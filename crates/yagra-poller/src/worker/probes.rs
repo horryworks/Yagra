@@ -40,6 +40,17 @@ pub(super) async fn execute_icmp(
             } else {
                 CheckOutcome::Unreachable
             };
+            // Echoes on the wire vs. echoes this process got back. Emitted here rather than in
+            // `yagra-transport`, which holds no instrument of any kind and is the boundary that
+            // keeps it that way — the probe carries the two raw counts instead (ADR-109).
+            //
+            // 🚨 The point is not this ratio on its own: it is the comparison against what the
+            // KERNEL received (`nstat IcmpInEchoReps`). Equal means the loss is the network's;
+            // a shortfall means replies are being dropped between the socket and this process,
+            // and every one of those costs a full 1 s timeout while holding a concurrency permit.
+            metrics::counter!("yagra_icmp_echoes_sent_total").increment(u64::from(probe.sent));
+            metrics::counter!("yagra_icmp_echoes_replied_total")
+                .increment(u64::from(probe.received));
             let mut samples = vec![Sample::gauge("icmp_loss_pct", probe.loss_pct)];
             if let Some(rtt) = probe.rtt_ms {
                 samples.push(Sample::gauge(METRIC_ICMP_RTT_MS, rtt));

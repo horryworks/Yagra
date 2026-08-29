@@ -10,6 +10,55 @@
 
 ## Unreleased
 
+### New Features
+
+- **A poller now reports the polls it did not get to.** New Prometheus counter on every poller,
+  `yagra_poll_cycles_missed_total`: one per poll cycle that came and went while the poller was too
+  far behind to serve it. It stays at zero while a poller keeps up, so `rate()` over it answers
+  "is this poller meeting the intervals it was given?" — a question nothing could answer before.
+  A 50,000-node load test found two pollers delivering 587 of the 1,673 polls per second their
+  intervals asked for, at 3.8% CPU, with every existing counter reading healthy: almost nothing was
+  being *dropped* (the shed counter moved by a few hundred against 930,000 polls executed), the
+  poll cycle was silently stretching instead.
+
+  ⚠️ This is **not** the same number as `yagra_poll_skipped_backpressure_total`, and adding the two
+  is meaningless. That counter is a job that *was* dispatched and then dropped at the per-device
+  single-flight guard. The new one is a job that was never dispatched at all.
+
+### Improvements
+
+- **A poller now runs 256 concurrent probes by default, up from 64 — and the knob is finally in the
+  compose files.** `YAGRA_MAX_CONCURRENT_POLLS` bounds how many probes one poller has in flight;
+  it was never exposed in `docker-compose.poller.yml`, `docker-compose.deploy.yml` or
+  `docker-compose.yml`, so an operator running a remote site from the generated onboarding bundle
+  had no way to reach it at all. All three compositions now pass it through, with sizing notes.
+
+  The number comes from a new bench (`cargo run --example icmp_bench`) that drives the ICMP
+  transport alone against 50,000 kernel-answered targets at a 40 ms round trip, run on the same
+  hardware as the 50,000-node test. Throughput is **linear in this setting well past 512** —
+  64 → 530 polls/s, 128 → 1,062, 256 → 2,123, 512 → 4,178, 2,048 → 14,581 —
+  with latency flat at the theoretical floor and **0.00% reply loss at 256**. So 256 is chosen for
+  the other budget it shares: it is also the number of concurrent SNMP table walks a small site
+  points at its own switches by default. Raise it for a large site; the transport has room.
+
+  ⚠️ It bounds probes *in flight*, not a rate — the polls per second you get is this number divided
+  by how long one probe takes, which is the device's answer rather than Yagra's. And it is not a fix
+  for the ceiling the 50,000-node test hit: at 512 permits that deployment served 643 polls/s where
+  the transport alone does 4,152, so something upstream of the probe was the limit. The new
+  `yagra_poll_inflight` gauge is what tells the two apart — permits that are not full mean the
+  poller is being starved, not throttled.
+
+- **A poller now says where a poll's time went.** Four new self-observability signals, and the
+  poller's first histogram: `yagra_poll_phase_seconds{phase}` splits every poll into
+  `wait_permit` / `wait_device` / `execute` / `publish`, `yagra_poll_inflight` reports how many
+  probes are actually running (the count existed but only ever reached the heartbeat), and
+  `yagra_icmp_echoes_sent_total` / `yagra_icmp_echoes_replied_total` count echoes on the wire
+  against echoes that came back.
+
+  The last pair is meant to be read against the host's own `nstat IcmpInEchoReps`: equal means the
+  loss a poller reports is the network's, while a shortfall means replies are being dropped between
+  the socket and the process — which looks exactly like unreachable devices.
+
 ## v0.3.4 — an upgrade asks what to move and shows the sites moving, and a poller changes pool without a restart
 
 ### Breaking changes

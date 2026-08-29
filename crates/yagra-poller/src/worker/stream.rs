@@ -21,6 +21,40 @@ use super::*;
 /// keeping a long-interval check from parking for hours behind a wedged device.
 const MAX_SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(60);
 
+/// Where one poll's wall-clock went, in four disjoint phases (ADR-109).
+///
+/// The poller had **no histogram at all** until this one, so "the poll took 800 ms" and "the poll
+/// took 120 ms and spent the rest queueing" were the same observation from outside. The 50,000-node
+/// load test needed exactly that distinction and could not have it, and the cost of not having it
+/// was a wrong answer rather than no answer: `permits / throughput` was read as a mean hold time
+/// and it is only that when the permits are full. They were not (ADR-109). 🚨 So read this
+/// histogram beside `yagra_poll_inflight`, never on its own — a phase that looks slow while the
+/// gauge sits below the cap is a poller being starved, not a poller being slow.
+///
+/// 🚨 **The three phases inside the spawned task sum to the permit hold time**, which is what
+/// `permits / throughput` measures from outside — so an unexplained remainder means a phase is
+/// missing here, not that the arithmetic is wrong. `wait_permit` is the fourth and sits outside
+/// that sum: it is queueing for a slot, not occupying one.
+pub(crate) const POLL_PHASE_METRIC: &str = "yagra_poll_phase_seconds";
+
+/// Buckets for [`POLL_PHASE_METRIC`], applied where the exporter is installed.
+///
+/// The range spans one network round trip (5 ms) to past the single-flight ceiling (30 s), because
+/// the distribution this exists to show is **bimodal**: a probe that is answered, and a probe that
+/// waits out a 1 s timeout. A scale that blurred those two together would answer the question with
+/// an average, which is what the poller already had.
+///
+/// ⚠️ Named here rather than at the install site so the metric's identity is in one place — a
+/// histogram registered under one name and configured under another is a silent downgrade to this
+/// exporter's default rolling summary, and a summary's quantiles cannot be added up across a pool.
+pub(crate) const POLL_PHASE_BUCKETS: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+];
+
+fn record_phase(phase: &'static str, since: Instant) {
+    metrics::histogram!(POLL_PHASE_METRIC, "phase" => phase).record(since.elapsed().as_secs_f64());
+}
+
 /// Run the poll loop over a stream of jobs. Each job runs concurrently under the
 /// [`PollLimiter`]: a global concurrency cap bounds total load and per-device single-flight makes
 /// a poll wait for the probe already running against its target, dropping it only if the device is
@@ -113,9 +147,11 @@ pub async fn run_stream<S>(
         // time. The permit is the half that belongs here: it is what bounds concurrency, so
         // awaiting it is backpressure rather than head-of-line blocking, and it keeps this from
         // spawning unboundedly. See `PollLimiter::acquire_permit` for the measurement.
+        let queued_at = Instant::now();
         let Some(permit) = limiter.acquire_permit().await else {
             continue; // shutdown
         };
+        record_phase("wait_permit", queued_at);
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
@@ -144,11 +180,16 @@ pub async fn run_stream<S>(
                 // Per-device single-flight, awaited here rather than on the loop: a device still
                 // being walked now delays only the jobs aimed at *it*. DNS monitors share the
                 // `0.0.0.0` display address (see above), so they hold the permit alone.
+                let claimed_at = Instant::now();
                 let guard = if dns {
                     Some(limiter.global_guard(permit))
                 } else {
                     limiter.claim_target(permit, job.target, wait).await
                 };
+                // Recorded before the branch below, so a job that waited out its whole deadline and
+                // was then dropped is in the distribution rather than missing from it — that tail is
+                // the reason this phase is measured separately from `execute`.
+                record_phase("wait_device", claimed_at);
                 // Released (and the target unmarked) when the probe finishes.
                 let Some(_guard) = guard else {
                     metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
@@ -158,16 +199,25 @@ pub async fn run_stream<S>(
                     );
                     return;
                 };
-                inflight.fetch_add(1, Ordering::Relaxed);
+                let running = inflight.fetch_add(1, Ordering::Relaxed) + 1;
+                // This counter existed and only ever reached the heartbeat. Exported, it answers
+                // "are the permits actually occupied?" — from outside, a saturated poller and an
+                // idle one holding a huge working set looked identical during the 50,000-node test.
+                metrics::gauge!("yagra_poll_inflight").set(running as f64);
                 metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
+                let probed_at = Instant::now();
                 let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+                record_phase("execute", probed_at);
                 stamp_poller_id(&mut result, &poller_id);
                 // Carry the poll span's context so core's result-ingest span joins this trace.
                 result.trace_context = yagra_telemetry::current_trace_context();
                 // Store-and-forward: live-publish when connected, else buffer for replay (Phase 3).
+                let published_at = Instant::now();
                 sink.submit(result).await;
+                record_phase("publish", published_at);
                 results_total.fetch_add(1, Ordering::Relaxed);
-                inflight.fetch_sub(1, Ordering::Relaxed);
+                let left = inflight.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
+                metrics::gauge!("yagra_poll_inflight").set(left as f64);
             }
             .instrument(span),
         );
@@ -178,6 +228,47 @@ pub async fn run_stream<S>(
 mod tests {
     use super::*;
     use crate::worker::testkit::*;
+
+    /// The phase histogram reaches the exporter under the name and buckets it was configured with.
+    ///
+    /// 🚨 A metric registered under one name and given buckets under another does not fail: this
+    /// exporter silently falls back to a rolling summary, whose quantiles cannot be added up across
+    /// a pool — so the fleet-level question would get a per-poller answer that looks fine. Nothing
+    /// else in the build compares the two spellings, and they sit in different modules because the
+    /// exporter is installed at startup and the metric is recorded in the poll loop.
+    #[test]
+    fn the_phase_histogram_reaches_the_exporter_under_its_own_name_and_buckets() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .set_buckets_for_metric(
+                metrics_exporter_prometheus::Matcher::Full(POLL_PHASE_METRIC.to_owned()),
+                POLL_PHASE_BUCKETS,
+            )
+            .expect("the shipped buckets are a valid bucket list")
+            .build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_phase("execute", Instant::now());
+        });
+        let rendered = handle.render();
+
+        assert!(
+            rendered.contains("yagra_poll_phase_seconds_bucket"),
+            "no histogram buckets rendered — the name the exporter was configured with and the \
+             name `record_phase` writes to have diverged, and this metric is now a summary:\n\
+             {rendered}"
+        );
+        assert!(
+            rendered.contains("phase=\"execute\""),
+            "the phase label did not survive to the exporter:\n{rendered}"
+        );
+        for edge in ["0.005", "1", "30"] {
+            assert!(
+                rendered.contains(&format!("le=\"{edge}\"")),
+                "bucket edge {edge} is missing; POLL_PHASE_BUCKETS is not what was applied:\n\
+                 {rendered}"
+            );
+        }
+    }
     use uuid::Uuid;
     use yagra_bus::{Bus, InMemoryBus};
     use yagra_common::NodeId;

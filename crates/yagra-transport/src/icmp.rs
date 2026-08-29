@@ -262,6 +262,8 @@ pub(crate) fn summarize(count: u8, rtts_ms: &[f64]) -> IcmpProbe {
         reachable: received > 0,
         rtt_ms,
         loss_pct,
+        sent: count.max(1),
+        received: u8::try_from(received).unwrap_or(u8::MAX),
     }
 }
 
@@ -292,6 +294,37 @@ mod tests {
         assert!(!p.reachable);
         assert_eq!(p.rtt_ms, None);
         assert_eq!(p.loss_pct, 100.0);
+    }
+
+    /// The raw counts agree with the percentage they sit beside, on every branch.
+    ///
+    /// 🚨 They exist to be compared with what the KERNEL counted (`nstat IcmpInEchoReps`), so a
+    /// `received` that disagrees with `loss_pct` would send that comparison the wrong answer and
+    /// look like the receive path dropping replies it never dropped (ADR-109). Checking every
+    /// branch is the point: a check that only looked at the full-success case would have passed
+    /// with `received` hardcoded to `sent`.
+    #[test]
+    fn the_raw_counts_agree_with_the_loss_percentage() {
+        for (count, rtts) in [
+            (3u8, vec![10.0, 20.0, 30.0]),
+            (4, vec![12.0]),
+            (3, vec![]),
+            (1, vec![7.0]),
+        ] {
+            let p = summarize(count, &rtts);
+            assert_eq!(p.sent, count.max(1), "sent for count={count}");
+            assert_eq!(
+                p.received,
+                u8::try_from(rtts.len()).unwrap(),
+                "received for count={count}"
+            );
+            let implied = (f64::from(p.sent) - f64::from(p.received)) / f64::from(p.sent) * 100.0;
+            assert!(
+                (implied - p.loss_pct).abs() < 1e-9,
+                "count={count}: counts imply {implied}% loss but loss_pct says {}",
+                p.loss_pct
+            );
+        }
     }
 
     #[test]

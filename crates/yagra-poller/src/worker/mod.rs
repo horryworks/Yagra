@@ -52,7 +52,7 @@ use meraki::execute_meraki;
 use physical::{execute_mau, execute_optical};
 use probes::{execute_dns, execute_http, execute_icmp};
 use snmp::{execute_scalar_get, SnmpWalker};
-pub(crate) use stream::run_stream;
+pub(crate) use stream::{run_stream, POLL_PHASE_BUCKETS, POLL_PHASE_METRIC};
 
 use crate::limiter::PollLimiter;
 use crate::optical;
@@ -62,7 +62,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::Instrument as _;
 use yagra_bus::{
     CheckOutcome, CheckSpec, DiscoveredInterface, DnsCheck, HttpCheck, IcmpCheck, PollJob,

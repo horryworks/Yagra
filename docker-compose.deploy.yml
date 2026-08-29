@@ -405,6 +405,15 @@ services:
       # poller's file carries its YAGRA_POLLER_ID, so a pool sharing this volume never has two
       # processes appending to one hourly file. Set empty in .env to turn it off.
       YAGRA_LOG_DIR: ${YAGRA_POLLER_LOG_DIR-/var/log/yagra/pollers}
+      # How many probes this poller runs at once — a bound on IN-FLIGHT probes, not a rate:
+      # the polls/s you get is this number divided by how long one probe takes. Measured against
+      # the ICMP transport alone (examples/icmp_bench.rs, 40ms RTT): linear up to 512, with 256
+      # giving 2,123 polls/s at no reply loss. A whole poller sustains less than that. Read
+      # `yagra_poll_cycles_missed_total` AND `yagra_poll_inflight` before changing it: a counter
+      # that climbs while the gauge sits below the cap means this poller is being starved of work,
+      # not throttled, and raising the number changes nothing. The same budget caps concurrent SNMP
+      # table walks, which are much heavier than a ping — lower it for a small deployment.
+      YAGRA_MAX_CONCURRENT_POLLS: ${YAGRA_MAX_CONCURRENT_POLLS:-256}
       # Passive-event listeners (syslog / SNMP traps, v1/v2c) — unprivileged container
       # ports, standard host ports mapped below. Set empty in .env to disable.
       YAGRA_SYSLOG_BIND: ${YAGRA_SYSLOG_BIND-0.0.0.0:1514}

@@ -783,6 +783,8 @@ mod tests {
                 reachable: up,
                 rtt_ms: up.then_some(1.0),
                 loss_pct: if up { 0.0 } else { 100.0 },
+                sent: 1,
+                received: u8::from(up),
             })
         }
 
@@ -1229,6 +1231,8 @@ mod tests {
                     reachable: false,
                     rtt_ms: None,
                     loss_pct: 100.0,
+                    sent: 1,
+                    received: 0,
                 })
             }
             async fn snmp_get(

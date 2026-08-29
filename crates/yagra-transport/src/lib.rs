@@ -39,6 +39,16 @@ pub struct IcmpProbe {
     pub rtt_ms: Option<f64>,
     /// Packet loss percentage over the probe (0.0–100.0).
     pub loss_pct: f64,
+    /// Echo requests actually put on the wire (≤ the requested count — the sweep stops early when
+    /// nothing at all has replied by the deadline).
+    pub sent: u8,
+    /// Echo replies this process received back.
+    ///
+    /// ⚠️ Carried raw rather than derived from [`Self::loss_pct`]. The percentage is lossy at the
+    /// edges and, more to the point, the question these two exist to answer is a **ratio against
+    /// what the kernel received** — comparing a rounded percentage to `nstat IcmpInEchoReps` would
+    /// blur exactly the gap being looked for (ADR-109).
+    pub received: u8,
 }
 
 /// One numeric SNMP value: the OID it came from and its value as `f64`. Non-numeric
@@ -539,6 +549,11 @@ impl FakeTransport {
                 reachable: true,
                 rtt_ms: Some(rtt_ms),
                 loss_pct: 0.0,
+                // Kept consistent with `loss_pct` on purpose: a fake whose counts disagree with its
+                // own percentage would let a reader of either one pass while the other is wrong.
+                // Three is the shipped `IcmpCheck::default().count`.
+                sent: 3,
+                received: 3,
             },
             snmp: Vec::new(),
             snmp_table: Vec::new(),
@@ -566,6 +581,8 @@ impl FakeTransport {
                 reachable: false,
                 rtt_ms: None,
                 loss_pct: 100.0,
+                sent: 3,
+                received: 0,
             },
             snmp: Vec::new(),
             snmp_table: Vec::new(),

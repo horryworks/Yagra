@@ -90,3 +90,73 @@ fn every_capability_constant_is_claimed() {
          this poller does not claim is work core silently withholds from it — see ADR-103"
     );
 }
+
+/// Every shipped file that quotes the concurrency default quotes the constant.
+///
+/// `YAGRA_MAX_CONCURRENT_POLLS`' default was a bare literal in `main.rs` and was written out again
+/// in five shipped files, with nothing holding the six together — so the number an operator reads
+/// and the number the binary uses were free to disagree, silently, forever. It was raised
+/// 64 → 256 by ADR-109, which is exactly the moment a set like that drifts.
+///
+/// 🚨 **The floor counts files whose anchor was actually found, not files opened.** A prefix that
+/// stops matching yields no number to compare, which is indistinguishable from agreement — so each
+/// file must produce a reading, and the count of readings is asserted. That is the failure this
+/// repo has already paid for twice (`floor-must-count-what-was-checked`).
+///
+/// ⚠️ **This covers every in-repo restatement and none of the four outside it.** The website says
+/// the number too — `docs/features/monitoring.md` and `docs/reference/configuration.md`, EN and JA —
+/// and lives in the `Yagra-Website` repository, which is not checked out here and cannot be reached
+/// from a test. `/docs`' drift sweep is the only net over those, and this comment is the record
+/// that it is a net with a hole.
+#[test]
+fn every_shipped_file_states_the_concurrency_default_the_binary_uses() {
+    // (path relative to this crate, the text that anchors the declaration)
+    const SITES: [(&str, &str); 5] = [
+        ("../../DEPLOYMENT.md", "| `YAGRA_MAX_CONCURRENT_POLLS` | `"),
+        (
+            "../../DEPLOYMENT.ja.md",
+            "| `YAGRA_MAX_CONCURRENT_POLLS` | `",
+        ),
+        (
+            "../../docker-compose.poller.yml",
+            "YAGRA_MAX_CONCURRENT_POLLS:-",
+        ),
+        (
+            "../../docker-compose.deploy.yml",
+            "YAGRA_MAX_CONCURRENT_POLLS:-",
+        ),
+        (
+            "../../docker-compose.yml",
+            "# YAGRA_MAX_CONCURRENT_POLLS: \"",
+        ),
+    ];
+
+    let expected = crate::limiter::DEFAULT_MAX_CONCURRENT_POLLS;
+    let mut read = 0usize;
+    for (path, anchor) in SITES {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let after = text.split_once(anchor).unwrap_or_else(|| {
+            panic!(
+                "{path} no longer contains {anchor:?}. Either the default stopped being stated \
+                 there, or the anchor changed — and an anchor that matches nothing makes this \
+                 check pass over that file without reading it"
+            )
+        });
+        let digits: String = after.1.chars().take_while(char::is_ascii_digit).collect();
+        let found: usize = digits
+            .parse()
+            .unwrap_or_else(|_| panic!("{path}: no number follows {anchor:?}, got {digits:?}"));
+        assert_eq!(
+            found, expected,
+            "{path} says the concurrency default is {found}; the binary uses {expected} \
+             (limiter::DEFAULT_MAX_CONCURRENT_POLLS). One of the two is a lie to an operator"
+        );
+        read += 1;
+    }
+    assert_eq!(
+        read,
+        SITES.len(),
+        "only {read} of {} shipped files produced a reading",
+        SITES.len()
+    );
+}

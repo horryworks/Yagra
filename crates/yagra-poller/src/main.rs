@@ -144,10 +144,25 @@ async fn main() -> anyhow::Result<()> {
     let _telemetry = yagra_telemetry::init_instance("yagra-poller", Some(&identity.id));
 
     // Self-observability: expose Prometheus metrics on :9100/metrics (monitoring-conventions).
-    if let Err(e) = PrometheusBuilder::new()
-        .with_http_listener(([0, 0, 0, 0], 9100))
-        .install()
-    {
+    //
+    // `yagra_poll_phase_seconds` gets explicit buckets so it renders as a real histogram rather
+    // than this exporter's default rolling summary: quantiles computed per poller cannot be added
+    // up across a pool, and "how is the fleet's polling doing" is a question about the pool. The
+    // range spans one network round trip (5 ms) to the single-flight ceiling (30 s+), because the
+    // distribution this exists to show is bimodal — a probe that answers, and a probe that waits
+    // out a 1 s timeout (ADR-109).
+    let exporter = || PrometheusBuilder::new().with_http_listener(([0, 0, 0, 0], 9100));
+    let builder = match exporter().set_buckets_for_metric(
+        metrics_exporter_prometheus::Matcher::Full(worker::POLL_PHASE_METRIC.to_owned()),
+        worker::POLL_PHASE_BUCKETS,
+    ) {
+        Ok(with_buckets) => with_buckets,
+        Err(e) => {
+            tracing::warn!(error = %e, "poll-phase buckets rejected; exporting a summary instead");
+            exporter()
+        }
+    };
+    if let Err(e) = builder.install() {
         tracing::warn!(error = %e, "failed to start metrics exporter");
     }
 
@@ -180,12 +195,13 @@ async fn main() -> anyhow::Result<()> {
     let queue =
         std::env::var("YAGRA_POLLER_QUEUE").unwrap_or_else(|_| yagra_bus::POLLER_QUEUE.to_owned());
 
-    // Rate control: bound total concurrent probes + per-device single-flight (#4).
-    let max_concurrent = std::env::var("YAGRA_MAX_CONCURRENT_POLLS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(64);
+    // Rate control: bound total concurrent probes + per-device single-flight (#4). The default
+    // lives beside the semaphore it sizes, with the measurement that chose it — never a literal
+    // here, because four shipped files quote that number and a test pins them to the constant.
+    let max_concurrent = env_usize(
+        "YAGRA_MAX_CONCURRENT_POLLS",
+        limiter::DEFAULT_MAX_CONCURRENT_POLLS,
+    );
     let limiter = Arc::new(PollLimiter::new(max_concurrent));
 
     // Shared state across the tasks: the working set (source of truth for local scheduling), a

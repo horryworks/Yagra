@@ -172,6 +172,10 @@ services:
       # other's. Each poller's file also carries its YAGRA_POLLER_ID, so a pool sharing this volume
       # does not have two processes appending to one hourly file.
       YAGRA_LOG_DIR: /var/log/yagra/pollers
+      # Concurrent in-flight probes. The built-in default spelled out — raised 64 -> 256 on
+      # 2026-08-29 (ADR-109). It bounds in-flight probes, not a rate, and the same budget also
+      # caps SNMP table walks. See docker-compose.poller.yml for the measured sizing notes.
+      # YAGRA_MAX_CONCURRENT_POLLS: "256"
       # Passive-event listeners (syslog / SNMP traps, v1/v2c). The container binds
       # unprivileged ports; compose maps the standard host ports below. Unset = disabled.
       YAGRA_SYSLOG_BIND: 0.0.0.0:1514

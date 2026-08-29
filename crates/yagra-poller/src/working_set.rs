@@ -155,6 +155,23 @@ pub struct WorkingSet {
     /// Specs per second used to size the adoption window. `0` disables the cap, restoring the
     /// pre-v0.2.3 behaviour of spreading a new spec across its whole interval.
     adopt_rate_per_sec: u32,
+    /// Poll cycles that came and went while this poller was too far behind to serve them
+    /// ([`Self::due`] re-anchors past them), drained by [`Self::take_cycles_missed`].
+    ///
+    /// **This is the only place a poller knows it is not keeping up, and until the 50,000-node
+    /// load test of 2026-08-29 it was computed and thrown away.** Two pollers carrying 50,000
+    /// nodes served 587 of the 1,673 polls/s their intervals asked for — a 60-second effective
+    /// interval against a configured 30 — while every counter read healthy, CPU sat under 5% and
+    /// nothing was logged. Nothing was *dropped*, which is why no drop counter moved: the
+    /// scheduler back-pressures on a bounded channel and the cycle simply stretches.
+    ///
+    /// ⚠️ **Not the same shortfall as `yagra_poll_skipped_backpressure_total`**, and the two must
+    /// not be read as one number. That counter is a job that *was* dispatched and then dropped at
+    /// the device single-flight guard. This one is a job that was never dispatched, because its
+    /// turn passed while the poller was still working through an earlier one.
+    ///
+    /// A count, not a rate, and deliberately in the pure half: `assignment.rs` owns the meter.
+    cycles_missed: u64,
 }
 
 impl Default for WorkingSet {
@@ -183,7 +200,17 @@ impl WorkingSet {
             last_seq: 0,
             pending: None,
             adopt_rate_per_sec,
+            cycles_missed: 0,
         }
+    }
+
+    /// Take the poll cycles missed since the last call, resetting the tally.
+    ///
+    /// Drained rather than read so the caller can hand the delta straight to a counter without
+    /// keeping a previous value; a snapshot replacing the whole set does **not** clear it, because
+    /// this records what this *process* failed to serve, not what the set currently contains.
+    pub fn take_cycles_missed(&mut self) -> u64 {
+        std::mem::take(&mut self.cycles_missed)
     }
 
     /// The window, in milliseconds, that `added` newly adopted specs spread over: how long polling
@@ -335,11 +362,23 @@ impl WorkingSet {
     /// than emitting a backlog burst — at most one make-up poll per spec per call (catch-up cap).
     pub fn due(&mut self, now: Instant) -> Vec<PollJob> {
         let mut out = Vec::new();
+        // Accumulated locally because `self.nodes` is borrowed for the walk; folded in at the end.
+        let mut missed: u64 = 0;
         for specs in self.nodes.values_mut() {
             for sched in specs.iter_mut() {
                 if sched.next_due <= now {
                     out.push(sched.spec.to_job(Uuid::new_v4()));
                     let interval = Duration::from_secs(u64::from(sched.spec.interval_secs));
+                    // Whole intervals between the slot that just fired and `now`: the polls that
+                    // will never be issued because their turn has already passed. Zero while the
+                    // scheduler keeps up — one tick of lateness is far below one interval — so the
+                    // counter stays flat in health and only moves when the poller falls behind.
+                    // `checked_div` rather than a zero test: an interval of 0 is not reachable
+                    // through the API (`10..=3600`), and treating it as "nothing was missed" is the
+                    // only answer that makes sense if one ever arrives over the bus.
+                    let behind = now.saturating_duration_since(sched.next_due).as_millis();
+                    let skipped = behind.checked_div(interval.as_millis()).unwrap_or(0);
+                    missed = missed.saturating_add(u64::try_from(skipped).unwrap_or(u64::MAX));
                     sched.next_due += interval;
                     if sched.next_due <= now {
                         // Still behind after one step → re-anchor so we don't fire every tick.
@@ -348,6 +387,7 @@ impl WorkingSet {
                 }
             }
         }
+        self.cycles_missed = self.cycles_missed.saturating_add(missed);
         out
     }
 
@@ -1273,6 +1313,61 @@ mod tests {
             ws.nodes[&node(1)][0].next_due,
             much_later + Duration::from_secs(30)
         );
+    }
+
+    /// The make-up poll above hides ten polls that never happened, and until 2026-08-29 that fact
+    /// was computed and discarded — which is why a fleet polled at half its configured rate looked
+    /// healthy on every counter.
+    ///
+    /// 🚨 **Both directions, and the on-time one is the load-bearing half.** A counter that only
+    /// ever goes up is indistinguishable from one wired to the wrong branch; the first two
+    /// assertions are what say this measures lateness rather than dispatches
+    /// (`rejection-only-tests-pass-when-everything-rejects`).
+    #[test]
+    fn a_missed_cycle_is_counted_and_an_on_time_one_is_not() {
+        let mut ws = WorkingSet::new();
+        let e = Uuid::from_u128(1);
+        let now = Instant::now();
+        let mut rng = fixed(0); // next_due = now
+        ws.apply(
+            snapshot(
+                e,
+                1,
+                0,
+                1,
+                vec![NodeJobs {
+                    node_id: node(1),
+                    specs: vec![icmp_spec(node(1), 30)],
+                }],
+            ),
+            now,
+            &mut rng,
+        );
+
+        // On time: the first poll, then one exactly an interval later. Nothing was missed.
+        assert_eq!(ws.due(now).len(), 1);
+        assert_eq!(ws.take_cycles_missed(), 0, "an on-time poll is not a miss");
+        assert_eq!(ws.due(now + Duration::from_secs(30)).len(), 1);
+        assert_eq!(ws.take_cycles_missed(), 0, "still on time");
+
+        // A tick's worth of lateness is far below one interval and must not register either.
+        assert_eq!(
+            ws.due(now + Duration::from_secs(60) + SCHEDULER_TICK).len(),
+            1
+        );
+        assert_eq!(
+            ws.take_cycles_missed(),
+            0,
+            "half a second late on a 30s interval is not a missed cycle"
+        );
+
+        // Now fall behind: 300s past the slot that just fired, on a 30s interval, is ten slots
+        // that no poll will ever be issued for — the single make-up poll covers the eleventh.
+        // (the slot that just fired was at now+90, so now+390 is exactly 300s past it)
+        let much_later = now + Duration::from_secs(390);
+        assert_eq!(ws.due(much_later).len(), 1, "one make-up poll, as before");
+        assert_eq!(ws.take_cycles_missed(), 10);
+        assert_eq!(ws.take_cycles_missed(), 0, "draining resets the tally");
     }
 
     // ── Adoption window (ADR-051) ────────────────────────────────────────────────────────────────

@@ -90,6 +90,21 @@ services:
       # CA (or self-signed server) cert that signs the NATS server cert, mounted from
       # ./certs below. Required whenever YAGRA_BUS_URL is tls:// with a private CA.
       YAGRA_BUS_CA_FILE: ${YAGRA_BUS_CA_FILE:-/etc/yagra/certs/server-cert.pem}
+      # ── Polling ───────────────────────────────────────────────────────────────────
+      # How many probes this poller runs at once. It is a bound on IN-FLIGHT probes, not a
+      # rate: the polls/s you get is this number divided by how long one probe takes, so a
+      # site of slow or unreachable devices gets fewer polls/s from the same number.
+      # Measured against the ICMP transport ALONE (examples/icmp_bench.rs, 40ms RTT, 3 echoes):
+      # throughput is linear in this setting past 2,048 — 64 gives 530 polls/s, 256 gives 2,123,
+      # 512 gives 4,178 — with no reply loss up to 256. ⚠️ A whole poller sustains LESS than the
+      # transport does, and on the 50,000-node test it sustained far less (643 polls/s at 512),
+      # because the limit was upstream of the probe. So size from your own deployment: raise this
+      # if `yagra_poll_cycles_missed_total` is climbing AND `yagra_poll_inflight` is at the cap.
+      # If the counter climbs while the gauge sits low, this poller is being starved rather than
+      # throttled and raising the number changes nothing. LOWER it if this site's devices are small
+      # or slow: the same budget also caps concurrent SNMP table walks, which are far heavier than
+      # a ping, and 256 of those against one small switch stack is not kind.
+      YAGRA_MAX_CONCURRENT_POLLS: ${YAGRA_MAX_CONCURRENT_POLLS:-256}
       # ── Passive event listeners (optional; unset either line to disable) ───────────
       # With host networking the container binds the host port directly. This poller
       # runs NON-ROOT (file-cap NET_RAW only), so it CANNOT bind :514/:162 (<1024). Use

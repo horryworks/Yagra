@@ -154,10 +154,28 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
-        let due = {
+        let (due, missed) = {
             let mut ws = working_set.lock().expect("working set mutex poisoned");
-            ws.due(Instant::now())
+            let due = ws.due(Instant::now());
+            // Drained under the same lock as the walk that produced it, so no tick's tally can be
+            // attributed to the next one.
+            (due, ws.take_cycles_missed())
         };
+        // The polling deficit, which had no instrument until the 50,000-node load test went looking
+        // for one (2026-08-29): two pollers served 587 of the 1,673 polls/s their intervals asked
+        // for and every existing counter read healthy, because almost nothing was *dropped* (the
+        // shed counter moved by a few hundred against 930,000 executed) — the loop below
+        // back-pressures on a bounded channel and the cycle silently stretches instead.
+        // 🚨 And since ADR-109 this loop is the prime suspect for *why*: the ICMP transport alone
+        // does 4,178 polls/s on that very box, at the same concurrency and round trip where that
+        // deployment managed 643 —
+        // so the jobs were not arriving rather than running slowly. `yagra_poll_inflight` sitting
+        // below the permit cap is what would confirm it — measure before changing anything here.
+        // ⚠️ Distinct from `yagra_poll_skipped_backpressure_total`, which counts a job that WAS
+        // dispatched and then dropped at the device single-flight guard.
+        if missed > 0 {
+            metrics::counter!("yagra_poll_cycles_missed_total").increment(missed);
+        }
         for job in due {
             if jobs_tx.send(job).await.is_err() {
                 tracing::warn!("worker channel closed — stopping local scheduler");

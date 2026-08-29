@@ -27,6 +27,30 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
+/// Default for `YAGRA_MAX_CONCURRENT_POLLS`: how many probes one poller runs at once.
+///
+/// **Raised 64 → 256 on 2026-08-29** (ADR-109). The number comes from `examples/icmp_bench.rs`,
+/// which drives this crate's ICMP transport and nothing else, against 50,000 kernel-answered
+/// targets at a 40 ms round trip, measured on the same hardware as the 50,000-node test.
+/// Throughput is **linear in this value well past 512** — 64 → 530 polls/s, 128 → 1,062,
+/// 256 → 2,123, 512 → 4,178, 2,048 → 14,581 — with per-probe latency pinned at 120.5 ms, which is
+/// the theoretical floor (three sequential echoes at 40 ms). Reply loss is **0.00% up to 256** and
+/// 0.07% at 512.
+///
+/// So 256 is chosen for the *other* budget, not for throughput: this semaphore is not ICMP's, and
+/// every check kind draws from it — 256 is as many concurrent SNMP table walks as a small site
+/// should point at its own switches by default. Raise it for a large site; the transport has room.
+///
+/// ⚠️ **It bounds in-flight probes, not a rate.** The polls/s it yields is this number divided by
+/// how long one probe takes, and that is the device's answer, not Yagra's.
+///
+/// 🚨 **A poller that is behind says so in `yagra_poll_cycles_missed_total`** (ADR-108) — that is
+/// the counter to read before touching this, not CPU, which sat at 4.8% while a pair of pollers
+/// served a third of the polls they owed. And read `yagra_poll_inflight` beside it: if the permits
+/// are *not* full, raising this number changes nothing, because the poller is being starved rather
+/// than throttled. That is what the 50,000-node test turned out to be measuring (ADR-109).
+pub const DEFAULT_MAX_CONCURRENT_POLLS: usize = 256;
+
 /// How often a waiter re-checks the in-flight set even if it sees no release notification.
 ///
 /// Not belt-and-braces: [`Notify::notify_waiters`] only wakes tasks already parked, so a release
