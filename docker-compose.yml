@@ -68,6 +68,16 @@ services:
       YAGRA_DATABASE_URL: postgres://yagra:yagra@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
       YAGRA_BUS_URL: nats://nats:4222
+      # PostgreSQL connection-pool ceiling for the whole core process — the scheduler sweep, result
+      # ingest, the northbound API and the coordinator mirror all draw from this one pool.
+      # 🚨 Raise it before running a fleet with many interfaces. Measured 2026-08-30 at 50,000 nodes
+      # x 24 ports (ADR-110): the interface upsert rewrites ~1M rows a cycle and held every one of
+      # the default 20 connections, so unrelated readers queued behind it — a SELECT over
+      # routing_rules returning ZERO rows took 74 seconds, the topology derive took 337s, and core
+      # stalled long enough for the bus to drop its pollers. The symptom is never one slow query; it
+      # is every query being slow at once. .env.example recommends 50-80 at that size, and
+      # PostgreSQL's own max_connections (default 100) has to clear it.
+      YAGRA_PG_MAX_CONNECTIONS: ${YAGRA_PG_MAX_CONNECTIONS:-20}
       YAGRA_TSDB_URL: http://victoriametrics:8428
       # Event log store (ADR-024): passive events (syslog/trap/webhook) are searched from and
       # written to VictoriaLogs; PostgreSQL then keeps only alert-linked rows. Unset this to keep

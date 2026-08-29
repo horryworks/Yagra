@@ -27,6 +27,18 @@
 
 ### Improvements
 
+- **`YAGRA_PG_MAX_CONNECTIONS` now actually reaches core.** Both compositions pass it through.
+  Core has always read it and `.env.example` has always said to raise it to 50–80 at tens of
+  thousands of nodes — but the variable appeared in neither `docker-compose.yml` nor
+  `docker-compose.deploy.yml`, so setting it in `.env` did nothing at all. Same shape as the
+  concurrency knob fixed in the previous release.
+
+  It matters more than it looks. Measured at 50,000 nodes × 24 interfaces: the interface upsert
+  rewrites ~1M rows per cycle and held every one of the default 20 connections, so unrelated
+  readers queued behind it — a `SELECT` over `routing_rules` returning **zero rows took 74
+  seconds**, and the topology derive took 337. The symptom is never one slow query; it is every
+  query being slow at once.
+
 - **The poll-phase histogram now says which kind of check it is measuring.**
   `yagra_poll_phase_seconds` gained a `kind` label carrying the same word core stamps on a
   dispatched job (`icmp`, `snmp_table`, `snmp_optical`, `snmp_neighbors`, …) alongside the
