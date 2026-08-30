@@ -477,7 +477,7 @@ mod tests {
         let now = Instant::now();
         let mut rng = |_bound: u32| 0u32; // no jitter → due at `now`
         assert_eq!(ws.apply(snap, now, &mut rng), ApplyOutcome::Applied);
-        let jobs: Vec<PollJob> = ws.due(now);
+        let jobs: Vec<PollJob> = ws.due(now, usize::MAX);
         assert_eq!(jobs.len(), 1, "the single spec is due");
 
         let limiter = Arc::new(PollLimiter::new(16));

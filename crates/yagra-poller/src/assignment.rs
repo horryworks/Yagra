@@ -3,8 +3,9 @@
 //!
 //! Two loops, one shared [`WorkingSet`]. The first folds core's syncs into it and asks for a fresh
 //! snapshot whenever a gap or an epoch mismatch says the set can no longer be trusted; the second
-//! ticks at the working set's own quantum, pops what is due, and feeds the worker over a bounded
-//! channel. Between them they are the only writers and the only reader of that set.
+//! asks the working set for as much as the worker has room for, ranked by lateness (ADR-109
+//! Inc.4), and feeds it over a bounded channel. Between them they are the only writers and the
+//! only reader of that set.
 //!
 //! ⚠️ **The set itself is `working_set.rs`, and it stays pure.** That module's doc says it in as many
 //! words — a state machine with *no I/O*, clock and jitter injected, measured at zero `.await`. The
@@ -159,49 +160,72 @@ async fn run_sync_loop<B, S>(
     tracing::warn!("working-set sync stream ended");
 }
 
-/// Tick every [`working_set::SCHEDULER_TICK`], popping the due specs from the working set and
-/// forwarding each as a job to the worker loop over a bounded channel (backpressure: a full channel
-/// awaits, it never drops). Stops when the channel closes (worker gone).
+/// Pop what is due and feed it to the worker, re-reading the clock at least once per
+/// [`working_set::SCHEDULER_TICK`].
 ///
-/// The period is the working set's constant, not a literal here: it spaces a node's specs by whole
-/// ticks so they cannot collide in the worker's per-device single-flight guard, which only holds
-/// while this timer runs at that period.
+/// **The shape is "wait for room, then ask what is due", and the order of those two is the whole of
+/// ADR-109 Increment 4.** It used to be the other way round: one unbounded `due()` per tick, then a
+/// `for` loop pushing that entire batch into the bounded channel. On a saturated poller that loop
+/// ran for minutes — the clock was not consulted again until it finished — so the batch was served
+/// in the order it happened to be built, which is `HashMap` order, node by node. A node's specs are
+/// adjacent in that order, so a check configured hourly went out **as often as** one configured
+/// every minute. Asking the working set only for what will actually fit, at the moment it will fit,
+/// is what lets [`WorkingSet::due`] rank the choice instead of the walk order making it.
+///
+/// Throughput is unchanged when the poller is keeping up: `reserve()` returns immediately while the
+/// channel has room, so the inner loop is as fast as the worker drains. Backpressure still never
+/// drops — a full channel makes this await, exactly as before.
+///
+/// ⚠️ **The working set is walked more often than it used to be** — once per batch of at most
+/// `JOB_CHANNEL_DEPTH` rather than once per tick. At the throughputs measured that is a handful of
+/// walks per second against a few hundred thousand specs; if it ever shows up as CPU, the answer is
+/// a heap keyed by `next_due` rather than a walk, and that is a separate change.
 async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc::Sender<PollJob>) {
     let mut tick = tokio::time::interval(working_set::SCHEDULER_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
-        let (due, missed) = {
-            let mut ws = working_set.lock().expect("working set mutex poisoned");
-            let due = ws.due(Instant::now());
-            // Drained under the same lock as the walk that produced it, so no tick's tally can be
-            // attributed to the next one.
-            (due, ws.take_cycles_missed())
-        };
-        // The polling deficit, which had no instrument until the 50,000-node load test went looking
-        // for one (2026-08-29): two pollers served 587 of the 1,673 polls/s their intervals asked
-        // for and every existing counter read healthy, because almost nothing was *dropped* (the
-        // shed counter moved by a few hundred against 930,000 executed) — the loop below
-        // back-pressures on a bounded channel and the cycle silently stretches instead.
-        // 🚨 This loop was the prime suspect for *why*, and it was measured and cleared (ADR-109).
-        // One poller carrying 50,000 nodes on that box now serves 1,675 polls/s — the whole of what
-        // a 30-second interval asks for — while this counter stays at 0; drop the permits to 64 and
-        // the same poller yields exactly 532 polls/s, which is 64 divided by the 120.6 ms one poll
-        // takes, and this counter fires ~95,000 per 30 s. So the ceiling is the permit count and
-        // nothing else, and the tick below is not in the way at either end.
-        // ⚠️ What is still unexplained is the load test's own number: two pollers should have made
-        // ~1,064 polls/s at 64 permits each and made 587. Do not treat this loop as cleared *for
-        // that run* — the differences (a third, co-located poller in the pool; 6 vCPU rather than
-        // 3) were never isolated.
-        // ⚠️ Distinct from `yagra_poll_skipped_backpressure_total`, which counts a job that WAS
-        // dispatched and then dropped at the device single-flight guard.
-        if missed > 0 {
-            metrics::counter!("yagra_poll_cycles_missed_total").increment(missed);
-        }
-        for job in due {
-            if jobs_tx.send(job).await.is_err() {
+        let deadline = Instant::now() + working_set::SCHEDULER_TICK;
+        loop {
+            // Room first. Holding a permit before asking means the batch we are handed is one we can
+            // hand on without blocking part-way through it — which is what keeps a ranked batch from
+            // being cut at an arbitrary point by the channel instead of by the ranking.
+            let Ok(permit) = jobs_tx.reserve().await else {
                 tracing::warn!("worker channel closed — stopping local scheduler");
                 return;
+            };
+            // `capacity()` is what is left *after* our reservation, so the reserved slot is the +1.
+            let room = jobs_tx.capacity() + 1;
+            let (due, missed, deferred) = {
+                let mut ws = working_set.lock().expect("working set mutex poisoned");
+                // Read under the same lock as the walk that produced it, so no round's tally can be
+                // attributed to the next one.
+                let due = ws.due(Instant::now(), room);
+                (due, ws.take_cycles_missed(), ws.deferred())
+            };
+            // The polling deficit, which had no instrument until the 50,000-node load test went
+            // looking for one (2026-08-29). ⚠️ Distinct from `yagra_poll_skipped_backpressure_total`,
+            // which counts a job that WAS dispatched and then dropped at the device single-flight
+            // guard. 🚨 And read its doc on `WorkingSet::due` before trusting a 0: until specs
+            // started keeping their `next_due` when deferred, this stayed at zero on a poller
+            // serving 26.9 of the 1,017 polls per second its intervals asked for.
+            if missed > 0 {
+                metrics::counter!("yagra_poll_cycles_missed_total").increment(missed);
+            }
+            metrics::gauge!("yagra_poll_deferred_specs").set(f64::from(deferred));
+            let mut jobs = due.into_iter();
+            let Some(first) = jobs.next() else {
+                break; // nothing due — hand the reservation back and wait for the next tick
+            };
+            permit.send(first);
+            for job in jobs {
+                if jobs_tx.send(job).await.is_err() {
+                    tracing::warn!("worker channel closed — stopping local scheduler");
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                break; // one tick's worth of pushing; go back and re-read the clock
             }
         }
     }

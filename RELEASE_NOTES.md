@@ -240,6 +240,27 @@
   thing. A device that *answers* is asked for exactly the same four columns as before, over one UDP
   session instead of two, and nothing it reports changes.
   `yagra_snmp_walk_truncated_total{reason="silent"}` counts it.
+- **A poller that cannot keep up now spends what capacity it has in the proportions the configured
+  intervals ask for.** It decided what to dispatch next by walking its assignment in whatever order
+  it happened to be stored — node by node, and a node's checks sit together — and it handed that
+  whole batch to the workers before looking at the clock again. So a check configured every hour was
+  dispatched about as often as one configured every minute. Measured on 15,000 unreachable devices
+  with eight checks each: a demand ratio of **60 : 1 served at 1.03 : 1**, with the four hourly
+  checks taking **65.8%** of the concurrency budget while ICMP liveness took **3.1%**.
+  It now asks for only as many polls as the workers have room for, and picks the ones that have
+  waited longest **relative to their own interval**. Every check then degrades by the same factor
+  instead of the wrong ones not degrading at all, and a long-interval check is never starved — its
+  lateness keeps accumulating until it out-ranks a short one.
+  ⚠️ **Nothing changes on a poller that is keeping up.** When everything that is due fits in the
+  batch, every due check is dispatched exactly as before; the ranking only decides who goes first
+  when there is not enough room for everyone. And this reorders work rather than creating capacity:
+  a poller that is short of concurrency is still short of it, and the answer to that is still more
+  pollers.
+  Two meters come with it. `yagra_poll_deferred_specs` is how many due checks did not fit in the
+  last batch — the instantaneous depth, which nothing reported before.
+  `yagra_poll_cycles_missed_total` now counts the cycles a deferred check lost: the backlog used to
+  sit in the dispatch loop rather than in the poller's schedule, so how much of it that counter saw
+  depended on how long that loop took.
 
 ### Bug Fixes
 

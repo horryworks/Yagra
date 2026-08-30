@@ -5,10 +5,11 @@
 //! each poller the set of polling *specs* it owns as a full **snapshot** (chunked) plus incremental
 //! **deltas**, and the poller schedules them locally. This module owns that set and the sync
 //! protocol that keeps it consistent — with **no I/O**: [`WorkingSet::apply`] folds a [`SyncMsg`]
-//! into the set and reports whether the poller needs to resync, [`WorkingSet::due`] pops the specs
-//! whose local timers have fired and mints fresh jobs. Clock (`now`) and jitter source (`rng`) are
-//! injected so every rule here is deterministically unit-testable without a bus, a clock, or real
-//! randomness.
+//! into the set and reports whether the poller needs to resync, [`WorkingSet::due`] pops as many
+//! of the specs whose local timers have fired as the caller has room for — ranked by how late each
+//! is relative to its own interval (ADR-109 Inc.4) — and mints fresh jobs. Clock (`now`) and jitter
+//! source (`rng`) are injected so every rule here is deterministically unit-testable without a bus,
+//! a clock, or real randomness.
 //!
 //! Ordering & gap detection (ADR-020): syncs for one poller travel on a single ordered subject, so
 //! `seq` gates them. A delta must land exactly at `last_seq + 1` on the current `epoch`; a gap or an
@@ -118,6 +119,40 @@ struct PendingSpec {
     next_due: Option<Instant>,
 }
 
+/// One spec whose timer has fired, and how late it is **relative to its own interval** — the number
+/// [`WorkingSet::due`] ranks a scarce budget on (ADR-109 Increment 4).
+///
+/// The lateness is kept as the pair `behind_ms / interval_ms` rather than as a ratio, so the
+/// ordering is total and exact: `f64` has no `Ord`, and a ratio computed in floating point would
+/// make the boundary of a truncated batch depend on rounding. Comparing two is one
+/// cross-multiplication, and `u128` has room for it — the largest product in play is a process
+/// uptime in milliseconds times an hour in milliseconds.
+struct Candidate {
+    node: NodeId,
+    index: usize,
+    behind_ms: u128,
+    interval_ms: u128,
+}
+
+/// Order two due specs so the one that has waited longest **as a fraction of its own interval**
+/// comes first.
+///
+/// That fraction is what makes the ranking mean "keep the configured ratio". A 60 s check one
+/// minute late has waited a whole cycle; a 3600 s check one minute late has waited 1/60th of one,
+/// and the second is the one that can afford to wait. Under sustained scarcity the fractions
+/// equalise across the whole set, which reproduces the demand ratio the intervals declare.
+///
+/// 🚨 **The tie-break is not cosmetic.** Specs that have only just come due are all at `behind = 0`,
+/// so without a deterministic second key the boundary of a truncated batch would be decided by
+/// `HashMap` iteration order — which is seeded per process, so the same fleet would be served
+/// differently after every restart and no test could pin it.
+fn later_first(a: &Candidate, b: &Candidate) -> std::cmp::Ordering {
+    (b.behind_ms * a.interval_ms)
+        .cmp(&(a.behind_ms * b.interval_ms))
+        .then_with(|| a.node.cmp(&b.node))
+        .then_with(|| a.index.cmp(&b.index))
+}
+
 /// A snapshot being reassembled from its chunks, keyed by `(epoch, seq)`. Chunks of one snapshot
 /// share a single `(epoch, seq)`; only the newest such group is ever buffered.
 struct PendingSnapshot {
@@ -172,6 +207,11 @@ pub struct WorkingSet {
     ///
     /// A count, not a rate, and deliberately in the pure half: `assignment.rs` owns the meter.
     cycles_missed: u64,
+
+    /// How many specs were due at the last [`Self::due`] call and did not get a job.
+    ///
+    /// A level rather than a tally, so it is read and not drained — see [`Self::deferred`].
+    deferred: u32,
 }
 
 impl Default for WorkingSet {
@@ -201,6 +241,7 @@ impl WorkingSet {
             pending: None,
             adopt_rate_per_sec,
             cycles_missed: 0,
+            deferred: 0,
         }
     }
 
@@ -356,53 +397,153 @@ impl WorkingSet {
         self.last_seq = group.seq;
     }
 
-    /// Pop every spec whose timer has fired at/by `now`, minting a fresh [`PollJob`] id for each and
-    /// re-arming it one interval ahead. If a spec has fallen more than a full interval behind (e.g.
-    /// the poller was paused through a WAN blip), its timer re-anchors to `now + interval` rather
-    /// than emitting a backlog burst — at most one make-up poll per spec per call (catch-up cap).
-    pub fn due(&mut self, now: Instant) -> Vec<PollJob> {
-        let mut out = Vec::new();
-        // Accumulated locally because `self.nodes` is borrowed for the walk; folded in at the end.
-        let mut missed: u64 = 0;
-        for specs in self.nodes.values_mut() {
-            for sched in specs.iter_mut() {
+    /// Pop up to `budget` specs whose timers have fired at/by `now`, minting a fresh [`PollJob`] id
+    /// for each and re-arming it one interval ahead.
+    ///
+    /// If a spec has fallen more than a full interval behind (e.g. the poller was paused through a
+    /// WAN blip), its timer re-anchors to `now + interval` rather than emitting a backlog burst — at
+    /// most one make-up poll per spec per call (catch-up cap).
+    ///
+    /// # The budget, and what it is for (ADR-109 Increment 4)
+    ///
+    /// **`budget >= the number of specs that are due` is byte-for-byte the old behaviour**: every
+    /// due spec is minted and re-armed, in whatever order they are found. A poller that is keeping
+    /// up is always in that case, so nothing below changes what a healthy deployment does.
+    ///
+    /// The other case is the one this exists for. Before it, `due` returned **everything** that was
+    /// due, unbounded, and `assignment.rs` pushed that whole batch into a 256-deep channel before it
+    /// looked at the clock again. On 15,000 devices with eight checks each that is a 120,000-job
+    /// batch, walked node by node — and a node's specs are adjacent — so a check configured every
+    /// 3600 s was dispatched **as often as** one configured every 60 s. Measured 2026-08-30: a
+    /// demand ratio of 60 : 1 served at 1.03 : 1, with the four hourly checks eating **65.8%** of
+    /// the concurrency budget while ICMP got 3.1%.
+    ///
+    /// 🚨 **A spec that loses keeps its `next_due`.** That is the whole of the fairness argument and
+    /// the one line that must not be "tidied": advancing a deferred spec's timer would stop its
+    /// lateness accumulating, so a long-interval check would never out-rank a short one and would
+    /// never run again. Because it does accumulate, the ranking equalises `behind / interval` across
+    /// the whole set — which is the configured ratio, restored, with every check degrading by the
+    /// same factor rather than the wrong ones degrading not at all.
+    ///
+    /// ⚠️ It reorders; it does not create capacity. 15,000 devices × 8 checks ask for 2,817
+    /// permit-seconds per second and 256 permits cannot serve 9% of that. What changes is *which*
+    /// polls the budget buys.
+    pub fn due(&mut self, now: Instant, budget: usize) -> Vec<PollJob> {
+        // Pass 1 — who is due, and how late relative to their own interval. Read-only, so the whole
+        // set can be walked before anything is decided.
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for (node, specs) in &self.nodes {
+            for (index, sched) in specs.iter().enumerate() {
                 if sched.next_due <= now {
-                    out.push(sched.spec.to_job(Uuid::new_v4()));
-                    let interval = Duration::from_secs(u64::from(sched.spec.interval_secs));
-                    // Whole intervals between the slot that just fired and `now`: the polls that
-                    // will never be issued because their turn has already passed. Zero while the
-                    // scheduler keeps up — one tick of lateness is far below one interval — so the
-                    // counter stays flat in health and only moves when the poller falls behind.
-                    // `checked_div` rather than a zero test: an interval of 0 is not reachable
-                    // through the API (`10..=3600`), and treating it as "nothing was missed" is the
-                    // only answer that makes sense if one ever arrives over the bus.
-                    // `demand_per_sec` skips the same spec for the same reason — one judgement
-                    // about a degenerate interval, written in two places that must agree.
-                    let behind = now.saturating_duration_since(sched.next_due).as_millis();
-                    let skipped = behind.checked_div(interval.as_millis()).unwrap_or(0);
-                    missed = missed.saturating_add(u64::try_from(skipped).unwrap_or(u64::MAX));
-                    sched.next_due += interval;
-                    if sched.next_due <= now {
-                        // Still behind after one step → re-anchor so we don't fire every tick.
-                        sched.next_due = now + interval;
-                    }
+                    candidates.push(Candidate {
+                        node: *node,
+                        index,
+                        behind_ms: now.saturating_duration_since(sched.next_due).as_millis(),
+                        // A zero interval cannot arrive through the API (`10..=3600`) but can over
+                        // the bus. Ranking it as if it were 1 ms keeps the comparison total without
+                        // letting it monopolise: at `behind = 0` it still sorts with everything else
+                        // that has only just come due.
+                        interval_ms: u128::from(sched.spec.interval_secs)
+                            .saturating_mul(1000)
+                            .max(1),
+                    });
                 }
             }
         }
+        let due_count = candidates.len();
+        if due_count > budget {
+            // Partial sort: only the front `budget` need to be in order, and the tail is discarded
+            // unexamined. O(n) rather than O(n log n), which matters because this runs over the
+            // whole working set — 400,000 specs on the largest deployment measured.
+            candidates.select_nth_unstable_by(budget, later_first);
+            candidates.truncate(budget);
+        }
+
+        // Pass 2 — mint and re-arm exactly the chosen ones. Everything else is left untouched,
+        // including its `next_due` (see the 🚨 above).
+        let mut out = Vec::with_capacity(candidates.len());
+        let mut missed: u64 = 0;
+        for c in &candidates {
+            let Some(sched) = self
+                .nodes
+                .get_mut(&c.node)
+                .and_then(|specs| specs.get_mut(c.index))
+            else {
+                continue; // unreachable: nothing mutates the set between the two passes
+            };
+            out.push(sched.spec.to_job(Uuid::new_v4()));
+            let interval = Duration::from_secs(u64::from(sched.spec.interval_secs));
+            // Whole intervals between the slot that just fired and `now`: the polls that will never
+            // be issued because their turn has already passed. Zero while the scheduler keeps up —
+            // one tick of lateness is far below one interval.
+            //
+            // 🚨 **What reaches this counter changed with the budget, and it is worth knowing
+            // how.** It has always counted whole cycles that had passed for a spec that ran; what
+            // was unreliable was how much of the shortfall ever arrived here at all. The backlog
+            // used to sit in the scheduler's send loop rather than in this set, so the counter only
+            // moved as often as that loop got round to asking — measured flat at **0** through a
+            // settled ten-minute window on a poller serving 62.6 of 1,017 demanded polls per
+            // second, and at 361,107 in the ten minutes right after that same poller adopted its
+            // assignment. Deferring a spec without touching its `next_due` puts the backlog in
+            // this set by construction, so what is counted here is now the deficit of the polls
+            // that ran rather than a sample of where the queue happened to be.
+            //
+            // `checked_div` rather than a zero test: an interval of 0 is not reachable through the
+            // API (`10..=3600`), and treating it as "nothing was missed" is the only answer that
+            // makes sense if one ever arrives over the bus. `demand_per_sec` skips the same spec for
+            // the same reason — one judgement about a degenerate interval, written in two places
+            // that must agree.
+            let behind = now.saturating_duration_since(sched.next_due).as_millis();
+            let skipped = behind.checked_div(interval.as_millis()).unwrap_or(0);
+            missed = missed.saturating_add(u64::try_from(skipped).unwrap_or(u64::MAX));
+            sched.next_due += interval;
+            if sched.next_due <= now {
+                // Still behind after one step → re-anchor so we don't fire every tick.
+                sched.next_due = now + interval;
+            }
+        }
         self.cycles_missed = self.cycles_missed.saturating_add(missed);
+        self.deferred = u32::try_from(due_count - out.len()).unwrap_or(u32::MAX);
         out
+    }
+
+    /// How many specs were due at the last [`Self::due`] call and did **not** get a job.
+    ///
+    /// The number that says how far behind this poller is *right now*, which nothing else answered:
+    /// `yagra_poll_demand_per_second` says what the schedule asks for and
+    /// `yagra_poll_jobs_executed_total` says what was served, but the difference between them is a
+    /// rate computed over a window, and an operator watching an incident wants the instantaneous
+    /// depth. Read, not drained — it is a level, not a tally.
+    ///
+    /// ⚠️ It is the *last call's* answer, and `assignment.rs` calls `due` several times per tick
+    /// when the channel is draining fast. That is the intended reading: the most recent round is
+    /// the current state.
+    #[must_use]
+    pub fn deferred(&self) -> u32 {
+        self.deferred
     }
 
     /// Polls per second this set *asks for*: `Σ(1 / interval_secs)` over every spec (ADR-108 Inc.2).
     ///
-    /// 🚨 **[`Self::take_cycles_missed`] is a threshold signal, not a deficit meter, and reading it
-    /// as one gave a confidently wrong answer.** It only moves when [`Self::due`] re-anchors past a
-    /// whole interval, which needs the backlog to reach *this* set — a shortfall absorbed by the
-    /// concurrency permit or by a device's single-flight queue never arrives here. Measured
-    /// 2026-08-30 on 15,000 silent devices: **1,017 polls/s asked for, 26.9 served, and the counter
-    /// sat at 0**. So "is this poller keeping up?" is
-    /// `rate(yagra_poll_jobs_executed_total) / yagra_poll_demand_per_second`, and the counter is
-    /// what confirms a collapse rather than what detects one.
+    /// 🚨 **[`Self::take_cycles_missed`] answers "how many whole cycles had passed for the polls
+    /// that ran", and before ADR-109 Increment 4 how much of the shortfall reached it was a matter
+    /// of luck.** It moves when [`Self::due`] finds a spec more than a whole interval behind, which
+    /// needs the backlog to be *in this set*. It was not: `due` returned everything due and the
+    /// scheduler's send loop held the queue, so how often the set was consulted at all depended on
+    /// how long that loop took. Both extremes were measured on the same 15,000 silent devices
+    /// (2026-08-30): flat at **0** through a settled 601-second window in which the poller
+    /// served 62.6 of the 1,017 polls per second its intervals asked for, and 361,107 in the
+    /// ten minutes right after that same poller adopted the assignment. Neither reading is the
+    /// deficit; they are two samples of where the queue happened to be.
+    ///
+    /// Since a spec that loses a budgeted round keeps its `next_due`, the backlog is in this set by
+    /// construction and the cycles a deferred spec lost are still on its clock when it finally runs.
+    ///
+    /// ⚠️ What it still cannot see is a job that was dispatched and then dropped at the device's
+    /// single-flight guard; that is `yagra_poll_skipped_backpressure_total`, a different number.
+    /// And "is this poller keeping up?" is still best asked as
+    /// `rate(yagra_poll_jobs_executed_total) / yagra_poll_demand_per_second`, with
+    /// `yagra_poll_deferred_specs` as the instantaneous depth beside it.
     ///
     /// ⚠️ It answers "is this poller serving the work it holds", never "is core handing it the
     /// right work" — an assignment that never arrived shows up in `yagra_working_set_specs`
@@ -655,7 +796,7 @@ mod tests {
                 continue;
             }
             let mut per_node: HashMap<NodeId, usize> = HashMap::new();
-            for job in ws.due(now + elapsed) {
+            for job in ws.due(now + elapsed, usize::MAX) {
                 *per_node.entry(job.node_id).or_default() += 1;
             }
             out.push(per_node);
@@ -1307,11 +1448,11 @@ mod tests {
             &mut rng,
         );
         // Due immediately.
-        let jobs = ws.due(now);
+        let jobs = ws.due(now, usize::MAX);
         assert_eq!(jobs.len(), 1);
         // Not due again until an interval passes.
-        assert!(ws.due(now).is_empty());
-        assert_eq!(ws.due(now + Duration::from_secs(30)).len(), 1);
+        assert!(ws.due(now, usize::MAX).is_empty());
+        assert_eq!(ws.due(now + Duration::from_secs(30), usize::MAX).len(), 1);
     }
 
     #[test]
@@ -1334,8 +1475,8 @@ mod tests {
             now,
             &mut rng,
         );
-        let j1 = ws.due(now).remove(0);
-        let j2 = ws.due(now + Duration::from_secs(30)).remove(0);
+        let j1 = ws.due(now, usize::MAX).remove(0);
+        let j2 = ws.due(now + Duration::from_secs(30), usize::MAX).remove(0);
         assert_ne!(j1.job_id, j2.job_id, "each dispatch gets a fresh id");
         assert_eq!(j1.node_id, node(1));
         assert!(matches!(j1.check, CheckSpec::Icmp(_)));
@@ -1363,7 +1504,7 @@ mod tests {
         );
         // A long pause: 300s later, far past the 30s interval.
         let much_later = now + Duration::from_secs(300);
-        let jobs = ws.due(much_later);
+        let jobs = ws.due(much_later, usize::MAX);
         assert_eq!(jobs.len(), 1, "only one make-up poll, not a backlog burst");
         // Re-anchored to now + interval, not left far in the past.
         assert_eq!(
@@ -1402,14 +1543,15 @@ mod tests {
         );
 
         // On time: the first poll, then one exactly an interval later. Nothing was missed.
-        assert_eq!(ws.due(now).len(), 1);
+        assert_eq!(ws.due(now, usize::MAX).len(), 1);
         assert_eq!(ws.take_cycles_missed(), 0, "an on-time poll is not a miss");
-        assert_eq!(ws.due(now + Duration::from_secs(30)).len(), 1);
+        assert_eq!(ws.due(now + Duration::from_secs(30), usize::MAX).len(), 1);
         assert_eq!(ws.take_cycles_missed(), 0, "still on time");
 
         // A tick's worth of lateness is far below one interval and must not register either.
         assert_eq!(
-            ws.due(now + Duration::from_secs(60) + SCHEDULER_TICK).len(),
+            ws.due(now + Duration::from_secs(60) + SCHEDULER_TICK, usize::MAX)
+                .len(),
             1
         );
         assert_eq!(
@@ -1422,7 +1564,11 @@ mod tests {
         // that no poll will ever be issued for — the single make-up poll covers the eleventh.
         // (the slot that just fired was at now+90, so now+390 is exactly 300s past it)
         let much_later = now + Duration::from_secs(390);
-        assert_eq!(ws.due(much_later).len(), 1, "one make-up poll, as before");
+        assert_eq!(
+            ws.due(much_later, usize::MAX).len(),
+            1,
+            "one make-up poll, as before"
+        );
         assert_eq!(ws.take_cycles_missed(), 10);
         assert_eq!(ws.take_cycles_missed(), 0, "draining resets the tally");
     }
@@ -1693,6 +1839,206 @@ mod tests {
         assert!(
             seen.iter().all(|&b| b == 10_000),
             "the 50s window must clamp down to the 10s interval"
+        );
+    }
+
+    // ── A scarce budget goes to whatever is latest relative to its own interval (ADR-109 Inc.4) ──
+    //
+    // Before this, `due` returned everything and `assignment.rs` pushed the whole batch before it
+    // looked at the clock again, so the order was the walk order — node by node, and a node's specs
+    // are adjacent. A 3600 s check therefore went out as often as a 60 s one. These pin the rule
+    // that replaced it, and the one line it rests on.
+
+    /// One node per id, one spec each, at the interval given. The shape the ranking is about:
+    /// specs on *different* nodes, competing for the same budget.
+    fn fleet(specs: &[(u128, u32)]) -> Vec<NodeJobs> {
+        specs
+            .iter()
+            .map(|&(n, interval)| NodeJobs {
+                node_id: node(n),
+                specs: vec![icmp_spec(node(n), interval)],
+            })
+            .collect()
+    }
+
+    fn seeded(nodes: Vec<NodeJobs>, now: Instant) -> WorkingSet {
+        let mut ws = WorkingSet::new();
+        let mut rng = fixed(0); // no jitter: every spec is due at `now`
+        assert_eq!(
+            ws.apply(snapshot(Uuid::from_u128(1), 1, 0, 1, nodes), now, &mut rng),
+            ApplyOutcome::Applied
+        );
+        ws
+    }
+
+    /// **The accepting side, and it comes first on purpose.**
+    ///
+    /// Every other assertion here is of the form "the budget cut something". An implementation that
+    /// returned nothing, or that always deferred, satisfies all of them — and would stop the poller
+    /// polling entirely while this module stayed green
+    /// (`rejection-only-tests-pass-when-everything-rejects`). A budget that fits must behave exactly
+    /// as the unbudgeted `due` did, because that is the case a healthy deployment is always in.
+    #[test]
+    fn everything_due_is_minted_when_it_fits() {
+        let now = Instant::now();
+        let mut ws = seeded(
+            vec![
+                one_node_three_specs(node(1), 60),
+                one_node_three_specs(node(2), 60),
+            ],
+            now,
+        );
+        // Three seconds past `now` clears the per-spec stagger (SPEC_STAGGER_MS is two ticks, so
+        // a node’s third spec sits 2 s out), leaving all six genuinely due.
+        let at = now + Duration::from_secs(3);
+        let jobs = ws.due(at, 6);
+        assert_eq!(jobs.len(), 6, "a budget that fits mints every due spec");
+        assert_eq!(ws.deferred(), 0, "and nothing was held back");
+        assert!(
+            ws.due(at, 6).is_empty(),
+            "…and every one of them was re-armed, as before"
+        );
+    }
+
+    /// The rank is `behind / interval`, not `behind`, and not the node id.
+    ///
+    /// 🚨 **The hourly node is given the *lower* id deliberately.** Both specs are exactly one
+    /// minute late, so a rule that fell back to walk order or to the id tie-break would pick the
+    /// hourly one — which is the behaviour this increment exists to remove.
+    #[test]
+    fn the_most_overdue_relative_to_its_own_interval_goes_first() {
+        let now = Instant::now();
+        let mut ws = seeded(fleet(&[(1, 3600), (2, 60)]), now);
+        let jobs = ws.due(now + Duration::from_secs(60), 1);
+        assert_eq!(jobs.len(), 1, "the budget was one");
+        assert_eq!(
+            jobs[0].node_id,
+            node(2),
+            "a 60 s check a minute late has missed a whole cycle; a 3600 s check a minute late has \
+             missed a sixtieth of one"
+        );
+        assert_eq!(ws.deferred(), 1, "the hourly spec is the one held back");
+    }
+
+    /// 🚨 **A spec that loses keeps its `next_due`** — the one line the whole design rests on.
+    ///
+    /// Advance a deferred spec's timer and its lateness stops accumulating, so a long-interval check
+    /// can never out-rank a short one and never runs again. Every other test in this file passes
+    /// against that wrong version, because they all read the *winner*.
+    #[test]
+    fn a_spec_that_lost_keeps_its_turn() {
+        let now = Instant::now();
+        let mut ws = seeded(fleet(&[(1, 3600), (2, 60)]), now);
+        let at = now + Duration::from_secs(60);
+        let before = ws.nodes[&node(1)][0].next_due;
+
+        assert_eq!(
+            ws.due(at, 1)[0].node_id,
+            node(2),
+            "the 60 s check wins first"
+        );
+        assert_eq!(
+            ws.nodes[&node(1)][0].next_due,
+            before,
+            "the loser's timer must not move — that is what lets its lateness accumulate"
+        );
+        assert_eq!(
+            ws.due(at, 1)[0].node_id,
+            node(1),
+            "…so it takes the very next slot, rather than waiting another whole interval"
+        );
+    }
+
+    /// **Under sustained scarcity the served ratio comes back to the configured one.**
+    ///
+    /// 100 checks a minute and 100 checks an hour is a demand ratio of 60 : 1. The budget here
+    /// serves one poll a second against 1.694 demanded, so 41% of the schedule cannot run — and the
+    /// question is which 41%.
+    ///
+    /// Both bounds are load-bearing and they exclude opposite failures: the measured defect served
+    /// them at **1.03 : 1** (walk order, so the hourly tier ran as often as the per-minute one),
+    /// while a strict "shortest interval always wins" rule would serve the hourly tier **zero**
+    /// times — under this load the fast tier alone exceeds the budget forever.
+    #[test]
+    fn a_starved_hourly_check_eventually_wins_and_the_ratio_comes_back() {
+        let now = Instant::now();
+        let fleet_spec: Vec<(u128, u32)> = (0..100)
+            .map(|i| (i, 60))
+            .chain((100..200).map(|i| (i, 3600)))
+            .collect();
+        let mut ws = seeded(fleet(&fleet_spec), now);
+
+        let (mut fast, mut slow) = (0usize, 0usize);
+        for second in 1..=3600u64 {
+            for job in ws.due(now + Duration::from_secs(second), 1) {
+                if job.interval_secs == 60 {
+                    fast += 1;
+                } else {
+                    slow += 1;
+                }
+            }
+        }
+        assert_eq!(fast + slow, 3600, "one poll a second, for an hour");
+        assert!(
+            slow > 0,
+            "the hourly tier was never served at all — that is strict priority, not the configured \
+             ratio ({fast} fast / {slow} slow)"
+        );
+        let ratio = fast as f64 / slow as f64;
+        assert!(
+            ratio > 10.0,
+            "served {ratio:.2} : 1 against a configured 60 : 1 ({fast} fast / {slow} slow). \
+             The measured defect served 1.03 : 1"
+        );
+    }
+
+    /// Equal lateness is broken deterministically, not by `HashMap` order.
+    ///
+    /// Two working sets built from the same snapshot have different hash seeds, so without the
+    /// `(node, index)` tie-break the boundary of a truncated batch would differ between them — and
+    /// therefore between two restarts of the same poller, which no test could pin.
+    #[test]
+    fn equal_lateness_is_broken_deterministically() {
+        let now = Instant::now();
+        let spec = fleet(&[(1, 60), (2, 60), (3, 60), (4, 60)]);
+        let served = |mut ws: WorkingSet| -> Vec<NodeId> {
+            ws.due(now + Duration::from_secs(60), 2)
+                .into_iter()
+                .map(|j| j.node_id)
+                .collect()
+        };
+        let a = served(seeded(spec.clone(), now));
+        let b = served(seeded(spec, now));
+        assert_eq!(a.len(), 2);
+        assert_eq!(
+            a, b,
+            "the same fleet must be served in the same order twice"
+        );
+    }
+
+    /// A deferred spec's lost cycles are counted when it finally runs.
+    ///
+    /// 🚨 **`yagra_poll_cycles_missed_total` saw this only by luck before.** The backlog used to sit in
+    /// the scheduler’s send loop rather than in the working set, so how much of the shortfall reached
+    /// the counter depended on how often that loop asked — flat at **0** through a settled ten-minute
+    /// window on a poller serving 62.6 of 1,017 demanded polls per second, and 361,107 right after
+    /// that same poller adopted its assignment (both 2026-08-30). Keeping a loser’s `next_due` puts
+    /// the backlog in the set by construction.
+    #[test]
+    fn a_deferred_spec_is_counted_when_it_finally_runs() {
+        let now = Instant::now();
+        let mut ws = seeded(fleet(&[(1, 60), (2, 60)]), now);
+
+        // One minute on: both are due, one is served. It is one cycle late, so one is counted.
+        ws.due(now + Duration::from_secs(61), 1);
+        assert_eq!(ws.take_cycles_missed(), 1);
+
+        // Another minute: the loser has now been waiting two whole cycles, and says so.
+        ws.due(now + Duration::from_secs(121), 1);
+        assert_eq!(
+            ws.take_cycles_missed(),
+            2,
+            "the spec that was held back reports the cycles it lost, not just the last one"
         );
     }
 }
