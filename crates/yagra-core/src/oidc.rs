@@ -732,7 +732,7 @@ impl OidcRepo {
         let Some(row) = row else {
             return Ok(None);
         };
-        let key_id: i64 = row.try_get("key_id")?;
+        let key_id: i32 = row.try_get("key_id")?;
         let sealed = SealedSecret {
             key_id: u32::try_from(key_id).unwrap_or(0),
             wrapped_dek: row.try_get("wrapped_dek")?,

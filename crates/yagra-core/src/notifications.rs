@@ -280,7 +280,7 @@ impl NotificationRepo {
         let mut out = Vec::new();
         for row in rows {
             let id: Uuid = row.try_get("id")?;
-            let key_id: i64 = row.try_get("key_id")?;
+            let key_id: i32 = row.try_get("key_id")?;
             let template = ChannelTemplate {
                 subject: row.try_get("subject_template")?,
                 body: row.try_get("body_template")?,

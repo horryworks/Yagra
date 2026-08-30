@@ -553,4 +553,99 @@ mod tests {
         assert!(MerakiApiSecret::parse(br#"{}"#).is_err());
         assert!(MerakiApiSecret::parse(b"not json").is_err());
     }
+
+    /// 🚨 **A sealed secret's `key_id` must be decoded at the width its column declares.**
+    ///
+    /// sqlx checks the column type at **runtime**, not at compile time: reading an `INTEGER` column
+    /// into `i64` fails the whole row with `mismatched types`, and every caller above turns that
+    /// into a degraded read rather than an error anyone sees. Measured on the lab core 2026-08-30 —
+    /// `notification_channels` held exactly one row, `list_open_channels` failed every 30 seconds,
+    /// and `load_routing` degrades a failed read to an *empty* snapshot, so the deployment delivered
+    /// **no notification at all** and said so only in a `WARN` line. Three readers were wrong the
+    /// same way — notification channels, OIDC providers, forwarding destinations — and each one
+    /// silently disables a whole feature the moment a row exists.
+    ///
+    /// Nothing else could have caught it. These are live PostgreSQL reads, so no unit test reaches
+    /// them, and the lab held zero rows in all three tables — which is exactly what ADR-097's own
+    /// remnant said about notification channels, and it stood for eight releases.
+    ///
+    /// The rule is **derived, not written down**: `migrations/` says which width each `key_id`
+    /// column has, and exactly one of them is `BIGINT` (`credentials`, migration 0002). So exactly
+    /// one file may read it as `i64`, and that file is named here rather than in nine doc comments.
+    #[test]
+    fn every_sealed_key_id_is_read_at_the_width_its_column_declares() {
+        use std::path::Path;
+        use yagra_common::srcread as sr;
+
+        // What the schema declares.
+        let migrations = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+        let (mut wide_cols, mut narrow_cols) = (0usize, 0usize);
+        for entry in std::fs::read_dir(&migrations).expect("migrations/ is readable") {
+            let path = entry.expect("a readable directory entry").path();
+            if path.extension().is_none_or(|x| x != "sql") {
+                continue;
+            }
+            let sql = std::fs::read_to_string(&path)
+                .expect("migration is readable")
+                .to_lowercase();
+            // A declaration, not a reference: the type word follows the column name.
+            for tail in sql.split("key_id").skip(1) {
+                let word: String = tail
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .collect();
+                match word.as_str() {
+                    "bigint" => wide_cols += 1,
+                    "integer" => narrow_cols += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            wide_cols, 1,
+            "exactly one key_id column is BIGINT (credentials, migration 0002). A second one means \
+             the exemption below has to name its reader too"
+        );
+        assert!(
+            narrow_cols >= 7,
+            "only {narrow_cols} INTEGER key_id columns found — the migration scan stopped matching, \
+             and a scan that sees nothing is indistinguishable from a schema that is fine"
+        );
+
+        // What the code does. Read through `srcread` so this test cannot see its own needles.
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut paths = Vec::new();
+        sr::rs_files(&src, &mut paths);
+        assert!(
+            paths.len() >= 150,
+            "only {} source files walked; the crate is larger than that",
+            paths.len()
+        );
+        let mut inspected = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for path in &paths {
+            let name = sr::file_name(path);
+            let code = sr::strip_and_check(&name, &sr::read(path));
+            for line in code.lines().filter(|l| {
+                l.contains("key_id") && (l.contains("try_get") || l.contains(".get::<"))
+            }) {
+                inspected += 1;
+                if line.contains("i64") && name != "secrets.rs" {
+                    offenders.push(format!("{name}: {}", line.trim()));
+                }
+            }
+        }
+        assert!(
+            inspected >= 9,
+            "only {inspected} key_id reads inspected — the needle stopped matching, which reads the \
+             same as every reader being correct"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these decode an INTEGER key_id as i64, which fails the whole row at runtime and \
+             degrades to an empty read:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
 }

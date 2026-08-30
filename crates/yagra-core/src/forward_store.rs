@@ -270,7 +270,7 @@ impl ForwardStore {
     }
 
     fn row_to_open(&self, row: sqlx::postgres::PgRow) -> anyhow::Result<OpenDestination> {
-        let key_id: Option<i64> = row.try_get("key_id")?;
+        let key_id: Option<i32> = row.try_get("key_id")?;
         let secret = match key_id {
             None => None,
             Some(key_id) => {

@@ -230,6 +230,20 @@
 
 ### Bug Fixes
 
+- **Notification channels, OIDC single sign-on and forwarding destinations each stopped working the
+  moment one was configured.** All three read the envelope-encryption key generation (`key_id`) as a
+  64-bit integer out of a 32-bit column. sqlx checks a column's type when the row is decoded, so the
+  read failed — and each caller degrades a failed read to an empty result rather than an error. A
+  deployment with a notification channel therefore loaded **zero** channels and delivered **no
+  notifications at all**, saying so only in a log warning every 30 seconds; the same fault made an
+  OIDC provider unusable for sign-in and stripped the stored credentials from every forwarding
+  destination. Fixed in all three readers, with a check that derives the correct width from the
+  schema so a future reader cannot get it wrong.
+  ⚠️ **If this deployment has a notification channel, no notification has ever been delivered from
+  it.** Nothing was lost — alert history, alert state and acknowledgements are unaffected — and
+  channels start working on this version with no action needed. Alerts that fired while the channel
+  was inert are not re-sent.
+
 - **Deleting a node now closes the alerts it had open.** Nothing polls a node that no longer exists,
   so no poll result could ever visit its checks again and no code path could resolve them. The alert
   stayed active in the UI, the incident stayed open in whatever external tool its dedup key had
