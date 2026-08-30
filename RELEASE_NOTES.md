@@ -227,6 +227,19 @@
   The last pair is meant to be read against the host's own `nstat IcmpInEchoReps`: equal means the
   loss a poller reports is the network's, while a shortfall means replies are being dropped between
   the socket and the process — which looks exactly like unreachable devices.
+- **A device that answers no SNMP at all is now asked once by the media walk, not three times.**
+  Against a silent device every other SNMP check settles at two columns' worth of timeout; the media
+  walk (`snmp_mau`) sat at five — measured at **10,006 ms** per poll against 15,000 unreachable
+  devices — because it fired three separate walks, each starting its own truncation budget, and the
+  first asked for a *single* column, which can never reach the two-consecutive-failures rule that
+  ends the others early. `ifMauType` and the Cisco `portTable` columns now travel in one walk, and a
+  walk that gave up two columns in a row having collected nothing reports the device as silent
+  instead of returning an empty answer that reads identically to "this MIB is not implemented". That
+  puts the media walk on the same 4,002 ms the other five silent-device checks converged on, and
+  stops the two ENTITY-MIB walks that followed it from each buying another timeout to learn the same
+  thing. A device that *answers* is asked for exactly the same four columns as before, over one UDP
+  session instead of two, and nothing it reports changes.
+  `yagra_snmp_walk_truncated_total{reason="silent"}` counts it.
 
 ### Bug Fixes
 

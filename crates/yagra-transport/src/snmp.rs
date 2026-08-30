@@ -6,7 +6,7 @@
 //! at query time (ADR-012). Live-only (needs a device + UDP); the numeric mapping and
 //! ifIndex extraction are unit-tested.
 
-use crate::walk_budget::{note_truncation, ColumnOutcome, WalkBudget};
+use crate::walk_budget::{is_silence, note_truncation, ColumnOutcome, Truncation, WalkBudget};
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpTableSample, SnmpTableString, SnmpValue, TransportError,
 };
@@ -206,9 +206,13 @@ pub async fn snmp_walk_instances_v2c(
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
     let mut budget = WalkBudget::new(timeout);
+    // Why the walk stopped, kept rather than dropped so the caller can be told the
+    // device said nothing at all (ADR-110 Increment 4).
+    let mut stopped: Option<Truncation> = None;
     for (asked, base_str) in column_oids.iter().enumerate() {
         if let Some(reason) = budget.spent() {
             note_truncation(reason, target, column_oids.len() - asked);
+            stopped = Some(reason);
             break;
         }
         let Some(base) = parse_oid(base_str) else {
@@ -223,6 +227,16 @@ pub async fn snmp_walk_instances_v2c(
         let outcome =
             walk_column_capped(&client, base_str, &base, max_rows - rows.len(), &mut rows).await;
         budget.record(outcome);
+    }
+    // The loop only consults the budget at the *top* of an iteration, so a walk whose last
+    // two columns both failed ends by running out of columns rather than by tripping. Ask
+    // once more — the question is about the device, not about where the loop stopped.
+    let stopped = stopped.or_else(|| budget.spent());
+    // A device that failed two columns in a row and gave up nothing is not a device that
+    // does not implement these columns — it is one that is not answering. Saying so is what
+    // lets `execute_mau` stop after one walk instead of three (ADR-110 Increment 4).
+    if is_silence(rows.len(), stopped) {
+        return Err(TransportError::Silent(target));
     }
     Ok(rows)
 }

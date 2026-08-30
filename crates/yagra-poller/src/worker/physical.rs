@@ -463,22 +463,29 @@ async fn walk_entity_text(
 /// `walk_instances` caller.
 const MAU_MAX_ROWS: usize = 4096;
 
-/// Execute a media-type walk (v2c or v3, selected by `walker`) — ADR-063 Inc.2.
+/// Execute a media-type walk (v2c or v3, selected by `walker`) — ADR-063 Inc.2, ADR-110 Inc.4.
 ///
-/// Two sources, tried in order, and the order is the point:
+/// Three sources, and the order they are consulted in is the point:
 ///
 /// 1. **`ifMauTable`**, which answers with a registry designation covering copper *and* optics. Its
 ///    `(ifIndex, ifMauIndex)` index is why this cannot ride the interface walk — the ordinary
 ///    walkers fold a multi-subid tail into a hash. The instance walker preserves it.
-/// 2. **ENTITY-MIB**, only for ports MAU did not answer and only when `entity_fallback` is on. It
-///    returns a vendor part string, which is a *different fact*: it is stored as
+/// 2. **CISCO-STACK-MIB's `portType`** (ADR-063 Inc.7), for ports `ifMauType` did not answer: the
+///    device *stating* the medium, rather than a part number to pattern-match.
+/// 3. **ENTITY-MIB**, only for ports neither of those answered and only when `entity_fallback` is
+///    on. It returns a vendor part string, which is a *different fact*: it is stored as
 ///    `transceiver_model` and only promotes to `if_media` when it demonstrably contains a
 ///    designation. It reaches pluggables alone — a fixed copper port has no entity to describe, so
 ///    a device with no MAU-MIB gets nothing for its RJ45 ports and that is honest.
 ///
+/// **Sources 1 and 2 share one walk; source 3 is its own** — see the comment on that walk for why
+/// merging the first two is what makes a silent device cheap, and why merging the third would break
+/// `mau::entity_text`.
+///
 /// The result is **observational**, like the optical and neighbour walks: most devices do not
 /// implement MAU-MIB, and a silent one is not an unreachable one. Reporting otherwise would page
-/// someone about a healthy box.
+/// someone about a healthy box. Every exit goes through [`mau_result`], which is where that is said
+/// once.
 ///
 /// Every field except the media pair is `None` on the way out. Core's interface upsert COALESCEs
 /// each column, so these rows fill their own columns and leave the name, alias, speed, duplex and
@@ -491,17 +498,43 @@ pub(super) async fn execute_mau(
     timeout: Duration,
     walker: &SnmpWalker,
 ) -> PollResult {
-    let columns = vec![yagra_common::OID_IF_MAU_TYPE.to_owned()];
-    let (mut media, unknown) = match walker
+    // **One walk, not two** (ADR-110 Increment 4). `ifMauType` on its own is a *single* column, and
+    // a single column can never trip `WalkBudget`'s two-consecutive-failures rule — so against a
+    // silent device this walk paid a whole timeout and then returned `Ok(empty)`, which is
+    // indistinguishable from "the device does not implement MAU-MIB". Asking for both column
+    // families in one call gives the budget two columns to judge the device on, and the walker then
+    // says so with `TransportError::Silent` instead of leaving it to be guessed at. That is what
+    // put this check on the 4,002 ms every other silent-device check had already converged on;
+    // measured before it, `snmp_mau` alone sat at 10,006 ms (= 2 + 4 + 4).
+    //
+    // A healthy device is asked for exactly the same four columns as before, over one UDP session
+    // instead of two — the old `media.len() < MAU_MAX_ROWS` gate was true for anything short of a
+    // 4,096-port chassis, and the row budget it stood in for is enforced inside the walker anyway.
+    //
+    // ⚠️ **The ENTITY-MIB columns below are deliberately NOT merged in.** `mau::entity_text` treats
+    // every column that is not one of its yardsticks as a describing candidate, so MAU and Cisco
+    // rows arriving in the same vector would be read as part numbers.
+    let columns = vec![
+        yagra_common::OID_IF_MAU_TYPE.to_owned(),
+        yagra_common::OID_CISCO_PORT_TYPE.to_owned(),
+        yagra_common::OID_CISCO_PORT_IFINDEX.to_owned(),
+        // Three `portType` values name a capability rather than a rate; see `cisco_media_by_ifindex`.
+        yagra_common::OID_IF_HIGH_SPEED.to_owned(),
+    ];
+    let rows = match walker
         .walk_instances(transport, job.target, &columns, timeout, MAU_MAX_ROWS)
         .await
     {
-        Ok(rows) => crate::mau::media_by_ifindex(&rows),
+        Ok(rows) => rows,
         Err(err) => {
-            tracing::debug!(job_id = %job.job_id, error = %err, "ifMauTable walk failed");
-            (BTreeMap::new(), Vec::new())
+            // `TransportError::Silent` lands here, and returning on it is the point: the two ENTITY
+            // walks below would each buy another four seconds of the same answer.
+            tracing::debug!(job_id = %job.job_id, error = %err, "media walk failed");
+            return mau_result(job, at_unix_ms, Vec::new());
         }
     };
+
+    let (mut media, unknown) = crate::mau::media_by_ifindex(&rows, yagra_common::OID_IF_MAU_TYPE);
     if !unknown.is_empty() {
         // A *number*, not an OID string — it is what someone extending `MAU_TYPES` needs, and the
         // only way a gap in a hand-transcribed registry becomes visible from a running deployment.
@@ -513,41 +546,21 @@ pub(super) async fn execute_mau(
     }
 
     // Second source: CISCO-STACK-MIB's `portType` (ADR-063 Inc.7), for the ports `ifMauType` did
-    // not answer. Between MAU and the ENTITY text on purpose — it is the device *stating* the
-    // medium, where the ENTITY string is a part number this code pattern-matches — and skipped
-    // entirely when MAU already covered everything, so a device that answers the standard MIB pays
-    // nothing for it.
-    if media.is_empty() || media.len() < MAU_MAX_ROWS {
-        let columns = vec![
-            yagra_common::OID_CISCO_PORT_TYPE.to_owned(),
-            yagra_common::OID_CISCO_PORT_IFINDEX.to_owned(),
-            // Three `portType` values name a capability rather than a rate; see `cisco_media_by_ifindex`.
-            yagra_common::OID_IF_HIGH_SPEED.to_owned(),
-        ];
-        match walker
-            .walk_instances(transport, job.target, &columns, timeout, MAU_MAX_ROWS)
-            .await
-        {
-            Ok(rows) => {
-                let cisco = crate::mau::cisco_media_by_ifindex(
-                    &rows,
-                    yagra_common::OID_CISCO_PORT_TYPE,
-                    yagra_common::OID_CISCO_PORT_IFINDEX,
-                    yagra_common::OID_IF_HIGH_SPEED,
-                );
-                for (ifindex, m) in cisco {
-                    // MAU wins: a registry designation is never replaced by a translated one.
-                    media.entry(ifindex).or_insert(crate::mau::MediaRow {
-                        media: Some(m),
-                        duplex: None,
-                        transceiver_model: None,
-                    });
-                }
-            }
-            Err(err) => {
-                tracing::debug!(job_id = %job.job_id, error = %err, "cisco portTable walk failed");
-            }
-        }
+    // not answer. Read between MAU and the ENTITY text on purpose — it is the device *stating* the
+    // medium, where the ENTITY string is a part number this code pattern-matches.
+    let cisco = crate::mau::cisco_media_by_ifindex(
+        &rows,
+        yagra_common::OID_CISCO_PORT_TYPE,
+        yagra_common::OID_CISCO_PORT_IFINDEX,
+        yagra_common::OID_IF_HIGH_SPEED,
+    );
+    for (ifindex, m) in cisco {
+        // MAU wins: a registry designation is never replaced by a translated one.
+        media.entry(ifindex).or_insert(crate::mau::MediaRow {
+            media: Some(m),
+            duplex: None,
+            transceiver_model: None,
+        });
     }
 
     if entity_fallback {
@@ -579,6 +592,15 @@ pub(super) async fn execute_mau(
         })
         .collect();
 
+    mau_result(job, at_unix_ms, interfaces)
+}
+
+/// The shape every media-walk answer takes: observational, no samples, only the interface rows.
+///
+/// A function rather than a literal because [`execute_mau`] now has **two** exits — the walk that
+/// found nothing because the device said nothing returns early — and two copies of a nineteen-field
+/// struct is exactly how one of them ends up claiming reachability the walk never established.
+fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterface>) -> PollResult {
     PollResult {
         job_id: job.job_id,
         node_id: job.node_id,
@@ -593,7 +615,7 @@ pub(super) async fn execute_mau(
         arp: None,
         routing: None,
         poller_id: None,
-        // Never a liveness statement — see the doc comment.
+        // Never a liveness statement — see [`execute_mau`]'s doc comment.
         observational: true,
         trace_context: Default::default(),
     }
@@ -875,6 +897,138 @@ mod tests {
             of(yagra_common::METRIC_CISCO_TEMP_C),
             vec![(Some(200), 31.0)],
             "only the sensor that belongs to no port becomes a chassis temperature"
+        );
+    }
+
+    /// A media job aimed at a device, with the ENTITY fallback on — the shape core always builds
+    /// (`build_snmp_mau_check` hardcodes `entity_fallback: true`).
+    fn mau_job() -> PollJob {
+        PollJob::snmp_mau(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::SnmpMauCheck {
+                community: "public".to_owned(),
+                entity_fallback: true,
+                timeout_ms: 2_000,
+            },
+            3600,
+        )
+    }
+
+    /// **A device that said nothing is asked once, not three times** (ADR-110 Increment 4).
+    ///
+    /// The measured defect: `snmp_mau` sat at 10,006 ms against a silent device while every other
+    /// SNMP check converged on 4,002 ms, because `execute_mau` fired three walks and each one
+    /// started a fresh `WalkBudget`. The first asked for a *single* column, which can never trip the
+    /// two-consecutive-failures rule, so it returned `Ok(empty)` — indistinguishable from "this
+    /// device does not implement MAU-MIB" — and the other two paid their own timeouts to learn the
+    /// same thing.
+    ///
+    /// 🚨 This asserts what the poller **asked for**, not what came back. Every assertion about the
+    /// result already passed against the broken version: three walks against a silent device return
+    /// exactly what one walk returns.
+    #[tokio::test]
+    async fn a_device_that_said_nothing_is_asked_once_not_three_times() {
+        let fake = FakeTransport::reachable(1.0).with_silent_instance_walks();
+        let r = execute(&mau_job(), &fake, 1_000).await;
+
+        assert!(r.interfaces.is_empty(), "nothing was learned");
+        assert_eq!(
+            r.outcome,
+            CheckOutcome::Reachable,
+            "a media walk never states liveness, silence included"
+        );
+        assert!(r.observational, "…and says so");
+
+        let asked = fake
+            .asked
+            .lock()
+            .expect("the ask log is not poisoned")
+            .clone();
+        assert_eq!(
+            asked.len(),
+            1,
+            "one walk, not three — each extra one buys another timeout to learn the same thing: \
+             {asked:?}"
+        );
+        let first = &asked[0];
+        assert!(
+            first.iter().any(|c| c == yagra_common::OID_IF_MAU_TYPE)
+                && first.iter().any(|c| c == yagra_common::OID_CISCO_PORT_TYPE),
+            "the one walk must carry both column families, or the budget has only one column to \
+             judge the device on and cannot trip: {first:?}"
+        );
+        assert!(
+            !asked
+                .iter()
+                .flatten()
+                .any(|c| c == ENT_PHYSICAL_MODEL_NAME || c == optical::ENT_ALIAS_MAPPING),
+            "no ENTITY column may be asked for after the device was reported silent: {asked:?}"
+        );
+    }
+
+    /// **Merging the two column families changes nothing about what is reported.**
+    ///
+    /// The regression for ADR-110 Increment 4's second half: `ifMauType` and Cisco's `portTable`
+    /// now arrive in one row vector, so both readers have to pick their own columns out of it.
+    /// `media_by_ifindex` used to take every row it was handed and lean on "only `ifMauType` is an
+    /// OBJECT IDENTIFIER" — true today, and a coincidence of value types rather than a rule.
+    #[tokio::test]
+    async fn one_walk_carrying_both_column_families_reports_what_two_walks_did() {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        const CISCO_TYPE: &str = "1.3.6.1.4.1.9.5.1.4.1.1.5";
+        const CISCO_IFX: &str = "1.3.6.1.4.1.9.5.1.4.1.1.11";
+        const HIGH_SPEED: &str = "1.3.6.1.2.1.31.1.1.1.15";
+
+        let mau = |ifindex: u32, subid: u32| SnmpInstanceRow {
+            oid_base: yagra_common::OID_IF_MAU_TYPE.to_owned(),
+            instance: vec![ifindex, 1],
+            value: SnmpValue::Oid(format!("1.3.6.1.2.1.26.4.{subid}")),
+        };
+        let port = |oid: &str, module: u32, port: u32, v: i64| SnmpInstanceRow {
+            oid_base: oid.to_owned(),
+            instance: vec![module, port],
+            value: SnmpValue::Int(v),
+        };
+        let speed = |ifindex: u32, mbps: i64| SnmpInstanceRow {
+            oid_base: HIGH_SPEED.to_owned(),
+            instance: vec![ifindex],
+            value: SnmpValue::Int(mbps),
+        };
+
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_instances = vec![
+            // ifIndex 7 answers MAU: 1000BASE-T (registration 30).
+            mau(7, 30),
+            // (1,1) → ifIndex 10101 answers only Cisco's portTable, at 1 Gbit/s copper.
+            port(CISCO_IFX, 1, 1, 10101),
+            port(CISCO_TYPE, 1, 1, 61),
+            speed(10101, 1000),
+        ];
+        let r = execute(&mau_job(), &fake, 1_000).await;
+
+        let media: Vec<(u32, Option<String>)> = r
+            .interfaces
+            .iter()
+            .map(|i| (i.ifindex.0, i.if_media.clone()))
+            .collect();
+        assert!(
+            media.contains(&(7, Some("1000BASE-T".to_owned()))),
+            "the MAU registration must survive the merge: {media:?}"
+        );
+        assert!(
+            media.contains(&(10101, Some("1000BASE-T".to_owned()))),
+            "…and so must the Cisco translation, which now shares the walk: {media:?}"
+        );
+        assert_eq!(
+            fake.asked
+                .lock()
+                .expect("the ask log is not poisoned")
+                .first()
+                .map(Vec::len),
+            Some(4),
+            "one walk asking for all four columns"
         );
     }
 }

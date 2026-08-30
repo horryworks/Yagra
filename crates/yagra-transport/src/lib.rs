@@ -306,6 +306,16 @@ pub enum TransportError {
     /// The transport for this protocol is not yet implemented.
     #[error("transport not implemented: {0}")]
     Unimplemented(&'static str),
+    /// The device answered nothing at all: a multi-column walk stopped on
+    /// `walk_budget::Truncation::Silent` having collected no rows (ADR-110 Increment 4).
+    ///
+    /// 🚨 **Distinct from an empty `Ok`, and that distinction is the whole point.**
+    /// `Ok(vec![])` means "the agent answered, and does not implement these columns" — the property
+    /// `walk_budget`'s safety argument rests on. This means nothing came back at all, which is what
+    /// lets a caller that would otherwise fire more walks at the same silent device stop after the
+    /// first. `execute_mau` fires three, and paid 10,006 ms instead of 4,002 for exactly that.
+    #[error("no answer from {0}")]
+    Silent(IpAddr),
 }
 
 /// Abstraction over device access. Implementations: a real ICMP/SNMP/HTTP transport
@@ -512,6 +522,16 @@ pub struct FakeTransport {
     /// "The agent refused" and "the agent answered with nothing" are different device states
     /// that a caller can easily conflate, and the empty-vec default can only express the second.
     pub snmp_get_error: Option<String>,
+    /// When set, every **instance** walk (v2c and v3) reports the device as silent —
+    /// `TransportError::Silent` — instead of returning [`Self::snmp_instances`].
+    ///
+    /// The state a real walker reaches when two columns in a row go unanswered (ADR-110
+    /// Increment 4). It is its own field rather than a reuse of [`Self::snmp_get_error`]
+    /// because the whole question these two answer is different: an empty `Ok` from an
+    /// instance walk means "the agent does not implement these columns", and only this
+    /// means "nothing came back". A caller that fires more walks at the device must
+    /// distinguish them, and a test that cannot produce the second cannot see it fail to.
+    pub snmp_instances_silent: bool,
 }
 
 /// A canned one-hop chain resolving to `10.1.2.3`, or the same query having timed out.
@@ -607,6 +627,7 @@ impl FakeTransport {
             meraki: Vec::new(),
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
+            snmp_instances_silent: false,
             dns: fake_dns_chain(true),
         }
     }
@@ -637,6 +658,7 @@ impl FakeTransport {
             meraki: Vec::new(),
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
+            snmp_instances_silent: false,
             dns: fake_dns_chain(false),
         }
     }
@@ -652,6 +674,14 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp_get_error(mut self, message: &str) -> Self {
         self.snmp_get_error = Some(message.to_owned());
+        self
+    }
+
+    /// Make every instance walk (v2c and v3) report the device as silent, as a walker does
+    /// once two columns in a row go unanswered (ADR-110 Increment 4).
+    #[must_use]
+    pub fn with_silent_instance_walks(mut self) -> Self {
+        self.snmp_instances_silent = true;
         self
     }
 
@@ -822,6 +852,9 @@ impl Transport for FakeTransport {
         max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
         self.record_asked(column_oids);
+        if self.snmp_instances_silent {
+            return Err(TransportError::Silent(_target));
+        }
         Ok(self.canned_instances(column_oids, max_rows))
     }
 
@@ -834,6 +867,9 @@ impl Transport for FakeTransport {
         max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
         self.record_asked(column_oids);
+        if self.snmp_instances_silent {
+            return Err(TransportError::Silent(_target));
+        }
         // Same canned rows as the v2c walk — the fake is protocol-agnostic.
         Ok(self.canned_instances(column_oids, max_rows))
     }

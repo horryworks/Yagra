@@ -97,7 +97,8 @@ pub struct MediaRow {
     pub transceiver_model: Option<String>,
 }
 
-/// `ifMauType` rows → one media row per ifIndex.
+/// `ifMauType` rows → one media row per ifIndex. Rows of any other column are ignored, which is
+/// what lets this share a walk with the Cisco `portTable` columns (ADR-110 Increment 4).
 ///
 /// The ifIndex is the **first** sub-identifier of the instance (`ifMauIfIndex`); the second is
 /// `ifMauIndex`, which distinguishes several MAUs on one port.
@@ -111,10 +112,17 @@ pub struct MediaRow {
 /// `unknown_subids`, so the caller can log a *number* — which is what someone extending the table
 /// needs. It is never guessed at.
 #[must_use]
-pub fn media_by_ifindex(rows: &[SnmpInstanceRow]) -> (BTreeMap<u32, MediaRow>, Vec<u32>) {
+pub fn media_by_ifindex(
+    rows: &[SnmpInstanceRow],
+    mau_type_oid: &str,
+) -> (BTreeMap<u32, MediaRow>, Vec<u32>) {
     let mut out: BTreeMap<u32, MediaRow> = BTreeMap::new();
     let mut unknown: Vec<u32> = Vec::new();
-    for row in rows {
+    // Filtered by column, not by value shape. Since ADR-110 Increment 4 the caller asks for
+    // `ifMauType` and the three Cisco `portTable` columns in **one** walk, so `rows` carries
+    // both families; leaning on "only `ifMauType` is an OBJECT IDENTIFIER" would be relying
+    // on a coincidence of value types rather than on what was asked for.
+    for row in rows.iter().filter(|r| r.oid_base == mau_type_oid) {
         let Some(&ifindex) = row.instance.first() else {
             continue;
         };
@@ -352,7 +360,10 @@ mod tests {
         // The reason this check exists at all. If the two-subid instance were ever collapsed the
         // way the ordinary walkers collapse it, every row would land on a synthetic key and the
         // column would be empty on every device — silently.
-        let (got, unknown) = media_by_ifindex(&[mau_row(7, 1, 30), mau_row(8, 1, 26)]);
+        let (got, unknown) = media_by_ifindex(
+            &[mau_row(7, 1, 30), mau_row(8, 1, 26)],
+            yagra_common::OID_IF_MAU_TYPE,
+        );
         assert!(unknown.is_empty());
         assert_eq!(got[&7].media.as_deref(), Some("1000BASE-T"));
         assert_eq!(got[&7].duplex, Some(Duplex::Full));
@@ -363,7 +374,10 @@ mod tests {
     #[test]
     fn the_first_mau_per_port_wins() {
         // A stated rule beats a clever one. Ascending `ifMauIndex` is the agent's own walk order.
-        let (got, _) = media_by_ifindex(&[mau_row(7, 1, 30), mau_row(7, 2, 26)]);
+        let (got, _) = media_by_ifindex(
+            &[mau_row(7, 1, 30), mau_row(7, 2, 26)],
+            yagra_common::OID_IF_MAU_TYPE,
+        );
         assert_eq!(got.len(), 1);
         assert_eq!(got[&7].media.as_deref(), Some("1000BASE-T"));
     }
@@ -375,7 +389,10 @@ mod tests {
         // "past the transcribed block" until the table was generated from the registry — 103 is
         // 2.5GBASE-T and is now perfectly well known. The example has to be a **deliberate** gap,
         // not merely a high number, or the test decays into "some number we have not reached yet".
-        let (got, unknown) = media_by_ifindex(&[mau_row(7, 1, 154), mau_row(8, 1, 30)]);
+        let (got, unknown) = media_by_ifindex(
+            &[mau_row(7, 1, 154), mau_row(8, 1, 30)],
+            yagra_common::OID_IF_MAU_TYPE,
+        );
         assert!(!got.contains_key(&7), "must not guess a medium");
         assert_eq!(unknown, vec![154]);
         assert_eq!(got[&8].media.as_deref(), Some("1000BASE-T"));
@@ -496,7 +513,7 @@ mod tests {
                 value: SnmpValue::Int(30),
             },
         ];
-        let (got, unknown) = media_by_ifindex(&rows);
+        let (got, unknown) = media_by_ifindex(&rows, yagra_common::OID_IF_MAU_TYPE);
         assert!(got.is_empty());
         assert!(unknown.is_empty());
     }

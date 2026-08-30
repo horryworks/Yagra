@@ -1700,9 +1700,13 @@ pub struct SnmpMauCheck {
     pub community: String,
     /// Whether to fall back to ENTITY-MIB's transceiver strings when `ifMauTable` answers nothing.
     ///
-    /// Defaults **on**. It costs nothing when MAU answered (the fallback is not attempted) and it is
-    /// the only source that reaches a device with no MAU-MIB at all — which, measured, includes the
-    /// one SNMP device in this project's lab.
+    /// Defaults **on**. It is the only source that reaches a device with no MAU-MIB at all —
+    /// which, measured, includes the one SNMP device in this project's lab.
+    ///
+    /// ⚠️ **It is not free when MAU answered.** This line used to say it was; the ENTITY text
+    /// walk runs whenever the flag is on, and only the *merge* is limited to ports MAU left
+    /// unanswered. On a silent device the walk is skipped for a different reason — the media
+    /// walk now reports the device as silent and returns first (ADR-110 Increment 4).
     #[serde(default = "default_true")]
     pub entity_fallback: bool,
     /// Per-request timeout, in milliseconds.

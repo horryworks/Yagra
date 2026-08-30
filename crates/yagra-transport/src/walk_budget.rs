@@ -191,6 +191,28 @@ pub(crate) fn note_truncation(reason: Truncation, target: IpAddr, skipped: usize
     );
 }
 
+/// Whether a finished multi-column call amounts to **"this device said nothing"**.
+///
+/// The judgement [`WalkBudget`] already made, handed to the caller instead of thrown away
+/// (ADR-110 Increment 4). A caller that fires several walks at one device — `execute_mau` fires
+/// three — otherwise pays the first walk's timeout again for each later one, because `Ok(vec![])`
+/// cannot say whether the agent answered "I do not implement this" or did not answer at all.
+///
+/// **Both conditions carry weight:**
+///
+/// - **[`Truncation::Silent`], never [`Truncation::Deadline`].** A device that trips the deadline
+///   is answering, slowly. Folding the two together would report a slow switch as an absent one —
+///   and the two counters exist precisely because those want opposite responses.
+/// - **No rows.** "Some columns answered and then it went quiet" is a partial read, not an absent
+///   device, and what it did return is worth keeping.
+///
+/// Kept here for the reason [`WalkBudget`] gives about itself: the loops that consult it open a UDP
+/// socket to port 161 and cannot be unit-tested, so every part of the rule a test can reach has to
+/// live outside them.
+pub(crate) fn is_silence(rows_collected: usize, stopped: Option<Truncation>) -> bool {
+    rows_collected == 0 && matches!(stopped, Some(Truncation::Silent))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +384,34 @@ mod tests {
     #[test]
     fn the_two_truncation_reasons_are_labelled_apart() {
         assert_ne!(Truncation::Silent.reason(), Truncation::Deadline.reason());
+    }
+
+    /// **The accepting side of [`is_silence`], and it comes first on purpose.**
+    ///
+    /// Every other assertion about this rule is of the form "that is silence". A predicate
+    /// answering `true` unconditionally satisfies all of them — and would turn every adjacency,
+    /// MAU and ENTITY walk on every healthy device into an error, silently emptying the network
+    /// map while this module stayed green
+    /// (`rejection-only-tests-pass-when-everything-rejects`).
+    #[test]
+    fn a_walk_that_collected_rows_is_never_silence() {
+        assert!(!is_silence(1, Some(Truncation::Silent)));
+        assert!(!is_silence(4096, Some(Truncation::Silent)));
+        assert!(
+            !is_silence(0, None),
+            "a walk that simply ran out of columns is not a statement about the device"
+        );
+        assert!(!is_silence(7, None));
+    }
+
+    /// Only a silent truncation with nothing collected is the device.
+    ///
+    /// The `Deadline` half is the one that would be easy to get wrong: a slow device answers, and
+    /// calling it absent would make `WALK_BUDGET_TIMEOUTS` being too small look like a fleet of
+    /// unreachable switches.
+    #[test]
+    fn only_a_silent_truncation_with_no_rows_is_silence() {
+        assert!(is_silence(0, Some(Truncation::Silent)));
+        assert!(!is_silence(0, Some(Truncation::Deadline)));
     }
 }
