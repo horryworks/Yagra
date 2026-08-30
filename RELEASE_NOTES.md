@@ -27,6 +27,17 @@
 
 ### Improvements
 
+- **A metrics writer now waits briefly for its batch to fill.** A VictoriaMetrics bulk import costs
+  about 2 ms before it carries any data, and the writer used to post whatever happened to be queued
+  at that instant — which at fleet rates was a handful of results. Measured at 50,000 nodes x 24
+  ports: one writer averaged 4,410 samples per import and four averaged **656**, against a cap of
+  52,800, and **82% of four writers' total time in VictoriaMetrics went on per-request overhead
+  rather than on data**. Sharding shrank each batch by exactly the factor it multiplied the
+  writers, which is why splitting the writer alone did not raise the ceiling. Each writer now waits
+  up to 100 ms for the rest of its batch. This delays *writing* a sample, never its timestamp — the
+  exposition line carries the poll's own time, so a lingered batch lands at the same place in the
+  series — and it is cut short by shutdown and by a full batch.
+
 - **The metrics writer is no longer a single task.** Core wrote every sample to VictoriaMetrics from
   one tokio task, and a task can only have one bulk import in flight — so the whole metrics tier was
   capped by one request-response round trip at a time. Measured at 50,000 nodes x 24 ports, that

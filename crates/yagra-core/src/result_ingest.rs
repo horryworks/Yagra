@@ -55,6 +55,21 @@ const VM_BATCH_MAX_RESULTS: usize = 200;
 const VM_SPILL_MAX_BATCHES: usize = 64;
 /// Retry attempts for a VM bulk POST before it spills.
 const VM_WRITE_RETRIES: usize = 2;
+/// How long a writer waits for its batch to fill before posting a partial one.
+///
+/// **A bulk import costs about 2 ms before it carries any data at all** (measured at 50,000 nodes
+/// x 24 ports: fitting post time against body size across two runs gives ~2.2 ms fixed plus
+/// ~8.3 ms/MB). Draining only what is already queued makes that fixed cost dominate — one writer
+/// averaged 4,410 samples per POST and four averaged **656**, against a cap of 52,800, and 82% of
+/// the four writers' total post time went on per-request overhead rather than on data. Sharding
+/// without this shrinks the batches by exactly the factor it multiplies the writers, which is why
+/// the split alone did not move the ceiling.
+///
+/// 100 ms is chosen against the two things it trades between: long enough to collect tens of
+/// results per writer at fleet rates, and irrelevant beside a poll interval of 30 s or more.
+/// It delays *writing* a sample, never its timestamp — an exposition line carries the poll's own
+/// at_unix_ms, so a lingered batch lands at the same place in the series.
+const VM_BATCH_LINGER: std::time::Duration = std::time::Duration::from_millis(100);
 /// Most VictoriaMetrics writer tasks the metrics tier will run, however many cores it is given
 /// or an operator asks for. Past this the per-shard bounds below get small enough that batch
 /// coalescing degrades — each shard sees 1/N of the stream, so it takes N times as long to fill
@@ -65,10 +80,18 @@ const VM_WRITERS_MAX: usize = 4;
 /// [`VM_WRITERS_MAX`]. A request above the cap is clamped **and logged** — silently ignoring a
 /// number an operator typed is worse than refusing it.
 fn vm_writer_count() -> usize {
-    let requested = std::env::var("YAGRA_VM_WRITERS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0);
+    writer_count_from(
+        std::env::var("YAGRA_VM_WRITERS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0),
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+    )
+}
+
+/// The decision itself, separated from where its two inputs come from so it can be tested: reading
+/// `YAGRA_VM_WRITERS` is a process-global mutation that parallel tests cannot do safely.
+fn writer_count_from(requested: Option<usize>, cores: usize) -> usize {
     match requested {
         Some(n) if n > VM_WRITERS_MAX => {
             tracing::warn!(
@@ -79,9 +102,7 @@ fn vm_writer_count() -> usize {
             VM_WRITERS_MAX
         }
         Some(n) => n,
-        None => std::thread::available_parallelism()
-            .map_or(1, std::num::NonZeroUsize::get)
-            .clamp(1, VM_WRITERS_MAX),
+        None => cores.clamp(1, VM_WRITERS_MAX),
     }
 }
 
@@ -550,6 +571,30 @@ pub(crate) async fn run_vm_writer(
                             match rx.try_recv() {
                                 Ok(r) => buf.push(r),
                                 Err(_) => break,
+                            }
+                        }
+                        // Then wait, briefly, for the rest of a batch. Without this the writer
+                        // posts whatever happened to be queued — 2.5 results at fleet rates — and
+                        // pays the fixed per-request cost on each (see VM_BATCH_LINGER).
+                        // Cancellable: shutdown must not have to wait out the linger.
+                        if buf.len() < VM_BATCH_MAX_RESULTS {
+                            let linger = tokio::time::sleep(VM_BATCH_LINGER);
+                            tokio::pin!(linger);
+                            loop {
+                                tokio::select! {
+                                    biased;
+                                    () = shutdown.cancelled() => break,
+                                    () = &mut linger => break,
+                                    more = rx.recv() => match more {
+                                        Some(r) => {
+                                            buf.push(r);
+                                            if buf.len() >= VM_BATCH_MAX_RESULTS {
+                                                break;
+                                            }
+                                        }
+                                        None => break,
+                                    },
+                                }
                             }
                         }
                         flush_vm(&store, &mut buf, &mut spill, spill_cap).await;
@@ -1293,6 +1338,98 @@ mod tests {
         // And one writer is the old design exactly, so `YAGRA_VM_WRITERS=1` cannot regress.
         assert_eq!(per_shard_channel_cap(1), RESULT_PERSIST_CHANNEL_CAP);
         assert_eq!(per_shard_spill_cap(1), VM_SPILL_MAX_BATCHES);
+    }
+
+    /// The linger has to do both halves: hold a partial batch back long enough for the rest of it
+    /// to arrive, and never hold it longer than that. Time is paused, so this is deterministic —
+    /// the clock only moves when the test moves it.
+    #[tokio::test(start_paused = true)]
+    async fn a_partial_batch_waits_for_the_linger_and_no_longer() {
+        let fake = Arc::new(FakeStore::new(false));
+        let store: Arc<dyn MetricStore> = fake.clone();
+        let shutdown = CancellationToken::new();
+        let (tx, rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        tokio::spawn(run_vm_writer(rx, store, shutdown.clone(), 0, 8));
+
+        tx.send(sample_result())
+            .await
+            .expect("the writer is listening");
+        tokio::time::sleep(VM_BATCH_LINGER / 2).await;
+        assert!(
+            fake.seen_nodes().is_empty(),
+            "a one-result batch must wait for company rather than pay a whole POST for itself"
+        );
+
+        tokio::time::sleep(VM_BATCH_LINGER).await;
+        assert_eq!(
+            fake.seen_nodes().len(),
+            1,
+            "and it must be posted when the linger expires, not held for a batch that never comes"
+        );
+        shutdown.cancel();
+    }
+
+    /// 🚨 The linger is inside the receive arm, so a naive implementation makes shutdown wait it
+    /// out — once per writer, on every stop. The cancel branch is `biased` and first for that
+    /// reason, and this is what says so.
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_does_not_wait_out_the_linger() {
+        let fake = Arc::new(FakeStore::new(false));
+        let store: Arc<dyn MetricStore> = fake.clone();
+        let shutdown = CancellationToken::new();
+        let (tx, rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        tokio::spawn(run_vm_writer(rx, store, shutdown.clone(), 0, 8));
+
+        tx.send(sample_result())
+            .await
+            .expect("the writer is listening");
+        tokio::task::yield_now().await; // let the writer take it and start lingering
+        let before = tokio::time::Instant::now();
+        shutdown.cancel();
+        for _ in 0..50 {
+            if !fake.seen_nodes().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            fake.seen_nodes().len(),
+            1,
+            "the pending batch is flushed on cancel"
+        );
+        assert!(
+            before.elapsed() < VM_BATCH_LINGER,
+            "cancel must cut the linger short, not wait it out"
+        );
+    }
+
+    /// How many writers to run, from the two inputs that decide it. The operator's number wins up
+    /// to the cap; above it the cap wins and the log says so, because silently running 4 when the
+    /// operator asked for 16 is the kind of thing found months later.
+    #[test]
+    fn writer_count_respects_the_operator_then_the_cores_then_the_cap() {
+        assert_eq!(writer_count_from(Some(1), 32), 1, "1 is the old design");
+        assert_eq!(
+            writer_count_from(Some(3), 2),
+            3,
+            "the operator's number wins over the cores"
+        );
+        assert_eq!(
+            writer_count_from(Some(64), 32),
+            VM_WRITERS_MAX,
+            "above the cap is clamped"
+        );
+        assert_eq!(
+            writer_count_from(None, 1),
+            1,
+            "a one-core box gets one writer"
+        );
+        assert_eq!(writer_count_from(None, 2), 2, "and a two-core box two");
+        assert_eq!(
+            writer_count_from(None, 32),
+            VM_WRITERS_MAX,
+            "cores are capped too"
+        );
     }
 
     /// `yagra_persist_queue_depth{stream="metrics"}` keeps meaning "results waiting for the
