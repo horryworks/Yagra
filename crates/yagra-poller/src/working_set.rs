@@ -408,8 +408,36 @@ impl WorkingSet {
     /// right work" — an assignment that never arrived shows up in `yagra_working_set_specs`
     /// instead, and the two are different faults.
     ///
+    /// 🚨 **The ratio is not ~1 on a healthy poller unless the window is chosen for it, and both
+    /// ways it can be wrong were measured the day this shipped** (32-node lab, 187 specs = 95 at
+    /// 60 s + 92 at 3600 s):
+    ///
+    /// - **Too short reads low, and it reads low in whole bursts.** The adoption window is
+    ///   `specs / adopt_rate` — here `187 / 200` ≈ **0.94 s** — so the whole fleet's fast specs fire
+    ///   as *one* burst a minute, staggered only within a node. A 331 s window owes 5.52 bursts and
+    ///   catches 5, giving **0.906**, which is `5 / 5.517` to four figures. A 74 s window caught two
+    ///   bursts where it owed 1.23 and read **1.46× too high**. Take the window as a whole multiple
+    ///   of the dominant interval, and long enough to contain the slow tier at all.
+    /// - **Just after a restart it reads high.** Adopting a set fires every spec once. Core and the
+    ///   poller restarting together changes the epoch, which resyncs and fires them *again* — the
+    ///   first reading here was **1.57**, with the hourly tier having run twice in eight minutes.
+    ///
+    /// Chosen properly it is exact. A **600 s** window — ten whole 60 s cycles — on that same lab
+    /// gave `achieved` = **1.583333**, which is `95/60` to six figures and a fast-tier ratio of
+    /// **1.0000**; the 0.0159 short of the full demand is `92/3600`, the hourly tier that was
+    /// legitimately not due. Per check kind it implied **27 / 23 / 23 / 17 / 3 / 2** specs — every
+    /// one an integer, and the same numbers as the inventory (27 device nodes, 23 credentialed,
+    /// 3 DNS, 2 URL). Over an hour the whole ratio converges; below that, read it as the fast
+    /// tier's and know that is what you have.
+    ///
     /// A zero interval owes nothing, for the reason [`Self::due`] gives beside its `checked_div`:
     /// the API accepts `10..=3600`, so one can only arrive over the bus.
+    ///
+    /// ⚠️ **`fold` rather than `sum`, and the difference is visible to an operator.** Rust's
+    /// `Sum for f64` folds from **`-0.0`** (the only identity that survives adding `-0.0` to it), so
+    /// an empty set sums to negative zero and the Prometheus exporter renders it `-0`. Seen on a
+    /// poller holding no assignment the day this shipped. `-0.0 == 0.0` is true, so a test comparing
+    /// the two cannot tell — `an_empty_set_demands_nothing` compares the bits.
     #[must_use]
     pub fn demand_per_sec(&self) -> f64 {
         self.nodes
@@ -417,7 +445,7 @@ impl WorkingSet {
             .flatten()
             .filter(|s| s.spec.interval_secs > 0)
             .map(|s| 1.0 / f64::from(s.spec.interval_secs))
-            .sum()
+            .fold(0.0, |acc, rate| acc + rate)
     }
 
     /// `(node count, spec count)` — for the heartbeat telemetry and the specs gauge.
@@ -1432,14 +1460,19 @@ mod tests {
         );
     }
 
+    /// 🚨 **The bits, not the value.** `-0.0 == 0.0` is true, so the obvious assertion here passes
+    /// for negative zero — and negative zero is what this returned before `demand_per_sec` folded
+    /// from an explicit `0.0`, because Rust's `Sum for f64` uses `-0.0` as its identity. The test
+    /// was written, was green, and the poller with no assignment still exported `-0`.
     #[test]
     fn an_empty_set_demands_nothing() {
         let ws = WorkingSet::new();
         assert_eq!(
-            ws.demand_per_sec(),
-            0.0,
-            "an empty sum is zero, and it must not be NaN — a NaN gauge renders and reads as \
-             'no data', which is the one answer that must not be mistaken for 'nothing is owed'"
+            ws.demand_per_sec().to_bits(),
+            0.0_f64.to_bits(),
+            "an empty set must ask for positive zero: it is published as-is, and an operator \
+             reading `-0` on a gauge reasonably concludes the number is broken (got {})",
+            ws.demand_per_sec()
         );
     }
 
