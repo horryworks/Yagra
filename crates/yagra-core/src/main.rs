@@ -1085,20 +1085,13 @@ impl LeaderTasks {
             });
         }
 
-        let (metrics_tx, metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(
-            result_ingest::RESULT_PERSIST_CHANNEL_CAP,
-        );
+        let vm = result_ingest::start_vm_writers(self.store.clone(), self.shutdown.clone());
         let (meta_tx, meta_rx) = tokio::sync::mpsc::channel::<result_ingest::MetaRecord>(
             result_ingest::RESULT_PERSIST_CHANNEL_CAP,
         );
         let (history_tx, history_rx) = tokio::sync::mpsc::channel::<result_ingest::HistoryRecord>(
             result_ingest::RESULT_PERSIST_CHANNEL_CAP,
         );
-        tokio::spawn(result_ingest::run_vm_writer(
-            metrics_rx,
-            self.store.clone(),
-            self.shutdown.clone(),
-        ));
         tokio::spawn(result_ingest::run_pg_writer(
             meta_rx,
             history_rx,
@@ -1121,7 +1114,7 @@ impl LeaderTasks {
                     results,
                     self.alerts.clone(),
                     notify_tx,
-                    metrics_tx.clone(),
+                    vm.clone(),
                     meta_tx.clone(),
                     history_tx,
                     self.history.clone(),
@@ -1135,7 +1128,7 @@ impl LeaderTasks {
             let backfill = Box::pin(self.bus.subscribe_results_backfill().await?);
             spawn_cancellable(
                 &self.shutdown,
-                result_ingest::consume_results_backfill(backfill, metrics_tx, meta_tx),
+                result_ingest::consume_results_backfill(backfill, vm, meta_tx),
             );
         }
         Ok(())

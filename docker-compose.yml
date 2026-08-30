@@ -78,6 +78,14 @@ services:
       # is every query being slow at once. .env.example recommends 50-80 at that size, and
       # PostgreSQL's own max_connections (default 100) has to clear it.
       YAGRA_PG_MAX_CONNECTIONS: ${YAGRA_PG_MAX_CONNECTIONS:-20}
+      # How many tasks write metrics to VictoriaMetrics (ADR-110 Inc.2). Default: one per core, at
+      # most 4. One task can only have one bulk import in flight, and 84% of that task's time is
+      # spent waiting for VictoriaMetrics to answer -- measured at 50,000 nodes x 24 ports, where
+      # one writer saturated at 2,500 results/s with its queue pinned. Samples are sharded by node,
+      # so a series' order is preserved. The tier's memory bound is DIVIDED among the writers, not
+      # repeated, so raising this does not raise what core can hold. Set 1 to get the old
+      # single-writer behaviour back, byte for byte.
+      YAGRA_VM_WRITERS: ${YAGRA_VM_WRITERS:-}
       YAGRA_TSDB_URL: http://victoriametrics:8428
       # Event log store (ADR-024): passive events (syslog/trap/webhook) are searched from and
       # written to VictoriaLogs; PostgreSQL then keeps only alert-linked rows. Unset this to keep

@@ -3,7 +3,7 @@
 //!
 //! One logical consumer drains `yagra.results`, matches each result **in memory and
 //! synchronously** — `AlertManager::observe` does no I/O — and then *hands off* every kind of
-//! persistence over a bounded channel: samples to the VictoriaMetrics writer, interface and
+//! persistence over a bounded channel: samples to the VictoriaMetrics writers, interface and
 //! identity metadata to the PostgreSQL writer, alert transitions to the same writer with an inline
 //! fallback. The matcher never blocks on a store, which is what keeps a slow database from
 //! becoming a slow poller.
@@ -55,6 +55,156 @@ const VM_BATCH_MAX_RESULTS: usize = 200;
 const VM_SPILL_MAX_BATCHES: usize = 64;
 /// Retry attempts for a VM bulk POST before it spills.
 const VM_WRITE_RETRIES: usize = 2;
+/// Most VictoriaMetrics writer tasks the metrics tier will run, however many cores it is given
+/// or an operator asks for. Past this the per-shard bounds below get small enough that batch
+/// coalescing degrades — each shard sees 1/N of the stream, so it takes N times as long to fill
+/// a batch — and four already covers a machine whose `run_vm_writer` was the constraint.
+const VM_WRITERS_MAX: usize = 4;
+
+/// How many writer tasks to run: `YAGRA_VM_WRITERS` if set, otherwise one per core up to
+/// [`VM_WRITERS_MAX`]. A request above the cap is clamped **and logged** — silently ignoring a
+/// number an operator typed is worse than refusing it.
+fn vm_writer_count() -> usize {
+    let requested = std::env::var("YAGRA_VM_WRITERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0);
+    match requested {
+        Some(n) if n > VM_WRITERS_MAX => {
+            tracing::warn!(
+                requested = n,
+                max = VM_WRITERS_MAX,
+                "YAGRA_VM_WRITERS above the cap; using the cap"
+            );
+            VM_WRITERS_MAX
+        }
+        Some(n) => n,
+        None => std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .clamp(1, VM_WRITERS_MAX),
+    }
+}
+
+/// One shard's share of the metrics queue. **The tier's total is what is bounded, not each
+/// shard's**: at 24 ports a queued result is ~21 KB, so giving every shard the full cap would
+/// multiply the tier's worst-case memory by the writer count. Dividing keeps `N = 1` identical
+/// to the single-writer design, byte for byte.
+const fn per_shard_channel_cap(shards: usize) -> usize {
+    let n = RESULT_PERSIST_CHANNEL_CAP / shards;
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
+/// One shard's share of the spill, for the same reason and with the same arithmetic. A spilled
+/// batch is the expensive one — up to 200 results — so this is the division that matters most.
+const fn per_shard_spill_cap(shards: usize) -> usize {
+    let n = VM_SPILL_MAX_BATCHES / shards;
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
+/// Which writer owns a node's samples.
+///
+/// Sharding by **node** rather than letting N tasks race one queue is what keeps a series'
+/// samples in order: every sample of a series carries that node's id, so one node's batches are
+/// always built and posted by the same task, in arrival order. A shared queue would let two
+/// batches for the same series be posted concurrently by different tasks.
+///
+/// The two halves are folded together because the entropy sits in a different half in each id
+/// scheme this sees: a v4 UUID is random throughout, while the load rig's ids are a constant
+/// namespace tag in the high half and a sequential index in the low one.
+fn shard_of(node: yagra_common::NodeId, shards: usize) -> usize {
+    if shards <= 1 {
+        return 0;
+    }
+    let v = node.as_uuid().as_u128();
+    ((((v >> 64) as u64) ^ (v as u64)) % shards as u64) as usize
+}
+
+/// The metrics tier's sender side: one bounded channel per writer task, picked by node.
+///
+/// Cloneable and cheap — the matcher and the store-and-forward backfill consumer each hold one,
+/// exactly as they held one `Sender` before. The modulus is `txs.len()` rather than a stored
+/// count so the routing and the set of live channels cannot disagree.
+#[derive(Clone)]
+pub(crate) struct VmWriters {
+    txs: Arc<[tokio::sync::mpsc::Sender<Arc<PollResult>>]>,
+}
+
+impl VmWriters {
+    /// Hand one result to its shard, shedding it if that shard is full (best-effort tier,
+    /// ADR-025). Publishes the tier's **total** queue depth under the name it has always had:
+    /// the per-shard breakdown is a separate metric, because a gauge published under one name
+    /// with two different label sets is double-counted by any `sum by()` over it.
+    fn try_send(&self, result: &Arc<PollResult>) -> Result<(), TrySendError<Arc<PollResult>>> {
+        let shard = shard_of(result.node_id, self.txs.len());
+        let sent = self.txs[shard].try_send(Arc::clone(result));
+        metrics::gauge!("yagra_persist_queue_depth", "stream" => "metrics")
+            .set(self.depth() as f64);
+        sent
+    }
+
+    /// Results queued across every shard.
+    fn depth(&self) -> usize {
+        self.txs
+            .iter()
+            .map(|tx| tx.max_capacity().saturating_sub(tx.capacity()))
+            .sum()
+    }
+
+    /// How many writer tasks this handle feeds.
+    #[cfg(test)]
+    fn shards(&self) -> usize {
+        self.txs.len()
+    }
+
+    /// Build a handle over channels the caller already owns, so a test can drain them without
+    /// running a writer task.
+    #[cfg(test)]
+    fn from_senders(txs: Vec<tokio::sync::mpsc::Sender<Arc<PollResult>>>) -> Self {
+        Self { txs: txs.into() }
+    }
+}
+
+/// Start the metrics tier's writer tasks and return the handle that feeds them.
+///
+/// Leader-only, like everything `spawn_result_ingest` starts. The channel count, the per-shard
+/// bounds and the spawn live together here rather than at the call site because they are one
+/// decision: a cap divided by a number of shards that no longer matches the number of tasks is
+/// the whole failure this arrangement has to avoid.
+pub(crate) fn start_vm_writers(
+    store: Arc<dyn MetricStore>,
+    shutdown: CancellationToken,
+) -> VmWriters {
+    let shards = vm_writer_count();
+    let channel_cap = per_shard_channel_cap(shards);
+    let spill_cap = per_shard_spill_cap(shards);
+    let mut txs = Vec::with_capacity(shards);
+    for shard in 0..shards {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(channel_cap);
+        txs.push(tx);
+        tokio::spawn(run_vm_writer(
+            rx,
+            store.clone(),
+            shutdown.clone(),
+            shard,
+            spill_cap,
+        ));
+    }
+    tracing::info!(
+        shards,
+        channel_cap,
+        spill_cap,
+        "VictoriaMetrics writers started"
+    );
+    VmWriters { txs: txs.into() }
+}
 
 /// One interface row for the batched metadata upsert (matcher extracts it from the result so the
 /// writer re-derives nothing): `(ifindex, if_name, if_alias, if_speed)`.
@@ -106,7 +256,7 @@ pub(crate) async fn consume_results<S>(
     mut results: S,
     alerts: Arc<AlertManager>,
     notify_tx: tokio::sync::mpsc::Sender<crate::alerts::NotifyAction>,
-    metrics_tx: tokio::sync::mpsc::Sender<Arc<PollResult>>,
+    vm: VmWriters,
     meta_tx: tokio::sync::mpsc::Sender<MetaRecord>,
     history_tx: tokio::sync::mpsc::Sender<HistoryRecord>,
     history: Arc<AlertHistoryStore>,
@@ -131,7 +281,7 @@ pub(crate) async fn consume_results<S>(
             result,
             &alerts,
             &notify_tx,
-            &metrics_tx,
+            &vm,
             &meta_tx,
             &history_tx,
             &history,
@@ -154,14 +304,14 @@ pub(crate) async fn consume_results<S>(
 /// consumer (fan-out subscribe; only the leader ingests). Returns when the stream ends.
 pub(crate) async fn consume_results_backfill<S>(
     mut results: S,
-    metrics_tx: tokio::sync::mpsc::Sender<Arc<PollResult>>,
+    vm: VmWriters,
     meta_tx: tokio::sync::mpsc::Sender<MetaRecord>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_core_backfill_results_total").increment(1);
-        persist_metrics_and_meta(&Arc::new(result), &metrics_tx, &meta_tx);
+        persist_metrics_and_meta(&Arc::new(result), &vm, &meta_tx);
     }
     tracing::warn!("backfill result stream ended");
 }
@@ -173,13 +323,13 @@ pub(crate) async fn consume_results_backfill<S>(
 /// only — names/aliases live in PostgreSQL, joined at query time (ADR-011).
 fn persist_metrics_and_meta(
     result: &Arc<PollResult>,
-    metrics_tx: &tokio::sync::mpsc::Sender<Arc<PollResult>>,
+    vm: &VmWriters,
     meta_tx: &tokio::sync::mpsc::Sender<MetaRecord>,
 ) {
     // Metrics → VM writer. Shed-able: alerts are computed in-memory and never read VM back, so a
     // dropped sample never loses an alert (best-effort observational tier, ADR-025).
     if !result.samples.is_empty() {
-        match metrics_tx.try_send(Arc::clone(result)) {
+        match vm.try_send(result) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 metrics::counter!("yagra_result_metrics_persist_dropped_total", "reason" => "channel_full")
@@ -270,7 +420,7 @@ async fn ingest_result(
     result: Arc<PollResult>,
     alerts: &Arc<AlertManager>,
     notify_tx: &tokio::sync::mpsc::Sender<crate::alerts::NotifyAction>,
-    metrics_tx: &tokio::sync::mpsc::Sender<Arc<PollResult>>,
+    vm: &VmWriters,
     meta_tx: &tokio::sync::mpsc::Sender<MetaRecord>,
     history_tx: &tokio::sync::mpsc::Sender<HistoryRecord>,
     history: &Arc<AlertHistoryStore>,
@@ -300,7 +450,7 @@ async fn ingest_result(
 
     // Metrics → VM writer + interface/identity metadata → PG writer. Shed-able/self-healing and
     // alert-independent, so it's shared with the backfill path (`consume_results_backfill`).
-    persist_metrics_and_meta(&result, metrics_tx, meta_tx);
+    persist_metrics_and_meta(&result, vm, meta_tx);
 
     // An observational result (today: the CDP/LLDP neighbour walk, ADR-038) states nothing about
     // the node's reachability, so it must not reach the alert engine at all. `observe` derives
@@ -372,6 +522,8 @@ pub(crate) async fn run_vm_writer(
     mut rx: tokio::sync::mpsc::Receiver<Arc<PollResult>>,
     store: Arc<dyn MetricStore>,
     shutdown: CancellationToken,
+    shard: usize,
+    spill_cap: usize,
 ) {
     let mut spill: std::collections::VecDeque<Vec<Arc<PollResult>>> =
         std::collections::VecDeque::new();
@@ -383,15 +535,15 @@ pub(crate) async fn run_vm_writer(
                 while let Ok(r) = rx.try_recv() {
                     buf.push(r);
                     if buf.len() >= VM_BATCH_MAX_RESULTS {
-                        flush_vm(&store, &mut buf, &mut spill).await;
+                        flush_vm(&store, &mut buf, &mut spill, spill_cap).await;
                     }
                 }
-                flush_vm(&store, &mut buf, &mut spill).await;
+                flush_vm(&store, &mut buf, &mut spill, spill_cap).await;
                 break;
             }
             first = rx.recv() => {
                 match first {
-                    None => { flush_vm(&store, &mut buf, &mut spill).await; break; }
+                    None => { flush_vm(&store, &mut buf, &mut spill, spill_cap).await; break; }
                     Some(r) => {
                         buf.push(r);
                         while buf.len() < VM_BATCH_MAX_RESULTS {
@@ -400,8 +552,11 @@ pub(crate) async fn run_vm_writer(
                                 Err(_) => break,
                             }
                         }
-                        flush_vm(&store, &mut buf, &mut spill).await;
-                        metrics::gauge!("yagra_persist_queue_depth", "stream" => "metrics")
+                        flush_vm(&store, &mut buf, &mut spill, spill_cap).await;
+                        // The per-shard depth, under its own name: the tier's total is published
+                        // by `VmWriters::try_send`, and one name carrying both would be summed
+                        // twice by anything aggregating over it.
+                        metrics::gauge!("yagra_vm_writer_queue_depth", "shard" => shard.to_string())
                             .set(rx.len() as f64);
                     }
                 }
@@ -416,6 +571,7 @@ async fn flush_vm(
     store: &Arc<dyn MetricStore>,
     buf: &mut Vec<Arc<PollResult>>,
     spill: &mut std::collections::VecDeque<Vec<Arc<PollResult>>>,
+    spill_cap: usize,
 ) {
     let fresh = std::mem::take(buf);
     // Drain spilled batches oldest-first; stop at the first failure (VM still down).
@@ -433,7 +589,7 @@ async fn flush_vm(
         if !vm_down && write_vm_with_retry(store, &fresh).await {
             metrics::counter!("yagra_vm_batch_flush_total").increment(1);
         } else {
-            if spill.len() >= VM_SPILL_MAX_BATCHES {
+            if spill.len() >= spill_cap {
                 if let Some(dropped) = spill.pop_front() {
                     let n: u64 = dropped.iter().map(|r| r.samples.len() as u64).sum();
                     metrics::counter!("yagra_vm_samples_dropped_total", "reason" => "spill_full")
@@ -688,6 +844,7 @@ mod tests {
         use yagra_bus::DiscoveredInterface;
         use yagra_common::IfIndex;
         let (metrics_tx, mut metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
         let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
         let result = PollResult {
             job_id: uuid::Uuid::nil(),
@@ -719,7 +876,7 @@ mod tests {
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         };
-        consume_results_backfill(futures::stream::iter(vec![result]), metrics_tx, meta_tx).await;
+        consume_results_backfill(futures::stream::iter(vec![result]), vm, meta_tx).await;
         assert!(
             metrics_rx.try_recv().is_ok(),
             "backfilled metrics reach the VM writer"
@@ -745,6 +902,7 @@ mod tests {
         ));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(64);
         let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(64);
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
         let (meta_tx, _meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(64);
         let (history_tx, _history_rx) = tokio::sync::mpsc::channel::<HistoryRecord>(64);
         // The history store is never touched: the channel is wide enough that `enqueue_history`
@@ -769,7 +927,7 @@ mod tests {
                 Arc::new(r),
                 &alerts,
                 &notify_tx,
-                &metrics_tx,
+                &vm,
                 &meta_tx,
                 &history_tx,
                 &history,
@@ -867,18 +1025,28 @@ mod tests {
     /// writer's retry/spill bookkeeping without a network. The read methods are never hit here.
     struct FakeStore {
         fail: AtomicBool,
+        /// Every node whose samples reached this store, in arrival order.
+        seen: std::sync::Mutex<Vec<NodeId>>,
     }
     impl FakeStore {
         fn new(fail: bool) -> Self {
             Self {
                 fail: AtomicBool::new(fail),
+                seen: std::sync::Mutex::new(Vec::new()),
             }
+        }
+        fn seen_nodes(&self) -> Vec<NodeId> {
+            self.seen.lock().expect("seen mutex poisoned").clone()
         }
     }
     #[async_trait::async_trait]
     impl MetricStore for FakeStore {
         async fn write(&self, _result: &PollResult) {}
-        async fn write_batch(&self, _results: &[Arc<PollResult>]) -> bool {
+        async fn write_batch(&self, results: &[Arc<PollResult>]) -> bool {
+            if !self.fail.load(Ordering::SeqCst) {
+                let mut seen = self.seen.lock().expect("seen mutex poisoned");
+                seen.extend(results.iter().map(|r| r.node_id));
+            }
             !self.fail.load(Ordering::SeqCst)
         }
         async fn latest(&self, _k: &SeriesKey) -> Option<f64> {
@@ -989,17 +1157,17 @@ mod tests {
         let mut spill: VecDeque<Vec<Arc<PollResult>>> = VecDeque::new();
 
         let mut buf = vec![sample_result()];
-        flush_vm(&store, &mut buf, &mut spill).await;
+        flush_vm(&store, &mut buf, &mut spill, VM_SPILL_MAX_BATCHES).await;
         assert!(buf.is_empty(), "fresh buffer is taken by the flush");
         assert_eq!(spill.len(), 1, "a batch that fails every retry is spilled");
 
         // Still down: a later flush retries the spilled batch (fails) and keeps it.
-        flush_vm(&store, &mut buf, &mut spill).await;
+        flush_vm(&store, &mut buf, &mut spill, VM_SPILL_MAX_BATCHES).await;
         assert_eq!(spill.len(), 1, "spill retained while VM is down");
 
         // Recover: the next flush drains the spill.
         fake.fail.store(false, Ordering::SeqCst);
-        flush_vm(&store, &mut buf, &mut spill).await;
+        flush_vm(&store, &mut buf, &mut spill, VM_SPILL_MAX_BATCHES).await;
         assert!(
             spill.is_empty(),
             "spill drains once VM accepts writes again"
@@ -1015,12 +1183,138 @@ mod tests {
 
         for _ in 0..(VM_SPILL_MAX_BATCHES + 5) {
             let mut buf = vec![sample_result()];
-            flush_vm(&store, &mut buf, &mut spill).await;
+            flush_vm(&store, &mut buf, &mut spill, VM_SPILL_MAX_BATCHES).await;
         }
         assert_eq!(
             spill.len(),
             VM_SPILL_MAX_BATCHES,
             "spill never exceeds its bound; the oldest is dropped"
         );
+    }
+
+    /// A node's samples must always take the same route (order within a series), and the routes
+    /// must be used evenly (a shard nobody reaches is a writer task doing nothing while another
+    /// is the constraint again).
+    #[test]
+    fn shard_of_is_stable_and_spreads() {
+        // Both id schemes this sees in production: v4 UUIDs, and the load rig's
+        // `Uuid::from_u128(TAG << 64 | i)`, whose high half is a constant.
+        const TAG: u128 = 0xF17E_0000_5EED_0000;
+        let mut ids: Vec<NodeId> = (0..50_000u128)
+            .map(|i| NodeId::from(uuid::Uuid::from_u128((TAG << 64) | i)))
+            .collect();
+        ids.extend((0..50_000).map(|_| NodeId::new()));
+        assert_eq!(ids.len(), 100_000, "the floor: this examined 100,000 ids");
+
+        for shards in [2usize, 3, 4, 8] {
+            let mut buckets = vec![0usize; shards];
+            for id in &ids {
+                let first = shard_of(*id, shards);
+                assert!(first < shards, "a shard index must address a real channel");
+                assert_eq!(
+                    first,
+                    shard_of(*id, shards),
+                    "the same node must always route to the same writer"
+                );
+                buckets[first] += 1;
+            }
+            let even = ids.len() / shards;
+            let (lo, hi) = (even * 9 / 10, even * 11 / 10);
+            for (shard, &n) in buckets.iter().enumerate() {
+                assert!(
+                    (lo..=hi).contains(&n),
+                    "shards={shards}: shard {shard} took {n} of {} ids, outside +/-10% of {even}",
+                    ids.len()
+                );
+            }
+        }
+    }
+
+    /// 🚨 The failure this exists for: a writer task that was never started. Nothing about it is
+    /// loud — the send succeeds until that shard's channel fills, then every result for the
+    /// nodes that hash to it is shed forever, while the other shards look perfectly healthy.
+    /// So drive one result **per shard** all the way to the store and demand all of them arrive.
+    #[tokio::test]
+    async fn every_shard_has_a_running_writer() {
+        let fake = Arc::new(FakeStore::new(false));
+        let store: Arc<dyn MetricStore> = fake.clone();
+        let shutdown = CancellationToken::new();
+        let vm = start_vm_writers(store, shutdown.clone());
+        let shards = vm.shards();
+        assert!(shards >= 1, "the floor: at least one writer was started");
+
+        // One node per shard, found by search — the ids are opaque, so the routing decides.
+        let mut per_shard: Vec<Option<NodeId>> = vec![None; shards];
+        while per_shard.iter().any(Option::is_none) {
+            let node = NodeId::new();
+            per_shard[shard_of(node, shards)].get_or_insert(node);
+        }
+
+        for node in per_shard.iter().flatten() {
+            let mut r = (*sample_result()).clone();
+            r.node_id = *node;
+            vm.try_send(&Arc::new(r)).expect("a fresh shard has room");
+        }
+
+        // Each writer wakes, drains and flushes; give them a moment rather than a fixed sleep.
+        for _ in 0..200 {
+            if fake.seen_nodes().len() >= shards {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let seen = fake.seen_nodes();
+        for (shard, node) in per_shard.iter().enumerate() {
+            let node = node.expect("every shard got a node");
+            assert!(
+                seen.contains(&node),
+                "shard {shard} of {shards} never delivered its result: no writer is draining it"
+            );
+        }
+        shutdown.cancel();
+    }
+
+    /// Splitting the tier must not multiply what it can hold. The bounds are divided, not
+    /// repeated — at 24 ports a queued result is ~21 KB and a spilled batch up to 200 of them,
+    /// so `N` copies of the single-writer bounds would be `N` times the tier's worst case.
+    #[test]
+    fn sharding_does_not_raise_the_metrics_tier_bound() {
+        for shards in 1..=VM_WRITERS_MAX {
+            assert!(
+                per_shard_channel_cap(shards) * shards <= RESULT_PERSIST_CHANNEL_CAP,
+                "shards={shards}: queued results across the tier exceed the single-writer bound"
+            );
+            assert!(
+                per_shard_spill_cap(shards) * shards <= VM_SPILL_MAX_BATCHES,
+                "shards={shards}: spilled batches across the tier exceed the single-writer bound"
+            );
+        }
+        // And one writer is the old design exactly, so `YAGRA_VM_WRITERS=1` cannot regress.
+        assert_eq!(per_shard_channel_cap(1), RESULT_PERSIST_CHANNEL_CAP);
+        assert_eq!(per_shard_spill_cap(1), VM_SPILL_MAX_BATCHES);
+    }
+
+    /// `yagra_persist_queue_depth{stream="metrics"}` keeps meaning "results waiting for the
+    /// metrics tier", which is now a sum rather than one channel's length.
+    #[tokio::test]
+    async fn queue_depth_is_the_sum_across_shards() {
+        let (tx0, _rx0) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let (tx1, _rx1) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let vm = VmWriters::from_senders(vec![tx0, tx1]);
+        assert_eq!(vm.depth(), 0, "nothing queued yet");
+
+        // Two nodes that land on different shards, so both channels get something.
+        let mut per_shard: Vec<Option<NodeId>> = vec![None; 2];
+        while per_shard.iter().any(Option::is_none) {
+            let node = NodeId::new();
+            per_shard[shard_of(node, 2)].get_or_insert(node);
+        }
+        for node in per_shard.iter().flatten() {
+            let mut r = (*sample_result()).clone();
+            r.node_id = *node;
+            vm.try_send(&Arc::new(r)).expect("room in both shards");
+        }
+        assert_eq!(vm.depth(), 2, "one queued in each shard, counted once each");
     }
 }

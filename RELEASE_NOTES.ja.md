@@ -27,6 +27,18 @@
 
 ### 改善
 
+- **メトリクスの書き手がタスク 1 本ではなくなりました。** core は全サンプルを 1 本の tokio タスクから
+  VictoriaMetrics に書いており、1 本のタスクは bulk import を同時に 1 つしか投げられないため、
+  メトリクス層全体が「1 往復ずつ」に縛られていました。5 万ノード × 24 ポートで実測すると、
+  **2,500 results/s でそのタスクの占有率は 94%**、キューは上限 8,192 に張り付いてサンプルを
+  捨てており、**その占有の 84% は CPU ではなく VictoriaMetrics の返事待ち**でした。
+  書き手を複数（既定はコア数、最大 4）にし、`YAGRA_VM_WRITERS` で本数を指定できます。
+  **ノード id でシャード**するので、1 系列のサンプルは今までどおり同じタスクが到着順に書きます。
+  キューと spill の上限は本数で**割られる**（各本に同じ上限を持たせるのではない）ので、core が
+  抱えうる量は増えません。`YAGRA_VM_WRITERS=1` は定数まで含めて従来と同じ挙動です。
+  シャードごとの偏りは新しい `yagra_vm_writer_queue_depth{shard="..."}` で見えます。
+  `yagra_persist_queue_depth{stream="metrics"}` は名前も意味も上限もそのままで、全シャードの合計です。
+
 - **メトリクスの書き込み経路が「時間の行き先」を言うようになった。** core に新しい Prometheus
   ヒストグラム `yagra_vm_import_seconds{phase="build"|"post"}` —— VictoriaMetrics への 1 回の
   bulk import が、送信用テキストの組み立て（core の CPU）に何秒使い、VictoriaMetrics の返事待ちに

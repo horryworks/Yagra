@@ -458,6 +458,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_LOGS_URL` | unset ⇒ events stay in PostgreSQL | VictoriaLogs base URL — opt-in passive-event log store |
 | `YAGRA_CLICKHOUSE_URL` | unset ⇒ flow store off | ClickHouse HTTP URL — opt-in traffic-flow store (without it the flow API returns 503) |
 | `YAGRA_PG_MAX_CONNECTIONS` | `20` | PostgreSQL connection-pool ceiling (the HA leader holds +1 advisory-lock connection on top) |
+| `YAGRA_VM_WRITERS` | one per core, max 4 | How many tasks write metrics to VictoriaMetrics. Samples are sharded by node, so a series stays in order; the tier queue and spill bounds are divided among them, not repeated. Set `1` for the old single-writer behaviour |
 | **API & security** | | |
 | `YAGRA_KEK_FILE` | unset ⇒ ephemeral dev key | Path to the mounted 32-byte key-encryption key |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` bind address |

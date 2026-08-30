@@ -27,6 +27,19 @@
 
 ### Improvements
 
+- **The metrics writer is no longer a single task.** Core wrote every sample to VictoriaMetrics from
+  one tokio task, and a task can only have one bulk import in flight — so the whole metrics tier was
+  capped by one request-response round trip at a time. Measured at 50,000 nodes x 24 ports, that
+  task was **94% occupied at 2,500 results/s** with its queue pinned at the 8,192 cap and samples
+  being shed, and **84% of that occupancy was waiting for VictoriaMetrics rather than using CPU**.
+  There are now several writers, one per core up to 4, and `YAGRA_VM_WRITERS` overrides the count.
+  Samples are **sharded by node**, so every sample of a series is still built and posted by one task
+  in arrival order. The tier's queue and spill bounds are **divided** among the writers rather than
+  repeated, so this does not raise how much core can hold; `YAGRA_VM_WRITERS=1` is the previous
+  behaviour with the same constants. New per-shard gauge `yagra_vm_writer_queue_depth{shard="..."}`
+  shows an uneven split; `yagra_persist_queue_depth{stream="metrics"}` keeps its name, its meaning
+  and its ceiling, and is now the sum across shards.
+
 - **The metrics write path now says where its time goes.** New Prometheus histogram on core,
   `yagra_vm_import_seconds{phase="build"|"post"}`: how long one VictoriaMetrics bulk import spent
   building the exposition body (CPU in core) versus waiting for VictoriaMetrics to answer, plus

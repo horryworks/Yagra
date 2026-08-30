@@ -449,6 +449,7 @@ export RUST_LOG=info
 | `YAGRA_LOGS_URL` | 未設定 ⇒ イベントは PostgreSQL のみ | VictoriaLogs ベース URL — オプトインのパッシブイベントログストア |
 | `YAGRA_CLICKHOUSE_URL` | 未設定 ⇒ フローストア無効 | ClickHouse HTTP URL — オプトインのトラフィックフローストア（未設定だとフロー API は 503 を返す） |
 | `YAGRA_PG_MAX_CONNECTIONS` | `20` | PostgreSQL 接続プールの上限（HA のリーダーはこれに加えて advisory lock 用の +1 接続を保持） |
+| `YAGRA_VM_WRITERS` | コア数（最大 4） | VictoriaMetrics へメトリクスを書くタスクの本数。ノード id でシャードするので 1 系列の順序は保たれる。キューと spill の上限は本数で割られる（増えない）。`1` で従来の 1 本構成に戻る |
 | **API とセキュリティ** | | |
 | `YAGRA_KEK_FILE` | 未設定 ⇒ 一時 dev 鍵 | マウントした 32 バイト鍵ファイルへのパス |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` のバインドアドレス |
