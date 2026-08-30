@@ -1349,6 +1349,17 @@ impl LeaderTasks {
                 self.alert_sink("a derived-metric transition"),
             ),
         );
+        // Nodes that have been deleted (ADR-097 Increment 4). Nothing polls a node that no longer
+        // exists, so no other path can ever close its alert — before this, deleting a node left its
+        // incident open in the external tool for good and its state in the fleet tally until the
+        // next restart. Leader-only for the same reason the two loops above are.
+        spawn_cancellable(
+            &self.shutdown,
+            alerts::deleted::run_deleted_node_watch(
+                self.alerts.clone(),
+                self.alert_sink("a deleted-node resolution"),
+            ),
+        );
         spawn_cancellable(
             &self.shutdown,
             pool_coverage::run_pool_coverage_watch(

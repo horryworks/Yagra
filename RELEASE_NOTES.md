@@ -228,6 +228,23 @@
   loss a poller reports is the network's, while a shortfall means replies are being dropped between
   the socket and the process — which looks exactly like unreachable devices.
 
+### Bug Fixes
+
+- **Deleting a node now closes the alerts it had open.** Nothing polls a node that no longer exists,
+  so no poll result could ever visit its checks again and no code path could resolve them. The alert
+  stayed active in the UI, the incident stayed open in whatever external tool its dedup key had
+  reached, and the node stayed in the fleet summary's per-state breakdown — which is why that
+  breakdown could add up to more than the fleet's own total. Restarting made the alert vanish from
+  the UI **without ever having been resolved**, which is what kept this hidden.
+  A leader-only sweep now closes each such alert as an ordinary resolution — a resolved row in alert
+  history, and a recovery on every routed notification channel — and drops the node from the liveness
+  map and the dependency-suppression down-set. Deleting many nodes at once produces one recovery per
+  closed alert, deliberately: withholding them would leave exactly those incidents open, which is the
+  fault being fixed.
+  ⚠️ A node deleted straight in the database rather than through the API or the WebUI is not noticed
+  until some other configuration change happens, because that is what rebuilds the node inventory the
+  sweep reads.
+
 ## v0.3.4 — an upgrade asks what to move and shows the sites moving, and a poller changes pool without a restart
 
 ### Breaking changes

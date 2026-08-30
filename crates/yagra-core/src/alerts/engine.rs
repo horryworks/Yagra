@@ -1222,6 +1222,103 @@ impl AlertManager {
         self.resolve_orphans(orphans)
     }
 
+    /// Close every alert about a node the inventory no longer holds, and forget what the engine
+    /// still believed about that node (ADR-097 Increment 4).
+    ///
+    /// The third sweep of this shape, and the one whose subject is the **node** rather than the
+    /// rule. Its motivating failure is different from its two siblings': deleting a node produces no
+    /// poll result, so [`Self::observe`]'s `!alerting` branch is never reached for any of its checks
+    /// and there is no path by which a deleted node's alert can ever resolve. ADR-097 decision 4
+    /// made that invisible rather than harmless — `open_alerts` drops a row whose node is gone, so a
+    /// restart makes the alert **disappear without ever having been resolved**, and whatever
+    /// external tool its dedup key reached never hears that it closed.
+    ///
+    /// # Two halves, and the second is not optional
+    ///
+    /// The first resolves the alerts, which is what closes the incident. The second drops the node
+    /// from `live`/`down`, which is what makes the fleet tally add up again:
+    /// `api/fleet.rs::state_tally` takes its total from PostgreSQL and its per-state breakdown from
+    /// this engine, so a node present in one and not the other makes the breakdown sum to more than
+    /// the total. Measured on the lab core 2026-08-30 — 15,000 synthetic nodes deleted, and the live
+    /// suite's "the fleet summary does not add up to its own total" went red. A deleted node that
+    /// never had an alert is still in `live`, so the first half alone fixes nothing there.
+    ///
+    /// # Why an empty map is a no-op
+    ///
+    /// 🚨 **An empty `node_meta` means "no config has been installed yet", never "the fleet is
+    /// empty".** [`AlertConfig::default`] is what this type holds before the first refresh, and
+    /// [`Self::restore`] has already seeded the active set by then — so without this guard the first
+    /// cycle after every start would resolve every alert in the fleet and page a recovery for each.
+    /// That is the accident ADR-080 paid for once. The guard lives **here rather than at the call
+    /// site** on purpose: it has to hold for any caller, and most of this module's own tests
+    /// configure the manager with an empty map.
+    ///
+    /// ⚠️ **The map is never *partially* loaded.** `alerts::config::load_alert_config_base`
+    /// propagates every read with `?`, so the snapshot is either a complete `list_nodes` scan or the
+    /// previous one unchanged — the same property the two sweeps above depend on.
+    ///
+    /// ⚠️ **A node deleted outside the API stays invisible until something bumps the config
+    /// generation**, because that is what rebuilds `node_meta`. Every operator-facing delete goes
+    /// through the API; a direct `DELETE FROM nodes` (the load-test teardown) needs a core restart.
+    ///
+    /// ⚠️ **What this deliberately does not reclaim**: the [`CheckState`] of a check that had no
+    /// active alert. `CheckId` is a one-way UUIDv5 of `(node, metric)`, so a deleted node's checks
+    /// cannot be enumerated. It is memory only — nothing will ever observe that check again, and a
+    /// node re-created with the same id has its committed state dropped by [`Self::resolve_orphans`]
+    /// along with its alert.
+    pub fn forget_deleted_nodes(&self) -> Vec<NotifyAction> {
+        let (orphans, gone) = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            if config.node_meta.is_empty() {
+                return Vec::new();
+            }
+            // `active` and `live` are collected one at a time. The two are never held together
+            // anywhere in this type — `restore` and `process_check` each release one before taking
+            // the other — and this is not the place to start.
+            let orphans: Vec<CheckId> = {
+                let active = self.active.lock().expect("alerts mutex poisoned");
+                active
+                    .values()
+                    .filter_map(|a| {
+                        // A non-node subject (a poller pool) has no inventory row that could be
+                        // missing, so it is not this sweep's to close.
+                        let node = a.node()?;
+                        (!config.node_meta.contains_key(&node)).then_some(a.check)
+                    })
+                    .collect()
+            };
+            let gone: Vec<NodeId> = {
+                let live = self.live.lock().expect("live mutex poisoned");
+                live.keys()
+                    .filter(|n| !config.node_meta.contains_key(n))
+                    .copied()
+                    .collect()
+            };
+            (orphans, gone)
+        };
+        if !gone.is_empty() {
+            {
+                let mut live = self.live.lock().expect("live mutex poisoned");
+                for node in &gone {
+                    live.remove(node);
+                }
+            }
+            let mut down = self.down.lock().expect("down mutex poisoned");
+            for node in &gone {
+                down.remove(node);
+            }
+        }
+        let actions = self.resolve_orphans(orphans);
+        if !actions.is_empty() || !gone.is_empty() {
+            tracing::info!(
+                resolved = actions.len(),
+                forgotten = gone.len(),
+                "closed the alerts of nodes the inventory no longer holds"
+            );
+        }
+        actions
+    }
+
     /// Close each orphaned check and forget its dwell window.
     ///
     /// 🚨 Drop the dwell/flap bookkeeping along with the alert, or the check goes permanently
@@ -3989,5 +4086,193 @@ mod tests {
             "the poll path owns this one"
         );
         assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    // ---- ADR-097 Increment 4: a deleted node's alerts are closed, not abandoned ----
+
+    /// A manager holding one open liveness alert per node named, over `meta` as the inventory.
+    ///
+    /// ⚠️ Several tests below keep a second node in `meta` purely so the map is not *empty* after
+    /// the deletion — an empty map means "no config installed" and is a deliberate no-op, so a test
+    /// that deleted the only node would pass for the wrong reason.
+    fn with_open_liveness_alerts(
+        nodes: &[NodeId],
+        meta: HashMap<NodeId, NodeMeta>,
+    ) -> AlertManager {
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(Vec::new(), meta));
+        for node in nodes {
+            for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+                mgr.observe(&result(*node, CheckOutcome::Unreachable, i));
+            }
+        }
+        mgr
+    }
+
+    /// 🚨 The accepting side, and it is written first on purpose: a sweep that resolved everything
+    /// would satisfy every other test here.
+    #[test]
+    fn an_alert_about_a_node_the_inventory_still_holds_is_left_alone() {
+        let node = NodeId::new();
+        let mgr = with_open_liveness_alerts(&[node], meta_for(node));
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        assert!(
+            mgr.forget_deleted_nodes().is_empty(),
+            "the node is in the inventory; nothing about it is orphaned"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+        assert_eq!(mgr.node_state(node), Some(NodeState::Unreachable));
+    }
+
+    /// The whole point: nothing else can ever close this alert, because nothing polls a node that
+    /// no longer exists.
+    #[test]
+    fn an_alert_about_a_deleted_node_is_resolved_and_forgotten() {
+        let kept = NodeId::new();
+        let gone = NodeId::new();
+        let mut meta = meta_for(kept);
+        meta.insert(gone, NodeMeta::default());
+        let mgr = with_open_liveness_alerts(&[kept, gone], meta);
+        assert_eq!(mgr.active_alerts().len(), 2);
+
+        // The node is deleted, so the next config load no longer carries it.
+        mgr.set_config(cfg(Vec::new(), meta_for(kept)));
+        let actions = mgr.forget_deleted_nodes();
+
+        assert_eq!(actions.len(), 1, "exactly the deleted node");
+        let NotifyAction::Resolve(closed) = &actions[0] else {
+            panic!("it must close as a resolution, which is what shuts the external incident");
+        };
+        assert_eq!(closed.node(), Some(gone));
+        assert_eq!(mgr.active_alerts().len(), 1);
+        assert_eq!(mgr.active_alerts()[0].node(), Some(kept));
+        assert_eq!(
+            mgr.node_state(gone),
+            None,
+            "and it leaves the display tally"
+        );
+        assert_eq!(mgr.node_state(kept), Some(NodeState::Unreachable));
+    }
+
+    /// It runs on every config-refresh cycle for the life of the process.
+    #[test]
+    fn the_deleted_node_sweep_is_idempotent() {
+        let kept = NodeId::new();
+        let gone = NodeId::new();
+        let mut meta = meta_for(kept);
+        meta.insert(gone, NodeMeta::default());
+        let mgr = with_open_liveness_alerts(&[gone], meta);
+
+        mgr.set_config(cfg(Vec::new(), meta_for(kept)));
+        assert_eq!(mgr.forget_deleted_nodes().len(), 1);
+        assert!(mgr.forget_deleted_nodes().is_empty());
+        assert!(mgr.forget_deleted_nodes().is_empty());
+    }
+
+    /// 🚨 The disaster case. `AlertConfig::default()` is what the engine holds between start-up and
+    /// the first config refresh — and `restore` has already seeded the active set by then. Reading
+    /// an empty map as "every node was deleted" would resolve the whole fleet and page a recovery
+    /// for each, which is exactly the accident ADR-080 paid for once.
+    #[test]
+    fn an_empty_node_map_resolves_nothing() {
+        let node = NodeId::new();
+        let mgr = with_open_liveness_alerts(&[node], meta_for(node));
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        // Direction 1: a real inventory that still holds the node.
+        assert!(mgr.forget_deleted_nodes().is_empty());
+
+        // Direction 2: no config installed at all.
+        mgr.set_config(AlertConfig::default());
+        assert!(
+            mgr.forget_deleted_nodes().is_empty(),
+            "an empty node map means no config has been installed, never that the fleet is empty"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+        assert_eq!(mgr.node_state(node), Some(NodeState::Unreachable));
+    }
+
+    /// The half the alerts alone do not cover: a deleted node that never had an alert still sits in
+    /// `live` and in the suppression down-set. `api/fleet.rs::state_tally` takes its total from
+    /// PostgreSQL and its breakdown from here, so leaving it makes the breakdown sum to more than
+    /// the total — which is how this was found on the lab core.
+    #[test]
+    fn a_deleted_node_leaves_the_display_tally_and_the_down_set() {
+        let kept = NodeId::new();
+        let gone = NodeId::new();
+        let mut meta = meta_for(kept);
+        meta.insert(gone, NodeMeta::default());
+
+        // No liveness rule, so the state commits and the down-set moves while nobody is paged
+        // (ADR-075). That is what makes this an alert-free case.
+        let mgr = AlertManager::new();
+        mgr.set_config(AlertConfig::new(Vec::new(), meta));
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(gone, CheckOutcome::Unreachable, i));
+            mgr.observe(&result(kept, CheckOutcome::Reachable, i));
+        }
+        assert!(mgr.active_alerts().is_empty(), "no rule means no alert");
+        assert!(mgr.down_set().contains(&gone));
+        assert_eq!(mgr.node_states().len(), 2);
+
+        mgr.set_config(AlertConfig::new(Vec::new(), meta_for(kept)));
+        assert!(
+            mgr.forget_deleted_nodes().is_empty(),
+            "there was never an alert to close — and the sweep must still do its second half"
+        );
+        assert_eq!(
+            mgr.node_states().len(),
+            1,
+            "the tally must stop counting a node the inventory no longer holds"
+        );
+        assert!(
+            !mgr.down_set().contains(&gone),
+            "a node that no longer exists must not keep suppressing anything"
+        );
+    }
+
+    /// A pool-coverage alert has no inventory row that could be missing, so this sweep must not be
+    /// the thing that closes it — `resolve_pool_coverage_alert` owns that.
+    #[test]
+    fn a_pool_subject_is_never_swept_as_a_deleted_node() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        assert!(mgr.raise_pool_coverage_alert("site-a", 1).is_some());
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        assert!(mgr.forget_deleted_nodes().is_empty());
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// 🚨 The trap `resolve_orphans` documents, met from this direction: a config-bundle import
+    /// preserves node ids, so a node can come back with the same id. If the sweep resolved the alert
+    /// without dropping the dwell state, the re-created node would observe `Unreachable →
+    /// Unreachable`, see no transition, and never fire again for the life of the process.
+    #[test]
+    fn a_node_recreated_with_the_same_id_can_alert_again() {
+        let node = NodeId::new();
+        let keeper = NodeId::new();
+        let mut meta = meta_for(keeper);
+        meta.insert(node, NodeMeta::default());
+        let mgr = with_open_liveness_alerts(&[node], meta);
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        mgr.set_config(cfg(Vec::new(), meta_for(keeper)));
+        assert_eq!(mgr.forget_deleted_nodes().len(), 1);
+        assert!(mgr.active_alerts().is_empty());
+
+        let mut back = meta_for(keeper);
+        back.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(Vec::new(), back));
+        for i in 200..(200 + i64::from(DEFAULT_LIVENESS_DWELL)) {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i));
+        }
+        assert_eq!(
+            mgr.active_alerts().len(),
+            1,
+            "the check must be able to fire again"
+        );
     }
 }
