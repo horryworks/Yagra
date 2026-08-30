@@ -30,7 +30,10 @@ interface NodeRow {
 }
 interface NodeList {
   nodes: NodeRow[];
+  /** Filter mode only: matches were left out of a capped candidate scan. */
   truncated: boolean;
+  /** Paging mode: there is another page. Deliberately *not* `truncated` — see below. */
+  next_cursor: string | null;
 }
 
 /** `src/locales/en/format.json`'s `state` block — the labels `stateLabel()` resolves. Read here
@@ -58,7 +61,18 @@ test('the inventory header agrees with the list it is a summary of', async ({ pa
 
   // 型 2 — the aggregate against the list. Two different queries answer "how many nodes are
   // there", and the header shows the first while the tree below it is built from the second.
-  test.skip(list.truncated, 'the node list was capped, so its length is not the fleet total');
+  // 🚨 **Both signals, and the second one was missing for a year.** `GET /nodes` answers in two
+  // modes: a filtered query returns one capped page and sets `truncated`, while an unfiltered one
+  // pages by cursor and sets `truncated: false` on purpose — `next_cursor` is what says there is
+  // more, and a client reading both would show a "results were cut" notice on every page but the
+  // last. This test asked only the first, so on any deployment with more nodes than the limit it
+  // failed claiming the aggregate and the list disagree. Found the day a lab box first held more
+  // than 500 nodes (15,032, ADR-109 Inc.2's load test); until then no deployment was large enough
+  // to reach it, which is exactly the class of bug Tier2a exists for and could not see.
+  test.skip(
+    list.truncated || list.next_cursor !== null,
+    'the node list did not fit in one page, so its length is not the fleet total',
+  );
   expect(list.nodes.length, 'the aggregate and the list disagree about the fleet').toBe(
     summary.total,
   );
