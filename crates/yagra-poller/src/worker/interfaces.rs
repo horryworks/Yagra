@@ -14,6 +14,67 @@
 
 use super::*;
 
+/// The numeric columns one interface walk asks for, **in the order it asks for them**.
+///
+/// Two properties, and both only became visible once `FakeTransport` started recording what it was
+/// asked for (ADR-110 Increment 3).
+///
+/// 🚨 **The inventory columns come first, and the order is now load-bearing.** A walk can be cut
+/// short — a device that goes silent, or one slow enough to spend its whole budget — and what a
+/// truncated walk drops is decided here. Dropping a *metric* column costs a gap in the TSDB, which
+/// is visible on the chart and which `rate()` steps over. Dropping the columns the interface
+/// **inventory** is folded from costs something worse and quieter: no `DiscoveredInterface` rows are
+/// produced, so nothing touches those ports' `last_seen`, and 900 seconds later every port on a
+/// node that still looks perfectly healthy reads *stale* — indistinguishable from a line card that
+/// was pulled (`INTERFACE_STALE_SECS`). So the cheap loss goes last.
+///
+/// The reordering changes **nothing** on a device that answers: every column is walked either way,
+/// and the demux is keyed by `oid_base`, not by position. It can only matter when the walk stops
+/// early — and then it converts the dangerous state (healthy node, stale ports) into the honest one
+/// (a device that said nothing is `Unreachable`, because the metric columns it never reached are
+/// what `outcome` is decided from).
+///
+/// **Each column is asked for once.** `if_high_speed` arrives from two directions — it is a declared
+/// metric column in the built-in catalog *and* the 64-bit source `resolve_if_speed` needs — and used
+/// to be walked twice per poll: one extra GETBULK sequence on every interface poll of every SNMP
+/// node, and two identical samples per port. Deduplicating rather than dropping the poller-side
+/// push is deliberate: a profile carrying the ifSpeed meta column but not the catalog metric needs
+/// the push, and a profile with the metric but no meta column needs the catalog entry. Either
+/// source alone must still produce exactly one column.
+fn numeric_walk_columns(columns: &[SnmpColumn], speed_oids: &[String]) -> Vec<String> {
+    let mut oids: Vec<String> = Vec::with_capacity(columns.len() + speed_oids.len() + 5);
+    if !speed_oids.is_empty() {
+        oids.extend(speed_oids.iter().cloned());
+        oids.push(OID_IF_HIGH_SPEED.to_owned());
+        // The link's negotiated mode rides along for free (ADR-063 Inc.1): both are INTEGER-valued
+        // and indexed by ifIndex alone, so they cost extra GETBULK sequences on a session this poll
+        // was opening anyway — not a session, which is what S5 was about. Gated on the same
+        // condition as ifHighSpeed because it marks "this job is gathering interface metadata".
+        //
+        // ⚠️ They are appended here rather than declared as `InterfaceField` variants on purpose:
+        // a new variant would make every N-1 poller drop the entire SnmpTable spec. The reasoning
+        // is on `yagra_common::link_mode`, next to the constants.
+        oids.push(OID_DOT3_DUPLEX_STATUS.to_owned());
+        // Huawei YunShan implements neither EtherLike-MIB nor MAU-MIB, so both of ADR-063's
+        // existing paths are dead there and the duplex column was permanently blank. This is
+        // one more column on a walk already being issued, and it returns no rows on the
+        // devices that answer the standard one. ⚠️ Its enumeration is NOT the standard one —
+        // see `duplex_from_huawei`, which is why the fold below cannot share a mapper.
+        oids.push(OID_HW_ETHERNET_DUPLEX.to_owned());
+        // Whether the port is metal or optical (ADR-063 Inc.4), two columns from the duplex one in
+        // the same Huawei table. The standard answer — `ifMauType` — is walked by the hourly media
+        // job and is dead on this platform (`1.3.6.1.2.1.26` answers No Such Object), and the other
+        // implemented source only ever names a pluggable, so a fixed RJ45 port had no source at all.
+        oids.push(OID_HW_ETHERNET_PORT_TYPE.to_owned());
+        oids.push(OID_IF_TYPE.to_owned());
+    }
+    oids.extend(columns.iter().map(|c| c.oid.clone()));
+    // Order-preserving, so the inventory columns keep the head of the list.
+    let mut seen: HashSet<String> = HashSet::with_capacity(oids.len());
+    oids.retain(|oid| seen.insert(oid.clone()));
+    oids
+}
+
 /// Execute an SNMP table-walk check (v2c or v3, selected by `walker`): numeric columns become
 /// per-interface samples (keyed by ifIndex, using the column's explicit metric name and kind — no
 /// OID-name guessing), and metadata columns become [`DiscoveredInterface`] records (PostgreSQL
@@ -41,40 +102,20 @@ async fn execute_table_walk(
     // (UDP socket + client) per walk — metric, ifSpeed, ifHighSpeed — holding the poll's global
     // permit ~3× longer and amplifying permit exhaustion during a mass outage (S5). Folding the
     // numeric walks into one leaves just this walk + the string-metadata walk below (2 sessions).
-    let mut numeric_oids: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
-    numeric_oids.extend(speed_oids.iter().cloned());
-    if !speed_oids.is_empty() {
-        numeric_oids.push(OID_IF_HIGH_SPEED.to_owned());
-        // The link's negotiated mode rides along for free (ADR-063 Inc.1): both are INTEGER-valued
-        // and indexed by ifIndex alone, so they cost extra GETBULK sequences on a session this poll
-        // was opening anyway — not a session, which is what S5 was about. Gated on the same
-        // condition as ifHighSpeed because it marks "this job is gathering interface metadata".
-        //
-        // ⚠️ They are appended here rather than declared as `InterfaceField` variants on purpose:
-        // a new variant would make every N-1 poller drop the entire SnmpTable spec. The reasoning
-        // is on `yagra_common::link_mode`, next to the constants.
-        numeric_oids.push(OID_DOT3_DUPLEX_STATUS.to_owned());
-        // Huawei YunShan implements neither EtherLike-MIB nor MAU-MIB, so both of ADR-063's
-        // existing paths are dead there and the duplex column was permanently blank. This is
-        // one more column on a walk already being issued, and it returns no rows on the
-        // devices that answer the standard one. ⚠️ Its enumeration is NOT the standard one —
-        // see `duplex_from_huawei`, which is why the fold below cannot share a mapper.
-        numeric_oids.push(OID_HW_ETHERNET_DUPLEX.to_owned());
-        // Whether the port is metal or optical (ADR-063 Inc.4), two columns from the duplex one in
-        // the same Huawei table. The standard answer — `ifMauType` — is walked by the hourly media
-        // job and is dead on this platform (`1.3.6.1.2.1.26` answers No Such Object), and the other
-        // implemented source only ever names a pluggable, so a fixed RJ45 port had no source at all.
-        numeric_oids.push(OID_HW_ETHERNET_PORT_TYPE.to_owned());
-        numeric_oids.push(OID_IF_TYPE.to_owned());
-    }
+    let numeric_oids = numeric_walk_columns(columns, &speed_oids);
 
     let mut samples = Vec::new();
     let mut raw = RawInterfaceNumerics::default();
+    // Whether the agent produced a single row, anywhere, for any column. Not the same as
+    // `samples.is_empty()`: a device can answer the speed and duplex columns while matching no
+    // *metric* column at all, and that device has still spoken.
+    let mut answered = false;
     match walker
         .walk(transport, job.target, &numeric_oids, timeout)
         .await
     {
         Ok(rows) => {
+            answered = !rows.is_empty();
             for row in rows {
                 // 🚨 `ifHighSpeed` is TWO things at once and must feed both.
                 //
@@ -121,8 +162,23 @@ async fn execute_table_walk(
         Err(err) => tracing::warn!(job_id = %job.job_id, error = %err, "snmp table walk failed"),
     }
 
-    let interfaces =
-        walk_interface_metadata(job, transport, walker, meta_columns, &raw, timeout).await;
+    // 🚨 **A table poll is two walks, and each carries its own budget** — so a silent device paid
+    // for both, and the job cost twice what one walk's ceiling promised. A device that produced no
+    // numeric row has said nothing at all: there is no ifIndex for a name to attach to, and asking
+    // is a second full budget spent to re-establish a fact already in hand. This is the cheap half
+    // of the "whole job" bound ADR-110 Increment 3 asked for, and it halves the cost of a mass
+    // outage where every device is in exactly this state.
+    //
+    // ⚠️ **One behaviour changes**: a device that answers `ifName` while answering no numeric
+    // column at all no longer has its interface names stored. Such a device's poll already reports
+    // `Unreachable` (`outcome` below is decided from `samples`), so what is lost is inventory for a
+    // node Yagra is simultaneously calling unreachable. Declared rather than silent — it is in the
+    // release notes.
+    let interfaces = if answered {
+        walk_interface_metadata(job, transport, walker, meta_columns, &raw, timeout).await
+    } else {
+        Vec::new()
+    };
 
     // Reachable iff the agent returned at least one value (matches the scalar SNMP arm).
     let outcome = if samples.is_empty() {
@@ -527,6 +583,177 @@ mod tests {
             },
             60,
         )
+    }
+
+    /// The six columns the interface **inventory** is folded from, as `execute` asks for them.
+    ///
+    /// Derived from the same places the walk builds them, so this stays true if a seventh is added:
+    /// the `Speed` meta column the catalog declares, plus the five the poller appends itself.
+    fn inventory_oids() -> Vec<String> {
+        use yagra_common::{builtin_interface_meta_columns, InterfaceField};
+        let mut oids: Vec<String> = builtin_interface_meta_columns()
+            .into_iter()
+            .filter(|(f, _)| matches!(f, InterfaceField::Speed))
+            .map(|(_, oid)| oid.to_owned())
+            .collect();
+        for oid in [
+            OID_IF_HIGH_SPEED,
+            OID_DOT3_DUPLEX_STATUS,
+            OID_HW_ETHERNET_DUPLEX,
+            OID_HW_ETHERNET_PORT_TYPE,
+            OID_IF_TYPE,
+        ] {
+            oids.push(oid.to_owned());
+        }
+        oids
+    }
+
+    /// **Each column is asked for once** (ADR-110 Increment 3).
+    ///
+    /// 🚨 Nothing could see this before `FakeTransport` recorded what it was asked for. The canned
+    /// rows are matched with `any()`, so a column requested twice returns the same rows once, and
+    /// every assertion about the *result* agreed while the poller issued an extra GETBULK sequence
+    /// on every interface poll of every SNMP node and published two identical samples per port.
+    ///
+    /// `if_high_speed` is the one that was duplicated, and it is duplicated *by construction* — a
+    /// declared metric column in the built-in catalog and the 64-bit speed source the poller appends
+    /// itself — so the catalog job is the only fixture that can show it.
+    #[tokio::test]
+    async fn the_interface_walk_asks_for_each_column_once() {
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![SnmpTableSample {
+            oid_base: OID_IF_HIGH_SPEED.to_owned(),
+            ifindex: 1,
+            value: 1_000.0,
+        }]);
+        let _ = execute(&catalog_table_job(), &t, 1_000).await;
+
+        let asked = t.asked();
+        let numeric = asked.first().expect("the numeric walk happened");
+        assert!(
+            numeric.len() >= 17,
+            "only {} columns were asked for; this fixture is the whole built-in interface \
+             template and the assertions below would be running over almost nothing",
+            numeric.len()
+        );
+
+        let mut seen: std::collections::HashSet<&String> = std::collections::HashSet::new();
+        let dupes: Vec<&String> = numeric.iter().filter(|o| !seen.insert(o)).collect();
+        assert!(
+            dupes.is_empty(),
+            "these columns were walked more than once: {dupes:?}. Every duplicate is one extra \
+             GETBULK sequence per poll and one extra sample per port"
+        );
+        assert_eq!(
+            numeric.iter().filter(|o| *o == OID_IF_HIGH_SPEED).count(),
+            1,
+            "ifHighSpeed must still be walked — it is both a charted metric and the only 64-bit \
+             speed source — but exactly once"
+        );
+    }
+
+    /// **The inventory columns are walked first, and a truncated walk therefore costs a chart.**
+    ///
+    /// 🚨 This is the order that decides what a cut walk loses (ADR-110 Increment 3). Dropping a
+    /// metric column leaves a hole in a chart that `rate()` steps over. Dropping the columns the
+    /// `DiscoveredInterface` rows are folded from produces no rows at all, so nothing touches those
+    /// ports' `last_seen` and 900 seconds later every port on a node that still looks healthy reads
+    /// *stale* — which is what a pulled line card looks like. The cheap loss goes last.
+    ///
+    /// On a device that answers, this changes nothing: the demux is keyed by `oid_base`. It is only
+    /// ever observable when the walk stops early, which is exactly when nobody is watching.
+    #[tokio::test]
+    async fn the_columns_that_carry_the_inventory_are_asked_for_first() {
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![SnmpTableSample {
+            oid_base: OID_IF_HIGH_SPEED.to_owned(),
+            ifindex: 1,
+            value: 1_000.0,
+        }]);
+        let _ = execute(&catalog_table_job(), &t, 1_000).await;
+        let asked = t.asked();
+        let numeric = asked.first().expect("the numeric walk happened");
+
+        let inventory = inventory_oids();
+        let last_inventory = numeric
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| inventory.contains(o))
+            .map(|(i, _)| i)
+            .max()
+            .expect("the inventory columns are in the walk");
+        let metric: Vec<(usize, &String)> = numeric
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| !inventory.contains(o))
+            .collect();
+        let first_metric = metric
+            .first()
+            .expect("the metric columns are in the walk")
+            .0;
+
+        assert!(
+            inventory.len() >= 6 && metric.len() >= 11,
+            "compared {} inventory columns against {} metric ones; the built-in template has six \
+             and eleven, so this ran over the wrong list",
+            inventory.len(),
+            metric.len()
+        );
+        assert!(
+            last_inventory < first_metric,
+            "the inventory columns must all precede the metric ones — a truncated walk has to \
+             lose a TSDB gap before it loses an interface row (asked: {numeric:?})"
+        );
+    }
+
+    /// **A device that said nothing is not asked a second time** (ADR-110 Increment 3).
+    ///
+    /// A table poll is two walks, each with its own budget, so a silent device used to pay for
+    /// both. Both directions are asserted, and the accepting one is the load-bearing half: a poller
+    /// that simply stopped walking `ifName` would satisfy the rejecting assertion perfectly and
+    /// blank every interface name in the deployment.
+    #[tokio::test]
+    async fn a_device_that_said_nothing_is_not_asked_for_interface_names() {
+        use yagra_transport::{SnmpTableSample, SnmpTableString};
+        let names = vec![SnmpTableString {
+            oid_base: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+            ifindex: 1,
+            value: "Gi0/1".to_owned(),
+        }];
+
+        // Silent: the numeric walk produced no row at all.
+        let silent = FakeTransport::reachable(0.0).with_snmp_table_strings(names.clone());
+        let r = execute(&catalog_table_job(), &silent, 1_000).await;
+        assert_eq!(
+            silent.asked().len(),
+            1,
+            "the metadata walk was attempted against a device that answered nothing: {:?}",
+            silent.asked()
+        );
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+        assert!(r.interfaces.is_empty());
+
+        // Answering: the second walk still happens, and the names still land.
+        let answering = FakeTransport::reachable(0.0)
+            .with_snmp_table(vec![SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 1,
+                value: 10.0,
+            }])
+            .with_snmp_table_strings(names);
+        let r = execute(&catalog_table_job(), &answering, 1_000).await;
+        assert_eq!(
+            answering.asked().len(),
+            2,
+            "a device that answered must still be asked for its interface names"
+        );
+        assert_eq!(
+            r.interfaces
+                .iter()
+                .find(|i| i.ifindex == IfIndex(1))
+                .and_then(|i| i.if_name.as_deref()),
+            Some("Gi0/1")
+        );
     }
 
     #[tokio::test]

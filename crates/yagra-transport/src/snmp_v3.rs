@@ -8,6 +8,7 @@
 //! (counters included) — rates are derived at query time (ADR-012). Live-only (needs a
 //! device + UDP); the parameter mapping is unit-tested.
 
+use crate::walk_budget::{note_truncation, ColumnOutcome, WalkBudget};
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpStringSample, SnmpTableSample, SnmpTableString, SnmpV3Params,
     SnmpValue, TransportError,
@@ -33,6 +34,25 @@ const MAX_WALK_REQUESTS: usize = 1000;
 /// rows per column — so this names *which* bound applies rather than leaving a bare `usize::MAX`
 /// that reads as none.
 const ROWS_BOUNDED_BY_REQUEST_CEILING: usize = usize::MAX;
+
+/// One failed `snmp2` exchange in which the agent said **nothing at all** (ADR-110 Increment 3).
+///
+/// Written down here rather than at each of the five loops below, because the rule is subtle and
+/// the whole consecutive-failure design is wrong without it: **only the `tokio::time::timeout` arm
+/// is silence.** A `snmp2::Error` means the exchange produced *something* — a decode failure, a
+/// report PDU, an authentication complaint — and a device answering `noSuchObject` for a column it
+/// does not implement must never be read as unreachable. `walk_budget`'s module doc carries the
+/// full argument.
+///
+/// ⚠️ **v3 rarely reaches this at all.** [`open_session`] runs engine discovery before the first
+/// column, so a silent device fails the whole *call* in one timeout rather than paying one per
+/// column — the asymmetry with v2c, whose `connect` only binds a socket and never speaks. The
+/// budget is wired here anyway for the device that goes quiet after the session is up, and so that
+/// the tenth loop someone adds inherits it rather than reopening the defect.
+const AGENT_SAID_NOTHING: ColumnOutcome = ColumnOutcome::Failed;
+
+/// The agent answered — including by complaining. See [`AGENT_SAID_NOTHING`].
+const AGENT_ANSWERED: ColumnOutcome = ColumnOutcome::Answered;
 
 /// Open a v3 session against `target` and run engine discovery (id/boots/time) — required
 /// before authenticated requests.
@@ -63,9 +83,15 @@ pub async fn snmp_get_v3(
 ) -> Result<Vec<SnmpSample>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut samples = Vec::with_capacity(oids.len());
-    for oid_str in oids {
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, oid_str) in oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, oids.len() - asked);
+            break;
+        }
         let Some(oid) = parse_oid(oid_str) else {
             tracing::warn!(%oid_str, "skipping malformed OID");
+            budget.record(ColumnOutcome::Skipped);
             continue;
         };
         match tokio::time::timeout(timeout, session.get(&oid)).await {
@@ -78,9 +104,16 @@ pub async fn snmp_get_v3(
                         });
                     }
                 }
+                budget.record(AGENT_ANSWERED);
             }
-            Ok(Err(e)) => tracing::debug!(%oid_str, error = %e, "snmp v3 get failed"),
-            Err(_) => tracing::debug!(%oid_str, "snmp v3 get timed out"),
+            Ok(Err(e)) => {
+                tracing::debug!(%oid_str, error = %e, "snmp v3 get failed");
+                budget.record(AGENT_ANSWERED);
+            }
+            Err(_) => {
+                tracing::debug!(%oid_str, "snmp v3 get timed out");
+                budget.record(AGENT_SAID_NOTHING);
+            }
         }
     }
     Ok(samples)
@@ -96,9 +129,15 @@ pub async fn snmp_get_v3_strings(
 ) -> Result<Vec<SnmpStringSample>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut samples = Vec::with_capacity(oids.len());
-    for oid_str in oids {
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, oid_str) in oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, oids.len() - asked);
+            break;
+        }
         let Some(oid) = parse_oid(oid_str) else {
             tracing::warn!(%oid_str, "skipping malformed OID");
+            budget.record(ColumnOutcome::Skipped);
             continue;
         };
         match tokio::time::timeout(timeout, session.get(&oid)).await {
@@ -111,9 +150,16 @@ pub async fn snmp_get_v3_strings(
                         });
                     }
                 }
+                budget.record(AGENT_ANSWERED);
             }
-            Ok(Err(e)) => tracing::debug!(%oid_str, error = %e, "snmp v3 string get failed"),
-            Err(_) => tracing::debug!(%oid_str, "snmp v3 string get timed out"),
+            Ok(Err(e)) => {
+                tracing::debug!(%oid_str, error = %e, "snmp v3 string get failed");
+                budget.record(AGENT_ANSWERED);
+            }
+            Err(_) => {
+                tracing::debug!(%oid_str, "snmp v3 string get timed out");
+                budget.record(AGENT_SAID_NOTHING);
+            }
         }
     }
     Ok(samples)
@@ -132,8 +178,13 @@ pub async fn snmp_walk_v3(
 ) -> Result<Vec<SnmpTableSample>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut rows = Vec::new();
-    for base_str in column_oids {
-        walk_column_v3(
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, base_str) in column_oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, column_oids.len() - asked);
+            break;
+        }
+        let outcome = walk_column_v3(
             &mut session,
             base_str,
             timeout,
@@ -149,6 +200,7 @@ pub async fn snmp_walk_v3(
             &mut rows,
         )
         .await;
+        budget.record(outcome);
     }
     Ok(rows)
 }
@@ -164,8 +216,13 @@ pub async fn snmp_walk_strings_v3(
 ) -> Result<Vec<SnmpTableString>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut rows = Vec::new();
-    for base_str in column_oids {
-        walk_column_v3(
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, base_str) in column_oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, column_oids.len() - asked);
+            break;
+        }
+        let outcome = walk_column_v3(
             &mut session,
             base_str,
             timeout,
@@ -181,6 +238,7 @@ pub async fn snmp_walk_strings_v3(
             &mut rows,
         )
         .await;
+        budget.record(outcome);
     }
     Ok(rows)
 }
@@ -202,17 +260,22 @@ pub async fn snmp_walk_instances_v3(
 ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut rows = Vec::new();
-    for base_str in column_oids {
-        if rows.len() >= max_rows {
-            tracing::debug!(%base_str, max_rows, "instance walk budget spent; skipping column");
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, base_str) in column_oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, column_oids.len() - asked);
             break;
         }
-        let budget = max_rows - rows.len();
-        walk_column_v3(
+        if rows.len() >= max_rows {
+            tracing::debug!(%base_str, max_rows, "instance walk row budget spent; skipping column");
+            break;
+        }
+        let row_budget = max_rows - rows.len();
+        let outcome = walk_column_v3(
             &mut session,
             base_str,
             timeout,
-            budget,
+            row_budget,
             |tail, value| {
                 raw_value(value).map(|v| SnmpInstanceRow {
                     oid_base: base_str.clone(),
@@ -223,6 +286,7 @@ pub async fn snmp_walk_instances_v3(
             &mut rows,
         )
         .await;
+        budget.record(outcome);
     }
     Ok(rows)
 }
@@ -245,22 +309,22 @@ async fn walk_column_v3<R>(
     session: &mut AsyncSession,
     base_str: &str,
     timeout: Duration,
-    budget: usize,
+    row_budget: usize,
     map: impl Fn(&[u32], &Value) -> Option<R>,
     out: &mut Vec<R>,
-) {
+) -> ColumnOutcome {
     if parse_oid(base_str).is_none() {
         tracing::warn!(%base_str, "skipping malformed table column OID");
-        return;
+        return ColumnOutcome::Skipped;
     }
     let mut cursor_str = base_str.to_owned();
     let mut taken = 0usize;
     for _ in 0..MAX_WALK_REQUESTS {
-        if taken >= budget {
-            return;
+        if taken >= row_budget {
+            return AGENT_ANSWERED;
         }
         let Some(cursor) = parse_oid(&cursor_str) else {
-            return;
+            return ColumnOutcome::Skipped;
         };
         let pdu = match tokio::time::timeout(
             timeout,
@@ -271,11 +335,11 @@ async fn walk_column_v3<R>(
             Ok(Ok(pdu)) => pdu,
             Ok(Err(e)) => {
                 tracing::debug!(%base_str, error = %e, "snmp v3 table walk failed");
-                return;
+                return AGENT_ANSWERED;
             }
             Err(_) => {
                 tracing::debug!(%base_str, "snmp v3 table walk timed out");
-                return;
+                return AGENT_SAID_NOTHING;
             }
         };
         // Scan this page: collect in-subtree rows and note the last OID reached so the next
@@ -287,7 +351,7 @@ async fn walk_column_v3<R>(
             // The budget is checked here, inside the page loop, rather than after it: the cost this
             // bound exists to refuse is the memory the rows occupy, and a row already pushed has
             // already cost it.
-            if taken >= budget {
+            if taken >= row_budget {
                 stop = true;
                 break;
             }
@@ -315,9 +379,11 @@ async fn walk_column_v3<R>(
             // More in-subtree rows may follow — advance past the last one, unless the agent
             // failed to advance (defensive: GETBULK returns strictly-greater OIDs).
             Some(next) if !stop && next != cursor_str => cursor_str = next,
-            _ => return,
+            // The agent answered every page it was asked for; the column ended on its own terms.
+            _ => return AGENT_ANSWERED,
         }
     }
+    AGENT_ANSWERED
 }
 
 /// Sub-identifiers of `oid_str` past the column `base_str`, or `None` when `oid_str` is not a

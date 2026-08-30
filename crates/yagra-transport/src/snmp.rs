@@ -6,22 +6,50 @@
 //! at query time (ADR-012). Live-only (needs a device + UDP); the numeric mapping and
 //! ifIndex extraction are unit-tested.
 
+use crate::walk_budget::{note_truncation, ColumnOutcome, WalkBudget};
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpTableSample, SnmpTableString, SnmpValue, TransportError,
 };
-use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient};
+use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient, SnmpClientError};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 /// Standard SNMP agent port.
 const SNMP_PORT: u16 = 161;
 
+/// Did the agent say **anything**, or nothing at all?
+///
+/// 🚨 **The whole of [`WalkBudget`]'s consecutive-failure rule depends on this distinction**, and
+/// getting it backwards would truncate healthy devices. Most `csnmp` errors mean bytes came back and
+/// we did not like them — the commonest by far being `FailedBinding { NoSuchObject }`, which is how
+/// a scalar GET reports *"I do not implement that OID"*. That is an answer. Only the five variants
+/// below mean the conversation did not happen.
+///
+/// ⚠️ The table walk reaches "unimplemented" differently — `walk_bulk` swallows `noSuchObject` and
+/// returns `Ok(empty)` — so it never arrives here at all. This function exists mainly for the
+/// scalar GET loop, where a device missing two collection OIDs in a row must not read as silent.
+fn outcome_of(err: &SnmpClientError) -> ColumnOutcome {
+    match err {
+        SnmpClientError::TimedOut
+        | SnmpClientError::Sending { .. }
+        | SnmpClientError::Receiving { .. }
+        | SnmpClientError::CreatingSocket { .. }
+        | SnmpClientError::Connecting { .. } => ColumnOutcome::Failed,
+        // A wildcard on purpose, and it falls the safe way: this is a foreign enum, so a variant
+        // added upstream lands here and is read as "the agent answered" — which never truncates a
+        // walk. Enumerating the other nine would turn an upstream release into a build failure and
+        // buy nothing, because the interesting split is exactly the five above.
+        _ => ColumnOutcome::Answered,
+    }
+}
+
 /// GETBULK max-repetitions per request. Bounded so a huge table is paged, not pulled in
 /// one oversized PDU; `csnmp::walk_bulk` repeats internally until the column is exhausted.
 const WALK_MAX_REPETITIONS: u32 = 20;
 
 /// Fetch `oids` from `target` via SNMP v2c. Per-OID failures are logged and skipped so a
-/// single bad OID doesn't fail the whole poll.
+/// single bad OID doesn't fail the whole poll — bounded by a [`WalkBudget`], so a device that
+/// answers nothing costs two round trips rather than one per OID (ADR-110 Increment 3).
 pub async fn snmp_get_v2c(
     target: IpAddr,
     community: &str,
@@ -31,11 +59,17 @@ pub async fn snmp_get_v2c(
     let client = connect(target, community, timeout).await?;
 
     let mut samples = Vec::with_capacity(oids.len());
-    for oid_str in oids {
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, oid_str) in oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, oids.len() - asked);
+            break;
+        }
         let oid = match parse_oid(oid_str) {
             Some(o) => o,
             None => {
                 tracing::warn!(%oid_str, "skipping malformed OID");
+                budget.record(ColumnOutcome::Skipped);
                 continue;
             }
         };
@@ -47,8 +81,12 @@ pub async fn snmp_get_v2c(
                         value: v,
                     });
                 }
+                budget.record(ColumnOutcome::Answered);
             }
-            Err(e) => tracing::debug!(%oid_str, error = %e, "snmp get failed"),
+            Err(e) => {
+                tracing::debug!(%oid_str, error = %e, "snmp get failed");
+                budget.record(outcome_of(&e));
+            }
         }
     }
     Ok(samples)
@@ -68,9 +106,15 @@ pub async fn snmp_walk_v2c(
 ) -> Result<Vec<SnmpTableSample>, TransportError> {
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
-    for base_str in column_oids {
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, base_str) in column_oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, column_oids.len() - asked);
+            break;
+        }
         let Some(base) = parse_oid(base_str) else {
             tracing::warn!(%base_str, "skipping malformed table column OID");
+            budget.record(ColumnOutcome::Skipped);
             continue;
         };
         match client.walk_bulk(base, WALK_MAX_REPETITIONS).await {
@@ -84,8 +128,12 @@ pub async fn snmp_walk_v2c(
                         });
                     }
                 }
+                budget.record(ColumnOutcome::Answered);
             }
-            Err(e) => tracing::debug!(%base_str, error = %e, "snmp table walk failed"),
+            Err(e) => {
+                tracing::debug!(%base_str, error = %e, "snmp table walk failed");
+                budget.record(outcome_of(&e));
+            }
         }
     }
     Ok(rows)
@@ -101,9 +149,15 @@ pub async fn snmp_walk_strings_v2c(
 ) -> Result<Vec<SnmpTableString>, TransportError> {
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
-    for base_str in column_oids {
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, base_str) in column_oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, column_oids.len() - asked);
+            break;
+        }
         let Some(base) = parse_oid(base_str) else {
             tracing::warn!(%base_str, "skipping malformed table column OID");
+            budget.record(ColumnOutcome::Skipped);
             continue;
         };
         match client.walk_bulk(base, WALK_MAX_REPETITIONS).await {
@@ -119,8 +173,12 @@ pub async fn snmp_walk_strings_v2c(
                         });
                     }
                 }
+                budget.record(ColumnOutcome::Answered);
             }
-            Err(e) => tracing::debug!(%base_str, error = %e, "snmp string table walk failed"),
+            Err(e) => {
+                tracing::debug!(%base_str, error = %e, "snmp string table walk failed");
+                budget.record(outcome_of(&e));
+            }
         }
     }
     Ok(rows)
@@ -147,16 +205,24 @@ pub async fn snmp_walk_instances_v2c(
 ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
-    for base_str in column_oids {
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, base_str) in column_oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, column_oids.len() - asked);
+            break;
+        }
         let Some(base) = parse_oid(base_str) else {
             tracing::warn!(%base_str, "skipping malformed table column OID");
+            budget.record(ColumnOutcome::Skipped);
             continue;
         };
         if rows.len() >= max_rows {
-            tracing::debug!(%base_str, max_rows, "instance walk budget spent; skipping column");
+            tracing::debug!(%base_str, max_rows, "instance walk row budget spent; skipping column");
             break;
         }
-        walk_column_capped(&client, base_str, &base, max_rows - rows.len(), &mut rows).await;
+        let outcome =
+            walk_column_capped(&client, base_str, &base, max_rows - rows.len(), &mut rows).await;
+        budget.record(outcome);
     }
     Ok(rows)
 }
@@ -168,14 +234,16 @@ pub async fn snmp_walk_instances_v2c(
 /// [`page_slice`], which is pure and tested; this function is the I/O around it.
 ///
 /// A column that errors or times out ends here and only here, as in the other walkers: one bad
-/// column must not fail the whole poll.
+/// column must not fail the whole poll. What it returns is that column's verdict **about the
+/// device**, which the caller folds into its [`WalkBudget`] — see [`outcome_of`] for why an error
+/// is not automatically a failure.
 async fn walk_column_capped(
     client: &Snmp2cClient,
     base_str: &str,
     base: &ObjectIdentifier,
-    budget: usize,
+    row_budget: usize,
     out: &mut Vec<SnmpInstanceRow>,
-) {
+) -> ColumnOutcome {
     // Defensive ceiling on requests as well as rows: an agent that answers with OIDs that do not
     // advance would otherwise spin forever, and `budget` alone cannot catch that because such a
     // page yields no rows either.
@@ -187,14 +255,14 @@ async fn walk_column_capped(
             Ok(p) => p,
             Err(e) => {
                 tracing::debug!(%base_str, error = %e, "snmp instance walk failed");
-                return;
+                return outcome_of(&e);
             }
         };
         // `GetBulkResult::values` is a `BTreeMap`, so it already arrives in OID order — which is
         // what "leading entries" in `page_slice` means. Materialized as a slice (≤
         // `WALK_MAX_REPETITIONS` entries) so the paging decision stays a pure function over one.
         let entries: Vec<(ObjectIdentifier, ObjectValue)> = page.values.into_iter().collect();
-        let (take, next) = page_slice(base, &entries, budget - taken);
+        let (take, next) = page_slice(base, &entries, row_budget - taken);
         for (oid, value) in entries.iter().take(take) {
             let Some(tail) = oid.relative_to(base) else {
                 continue;
@@ -214,10 +282,12 @@ async fn walk_column_capped(
             // `next != cursor` guards the non-advancing agent; GETBULK is specified to return
             // strictly greater OIDs, but a buggy one that repeats itself must not loop us.
             Some(n) if !page.end_of_mib_view && n != cursor => cursor = n,
-            _ => return,
+            // The agent answered every page it was asked for; the walk ended on its own terms.
+            _ => return ColumnOutcome::Answered,
         }
     }
     tracing::debug!(%base_str, "instance walk hit its request ceiling");
+    ColumnOutcome::Answered
 }
 
 /// How much of one GETBULK page this walk may keep, and where to continue from.

@@ -31,3 +31,13 @@ x509-parser = { workspace = true }
 serde_json = { workspace = true }
 # DNS name-resolution monitoring transport (ADR-033).
 hickory-resolver = { workspace = true }
+# The truncated-walk counter (ADR-110 Increment 3). A facade: with no recorder installed every
+# call is a no-op, so linking it into a library `yagra-core` also uses costs nothing.
+metrics = { workspace = true }
+
+[dev-dependencies]
+# `srcread`, for the check that every multi-column SNMP call takes a budget (ADR-110 Increment 3).
+# A dev-dependency on purpose: under resolver v2 the feature is not unified into a normal
+# `cargo build`, so the shipped library links a `yagra-common` with none of it in it. Same shape as
+# `yagra-poller`'s line, and the reason the mechanism lives in `yagra-common` at all (ADR-099).
+yagra-common = { path = "../yagra-common", features = ["test-util"] }

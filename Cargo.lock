@@ -5288,6 +5288,7 @@ dependencies = [
  "async-trait",
  "csnmp",
  "hickory-resolver",
+ "metrics",
  "rand 0.8.6",
  "reqwest",
  "serde_json",

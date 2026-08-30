@@ -13,6 +13,9 @@
 
 use async_trait::async_trait;
 use std::net::IpAddr;
+// Only `FakeTransport`'s call log needs these, and it is gated the same way.
+#[cfg(any(test, feature = "test-util"))]
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -20,8 +23,11 @@ mod dns;
 mod http;
 mod icmp;
 mod meraki;
+#[cfg(test)]
+mod module_source;
 mod snmp;
 mod snmp_v3;
+mod walk_budget;
 pub use icmp::SurgePingTransport;
 pub use meraki::{
     list_devices, list_networks, list_organizations, MerakiDeviceInfo, MerakiNetworkInfo,
@@ -486,6 +492,20 @@ pub struct FakeTransport {
     pub meraki: Vec<MerakiObservation>,
     /// The chain every DNS resolution returns.
     pub dns: DnsChain,
+    /// Every SNMP call's requested OID list, in the order the calls were made.
+    ///
+    /// **What the poller asked the device for**, which is a different question from what came
+    /// back — and the only one that can see a walk asking for the same column twice, or not
+    /// asking at all. `ifHighSpeed` was walked twice per interface poll for months precisely
+    /// because this did not exist: the canned rows are matched with `any()`, so a duplicated
+    /// column returns the same row set and every assertion about the *result* agrees
+    /// (ADR-110 Increment 3).
+    ///
+    /// ⚠️ **Shared across clones, deliberately.** A poller holds its transport behind
+    /// `Arc<dyn Transport>`; a log that cloned would leave the test reading its own private copy
+    /// and observing nothing. The flip side is that a fake reused between assertions
+    /// accumulates — build a fresh one per test.
+    pub asked: Arc<Mutex<Vec<Vec<String>>>>,
     /// When set, every scalar SNMP GET (v2c and v3) fails with this message instead of
     /// returning [`Self::snmp`].
     ///
@@ -541,6 +561,23 @@ impl FakeTransport {
             .collect()
     }
 
+    /// Note that an SNMP call asked for `oids`. See [`Self::asked`] for why this is recorded.
+    fn record_asked(&self, oids: &[String]) {
+        if let Ok(mut log) = self.asked.lock() {
+            log.push(oids.to_vec());
+        }
+    }
+
+    /// Every SNMP call's requested OID list, oldest first.
+    ///
+    /// A snapshot rather than a guard, so a test can assert against it without holding the lock
+    /// while it panics — a poisoned mutex turns one failing assertion into every later test in
+    /// the file failing for an unrelated reason.
+    #[must_use]
+    pub fn asked(&self) -> Vec<Vec<String>> {
+        self.asked.lock().map(|log| log.clone()).unwrap_or_default()
+    }
+
     /// A fake that always reports the target reachable with the given RTT (and an HTTP 200).
     #[must_use]
     pub fn reachable(rtt_ms: f64) -> Self {
@@ -568,6 +605,7 @@ impl FakeTransport {
                 body: None,
             },
             meraki: Vec::new(),
+            asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             dns: fake_dns_chain(true),
         }
@@ -597,6 +635,7 @@ impl FakeTransport {
                 body: None,
             },
             meraki: Vec::new(),
+            asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             dns: fake_dns_chain(false),
         }
@@ -668,9 +707,10 @@ impl Transport for FakeTransport {
         &self,
         _target: IpAddr,
         _community: &str,
-        _oids: &[String],
+        oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
+        self.record_asked(oids);
         match &self.snmp_get_error {
             Some(e) => Err(TransportError::Io(e.clone())),
             None => Ok(self.snmp.clone()),
@@ -681,9 +721,10 @@ impl Transport for FakeTransport {
         &self,
         _target: IpAddr,
         _params: &SnmpV3Params,
-        _oids: &[String],
+        oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
+        self.record_asked(oids);
         match &self.snmp_get_error {
             Some(e) => Err(TransportError::Io(e.clone())),
             None => Ok(self.snmp.clone()),
@@ -697,6 +738,7 @@ impl Transport for FakeTransport {
         oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpStringSample>, TransportError> {
+        self.record_asked(oids);
         Ok(self
             .snmp_v3_strings
             .iter()
@@ -712,6 +754,7 @@ impl Transport for FakeTransport {
         column_oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpTableSample>, TransportError> {
+        self.record_asked(column_oids);
         // Return only the rows for the requested columns, as a real per-column walk would.
         Ok(self
             .snmp_table
@@ -728,6 +771,7 @@ impl Transport for FakeTransport {
         column_oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpTableString>, TransportError> {
+        self.record_asked(column_oids);
         Ok(self
             .snmp_table_strings
             .iter()
@@ -743,6 +787,7 @@ impl Transport for FakeTransport {
         column_oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpTableSample>, TransportError> {
+        self.record_asked(column_oids);
         // Same canned rows as the v2c walk — the fake is protocol-agnostic.
         Ok(self
             .snmp_table
@@ -759,6 +804,7 @@ impl Transport for FakeTransport {
         column_oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpTableString>, TransportError> {
+        self.record_asked(column_oids);
         Ok(self
             .snmp_table_strings
             .iter()
@@ -775,6 +821,7 @@ impl Transport for FakeTransport {
         _timeout: Duration,
         max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+        self.record_asked(column_oids);
         Ok(self.canned_instances(column_oids, max_rows))
     }
 
@@ -786,6 +833,7 @@ impl Transport for FakeTransport {
         _timeout: Duration,
         max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+        self.record_asked(column_oids);
         // Same canned rows as the v2c walk — the fake is protocol-agnostic.
         Ok(self.canned_instances(column_oids, max_rows))
     }

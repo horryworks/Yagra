@@ -46,6 +46,43 @@
 
 ### Improvements
 
+- **A device that stops answering no longer holds a poller's capacity for the best part of a
+  minute.** An SNMP table walk asks for its columns one at a time, and each column waited out its
+  own two-second timeout with no retry, so eighteen columns against a silent device meant
+  thirty-six seconds — measured at **51,299 ms** on a poller cut off from the network its agents
+  were on. A poller's ceiling is its concurrency permits divided by how long one poll takes, so one
+  silent device was occupying a permit for the time a hundred healthy polls would have taken, and
+  it degraded hardest during exactly the event it exists to report: in a mass outage many devices
+  go silent at once.
+  Every multi-column SNMP call now carries a budget. Two columns failing in a row with no answer
+  between them ends the walk — a device, not a column — and the whole call is bounded at eight
+  times the check's own per-round-trip timeout (16 seconds at the default). A table poll makes two
+  walks, and the second is now skipped outright when the first heard nothing, so a silent device
+  costs roughly **four seconds instead of fifty-one**.
+  New Prometheus counter, `yagra_snmp_walk_truncated_total{reason="silent"|"deadline"}`, on every
+  poller. ⚠️ **`reason="deadline"` should read zero on a healthy fleet.** If it does not, the budget
+  is too small for your devices rather than your devices being broken — raise that check's
+  `timeout_ms`, which is what the budget is a multiple of. There is deliberately no second setting.
+  ⚠️ A column a device does not implement is *not* counted as a failure, so this does not truncate
+  a walk that includes vendor columns your devices lack.
+
+- **A cut-short walk now loses a chart before it loses an inventory row.** The interface walk asks
+  for the columns the interface inventory is built from — speed, duplex, media, ifType — *before*
+  the metric columns. On a device that answers, nothing changes: every column is walked either way.
+  It matters only when a walk is truncated, and then it is the difference between a gap in a
+  throughput chart (visible, and stepped over by `rate()`) and no interface rows at all — which
+  stops `last_seen` advancing and makes every port on an otherwise healthy-looking node read
+  *stale* fifteen minutes later, exactly as a pulled line card does.
+  ⚠️ **One behaviour change**: a device that answers `ifName` while answering no numeric column at
+  all no longer has its interface names stored. Such a poll already reports the node unreachable.
+
+- **`ifHighSpeed` was being walked twice on every interface poll.** It reaches the walk from two
+  directions — a declared metric column in the built-in interface template, and the 64-bit speed
+  source the poller appends itself — and both were asked for. The cost was one redundant GETBULK
+  sequence per interface poll of every SNMP node and two identical samples per port per cycle
+  (1.2 million per cycle at 50,000 nodes x 24 ports). No chart or query was ever wrong, because
+  the duplicate carried the same value at the same timestamp, which is why nothing noticed.
+
 - **A metrics writer now waits briefly for its batch to fill.** A VictoriaMetrics bulk import costs
   about 2 ms before it carries any data, and the writer used to post whatever happened to be queued
   at that instant — which at fleet rates was a handful of results. Measured at 50,000 nodes x 24

@@ -58,7 +58,7 @@ use crate::limiter::PollLimiter;
 use crate::optical;
 use crate::store_forward::StoreForwardSink;
 use futures::stream::{Stream, StreamExt};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
