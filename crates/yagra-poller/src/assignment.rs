@@ -31,6 +31,25 @@ use crate::PollerIdentity;
 /// (see [`run_local_scheduler`]).
 const JOB_CHANNEL_DEPTH: usize = 256;
 
+/// Publish what this poller's working set holds, and what it asks for (ADR-108 Inc.2).
+///
+/// **One function because the two are one fact.** `yagra_working_set_specs` was set from here *and*
+/// from `heartbeat.rs`, and a demand gauge added beside only one of them would read stale for up to
+/// a whole beat after every sync — or be forgotten at the second site altogether, which is the
+/// shape this repository keeps paying for. `guards.rs` pins the metric names to this function.
+///
+/// ⚠️ The two answer different faults. The spec count says what core handed this poller; the demand
+/// says what that work costs per second. A poller starved of assignments and a poller unable to
+/// serve them look identical in either gauge alone.
+///
+/// Here rather than in `working_set.rs` for the reason ADR-108 decision 2 gives: that module is a
+/// pure state machine with no I/O, so it owns the number and this file owns the meter.
+pub(crate) fn publish_working_set_gauges(ws: &WorkingSet) {
+    let (_, specs) = ws.stats();
+    metrics::gauge!("yagra_working_set_specs").set(f64::from(specs));
+    metrics::gauge!("yagra_poll_demand_per_second").set(ws.demand_per_sec());
+}
+
 /// Subscribe, ask for a snapshot, and start both loops. Returns the receiving half of the job
 /// channel, which the caller merges with the bus-delivered jobs into the worker's single stream.
 ///
@@ -118,11 +137,9 @@ async fn run_sync_loop<B, S>(
                 } else {
                     metrics::counter!("yagra_sync_deltas_total").increment(1);
                 }
-                let (_, specs) = working_set
-                    .lock()
-                    .expect("working set mutex poisoned")
-                    .stats();
-                metrics::gauge!("yagra_working_set_specs").set(f64::from(specs));
+                publish_working_set_gauges(
+                    &working_set.lock().expect("working set mutex poisoned"),
+                );
             }
             ApplyOutcome::NeedSync => {
                 metrics::counter!("yagra_sync_gaps_total").increment(1);
@@ -187,5 +204,69 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+    use yagra_bus::{IcmpCheck, JobSpec, NodeJobs, WorkingSetSnapshot};
+    use yagra_common::NodeId;
+
+    fn spec(node: NodeId, interval: u32) -> JobSpec {
+        JobSpec::from_job(&PollJob::icmp(
+            Uuid::nil(),
+            node,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IcmpCheck::default(),
+            interval,
+        ))
+    }
+
+    /// Both names reach the exporter from one call, carrying what the set actually holds.
+    ///
+    /// `guards.rs` says the two gauges are published from one place; this says that place publishes
+    /// both, with real numbers. Neither implies the other — a function naming both metrics can
+    /// still set one of them and forget the second, which is the state this crate was in.
+    #[test]
+    fn both_working_set_gauges_reach_the_exporter() {
+        let n = NodeId::from(Uuid::from_u128(1));
+        let mut ws = WorkingSet::new();
+        let mut rng = |_bound: u32| 0;
+        let applied = ws.apply(
+            SyncMsg::SnapshotChunk(WorkingSetSnapshot {
+                poller_id: "p1".to_owned(),
+                epoch: Uuid::from_u128(9),
+                seq: 1,
+                chunk_index: 0,
+                chunk_total: 1,
+                nodes: vec![NodeJobs {
+                    node_id: n,
+                    specs: vec![spec(n, 10), spec(n, 40)],
+                }],
+                total_nodes: 1,
+                pool: None,
+            }),
+            Instant::now(),
+            &mut rng,
+        );
+        assert_eq!(applied, ApplyOutcome::Applied, "the fixture must land");
+
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || publish_working_set_gauges(&ws));
+        let rendered = handle.render();
+
+        assert!(
+            rendered.contains("yagra_working_set_specs 2"),
+            "the spec count is missing from:\n{rendered}"
+        );
+        // 1/10 + 1/40. Asserted as a rendered value rather than a float comparison, because what
+        // an operator reads is this text.
+        assert!(
+            rendered.contains("yagra_poll_demand_per_second 0.125"),
+            "the demand gauge is missing or wrong in:\n{rendered}"
+        );
     }
 }

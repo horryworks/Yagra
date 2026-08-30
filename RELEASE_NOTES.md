@@ -46,6 +46,17 @@
 
 ### Improvements
 
+- **A poller now exports the polling rate its assignment asks for, so "is it keeping up?" is a
+  number rather than an arithmetic exercise.** `yagra_poll_cycles_missed_total` only moves when a
+  poller falls so far behind that a whole interval passes unserved inside its own scheduler; a
+  shortfall absorbed by the concurrency limit or by a device's single-flight queue never reaches it.
+  Measured on 15,000 unreachable devices: **1,017 polls/s asked for, 26.9 served, and that counter
+  read 0 throughout.** The new gauge `yagra_poll_demand_per_second` is the sum of `1 / interval` over
+  every spec the poller holds, so
+  `rate(yagra_poll_jobs_executed_total[5m]) / yagra_poll_demand_per_second` is the fraction of the
+  configured polling actually being done. It answers "is this poller serving the work it holds" —
+  work core never assigned shows up in `yagra_working_set_specs` instead.
+
 - **A device that stops answering no longer holds a poller's capacity for the best part of a
   minute.** An SNMP table walk asks for its columns one at a time, and each column waited out its
   own two-second timeout with no retry, so eighteen columns against a silent device meant

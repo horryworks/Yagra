@@ -376,6 +376,8 @@ impl WorkingSet {
                     // `checked_div` rather than a zero test: an interval of 0 is not reachable
                     // through the API (`10..=3600`), and treating it as "nothing was missed" is the
                     // only answer that makes sense if one ever arrives over the bus.
+                    // `demand_per_sec` skips the same spec for the same reason — one judgement
+                    // about a degenerate interval, written in two places that must agree.
                     let behind = now.saturating_duration_since(sched.next_due).as_millis();
                     let skipped = behind.checked_div(interval.as_millis()).unwrap_or(0);
                     missed = missed.saturating_add(u64::try_from(skipped).unwrap_or(u64::MAX));
@@ -389,6 +391,33 @@ impl WorkingSet {
         }
         self.cycles_missed = self.cycles_missed.saturating_add(missed);
         out
+    }
+
+    /// Polls per second this set *asks for*: `Σ(1 / interval_secs)` over every spec (ADR-108 Inc.2).
+    ///
+    /// 🚨 **[`Self::take_cycles_missed`] is a threshold signal, not a deficit meter, and reading it
+    /// as one gave a confidently wrong answer.** It only moves when [`Self::due`] re-anchors past a
+    /// whole interval, which needs the backlog to reach *this* set — a shortfall absorbed by the
+    /// concurrency permit or by a device's single-flight queue never arrives here. Measured
+    /// 2026-08-30 on 15,000 silent devices: **1,017 polls/s asked for, 26.9 served, and the counter
+    /// sat at 0**. So "is this poller keeping up?" is
+    /// `rate(yagra_poll_jobs_executed_total) / yagra_poll_demand_per_second`, and the counter is
+    /// what confirms a collapse rather than what detects one.
+    ///
+    /// ⚠️ It answers "is this poller serving the work it holds", never "is core handing it the
+    /// right work" — an assignment that never arrived shows up in `yagra_working_set_specs`
+    /// instead, and the two are different faults.
+    ///
+    /// A zero interval owes nothing, for the reason [`Self::due`] gives beside its `checked_div`:
+    /// the API accepts `10..=3600`, so one can only arrive over the bus.
+    #[must_use]
+    pub fn demand_per_sec(&self) -> f64 {
+        self.nodes
+            .values()
+            .flatten()
+            .filter(|s| s.spec.interval_secs > 0)
+            .map(|s| 1.0 / f64::from(s.spec.interval_secs))
+            .sum()
     }
 
     /// `(node count, spec count)` — for the heartbeat telemetry and the specs gauge.
@@ -1368,6 +1397,113 @@ mod tests {
         assert_eq!(ws.due(much_later).len(), 1, "one make-up poll, as before");
         assert_eq!(ws.take_cycles_missed(), 10);
         assert_eq!(ws.take_cycles_missed(), 0, "draining resets the tally");
+    }
+
+    // ── The demand meter (ADR-108 Inc.2) ─────────────────────────────────────────────────────────
+    //
+    // What the counter above cannot say. `cycles_missed` only moves when `due` re-anchors, so a
+    // poller serving 26.9 of the 1,017 polls/s it owed read 0 on hardware. These pin the other half
+    // of the ratio — the number the shortfall is measured *against*.
+
+    /// The acceptance side, and the arithmetic: three specs, two intervals, one sum.
+    #[test]
+    fn demand_is_the_sum_of_one_over_each_interval() {
+        let mut ws = WorkingSet::new();
+        let e = Uuid::from_u128(1);
+        let mut rng = fixed(0);
+        let n = node(1);
+        let jobs = NodeJobs {
+            node_id: n,
+            specs: vec![
+                snmp_spec(n, "public", 60),
+                snmp_spec(n, "public2", 60),
+                icmp_spec(n, 30),
+            ],
+        };
+        assert_eq!(
+            ws.apply(snapshot(e, 1, 0, 1, vec![jobs]), Instant::now(), &mut rng),
+            ApplyOutcome::Applied
+        );
+        let expected = 2.0 / 60.0 + 1.0 / 30.0;
+        assert!(
+            (ws.demand_per_sec() - expected).abs() < 1e-9,
+            "asked for {} polls/s, expected {expected}",
+            ws.demand_per_sec()
+        );
+    }
+
+    #[test]
+    fn an_empty_set_demands_nothing() {
+        let ws = WorkingSet::new();
+        assert_eq!(
+            ws.demand_per_sec(),
+            0.0,
+            "an empty sum is zero, and it must not be NaN — a NaN gauge renders and reads as \
+             'no data', which is the one answer that must not be mistaken for 'nothing is owed'"
+        );
+    }
+
+    /// A zero interval cannot arrive through the API (`10..=3600`) but can arrive over the bus, and
+    /// it owes nothing — the same judgement `due` makes beside its `checked_div`. The healthy spec
+    /// beside it is what stops a division-by-zero `inf` (or a blanket `0`) from passing.
+    #[test]
+    fn a_zero_interval_spec_contributes_no_demand() {
+        let mut ws = WorkingSet::new();
+        let e = Uuid::from_u128(1);
+        let mut rng = fixed(0);
+        let n = node(1);
+        let jobs = NodeJobs {
+            node_id: n,
+            specs: vec![snmp_spec(n, "public", 0), icmp_spec(n, 60)],
+        };
+        assert_eq!(
+            ws.apply(snapshot(e, 1, 0, 1, vec![jobs]), Instant::now(), &mut rng),
+            ApplyOutcome::Applied
+        );
+        assert!(
+            ws.demand_per_sec().is_finite(),
+            "a zero interval must not divide"
+        );
+        assert!(
+            (ws.demand_per_sec() - 1.0 / 60.0).abs() < 1e-9,
+            "only the healthy spec is owed; got {}",
+            ws.demand_per_sec()
+        );
+    }
+
+    /// It must track the set, not the value it had at boot: a poller adopts and sheds work all day.
+    #[test]
+    fn demand_follows_the_set_through_a_snapshot_and_a_delta() {
+        let mut ws = WorkingSet::new();
+        let e = Uuid::from_u128(1);
+        let mut rng = fixed(0);
+        let now = Instant::now();
+        let (a, b) = (node(1), node(2));
+        assert_eq!(
+            ws.apply(
+                snapshot(
+                    e,
+                    1,
+                    0,
+                    1,
+                    vec![one_node_three_specs(a, 60), one_node_three_specs(b, 60)],
+                ),
+                now,
+                &mut rng,
+            ),
+            ApplyOutcome::Applied
+        );
+        assert!((ws.demand_per_sec() - 6.0 / 60.0).abs() < 1e-9);
+
+        assert_eq!(
+            ws.apply(delta(e, 2, Vec::new(), vec![b]), now, &mut rng),
+            ApplyOutcome::Applied
+        );
+        assert!(
+            (ws.demand_per_sec() - 3.0 / 60.0).abs() < 1e-9,
+            "dropping a node halves what is owed; got {}",
+            ws.demand_per_sec()
+        );
     }
 
     // ── Adoption window (ADR-051) ────────────────────────────────────────────────────────────────

@@ -91,6 +91,44 @@ fn every_capability_constant_is_claimed() {
     );
 }
 
+/// Both working-set gauges are published from exactly one place.
+///
+/// `yagra_working_set_specs` was set from **two** — `assignment.rs` on every sync and
+/// `heartbeat.rs` on every beat — and ADR-108 Inc.2 put `yagra_poll_demand_per_second` beside it.
+/// Two sites for one fact is precisely how the second one gets forgotten, and the failure is silent
+/// in the worst way: a gauge nobody sets reads **0**, which is a legitimate value for both of these.
+/// So the rule is `assignment::publish_working_set_gauges` and nowhere else, and this is the rule.
+///
+/// 🚨 **The floor is the load-bearing half.** A walk that stopped finding this crate's sources
+/// reports "each name is published once" over nothing at all, in the same words as a healthy crate
+/// (`floor-must-count-what-was-checked`).
+#[test]
+fn the_working_set_gauges_are_published_from_one_place() {
+    let files = module_source::crate_files();
+    assert!(
+        files.len() >= 24,
+        "only {} production files were walked; the walk has stopped finding this crate and the \
+         assertions below are vacuous",
+        files.len()
+    );
+
+    for metric in ["yagra_working_set_specs", "yagra_poll_demand_per_second"] {
+        let needle = format!("\"{metric}\"");
+        let sites: Vec<&str> = files
+            .iter()
+            .filter(|(_, code)| code.contains(&needle))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(
+            sites,
+            ["assignment.rs"],
+            "{metric} is named in {sites:?}. Both working-set gauges belong to \
+             `assignment::publish_working_set_gauges`, so that a reader can never see one of them \
+             refreshed and the other stale — see ADR-108 Increment 2"
+        );
+    }
+}
+
 /// Every shipped file that quotes the concurrency default quotes the constant.
 ///
 /// `YAGRA_MAX_CONCURRENT_POLLS`' default was a bare literal in `main.rs` and was written out again

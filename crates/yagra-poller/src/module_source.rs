@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! This crate's binding of [`yagra_common::srcread`] — reading a module's own source text.
 //!
-//! **The rule itself is not here**, and this file is deliberately the same six lines as
-//! `yagra-core`'s. It is written down once, in `yagra-common/src/srcread.rs`, along with why it
-//! removes every top-level test-only *item* rather than cutting at the first one (ADR-091). What is
-//! left here is the one fact a shared implementation cannot know: **where this crate is on disk**,
-//! because `env!("CARGO_MANIFEST_DIR")` expands where the code is written.
+//! **The rule itself is not here.** It is written down once, in `yagra-common/src/srcread.rs`,
+//! along with why it removes every top-level test-only *item* rather than cutting at the first one
+//! (ADR-091). What is left here is the one fact a shared implementation cannot know: **where this
+//! crate is on disk**, because `env!("CARGO_MANIFEST_DIR")` expands where the code is written.
+//!
+//! ⚠️ It was `yagra-core`'s six lines verbatim until ADR-108 Inc.2, which added [`crate_files`] —
+//! the crate-wide walk, needed because the shared `files` refuses a nested module directory and
+//! this crate has `worker/`. That is still a *binding* rather than a second copy of the rule: the
+//! cut it applies is `srcread`'s.
 //!
 //! ⚠️ **This crate had no source-reading check at all until ADR-099** — sixteen files and roughly
 //! ten thousand lines, including the 4,360-line worker. The mechanism lived in `yagra-core`, and the
@@ -30,6 +34,37 @@ pub(crate) fn roots(dir: &str, stem: &str) -> Vec<PathBuf> {
 /// read this crate's worker. It resolves against `BASE`, so it is a path and not a package name.
 pub(crate) fn code(dir: &str, stem: &str) -> String {
     yagra_common::srcread::code_in(Path::new(BASE), dir, stem)
+}
+
+/// Every production file in this crate, as `(file name, code)`.
+///
+/// For a check whose question is about the crate rather than about one module — "this metric name
+/// appears in exactly one place". [`yagra_common::srcread::files`] cannot answer it here: it refuses
+/// a nested module directory on purpose, and this crate has `worker/`. So the walk is `rs_files`
+/// plus the same cut, which is what `assert_crate_is_readable` does. It is here rather than at the
+/// call site because `BASE` is the one fact this file exists to hold.
+pub(crate) fn crate_files() -> Vec<(String, String)> {
+    use yagra_common::srcread as sr;
+    let src = Path::new(BASE).join("src");
+    let mut paths = Vec::new();
+    sr::rs_files(&src, &mut paths);
+    paths.sort();
+    // ⚠️ Test-only modules are declared by the *crate root* and by each directory's `mod.rs`, and
+    // `src/` has no `mod.rs` — so the root is asked as a file and the directories as directories.
+    // Skipping them is the whole reason a check can search for a needle it also writes down.
+    let mut skip = sr::test_only_modules(&src.join("main.rs"));
+    for dir in paths.iter().filter_map(|p| p.parent()) {
+        skip.extend(sr::test_only_modules(dir));
+    }
+    paths
+        .iter()
+        .map(|p| (sr::file_name(p), p))
+        .filter(|(name, _)| !skip.contains(name))
+        .map(|(name, p)| {
+            let code = sr::strip_and_check(&name, &sr::read(p));
+            (name, code)
+        })
+        .collect()
 }
 
 /// Every file of the module as `(file name, code)`, with whole-line `//` comments dropped.

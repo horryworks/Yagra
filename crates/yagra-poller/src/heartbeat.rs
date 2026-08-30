@@ -113,9 +113,11 @@ async fn run_heartbeat_loop<B>(
             let ws = working_set.lock().expect("working set mutex poisoned");
             let (nodes, specs) = ws.stats();
             let (epoch, last_seq) = ws.sync_state();
+            // Both gauges, from the one place that publishes them — a beat is the periodic
+            // republish that keeps them current between syncs (ADR-108 Inc.2).
+            crate::assignment::publish_working_set_gauges(&ws);
             (nodes, specs, epoch, last_seq)
         };
-        metrics::gauge!("yagra_working_set_specs").set(f64::from(specs));
         let hb = HeartbeatMsg {
             poller_id: poller_id.clone(),
             // Read per beat, not captured once: core moves this poller by telling it a new pool
