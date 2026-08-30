@@ -362,6 +362,12 @@ async fn enqueue_history(
 /// Async VictoriaMetrics batch writer (ADR-025): drains the bounded metrics queue and coalesces many
 /// poll results' samples into few bulk import POSTs, off the matcher's hot path. Takes the shutdown
 /// token directly (not `spawn_cancellable`) so it can do a best-effort final flush on cancel.
+///
+/// **How busy this task is** is read from `yagra_vm_import_seconds` (`store.rs`), whose two phases
+/// sum to the flush's own cost: while nothing is spilling, that sum over a window *is* this task's
+/// occupancy. One task can use one core, so an occupancy near 1.0 means the queue behind it is
+/// pinned because this is the constraint — and an occupancy well under 1.0 while the queue is
+/// pinned means it is not (ADR-110 Increment 2).
 pub(crate) async fn run_vm_writer(
     mut rx: tokio::sync::mpsc::Receiver<Arc<PollResult>>,
     store: Arc<dyn MetricStore>,

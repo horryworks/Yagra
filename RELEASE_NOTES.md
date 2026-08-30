@@ -27,6 +27,15 @@
 
 ### Improvements
 
+- **The metrics write path now says where its time goes.** New Prometheus histogram on core,
+  `yagra_vm_import_seconds{phase="build"|"post"}`: how long one VictoriaMetrics bulk import spent
+  building the exposition body (CPU in core) versus waiting for VictoriaMetrics to answer, plus
+  `yagra_vm_import_samples_total` and `yagra_vm_import_bytes_total`. The writer is a single task, so
+  its `_sum` over a window is that task's occupancy — which is the difference between "the queue
+  behind it is pinned because this is the constraint" and "it is pinned because this task cannot get
+  CPU". A queue-depth gauge reads identically in both cases, and at 50,000 nodes x 24 ports that
+  distinction decides whether splitting the writer would help at all.
+
 - **The interface table is only written when something actually changed.** An SNMP table walk
   re-reports every port on every poll, and core rewrote every one of those rows every time —
   1,159,864 row updates per cycle at 50,000 nodes × 24 ports — whether or not the device had said

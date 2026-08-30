@@ -868,6 +868,14 @@ fn interface_candidates_query(metric: InterfaceTopMetric, floor_bps: f64, sel: &
 /// **Measured, not remembered** (2026-08-20, v1.148.0, default flags): 200 UUIDs plus separators
 /// is a 7,499-byte query and answers; 400 is 14,899 and answers; 500 is 18,599 and is refused with
 /// `422 too long query; mustn't exceed -search.maxQueryLen=16384`.
+/// Where one bulk import POST spends its time, split into the two halves that scale
+/// differently: **build** is CPU in this process (one exposition line per sample), **post** is
+/// waiting for VictoriaMetrics. A writer task can only use one core, so the `_sum` series over a
+/// window is that task's **occupancy**, and the build:post ratio says whether a second task would
+/// help or whether the work itself is too expensive (ADR-110 Increment 2). Queue depth answers
+/// neither: a writer starved of CPU and a writer saturated by work pin the queue identically.
+const M_VM_IMPORT_SECONDS: &str = "yagra_vm_import_seconds";
+
 const VM_MAX_QUERY_LEN: usize = 16_384;
 
 /// The most times one [`interface_expr_scoped`] expression writes the selector.
@@ -1193,6 +1201,8 @@ impl MetricStore for VmStore {
         // Coalesce every buffered result's samples into ONE exposition body → one import POST. Each
         // line carries its own ms timestamp (`prometheus_line`), so mixing many results/timestamps
         // in one body is valid. Returns success so the writer can retry/spill on failure.
+        let build_started = std::time::Instant::now();
+        let mut lines: u64 = 0;
         let mut body = String::new();
         for result in results {
             for sample in &result.samples {
@@ -1205,14 +1215,25 @@ impl MetricStore for VmStore {
                     continue;
                 }
                 body.push_str(&key.prometheus_line(sample.value, result.at_unix_ms));
+                lines += 1;
                 body.push('\n');
             }
         }
+        // Recorded before the empty-body return: the loop ran either way, and a batch whose
+        // samples were all rejected still cost the CPU this measurement is about.
+        metrics::histogram!(M_VM_IMPORT_SECONDS, "phase" => "build")
+            .record(build_started.elapsed().as_secs_f64());
+        metrics::counter!("yagra_vm_import_samples_total").increment(lines);
         if body.is_empty() {
             return true; // nothing to persist (all buffered results were sample-free or rejected)
         }
+        metrics::counter!("yagra_vm_import_bytes_total").increment(body.len() as u64);
         let url = format!("{}/api/v1/import/prometheus", self.base);
-        match self.http.post(&url).body(body).send().await {
+        let post_started = std::time::Instant::now();
+        let sent = self.http.post(&url).body(body).send().await;
+        metrics::histogram!(M_VM_IMPORT_SECONDS, "phase" => "post")
+            .record(post_started.elapsed().as_secs_f64());
+        match sent {
             Ok(resp) if resp.status().is_success() => true,
             Ok(resp) => {
                 tracing::warn!(status = %resp.status(), "VictoriaMetrics batch import non-2xx");
