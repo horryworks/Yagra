@@ -514,7 +514,7 @@ export RUST_LOG=info
 | `YAGRA_POLLER_ID` | `docker-compose.deploy.yml` では `local`、単体ではホスト名、無ければ `poller-<hex>` | 安定・一意・subject 安全なポーラ識別子。core にも同じ値が渡るので、両者が同じポーラーを指す |
 | `YAGRA_POLLER_POOL` | `default` | このポーラが**最初に所属する**プール。v0.3.4 以降、初回接続より後の所属は core が持つため、Settings ▸ Pollers での移動はコンテナを作り直しても戻らない |
 | `YAGRA_BUS_CA_FILE` | 未設定 ⇒ 平文 | `tls://` バスに固定する CA/サーバ証明書 |
-| `YAGRA_MAX_CONCURRENT_POLLS` | `256` | 同時実行プローブ数の上限。**速さの上限ではなく「同時に何本走らせるか」** — 得られる polls/s はこの数 ÷ 1 本あたりの所要時間。この既定値で、ポーラー 1 台が **ICMP ノード 5 万台を 30 秒間隔**（1,675 polls/s）で取りこぼし無く回すことを実測済み（CPU 11〜14%）。変える前に `yagra_poll_cycles_missed_total` を見ること（CPU ではなくこのカウンタが「間に合っていない」と言う）。併せて `yagra_poll_inflight` も —— この数を上げて効くのは、そのゲージが上限に張り付いているときだけ。同じ枠で SNMP のテーブル取得も走るので、小さな拠点では下げる |
+| `YAGRA_MAX_CONCURRENT_POLLS` | `256` | 同時実行プローブ数の上限。**速さの上限ではなく「同時に何本走らせるか」** — 得られる polls/s はこの数 ÷ 1 本あたりの所要時間。この既定値で、ポーラー 1 台が **ICMP ノード 5 万台を 30 秒間隔**（1,675 polls/s）で取りこぼし無く回すことを実測済み（CPU 11〜14%）。変える前に `yagra_poll_demand_per_second` を見ること —— `rate(yagra_poll_jobs_executed_total[5m])` をこれで割ると「設定した監視の何割が実際に行われているか」になる。`yagra_poll_cycles_missed_total` は 1 周期まるごと過ぎたときにしか動かず、要求の 2% しか回せていない状態でも 0 だった。併せて `yagra_poll_inflight` も —— この数を上げて効くのは、そのゲージが上限に張り付いているときだけ。v0.3.5 から permit は**実際に探っている間だけ**握るので、この数は「機器の順番待ちをしているジョブ」ではなく本当に探りの本数を縛る。同じ枠で SNMP のテーブル取得も走るので、小さな拠点では下げる |
 | `YAGRA_ADOPT_RATE_PER_SEC` | `200` | 他ポーラーの作業を引き継ぐ際のジッタ窓を決めるレート（チェック数/秒）。`0` で間隔全体にジッタ（従来動作）|
 | `YAGRA_POLLER_QUEUE` | `pollers` | 負荷分散ジョブ消費用の NATS キューグループ |
 | **パッシブイベント（syslog / SNMP トラップ）** | | |

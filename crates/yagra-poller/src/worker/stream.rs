@@ -32,10 +32,24 @@ const MAX_SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(60);
 /// `yagra_poll_inflight`, never on its own — a phase that looks slow while the gauge sits below the
 /// cap is a poller being starved, not a poller being slow, and the two want opposite fixes.
 ///
-/// 🚨 **The three phases inside the spawned task sum to the permit hold time**, which is what
-/// `permits / throughput` measures from outside — so an unexplained remainder means a phase is
-/// missing here, not that the arithmetic is wrong. `wait_permit` is the fourth and sits outside
-/// that sum: it is queueing for a slot, not occupying one.
+/// 🚨 **`execute + publish` is the permit hold time — and until ADR-109 Increment 2 it was
+/// `wait_device + execute + publish`, which is a sentence that cost a wrong measurement the day it
+/// was read.** The permit used to be taken on the poll loop and handed into the task, so a job
+/// waiting for its device held one; on 15,000 unreachable devices that was **149 of 256 permits
+/// occupied by jobs talking to nothing**. `claim_then_permit` now takes the permit only once the
+/// device is free, so the four phases are:
+///
+/// | phase | where | holds a permit |
+/// |---|---|---|
+/// | `wait_admit` | the poll loop | no — it holds a *spawn* slot (`ADMISSION_FACTOR`) |
+/// | `wait_device` | the task, non-DNS | no, bar the instant of the claim |
+/// | `wait_permit` | the task, DNS / Meraki only | no — those have no device to wait for |
+/// | `execute`, `publish` | the task | **yes** |
+///
+/// ⚠️ So `permits / throughput` measured from outside is now `execute + publish` per poll, and an
+/// unexplained remainder means a phase is missing here rather than that the arithmetic is wrong.
+/// ⚠️ `wait_device` and `wait_permit` are mutually exclusive per poll: a check kind is one or the
+/// other, never both.
 pub(crate) const POLL_PHASE_METRIC: &str = "yagra_poll_phase_seconds";
 
 /// Buckets for [`POLL_PHASE_METRIC`], applied where the exporter is installed.
@@ -60,9 +74,10 @@ pub(crate) const POLL_PHASE_BUCKETS: &[f64] = &[
 /// true, unactionable, and could not say which check spent the time. The label comes from
 /// [`CheckSpec::kind_label`], which is the same word core stamps on the dispatch span.
 ///
-/// ⚠️ Meraki collects are not in here: that branch returns above without taking these phases,
-/// because one job becomes many results and the phases would not mean the same thing. So an absent
-/// `kind="meraki_collect"` says the phase was never recorded, not that the poll was free.
+/// ⚠️ **A Meraki collect records only its two waits**, under the literal `meraki_collect`: that
+/// branch fans one job out to many results, so `execute` and `publish` would not mean what they
+/// mean everywhere else. An absent `execute` there says the phase is not recorded, not that the
+/// poll was free.
 fn record_phase(kind: &'static str, phase: &'static str, since: Instant) {
     metrics::histogram!(POLL_PHASE_METRIC, "kind" => kind, "phase" => phase)
         .record(since.elapsed().as_secs_f64());
@@ -75,9 +90,10 @@ fn record_phase(kind: &'static str, phase: &'static str, since: Instant) {
 /// Returns when the stream ends. Stream-generic so the same loop drives both the in-memory
 /// bus (tests/skeleton) and the NATS queue subscription (production), ADR-003/009.
 ///
-/// 🚨 **This loop awaits the concurrency permit and nothing else.** Everything a *device* can make
-/// a job wait for happens inside the spawned task, because a wait on this line is a wait for every
-/// job behind it — `a_busy_device_does_not_stall_other_devices` below is what holds that.
+/// 🚨 **This loop awaits a spawn slot and nothing else** (ADR-109 Inc.2). Everything a *device* or
+/// the concurrency cap can make a job wait for happens inside the spawned task, because a wait on
+/// this line is a wait for every job behind it — `a_busy_device_does_not_stall_other_devices` below
+/// is what holds that, and it fails against either of the two arrangements that came before.
 ///
 /// `poller_id` (its sanitized id) is stamped onto every published result for provenance; the shared
 /// `results_total` counter is bumped on each successful publish and `inflight` tracks probes in
@@ -98,9 +114,12 @@ pub async fn run_stream<S>(
         // by core, so they use only the global concurrency cap (not per-device single-flight, which
         // would wrongly drop concurrent collects for different orgs) and fan out to many results.
         if matches!(job.check, CheckSpec::MerakiCollect(_)) {
-            let Some(guard) = limiter.begin_global().await else {
+            let queued_at = Instant::now();
+            let Some(admit) = limiter.acquire_admission().await else {
                 continue; // shutdown
             };
+            record_phase("meraki_collect", "wait_admit", queued_at);
+            let limiter = limiter.clone();
             let sink = sink.clone();
             let transport = transport.clone();
             let poller_id = poller_id.clone();
@@ -116,7 +135,15 @@ pub async fn run_stream<S>(
             yagra_telemetry::set_span_parent(&span, &job.trace_context);
             tokio::spawn(
                 async move {
-                    let _guard = guard;
+                    let _admit = admit;
+                    // The permit is taken here rather than on the loop: a Meraki collect has no
+                    // device to wait for, but awaiting concurrency on the loop is the same
+                    // head-of-line stall for every job behind it (ADR-109 Inc.2).
+                    let permit_at = Instant::now();
+                    let Some(_guard) = limiter.begin_global().await else {
+                        return; // shutdown
+                    };
+                    record_phase("meraki_collect", "wait_permit", permit_at);
                     inflight.fetch_add(1, Ordering::Relaxed);
                     metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
                     // Snapshot the poll span's context once; every fanned-out result carries it so
@@ -154,20 +181,22 @@ pub async fn run_stream<S>(
             }
         }
 
-        // 🚨 **Only the permit is awaited here. The per-device wait is awaited in the task.**
-        // Both used to happen on this line, and that made one device's serialised conversation
-        // stall every *other* device's job behind it — a fan-out loop that fanned out one job at a
-        // time. The permit is the half that belongs here: it is what bounds concurrency, so
-        // awaiting it is backpressure rather than head-of-line blocking, and it keeps this from
-        // spawning unboundedly. See `PollLimiter::acquire_permit` for the measurement.
+        // 🚨 **A spawn slot is awaited here — not the concurrency permit, and not the device.**
+        // Three arrangements are ruled out by three measurements, and `PollLimiter` carries all of
+        // them: waiting for the *device* here is head-of-line blocking (4.8 jobs/min against 187
+        // specs); taking the *permit* here means every job's device wait is spent holding one
+        // (149 of 256 permits occupied by jobs talking to nothing, on 15,000 unreachable devices);
+        // and awaiting nothing at all spawns a task per due job, which `WorkingSet::due` can hand
+        // back tens of thousands of at once. So the loop awaits the one thing that bounds *spawns*
+        // and nothing else (ADR-109 Inc.2).
         let queued_at = Instant::now();
-        let Some(permit) = limiter.acquire_permit().await else {
+        let Some(admit) = limiter.acquire_admission().await else {
             continue; // shutdown
         };
         // Read once, out here: the task takes the job by value, and every phase must carry the same
         // word or one poll would land in two kinds.
         let kind = job.check.kind_label();
-        record_phase(kind, "wait_permit", queued_at);
+        record_phase(kind, "wait_admit", queued_at);
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
@@ -193,19 +222,31 @@ pub async fn run_stream<S>(
         yagra_telemetry::set_span_parent(&span, &job.trace_context);
         tokio::spawn(
             async move {
+                let _admit = admit;
                 // Per-device single-flight, awaited here rather than on the loop: a device still
                 // being walked now delays only the jobs aimed at *it*. DNS monitors share the
-                // `0.0.0.0` display address (see above), so they hold the permit alone.
+                // `0.0.0.0` display address (see above), so they wait for a permit and nothing else.
+                //
+                // ⚠️ **`wait_device` now covers the permit wait too, and cannot be split from it.**
+                // `claim_then_permit` interleaves the two — it takes a permit only once the device
+                // looks free and gives it straight back if it loses the race — so there is no
+                // instant to measure between them. What the phase means is unchanged in the way
+                // that matters: it is time *outside* the permit, bar the moment of the claim.
+                // A DNS or Meraki job has no device, so its wait is recorded as `wait_permit`.
                 let claimed_at = Instant::now();
                 let guard = if dns {
-                    Some(limiter.global_guard(permit))
+                    limiter.begin_global().await
                 } else {
-                    limiter.claim_target(permit, job.target, wait).await
+                    limiter.claim_then_permit(job.target, wait).await
                 };
                 // Recorded before the branch below, so a job that waited out its whole deadline and
                 // was then dropped is in the distribution rather than missing from it — that tail is
                 // the reason this phase is measured separately from `execute`.
-                record_phase(kind, "wait_device", claimed_at);
+                record_phase(
+                    kind,
+                    if dns { "wait_permit" } else { "wait_device" },
+                    claimed_at,
+                );
                 // Released (and the target unmarked) when the probe finishes.
                 let Some(_guard) = guard else {
                     metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
@@ -340,7 +381,7 @@ mod tests {
     ///
     /// The regression for the head-of-line stall described on [`run_stream`]. Both jobs are due at
     /// once and the *blocked* one is first, which is the only ordering that can tell the two
-    /// designs apart: with the wait on the loop, `run_stream` parks in `claim_target` for the full
+    /// designs apart: with the wait on the loop, `run_stream` parks in `claim_then_permit` for the full
     /// single-flight budget and the second device's job is never even pulled off the stream.
     ///
     /// 🚨 **The 60 s interval is load-bearing.** `single_flight_wait` is `min(interval, 60s)`, so a

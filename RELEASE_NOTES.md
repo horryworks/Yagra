@@ -46,6 +46,19 @@
 
 ### Improvements
 
+- **A poller no longer spends its concurrency budget waiting for busy devices.** A device's checks
+  are serialised — they are one conversation with one agent — so a node's later checks queue behind
+  its first. That queueing used to happen while holding one of the poller's concurrency permits, so
+  a wedged device shrank the budget available to every healthy one. Measured on a poller carrying
+  15,000 unreachable devices: **157 of its 256 permits were held by jobs that were not talking to
+  anything**, and the poller served 24 of the 1,018 polls/s its intervals asked for. The permit is
+  now taken only once the device is free, which leaves the whole budget for probes that are actually
+  running. Nothing about per-device single-flight, the shedding deadline, or the concurrency limit
+  itself has changed — `YAGRA_MAX_CONCURRENT_POLLS` simply now means what it always said it meant.
+  The `yagra_poll_phase_seconds` histogram gains a `wait_admit` phase (queueing for a slot on the
+  poll loop); `wait_permit` now appears only for DNS and Meraki checks, which have no device to wait
+  for. **Permit occupancy is now `execute + publish`, not `wait_device + execute + publish`.**
+
 - **A poller now exports the polling rate its assignment asks for, so "is it keeping up?" is a
   number rather than an arithmetic exercise.** `yagra_poll_cycles_missed_total` only moves when a
   poller falls so far behind that a whole interval passes unserved inside its own scheduler; a

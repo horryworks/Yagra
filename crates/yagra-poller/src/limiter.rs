@@ -88,9 +88,28 @@ impl Drop for PollGuard {
     }
 }
 
+/// How many jobs may be in the system per concurrency permit (ADR-109 Inc.2).
+///
+/// Once the permit stopped covering the wait for a device, the poll loop needed something *else* to
+/// await, or it would spawn a task per due job — and `WorkingSet::due` can hand back tens of
+/// thousands in one tick. This is that bound: at the default 256 permits, up to 1,024 jobs may be
+/// parked waiting for their device, and the 1,025th makes the loop wait.
+///
+/// **Derived rather than configured, deliberately.** `YAGRA_MAX_CONCURRENT_POLLS` is restated in
+/// five shipped files and `guards.rs` counts them; a second knob would be five more places to
+/// disagree with the binary, to bound something an operator has no way to reason about.
+///
+/// ⚠️ 4 is not a measured number. It is large enough that the loop is not the bound in the case
+/// this increment exists for (a fleet where most devices are busy) and small enough that the parked
+/// jobs are a rounding error against the poller's RSS.
+const ADMISSION_FACTOR: usize = 4;
+
 /// Per-device single-flight + global concurrency limiter.
 pub struct PollLimiter {
     global: Arc<Semaphore>,
+    /// Bounds how many jobs the poll loop may have spawned at once — **not** how many are probing.
+    /// See [`ADMISSION_FACTOR`].
+    admission: Arc<Semaphore>,
     inflight: Arc<Mutex<HashSet<IpAddr>>>,
     /// Notified whenever a guard drops, so a waiter re-checks without spinning.
     released: Arc<Notify>,
@@ -100,11 +119,33 @@ impl PollLimiter {
     /// New limiter allowing `max_concurrent` simultaneous probes (clamped to >= 1).
     #[must_use]
     pub fn new(max_concurrent: usize) -> Self {
+        let concurrent = max_concurrent.max(1);
         Self {
-            global: Arc::new(Semaphore::new(max_concurrent.max(1))),
+            global: Arc::new(Semaphore::new(concurrent)),
+            admission: Arc::new(Semaphore::new(concurrent * ADMISSION_FACTOR)),
             inflight: Arc::new(Mutex::new(HashSet::new())),
             released: Arc::new(Notify::new()),
         }
+    }
+
+    /// Take a spawn slot — what the poll loop awaits, in place of the concurrency permit.
+    ///
+    /// 🚨 **The loop must await this and not [`Self::acquire_permit`].** The permit is now taken
+    /// inside the spawned task, once the device is free (see [`Self::claim_then_permit`]); awaiting
+    /// it on the loop again would put every job's device wait back inside a permit, which is the
+    /// whole of what ADR-109 Increment 2 removed.
+    pub async fn acquire_admission(&self) -> Option<OwnedSemaphorePermit> {
+        self.admission.clone().acquire_owned().await.ok()
+    }
+
+    /// Is another probe running against `target` right now? A hint, not a claim — the answer can be
+    /// stale by the time the caller acts on it, which is why [`Self::claim_then_permit`] re-checks
+    /// under the lock before it commits.
+    fn is_busy(&self, target: IpAddr) -> bool {
+        self.inflight
+            .lock()
+            .expect("inflight mutex poisoned")
+            .contains(&target)
     }
 
     /// Take **only** the global concurrency permit — the half of a probe's admission that belongs
@@ -121,42 +162,63 @@ impl PollLimiter {
     /// CPU with 62 of its 64 permits free. Its visible end was an Interfaces tab greyed out for
     /// most of every cycle, because a row goes stale after 900 s without a walk.
     ///
-    /// The permit is what bounds concurrency, so taking it is what the loop should await;
-    /// [`Self::claim_target`] is what the spawned task should await.
+    /// ⚠️ **The loop no longer awaits this** (ADR-109 Inc.2). It awaits
+    /// [`Self::acquire_admission`], and the permit is taken inside the task by
+    /// [`Self::claim_then_permit`], once the device is free — so a job queueing for a device is not
+    /// also occupying concurrency. The measurement above is why the *device* wait left this line;
+    /// the one on `claim_then_permit` is why the permit followed it.
     pub async fn acquire_permit(&self) -> Option<OwnedSemaphorePermit> {
         self.global.clone().acquire_owned().await.ok()
     }
 
-    /// Claim `target`'s single-flight marker for a permit already in hand, waiting up to `max_wait`
-    /// for a probe already running against it. The other half of [`Self::acquire_permit`].
-    ///
+    /// Wait for `target` to be free, **then** take a concurrency permit, then claim the device.
     /// Returns `None` when the device is still busy at the deadline — the caller counts that as a
-    /// skipped poll. `max_wait` is what keeps this backpressure rather than an unbounded queue: a
-    /// device that never frees up sheds load. The permit is released with the `None`, so a shed job
-    /// frees its concurrency slot.
+    /// skipped poll.
     ///
-    /// **The permit is taken first and the target is marked only once the probe is about to run.**
-    /// The order before that marked the target and *then* queued for a permit, so time spent
-    /// waiting for concurrency counted as "this device is being polled" even though no packet had
-    /// been sent. Taking the permit on the loop keeps that property.
-    pub async fn claim_target(
-        &self,
-        permit: OwnedSemaphorePermit,
-        target: IpAddr,
-        max_wait: Duration,
-    ) -> Option<PollGuard> {
+    /// 🚨 **The order is the whole point, and there is exactly one order that works** (ADR-109
+    /// Inc.2). Two earlier incidents each rule out a different arrangement:
+    ///
+    /// - *Waiting for the device while holding a permit* is what this replaced, and it was
+    ///   expensive: measured on 15,000 unreachable devices, **149 of the 256 permits were occupied
+    ///   by jobs that were not talking to anything**, so one wedged device shrank the budget for
+    ///   every healthy one. That is `scalability-audit-2026-07.md` S4 with the truncation added and
+    ///   the structure untouched.
+    /// - *Marking the device and then queueing for a permit* is what the previous comment here
+    ///   ruled out: time spent waiting for concurrency counted as "this device is being polled"
+    ///   although no packet had been sent, so a third spec for that device queued behind a job that
+    ///   was not running.
+    /// - *Waiting for the device on the poll loop* is head-of-line blocking, measured at
+    ///   **4.8 jobs/min against 187 specs** (see [`Self::acquire_permit`]).
+    ///
+    /// So: peek (holding nothing), take the permit only once the device looks free, and claim under
+    /// the lock. Losing that race gives the permit straight back and returns to waiting — which is
+    /// why the permit is taken *after* the peek and not before it.
+    ///
+    /// ⚠️ **The permit wait itself is unbounded, exactly as it was** when the loop awaited it.
+    /// `max_wait` bounds the *device* wait and nothing else, which is what keeps a device that
+    /// never frees up shedding rather than queueing.
+    ///
+    /// ⚠️ Re-acquiring goes to the back of tokio's FIFO queue, so a job that keeps losing the race
+    /// can be starved. It is bounded by `max_wait` and ends as a shed poll, counted like any other.
+    pub async fn claim_then_permit(&self, target: IpAddr, max_wait: Duration) -> Option<PollGuard> {
         let deadline = Instant::now() + max_wait;
         loop {
-            {
-                let mut set = self.inflight.lock().expect("inflight mutex poisoned");
-                if set.insert(target) {
-                    return Some(PollGuard {
-                        target,
-                        inflight: self.inflight.clone(),
-                        released: self.released.clone(),
-                        _permit: permit,
-                    });
+            if !self.is_busy(target) {
+                let permit = self.acquire_permit().await?;
+                {
+                    let mut set = self.inflight.lock().expect("inflight mutex poisoned");
+                    if set.insert(target) {
+                        return Some(PollGuard {
+                            target,
+                            inflight: self.inflight.clone(),
+                            released: self.released.clone(),
+                            _permit: permit,
+                        });
+                    }
                 }
+                // Someone claimed it between the peek and the lock. Hand the permit back rather
+                // than sitting on it — holding it here is the exact cost this method removes.
+                drop(permit);
             }
             if Instant::now() >= deadline {
                 return None;
@@ -169,14 +231,10 @@ impl PollLimiter {
         }
     }
 
-    /// Both halves at once: take a permit, then wait for `target`. **Test-only, and deliberately
-    /// so** — this is the shape whose `.await` stalled the poll loop, and `#[cfg(test)]` is what
-    /// stops it being reachable from production code at all. Tests exercising the limiter itself
-    /// have no loop to stall, so composing here keeps them reading as one call.
+    /// [`Self::claim_then_permit`] under its old name, for tests that read as one call.
     #[cfg(test)]
     pub async fn begin_for(&self, target: IpAddr, max_wait: Duration) -> Option<PollGuard> {
-        let permit = self.acquire_permit().await?;
-        self.claim_target(permit, target, max_wait).await
+        self.claim_then_permit(target, max_wait).await
     }
 
     /// Acquire only the global concurrency permit — **no** per-target single-flight. For jobs whose
@@ -191,7 +249,7 @@ impl PollLimiter {
 
     /// Wrap a permit already in hand as a guard that took **no** per-device marker — the
     /// [`Self::begin_global`] half that pairs with [`Self::acquire_permit`], for the same reason
-    /// [`Self::claim_target`] exists.
+    /// [`Self::claim_then_permit`] exists.
     #[must_use]
     pub fn global_guard(&self, permit: OwnedSemaphorePermit) -> PollGuard {
         PollGuard {
@@ -322,6 +380,101 @@ mod tests {
             .await
             .is_err(),
             "should block on the global permit"
+        );
+    }
+    /// 🚨 **The property this increment exists for: waiting for a device must not cost a permit.**
+    ///
+    /// Two permits. `a` is probing device 1. `b` queues for device 1 with a long deadline. `c` wants
+    /// a *different* device, and the only way it can start is if `b` is not sitting on the second
+    /// permit. Against the previous arrangement — permit taken on the poll loop and handed into the
+    /// task — `b` holds it for the whole five seconds and this times out.
+    ///
+    /// Measured cost of that arrangement on 15,000 unreachable devices: 149 of 256 permits held by
+    /// jobs that were not talking to anything (ADR-109 Inc.2).
+    #[tokio::test]
+    async fn a_waiting_job_holds_no_concurrency_permit() {
+        let limiter = Arc::new(PollLimiter::new(2));
+        let a = limiter
+            .begin_for(target(1), Duration::ZERO)
+            .await
+            .expect("the first probe takes device 1");
+
+        let queued = limiter.clone();
+        let b =
+            tokio::spawn(async move { queued.begin_for(target(1), Duration::from_secs(5)).await });
+        // Let `b` reach its wait. It cannot proceed: device 1 is busy.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let c = tokio::time::timeout(
+            Duration::from_millis(500),
+            limiter.begin_for(target(2), Duration::ZERO),
+        )
+        .await;
+        assert!(
+            matches!(c, Ok(Some(_))),
+            "a job queued behind a busy device must not occupy a concurrency permit — one wedged \
+             device would otherwise shrink the budget for every healthy one"
+        );
+
+        drop(a);
+        assert!(
+            b.await.expect("waiter task").is_some(),
+            "and it must still get its turn once the device frees up"
+        );
+    }
+
+    /// The device is claimed **after** the permit is in hand, never before.
+    ///
+    /// The mirror of the test above, and it guards the arrangement this replaced *the other* one
+    /// with: marking the target and then queueing for concurrency made a device read as "being
+    /// polled" while no packet had been sent, so a third spec for it queued behind a job that was
+    /// not running.
+    #[tokio::test]
+    async fn a_job_waiting_for_a_permit_has_not_claimed_its_device() {
+        let limiter = Arc::new(PollLimiter::new(1));
+        let _held = limiter
+            .begin_for(target(1), Duration::ZERO)
+            .await
+            .expect("the only permit");
+
+        let queued = limiter.clone();
+        let waiter =
+            tokio::spawn(async move { queued.begin_for(target(2), Duration::from_secs(5)).await });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        assert!(
+            !limiter.is_busy(target(2)),
+            "device 2 is not being probed — the job aimed at it is queueing for a permit, and \
+             marking it here would make a third spec wait behind a probe that does not exist"
+        );
+        waiter.abort();
+    }
+
+    /// The loop's bound exists, and it is a multiple of the permits rather than a second knob.
+    #[tokio::test]
+    async fn the_loop_blocks_once_the_admission_slots_are_gone() {
+        let limiter = PollLimiter::new(2);
+        let mut held = Vec::new();
+        for i in 0..2 * ADMISSION_FACTOR {
+            held.push(
+                limiter
+                    .acquire_admission()
+                    .await
+                    .unwrap_or_else(|| panic!("slot {i} of {}", 2 * ADMISSION_FACTOR)),
+            );
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), limiter.acquire_admission())
+                .await
+                .is_err(),
+            "the {}th slot must make the poll loop wait — without this the loop spawns a task per \
+             due job, and `WorkingSet::due` can return tens of thousands in one tick",
+            2 * ADMISSION_FACTOR + 1
+        );
+        drop(held.pop());
+        assert!(
+            limiter.acquire_admission().await.is_some(),
+            "and a finished job gives its slot back"
         );
     }
 }
