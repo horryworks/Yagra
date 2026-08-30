@@ -84,6 +84,12 @@
     "darkPools": "{{count}} pool has only one poller, so monitoring stops there while its container is recreated: {{pools}}",
     "darkPools_other": "{{count}} pools have only one poller, so monitoring stops there while their containers are recreated: {{pools}}"
   },
+  "sitePrep": {
+    "row": "site has not confirmed an upgrade is safe there",
+    "warning": "{{count}} site has not confirmed that an upgrade is safe there: {{names}}. Its updater can hand the replacement poller an empty certificate directory, leaving it unable to reach the bus — and both ends report success, so nothing here would say it went wrong. Repairing it needs someone at the site.",
+    "warning_other": "{{count}} sites have not confirmed that an upgrade is safe there: {{names}}. Their updaters can hand each replacement poller an empty certificate directory, leaving it unable to reach the bus — and both ends report success, so nothing here would say it went wrong. Repairing them needs someone at each site.",
+    "fix": "To clear this, re-issue that site's bundle at Settings ▸ Pollers, unpack it there and run: docker compose -f docker-compose.poller.yml up -d. The bundle replaces the site's .env, so its bus token changes."
+  },
   "rollbackList": {
     "show": "Show {{count}} earlier releases",
     "hide": "Hide earlier releases"

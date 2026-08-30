@@ -347,6 +347,11 @@ pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::Po
                 .as_ref()
                 .map(crate::upgrade::PollerUpgradeProgress::from),
             self_upgrades: v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE),
+            // The site updater beside it saying an apply will not damage that site (ADR-051
+            // Inc.7). Read from the same list and never inferred from the poller's version: the
+            // hazard is in the site's composition, which a poller upgraded on its own leaves
+            // untouched — see `CAP_SITE_PREPARED`.
+            site_prepared: v.caps.iter().any(|c| c == yagra_bus::CAP_SITE_PREPARED),
             version: (!v.version.is_empty()).then_some(v.version),
             online: v.online,
             pool: v.pool,

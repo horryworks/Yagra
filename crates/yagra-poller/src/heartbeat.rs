@@ -174,11 +174,14 @@ async fn run_heartbeat_loop<B>(
                 yagra_bus::CAP_POOL_FOLLOW.to_owned(),
             ]
             .into_iter()
-            // Unlike the four above, this one is conditional: it says a site updater is deployed
-            // beside this poller and has been seen alive, so core may hand it a release to install
-            // (ADR-051). Claiming it unconditionally would make core send commands into sites that
-            // cannot act on them, and report every such site as "will upgrade" when it will not.
-            .chain(self_upgrade_cap())
+            // Unlike the seven above, these two are conditional and come from the same read: the
+            // site updater beside this poller is alive (`self-upgrade`), and it has vouched for
+            // itself (`site-prepared`, ADR-051 Inc.7). Claiming the first unconditionally would
+            // make core send commands into sites that cannot act on them and report every such
+            // site as "will upgrade" when it will not; the second is a claim about a *neighbouring
+            // container*, so its absence has to cover a stopped sidecar, one a release behind, and
+            // one that never heard of the field — all three want the same warning before a press.
+            .chain(updater_caps())
             // Conditional for the same shape of reason (ADR-045 Inc.4): this poller can answer a
             // support-log request only if it has a file layer to read. Without the claim core does
             // not ask, and the bundle names the site as unrepresented — which is the true statement.
@@ -221,30 +224,77 @@ async fn run_heartbeat_loop<B>(
     }
 }
 
-/// [`yagra_bus::CAP_SELF_UPGRADE`], but only when a site updater is really there to act on it.
+/// The capabilities the site updater beside this poller earns it (ADR-051).
 ///
-/// Two conditions, and both are needed. `YAGRA_UPGRADE_DIR` says an operator wired the hand-off
-/// volume; a **fresh** `current.json` in it says the sidecar is running rather than commented out,
-/// crashed, or wired to the wrong path. Claiming on the env var alone would let core report a site
-/// as "will upgrade with core" and then send it a command nothing reads — the version skew would
-/// still be there, and the page would say it had been dealt with, which is worse than saying
-/// nothing (ADR-051).
-fn self_upgrade_cap() -> Option<String> {
-    let dir = crate::env_nonempty("YAGRA_UPGRADE_DIR")?;
-    let raw = std::fs::read_to_string(Path::new(&dir).join("current.json")).ok()?;
-    let beat: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let written_at = beat.get("written_at")?.as_i64()?;
-    let now = i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_secs(),
-    )
-    .ok()?;
+/// One function and one file read per beat, for two claims that are both answers about the *same
+/// container* at the *same instant*. Splitting them would read `current.json` twice and give the
+/// freshness rule two homes — and that rule is the load-bearing half of both, since it is the only
+/// thing separating a running sidecar from one that was commented out, crashed, or wired to the
+/// wrong path.
+///
+/// Impure only in its first three lines; everything decided lives in [`updater_caps_from`], where a
+/// test can reach it without a filesystem or a clock.
+fn updater_caps() -> Vec<String> {
+    let Some(dir) = crate::env_nonempty("YAGRA_UPGRADE_DIR") else {
+        return Vec::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(Path::new(&dir).join("current.json")) else {
+        return Vec::new();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok());
+    now.map_or_else(Vec::new, |now| updater_caps_from(&raw, now))
+}
+
+/// What a site updater's `current.json` claims, given its text and the clock.
+///
+/// * [`yagra_bus::CAP_SELF_UPGRADE`] — a sidecar is deployed and has been seen alive, so core may
+///   hand it a release. Claiming this on the environment variable alone would let core report a
+///   site as "will upgrade with core" and then send it a command nothing reads: the version skew
+///   would still be there and the page would say it had been dealt with, which is worse than
+///   saying nothing.
+/// * [`yagra_bus::CAP_SITE_PREPARED`] — that sidecar's own word that an apply will not damage this
+///   site (Inc.7). **Relayed, never decided here**: the hazard is that `docker compose`, run by
+///   that sibling container from a container-local working directory, resolves this poller's
+///   relative certificate bind against the wrong root and is handed an empty directory Docker
+///   created for it. Nothing visible from inside this process tells that apart from a healthy site
+///   until the replacement has already started and failed, so the container running the command is
+///   the one that answers.
+///
+/// **Absence is the warning, and that is the whole design.** No field is written by a sidecar that
+/// predates the fix, by one running an older release, or by none at all — and all three want the
+/// same thing said about them. The only error this may not make is the reassuring one.
+///
+/// ⚠️ **Do not re-derive preparedness from a version or from another capability.** The obvious
+/// shortcut is [`yagra_bus::CAP_UPGRADE_REPORT`], which shipped in the same commit as the fix — but
+/// that is a claim about this *binary*, while the hazard lives in the site's *composition*. A
+/// `docker compose up -d` at a site replaces the binary (floating tag, `pull_policy: always`) and
+/// leaves the updater alone, because its definition did not change. The shortcut reports that site
+/// as safe.
+fn updater_caps_from(raw: &str, now: i64) -> Vec<String> {
+    let Ok(beat) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    let Some(written_at) = beat.get("written_at").and_then(serde_json::Value::as_i64) else {
+        return Vec::new();
+    };
     // The sidecar beats every few seconds; a minute of slack absorbs clock skew between two
     // containers on the same host without ever calling a dead updater alive. A beat from the future
     // is skew, not staleness — it was clearly written.
-    (now.saturating_sub(written_at) <= 60).then(|| yagra_bus::CAP_SELF_UPGRADE.to_owned())
+    if now.saturating_sub(written_at) > 60 {
+        return Vec::new();
+    }
+    let mut caps = vec![yagra_bus::CAP_SELF_UPGRADE.to_owned()];
+    if beat
+        .get(yagra_bus::SITE_PREPARED_FIELD)
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        caps.push(yagra_bus::CAP_SITE_PREPARED.to_owned());
+    }
+    caps
 }
 
 /// What the site updater last wrote about an upgrade, for core to read off the beat (ADR-051 Inc.4).
@@ -300,6 +350,67 @@ mod tests {
         assert!(
             arm.contains("bus.flush()"),
             "the leaving arm must flush: a queued publish dies with the runtime"
+        );
+    }
+
+    /// What a site updater's beat earns it, in both directions.
+    ///
+    /// 🚨 **The accept cases are here for a reason.** A suite of "X is not claimed" assertions is
+    /// satisfied by a function that claims nothing at all, which is exactly the regression that
+    /// matters least and passes most easily. So every rejection below is paired with a beat that
+    /// *is* accepted, and the third case pins the pair apart: a live sidecar that has not vouched
+    /// for itself must still earn `self-upgrade`, or turning the warning on would stop core sending
+    /// any site a release.
+    ///
+    /// Pure on purpose (ADR-051 Inc.7): the decision takes the text and the clock, so this needs no
+    /// filesystem, no environment variable and no sleep — and `set_var` in a parallel test binary is
+    /// how a check like this becomes flaky and then ignored.
+    #[test]
+    fn a_site_updater_earns_preparedness_only_by_declaring_it() {
+        use yagra_bus::{CAP_SELF_UPGRADE, CAP_SITE_PREPARED};
+        let now = 1_700_000_000;
+        let beat = |extra: &str| format!(r#"{{"written_at":{now},"repo":"r"{extra}}}"#);
+        let caps = |raw: &str| super::updater_caps_from(raw, now);
+
+        assert_eq!(
+            caps(&beat(r#","prepared":true"#)),
+            vec![CAP_SELF_UPGRADE.to_owned(), CAP_SITE_PREPARED.to_owned()],
+            "a sidecar that vouches for itself earns both"
+        );
+        assert_eq!(
+            caps(&beat("")),
+            vec![CAP_SELF_UPGRADE.to_owned()],
+            "a sidecar that predates the field is alive and unvouched — it must still be sent \
+             releases, and it must still be warned about"
+        );
+        assert_eq!(
+            caps(&beat(r#","prepared":false"#)),
+            vec![CAP_SELF_UPGRADE.to_owned()],
+            "an explicit false is the same answer as saying nothing"
+        );
+        assert_eq!(
+            caps(&beat(r#","prepared":"yes""#)),
+            vec![CAP_SELF_UPGRADE.to_owned()],
+            "only a real boolean counts; a truthy string must not read as a claim"
+        );
+
+        // Staleness and unreadability outrank everything: a sidecar that has stopped cannot vouch
+        // for what an apply would do, whatever its last file said.
+        assert!(
+            caps(&format!(
+                r#"{{"written_at":{},"repo":"r","prepared":true}}"#,
+                now - 61
+            ))
+            .is_empty(),
+            "a beat older than the freshness window earns nothing, prepared or not"
+        );
+        assert!(
+            caps(r#"{"repo":"r","prepared":true}"#).is_empty(),
+            "a beat with no timestamp cannot be dated, so it cannot be believed"
+        );
+        assert!(
+            caps(r#"{"written_at":"#).is_empty(),
+            "a half-written file is read at some point on every host"
         );
     }
 }

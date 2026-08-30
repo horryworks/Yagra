@@ -5126,6 +5126,27 @@ export interface components {
              *     the other thing deciding from it is whether a rollback is allowed.
              */
             moves_back: boolean;
+            /**
+             * @description Moving this component would carry it to a site that has not said an upgrade is safe there.
+             *
+             *     A remote site replaces its own poller by running `docker compose` beside it. A site whose
+             *     updater predates the fix for that operation resolves the poller's certificate mount against
+             *     the wrong directory, and Docker creates the missing source **empty** rather than failing —
+             *     so the replacement starts, has nothing to trust the bus with, and never comes back. Both
+             *     ends report success, because the command exited 0.
+             *
+             *     The site declares the opposite when it can, so `true` covers a site running an older
+             *     updater, one whose updater is stopped, and one that has never said. All three call for the
+             *     same thing before a press, and none of them may read as safe. `false` for anything an
+             *     upgrade would not move on its own — this deployment's core, a poller sharing its compose
+             *     project, one that is offline, and one with no site updater at all.
+             *
+             *     Clearing it takes replacing that site's composition: re-issue its bundle from
+             *     Settings ▸ Pollers, unpack it at the site, and bring it up. Setting `YAGRA_CERT_DIR` to an
+             *     absolute path there makes the next upgrade survivable but leaves the site on the old
+             *     updater, so this stays `true` — deliberately, because it is still true.
+             */
+            needs_site_prep: boolean;
             /** @description The pool it serves; `null` for core, which serves none. */
             pool?: string | null;
             progress?: null | components["schemas"]["PollerUpgradeProgress"];

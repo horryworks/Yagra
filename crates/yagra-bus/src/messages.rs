@@ -108,6 +108,43 @@ pub const CAP_SELF_UPGRADE: &str = "self-upgrade";
 /// first run is that core reads the silence correctly instead of reading it as "not yet".
 pub const CAP_UPGRADE_REPORT: &str = "upgrade-report";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when the site updater beside it
+/// has declared that an apply will not damage this site (ADR-051 Inc.7).
+///
+/// **The claim is relayed, not made.** Every other conditional capability here is something the
+/// poller knows about itself; this one is a fact about a *sibling container* whose script does not
+/// live in any image — it is written inline in `docker-compose.poller.yml`, so it is whatever
+/// composition the site has on disk. The poller only carries what that script wrote into
+/// [`SITE_PREPARED_FIELD`].
+///
+/// That indirection is the point. The hazard it reports is decision 20's: an updater that addresses
+/// its deployment directory by a container-local path makes `docker compose` resolve the poller's
+/// relative certificate bind against the wrong root, and Docker creates the missing source as an
+/// **empty directory** rather than failing. The replacement poller starts, finds no CA, never
+/// reaches the bus — and `up -d` exits 0, so both the site and core report success. Measured on
+/// 192.168.1.212, 2026-08-27.
+///
+/// **Why not read [`CAP_UPGRADE_REPORT`] for this instead** — it was the obvious candidate, since
+/// the fix and that token shipped in one commit, so a build predating one predates the other. It is
+/// wrong by one step: that token is claimed by the poller *binary*, and the hazard lives in the
+/// *composition*. A site told to run `docker compose up -d` pulls a new poller (the service is
+/// `pull_policy: always` on a floating tag) while leaving the updater untouched, because its
+/// definition did not change — so the token appears while the hazard remains. The advice in every
+/// release note to date produces exactly that state.
+///
+/// Absence therefore means "this site has not said it is safe", which covers a site that never
+/// heard of the field, one whose updater is a build behind, and one that is simply not running the
+/// sidecar. All three deserve the same warning, and none of them may read as safe: the only error
+/// this must never make is the reassuring one.
+pub const CAP_SITE_PREPARED: &str = "site-prepared";
+
+/// The field a site updater writes into its `current.json` to claim [`CAP_SITE_PREPARED`].
+///
+/// Named here rather than in the poller because it is one half of a pair that must agree across a
+/// language boundary — this crate holds the token, the site's composition holds the literal, and
+/// `yagra-core`'s composition scan reads *this* constant so the two cannot drift apart silently.
+pub const SITE_PREPARED_FIELD: &str = "prepared";
+
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can answer a
 /// [`PollerLogRequest`] with its own on-disk log (ADR-045 Inc.4).
 ///

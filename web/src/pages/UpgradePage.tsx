@@ -48,6 +48,7 @@ import {
   rollbacks,
   rowLocked,
   rowPlan,
+  unpreparedSites,
   runPhase,
   runState,
   shortRef,
@@ -606,12 +607,20 @@ export function UpgradePage() {
             </Badge>
           )}
           {why && <span className="upgrade-why muted">{t(`componentReason.${why}`)}</span>}
+          {/* Before the press, and not only inside the dialog: this is the one line on the screen
+              that says an upgrade could take a site off the air, and an operator who never opens
+              the dialog (they press the running release's own row) would otherwise never meet it.
+              Coloured, because every other note in this list is a fact and this one is a risk. */}
+          {r.needs_site_prep && (
+            <span className="upgrade-why upgrade-why-warn">{t('sitePrep.row')}</span>
+          )}
         </span>
       </li>
     );
   };
 
   const picked = picking;
+  const pickedUnprepared = picked === null ? [] : unpreparedSites(rows, selected);
   const pickedDark = picked === null ? [] : darkPools(rows, selected);
   const pickedBack = picked === null ? [] : rows.filter((r) => r.moves_back && selected.includes(r.id));
   const movable = picked === null ? [] : rows.filter((r) => !rowLocked(r, picked));
@@ -940,6 +949,9 @@ export function UpgradePage() {
               const locked = rowLocked(r, picked);
               const on = selected.includes(r.id) || (r.co_located && selected.includes(CORE_ID));
               const why = componentReason(r.reason);
+              // Only where it would actually happen: a row this press does not move cannot take
+              // its site off the air, whatever that site last said.
+              const warn = r.needs_site_prep && plan === 'moves';
               return (
                 <label
                   key={r.id}
@@ -969,15 +981,25 @@ export function UpgradePage() {
                   <span className="upgrade-pick-arrow">{plan === 'moves' ? '→' : '—'}</span>
                   <span className="mono">{plan === 'moves' ? picked : '—'}</span>
                   {/* The reason lives in the row, never in a tooltip: a control whose explanation
-                      is hover-only is one a touch device never explains (ADR-055 R4). */}
-                  <span className="upgrade-why muted">
-                    {plan === 'already'
-                      ? t('componentReason.already', { version: picked })
-                      : why
-                        ? t(`componentReason.${why}`)
-                        : r.moves_back
-                          ? t('componentReason.moves_back')
-                          : ''}
+                      is hover-only is one a touch device never explains (ADR-055 R4).
+
+                      🚨 One span, not two: `.upgrade-pick-row` is a seven-column grid sharing its
+                      template with `.upgrade-pick-head`, so an eighth child slides every row out
+                      from under its own header — and no test can see that.
+
+                      The site-prep warning outranks the rest when both apply. It is the only entry
+                      here that describes damage rather than cost, and `pick.downgrade` below still
+                      names a row moved back, so nothing is lost by yielding the cell. */}
+                  <span className={warn ? 'upgrade-why upgrade-why-warn' : 'upgrade-why muted'}>
+                    {warn
+                      ? t('sitePrep.row')
+                      : plan === 'already'
+                        ? t('componentReason.already', { version: picked })
+                        : why
+                          ? t(`componentReason.${why}`)
+                          : r.moves_back
+                            ? t('componentReason.moves_back')
+                            : ''}
                   </span>
                 </label>
               );
@@ -999,6 +1021,28 @@ export function UpgradePage() {
                 names: pickedBack.map((r) => r.id).join(', '),
               })}
             </p>
+          )}
+          {/* 🚨 The most serious thing this dialog can say, so it sits above the rest of them: the
+              others describe a cost the operator is accepting, this one describes a site that may
+              not come back. Recomputed from the checkboxes for the same reason `darkPools` is —
+              unticking a site has to take it out of the sentence, or the sentence stops being
+              about the button.
+
+              The repair is spelled out here rather than pointed at: production is a closed network
+              (ADR-045), so the text on the screen is the manual (ADR-055 R5). And it is the repair
+              that actually clears this warning — telling an operator to set YAGRA_CERT_DIR would
+              make the next upgrade survivable while leaving the row exactly as it is, which is how
+              a warning gets read past. */}
+          {pickedUnprepared.length > 0 && (
+            <>
+              <p className="upgrade-note upgrade-note-warn">
+                {t('sitePrep.warning', {
+                  count: pickedUnprepared.length,
+                  names: pickedUnprepared.join(', '),
+                })}
+              </p>
+              <p className="upgrade-hint muted">{t('sitePrep.fix')}</p>
+            </>
           )}
           {/* The consequence an operator cannot find out afterwards except from an alert: no
               maintenance window silences pool coverage, deliberately (ADR-051 decision 13). It is

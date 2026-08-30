@@ -1902,7 +1902,13 @@ mod tests {
                 if !line.starts_with(' ') && !line.is_empty() {
                     inside = false;
                 }
-                if inside {
+                // Commented-out lines are prose, not commands. This reads what the container
+                // *runs*, and the block it reads is a shell script whose own explanation lives
+                // beside it — so a comment that says the word `cd` was being held to the rule the
+                // rule exists to enforce on the line below it. Dropping them narrows this check to
+                // the thing it is about; a commented `cd /project` cannot empty a certificates
+                // directory, because nothing executes it.
+                if inside && !line.trim_start().starts_with('#') {
                     body.push(line);
                 }
             }
@@ -1972,6 +1978,94 @@ mod tests {
             "expected 4 directory changes: three in the central updater (backup, apply, bus) and \
              one in the site updater's apply. A lower number means a pattern stopped matching and \
              this check passed over the line it exists to read",
+        );
+    }
+
+    /// Only the site updater declares its own preparedness, and it does so in the beat the poller
+    /// reads (ADR-051 Inc.7).
+    ///
+    /// This is the one link in the chain that crosses out of Rust. The token
+    /// (`yagra_bus::CAP_SITE_PREPARED`) is a constant; the field it is earned by is a **string
+    /// literal in a shell script embedded in a YAML file**, which nothing compiles and nothing
+    /// type-checks. So the needle is built from `SITE_PREPARED_FIELD` rather than written out here,
+    /// and this test is what stops the two spellings drifting — the drift would be silent in the
+    /// worst direction, because a field the poller cannot find reads exactly like a site that never
+    /// claimed to be safe, and every site would warn forever with no error anywhere.
+    ///
+    /// **Per file, not global.** The central updater must *not* declare it: its `current.json` is
+    /// read by core as an `UpdaterHeartbeat`, it upgrades this host rather than a remote site, and a
+    /// claim there would be a container vouching for a hazard it does not have. Only the sidecar
+    /// that runs `docker compose` at a site can answer for what an apply does to that site.
+    ///
+    /// 🚨 The floors count the **write lines actually found**, not the files opened. A renamed
+    /// `heartbeat()` or a moved `current.json` would leave both loops matching nothing, which is
+    /// indistinguishable from agreement (`floor-must-count-what-was-checked`).
+    #[test]
+    fn only_the_site_updater_declares_its_own_preparedness() {
+        // What the `current.json` writer looks like in both compositions, and nothing else does:
+        // the central updater also `printf`s `written_at` into `available.json`, twice.
+        const BEAT_SHAPE: &str = r#""written_at":%s,"repo":"%s""#;
+        let claim = format!("\"{}\":true", yagra_bus::SITE_PREPARED_FIELD);
+        let mut beats = 0;
+        for (file, service, want) in [
+            ("docker-compose.deploy.yml", "yagra-updater:", false),
+            ("docker-compose.poller.yml", "yagra-poller-updater:", true),
+        ] {
+            let text = std::fs::read_to_string(format!("../../{file}"))
+                .unwrap_or_else(|e| panic!("{file} ships with the product: {e}"));
+            // Everything from this service up to the next key at the same indent — the same cut the
+            // sibling checks make, and for the same reason: these compositions hold other services.
+            let mut inside = false;
+            let mut body = Vec::new();
+            for line in text.lines() {
+                if line.starts_with("  ")
+                    && !line.starts_with("   ")
+                    && line.trim_end().ends_with(':')
+                {
+                    inside = line.trim() == service;
+                    continue;
+                }
+                if !line.starts_with(' ') && !line.is_empty() {
+                    inside = false;
+                }
+                if inside {
+                    body.push(line);
+                }
+            }
+            assert!(
+                !body.is_empty(),
+                "{file} no longer defines {service}, so this check read nothing and would have \
+                 passed on any content at all",
+            );
+
+            // The beat line itself, not the whole service: this file's own commentary names the
+            // field, and a comment must not be able to satisfy the check.
+            let written: Vec<&&str> = body
+                .iter()
+                .filter(|l| l.contains("printf") && l.contains(BEAT_SHAPE))
+                .collect();
+            assert_eq!(
+                written.len(),
+                1,
+                "{file}'s {service} has {} heartbeat lines matching {BEAT_SHAPE:?}; this check \
+                 reads that line, and on any count but one it is reporting about nothing",
+                written.len(),
+            );
+            beats += 1;
+
+            assert_eq!(
+                written[0].contains(&claim),
+                want,
+                "{file}'s {service} {} {claim} in the beat the poller reads. Only the site updater \
+                 may vouch for a site: it is the container that runs `docker compose` there, and \
+                 the poller relays its word as `{}`",
+                if want { "must declare" } else { "must not declare" },
+                yagra_bus::CAP_SITE_PREPARED,
+            );
+        }
+        assert_eq!(
+            beats, 2,
+            "expected one heartbeat line in each of the two updaters",
         );
     }
 

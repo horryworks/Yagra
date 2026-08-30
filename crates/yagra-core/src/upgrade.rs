@@ -355,6 +355,14 @@ pub struct PollerBuild {
     /// It advertises `CAP_SELF_UPGRADE` — a site updater is deployed beside it and core can hand it
     /// the same release (ADR-051).
     pub self_upgrades: bool,
+    /// It advertises `CAP_SITE_PREPARED` — the site updater beside it has declared that an apply
+    /// will not damage this site (ADR-051 Inc.7).
+    ///
+    /// Carried separately from `self_upgrades` because the two are different containers answering
+    /// different questions: that one says a sidecar is there to act, this one says acting is safe.
+    /// A site can be the first without the second, and that combination is the whole reason this
+    /// field exists — it is the one an upgrade destroys.
+    pub site_prepared: bool,
     /// Whether core has heard from it recently enough to call it live.
     ///
     /// Carried rather than filtered at the call site: an upgrade may only act on a poller that is
@@ -449,6 +457,25 @@ pub struct ComponentRow {
     /// being true the moment a row can be unchecked — and a warning that does not follow the
     /// checkboxes is worse than none, because it reads the same when it matters.
     pub live_in_pool: usize,
+    /// Moving this component would carry it to a site that has not said an upgrade is safe there.
+    ///
+    /// A remote site replaces its own poller by running `docker compose` beside it. A site whose
+    /// updater predates the fix for that operation resolves the poller's certificate mount against
+    /// the wrong directory, and Docker creates the missing source **empty** rather than failing —
+    /// so the replacement starts, has nothing to trust the bus with, and never comes back. Both
+    /// ends report success, because the command exited 0.
+    ///
+    /// The site declares the opposite when it can, so `true` covers a site running an older
+    /// updater, one whose updater is stopped, and one that has never said. All three call for the
+    /// same thing before a press, and none of them may read as safe. `false` for anything an
+    /// upgrade would not move on its own — this deployment's core, a poller sharing its compose
+    /// project, one that is offline, and one with no site updater at all.
+    ///
+    /// Clearing it takes replacing that site's composition: re-issue its bundle from
+    /// Settings ▸ Pollers, unpack it at the site, and bring it up. Setting `YAGRA_CERT_DIR` to an
+    /// absolute path there makes the next upgrade survivable but leaves the site on the old
+    /// updater, so this stays `true` — deliberately, because it is still true.
+    pub needs_site_prep: bool,
     /// Its site updater's last word, or `null` when it has none or has never been asked.
     pub progress: Option<PollerUpgradeProgress>,
 }
@@ -489,6 +516,9 @@ pub fn components(
         co_located: false,
         moves_back: false,
         live_in_pool: 0,
+        // core is this host, replaced by the updater that lives here. The hazard this names is a
+        // remote site's, so the question does not arise.
+        needs_site_prep: false,
         progress: None,
     }];
     let mut pollers: Vec<ComponentRow> = fleet
@@ -519,6 +549,12 @@ pub fn components(
                     .iter()
                     .filter(|q| q.online && q.pool == p.pool)
                     .count(),
+                // Only for a row an upgrade would move to a site on its own: a co-located poller
+                // is replaced by core's compose project on this host, an offline one is handed
+                // nothing, and one with no site updater is not moved at all. Warning about any of
+                // those would be a warning that fires when nothing happens, which reads the same
+                // as the one that matters (the argument `dark_pools` above is built on).
+                needs_site_prep: p.online && p.self_upgrades && !co_located && !p.site_prepared,
                 pool: Some(p.pool.clone()),
                 version: p.version.clone(),
                 progress: p.upgrade.clone(),
@@ -2436,6 +2472,11 @@ mod tests {
             version: version.map(str::to_owned),
             upgrade: None,
             self_upgrades,
+            // Prepared unless a test says otherwise, for the same reason `online` is: these
+            // fixtures are about versions and coverage, and a site that has vouched for itself is
+            // the one that leaves those assertions saying what they said before Inc.7. The
+            // unprepared case is spelled out where it is the subject.
+            site_prepared: true,
             // Live unless a test says otherwise: the offline case is the exception and is worth
             // spelling out at the one call site that wants it.
             online: true,
@@ -2585,6 +2626,86 @@ mod tests {
         assert!(
             !row("edge-nagoya-1").upgradable,
             "never reported a version and has no updater either"
+        );
+    }
+
+    /// A site is warned about unless it has said an upgrade is safe there (ADR-051 Inc.7).
+    ///
+    /// 🚨 **Both directions, in one test, on purpose.** "Nothing is flagged" is satisfied by a
+    /// field wired to a constant `false`, and that is the regression that costs a site: the button
+    /// then reads exactly as it did before this existed. So the unprepared row and the prepared one
+    /// are asserted together, against the same `components` call.
+    ///
+    /// The default is the loud one. A poller that has never heard of the field, one whose sidecar
+    /// has stopped, and one running an older release all arrive here identically — as an absent
+    /// capability — and all three deserve the warning. The only answer this may not give is the
+    /// reassuring one.
+    #[test]
+    fn a_site_that_does_not_declare_itself_prepared_is_flagged() {
+        let fleet = vec![
+            PollerBuild {
+                site_prepared: false,
+                ..build("edge-tokyo-1", Some("0.3.3"), true)
+            },
+            build("edge-osaka-1", Some("0.3.3"), true),
+        ];
+        let rows = components(&fleet, Some(&[]), "0.3.4", true);
+        let row = |id: &str| {
+            rows.iter()
+                .find(|r| r.id == id)
+                .unwrap_or_else(|| panic!("{id} should be listed"))
+        };
+        assert!(
+            row("edge-tokyo-1").needs_site_prep,
+            "a site that has not vouched for itself must be named before the press, not after"
+        );
+        assert!(
+            !row("edge-osaka-1").needs_site_prep,
+            "a site whose updater declared itself prepared is an ordinary row; a warning that \
+             fires on every site reads the same as one that fires on the right site"
+        );
+    }
+
+    /// Only a row an upgrade would carry to a site on its own can need that site prepared.
+    ///
+    /// Four ways a row is not that, and each is a live poller in this fixture so none of them
+    /// passes for want of a row to test. core is replaced by the updater on this host; a
+    /// co-located poller goes with core's compose project; an offline one is handed nothing; one
+    /// with no site updater is not moved at all. Every one of them lacks the capability, so a
+    /// condition that only asked about the capability would flag all five.
+    ///
+    /// **The floor counts rows inspected**, because "no row was flagged" is the healthy answer
+    /// here and has to be distinguishable from "the fixture stopped producing rows".
+    #[test]
+    fn only_a_row_an_upgrade_would_move_can_need_preparation() {
+        let unprepared = |id: &str, self_upgrades: bool, online: bool| PollerBuild {
+            site_prepared: false,
+            online,
+            ..build(id, Some("0.3.3"), self_upgrades)
+        };
+        let fleet = vec![
+            unprepared("core-host-poller", false, true),
+            unprepared("edge-offline", true, false),
+            unprepared("edge-no-updater", false, true),
+            unprepared("edge-tokyo-1", true, true),
+        ];
+        let rows = components(
+            &fleet,
+            Some(&["core-host-poller".to_owned()]),
+            "0.3.4",
+            true,
+        );
+        assert_eq!(rows.len(), 5, "core plus the four pollers");
+
+        let flagged: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.needs_site_prep)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            flagged,
+            vec!["edge-tokyo-1"],
+            "only the row an upgrade moves to a site of its own may be flagged"
         );
     }
 
@@ -2798,6 +2919,7 @@ mod tests {
             id: id.to_owned(),
             pool: "default".to_owned(),
             version: Some(version.to_owned()),
+            site_prepared: true,
             self_upgrades: true,
             online: true,
             upgrade,

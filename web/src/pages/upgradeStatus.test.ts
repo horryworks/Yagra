@@ -10,6 +10,7 @@ import {
   convergeState,
   CORE_ID,
   darkPools,
+  unpreparedSites,
   defaultSelection,
   bundleTagFromFilename,
   canApply,
@@ -436,6 +437,7 @@ describe('components', () => {
       co_located: false,
       moves_back: false,
       live_in_pool: 2,
+      needs_site_prep: false,
       progress: null,
       ...over,
     }) as ComponentRow;
@@ -498,6 +500,31 @@ describe('components', () => {
     expect(darkPools(rows, [])).toEqual([]);
     // core has no pool, so selecting it can never darken one.
     expect(darkPools(rows, [CORE_ID])).toEqual([]);
+  });
+
+  // 🚨 The sibling of the one above, and it follows the checkboxes for the same reason: a site
+  // unticked is a site this press does not touch, so leaving it in the sentence would train the
+  // operator to read past the sentence.
+  //
+  // The accepting case is asserted first and is load-bearing. `unpreparedSites` returning nothing
+  // is what the screen looked like before this existed -- and the failure it guards against is a
+  // remote site destroyed by one click, reported as a success by both ends.
+  it('names the sites in this selection that have not said an upgrade is safe there', () => {
+    const rows = [
+      core,
+      row({ id: 'unprepared-b', needs_site_prep: true }),
+      row({ id: 'unprepared-a', needs_site_prep: true }),
+      row({ id: 'prepared', needs_site_prep: false }),
+    ];
+    expect(unpreparedSites(rows, ['unprepared-a', 'unprepared-b', 'prepared'])).toEqual([
+      'unprepared-a',
+      'unprepared-b',
+    ]);
+    expect(unpreparedSites(rows, ['unprepared-a', 'prepared'])).toEqual(['unprepared-a']);
+    expect(unpreparedSites(rows, ['prepared'])).toEqual([]);
+    expect(unpreparedSites(rows, [])).toEqual([]);
+    // core is never a site, so selecting it cannot put one in the warning.
+    expect(unpreparedSites(rows, [CORE_ID])).toEqual([]);
   });
 
   // A value from a core newer than this bundle must render as *something*. Not manners: the Tier1

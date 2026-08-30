@@ -245,6 +245,17 @@
   max-width: 34ch;
 }
 
+/* The one warning on this screen that describes damage rather than cost (ADR-051 Inc.7): a site
+   that has not said an upgrade is safe there can be left unable to reach the bus, silently, with
+   both ends reporting success. Coloured rather than muted for that reason — every other note here
+   is a consequence the operator accepts, and this one is a consequence they can still avoid.
+   `--status-warning` is the domain's own colour: this is a state of a monitored thing, so it must
+   not invent a second yellow (ui-conventions.md). */
+.upgrade-why-warn,
+.upgrade-note-warn {
+  color: var(--status-warning);
+}
+
 /* ── The convergence: one line per site ──────────────────────────────────────────────────── */
 .upgrade-sites {
   list-style: none;

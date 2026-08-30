@@ -246,8 +246,24 @@ services:
             "$$1" "$$2" "$$3" "$$4" "$$5" "$$6" "$$7" "$$8" > "$$D/status.json.tmp"
           mv "$$D/status.json.tmp" "$$D/status.json"
         }
+        # `prepared` is this script vouching for ITSELF (ADR-051 Inc.7). It says an apply from here
+        # will not damage the site: the two lines below that make it true are `-v ${PWD}:${PWD}`
+        # with `cd "$WORKDIR"`, and the certificate-content check before anything is recreated.
+        # The poller relays it as the `site-prepared` capability, and core warns about every site
+        # that does not send it — which is the honest default, because the fault it guards against
+        # is silent on both ends (the site reports success and core reports "aligned").
+        #
+        # It is declared HERE, and not derived from a version anywhere, because this script is not
+        # in any image: it is whatever `docker-compose.poller.yml` the site has on disk. A site told
+        # to run `docker compose up -d` gets a new poller binary (floating tag, pull_policy: always)
+        # and keeps this container untouched, so anything the BINARY claims would say "safe" while
+        # the hazard sat right here.
+        #
+        # ⚠️ A future first-upgrade hazard widens the meaning of this one boolean rather than adding
+        # a second field. "Is this site safe to upgrade" has one answer, and this is the only thing
+        # that knows it.
         heartbeat() {
-          printf '{"written_at":%s,"repo":"%s","check_interval_secs":5,"allow_bundle":false,"paused":false}\n' \
+          printf '{"written_at":%s,"repo":"%s","check_interval_secs":5,"allow_bundle":false,"paused":false,"prepared":true}\n' \
             "$$(date +%s)" "$$REPO" > "$$D/current.json.tmp"
           mv "$$D/current.json.tmp" "$$D/current.json"
         }

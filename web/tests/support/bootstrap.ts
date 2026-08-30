@@ -68,6 +68,36 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     } as unknown as Json;
   })(),
 
+  // 🚨 The generated body has **no poller row at all** — `ComponentKind`'s enum is ordered
+  // `["core","poller"]`, so the generator's "take the first member" rule builds a components list
+  // that is one core and nothing else. Every per-poller thing Settings ▸ Upgrade draws (the pool,
+  // the site's own progress, and since ADR-051 Inc.7 the warning that a site has not said an
+  // upgrade is safe there) is therefore unreachable, on a screen the walk otherwise passes.
+  //
+  // So one remote site is appended to the generated list rather than replacing it, and it carries
+  // the Inc.7 warning, so the per-poller cells are rendered and measured at all rather than the
+  // screen passing over a components list with no site in it. The generated core row is kept — the
+  // route walk wants a visible `ymock-` string here. `sitePrep.spec.ts` is what reads the warning.
+  '/api/v1/system/upgrade': (() => {
+    const body = defaultBodyFor('/api/v1/system/upgrade') as unknown as Schemas['UpgradeStatusResponse'];
+    body.components = [
+      ...body.components,
+      {
+        id: 'edge-tokyo-1',
+        kind: 'poller',
+        pool: 'tokyo',
+        version: '0.3.3',
+        upgradable: true,
+        reason: null,
+        co_located: false,
+        moves_back: false,
+        live_in_pool: 2,
+        needs_site_prep: true,
+        progress: null,
+      },
+    ];
+    return body as unknown as Json;
+  })(),
   // Schema-valid, domain-invalid: `promoted_node_id` is "the node this address became once it is
   // monitored", and the generator fills every nullable uuid. So every discovered endpoint arrived
   // already-monitored and the table — which filters to unmonitored by default, and always has —

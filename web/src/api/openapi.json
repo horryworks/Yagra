@@ -22200,7 +22200,8 @@
           "upgradable",
           "co_located",
           "moves_back",
-          "live_in_pool"
+          "live_in_pool",
+          "needs_site_prep"
         ],
         "properties": {
           "co_located": {
@@ -22223,6 +22224,10 @@
           "moves_back": {
             "type": "boolean",
             "description": "It is **ahead** of this core, so moving it to core's build is a downgrade.\n\nComputed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`\ncomes after `0.2.9`, and this repository already keeps that comparison in one place because\nthe other thing deciding from it is whether a rollback is allowed."
+          },
+          "needs_site_prep": {
+            "type": "boolean",
+            "description": "Moving this component would carry it to a site that has not said an upgrade is safe there.\n\nA remote site replaces its own poller by running `docker compose` beside it. A site whose\nupdater predates the fix for that operation resolves the poller's certificate mount against\nthe wrong directory, and Docker creates the missing source **empty** rather than failing —\nso the replacement starts, has nothing to trust the bus with, and never comes back. Both\nends report success, because the command exited 0.\n\nThe site declares the opposite when it can, so `true` covers a site running an older\nupdater, one whose updater is stopped, and one that has never said. All three call for the\nsame thing before a press, and none of them may read as safe. `false` for anything an\nupgrade would not move on its own — this deployment's core, a poller sharing its compose\nproject, one that is offline, and one with no site updater at all.\n\nClearing it takes replacing that site's composition: re-issue its bundle from\nSettings ▸ Pollers, unpack it at the site, and bring it up. Setting `YAGRA_CERT_DIR` to an\nabsolute path there makes the next upgrade survivable but leaves the site on the old\nupdater, so this stays `true` — deliberately, because it is still true."
           },
           "pool": {
             "type": [

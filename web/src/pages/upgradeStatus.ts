@@ -305,6 +305,25 @@ export function darkPools(rows: ComponentRow[], selected: string[]): string[] {
 }
 
 /**
+ * Sites in **this** selection that have not said an upgrade is safe there.
+ *
+ * The sibling of `darkPools`, and it follows the checkboxes for the same reason: a warning computed
+ * once from everything that could move reads exactly the same when it matters as when it does not
+ * (ADR-051 Inc.6/Inc.7). Unticking a site has to remove it from the sentence, or the sentence stops
+ * being about the button.
+ *
+ * The judgement itself is the server's — `needs_site_prep` arrives per row, decided from what the
+ * site's own updater declared. Nothing here infers it from a version, and nothing may: the hazard
+ * lives in the site's composition, which a poller upgraded on its own leaves untouched.
+ */
+export function unpreparedSites(rows: ComponentRow[], selected: string[]): string[] {
+  return rows
+    .filter((r) => r.needs_site_prep && selected.includes(r.id))
+    .map((r) => r.id)
+    .sort();
+}
+
+/**
  * How the poller half of an upgrade is going.
  *
  * `pending` is the run id the last press returned, and it does the same job it does for core's own

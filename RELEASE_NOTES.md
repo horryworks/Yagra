@@ -12,6 +12,25 @@
 
 ### New Features
 
+- **Settings ▸ Upgrade now names the remote sites that an upgrade could take off the air.** A site
+  replaces its own poller by running `docker compose` beside it, and a site updater from before
+  v0.3.4 does that from a directory only its own container knows — so Docker creates the poller's
+  certificate mount empty, the replacement starts with nothing to trust the bus with, and never
+  comes back. Both ends report success, because the command exits 0. Until now the only warning was
+  a paragraph in these notes and in the site README, which an operator who never re-issues a site
+  bundle does not read.
+  A site updater now declares in its own heartbeat that an apply is safe there; the poller relays
+  that as a new `site-prepared` capability, and `GET /api/v1/system/upgrade` carries it per row as
+  `components[].needs_site_prep`. The upgrade dialog names every such site that is still ticked,
+  and says how to clear it: re-issue that site's bundle at Settings ▸ Pollers, unpack it there and
+  bring it up.
+  ⚠️ **Every existing remote site reports this until its composition is replaced**, which is
+  correct — the fix travels in `docker-compose.poller.yml`, so a site keeps the old updater until
+  it takes a new bundle or a successful upgrade. Sites are still ticked by default: leaving them
+  behind silently is the failure this whole mechanism exists to remove.
+  ⚠️ Setting `YAGRA_CERT_DIR` to an absolute path in a site's `.env` makes the next upgrade
+  survivable but leaves the old updater in place, so the warning stays. That is deliberate.
+
 - **A poller now reports the polls it did not get to.** New Prometheus counter on every poller,
   `yagra_poll_cycles_missed_total`: one per poll cycle that came and went while the poller was too
   far behind to serve it. It stays at zero while a poller keeps up, so `rate()` over it answers
