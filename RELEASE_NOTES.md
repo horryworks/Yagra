@@ -249,8 +249,14 @@
   checks taking **65.8%** of the concurrency budget while ICMP liveness took **3.1%**.
   It now asks for only as many polls as the workers have room for, and picks the ones that have
   waited longest **relative to their own interval**. Every check then degrades by the same factor
-  instead of the wrong ones not degrading at all, and a long-interval check is never starved — its
-  lateness keeps accumulating until it out-ranks a short one.
+  instead of the wrong ones not degrading at all: in steady state each tier is served in proportion
+  to what its interval asks for, which is the configured ratio preserved.
+  ⚠️ **A long-interval check is not starved, but on a badly over-subscribed poller it may look like
+  it is.** It only out-ranks a short-interval one once it has accumulated `interval × stretch`
+  seconds of lateness, and every check on that interval crosses that line at about the same moment —
+  so its polls arrive in a clump, one *stretched* interval apart. Simulated at 14× over-subscription:
+  the hourly tier receives nothing for 12.6 hours, then all of it, while the per-minute tier runs
+  every 833 s. That is the same 13× stretch for both, and it is also a fleet that needs more pollers.
   ⚠️ **Nothing changes on a poller that is keeping up.** When everything that is due fits in the
   batch, every due check is dispatched exactly as before; the ranking only decides who goes first
   when there is not enough room for everyone. And this reorders work rather than creating capacity:

@@ -420,14 +420,25 @@ impl WorkingSet {
     ///
     /// 🚨 **A spec that loses keeps its `next_due`.** That is the whole of the fairness argument and
     /// the one line that must not be "tidied": advancing a deferred spec's timer would stop its
-    /// lateness accumulating, so a long-interval check would never out-rank a short one and would
-    /// never run again. Because it does accumulate, the ranking equalises `behind / interval` across
-    /// the whole set — which is the configured ratio, restored, with every check degrading by the
-    /// same factor rather than the wrong ones degrading not at all.
+    /// lateness accumulating, so a long-interval check could never out-rank a short one and would
+    /// never run again.
+    ///
+    /// **What that buys, stated exactly.** In steady state the marginal served spec of each tier has
+    /// the same `behind / interval`, which makes each tier's service rate proportional to its
+    /// demand — every check stretched by the same factor, which is the configured ratio preserved.
+    /// ⚠️ **But the long tier's polls arrive in a clump, and the first clump is one *stretched*
+    /// interval away.** A starved 3600 s check has to accumulate `3600 × stretch` seconds of
+    /// lateness before it out-ranks a 60 s check, and every one of them crosses that line at about
+    /// the same moment. Simulated at 1,500 nodes × 8 specs and 14× over-subscription: the hourly
+    /// tier receives **nothing for 12.6 hours**, then all of it inside three hours, then nothing
+    /// again for about thirteen — while the 60 s tier runs every 833 s, stretched 13.9×. So a
+    /// window shorter than the stretched interval reads the long tier as starved, and on a fleet
+    /// this far past its capacity that reading is operationally true even though the schedule is
+    /// proportional.
     ///
     /// ⚠️ It reorders; it does not create capacity. 15,000 devices × 8 checks ask for 2,817
     /// permit-seconds per second and 256 permits cannot serve 9% of that. What changes is *which*
-    /// polls the budget buys.
+    /// polls the budget buys — and at that depth, what it buys is liveness.
     pub fn due(&mut self, now: Instant, budget: usize) -> Vec<PollJob> {
         // Pass 1 — who is due, and how late relative to their own interval. Read-only, so the whole
         // set can be walked before anything is decided.
@@ -1949,7 +1960,7 @@ mod tests {
         );
     }
 
-    /// **Under sustained scarcity the served ratio comes back to the configured one.**
+    /// **Under a mild deficit the served ratio comes back to the configured one.**
     ///
     /// 100 checks a minute and 100 checks an hour is a demand ratio of 60 : 1. The budget here
     /// serves one poll a second against 1.694 demanded, so 41% of the schedule cannot run — and the
@@ -1958,7 +1969,15 @@ mod tests {
     /// Both bounds are load-bearing and they exclude opposite failures: the measured defect served
     /// them at **1.03 : 1** (walk order, so the hourly tier ran as often as the per-minute one),
     /// while a strict "shortest interval always wins" rule would serve the hourly tier **zero**
-    /// times — under this load the fast tier alone exceeds the budget forever.
+    /// times. This lands at 49.7 : 1.
+    ///
+    /// ⚠️ **"Mild" is doing work in that first line, and the hour here is not enough to see the
+    /// other regime.** The rank equalises `behind / interval`, so a starved 3600 s check only
+    /// out-ranks a 60 s one once it has accumulated `3600 × stretch` seconds of lateness. At 1.7×
+    /// that is under an hour and this test sees it. Simulated at 14× over-subscription it is
+    /// **12.6 hours**, and the hourly tier then arrives all at once — proportional in the long run,
+    /// indistinguishable from starvation on any shorter window. [`WorkingSet::due`]'s doc carries
+    /// the numbers; do not read this test as a promise about a fleet far past its capacity.
     #[test]
     fn a_starved_hourly_check_eventually_wins_and_the_ratio_comes_back() {
         let now = Instant::now();
