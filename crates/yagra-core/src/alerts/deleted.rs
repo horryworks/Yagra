@@ -41,6 +41,18 @@ const STARTUP_TICK: Duration = Duration::from_secs(5);
 /// room for a slow first load, short enough that it is over before anything else happens.
 const STARTUP_WINDOW: Duration = Duration::from_secs(120);
 
+/// How long to wait before the next sweep, given how long this process has been running.
+///
+/// Extracted from the loop because the boundary is the only thing here that can be got wrong, and a
+/// loop around a real database is not somewhere a test can reach. `<` rather than `<=`: at
+/// exactly [`STARTUP_WINDOW`] the startup period is over.
+fn tick_at(elapsed: Duration) -> Duration {
+    match elapsed < STARTUP_WINDOW {
+        true => STARTUP_TICK,
+        false => TICK,
+    }
+}
+
 /// Leader-only: close the alerts of deleted nodes, and forget their display state.
 ///
 /// # Why its own task rather than a step of the config-refresh loop
@@ -63,16 +75,51 @@ const STARTUP_WINDOW: Duration = Duration::from_secs(120);
 pub(crate) async fn run_deleted_node_watch(alerts: Arc<AlertManager>, sink: Arc<dyn AlertSink>) {
     let started = Instant::now();
     loop {
-        let tick = match started.elapsed() < STARTUP_WINDOW {
-            true => STARTUP_TICK,
-            false => TICK,
-        };
-        tokio::time::sleep(tick).await;
+        tokio::time::sleep(tick_at(started.elapsed())).await;
         // Resolutions are dispatched one at a time and in order, the same as every other alert
         // source: `Dispatcher` serialises per channel anyway, so concurrency here would only move
         // the queue.
         for action in alerts.forget_deleted_nodes() {
             sink.dispatch(action).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The startup cadence has to outlast the alert config's own 30-second refresh, because a sweep
+    /// before the first config load is a deliberate no-op — set the window shorter and the fast
+    /// ticks would all land while `node_meta` is still empty, leaving the orphan close on the
+    /// steady-state minute after all (ADR-097 Increment 5).
+    #[test]
+    fn the_fast_cadence_outlasts_the_config_refresh_it_is_waiting_for() {
+        assert!(
+            STARTUP_TICK < TICK,
+            "a startup tick no faster than the steady one buys nothing"
+        );
+        assert!(
+            STARTUP_WINDOW >= Duration::from_secs(60),
+            "the window must cover two config refreshes, not one"
+        );
+    }
+
+    /// The boundary itself, which is the only thing in this file a compiler cannot check. Asserted
+    /// at the instant before, at, and after — an off-by-one here either drops the fast cadence
+    /// entirely or never leaves it.
+    #[test]
+    fn the_cadence_switches_exactly_at_the_window() {
+        assert_eq!(tick_at(Duration::ZERO), STARTUP_TICK);
+        assert_eq!(
+            tick_at(STARTUP_WINDOW - Duration::from_millis(1)),
+            STARTUP_TICK
+        );
+        assert_eq!(
+            tick_at(STARTUP_WINDOW),
+            TICK,
+            "at the window it is over, not still running"
+        );
+        assert_eq!(tick_at(STARTUP_WINDOW + Duration::from_secs(3600)), TICK);
     }
 }
