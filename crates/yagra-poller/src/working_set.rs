@@ -433,8 +433,13 @@ impl WorkingSet {
     /// dispatch, and per dispatch is what it actually was: `assignment.rs` waits on a channel
     /// permit, so on a saturated poller it wakes once per *freed slot* and asks for one job.
     /// Measured 2026-08-31 on 15,000 silent devices: ~93 calls a second, each judging 120,000
-    /// deadlines and allocating 114,392 candidates — 3.2×10⁷ operations and ~600 MB of churn every
-    /// second, which is the whole of the 4.8% → 15.5% CPU that increment cost.
+    /// deadlines and allocating 114,380 candidates — 3.2×10⁷ operations and ~600 MB of churn every
+    /// second. That was **36.47% of a core**, and replacing it left **2.23%**, so essentially all of
+    /// it was this walk: a poller whose 256 permits are all asleep in an SNMP timeout costs almost
+    /// nothing. ⚠️ Increment 4 recorded the same arm at 15.5% and that figure does not reproduce —
+    /// re-measured the same day on the same fleet it is 36.47%, while achieved polls/s, the
+    /// per-kind occupancy and the deferred depth all agree to three figures. **CPU figures in this
+    /// module are percent of one core** (`docker stats` and the cgroup's `usage_usec` agree).
     ///
     /// The ranking is unchanged; only the way the winner is found is. [`crate::timers`] keeps one
     /// earliest-deadline heap **per interval** — inside a tier the `now` term of the ranking
