@@ -1032,7 +1032,14 @@ export function UpgradePage() {
               (ADR-045), so the text on the screen is the manual (ADR-055 R5). And it is the repair
               that actually clears this warning — telling an operator to set YAGRA_CERT_DIR would
               make the next upgrade survivable while leaving the row exactly as it is, which is how
-              a warning gets read past. */}
+              a warning gets read past.
+
+              🚨 Two repairs, cheapest first, and the order is load-bearing. An apply installs the
+              site's new composition and then recreates `poller` BY NAME — deliberately, because a
+              bare `up -d` would kill the updater running the apply. So the common case after any
+              upgrade is a current file and a stale container, which recreating one service fixes
+              and which no bundle is needed for. Naming only the bundle would send every such site
+              through a token rotation and a trip to the site for a one-line repair. */}
           {pickedUnprepared.length > 0 && (
             <>
               <p className="upgrade-note upgrade-note-warn">

@@ -50,3 +50,46 @@ test('the components card names the site that has not said an upgrade is safe th
   const core = page.locator('.upgrade-components li').first();
   await expect(core.locator('.upgrade-why-warn')).toHaveCount(0);
 });
+
+// The other half, and the one the components card cannot reach: the summary an operator reads
+// **in the dialog**, immediately above the button that does the damage.
+//
+// 🚨 Why this needs the browser. `unpreparedSites` is unit-tested in `upgradeStatus.test.ts`, but
+// the wiring from that array to a sentence — and the fact that the sentence follows the checkboxes
+// — lives in `UpgradePage.tsx`, which Vitest does not run at all (testing.md). Verified once
+// against a real deployment on 2026-08-31; this is what stops the next person re-doing that by
+// hand, and what would notice the summary being wired to `rows` instead of `selected`.
+test('the dialog names the unprepared site, and stops naming it when it is unticked', async ({
+  page,
+}) => {
+  await page.goto('/settings/upgrade');
+  await page.getByRole('button', { name: /^Bring them to/ }).click();
+
+  // Read the warning through its own class. The dialog also carries `darkPools` and the downgrade
+  // note, so a text search over the modal cannot tell which sentence it found.
+  const warn = page.locator('p.upgrade-note-warn');
+  await expect(warn).toHaveCount(1);
+  await expect(warn).toContainText(SITE);
+
+  // The repair is on the screen beside it, not behind a link: production is a closed network, so
+  // the text *is* the manual (ADR-055 R5). It is also deliberately the repair that clears the
+  // warning — an operator told to set `YAGRA_CERT_DIR` would come back to an unchanged row.
+  const fix = warn.locator('xpath=following-sibling::p[1]');
+  // The cheap repair first: recreating one service clears the common case and rotates no token.
+  await expect(fix).toContainText('yagra-poller-updater');
+  // And the fallback for a site whose composition is itself old, which does cost a new bundle.
+  await expect(fix).toContainText('re-issue');
+
+  // 🚨 The accept side, and the reason this test exists as well as the unit test: a summary
+  // computed from every row instead of the ticked ones reads exactly the same here as one that
+  // follows the checkboxes — until a row is unticked.
+  const row = page.locator('.upgrade-pick-row', { hasText: SITE });
+  await row.locator('input[type=checkbox]').uncheck();
+  await expect(warn).toHaveCount(0);
+
+  // And back. A check that only ever watches something disappear is satisfied by a warning that
+  // can never come back.
+  await row.locator('input[type=checkbox]').check();
+  await expect(warn).toHaveCount(1);
+  await expect(warn).toContainText(SITE);
+});

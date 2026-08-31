@@ -88,7 +88,7 @@
     "row": "site has not confirmed an upgrade is safe there",
     "warning": "{{count}} site has not confirmed that an upgrade is safe there: {{names}}. Its updater can hand the replacement poller an empty certificate directory, leaving it unable to reach the bus — and both ends report success, so nothing here would say it went wrong. Repairing it needs someone at the site.",
     "warning_other": "{{count}} sites have not confirmed that an upgrade is safe there: {{names}}. Their updaters can hand each replacement poller an empty certificate directory, leaving it unable to reach the bus — and both ends report success, so nothing here would say it went wrong. Repairing them needs someone at each site.",
-    "fix": "To clear this, re-issue that site's bundle at Settings ▸ Pollers, unpack it there and run: docker compose -f docker-compose.poller.yml up -d. The bundle replaces the site's .env, so its bus token changes."
+    "fix": "To clear this, recreate that site's updater from the directory holding its composition: docker compose -p yagra-poller -f docker-compose.poller.yml up -d --force-recreate yagra-poller-updater. That is usually all it takes and it changes no credentials — an upgrade installs a site's new composition but deliberately leaves the container running the old one, so a site can hold a current file and a stale updater. If the warning stays, that site's composition itself predates the fix: re-issue its bundle at Settings ▸ Pollers, unpack it there and run docker compose -f docker-compose.poller.yml up -d. That bundle replaces the site's .env, so its bus token changes."
   },
   "rollbackList": {
     "show": "Show {{count}} earlier releases",

@@ -471,10 +471,15 @@ pub struct ComponentRow {
     /// upgrade would not move on its own — this deployment's core, a poller sharing its compose
     /// project, one that is offline, and one with no site updater at all.
     ///
-    /// Clearing it takes replacing that site's composition: re-issue its bundle from
-    /// Settings ▸ Pollers, unpack it at the site, and bring it up. Setting `YAGRA_CERT_DIR` to an
-    /// absolute path there makes the next upgrade survivable but leaves the site on the old
-    /// updater, so this stays `true` — deliberately, because it is still true.
+    /// Clearing it takes recreating the container that answers, which is not the same as
+    /// replacing the file it was created from. An apply installs the site's new composition and
+    /// then recreates `poller` **by name** — deliberately, because a bare `up -d` would destroy
+    /// the updater running the apply — so a site can hold a current composition and a stale
+    /// updater, and this stays `true` until that service is recreated. The cheap repair is
+    /// therefore `up -d --force-recreate yagra-poller-updater` at the site; re-issuing the
+    /// bundle is for a site whose composition is itself older than the fix. Setting
+    /// `YAGRA_CERT_DIR` to an absolute path makes the next upgrade survivable and clears nothing
+    /// here — deliberately, because the site is still on the old updater.
     pub needs_site_prep: bool,
     /// Its site updater's last word, or `null` when it has none or has never been asked.
     pub progress: Option<PollerUpgradeProgress>,
