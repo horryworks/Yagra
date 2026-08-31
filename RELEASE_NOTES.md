@@ -10,7 +10,39 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **This release does not stand behind the in-place upgrade path — install fresh instead.** The
+  upgrade mechanism is still there and still works; what is withdrawn for this version is the
+  guarantee. An existing deployment that upgrades in place can be left in states this release does
+  not repair on its own, and the one below is already known: a site that upgrades keeps the site
+  updater it had, so the new "has not confirmed an upgrade is safe there" warning does not clear by
+  upgrading.
+  🚨 **A fresh install of the central deployment does not reinstall a remote site.** Sites are
+  separate deployments. Re-issue every site's kit from Settings ▸ Pollers, unpack it at the site and
+  bring it up. Skipping that leaves each site on its old composition — on the old site updater, and
+  still named by the warning.
+  **What a fresh install costs, exactly.** The stores start empty, so collected metrics, alert
+  history and the audit log do not travel. Most configuration does: export a bundle from the old
+  deployment at Settings ▸ Configuration bundle and import it into the new one. What a bundle
+  deliberately never carries has to be re-created by hand on the target — user accounts and API
+  tokens, monitoring credentials, notification channels and the routing rules that point at them,
+  LDAP / OIDC / LLM provider settings, and dashboard layouts.
+  This is a decision about this release, not a change of policy: N→N+1 upgrades that preserve
+  config, alert history and metrics remain the design goal (ADR-017). The guarantee is meant to
+  come back once the upgrade path has been exercised end to end against a published release.
 ### New Features
+- **A remote site can now be given its kit before it exists.** **Settings ▸ Pollers ▸ Register
+  poller** gains **Issue token & download kit**: give the site an id and a pool, and the archive
+  comes down — the composition, the certificate to pin and a ready `.env`. Unpack it at the site and
+  bring it up; there is nothing to edit.
+  🚨 **This is what makes the documented order possible.** `docker-compose.poller.yml` travels only
+  inside that archive; the archive used to be reachable only from a row in the poller table; and a
+  row appears only once that poller has connected — which needs the composition. A *first* remote
+  site could not be stood up from the WebUI at all. The API had always been able to register a site
+  before it existed; what was missing was the way to reach it.
+  The manual fields below it stay, for a site whose composition is already in place.
+
 
 - **Settings ▸ Upgrade now names the remote sites that an upgrade could take off the air.** A site
   replaces its own poller by running `docker compose` beside it, and a site updater from before
@@ -22,12 +54,16 @@
   A site updater now declares in its own heartbeat that an apply is safe there; the poller relays
   that as a new `site-prepared` capability, and `GET /api/v1/system/upgrade` carries it per row as
   `components[].needs_site_prep`. The upgrade dialog names every such site that is still ticked,
-  and says how to clear it: re-issue that site's bundle at Settings ▸ Pollers, unpack it there and
-  bring it up.
-  ⚠️ **Every existing remote site reports this until its composition is replaced**, which is
-  correct — the fix travels in `docker-compose.poller.yml`, so a site keeps the old updater until
-  it takes a new bundle or a successful upgrade. Sites are still ticked by default: leaving them
-  behind silently is the failure this whole mechanism exists to remove.
+  and says how to clear it, cheapest first: recreate that site's updater with
+  `docker compose -p yagra-poller -f docker-compose.poller.yml up -d --force-recreate
+  yagra-poller-updater`, which rotates no credentials. Only a site whose composition is itself
+  older than the fix needs a re-issued bundle.
+  🚨 **Upgrading does not clear this on its own.** An apply installs the site's new composition and
+  then recreates `poller` **by name** — deliberately, because a bare `up -d` would destroy the
+  updater running the apply — so the site is left holding a current file and a container built
+  from the old one. Expect an existing site to keep reporting this after it upgrades, until the
+  one-line repair above is run there. Sites are still ticked by default: leaving them behind
+  silently is the failure this whole mechanism exists to remove.
   ⚠️ Setting `YAGRA_CERT_DIR` to an absolute path in a site's `.env` makes the next upgrade
   survivable but leaves the old updater in place, so the warning stays. That is deliberate.
 
@@ -45,6 +81,12 @@
   single-flight guard. The new one is a job that was never dispatched at all.
 
 ### Improvements
+- **The `pollers.desired_pool` column is dropped.** It recorded where an operator wanted a poller to
+  be, as opposed to where it said it was — a gap that existed only while moving a poller meant
+  editing the site's `.env` and restarting it. v0.3.4 closed that gap in the same release that
+  opened it, so no published version has ever read or written the column and it is NULL everywhere.
+  Nothing about a rollback changes: no released core references it.
+
 
 - **Restarting core, or a poller, no longer publishes that pool's whole inventory as individual
   jobs.** Core decides per pool between handing a poller its working set and the legacy per-job

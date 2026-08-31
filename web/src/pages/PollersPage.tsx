@@ -819,15 +819,28 @@ function PollerTokenModal({
   );
 }
 
-/** Client-side helper: collect id/pool/bus URL and render the ready-to-paste config for a remote
- *  poller container. No API call — it only produces the `docker-compose.poller.yml` `.env`. */
+/** Stand up a site that has never connected (ADR-065 Inc.9).
+ *
+ *  🚨 The archive button is what makes the documented order possible at all, and the reason is a
+ *  circle rather than a convenience. `docker-compose.poller.yml` travels ONLY inside the kit
+ *  archive (decision 5); the archive was only reachable from a row in the fleet table; and a row
+ *  only appears once that poller has heartbeated — which needs the composition. Measured on a fresh
+ *  deployment (2026-09-01): a first site could not be brought up from this screen at all. The
+ *  `POST /pollers/:id/token` endpoint has always created the row for a not-yet-seen id — its own
+ *  doc says so — so what was missing was the way to reach it.
+ *
+ *  The fields below stay: they are the manual path for a site whose composition is already there. */
 function RegisterPollerModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation('system');
+  const canSystem = useCan('manage_system');
   const [id, setId] = useState('');
   const [pool, setPool] = useState('');
   const [busUrl, setBusUrl] = useState('');
   const [caFile, setCaFile] = useState('');
   const [copied, setCopied] = useState<'env' | 'cmd' | null>(null);
+  const [issuing, setIssuing] = useState(false);
+  const [issued, setIssued] = useState(false);
+  const [issueError, setIssueError] = useState<string | null>(null);
 
   const idBad = id !== '' && !isValidPollerToken(id);
   const poolBad = pool !== '' && !isValidPollerToken(pool);
@@ -841,6 +854,23 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
     void navigator.clipboard?.writeText(text);
     setCopied(mark);
     setTimeout(() => setCopied(null), 1200);
+  };
+
+  // Only the id and the pool: the address is left to the server, which falls back to the name the
+  // operator typed when they turned remote acceptance on. Asking for it again here would be asking
+  // them to repeat themselves, which is the same reasoning `issue_poller_token` states.
+  const canIssue = isValidPollerToken(id) && isValidPollerToken(pool);
+  const issue = () => {
+    setIssuing(true);
+    setIssueError(null);
+    api
+      .issuePollerToken(id, { pool, self_upgrade: true })
+      .then(({ blob, filename }) => {
+        saveBlob(blob, filename || `yagra-poller-${id}.tar.gz`);
+        setIssued(true);
+      })
+      .catch((e) => setIssueError(errMsg(e, t('pollers.register.issueFailed'))))
+      .finally(() => setIssuing(false));
   };
 
   return (
@@ -881,6 +911,22 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
           {poolBad ? t('pollers.register.invalidToken') : t('pollers.register.fields.pool.hint')}
         </FieldHint>
       </div>
+
+      {/* The recommended path, so it sits above the manual one. `useCan` rather than `disabled`
+          (ADR-056): a viewer is not shown a button they cannot press. */}
+      {canSystem && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('pollers.register.fields.kit.label')}</label>
+          <div className="poller-copyrow">
+            <Button variant="primary" onClick={issue} disabled={!canIssue || issuing}>
+              {t('pollers.register.issue')}
+            </Button>
+          </div>
+          <FieldHint>{t('pollers.register.fields.kit.hint')}</FieldHint>
+          {issued && <p className="form-hint">{t('pollers.register.issued')}</p>}
+          {issueError && <p className="form-error">{issueError}</p>}
+        </div>
+      )}
 
       <div className="modal-field">
         <label className="modal-field-label">{t('pollers.register.fields.busUrl.label')}</label>

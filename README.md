@@ -333,6 +333,10 @@ to and does the whole thing — back up, pull, install the composition carried i
 image, recreate, verify — in a sidecar that holds the Docker socket so core never has to. Remote
 pollers can opt into the same treatment.
 
+Read the release notes for the version you are moving to before you press it. A release can
+withdraw the guarantee for itself and ask you to install fresh instead; when one does, its notes
+say so under **Breaking changes**, along with what a fresh install costs.
+
 The WebUI is HTTPS by default. Core generates a self-signed certificate on first start, so your
 browser will warn once — import a real one at **Settings ▸ TLS** and it takes effect in seconds
 without a restart.

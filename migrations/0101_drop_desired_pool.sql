@@ -1,0 +1,22 @@
+-- Drop `pollers.desired_pool` — the column of a decision that was withdrawn before it shipped.
+--
+-- ADR-107 增分 1 recorded "where the operator wants this poller to be, as opposed to where it says
+-- it is", because moving a poller then meant editing the site's `.env` and restarting it: the wish
+-- and the fact could disagree for as long as it took someone to go and do that. Increment 2 removed
+-- the gap — a poller now changes pool from the WebUI with no restart anywhere — and with it the
+-- only reason to store a destination separately from the report. The column was left behind.
+--
+-- Both increments landed inside v0.3.4 (6d18197 and 897729e, same release), so **no published
+-- binary has ever read or written this column**. It is NULL on every deployment that has only ever
+-- run a release. A lab box that ran the intermediate commit may hold a value; it means nothing now.
+--
+-- 🚨 0100's prose still describes the mechanism this column served — the one-directional clear in
+-- `SEEN_UPSERT_SQL`, the "移動待ち" badge that disappears by itself — in the present tense. That
+-- comment cannot be corrected: an applied migration is checksummed, and editing one byte stops
+-- every existing deployment from starting. This file is where the correction lives instead.
+--
+-- reversible: nothing reads this column, so rolling the binary back to any released version leaves
+-- a working deployment — the oldest bootable core does not reference it either. Re-adding it is one
+-- `ALTER TABLE ... ADD COLUMN`, and it would come back holding exactly what it holds now: nothing.
+-- No `schema_compat` floor is owed (0078's rule): the oldest bootable core does not move.
+ALTER TABLE pollers DROP COLUMN IF EXISTS desired_pool;

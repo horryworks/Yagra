@@ -124,11 +124,18 @@
     "register": {
       "title": "Register a poller",
       "done": "Done",
-      "intro": "Run a poller container at the remote site; it connects outbound to the central NATS bus. Fill in its identity below, then drop the generated <env>.env</env> next to <file>docker-compose.poller.yml</file> and bring it up.",
+      "intro": "Run a poller container at the remote site; it connects outbound to the central NATS bus. Give it an id and a pool, then download its kit — one archive holding the composition, the certificate and an <env>.env</env> that needs no editing. The fields further down are the manual alternative, for a site that already has <file>docker-compose.poller.yml</file>.",
+      "issue": "Issue token & download kit",
+      "issued": "Downloaded. The token exists only in that archive — Yagra kept a digest of it.",
+      "issueFailed": "failed to issue the token",
       "invalidToken": "Use letters, digits, dash or underscore only.",
       "copy": "Copy",
       "snippetEmpty": "Enter a valid ID, pool and bus URL to generate the snippet.",
       "fields": {
+        "kit": {
+          "label": "Site kit",
+          "hint": "The composition, the certificate to pin and a ready .env. Unpack it at the site and bring it up — there is nothing to edit. This also registers the poller, so it may be done before the site exists."
+        },
         "id": {
           "label": "Poller ID",
           "hint": "Stable, unique per poller."
