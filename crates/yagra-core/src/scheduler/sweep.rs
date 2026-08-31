@@ -142,18 +142,19 @@ pub(crate) async fn run_scheduler(
     // A read failure degrades to "wait for nobody" = the behaviour that predates this increment.
     let started = Instant::now();
     let registered = coordinator.registered_pools().await;
-    let mut last_live: HashMap<String, Instant> = HashMap::new();
     loop {
         // Read the config generation before any work so a change racing the rebuild is caught next
         // round (the cache is tagged with the pre-work value).
         let generation = config_gen::current();
         let now = Instant::now();
         let live = coordinator.live_pools(now);
-        // Before the fast path, which `continue`s: a cached round is still an observation that
-        // these pools had a poller, and the poller-restart arm of `pool_mode` reads it.
-        for pool in &live {
-            last_live.insert(pool.clone(), now);
-        }
+        // 🚨 Read from the registry, never sampled here. A sweep observes liveness once a round and
+        // rounds are one poll interval apart (60s by default), so its own observations are up to
+        // twice as stale as the 30s window `pool_mode` compares them against — measured on hardware
+        // as a graceful poller restart that still published the pool's whole inventory, because the
+        // last sample was 36 seconds old. The coordinator knows to the second, including the
+        // goodbye beat that removes the last poller.
+        let last_live = coordinator.pools_last_live(now);
 
         // Fast path: config unchanged since the cache was built AND every cached pool still has a
         // live poller (working-set). Reuse the cached desired sets — no DB scan, no per-node spec
@@ -290,9 +291,7 @@ pub(crate) async fn run_scheduler(
                 ));
 
                 for (pool, members) in groups {
-                    let since_last_live = last_live
-                        .get(&pool)
-                        .map(|&t| now.saturating_duration_since(t));
+                    let since_last_live = last_live.get(&pool).copied();
                     let since_start = now.saturating_duration_since(started);
                     match scheduler::pool_mode(
                         &pool,
@@ -462,10 +461,6 @@ pub(crate) async fn run_scheduler(
         if waiting_pools > 0 {
             metrics::counter!("yagra_sweep_pools_waiting_total").increment(waiting_pools);
         }
-        // Keeps `last_live` bounded. A pool seen live is refreshed to `now` every round, so this
-        // only drops pools whose grace has already run out — and it cannot reintroduce a wait: an
-        // entry that old implies the process is at least as old, so the startup arm is false too.
-        last_live.retain(|_, t| now.saturating_duration_since(*t) < scheduler::POOL_GRACE);
         // Wake early if a poller announced it is leaving: the ring changed, so the desired
         // set must be re-pushed now rather than after a full poll interval.
         tokio::select! {

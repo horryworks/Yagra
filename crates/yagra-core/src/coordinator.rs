@@ -150,6 +150,19 @@ struct CoordState {
     /// is all the diff needs ("did this node's spec set change?"); the decrypted specs live only
     /// transiently inside [`Coordinator::reconcile_pool`] while a message is built, then drop.
     published: HashMap<String, HashMap<NodeId, u64>>,
+    /// Per pool, the last instant any of its pollers was heard from — **including the goodbye beat
+    /// that removes the last one** (ADR-009 Increment 1).
+    ///
+    /// The scheduler cannot work this out for itself. It samples `live_pools` once per round, and a
+    /// round is one poll interval apart (60s by default) while the grace it has to compare against
+    /// is one offline window (30s) — so a poller that left five seconds ago and one that left fifty
+    /// are indistinguishable from the sweep's own observations. Measured on hardware: a graceful
+    /// poller restart still published the pool's whole inventory, because the last observation was
+    /// 36 seconds stale. Only this registry knows the answer to the second.
+    ///
+    /// Pruned to [`OFFLINE_AFTER`] on every beat, which is the same window the reader compares
+    /// against — both come from `yagra_bus::OFFLINE_AFTER_SECS`, so they cannot drift apart.
+    pool_last_live: HashMap<String, Instant>,
 }
 
 /// A point-in-time view of one poller for the Pollers API (Step 6).
@@ -278,8 +291,18 @@ impl Coordinator {
         // all, so the nodes go unpolled for the whole restart instead of moving to a live poller.
         if hb.leaving {
             let mut st = self.state.lock().expect("coordinator state poisoned");
+            // The pool core believes this poller serves, not the one the beat claims (ADR-107);
+            // falling back to the beat only when the poller was never known here.
+            let pool = st
+                .pollers
+                .get(&hb.poller_id)
+                .map_or_else(|| hb.pool.clone(), |e| e.pool.clone());
             st.pollers.remove(&hb.poller_id);
             st.published.remove(&hb.poller_id);
+            // 🚨 Recorded *because* the entry is being removed. This is the one moment the registry
+            // stops being able to answer "when was this pool last alive", and the scheduler's
+            // decision to hold the legacy fallback back for one offline window depends on it.
+            st.pool_last_live.insert(pool, now);
             drop(st);
             tracing::info!(
                 poller = %hb.poller_id,
@@ -353,6 +376,7 @@ impl Coordinator {
             let gap_listeners = entry.listeners.clone();
             // Liveness + telemetry refresh regardless of new/known.
             entry.last_seen = now;
+            let pool_now = entry.pool.clone();
             entry.working_set_nodes = hb.working_set_nodes;
             entry.working_set_specs = hb.working_set_specs;
             entry.inflight = hb.inflight;
@@ -371,6 +395,13 @@ impl Coordinator {
             if do_pg {
                 entry.last_upserted = Some(now);
             }
+            // ADR-009 Increment 1. Refreshed by every beat and by the goodbye beat above, which is
+            // all the scheduler needs to tell "left a moment ago" from "long gone". Pruned here
+            // rather than on a timer: a beat is the only thing that writes this map, and the window
+            // is the same one the reader compares against.
+            st.pool_last_live.insert(pool_now, now);
+            st.pool_last_live
+                .retain(|_, t| now.saturating_duration_since(*t) < OFFLINE_AFTER);
             let doc = PollerLiveDoc {
                 pool: hb.pool.clone(),
                 incarnation: hb.incarnation,
@@ -571,6 +602,24 @@ impl Coordinator {
                 HashSet::new()
             }
         }
+    }
+
+    /// Per pool, how long ago core last heard from any of its pollers (ADR-009 Increment 1).
+    ///
+    /// Answers the one question [`Self::live_pools`] structurally cannot: a pool drops out of that
+    /// set the instant its last poller sends a goodbye beat, with nothing left to say whether that
+    /// was a second ago or an hour. The scheduler holds the legacy per-job fallback back for one
+    /// offline window after a departure, and this is where that window is measured from.
+    ///
+    /// 🚨 **Not liveness either.** A pool in here may have been gone for almost a full offline
+    /// window. `live_pools` remains the only answer to "is anyone there right now".
+    #[must_use]
+    pub fn pools_last_live(&self, now: Instant) -> HashMap<String, Duration> {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        st.pool_last_live
+            .iter()
+            .map(|(pool, t)| (pool.clone(), now.saturating_duration_since(*t)))
+            .collect()
     }
 
     /// Whether **every** live poller that could be running work on `pool` advertises `cap`.
@@ -1264,6 +1313,65 @@ mod tests {
         assert!(
             coord.registered_pools().await.is_empty(),
             "registration is a durable fact, not something a heartbeat can assert in memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_goodbye_beat_records_when_the_pool_stopped_being_live() {
+        // 🚨 The hardware failure this exists for. A graceful poller restart drops the entry the
+        // instant the goodbye beat lands, so `live_pools` can no longer say *when* the pool went
+        // quiet — and the scheduler, sampling once every poll interval, read a departure five
+        // seconds old as thirty-six and published the pool's whole inventory anyway (measured
+        // 2026-08-31: 187 jobs on a 32-node deployment, with core never restarting).
+        let (coord, _bus, _stats) = coordinator();
+        let now = Instant::now();
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", Uuid::nil()), now)
+            .await;
+        assert!(coord.live_pools(now).contains("tokyo"));
+
+        // Twenty seconds later — two thirds of the way through the grace, and two missed beats —
+        // it says goodbye. The gap is deliberate: with the goodbye arriving at the same instant as
+        // an ordinary beat this test passes whether or not the departure is recorded at all, which
+        // is exactly how it first went green over nothing.
+        let bye_at = now + Duration::from_secs(20);
+        let mut bye = heartbeat("edge-1", "tokyo", Uuid::nil());
+        bye.leaving = true;
+        coord.observe_heartbeat(bye, bye_at).await;
+
+        // Gone from the live set, but the moment it left is on record — to the second, which is the
+        // whole difference between this and anything the sweep could sample for itself.
+        assert!(!coord.live_pools(bye_at).contains("tokyo"));
+        assert_eq!(
+            coord.pools_last_live(bye_at).get("tokyo").copied(),
+            Some(Duration::ZERO),
+            "the goodbye is when the pool stopped being live, not the last ordinary beat before it"
+        );
+        assert_eq!(
+            coord
+                .pools_last_live(bye_at + Duration::from_secs(5))
+                .get("tokyo")
+                .copied(),
+            Some(Duration::from_secs(5))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_poller_that_died_without_saying_so_is_already_past_the_grace() {
+        // The other half, and the reason this window can safely be the same one twice. A poller
+        // killed outright sends no goodbye, so its pool stays live until `OFFLINE_AFTER` has passed
+        // — by which point `pools_last_live` already reports at least that long, and the scheduler
+        // falls straight through to the legacy fallback. No pool ever waits two windows.
+        let (coord, _bus, _stats) = coordinator();
+        let now = Instant::now();
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", Uuid::nil()), now)
+            .await;
+        let later = now + OFFLINE_AFTER + Duration::from_secs(1);
+        assert!(!coord.live_pools(later).contains("tokyo"));
+        assert!(
+            coord.pools_last_live(later).get("tokyo").copied() >= Some(OFFLINE_AFTER),
+            "a silent death must not buy a second grace window on top of the offline window"
         );
     }
 
