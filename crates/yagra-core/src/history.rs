@@ -252,8 +252,9 @@ fn history_page_sql() -> String {
     )
 }
 
-/// The statement behind [`AlertHistoryStore::open_alerts`]: the newest transition per check, kept
-/// only when it is a fire.
+/// The statement behind [`AlertHistoryStore::open_alerts`] and
+/// [`AlertHistoryStore::open_alerts_of_deleted_nodes`]: the newest transition per check, kept only
+/// when it is a fire, split by whether its subject still exists.
 ///
 /// Three things about it are load-bearing:
 ///
@@ -264,18 +265,41 @@ fn history_page_sql() -> String {
 ///   favour of the clear, so an ambiguous pair fails *closed*: the alert is not restored, and the
 ///   next poll re-fires it if it is genuinely still broken. The other order would resurrect a
 ///   closed incident.
-/// - **The `nodes` sub-select** drops a row about a node that no longer exists (ADR-097 decision 4).
-///   Nothing polls a deleted node, so nothing could ever resolve its restored alert — it would be
-///   immortal. A non-node subject (a poller pool) has no `node` and is kept.
-fn open_alerts_sql() -> String {
+/// - **`node_present` selects which side of the `nodes` sub-select the caller wants**, and the two
+///   sides are exhaustive: every open row is in exactly one. That is the property the restore
+///   depends on — a row in neither would be one nothing can ever close.
+///
+/// # Why one function with a flag rather than two statements
+///
+/// 🚨 The orphan predicate must name `subject_kind = 'node'` explicitly, and a second spelling is
+/// exactly where that gets forgotten. A **pool** subject stores a *derived* UUID in `node`
+/// (ADR-009 Increment 2), so `node NOT IN (SELECT id FROM nodes)` matches every one of them —
+/// filter on the kind and a pool alert would be swept up as an orphan and closed, every restart.
+///
+/// # The `nodes` sub-select is no longer an exclusion (ADR-097 Increment 5)
+///
+/// Decision 4 dropped the deleted-node rows outright, and its stated reason was that nothing polls
+/// a deleted node, so nothing could ever resolve its restored alert — it would be immortal.
+/// **Increment 4 built exactly that path** ([`crate::alerts::AlertManager::forget_deleted_nodes`]),
+/// which made the reason false and left the exclusion as the only thing keeping those rows open
+/// forever: the restore dropped them, so the sweep — which reads memory — never saw them. Measured
+/// 2026-08-31, 43,227 rows left open by deleting 15,000 nodes while core was stopped. So the rows
+/// now come back too, through a separate call with its own budget.
+fn open_alerts_sql(node_present: bool) -> String {
+    // The two predicates are complements over the open rows. A non-node subject has no inventory
+    // row that could be missing, so it belongs on the `present` side — which is also the side that
+    // seeds the fleet, and a pool subject contributes nothing there either way.
+    let subject = match node_present {
+        true => "(subject_kind <> 'node' OR node IN (SELECT id FROM nodes))",
+        false => "(subject_kind = 'node' AND node NOT IN (SELECT id FROM nodes))",
+    };
     format!(
         "SELECT * FROM ( \
            SELECT DISTINCT ON (check_id) {HISTORY_COLUMNS} \
            FROM alert_history \
            ORDER BY check_id, at_unix_ms DESC, resolved DESC, id DESC \
          ) latest \
-         WHERE NOT resolved \
-           AND (subject_kind <> 'node' OR node IN (SELECT id FROM nodes)) \
+         WHERE NOT resolved AND {subject} \
          ORDER BY at_unix_ms DESC LIMIT $1"
     )
 }
@@ -529,8 +553,9 @@ impl AlertHistoryStore {
         .await
     }
 
-    /// Every alert that was **open when the previous process stopped** — the newest transition per
-    /// check, kept only where that transition is a fire (see [`open_alerts_sql`]).
+    /// Every alert that was **open when the previous process stopped and is still about something
+    /// the inventory holds** — the newest transition per check, kept only where that transition is
+    /// a fire (see [`open_alerts_sql`]).
     ///
     /// This is what `alerts::restore` reads at startup (ADR-097 decision 2). Before it existed, the
     /// engine began every process believing nothing was wrong, so a still-broken device re-fired
@@ -539,11 +564,45 @@ impl AlertHistoryStore {
     /// device that recovered *during* the restart never resolved at all, leaving its incident open
     /// in the external tool forever.
     ///
+    /// The rows this one leaves behind are [`Self::open_alerts_of_deleted_nodes`]'s, and they go to
+    /// a different entry point on the engine — see that method for why the split is not cosmetic.
+    ///
     /// ⚠️ `limit` is a backstop, not a policy: the answer is bounded by the number of checks, not by
     /// the size of the log. A deployment that hits it has more open alerts than a human could act on
     /// and wants to know, so the caller warns rather than silently restoring a prefix.
     pub async fn open_alerts(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
-        let rows = sqlx::query(&open_alerts_sql())
+        self.open_alerts_where(limit, true).await
+    }
+
+    /// The other half: open alerts about a node the inventory **no longer holds** (ADR-097
+    /// Increment 5).
+    ///
+    /// Deleting a node produces no poll result, so nothing on the poll path can ever resolve its
+    /// alert; Increment 4's sweep is what closes it, and the sweep reads the engine's in-memory
+    /// `active` set. That works while core is running and fails completely when the delete happens
+    /// while core is **stopped**: decision 4 had the restore drop these rows, so by the time the
+    /// sweep ran there was nothing in `active` to find. Measured 2026-08-31 — 15,000 nodes deleted
+    /// by hand against a stopped core left **43,227** rows open, permanently, with the incidents
+    /// they had opened in PagerDuty/JSM still open too.
+    ///
+    /// 🚨 **Its own budget, not a share of `open_alerts`'s.** One query for both would let a mass
+    /// deletion push genuinely open alerts out of the restore — the rows are taken newest-first, and
+    /// a load test's residue is the newest thing in the table. A deployment with more orphans than
+    /// `limit` closes them across successive restarts instead of starving the live fleet once.
+    pub async fn open_alerts_of_deleted_nodes(
+        &self,
+        limit: i64,
+    ) -> anyhow::Result<Vec<AlertHistoryRow>> {
+        self.open_alerts_where(limit, false).await
+    }
+
+    /// One reader for both sides, so the projection and the row interpretation cannot diverge.
+    async fn open_alerts_where(
+        &self,
+        limit: i64,
+        node_present: bool,
+    ) -> anyhow::Result<Vec<AlertHistoryRow>> {
+        let rows = sqlx::query(&open_alerts_sql(node_present))
             .bind(limit)
             .fetch_all(&self.pool)
             .await?;
@@ -985,7 +1044,11 @@ mod tests {
     /// refusing to start. Pin both statements to the shared list instead.
     #[test]
     fn both_statements_project_the_columns_the_reader_names() {
-        for sql in [history_page_sql(), open_alerts_sql()] {
+        for sql in [
+            history_page_sql(),
+            open_alerts_sql(true),
+            open_alerts_sql(false),
+        ] {
             assert!(
                 sql.contains(HISTORY_COLUMNS),
                 "a statement spells its own column list: {sql}"
@@ -1010,16 +1073,50 @@ mod tests {
     /// you shipped.
     #[test]
     fn the_open_query_breaks_ties_towards_the_clear() {
-        let sql = open_alerts_sql();
+        for sql in [open_alerts_sql(true), open_alerts_sql(false)] {
+            assert!(
+                sql.contains("ORDER BY check_id, at_unix_ms DESC, resolved DESC"),
+                "a fire and a clear sharing a millisecond must resolve in favour of the clear: {sql}"
+            );
+            assert!(sql.contains("WHERE NOT resolved"));
+        }
+    }
+
+    /// 🚨 The orphan side must name the subject kind, and nothing but this test says so.
+    ///
+    /// A **pool** subject stores a derived UUID in `node` (ADR-009 Increment 2), so it is in no
+    /// deployment's `nodes` table and `node NOT IN (SELECT id FROM nodes)` matches every one of
+    /// them. Drop the `subject_kind` clause and every pool alert is read back as an orphan and
+    /// closed by the deleted-node sweep, on every restart, with no error anywhere.
+    #[test]
+    fn only_node_subjects_can_be_orphans() {
+        let orphans = open_alerts_sql(false);
         assert!(
-            sql.contains("ORDER BY check_id, at_unix_ms DESC, resolved DESC"),
-            "a fire and a clear sharing a millisecond must resolve in favour of the clear: {sql}"
+            orphans.contains("subject_kind = 'node' AND node NOT IN (SELECT id FROM nodes)"),
+            "the orphan side must be narrowed to node subjects: {orphans}"
         );
-        assert!(sql.contains("WHERE NOT resolved"));
+    }
+
+    /// The two sides are complements: every open row is in exactly one, so no row is left with
+    /// nothing that could ever close it — which is the whole of ADR-097 Increment 5.
+    ///
+    /// Asserted on the text because there is no database here. The `NOT` is what makes them
+    /// disjoint and the `subject_kind` split is what makes them exhaustive, so both spellings are
+    /// pinned rather than merely "they differ".
+    #[test]
+    fn the_two_open_queries_partition_the_open_rows() {
+        let present = open_alerts_sql(true);
+        let orphans = open_alerts_sql(false);
+        assert_ne!(present, orphans, "the flag must change the statement");
         assert!(
-            sql.contains("node IN (SELECT id FROM nodes)"),
-            "a deleted node's alert would have nothing left that could resolve it"
+            present.contains("subject_kind <> 'node' OR node IN (SELECT id FROM nodes)"),
+            "the present side keeps non-node subjects and live nodes: {present}"
         );
+        // Belt and braces on the needle above: `node IN` is a substring of nothing on the orphan
+        // side only because of the ` NOT `, so assert the negation explicitly rather than trusting
+        // substring luck.
+        assert!(!present.contains("NOT IN (SELECT id FROM nodes)"));
+        assert!(!orphans.contains("subject_kind <> 'node'"));
     }
 
     #[test]

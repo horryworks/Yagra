@@ -106,22 +106,7 @@ impl AlertManager {
         if alerts.is_empty() {
             return 0;
         }
-        // One lock at a time, in the order `process_check` takes them — this runs before the ingest
-        // starts, but a restore that could deadlock against a poll result would be a trap laid for
-        // whoever moves the call.
-        {
-            let mut states = self.states.lock().expect("states mutex poisoned");
-            for a in &alerts {
-                states.entry(a.check).or_insert_with(|| {
-                    CheckState::restored(
-                        a.state,
-                        DEFAULT_LIVENESS_DWELL,
-                        FLAP_WINDOW_MS,
-                        FLAP_THRESHOLD,
-                    )
-                });
-            }
-        }
+        self.seed_states(&alerts);
         // 🚨 `live` and `down` move together or not at all — `process_check` calls `live` the
         // down-set's "only mutation site", and seeding one without the other would break that in a
         // way nothing downstream could detect. So the nodes that actually landed in `live` are
@@ -152,6 +137,73 @@ impl AlertManager {
         // is "is this node down *now*", and a node can be in it because of an observation this
         // restore did not make.
         let down = self.down_set();
+        self.seed_active(alerts, &down)
+    }
+
+    /// Seed the alerts that were open about nodes the inventory **no longer holds**, so that
+    /// [`Self::forget_deleted_nodes`] can close them (ADR-097 Increment 5).
+    ///
+    /// Decision 4 used to drop these rows on the way in, on the reasoning that nothing polls a
+    /// deleted node so nothing could ever resolve the restored alert. Increment 4 built that path,
+    /// which made the reasoning false and turned the exclusion into the only thing keeping the rows
+    /// open: the sweep reads `active`, and the restore had made sure they were never in it.
+    /// Measured 2026-08-31 — 43,227 rows left permanently open by deleting 15,000 nodes against a
+    /// stopped core, with their external incidents still open too.
+    ///
+    /// # 🚨 Why this does not seed `live` / `down`, and [`Self::restore`] does
+    ///
+    /// **`down` is the dependency-suppression set.** A node in it suppresses the alerts of
+    /// everything topology says sits behind it, and a *deleted* node has no business suppressing
+    /// anything — least of all for the minute before the sweep notices. `live` moves with `down` or
+    /// not at all ([`Self::restore`] says why), so neither is seeded.
+    ///
+    /// ⚠️ **This does not keep the deleted node out of the fleet's per-state breakdown**, and it
+    /// was written believing it would. [`Self::node_states`] rolls up `live` **unioned with every
+    /// active alert's node**, so an alert restored here still contributes a node the inventory does
+    /// not have, and `api::fleet::state_tally` — whose total comes from PostgreSQL — can therefore
+    /// report a breakdown that sums to more than its own total. It lasts until the first sweep
+    /// after the config loads (bounded by [`crate::alerts::deleted`]'s startup cadence, seconds
+    /// rather than the steady-state minute) and then corrects itself. The alternative was leaving
+    /// the incidents open forever, so the transient is the price and it is written down rather than
+    /// smoothed over.
+    ///
+    /// `root_cause` is not re-derived either, for the same reason as `down` and one more:
+    /// attribution says "this alert is part of that node's outage", and the node is about to stop
+    /// existing in the engine entirely.
+    ///
+    /// ⚠️ **Nothing here closes anything.** Like [`Self::restore`] it returns no [`NotifyAction`]
+    /// and broadcasts nothing; it makes the rows *visible to the sweep*, which is what closes them,
+    /// with the notification the incident's external tool is waiting for.
+    pub fn restore_deleted(&self, alerts: Vec<Alert>) -> usize {
+        if alerts.is_empty() {
+            return 0;
+        }
+        self.seed_states(&alerts);
+        self.seed_active(alerts, &BTreeSet::new())
+    }
+
+    /// Seed each alert's dwell/flap bookkeeping. One lock, taken in the order `process_check` takes
+    /// it — this runs before the ingest starts, but a restore that could deadlock against a poll
+    /// result would be a trap laid for whoever moves the call.
+    fn seed_states(&self, alerts: &[Alert]) {
+        let mut states = self.states.lock().expect("states mutex poisoned");
+        for a in alerts {
+            states.entry(a.check).or_insert_with(|| {
+                CheckState::restored(
+                    a.state,
+                    DEFAULT_LIVENESS_DWELL,
+                    FLAP_WINDOW_MS,
+                    FLAP_THRESHOLD,
+                )
+            });
+        }
+    }
+
+    /// Put the alerts into the active set, attributing each to `down` where ADR-087 says it belongs.
+    /// Returns the size of the active set afterwards.
+    ///
+    /// `down` is empty for a deleted node's alerts — see [`Self::restore_deleted`].
+    fn seed_active(&self, alerts: Vec<Alert>, down: &BTreeSet<NodeId>) -> usize {
         let mut active = self.active.lock().expect("alerts mutex poisoned");
         for mut a in alerts {
             // The attribution is not stored (`alert_history` has no `root_cause` column), so it is
@@ -4274,5 +4326,101 @@ mod tests {
             1,
             "the check must be able to fire again"
         );
+    }
+
+    // ---- ADR-097 Increment 5: a node deleted while core was stopped is closed too ----
+
+    /// 🚨 **The accepting side, written first for the same reason as Increment 4's.** A
+    /// `restore_deleted` that seeded the fleet exactly like `restore` would satisfy the test below
+    /// it, and the damage would be dependency suppression: a node that no longer exists sitting in
+    /// the down set, silencing whatever topology says is behind it, until the first sweep.
+    #[test]
+    fn restore_seeds_the_fleet_but_restore_deleted_does_not() {
+        let live_node = NodeId::new();
+        let gone_node = NodeId::new();
+
+        let mgr = AlertManager::new();
+        mgr.restore(vec![open_alert(
+            live_node,
+            LIVENESS,
+            NodeState::Unreachable,
+        )]);
+        assert_eq!(
+            mgr.node_state(live_node),
+            Some(NodeState::Unreachable),
+            "a node that still exists reads correctly from the first second (decision 2)"
+        );
+        assert!(
+            mgr.down_set().contains(&live_node),
+            "and suppression knows about it"
+        );
+
+        let mgr = AlertManager::new();
+        mgr.restore_deleted(vec![open_alert(
+            gone_node,
+            LIVENESS,
+            NodeState::Unreachable,
+        )]);
+        assert_eq!(
+            mgr.active_alerts().len(),
+            1,
+            "the alert itself is restored — that is what lets the sweep close it"
+        );
+        assert!(
+            mgr.down_set().is_empty(),
+            "but a deleted node must never suppress anything"
+        );
+        // ⚠️ Asserted positively because it surprises: `node_states` unions `live` with every
+        // active alert's node, so the deleted node *is* in the rolled-up display state despite not
+        // being seeded into `live`. That is the transient `restore_deleted`'s doc names — the sweep
+        // removes it — and pinning it here stops a future reader "fixing" the seeding and believing
+        // they fixed the tally.
+        assert_eq!(mgr.node_state(gone_node), Some(NodeState::Unreachable));
+    }
+
+    /// The defect itself, end to end within the engine: an alert read back from the log about a
+    /// node the inventory no longer holds is closed **as a resolution**, which is what shuts the
+    /// incident in the external tool.
+    ///
+    /// Before Increment 5 the restore dropped this row, so `active` never held it, so the sweep —
+    /// which reads `active` — could not see it. Measured on hardware: 43,227 rows left open.
+    #[test]
+    fn an_alert_restored_about_a_node_deleted_while_core_was_down_is_closed() {
+        let kept = NodeId::new();
+        let gone = NodeId::new();
+        let mgr = AlertManager::new();
+        // The config the restart loads: the deleted node is simply not in it.
+        mgr.set_config(cfg(Vec::new(), meta_for(kept)));
+        mgr.restore_deleted(vec![open_alert(gone, LIVENESS, NodeState::Unreachable)]);
+
+        let actions = mgr.forget_deleted_nodes();
+        assert_eq!(actions.len(), 1, "the orphan, and only it");
+        let NotifyAction::Resolve(closed) = &actions[0] else {
+            panic!("it must close as a resolution, not merely vanish from memory");
+        };
+        assert_eq!(closed.node(), Some(gone));
+        assert!(mgr.active_alerts().is_empty());
+        assert!(
+            mgr.forget_deleted_nodes().is_empty(),
+            "and it closes once, not on every tick"
+        );
+    }
+
+    /// 🚨 The other accepting side: restoring an alert about a node that **is** in the inventory
+    /// must not make it closeable. Without this, "orphan" could be spelled backwards — or dropped
+    /// entirely — and the whole live fleet would be resolved on the first tick after every restart.
+    #[test]
+    fn a_restored_alert_about_a_live_node_is_not_closed() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]);
+
+        assert!(
+            mgr.forget_deleted_nodes().is_empty(),
+            "the node is in the inventory; its outage is still real"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+        assert_eq!(mgr.node_state(node), Some(NodeState::Unreachable));
     }
 }

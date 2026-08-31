@@ -311,6 +311,30 @@
 
 ### Bug Fixes
 
+- **An alert about a node deleted while core was stopped stayed open forever, in Yagra and in
+  PagerDuty/JSM.** Deleting a node produces no poll result, so nothing on the poll path can resolve
+  its alert; a periodic sweep closes it instead, and that sweep reads the alert engine's in-memory
+  set. Which works only if the alert is *in* that set — and the startup restore deliberately dropped
+  every stored alert whose node no longer existed. So a deletion that happened while core was down
+  (an upgrade, a maintenance stop, a load-test teardown) left its alerts unresolvable: the restore
+  discarded them, the sweep never saw them, and their rows stayed `resolved = false` for the life of
+  the deployment. Measured on the lab core: 15,000 nodes deleted against a stopped core left
+  **43,227** rows open. The incidents those alerts had opened in an external tool stayed open too,
+  until a human closed each one by hand.
+  The exclusion was correct when it was written — nothing could then resolve such an alert — and
+  stopped being correct when the deleted-node sweep shipped in v0.3.4. Those alerts are now read
+  back at startup as well, into the alert set only, so the existing sweep closes each one **as a
+  resolution**: the History row is written and the resolve reaches the notification channels, which
+  is what shuts the external incident.
+  ⚠️ **The first start after upgrading can emit a burst of resolutions** — one per alert about a
+  node deleted while core was down that is still inside the alert-history retention window. They are
+  resolutions, so nothing pages; a deployment with no notification channels sends none at all.
+  ⚠️ **The fleet's per-state breakdown can over-report for a few seconds after such a start.** A
+  restored alert contributes its node to the rolled-up state even though the inventory no longer has
+  it, so `GET /api/v1/fleet/summary` can briefly sum to more than its own total. The sweep now runs
+  every 5 seconds for the first 2 minutes of a process (60 seconds thereafter, unchanged) so the
+  window closes promptly.
+
 - **Notification channels, OIDC single sign-on and forwarding destinations each stopped working the
   moment one was configured.** All three read the envelope-encryption key generation (`key_id`) as a
   64-bit integer out of a 32-bit column. sqlx checks a column's type when the row is decoded, so the

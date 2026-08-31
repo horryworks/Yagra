@@ -33,47 +33,96 @@ use crate::history::{AlertHistoryRow, AlertHistoryStore};
 
 use super::{check_id, AlertManager, LIVENESS};
 
-/// Backstop on how many open alerts one restore will take.
+/// Backstop on how many open alerts one restore will take, **per side**.
 ///
 /// Not a policy — the answer is bounded by the number of *checks* a deployment has, not by the size
 /// of the log, and a fleet with more open alerts than this has bigger problems than a restart. It
 /// exists so that a pathological table cannot make core startup unbounded, and it warns when hit
 /// rather than silently restoring a prefix.
+///
+/// 🚨 **Per side, not shared.** The deleted-node rows (ADR-097 Increment 5) are counted separately
+/// on purpose: they are taken newest-first, a mass deletion's residue is the newest thing in the
+/// table, and one shared budget would let 43,227 orphans push the live fleet's genuinely open
+/// alerts out of the restore — which re-fires them, the exact cost this module exists to avoid.
 const RESTORE_MAX: i64 = 50_000;
 
 /// Read the open alerts back and seed the engine with them.
 ///
+/// Two reads, not one, and they go to two different entry points:
+///
+/// - **Alerts about something that still exists** seed the engine proper, including the fleet's
+///   `live`/`down` view — [`AlertManager::restore`].
+/// - **Alerts about a node the inventory no longer holds** seed the alert set only, so that the
+///   deleted-node sweep can close them properly instead of them staying open forever —
+///   [`AlertManager::restore_deleted`], where the reason for the asymmetry is written down.
+///
 /// A failed read is logged and skipped rather than fatal, and that is safe in a way it would not be
 /// for `alerts::config` (ADR-080): restoring nothing lands on exactly the behaviour that shipped
 /// before this ADR, and no path here can *resolve* anything, so a degraded read cannot close an
-/// incident. It can only cost a duplicate fire.
+/// incident. It can only cost a duplicate fire. The two reads fail independently — a failure on the
+/// orphan side leaves those rows for the next restart and does not cost the live fleet its restore.
 pub(crate) async fn restore(mgr: &AlertManager, history: &AlertHistoryStore) {
     let started = Instant::now();
-    let rows = match history.open_alerts(RESTORE_MAX).await {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "reading open alerts failed; starting with an empty engine, so anything still \
-                 broken will re-fire on its next poll"
-            );
-            return;
-        }
+    let Some(rows) = read(history.open_alerts(RESTORE_MAX).await, "open alerts") else {
+        return;
     };
-    if rows.len() as i64 >= RESTORE_MAX {
-        tracing::warn!(
-            limit = RESTORE_MAX,
-            "open-alert restore hit its cap; the oldest open alerts were not restored and will \
-             re-fire"
-        );
-    }
-    let alerts: Vec<Alert> = rows.into_iter().filter_map(alert_from_row).collect();
-    let taken = mgr.restore(alerts);
+    let taken = mgr.restore(rows.into_iter().filter_map(alert_from_row).collect());
     tracing::info!(
         restored = taken,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "restored the alerts that were open before this process started (ADR-097)"
     );
+
+    // The orphan side is deliberately *after* the fleet's own restore: it is the slower query (a
+    // `NOT IN` over the inventory) and nothing waits on it, whereas a poll result arriving before
+    // the live fleet is seeded is a duplicate incident.
+    let Some(rows) = read(
+        history.open_alerts_of_deleted_nodes(RESTORE_MAX).await,
+        "open alerts of deleted nodes",
+    ) else {
+        return;
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let orphans = rows.len();
+    mgr.restore_deleted(rows.into_iter().filter_map(alert_from_row).collect());
+    tracing::info!(
+        orphans,
+        "alerts about nodes the inventory no longer holds were read back so the deleted-node \
+         sweep can close them (ADR-097 Inc.5); they are not counted in any fleet total"
+    );
+}
+
+/// One read, with the cap warning and the degraded-read decision in one place so the two sides
+/// cannot answer them differently.
+fn read(
+    result: anyhow::Result<Vec<AlertHistoryRow>>,
+    what: &'static str,
+) -> Option<Vec<AlertHistoryRow>> {
+    match result {
+        Ok(rows) => {
+            if rows.len() as i64 >= RESTORE_MAX {
+                tracing::warn!(
+                    limit = RESTORE_MAX,
+                    what,
+                    "open-alert restore hit its cap; the oldest were not restored — a live alert \
+                     will re-fire on its next poll, a deleted node's will be closed by a later \
+                     restart"
+                );
+            }
+            Some(rows)
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                what,
+                "reading open alerts failed; starting with an empty engine, so anything still \
+                 broken will re-fire on its next poll"
+            );
+            None
+        }
+    }
 }
 
 /// One stored transition, read back as the alert the engine was holding.
@@ -192,5 +241,41 @@ mod tests {
         assert_eq!(b.value, 91.5);
         assert_eq!(b.threshold, Some(80.0));
         assert_eq!(b.direction, Direction::Above);
+    }
+
+    /// This module's own production text — read through [`crate::module_source`] rather than
+    /// `include_str!`, so the needles below cannot match the test that writes them.
+    fn production_source() -> String {
+        crate::module_source::code_no_comments("src/alerts", "restore")
+    }
+
+    /// 🚨 **Structural, because the wiring has no seam and the hole is silent.**
+    ///
+    /// [`restore`] takes a concrete `AlertHistoryStore` over PostgreSQL, so nothing here can run
+    /// it. That was measured rather than assumed: deleting the whole orphan branch from this file
+    /// left the **entire 2,826-test workspace green**, and the only symptom on a real deployment is
+    /// an alert about a deleted node that never closes — which is invisible until someone counts
+    /// rows in `alert_history`. It is the defect ADR-097 Increment 5 exists to remove, so losing
+    /// the call silently would be losing the increment silently.
+    ///
+    /// ⚠️ **What this cannot see**: whether the two reads go to the *right* entry points. Swap them
+    /// — live alerts into `restore_deleted`, orphans into `restore` — and both needles still match
+    /// while the fleet's `down` set fills with nodes that no longer exist. Only the hardware check
+    /// covers that.
+    #[test]
+    fn the_startup_restore_reads_and_seeds_both_sides() {
+        let src = production_source();
+        for needle in [
+            "history.open_alerts(",
+            "history.open_alerts_of_deleted_nodes(",
+            "mgr.restore(",
+            "mgr.restore_deleted(",
+        ] {
+            assert!(
+                src.contains(needle),
+                "the startup restore no longer calls `{needle}` — an alert about a node deleted \
+                 while core was stopped would stay open forever (ADR-097 Inc.5)"
+            );
+        }
     }
 }

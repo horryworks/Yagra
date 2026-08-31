@@ -10,7 +10,7 @@
 //! the delivery, in the shape `interface_util` and `derived` already use.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::sink::AlertSink;
 use super::AlertManager;
@@ -22,6 +22,24 @@ use super::AlertManager;
 /// twice. This matches the cadence of the two sibling watches and bounds "deleted" to "closed" at
 /// roughly 90 seconds.
 const TICK: Duration = Duration::from_secs(60);
+
+/// The cadence for the first [`STARTUP_WINDOW`] of the process, and why it is not [`TICK`].
+///
+/// ADR-097 Increment 5 gave this loop a second kind of work: a node deleted while core was
+/// *stopped* has its alerts read back out of `alert_history` at startup, and until this sweep runs
+/// they sit in the engine's active set — where `node_states` unions them into the fleet's per-state
+/// breakdown, which can then sum to more than the total `api::fleet::state_tally` reads from
+/// PostgreSQL. That transient is bounded by whenever this loop next runs, so at startup it runs
+/// often. Steady state is untouched.
+///
+/// ⚠️ It cannot start before the config does: `forget_deleted_nodes` is a deliberate no-op while
+/// `node_meta` is empty, which it is until the first config load. These ticks are cheap for exactly
+/// that reason — a sweep with no config takes three locks and returns.
+const STARTUP_TICK: Duration = Duration::from_secs(5);
+
+/// How long the fast cadence lasts. Long enough to cover the config's own 30-second refresh with
+/// room for a slow first load, short enough that it is over before anything else happens.
+const STARTUP_WINDOW: Duration = Duration::from_secs(120);
 
 /// Leader-only: close the alerts of deleted nodes, and forget their display state.
 ///
@@ -43,8 +61,13 @@ const TICK: Duration = Duration::from_secs(60);
 /// here — an engine with no config installed sweeps nothing. A guard at this call site would have to
 /// be remembered by the next caller; one inside the method cannot be skipped.
 pub(crate) async fn run_deleted_node_watch(alerts: Arc<AlertManager>, sink: Arc<dyn AlertSink>) {
+    let started = Instant::now();
     loop {
-        tokio::time::sleep(TICK).await;
+        let tick = match started.elapsed() < STARTUP_WINDOW {
+            true => STARTUP_TICK,
+            false => TICK,
+        };
+        tokio::time::sleep(tick).await;
         // Resolutions are dispatched one at a time and in order, the same as every other alert
         // source: `Dispatcher` serialises per channel anyway, so concurrency here would only move
         // the queue.
