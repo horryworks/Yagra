@@ -52,6 +52,19 @@ impl SweepCache {
     }
 }
 
+/// Whether a completed round may seed the fast-path cache: only when **every** pool was actually
+/// served in working-set mode.
+///
+/// 🚨 The waiting argument is the load-bearing one, and it is the single most dangerous line in
+/// ADR-009 Increment 1. A waiting pool is not in `desired_by_pool`, yet it also leaves
+/// `legacy_pools` at zero — so a cache seeded beside one would satisfy [`SweepCache::reusable`]
+/// every round afterwards, and that pool would be served by **nobody** until the config generation
+/// changed. Its nodes stay in the inventory, so the node count, the demand gauge and the logs all
+/// look right; nothing anywhere would say a pool had stopped being polled.
+fn cache_seedable(legacy_pools: u64, waiting_pools: u64) -> bool {
+    legacy_pools == 0 && waiting_pools == 0
+}
+
 /// Group the round's nodes by the pool that should poll them.
 ///
 /// The pool is the node's **effective** one (own > ancestor folder > default, [`poolres`]), so a
@@ -120,12 +133,27 @@ pub(crate) async fn run_scheduler(
     // inheritance": that would silently move every folder-assigned node to the default pool for one
     // round, churning both pools' working sets. Reusing the last-known map is the safe failure.
     let mut resolver: Option<poolres::PoolResolver> = None;
+    // ADR-009 Increment 1. Three facts the three-way mode decision needs, and none of them can come
+    // from the coordinator's live registry — which is exactly the point, because that registry is
+    // in-memory and therefore empty for the first beat-interval of every core process.
+    //
+    // The durable inventory is read **once**, here: a poller registered after this moment will
+    // announce itself with a heartbeat, which makes its pool live and needs no row to be believed.
+    // A read failure degrades to "wait for nobody" = the behaviour that predates this increment.
+    let started = Instant::now();
+    let registered = coordinator.registered_pools().await;
+    let mut last_live: HashMap<String, Instant> = HashMap::new();
     loop {
         // Read the config generation before any work so a change racing the rebuild is caught next
         // round (the cache is tagged with the pre-work value).
         let generation = config_gen::current();
         let now = Instant::now();
         let live = coordinator.live_pools(now);
+        // Before the fast path, which `continue`s: a cached round is still an observation that
+        // these pools had a poller, and the poller-restart arm of `pool_mode` reads it.
+        for pool in &live {
+            last_live.insert(pool.clone(), now);
+        }
 
         // Fast path: config unchanged since the cache was built AND every cached pool still has a
         // live poller (working-set). Reuse the cached desired sets — no DB scan, no per-node spec
@@ -196,6 +224,12 @@ pub(crate) async fn run_scheduler(
             .clone()
             .unwrap_or_else(poolres::PoolResolver::empty);
         let mut min_interval = default_secs;
+        // Pools held back this round (ADR-009 Inc.1). Read twice below: by `cache_seedable` and by
+        // the sleep, which must not wait out a whole poll interval before re-deciding.
+        let mut waiting_pools: u64 = 0;
+        // The soonest a waiting pool's grace runs out, so the re-check lands just after it rather
+        // than every second (a poller restarting an hour into the process is 30s away, not 0).
+        let mut wait_recheck: Option<Duration> = None;
 
         match repo.list_nodes().await {
             Ok(nodes) => {
@@ -256,99 +290,142 @@ pub(crate) async fn run_scheduler(
                 ));
 
                 for (pool, members) in groups {
-                    if scheduler::pool_uses_working_set(&pool, &live) {
-                        // Build the pool's whole desired working set and let the coordinator diff +
-                        // distribute it (snapshots/deltas). Not gated by `due()`. These nodes leave
-                        // the legacy `last_dispatched` map (a later legacy fallback re-polls at once).
-                        for (node, _secs) in &members {
-                            last_dispatched.remove(&node.id.as_uuid());
-                        }
-                        // Own each item into the stream and clone the `Arc` per future so no borrow
-                        // crosses an `.await` (keeps the concurrent builds free of lifetime coupling).
-                        let desired: HashMap<_, _> = futures::stream::iter(members)
-                            .map(|(node, secs)| {
-                                let dispatcher = dispatcher.clone();
-                                let monitor_ids = monitor_ids.clone();
-                                // Cheap: scalars plus one `Arc` to the shared route-probe plan.
-                                let neighbors = neighbors.clone();
-                                async move {
-                                    let (url_ids, dns_ids) = monitor_ids.as_ref();
-                                    let specs = dispatcher
-                                        .build_node_specs(
-                                            &node,
-                                            secs,
-                                            scheduler::MonitorHints {
-                                                url: Some(url_ids),
-                                                dns: Some(dns_ids),
-                                            },
-                                            &neighbors,
-                                        )
-                                        .await;
-                                    (node.id, specs)
-                                }
-                            })
-                            .buffer_unordered(SWEEP_BUILD_CONCURRENCY)
-                            .filter_map(|(id, specs)| async move {
-                                (!specs.is_empty()).then_some((id, specs))
-                            })
-                            .collect()
-                            .await;
-                        // Reconcile from the borrow, then hand the one copy to the cache — the set
-                        // is built once per rebuild and never duplicated.
-                        coordinator.reconcile_pool(&pool, &desired, now).await;
-                        new_desired_by_pool.insert(pool.clone(), desired);
-                        working_set_pools += 1;
-                    } else {
-                        // Legacy: per-node due-check + jittered per-job publish to the pool subject.
-                        for (node, secs) in &members {
-                            let id = node.id.as_uuid();
-                            present.insert(id);
-                            let elapsed = last_dispatched.get(&id).map(|&t| now.duration_since(t));
-                            if !scheduler::due(elapsed, Duration::from_secs(u64::from(*secs))) {
-                                continue;
+                    let since_last_live = last_live
+                        .get(&pool)
+                        .map(|&t| now.saturating_duration_since(t));
+                    let since_start = now.saturating_duration_since(started);
+                    match scheduler::pool_mode(
+                        &pool,
+                        &live,
+                        since_last_live,
+                        since_start,
+                        &registered,
+                    ) {
+                        scheduler::PoolMode::WorkingSet => {
+                            // Build the pool's whole desired working set and let the coordinator diff +
+                            // distribute it (snapshots/deltas). Not gated by `due()`. These nodes leave
+                            // the legacy `last_dispatched` map (a later legacy fallback re-polls at once).
+                            for (node, _secs) in &members {
+                                last_dispatched.remove(&node.id.as_uuid());
                             }
-                            last_dispatched.insert(id, now);
-                            for (job, kind) in dispatcher
-                                .build_scheduled_jobs_hinted(
-                                    node,
-                                    *secs,
-                                    scheduler::MonitorHints {
-                                        url: Some(&monitor_ids.0),
-                                        dns: Some(&monitor_ids.1),
-                                    },
-                                    &neighbors,
-                                )
-                                .await
-                            {
-                                // A job whose own cadence is slower than the node's (today: the
-                                // neighbour walk) gets its own due-check. Working-set mode needs
-                                // nothing here — the poller schedules each spec by its own
-                                // `interval_secs` — but this path publishes on the *node's* tick,
-                                // so without the gate an hourly walk would go out every minute.
-                                // Existing jobs all carry `*secs`, so they never enter this branch.
-                                if job.interval_secs > *secs {
-                                    let key = (id, kind);
-                                    let elapsed =
-                                        last_slow.get(&key).map(|&t| now.duration_since(t));
-                                    let cadence = Duration::from_secs(u64::from(job.interval_secs));
-                                    if !scheduler::due(elapsed, cadence) {
-                                        continue;
+                            // Own each item into the stream and clone the `Arc` per future so no borrow
+                            // crosses an `.await` (keeps the concurrent builds free of lifetime coupling).
+                            let desired: HashMap<_, _> = futures::stream::iter(members)
+                                .map(|(node, secs)| {
+                                    let dispatcher = dispatcher.clone();
+                                    let monitor_ids = monitor_ids.clone();
+                                    // Cheap: scalars plus one `Arc` to the shared route-probe plan.
+                                    let neighbors = neighbors.clone();
+                                    async move {
+                                        let (url_ids, dns_ids) = monitor_ids.as_ref();
+                                        let specs = dispatcher
+                                            .build_node_specs(
+                                                &node,
+                                                secs,
+                                                scheduler::MonitorHints {
+                                                    url: Some(url_ids),
+                                                    dns: Some(dns_ids),
+                                                },
+                                                &neighbors,
+                                            )
+                                            .await;
+                                        (node.id, specs)
                                     }
-                                    last_slow.insert(key, now);
-                                }
-                                jobs_round += 1;
-                                let dispatcher = dispatcher.clone();
-                                let node_id = node.id;
-                                let pool = pool.clone();
-                                let delay =
-                                    Duration::from_millis(rand::random::<u64>() % window_ms);
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(delay).await;
-                                    dispatcher.publish_job(job, kind, node_id, &pool).await;
-                                });
-                            }
+                                })
+                                .buffer_unordered(SWEEP_BUILD_CONCURRENCY)
+                                .filter_map(|(id, specs)| async move {
+                                    (!specs.is_empty()).then_some((id, specs))
+                                })
+                                .collect()
+                                .await;
+                            // Reconcile from the borrow, then hand the one copy to the cache — the set
+                            // is built once per rebuild and never duplicated.
+                            coordinator.reconcile_pool(&pool, &desired, now).await;
+                            new_desired_by_pool.insert(pool.clone(), desired);
+                            working_set_pools += 1;
                         }
-                        legacy_pools += 1;
+                        scheduler::PoolMode::Wait => {
+                            // ADR-009 Increment 1: nothing has been heard from this pool, but there
+                            // are grounds to expect a beat — either it was live moments ago (a
+                            // poller restarting) or this process is younger than one offline window
+                            // and the pool has a registered poller. Serve it neither way.
+                            //
+                            // What this replaces, measured on 2026-08-31: publishing the pool's
+                            // whole inventory per-job. 187 jobs for a 32-node deployment on a core
+                            // restart, another 187 for one `docker restart` of the poller, and
+                            // 120,187 at 15,000 nodes — jittered rather than ranked, ~50 minutes to
+                            // drain, and every one of them duplicating a poll the poller never
+                            // stopped doing while core was away.
+                            let remaining = match since_last_live {
+                                Some(d) => scheduler::POOL_GRACE.saturating_sub(d),
+                                None => scheduler::POOL_GRACE.saturating_sub(since_start),
+                            };
+                            wait_recheck = Some(
+                                wait_recheck.map_or(remaining, |r: Duration| r.min(remaining)),
+                            );
+                            tracing::info!(
+                                pool = %pool,
+                                nodes = members.len(),
+                                heard_before = since_last_live.is_some(),
+                                recheck_secs = remaining.as_secs(),
+                                "holding the legacy fallback — no live poller yet, but one is expected"
+                            );
+                            waiting_pools += 1;
+                        }
+                        scheduler::PoolMode::Legacy => {
+                            // Legacy: per-node due-check + jittered per-job publish to the pool subject.
+                            for (node, secs) in &members {
+                                let id = node.id.as_uuid();
+                                present.insert(id);
+                                let elapsed =
+                                    last_dispatched.get(&id).map(|&t| now.duration_since(t));
+                                if !scheduler::due(elapsed, Duration::from_secs(u64::from(*secs))) {
+                                    continue;
+                                }
+                                last_dispatched.insert(id, now);
+                                for (job, kind) in dispatcher
+                                    .build_scheduled_jobs_hinted(
+                                        node,
+                                        *secs,
+                                        scheduler::MonitorHints {
+                                            url: Some(&monitor_ids.0),
+                                            dns: Some(&monitor_ids.1),
+                                        },
+                                        &neighbors,
+                                    )
+                                    .await
+                                {
+                                    // A job whose own cadence is slower than the node's (today: the
+                                    // neighbour walk) gets its own due-check. Working-set mode needs
+                                    // nothing here — the poller schedules each spec by its own
+                                    // `interval_secs` — but this path publishes on the *node's* tick,
+                                    // so without the gate an hourly walk would go out every minute.
+                                    // Existing jobs all carry `*secs`, so they never enter this branch.
+                                    if job.interval_secs > *secs {
+                                        let key = (id, kind);
+                                        let elapsed =
+                                            last_slow.get(&key).map(|&t| now.duration_since(t));
+                                        let cadence =
+                                            Duration::from_secs(u64::from(job.interval_secs));
+                                        if !scheduler::due(elapsed, cadence) {
+                                            continue;
+                                        }
+                                        last_slow.insert(key, now);
+                                    }
+                                    jobs_round += 1;
+                                    let dispatcher = dispatcher.clone();
+                                    let node_id = node.id;
+                                    let pool = pool.clone();
+                                    let delay =
+                                        Duration::from_millis(rand::random::<u64>() % window_ms);
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(delay).await;
+                                        dispatcher.publish_job(job, kind, node_id, &pool).await;
+                                    });
+                                }
+                            }
+                            legacy_pools += 1;
+                        }
                     }
                 }
                 // Forget legacy nodes no longer present so the map can't grow unbounded (working-set
@@ -361,7 +438,7 @@ pub(crate) async fn run_scheduler(
                 // needs node rows every round, so a mixed fleet keeps rebuilding (unchanged behavior).
                 // Tagged with the generation read before the rebuild so a racing config change is
                 // detected next round.
-                cache = if legacy_pools == 0 {
+                cache = if cache_seedable(legacy_pools, waiting_pools) {
                     Some(SweepCache {
                         generation,
                         min_interval,
@@ -373,10 +450,26 @@ pub(crate) async fn run_scheduler(
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
+        // ADR-009 Increment 1: a round that held a pool back looks again as soon as that pool's
+        // grace runs out, not after a whole poll interval. Without this the fallback for a pool
+        // whose poller really is gone waits out `min_interval` (60s by default) instead of one
+        // offline window, and the trade this increment claims — "at most 30 seconds unpolled" —
+        // would not be true. `+1` so the re-check lands past the boundary rather than on it.
+        let sleep_secs = match wait_recheck {
+            Some(remaining) => u64::from(min_interval).min(remaining.as_secs().saturating_add(1)),
+            None => u64::from(min_interval),
+        };
+        if waiting_pools > 0 {
+            metrics::counter!("yagra_sweep_pools_waiting_total").increment(waiting_pools);
+        }
+        // Keeps `last_live` bounded. A pool seen live is refreshed to `now` every round, so this
+        // only drops pools whose grace has already run out — and it cannot reintroduce a wait: an
+        // entry that old implies the process is at least as old, so the startup arm is false too.
+        last_live.retain(|_, t| now.saturating_duration_since(*t) < scheduler::POOL_GRACE);
         // Wake early if a poller announced it is leaving: the ring changed, so the desired
         // set must be re-pushed now rather than after a full poll interval.
         tokio::select! {
-            () = tokio::time::sleep(Duration::from_secs(u64::from(min_interval))) => {}
+            () = tokio::time::sleep(Duration::from_secs(sleep_secs)) => {}
             () = coordinator.sweep_nudged() => {}
         }
     }
@@ -466,6 +559,38 @@ mod tests {
 
     fn live(pools: &[&str]) -> std::collections::HashSet<String> {
         pools.iter().map(|p| (*p).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_round_that_held_a_pool_back_must_not_seed_the_cache() {
+        // 🚨 The one way ADR-009 Increment 1 could silently stop a fleet being polled. A waiting
+        // pool is absent from `desired_by_pool` *and* leaves `legacy_pools` at zero, so without the
+        // second argument the cache would be seeded, the fast path would keep being taken, and that
+        // pool would be served by nobody until the config generation changed — with its node count,
+        // its demand gauge and its logs all still looking correct.
+        assert!(
+            cache_seedable(0, 0),
+            "an all-working-set round is exactly what the cache is for"
+        );
+        assert!(
+            !cache_seedable(0, 1),
+            "a held-back pool is not in the cache, so a cache built beside one is a lie"
+        );
+        assert!(!cache_seedable(1, 0));
+        assert!(!cache_seedable(1, 1));
+    }
+
+    #[test]
+    fn the_fast_path_cannot_see_a_pool_it_never_cached() {
+        // The mechanism behind the test above, stated once so the guard is not read as arithmetic:
+        // `reusable` only ever asks about the pools the cache already holds. A pool that was held
+        // back is not one of them, so nothing in the fast path would notice it going unserved.
+        let c = sweep_cache(7, &["default"]);
+        assert!(
+            c.reusable(7, &live(&["default", "site-a"])),
+            "the cache answers yes without ever asking about 'site-a' — that is the hazard, and \
+             cache_seedable is what keeps such a cache from existing"
+        );
     }
 
     #[test]

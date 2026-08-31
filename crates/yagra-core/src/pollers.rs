@@ -295,6 +295,25 @@ impl PollerRepo {
             .collect()
     }
 
+    /// The distinct pools that have at least one registered poller (ADR-009 Inc.1).
+    ///
+    /// 🚨 **Grounds for *waiting*, never for believing a poller is live.** A row here says only
+    /// that some poller with this id once heartbeated — it survives the poller being switched off,
+    /// decommissioned, or unreachable for a week. The scheduler uses it for exactly one question:
+    /// on a cold start, is there any reason to expect a beat before falling back to legacy per-job
+    /// dispatch? Liveness stays the coordinator's in-memory registry and nothing else.
+    ///
+    /// ⚠️ A poller too old to heartbeat has no row, so its pool is never waited on — which is what
+    /// keeps the N/N-1 legacy fallback byte-identical for it.
+    pub async fn pools(&self) -> anyhow::Result<Vec<String>> {
+        let rows = sqlx::query("SELECT DISTINCT pool FROM pollers")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| Ok(row.try_get("pool")?))
+            .collect()
+    }
+
     /// What the Auth Callout must check this poller's presented secret against (ADR-065).
     ///
     /// Three answers, and the third is the one that closes the hole: an id with no row is refused

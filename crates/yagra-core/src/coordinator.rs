@@ -547,6 +547,32 @@ impl Coordinator {
             .collect()
     }
 
+    /// The pools that have a **registered** poller in the durable inventory (ADR-009 Inc.1).
+    ///
+    /// 🚨 **Not liveness, and it must never be read as one** — see [`PollerRepo::pools`]. The one
+    /// question it answers is whether, on a cold start, there is grounds to *wait* for a first
+    /// heartbeat before falling back to legacy per-job dispatch. [`Self::live_pools`] remains the
+    /// only answer to "is anyone there right now".
+    ///
+    /// Empty when there is no durable inventory (skeleton/tests) or the read fails — both mean
+    /// "wait for nobody", which is exactly the behaviour that predates this method. Degrading
+    /// towards the legacy fallback is the safe direction: it over-polls, it never under-polls.
+    pub async fn registered_pools(&self) -> HashSet<String> {
+        let Some(repo) = self.pollers_repo.as_ref() else {
+            return HashSet::new();
+        };
+        match repo.pools().await {
+            Ok(pools) => pools.into_iter().collect(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "reading the poller inventory failed — no pool will be waited for on this start"
+                );
+                HashSet::new()
+            }
+        }
+    }
+
     /// Whether **every** live poller that could be running work on `pool` advertises `cap`.
     ///
     /// `pool: None` asks about the whole live fleet, which is what a sweep published on the global
@@ -1216,6 +1242,29 @@ mod tests {
             mgmt_addrs: Vec::new(),
             upgrade: None,
         }
+    }
+
+    #[tokio::test]
+    async fn registered_pools_is_empty_without_a_durable_inventory_and_a_beat_does_not_add_one() {
+        // Two claims in one, because the second is what stops the first being read wrongly.
+        //
+        // 🚨 The degradation direction is the point: no inventory — skeleton, tests, or a failed
+        // read — must mean "wait for nobody", so the scheduler falls back to legacy exactly as it
+        // did before ADR-009 Increment 1. The opposite default would hold a fleet unpolled on a
+        // core that cannot reach PostgreSQL.
+        let (coord, _bus, _stats) = coordinator();
+        assert!(coord.registered_pools().await.is_empty());
+
+        // And liveness never leaks into this answer: a beat makes a pool live without registering
+        // it here. The two are different questions and this one is only ever grounds for waiting.
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", Uuid::nil()), Instant::now())
+            .await;
+        assert!(coord.live_pools(Instant::now()).contains("tokyo"));
+        assert!(
+            coord.registered_pools().await.is_empty(),
+            "registration is a durable fact, not something a heartbeat can assert in memory"
+        );
     }
 
     #[tokio::test]

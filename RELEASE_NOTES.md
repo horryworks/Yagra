@@ -46,6 +46,31 @@
 
 ### Improvements
 
+- **Restarting core, or a poller, no longer publishes that pool's whole inventory as individual
+  jobs.** Core decides per pool between handing a poller its working set and the legacy per-job
+  fallback, and the decision was "does this pool have a live poller *right now*". A core that has
+  just started has heard no heartbeats yet — they are 10 seconds apart, and the first scheduling
+  round runs before any of them arrive — so every pool looked deserted and its entire inventory
+  went out job by job. A graceful poller restart did the same thing, from the other end: the
+  departing poller's goodbye beat drops it from the registry and wakes the scheduler immediately.
+  Measured on a 32-node deployment: 187 jobs on a core restart, and another 187 for one poller
+  restart with core untouched. At 15,000 nodes the same event publishes 120,187, spread across the
+  poll interval rather than ordered by urgency, and takes about 50 minutes to drain — so an
+  upgrade of a busy deployment bought roughly an hour of unranked polling every time. None of it
+  was needed: a poller keeps polling the working set it already holds while core is away, so those
+  jobs duplicated work that was happening anyway.
+  Core now distinguishes "no poller has spoken *yet*" from "no poller is coming". A pool is held
+  back for at most one offline window (30 seconds) when it had a live poller moments ago, or when
+  core has just started and the pool has a registered poller in the durable inventory. New
+  Prometheus counter `yagra_sweep_pools_waiting_total` counts those rounds, and each one is logged
+  with the pool and the reason.
+  ⚠️ **The zero-poller fallback is unchanged for anything that does not heartbeat.** A poller old
+  enough to consume jobs without registering has no row in the inventory, so its pool is never held
+  back. For a pool whose poller really is gone, the fallback now engages up to 30 seconds later
+  than it used to.
+  ⚠️ For up to 30 seconds after core starts, the Monitoring dashboard widget shows `0 / 0` for
+  working-set / legacy pools instead of counting the waiting ones as legacy. They are neither.
+
 - **A saturated poller no longer re-reads its whole schedule for every poll it dispatches.** When
   the local scheduler asks what is due, it now walks only as far as the jobs it is about to send.
   Before, each ask judged every spec the poller holds — and it asks once per freed slot in its
