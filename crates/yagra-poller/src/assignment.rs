@@ -49,6 +49,13 @@ pub(crate) fn publish_working_set_gauges(ws: &WorkingSet) {
     let (_, specs) = ws.stats();
     metrics::gauge!("yagra_working_set_specs").set(f64::from(specs));
     metrics::gauge!("yagra_poll_demand_per_second").set(ws.demand_per_sec());
+    // 🚨 A deliberate second copy, published because the failure it guards is otherwise invisible.
+    // Since ADR-109 Increment 5 the scheduler reaches a spec only through the ordered index, so a
+    // spec present in the set and absent from the index is **never polled again** while this gauge's
+    // neighbour keeps counting it, no counter moves and nothing is logged. The two must be equal;
+    // an operator (or a Tier2 assertion) comparing them is the only reading that says so in a
+    // running deployment. See `WorkingSet::reindex`.
+    metrics::gauge!("yagra_working_set_timers").set(f64::from(ws.timer_count()));
 }
 
 /// Subscribe, ask for a snapshot, and start both loops. Returns the receiving half of the job
@@ -176,16 +183,27 @@ async fn run_sync_loop<B, S>(
 /// channel has room, so the inner loop is as fast as the worker drains. Backpressure still never
 /// drops — a full channel makes this await, exactly as before.
 ///
-/// ⚠️ **The working set is walked more often than it used to be** — once per batch of at most
-/// `JOB_CHANNEL_DEPTH` rather than once per tick. At the throughputs measured that is a handful of
-/// walks per second against a few hundred thousand specs; if it ever shows up as CPU, the answer is
-/// a heap keyed by `next_due` rather than a walk, and that is a separate change.
+/// 🚨 **The working set is consulted once per dispatched job, not once per batch — and the earlier
+/// note here said otherwise.** It read "once per batch of at most `JOB_CHANNEL_DEPTH`… a handful of
+/// walks per second", which underestimates the rate by two orders of magnitude. `reserve()` returns
+/// as soon as **one** slot frees, so on a saturated poller the channel is always full, `room` is
+/// almost always 1, and the loop below asks `due` for a single job at a time: measured 2026-08-31 at
+/// ~93 calls a second. That is why ADR-109 Increment 5 had to make a call cost what it dispatches
+/// rather than what the set holds — the shape here is right and the arithmetic behind it was wrong.
 async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc::Sender<PollJob>) {
     let mut tick = tokio::time::interval(working_set::SCHEDULER_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
         let deadline = Instant::now() + working_set::SCHEDULER_TICK;
+        // The clock the last round used, so the depth published below is measured at the same
+        // instant the schedule was last asked. Reading it a moment later instead would let a spec
+        // that came due in between count as backlog, and a healthy poller would report a flickering
+        // 1 where it should always report 0.
+        // Declared without a value on purpose: every exit from the loop below is a `break` that
+        // happens after the assignment, so the compiler proves it is set — and a placeholder here
+        // would be a clock reading nothing ever used.
+        let mut last_ask;
         loop {
             // Room first. Holding a permit before asking means the batch we are handed is one we can
             // hand on without blocking part-way through it — which is what keeps a ranked batch from
@@ -196,12 +214,13 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
             };
             // `capacity()` is what is left *after* our reservation, so the reserved slot is the +1.
             let room = jobs_tx.capacity() + 1;
-            let (due, missed, deferred) = {
+            last_ask = Instant::now();
+            let (due, missed) = {
                 let mut ws = working_set.lock().expect("working set mutex poisoned");
-                // Read under the same lock as the walk that produced it, so no round's tally can be
-                // attributed to the next one.
-                let due = ws.due(Instant::now(), room);
-                (due, ws.take_cycles_missed(), ws.deferred())
+                // Read under the same lock as the round that produced it, so no round's tally can
+                // be attributed to the next one.
+                let due = ws.due(last_ask, room);
+                (due, ws.take_cycles_missed())
             };
             // The polling deficit, which had no instrument until the 50,000-node load test went
             // looking for one (2026-08-29). ⚠️ Distinct from `yagra_poll_skipped_backpressure_total`,
@@ -212,7 +231,6 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
             if missed > 0 {
                 metrics::counter!("yagra_poll_cycles_missed_total").increment(missed);
             }
-            metrics::gauge!("yagra_poll_deferred_specs").set(f64::from(deferred));
             let mut jobs = due.into_iter();
             let Some(first) = jobs.next() else {
                 break; // nothing due — hand the reservation back and wait for the next tick
@@ -228,6 +246,16 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
                 break; // one tick's worth of pushing; go back and re-read the clock
             }
         }
+        // Once per tick, and **after** the dispatching, which is what makes the number readable:
+        // a poller that served everything it had reports 0, and one that could not reports the
+        // whole backlog. Asked before the loop it would be a tick's worth of freshly-due specs on
+        // a perfectly healthy poller. It walks the set, so it is also the reason this is per tick
+        // rather than per dispatch — see `WorkingSet::overdue`.
+        let deferred = working_set
+            .lock()
+            .expect("working set mutex poisoned")
+            .overdue(last_ask);
+        metrics::gauge!("yagra_poll_deferred_specs").set(f64::from(deferred));
     }
 }
 
@@ -248,11 +276,16 @@ mod tests {
         ))
     }
 
-    /// Both names reach the exporter from one call, carrying what the set actually holds.
+    /// All three names reach the exporter from one call, carrying what the set actually holds.
     ///
-    /// `guards.rs` says the two gauges are published from one place; this says that place publishes
-    /// both, with real numbers. Neither implies the other — a function naming both metrics can
-    /// still set one of them and forget the second, which is the state this crate was in.
+    /// `guards.rs` says the gauges are published from one place; this says that place publishes
+    /// every one of them, with real numbers. Neither implies the other — a function naming three
+    /// metrics can still set two of them and forget the third, which is the state this crate was in.
+    ///
+    /// 🚨 The timers gauge is here for a reason no other gauge has: it is the only thing that would
+    /// show, in a running deployment, that the ordered index and the specs have diverged — and a
+    /// diverged index means specs that are never polled again (see `WorkingSet::reindex`). A
+    /// consistency signal that is never published is not a signal.
     #[test]
     fn both_working_set_gauges_reach_the_exporter() {
         let n = NodeId::from(Uuid::from_u128(1));
@@ -291,6 +324,10 @@ mod tests {
         assert!(
             rendered.contains("yagra_poll_demand_per_second 0.125"),
             "the demand gauge is missing or wrong in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("yagra_working_set_timers 2"),
+            "the index gauge is missing from:\n{rendered}"
         );
     }
 }

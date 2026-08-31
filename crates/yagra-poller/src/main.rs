@@ -51,6 +51,7 @@ mod pool;
 mod routing;
 mod store_forward;
 mod support_logs;
+mod timers;
 mod upgrade;
 mod worker;
 mod working_set;

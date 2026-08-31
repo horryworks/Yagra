@@ -46,6 +46,22 @@
 
 ### Improvements
 
+- **A saturated poller no longer re-reads its whole schedule for every poll it dispatches.** When
+  the local scheduler asks what is due, it now walks only as far as the jobs it is about to send.
+  Before, each ask judged every spec the poller holds — and it asks once per freed slot in its
+  worker queue, which on a saturated poller is once per poll. Measured on a poller carrying 15,000
+  unreachable devices: **about 93 asks a second, each of them examining 120,000 deadlines**. The
+  answer is unchanged — the same polls are chosen, in the same order, by the same "how late is this
+  relative to its own interval" rule — but a poller that holds many more specs than it can serve now
+  spends its CPU on polling rather than on deciding what to poll.
+- **`yagra_poll_deferred_specs` is now published once per scheduler tick rather than once per
+  dispatched job**, and reads "specs that are overdue at the end of the tick". On a poller that is
+  keeping up it is 0 and on a saturated one it is the whole backlog, exactly as before; a reading
+  taken mid-tick can differ from the old one by at most one batch.
+- **New gauge `yagra_working_set_timers`.** It must always equal `yagra_working_set_specs`; the two
+  are published together, and a difference between them would mean the poller has specs it can no
+  longer schedule.
+
 - **A poller no longer spends its concurrency budget waiting for busy devices.** A device's checks
   are serialised — they are one conversation with one agent — so a node's later checks queue behind
   its first. That queueing used to happen while holding one of the poller's concurrency permits, so

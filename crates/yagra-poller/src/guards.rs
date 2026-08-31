@@ -123,6 +123,7 @@ fn the_polling_gauges_are_published_from_one_place() {
 
     for metric in [
         "yagra_working_set_specs",
+        "yagra_working_set_timers",
         "yagra_poll_demand_per_second",
         "yagra_poll_deferred_specs",
     ] {
