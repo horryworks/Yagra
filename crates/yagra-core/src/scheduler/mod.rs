@@ -9,6 +9,8 @@
 //! - [`checks`] — the arguments it is handed, and nothing else. Builds **one** check.
 //! - [`assemble`] — an already-resolved node and its config. Decides **which** checks it gets.
 //! - [`dispatch`] — the stores (PostgreSQL, Redis, the bus). Resolves what the two above need.
+//! - [`seams`] — what [`dispatch`] is *allowed* to read, as four traits (ADR-111). Cut by what the
+//!   caller needs, never per repository — which is what makes [`dispatch`] testable at all.
 //! - [`sweep`] — the clock and the pool map. Decides **when**.
 //! - [`stats`] — nothing (lock-free counters).
 //!
@@ -30,6 +32,7 @@ mod checks;
 mod dispatch;
 #[cfg(test)]
 mod guards;
+mod seams;
 mod stats;
 mod sweep;
 #[cfg(test)]
@@ -42,7 +45,7 @@ mod testkit;
 // twice and answered it the same way, so the allow is what refuses the offer.
 #[allow(unused_imports)]
 pub use assemble::{assemble_node_jobs, AdjacencyPolicy, MonitorHints, SpecialMonitor};
-pub use dispatch::{PollDispatcher, PollDispatcherSeams};
+pub use dispatch::{PollDispatcher, PollDispatcherStores};
 pub use stats::{SchedulerStats, SchedulerStatsSnapshot};
 pub(crate) use sweep::run_scheduler;
 

@@ -572,7 +572,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
     // both build jobs the same way.
     let dispatcher = Arc::new(scheduler::PollDispatcher::new(
-        scheduler::PollDispatcherSeams {
+        scheduler::PollDispatcherStores {
             bus: bus.clone(),
             creds: creds.clone(),
             collection: collection.clone(),

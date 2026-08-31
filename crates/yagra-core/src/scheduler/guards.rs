@@ -44,6 +44,10 @@ const PURITY: &[(&str, bool)] = &[
     ("stats.rs", true),
     // The impure half by design: reads PostgreSQL and Redis, publishes to the bus.
     ("dispatch.rs", false),
+    // What the impure half is allowed to read, as four traits (ADR-111). Impure because the
+    // production implementations are here: the traits alone would sit on either side, and the
+    // question this table asks is "does this file wait on the outside world", not "is it abstract".
+    ("seams.rs", false),
     // The loop. Waits on the clock, the coordinator and the dispatcher.
     ("sweep.rs", false),
 ];
@@ -110,13 +114,14 @@ fn the_pure_half_never_waits_on_the_outside_world() {
     // empty files satisfies every assertion above (ADR-091 shipped exactly that mistake).
     assert!(
         pure_lines >= 600,
-        "only {pure_lines} lines of pure code were scanned (760 at ADR-096 — the module's 1,056 \
-         non-blank lines less the 296 that are comments, which this reader drops); the reader is \
+        "only {pure_lines} lines of pure code were scanned (787 at ADR-111, 760 at ADR-096 — the \
+         pure files' non-blank lines less the comments, which this reader drops); the reader is \
          finding a fraction of the module and the assertions above mean nothing"
     );
     assert!(
         impure_waits >= 30,
-        "only {impure_waits} awaits were seen on the impure side (41 at ADR-096)"
+        "only {impure_waits} awaits were seen on the impure side (48 at ADR-111, 41 at ADR-096 — \
+         seams.rs joined the impure side, one wait per production implementation)"
     );
 }
 

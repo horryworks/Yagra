@@ -107,3 +107,75 @@ impl SchedulerStats {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A process that has not swept yet reports **no** timestamp, not the epoch.
+    ///
+    /// The distinction reaches an operator: `last_sweep_unix_ms` feeds "when did this core last
+    /// dispatch", and a zero would render as 1970 — which reads as a badly broken clock rather
+    /// than as "this core has not started sweeping".
+    #[test]
+    fn a_core_that_has_not_swept_reports_no_timestamp() {
+        let stats = SchedulerStats::default();
+        let snap = stats.snapshot();
+        assert_eq!(snap.last_sweep_unix_ms, None);
+        assert_eq!(snap.jobs_last_round, 0);
+
+        stats.record_sweep(7);
+        let snap = stats.snapshot();
+        assert!(snap.last_sweep_unix_ms.is_some_and(|ms| ms > 0));
+        assert_eq!(snap.jobs_last_round, 7);
+    }
+
+    /// 🚨 **Two of these are gauges and the rest are counters, and the difference is not visible
+    /// from the field names.** `jobs_last_round` and the two `pools_*` describe the *most recent*
+    /// sweep and are overwritten; everything else accumulates for the life of the process. Folding
+    /// one into the other would look like a tidy-up and would silently change what the
+    /// poller-health endpoint means.
+    #[test]
+    fn the_per_sweep_gauges_overwrite_while_the_totals_accumulate() {
+        let stats = SchedulerStats::default();
+
+        stats.record_sweep(10);
+        stats.set_pool_modes(3, 1);
+        for _ in 0..4 {
+            stats.record_result();
+        }
+        stats.record_snapshot();
+        stats.record_delta();
+        stats.record_assignment_write();
+
+        stats.record_sweep(2);
+        stats.set_pool_modes(4, 0);
+        stats.record_result();
+        stats.record_snapshot();
+
+        let snap = stats.snapshot();
+        // Gauges: the second sweep replaced the first.
+        assert_eq!(snap.jobs_last_round, 2);
+        assert_eq!(snap.pools_working_set, 4);
+        assert_eq!(snap.pools_legacy, 0);
+        // Counters: both sweeps are still in the total.
+        assert_eq!(snap.results_total, 5);
+        assert_eq!(snap.snapshots_published_total, 2);
+        assert_eq!(snap.deltas_published_total, 1);
+        assert_eq!(snap.assignment_mirror_writes_total, 1);
+    }
+
+    /// Every counter moves independently — a snapshot must not be counted as a delta, and an
+    /// assignment-mirror rewrite is its own thing (S18: it stays flat while the fleet is steady,
+    /// which is the property that makes it worth reading at all).
+    #[test]
+    fn each_counter_moves_only_when_its_own_event_happens() {
+        let stats = SchedulerStats::default();
+        stats.record_delta();
+        let snap = stats.snapshot();
+        assert_eq!(snap.deltas_published_total, 1);
+        assert_eq!(snap.snapshots_published_total, 0);
+        assert_eq!(snap.assignment_mirror_writes_total, 0);
+        assert_eq!(snap.results_total, 0);
+    }
+}
