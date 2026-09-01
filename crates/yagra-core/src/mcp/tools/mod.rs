@@ -19,7 +19,7 @@
 //!
 //! `/mcp` used to refuse a group-scoped principal outright, so a tool could read the whole fleet and
 //! be correct. That refusal is gone: scoped callers are admitted and **each tool filters**, using
-//! [`YagraMcp::scope_of`] to resolve the caller's scope and then the same rule its REST counterpart
+//! [`YagraMcp::scope_for`] to resolve the caller's scope and then the same rule its REST counterpart
 //! carries in `api/route_table.rs` — a `group_id = ANY(…)` predicate where the query is ours, a
 //! post-filter where the store ranks or aggregates, and the id-shaped `no node with that id` where
 //! the tool names one node (never a distinct refusal, which would confirm the node exists).
@@ -30,9 +30,9 @@
 //! does not take it.
 
 use rmcp::model::CallToolResult;
-// The module (not just the trait) — the `JsonSchema` derive expands to `schemars::…` paths, so the
-// `schemars` name must be in scope. rmcp re-exports it, keeping exactly one schemars version.
-use rmcp::service::{RequestContext, RoleServer};
+// 🎯 This file names no rmcp *session* type any more (ADR-113). `RequestContext` — and therefore
+// `Peer`, which no test can build — reaches only as far as the `#[tool]` wrappers and
+// `support::identity_of`. The gates below take the identity that came out of one.
 use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -216,11 +216,14 @@ impl YagraMcp {
     /// through, so the fallback is unreachable — which is exactly why it must resolve to "sees
     /// nothing" rather than "sees everything". An unreachable branch is the one nobody notices
     /// becoming reachable.
-    pub(super) async fn scope_of(
-        &self,
-        ctx: &RequestContext<RoleServer>,
-    ) -> Result<NodeScope, ApiError> {
-        let principal = identity_of(ctx).map(|id| id.principal).unwrap_or_else(|| {
+    ///
+    /// 🎯 **Takes the identity, not the `RequestContext` it came out of** (ADR-113). A
+    /// `RequestContext` needs an `rmcp::Peer`, whose constructor is crate-private in rmcp, so a
+    /// gate that takes one is a gate no test can call — and this one had none, including over the
+    /// fail-closed branch above. The `#[tool]` wrapper still takes `ctx` and reads the identity out
+    /// of it with [`identity_of`]; that is the only place on this surface that touches an rmcp type.
+    pub(super) async fn scope_for(&self, id: Option<McpIdentity>) -> Result<NodeScope, ApiError> {
+        let principal = id.map(|id| id.principal).unwrap_or_else(|| {
             tracing::error!("MCP tool ran with no authenticated identity; treating it as empty");
             yagra_common::Principal::new(
                 yagra_common::Role::Viewer,
@@ -230,15 +233,15 @@ impl YagraMcp {
         crate::api::scope::resolve(&self.state, &principal).await
     }
 
-    /// [`deny_invisible_node`] for a tool that still holds its `RequestContext` (the write tools,
-    /// which need the identity anyway and so never took the scope as a parameter).
-    pub(super) async fn deny_invisible_node_ctx(
+    /// [`deny_invisible_node`] for a tool that never took the scope as a parameter (the write
+    /// tools, which need the identity anyway).
+    pub(super) async fn deny_invisible_node_for(
         &self,
-        ctx: &RequestContext<RoleServer>,
+        id: Option<McpIdentity>,
         tool: &str,
         node: Uuid,
     ) -> Option<Result<CallToolResult, McpError>> {
-        match self.scope_of(ctx).await {
+        match self.scope_for(id).await {
             Ok(scope) => deny_invisible_node(&self.state, &scope, tool, node),
             Err(e) => Some(tool_api_error(tool, &e)),
         }
@@ -305,17 +308,366 @@ impl YagraMcp {
     /// own extractor, so this cannot drift from what the WebUI enforces.
     pub(super) fn deny_unless_permitted(
         &self,
-        ctx: &RequestContext<RoleServer>,
+        id: Option<&McpIdentity>,
         tool: &'static str,
         arg: &str,
     ) -> Option<Result<CallToolResult, McpError>> {
         let want = crate::mcp::folded::required_permission(tool, arg);
-        if authed_for(ctx, want).is_some() {
+        if id.is_some_and(|id| id.principal.can(want)) {
             return None;
         }
         Some(tool_forbidden(
             tool,
             &format!("this token lacks {} permission", permission_label(want)),
         ))
+    }
+
+    /// Authorize, **then** resolve the scope — the prelude every folded read runs (ADR-113).
+    ///
+    /// The order is a security property, not a preference: the permission check sits above every
+    /// store lookup so a caller who may not read a branch cannot infer, from a 403-vs-unavailable,
+    /// whether this deployment has that subsystem configured at all. It was written out in eight
+    /// tool wrappers, each declaring that rule in a comment and none of them holding anything to
+    /// it — so a ninth written the other way round would have shipped green.
+    ///
+    /// `Err` carries the refusal the tool should return verbatim. The nested `Result` reads oddly
+    /// once and matches [`Self::deny_unless_permitted`]'s `Option<Result<…>>`, which is how every
+    /// early return on this surface is already spelled.
+    ///
+    /// ⚠️ `get_audit` is the one folded read that does **not** come through here: it answers from
+    /// the audit log, which carries no node dimension, so it has no scope to resolve. It calls
+    /// [`Self::deny_unless_permitted`] directly.
+    pub(super) async fn admit(
+        &self,
+        id: Option<McpIdentity>,
+        tool: &'static str,
+        arg: &str,
+    ) -> Result<NodeScope, Result<CallToolResult, McpError>> {
+        if let Some(denied) = self.deny_unless_permitted(id.as_ref(), tool, arg) {
+            return Err(denied);
+        }
+        self.scope_for(id)
+            .await
+            .map_err(|e| tool_api_error(tool, &e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::tools::testkit::*;
+    use std::collections::BTreeSet;
+    use yagra_common::{Principal, Role, Scope};
+
+    /// An authenticated caller of `role` seeing the whole fleet.
+    fn unrestricted_id(role: Role) -> McpIdentity {
+        McpIdentity {
+            principal: Principal::new(role, Scope::All),
+            actor: "test".to_owned(),
+        }
+    }
+
+    /// An authenticated caller of `role` restricted to one group.
+    fn scoped_id(role: Role, group: Uuid) -> McpIdentity {
+        McpIdentity {
+            principal: Principal::new(role, Scope::Groups(BTreeSet::from([group.to_string()]))),
+            actor: "test".to_owned(),
+        }
+    }
+
+    // ── The scope gate ──────────────────────────────────────────────────────────────────────────
+
+    /// 🚨 **The branch the whole surface's safety rests on, and the reason this module now has
+    /// tests at all.** `mcp_auth_mw` inserts an identity into every request it admits, so this is
+    /// unreachable in production — which is exactly why it must resolve to *sees nothing*. Nobody
+    /// notices an unreachable branch becoming reachable, and the wrong answer here is the whole
+    /// fleet.
+    #[tokio::test]
+    async fn a_caller_with_no_identity_sees_nothing() {
+        let scope = mcp().scope_for(None).await.expect("resolves");
+        match scope {
+            NodeScope::All => panic!("a missing identity must not resolve to the whole fleet"),
+            NodeScope::Groups(s) => assert!(
+                s.visible.is_empty(),
+                "an absent identity must see no group at all, saw {:?}",
+                s.visible
+            ),
+        }
+    }
+
+    /// The paired accept side. Without it, "sees nothing" is also satisfied by a `scope_for` that
+    /// refuses everyone (`rejection-only-tests-pass-when-everything-rejects`).
+    #[tokio::test]
+    async fn an_unrestricted_identity_sees_the_whole_fleet() {
+        let scope = mcp()
+            .scope_for(Some(unrestricted_id(Role::Admin)))
+            .await
+            .expect("resolves");
+        assert!(
+            matches!(scope, NodeScope::All),
+            "an unrestricted principal resolves to the whole fleet"
+        );
+    }
+
+    /// A group-scoped principal keeps its group. In skeleton mode there is no group store to expand
+    /// through, so the visible set is the named root itself — which is what makes the *shape*
+    /// testable here without a database.
+    #[tokio::test]
+    async fn a_group_scoped_identity_keeps_its_group() {
+        let g = Uuid::from_u128(7);
+        let scope = mcp()
+            .scope_for(Some(scoped_id(Role::Viewer, g)))
+            .await
+            .expect("resolves");
+        match scope {
+            NodeScope::All => panic!("a group-scoped principal must not widen to the fleet"),
+            NodeScope::Groups(s) => assert_eq!(s.visible, vec![g]),
+        }
+    }
+
+    // ── The permission gate ─────────────────────────────────────────────────────────────────────
+
+    /// The permission comes from `folded::FOLDED_READS`, not from a literal — `get_system_health`
+    /// alone spans `View`, `ManageSystem` and `ManageCredentials`, so a Viewer reading the fleet's
+    /// poller list is fine and a Viewer reading credential health is not.
+    #[test]
+    fn a_viewer_is_refused_a_branch_that_needs_more_than_view() {
+        let m = mcp();
+        let viewer = unrestricted_id(Role::Viewer);
+        assert!(
+            m.deny_unless_permitted(Some(&viewer), "get_system_health", "credentials")
+                .is_some(),
+            "credential health needs manage-credentials"
+        );
+        // The accept side, on the same tool, so the refusal above is about the *branch* and not
+        // about the gate refusing everything it is shown.
+        assert!(
+            m.deny_unless_permitted(Some(&viewer), "get_system_health", "pollers")
+                .is_none(),
+            "the poller list needs only view"
+        );
+    }
+
+    #[test]
+    fn an_admin_passes_the_branch_a_viewer_is_refused() {
+        let admin = unrestricted_id(Role::Admin);
+        assert!(
+            mcp()
+                .deny_unless_permitted(Some(&admin), "get_system_health", "credentials")
+                .is_none(),
+            "an admin holds manage-credentials"
+        );
+    }
+
+    /// Fail-closed, the same rule as [`a_caller_with_no_identity_sees_nothing`] on the other gate:
+    /// no identity is refused even where the branch asks for nothing more than `View`.
+    #[test]
+    fn no_identity_is_refused_even_on_a_view_only_branch() {
+        assert!(
+            mcp()
+                .deny_unless_permitted(None, "get_system_health", "pollers")
+                .is_some(),
+            "an absent identity must not pass a permission check"
+        );
+    }
+
+    /// 🚨 **`required_permission` panics on a `(tool, arg)` the table does not hold**, and it is
+    /// called from inside a live request. `folded.rs` checks the other direction — that every row
+    /// has an arm — so nothing until now walked the arguments a wrapper can actually pass.
+    ///
+    /// The literals are the wrappers that pass a fixed string or a computed one; the two
+    /// enumerations are the folded discriminators, taken from the same `NAMES` list `parse` reads,
+    /// so a section added there is checked here without being added here.
+    #[test]
+    fn every_argument_a_wrapper_can_pass_is_in_the_folded_table() {
+        let mut args: Vec<(&str, String)> = vec![
+            ("get_interface_thresholds", String::new()),
+            ("list_node_metrics", String::new()),
+            ("fleet_state_history", String::new()),
+            ("get_audit", String::new()),
+            ("get_dns_chain", "current".to_owned()),
+            ("get_dns_chain", "history".to_owned()),
+            ("get_report_runs", "list".to_owned()),
+            ("get_report_runs", "detail".to_owned()),
+        ];
+        for name in HealthSection::NAMES {
+            let s = HealthSection::parse(name).expect("NAMES parses");
+            args.push(("get_system_health", s.arg().to_owned()));
+        }
+        for name in ConfigKind::NAMES {
+            let k = ConfigKind::parse(name).expect("NAMES parses");
+            args.push(("get_config", k.arg().to_owned()));
+        }
+        // The floor counts what was checked, not what was listed: a `NAMES` that stopped parsing
+        // would otherwise leave this passing over the eight literals alone.
+        assert!(
+            args.len() >= 40,
+            "only {} folded arguments were walked; the discriminator lists have shrunk",
+            args.len()
+        );
+        for (tool, arg) in &args {
+            // Panics if the pair has no row — which is the failure this test exists for.
+            let _ = crate::mcp::folded::required_permission(tool, arg);
+        }
+    }
+
+    // ── The two gates in order ──────────────────────────────────────────────────────────────────
+
+    /// A caller who may not read the branch gets the refusal, not a scope — so no store is ever
+    /// consulted on their behalf. ⚠️ The *ordering* itself cannot be observed from the return value
+    /// (in skeleton mode resolving a scope cannot fail), so this pins the outcome and the ordering
+    /// is proved by breaking it: swapping the two statements in `admit` turns this red.
+    #[tokio::test]
+    async fn admit_refuses_before_it_resolves_a_scope() {
+        let viewer = scoped_id(Role::Viewer, Uuid::from_u128(7));
+        let refusal = mcp()
+            .admit(Some(viewer), "get_system_health", "credentials")
+            .await
+            .expect_err("a viewer may not read credential health");
+        let err = refusal.expect_err("a refusal is a protocol error");
+        assert!(
+            err.message.contains("manage-credentials"),
+            "the refusal names the permission the caller lacks: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_hands_back_the_scope_when_the_permission_holds() {
+        let scope = mcp()
+            .admit(
+                Some(unrestricted_id(Role::Admin)),
+                "get_system_health",
+                "credentials",
+            )
+            .await
+            .map_err(|_| "refused")
+            .expect("an admin is admitted");
+        assert!(matches!(scope, NodeScope::All));
+    }
+
+    // ── The invisible-node gate ─────────────────────────────────────────────────────────────────
+
+    /// 🚨 The refusal must not vary with the id it was asked about, and must not echo it. A
+    /// distinct answer for a node that exists would confirm the node exists, which is the leak the
+    /// whole scoping design is for — the tool says the same thing about every id it will not serve.
+    #[tokio::test]
+    async fn the_refusal_for_an_unseeable_node_never_varies_with_the_id() {
+        let m = mcp();
+        let scoped = scoped_id(Role::Admin, Uuid::from_u128(7));
+        let real = m
+            .deny_invisible_node_for(Some(scoped.clone()), "t", Uuid::from_u128(1))
+            .await
+            .expect("a scoped caller sees no node in skeleton mode")
+            .expect("the refusal is a successful tool result");
+        let ghost = m
+            .deny_invisible_node_for(Some(scoped), "t", Uuid::from_u128(999))
+            .await
+            .expect("a nonexistent node is refused too")
+            .expect("the refusal is a successful tool result");
+        assert_eq!(
+            text_of(&real),
+            text_of(&ghost),
+            "the two answers must be indistinguishable"
+        );
+        assert!(
+            !text_of(&real).contains(&Uuid::from_u128(1).to_string()),
+            "the refusal must not echo the id it was asked about"
+        );
+    }
+
+    /// The accept side: an unrestricted caller is not denied, so the assertion above is about the
+    /// scope and not about a gate that refuses everything.
+    #[tokio::test]
+    async fn a_visible_node_is_not_denied() {
+        assert!(
+            mcp()
+                .deny_invisible_node_for(
+                    Some(unrestricted_id(Role::Admin)),
+                    "t",
+                    Uuid::from_u128(1)
+                )
+                .await
+                .is_none(),
+            "an unrestricted caller reaches the tool body"
+        );
+    }
+
+    // ── The dispatcher ──────────────────────────────────────────────────────────────────────────
+
+    /// Every published tool with no arm in [`YagraMcp::call_in`], and why.
+    ///
+    /// `rca/agent.rs::every_agent_tool_has_an_in_process_arm` walks the *allow-list*, so it proves
+    /// nothing about a tool the agent is not offered — two arms (`get_report_runs`,
+    /// `list_discovered_endpoints`) are outside it, and eight declared tools have no arm at all.
+    /// Declaring the eight makes a ninth a test failure rather than a silent gap: a new **read**
+    /// tool that lands with no arm is invisible to the RCA agent forever, and nothing else notices.
+    ///
+    /// ⚠️ The last three are reads and are **not** a decision anyone recorded — they were found by
+    /// this test (ADR-113 decision 5). `list_node_metrics` in particular is the tool `INSTRUCTIONS`
+    /// tells every client to call before `query_metrics`.
+    const NOT_DISPATCHABLE: &[&str] = &[
+        // Writes: the in-process caller is a language model, and MCP's write surface is frozen at
+        // three tools it is deliberately not offered (ADR-042 decision 6).
+        "ack_alert",
+        "open_maintenance",
+        "poll_now",
+        // Starts work and spends money; the agent must not recurse into itself.
+        "run_analysis",
+        "run_rca",
+        // ⚠️ Reads with no arm. Not yet decided — see the doc above.
+        "get_audit",
+        "get_interface_thresholds",
+        "list_node_metrics",
+    ];
+
+    #[tokio::test]
+    async fn every_published_tool_either_dispatches_or_is_declared_undispatchable() {
+        const UNKNOWN: &str = "no in-process tool named";
+        let m = mcp();
+        let mut missing = Vec::new();
+        let published = m.published_tools();
+        for t in &published {
+            let name = t.name.to_string();
+            let out = m
+                .call_in(&name, serde_json::json!({}), &NodeScope::All)
+                .await;
+            let refused_as_unknown = match &out {
+                Err(e) => e.message.contains(UNKNOWN),
+                Ok(_) => false,
+            };
+            if refused_as_unknown {
+                missing.push(name);
+            }
+        }
+        missing.sort();
+        let mut declared: Vec<String> = NOT_DISPATCHABLE.iter().map(|s| (*s).to_owned()).collect();
+        declared.sort();
+        assert_eq!(
+            missing, declared,
+            "the set of published tools with no `call_in` arm has moved; add the arm, or add the \
+             name to NOT_DISPATCHABLE with the reason"
+        );
+        assert!(
+            published.len() >= 36,
+            "only {} tools were published; the router lost a domain",
+            published.len()
+        );
+    }
+
+    /// The load-bearing half of the test above: prove the needle it searches for is what an unknown
+    /// name actually produces. Without this, a dispatcher that stopped producing that message would
+    /// make every tool look reachable.
+    #[tokio::test]
+    async fn a_name_the_dispatcher_does_not_know_is_refused_by_that_wording() {
+        let err = mcp()
+            .call_in("get_the_weather", serde_json::json!({}), &NodeScope::All)
+            .await
+            .expect_err("an unknown name is refused");
+        assert!(
+            err.message.contains("no in-process tool named"),
+            "the needle is not what an unknown name produces: {}",
+            err.message
+        );
     }
 }

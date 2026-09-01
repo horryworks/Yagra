@@ -15,9 +15,12 @@
 //! point of that table. Splitting it in two would be cutting per repository, which is the thing
 //! the rule above forbids.
 //!
-//! 🎯 **[`AlertFacts::recent_history`] takes only a limit.** The real method takes
-//! `(limit, before, before_id)` for keyset paging, and the one caller here has always passed
-//! `(1000, None, None)`. Paging is not something a report does.
+//! 🎯 **[`AlertFacts`] asks for counts, not rows** (ADR-112 Inc.2). It used to expose
+//! `recent_history(limit)` and `render_alert_summary` folded the newest 1000 rows into per-severity
+//! totals — which is why that KPI ran silently low on a busy fleet while the aggregate two sections
+//! away did not. Both halves are aggregates now and take the **same** lower bound, so the one
+//! document can no longer disagree with itself. What that costs: the two filters (`resolved`, the
+//! window) moved into SQL, out of reach of a fake — the same limit `ReportsRepo` has.
 //!
 //! ⚠️ **[`FleetInventory::node_names`] keeps its scope argument.** The only caller passes
 //! "unrestricted", and it carries three lines saying why: a report is an admin-defined, fleet-wide
@@ -39,7 +42,7 @@ use yagra_alert::Alert;
 use yagra_common::{Node, NodeId, NodeState};
 
 use crate::alerts::AlertManager;
-use crate::history::{AlertHistoryRow, AlertHistoryStore};
+use crate::history::AlertHistoryStore;
 use crate::repo::{GroupFilter, NodeRepo};
 
 use super::{ReportDefinition, ReportRun, ReportRunTrigger, ReportsRepo};
@@ -191,7 +194,7 @@ impl FleetInventory for NodeRepo {
 pub(super) trait AlertFacts: Send + Sync {
     fn active_alerts(&self) -> Vec<Alert>;
     fn node_states(&self) -> HashMap<NodeId, NodeState>;
-    async fn recent_history(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>>;
+    async fn fires_by_severity(&self, since_ms: i64) -> anyhow::Result<Vec<(String, i64)>>;
     async fn top_nodes_by_fires(
         &self,
         since_ms: i64,
@@ -222,8 +225,8 @@ impl AlertFacts for LiveAlerts {
         self.alerts.node_states()
     }
 
-    async fn recent_history(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
-        self.history.recent(limit, None, None).await
+    async fn fires_by_severity(&self, since_ms: i64) -> anyhow::Result<Vec<(String, i64)>> {
+        self.history.fires_by_severity(since_ms).await
     }
 
     async fn top_nodes_by_fires(

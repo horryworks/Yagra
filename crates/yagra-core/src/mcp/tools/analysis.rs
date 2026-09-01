@@ -141,7 +141,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "search_analysis_findings";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.search_analysis_findings_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -202,10 +202,10 @@ impl YagraMcp {
         // could already query, so this gate is not about disclosure — it is that launching one is
         // incident-response work with a real compute cost, and the two surfaces must agree on who
         // may do it. They did not: this was `View` while REST was admin-only.
-        let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
+        let Some(identity) = authed_for(identity_of(&ctx), Permission::AckAlerts) else {
             return tool_forbidden(TOOL, "this token lacks ack-alerts permission");
         };
-        let visible = match self.scope_of(&ctx).await {
+        let visible = match self.scope_for(identity_of(&ctx)).await {
             Ok(s) => s,
             Err(e) => return tool_api_error(TOOL, &e),
         };
@@ -310,7 +310,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_analysis_findings";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.analysis_findings_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -350,7 +350,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "list_analyses";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.list_analyses_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -420,13 +420,13 @@ impl YagraMcp {
         // Holds the identity rather than just the scope: it is both the audit actor and the
         // `created_by` stamped on the stored report, exactly as `Actor` is over REST.
         let want = crate::mcp::folded::required_permission(TOOL, "");
-        let Some(identity) = authed_for(&ctx, want) else {
+        let Some(identity) = authed_for(identity_of(&ctx), want) else {
             return tool_forbidden(
                 TOOL,
                 &format!("this token lacks {} permission", permission_label(want)),
             );
         };
-        let scope = match self.scope_of(&ctx).await {
+        let scope = match self.scope_for(identity_of(&ctx)).await {
             Ok(s) => s,
             Err(e) => return tool_api_error(TOOL, &e),
         };

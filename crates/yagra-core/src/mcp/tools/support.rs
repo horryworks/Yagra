@@ -133,11 +133,8 @@ pub(super) fn identity_of(ctx: &RequestContext<RoleServer>) -> Option<McpIdentit
 }
 
 /// [`identity_of`], but only if it holds `perm`. Fail-closed: `None` ⇒ the tool returns forbidden.
-pub(super) fn authed_for(
-    ctx: &RequestContext<RoleServer>,
-    perm: Permission,
-) -> Option<McpIdentity> {
-    identity_of(ctx).filter(|id| id.principal.can(perm))
+pub(super) fn authed_for(id: Option<McpIdentity>, perm: Permission) -> Option<McpIdentity> {
+    id.filter(|id| id.principal.can(perm))
 }
 
 /// The early return for a tool that names a node the caller may not see, or `None` to continue.

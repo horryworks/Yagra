@@ -150,7 +150,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "top_flows";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.top_flows_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -213,7 +213,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "flow_fanout";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.flow_fanout_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -267,7 +267,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "search_events";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.search_events_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -337,7 +337,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "event_stats";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.event_stats_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }

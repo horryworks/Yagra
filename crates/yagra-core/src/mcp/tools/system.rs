@@ -543,12 +543,9 @@ impl YagraMcp {
         // Resolve → authorize → scope → availability. The permission check sits above every store
         // lookup so a caller who may not read a section cannot infer, from a 403-vs-unavailable,
         // whether this deployment has that subsystem configured at all.
-        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, section.arg()) {
-            return deny;
-        }
-        let scope = match self.scope_of(&ctx).await {
+        let scope = match self.admit(identity_of(&ctx), TOOL, section.arg()).await {
             Ok(s) => s,
-            Err(e) => return tool_api_error(TOOL, &e),
+            Err(refusal) => return refusal,
         };
         self.system_health_in(section, p, &scope).await
     }
@@ -692,12 +689,9 @@ impl YagraMcp {
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_report_runs";
         let arg = if p.run_id.is_some() { "detail" } else { "list" };
-        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, arg) {
-            return deny;
-        }
-        match self.scope_of(&ctx).await {
+        match self.admit(identity_of(&ctx), TOOL, arg).await {
             Ok(scope) => self.report_runs_in(p, &scope).await,
-            Err(e) => tool_api_error(TOOL, &e),
+            Err(refusal) => refusal,
         }
     }
 
@@ -748,7 +742,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_audit";
-        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, "") {
+        if let Some(deny) = self.deny_unless_permitted(identity_of(&ctx).as_ref(), TOOL, "") {
             return deny;
         }
         self.audit_in(p).await
@@ -855,12 +849,9 @@ impl YagraMcp {
         // reason: the permission check sits above every store lookup so a caller who may not read a
         // kind cannot infer, from a 403-vs-unavailable, whether this deployment has that subsystem
         // configured at all.
-        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, kind.arg()) {
-            return deny;
-        }
-        let scope = match self.scope_of(&ctx).await {
+        let scope = match self.admit(identity_of(&ctx), TOOL, kind.arg()).await {
             Ok(s) => s,
-            Err(e) => return tool_api_error(TOOL, &e),
+            Err(refusal) => return refusal,
         };
         self.config_in(kind, p, &scope).await
     }

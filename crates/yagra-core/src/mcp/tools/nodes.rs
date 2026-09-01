@@ -156,7 +156,7 @@ impl YagraMcp {
         let Some(kind) = fleet_summary_kind(p.kind.as_deref()) else {
             return bad_fleet_summary_kind(p.kind.as_deref());
         };
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.fleet_summary_dispatch(kind, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -255,7 +255,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "list_nodes";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.list_nodes_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -380,7 +380,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_node_status";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.node_status_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -472,12 +472,9 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "list_node_metrics";
-        if let Some(denied) = self.deny_unless_permitted(&ctx, TOOL, "") {
-            return denied;
-        }
-        match self.scope_of(&ctx).await {
+        match self.admit(identity_of(&ctx), TOOL, "").await {
             Ok(scope) => self.list_node_metrics_in(p, &scope).await,
-            Err(e) => tool_api_error(TOOL, &e),
+            Err(refusal) => refusal,
         }
     }
 
@@ -524,7 +521,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "list_node_groups";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.list_node_groups_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -575,14 +572,17 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "poll_now";
-        let Some(identity) = authed_for(&ctx, Permission::ManageConfig) else {
+        let Some(identity) = authed_for(identity_of(&ctx), Permission::ManageConfig) else {
             return tool_forbidden(TOOL, "this token lacks manage-config permission");
         };
         // Belt-and-braces: `ManageConfig` is Admin, and an Admin cannot hold a group scope
         // (`auth.rs::ADMIN_IS_UNSCOPED`), so this can only ever pass today. It is here so the tool
         // does not depend on that invariant holding somewhere else — the check is one line, and
         // "a permission that happens to imply unscoped" is not a property to build on silently.
-        if let Some(deny) = self.deny_invisible_node_ctx(&ctx, TOOL, p.node_id).await {
+        if let Some(deny) = self
+            .deny_invisible_node_for(identity_of(&ctx), TOOL, p.node_id)
+            .await
+        {
             return deny;
         }
         let Some(admin) = self.state.admin.as_ref() else {
@@ -618,12 +618,9 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "fleet_state_history";
-        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, "") {
-            return deny;
-        }
-        match self.scope_of(&ctx).await {
+        match self.admit(identity_of(&ctx), TOOL, "").await {
             Ok(scope) => self.state_history_in(p, &scope).await,
-            Err(e) => tool_api_error(TOOL, &e),
+            Err(refusal) => refusal,
         }
     }
 
@@ -660,12 +657,9 @@ impl YagraMcp {
         } else {
             "current"
         };
-        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, arg) {
-            return deny;
-        }
-        match self.scope_of(&ctx).await {
+        match self.admit(identity_of(&ctx), TOOL, arg).await {
             Ok(scope) => self.dns_chain_in(p, &scope).await,
-            Err(e) => tool_api_error(TOOL, &e),
+            Err(refusal) => refusal,
         }
     }
 

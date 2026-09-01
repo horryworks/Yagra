@@ -14,7 +14,7 @@
 //! **Group-scoped principals are admitted** (WS-F, closed). They were refused here until every tool
 //! filtered, because admitting one would have handed it the whole fleet — the refusal *was* the
 //! enforcement. Each tool now resolves the caller's scope from the identity below
-//! ([`tools::YagraMcp::scope_of`]) and applies the same rule its REST counterpart does. Note what
+//! ([`tools::YagraMcp::scope_for`]) and applies the same rule its REST counterpart does. Note what
 //! that trade means: a tool that forgets to ask now fails **open**, where before it could not,
 //! which is why `tools/guards.rs` pins "every tool takes a `RequestContext`" with a test — taking one is
 //! the only way a tool body can reach the caller at all.
@@ -225,7 +225,7 @@ async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity,
     // A group-scoped principal is admitted (ADR-028 WS-F). This used to be refused here, because
     // the tools returned unfiltered data and admitting one would have handed it the fleet — the
     // refusal was the whole enforcement. Every tool now resolves the caller's scope from this
-    // identity (`tools/mod.rs::scope_of`) and filters, so the gate that replaced it is per tool.
+    // identity (`tools/mod.rs::scope_for`) and filters, so the gate that replaced it is per tool.
     //
     // ⚠️ Which means a tool that forgets to ask fails **open** now, where it could not before.
     // `mcp/tools/guards.rs` has a test asserting every `#[tool]` takes a `RequestContext`, since taking

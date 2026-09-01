@@ -69,15 +69,18 @@ impl ReportRunner {
         from_s: i64,
         _to_s: i64,
     ) -> Section {
+        // Fires in the window, by severity. The store counts them: this used to fold the newest
+        // 1000 history rows here and was silently low on a busy fleet (ADR-112 Inc.2). The lower
+        // bound is the same expression `render_top_alerting` passes, which is what stops the two
+        // numbers in one report from disagreeing.
         let from_ms = from_s * 1000;
-        // Fires in the window, by severity (resolved=false records since `from`).
-        let recent = self.alerts.recent_history(1000).await.unwrap_or_default();
-        let mut fires: HashMap<String, i64> = HashMap::new();
-        for r in &recent {
-            if !r.resolved && r.at_unix_ms >= from_ms {
-                *fires.entry(r.severity.as_str().to_owned()).or_insert(0) += 1;
-            }
-        }
+        let fires: HashMap<String, i64> = self
+            .alerts
+            .fires_by_severity(from_ms)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         let total_fires: i64 = fires.values().sum();
         // Active alerts now, by severity.
         let active = self.alerts.active_alerts();
@@ -321,7 +324,7 @@ impl ReportRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::testkit::{alert, harness, history_row, n, node, uid};
+    use super::testkit::{alert, harness, n, node, uid};
     use super::*;
 
     use crate::store::{MetricPoint, TopAgg};
@@ -381,34 +384,53 @@ mod tests {
 
     // ── Alert summary ────────────────────────────────────────────────────────────────────────
 
-    /// 🎯 A **resolved** row is the alert going away, not a fire. Nothing checked this: the filter
-    /// is one `!r.resolved` in the middle of a fold.
+    /// 🎯 **The counts come from the store now** (ADR-112 Inc.2), so what this file is responsible
+    /// for is putting them in the right places: three KPIs and a fixed three-row table.
+    ///
+    /// ⚠️ What moved out of reach in exchange: "a resolved row is not a fire" and "a row from
+    /// before the window is not a fire *in the window*" used to be assertions here, over a fold. In
+    /// SQL a fake cannot see them — the same limit `ReportsRepo` has. They are one `const` in
+    /// `history.rs` now, shared with the ranking below, which is why the trade is worth taking.
     #[tokio::test]
-    async fn a_resolved_history_row_is_not_counted_as_a_fire() {
+    async fn the_store_counts_the_fires_and_this_file_places_them() {
         let h = harness()
-            .history(vec![
-                history_row(Severity::Critical, 10_000, false),
-                history_row(Severity::Critical, 10_000, true),
-            ])
+            .fires(vec![("critical".to_owned(), 3), ("warning".to_owned(), 1)])
             .build();
         let s = h.runner.render_alert_summary("a".to_owned(), 0, 60).await;
-        assert_eq!(kpi(&s, "Fires in window"), "1");
-        assert_eq!(kpi(&s, "Critical fires"), "1");
+        assert_eq!(n(&h.calls.fires_by_severity), 1);
+        assert_eq!(kpi(&s, "Fires in window"), "4");
+        assert_eq!(kpi(&s, "Critical fires"), "3");
+        assert_eq!(
+            rows(&s),
+            vec![
+                vec!["critical".to_owned(), "0".to_owned(), "3".to_owned()],
+                vec!["warning".to_owned(), "0".to_owned(), "1".to_owned()],
+                vec!["info".to_owned(), "0".to_owned(), "0".to_owned()],
+            ]
+        );
     }
 
-    /// 🎯 …and one from before the window is not a fire *in the window*. The store is asked for the
-    /// most recent rows regardless of the window, so this filter is the only thing bounding it.
+    /// 🚨 **The defect ADR-112 recorded and did not fix, closed** (Inc.2).
+    ///
+    /// "Fires in window" and "Top alerting nodes" appear two sections apart in one report and a
+    /// reader compares them. The first used to be folded from the newest 1000 history rows and the
+    /// second has always been a SQL aggregate, so on a busy fleet the document disagreed with
+    /// itself. Both are aggregates now; this pins the remaining way they could still diverge, which
+    /// is being counted from different instants.
     #[tokio::test]
-    async fn a_fire_from_before_the_window_is_not_counted() {
-        let h = harness()
-            .history(vec![
-                history_row(Severity::Warning, 4_999, false),
-                history_row(Severity::Warning, 5_000, false),
-                history_row(Severity::Warning, 9_000, false),
-            ])
-            .build();
-        let s = h.runner.render_alert_summary("a".to_owned(), 5, 60).await;
-        assert_eq!(kpi(&s, "Fires in window"), "2", "the boundary is inclusive");
+    async fn both_halves_of_the_alert_story_count_from_the_same_instant() {
+        let h = harness().build();
+        let _ = h.runner.render_alert_summary("a".to_owned(), 5, 60).await;
+        let _ = h
+            .runner
+            .render_top_alerting("b".to_owned(), &settings(serde_json::Value::Null), 5)
+            .await;
+        let seen = h.alerts.since.lock().expect("poisoned").clone();
+        assert_eq!(
+            seen,
+            vec![5_000, 5_000],
+            "the summary and the ranking must be asked for the same window"
+        );
     }
 
     /// The accept side of the two above, and the other half of the table: what is alerting *now*.
@@ -420,11 +442,11 @@ mod tests {
                 alert(Severity::Critical),
                 alert(Severity::Warning),
             ])
-            .history(vec![history_row(Severity::Warning, 10_000, false)])
+            .fires(vec![("warning".to_owned(), 1)])
             .build();
         let s = h.runner.render_alert_summary("a".to_owned(), 0, 60).await;
         assert_eq!(n(&h.calls.active_alerts), 1);
-        assert_eq!(n(&h.calls.recent_history), 1);
+        assert_eq!(n(&h.calls.fires_by_severity), 1);
         assert_eq!(kpi(&s, "Active alerts"), "3");
         assert_eq!(kpi(&s, "Fires in window"), "1");
         // severity, active now, fires in window — in the fixed order critical/warning/info.
@@ -438,24 +460,12 @@ mod tests {
         );
     }
 
-    /// 🚨 **This records a defect rather than endorsing it** (ADR-112).
-    ///
-    /// "Fires in window" is folded from the most recent **1000** history rows and then filtered by
-    /// time, so on a fleet with more than that many transitions inside the window it is silently
-    /// low — and the 1000 is shared with the *resolutions*, so the effective ceiling is roughly
-    /// half. "Top alerting nodes", two sections away, is a SQL aggregate with no such ceiling, so
-    /// the same report can disagree with itself. Fixing it is a behaviour change and belongs in its
-    /// own increment; this test exists so the number cannot change without someone saying so.
-    #[tokio::test]
-    async fn the_fires_count_is_folded_from_at_most_a_thousand_history_rows() {
-        let h = harness().build();
-        let _ = h.runner.render_alert_summary("a".to_owned(), 0, 60).await;
-        assert_eq!(*h.alerts.limits.lock().expect("poisoned"), vec![1000]);
-    }
-
     #[tokio::test]
     async fn a_failed_history_read_renders_an_alert_summary_with_no_fires() {
-        let h = harness().alerts_fail().build();
+        let h = harness()
+            .fires(vec![("critical".to_owned(), 9)])
+            .alerts_fail()
+            .build();
         let s = h.runner.render_alert_summary("a".to_owned(), 0, 60).await;
         assert_eq!(kpi(&s, "Fires in window"), "0");
         assert_eq!(rows(&s).len(), 3, "the severity rows are always present");

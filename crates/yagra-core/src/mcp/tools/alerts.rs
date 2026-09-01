@@ -124,7 +124,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_active_alerts";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.active_alerts_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -190,7 +190,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_alert_history";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.alert_history_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -254,7 +254,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "list_suppressions";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.list_suppressions_in(&scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -313,7 +313,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "alert_trends";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.alert_trends_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -374,12 +374,15 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "ack_alert";
-        let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
+        let Some(identity) = authed_for(identity_of(&ctx), Permission::AckAlerts) else {
             return tool_forbidden(TOOL, "this token lacks ack-alerts permission");
         };
         // A write is scoped like a read, and this one is also a read: the 200/404 difference would
         // otherwise tell a scoped caller whether an invisible node currently has that alert.
-        if let Some(deny) = self.deny_invisible_node_ctx(&ctx, TOOL, p.node_id).await {
+        if let Some(deny) = self
+            .deny_invisible_node_for(identity_of(&ctx), TOOL, p.node_id)
+            .await
+        {
             return deny;
         }
         let Some(severity) = parse_severity(&p.severity) else {
@@ -442,10 +445,13 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "open_maintenance";
-        let Some(identity) = authed_for(&ctx, Permission::ManageMaintenance) else {
+        let Some(identity) = authed_for(identity_of(&ctx), Permission::ManageMaintenance) else {
             return tool_forbidden(TOOL, "this token lacks manage-maintenance permission");
         };
-        if let Some(deny) = self.deny_invisible_node_ctx(&ctx, TOOL, p.node_id).await {
+        if let Some(deny) = self
+            .deny_invisible_node_for(identity_of(&ctx), TOOL, p.node_id)
+            .await
+        {
             return deny;
         }
         let Some(admin) = self.state.admin.as_ref() else {

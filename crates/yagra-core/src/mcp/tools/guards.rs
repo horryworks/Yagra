@@ -624,3 +624,49 @@ fn a_permission_is_named_the_way_the_descriptions_name_it() {
         "the older refusals spell it hyphenated; this helper must match them"
     );
 }
+
+/// The half [`every_tool_takes_a_request_context`] could not see, now that it can (ADR-113).
+///
+/// That check proves a tool *can* ask who is calling; `extensibility.md` has said for two releases
+/// that it proves nothing about the answer being used. It could not: before ADR-113 the identity
+/// was read inside `scope_of` / `deny_unless_permitted`, so a wrapper that took `ctx` and dropped
+/// it looked exactly like one that consulted it.
+///
+/// Now every gate takes the identity as an argument, so passing it on is visible in the wrapper's
+/// own text — and a wrapper that answers without asking is a tool that returns the whole fleet to a
+/// group-scoped token, silently. This is still text, not semantics: it cannot tell a scope that is
+/// *used* from one that is resolved and ignored. It closes the cheaper half.
+#[test]
+fn every_tool_reads_the_identity_out_of_the_context_it_takes() {
+    let surface = crate::mcp::tool_source::tool_surface();
+    let src: &str = surface.as_str();
+    // Assembled at runtime for the reason the sibling check gives: this file would otherwise match
+    // its own needles. (It is excluded from `tool_surface()` as a test-only module, so this is
+    // belt and braces — and the belt is what keeps working when the exclusion changes.)
+    let attr = format!("#[{}(", "tool");
+    let reads = format!("{}(&{})", "identity_of", "ctx");
+    // The `#[tool]` wrapper runs from its attribute to the `pub(super)` body it delegates to (or to
+    // the next tool, for the few that have none).
+    let split_at = format!("{}(super) ", "pub");
+    let starts: Vec<usize> = src.match_indices(&attr).map(|(i, _)| i).collect();
+    let mut checked = 0;
+    for (n, &start) in starts.iter().enumerate() {
+        let end = starts.get(n + 1).copied().unwrap_or(src.len());
+        let seg = &src[start..end];
+        let wrapper = seg.split_once(&split_at).map_or(seg, |(head, _)| head);
+        let name = wrapper
+            .find("async fn ")
+            .map(|i| wrapper[i + 9..].split('(').next().unwrap_or("?"))
+            .unwrap_or("?");
+        assert!(
+            wrapper.contains(&reads),
+            "MCP tool `{name}` takes a RequestContext and never reads the caller out of it, so it \
+             answers a group-scoped token fleet-wide"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 36,
+        "only matched {checked} tool wrappers; the parser drifted"
+    );
+}

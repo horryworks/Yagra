@@ -26,11 +26,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use yagra_alert::{Alert, Subject, SubjectKind};
+use yagra_alert::{Alert, Subject};
 use yagra_bus::PollResult;
 use yagra_common::{CheckId, Node, NodeId, NodeState, SeriesKey, Severity};
 
-use crate::history::AlertHistoryRow;
 use crate::repo::GroupFilter;
 use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
 
@@ -52,27 +51,6 @@ pub(super) fn node(n: u128, name: &str) -> Node {
     node.vendor = Some("Acme".to_owned());
     node.model = Some("R1".to_owned());
     node
-}
-
-/// One alert-history row. `resolved` and `at_unix_ms` are what the window filter reads.
-pub(super) fn history_row(sev: Severity, at_unix_ms: i64, resolved: bool) -> AlertHistoryRow {
-    AlertHistoryRow {
-        id: Uuid::new_v4(),
-        node: Some(uid(1)),
-        subject_kind: SubjectKind::Node,
-        subject_name: None,
-        check: Uuid::new_v4(),
-        severity: sev,
-        state: NodeState::Critical,
-        at_unix_ms,
-        resolved,
-        metric: Some("icmp_rtt_ms".to_owned()),
-        observed_value: None,
-        threshold_value: None,
-        direction: None,
-        ifindex: None,
-        recorded_at: String::new(),
-    }
 }
 
 /// One active alert. Only `severity` is read by a report.
@@ -120,7 +98,7 @@ pub(super) struct Calls {
     pub(super) state_history: AtomicUsize,
     pub(super) active_alerts: AtomicUsize,
     pub(super) node_states: AtomicUsize,
-    pub(super) recent_history: AtomicUsize,
+    pub(super) fires_by_severity: AtomicUsize,
     pub(super) top_nodes_by_fires: AtomicUsize,
     pub(super) top_nodes: AtomicUsize,
     pub(super) throughput_range: AtomicUsize,
@@ -288,11 +266,12 @@ pub(super) struct FakeAlerts {
     calls: Arc<Calls>,
     active: Vec<Alert>,
     states: HashMap<NodeId, NodeState>,
-    history: Vec<AlertHistoryRow>,
+    fires: Vec<(String, i64)>,
     top: Vec<(Uuid, i64)>,
     fails: bool,
-    /// Every limit `recent_history` was handed.
-    pub(super) limits: Mutex<Vec<i64>>,
+    /// Every `since_ms` this fake was handed, by **either** aggregate — so a test can assert the
+    /// two halves of the alert story are counted from the same instant (ADR-112 Inc.2).
+    pub(super) since: Mutex<Vec<i64>>,
 }
 
 #[async_trait]
@@ -307,21 +286,22 @@ impl AlertFacts for FakeAlerts {
         self.states.clone()
     }
 
-    async fn recent_history(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
-        bump(&self.calls.recent_history);
-        self.limits.lock().expect("poisoned").push(limit);
+    async fn fires_by_severity(&self, since_ms: i64) -> anyhow::Result<Vec<(String, i64)>> {
+        bump(&self.calls.fires_by_severity);
+        self.since.lock().expect("poisoned").push(since_ms);
         if self.fails {
             anyhow::bail!("history unavailable");
         }
-        Ok(self.history.clone())
+        Ok(self.fires.clone())
     }
 
     async fn top_nodes_by_fires(
         &self,
-        _since_ms: i64,
+        since_ms: i64,
         limit: i64,
     ) -> anyhow::Result<Vec<(Uuid, i64)>> {
         bump(&self.calls.top_nodes_by_fires);
+        self.since.lock().expect("poisoned").push(since_ms);
         if self.fails {
             anyhow::bail!("history unavailable");
         }
@@ -467,7 +447,7 @@ pub(super) struct HarnessBuilder {
     inventory_fails: bool,
     active: Vec<Alert>,
     states: HashMap<NodeId, NodeState>,
-    history: Vec<AlertHistoryRow>,
+    fires: Vec<(String, i64)>,
     top_fires: Vec<(Uuid, i64)>,
     alerts_fail: bool,
     top_nodes: Vec<(Uuid, f64)>,
@@ -523,8 +503,8 @@ impl HarnessBuilder {
             .collect();
         self
     }
-    pub(super) fn history(mut self, rows: Vec<AlertHistoryRow>) -> Self {
-        self.history = rows;
+    pub(super) fn fires(mut self, counts: Vec<(String, i64)>) -> Self {
+        self.fires = counts;
         self
     }
     pub(super) fn top_fires(mut self, pairs: Vec<(Uuid, i64)>) -> Self {
@@ -586,7 +566,7 @@ impl HarnessBuilder {
             calls: calls.clone(),
             active: self.active,
             states: self.states,
-            history: self.history,
+            fires: self.fires,
             top: self.top_fires,
             fails: self.alerts_fail,
             ..FakeAlerts::default()

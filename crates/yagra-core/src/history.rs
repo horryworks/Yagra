@@ -432,6 +432,43 @@ impl AlertHistoryStore {
          AND ($2::uuid[] IS NULL OR node IN (SELECT id FROM nodes WHERE group_id = ANY($2)))) \
          OR (subject_kind <> 'node' AND $2::uuid[] IS NULL))";
 
+    /// What a **fire** is, and how far back to count — the one copy (ADR-112 Inc.2).
+    ///
+    /// Three aggregates below open with this predicate and each used to spell it out. That was
+    /// survivable while they only had to agree with each other; it stopped being so when
+    /// [`Self::fires_by_severity`] arrived, because its answer and [`Self::top_nodes_by_fires`]'s
+    /// appear **two sections apart in one report** and a reader compares them.
+    const FIRES_SINCE: &'static str = "resolved = false AND at_unix_ms >= $1";
+
+    /// Alert **fires** in the window, counted per severity. Powers the report's "Alert summary".
+    ///
+    /// 🎯 **A SQL aggregate rather than a fold over recent rows** (ADR-112 Inc.2). The report used
+    /// to read the newest 1000 history rows and count them in memory, so on a fleet with more than
+    /// that many transitions inside the window the number was silently low — and the 1000 was
+    /// shared with the resolutions, so the effective ceiling was roughly half. "Top alerting
+    /// nodes", two sections away in the same report, has always been an aggregate, so the one
+    /// document disagreed with itself.
+    ///
+    /// ⚠️ **No `subject_kind` filter, unlike [`Self::top_nodes_by_fires`].** That one ranks
+    /// *nodes*, so a pool subject would rank as a node with no name. This counts severities, and
+    /// the fold it replaces counted every row it was handed — restricting here would be a second,
+    /// unasked-for change of meaning.
+    ///
+    /// ⚠️ **No scope predicate**, for the reason `reports/seams.rs` gives about `node_names`: a
+    /// report is a fleet-wide artefact generated with no requesting principal (ADR-014 non-goal).
+    pub async fn fires_by_severity(&self, since_ms: i64) -> anyhow::Result<Vec<(String, i64)>> {
+        let rows = sqlx::query(&format!(
+            "SELECT severity, count(*) AS n FROM alert_history WHERE {} GROUP BY severity",
+            Self::FIRES_SINCE
+        ))
+        .bind(since_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("severity")?, row.try_get::<i64, _>("n")?)))
+            .collect()
+    }
+
     /// Nodes with the most alert **fires** (resolved=false) at or after `since_ms` (Unix ms),
     /// highest first. Powers the "Top alerting nodes" widget (chronic offenders).
     ///
@@ -443,11 +480,12 @@ impl AlertHistoryStore {
         since_ms: i64,
         limit: i64,
     ) -> anyhow::Result<Vec<(Uuid, i64)>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             "SELECT node, count(*) AS n FROM alert_history \
-             WHERE resolved = false AND at_unix_ms >= $1 AND subject_kind = 'node' \
+             WHERE {} AND subject_kind = 'node' \
              GROUP BY node ORDER BY n DESC LIMIT $2",
-        )
+            Self::FIRES_SINCE
+        ))
         .bind(since_ms)
         .bind(limit.clamp(1, 100))
         .fetch_all(&self.pool)
@@ -476,8 +514,9 @@ impl AlertHistoryStore {
                 extract(dow from to_timestamp(at_unix_ms / 1000.0) at time zone 'UTC')::int AS dow, \
                 extract(hour from to_timestamp(at_unix_ms / 1000.0) at time zone 'UTC')::int AS hour, \
                 count(*) AS n \
-             FROM alert_history WHERE resolved = false AND at_unix_ms >= $1 AND {} \
+             FROM alert_history WHERE {} AND {} \
              GROUP BY dow, hour",
+            Self::FIRES_SINCE,
             Self::SCOPE_PREDICATE
         ))
         .bind(since_ms)
@@ -839,10 +878,22 @@ mod tests {
         // would render as a raw UUID). `SCOPE_PREDICATE` must not let a non-node row past a group
         // filter it cannot evaluate — the fail-closed side of the trade documented on the const.
         let src = squash(&production_source());
+        // "A fire since T" is one const, interpolated by all three aggregates (ADR-112 Inc.2).
+        // Counted rather than re-spelled per statement: three literals that had to agree is
+        // exactly what the const removed, and writing them out here would put the third copy in
+        // the test. What made it worth removing: two of the three answer the *same report*, two
+        // sections apart, and a reader compares them.
+        assert_eq!(
+            AlertHistoryStore::FIRES_SINCE,
+            "resolved = false AND at_unix_ms >= $1"
+        );
+        assert_eq!(
+            src.matches("Self::FIRES_SINCE").count(),
+            3,
+            "every fire aggregate must count from the one predicate"
+        );
         assert!(
-            src.contains(
-                "WHERE resolved = false AND at_unix_ms >= $1 AND subject_kind = 'node' GROUP BY node"
-            ),
+            src.contains("WHERE {} AND subject_kind = 'node' GROUP BY node"),
             "the node ranking no longer filters to node subjects"
         );
         // The whole predicate is parenthesised and so is each side of its `OR` — it is

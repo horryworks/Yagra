@@ -187,7 +187,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "query_metrics";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.query_metrics_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -345,12 +345,9 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_interface_thresholds";
-        if let Some(denied) = self.deny_unless_permitted(&ctx, TOOL, "") {
-            return denied;
-        }
-        match self.scope_of(&ctx).await {
+        match self.admit(identity_of(&ctx), TOOL, "").await {
             Ok(scope) => self.get_interface_thresholds_in(p, &scope).await,
-            Err(e) => tool_api_error(TOOL, &e),
+            Err(refusal) => refusal,
         }
     }
 
@@ -422,7 +419,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_interface_series";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.interface_series_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -470,7 +467,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "top_metrics";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.top_metrics_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -513,7 +510,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "top_interfaces";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.top_interfaces_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -569,7 +566,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "fleet_throughput";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.fleet_throughput_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }

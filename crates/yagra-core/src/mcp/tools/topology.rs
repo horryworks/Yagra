@@ -99,7 +99,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_neighbors";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.neighbors_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -173,7 +173,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "list_discovered_endpoints";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.discovered_endpoints_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
@@ -237,7 +237,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_topology";
-        match self.scope_of(&ctx).await {
+        match self.scope_for(identity_of(&ctx)).await {
             Ok(scope) => self.topology_in(p, &scope).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
