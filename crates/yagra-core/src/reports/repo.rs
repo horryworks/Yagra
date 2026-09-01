@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! **Where reports are kept** — definitions, schedules and runs in PostgreSQL (ADR-004).
 //!
-//! 🚨 **The only file in this module allowed to name a table**, and \`super::guards\` enforces it
-//! both ways. Report generation reads stores through their own repositories; a \`sqlx::query\` in
-//! [\`super::runner\`] or [\`super::sections\`] would be the store-separation rule breaking in the
+//! 🚨 **The only file in this module allowed to name a table**, and `super::guards` enforces it
+//! both ways. Report generation reads stores through their own repositories; a `sqlx::query` in
+//! [`super::runner`] or [`super::sections`] would be the store-separation rule breaking in the
 //! place nobody looks.
 //!
-//! ⚠️ **No test in this module builds a \`ReportsRepo\`**, and that is now a gap rather than a
-//! limit. It used to be both: faking it needed seams (ADR-102 決定 5, done in ADR-112) and running
-//! it needed a live database (ADR-114, done). Neither obstacle is left — the gate on these lines is
-//! still generating a report on a real deployment, because nobody has written the tests yet.
+//! ✅ **Its statements run against a real PostgreSQL** (ADR-116). They were blocked twice over —
+//! faking a `ReportsRepo` needed seams (ADR-102 決定 5, done in ADR-112) and running one needed a
+//! database (ADR-114, done) — and then stayed unwritten once both obstacles were gone, which is
+//! how twenty-two statements reached eight releases with none of them ever executed by a test.
+//! Four `#[sqlx::test]`s now cover definitions, the schedule clock, a run from insert to finish,
+//! and the two janitors.
+//!
+//! 🔧 **`fail_orphans` has no age window** — measured, not assumed. The sweep runs at startup,
+//! when a live run cannot exist, so every queued/running row is an orphan. Its test separates the
+//! two *states* rather than two ages, because a fixture built on an age would have been asserting
+//! a window that is not there.
 
 use super::*;
 
@@ -476,5 +483,349 @@ impl ReportsRepo {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec() -> serde_json::Value {
+        serde_json::json!({ "sections": [{ "kind": "fleet_summary" }] })
+    }
+
+    fn schedule_input(definition_id: Uuid) -> ScheduleInput {
+        ScheduleInput {
+            definition_id,
+            frequency: Cadence::Weekly,
+            day_of_week: Some(1),
+            day_of_month: None,
+            at_hour: 6,
+            at_minute: 30,
+            enabled: true,
+        }
+    }
+
+    /// A definition through its whole life, including the two audit columns.
+    ///
+    /// `updated_by` is written by both writers and read by the list, so it is the one field that
+    /// would go unnoticed if a projection dropped it — the shape ADR-115 found in `repo/settings.rs`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_definition_is_created_read_edited_and_deleted(pool: sqlx::PgPool) {
+        let repo = ReportsRepo::new(pool.clone());
+        let made = repo
+            .create_definition(
+                "weekly health",
+                Some("every monday"),
+                &spec(),
+                Some("alice"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(made.name, "weekly health");
+        assert_eq!(made.description.as_deref(), Some("every monday"));
+        assert_eq!(made.updated_by.as_deref(), Some("alice"));
+        assert_eq!(made.spec, spec());
+
+        let got = repo
+            .get_definition(made.id)
+            .await
+            .unwrap()
+            .expect("read back");
+        assert_eq!(got.id, made.id);
+        assert_eq!(got.created_ms, made.created_ms);
+        assert_eq!(repo.list_definitions().await.unwrap().len(), 1);
+
+        let edited = serde_json::json!({ "sections": [] });
+        assert!(repo
+            .update_definition(made.id, "weekly health v2", None, &edited, Some("bob"))
+            .await
+            .unwrap());
+        let updated = repo
+            .get_definition(made.id)
+            .await
+            .unwrap()
+            .expect("read back");
+        assert_eq!(updated.name, "weekly health v2");
+        assert_eq!(updated.description, None);
+        assert_eq!(updated.updated_by.as_deref(), Some("bob"));
+        assert_eq!(updated.spec, edited);
+
+        // A row that is not there is None / false, never an error: the API edge turns both into a
+        // 404, so the distinction has to survive this far.
+        assert!(repo.get_definition(Uuid::new_v4()).await.unwrap().is_none());
+        assert!(!repo
+            .update_definition(Uuid::new_v4(), "ghost", None, &edited, None)
+            .await
+            .unwrap());
+        assert!(repo.delete_definition(made.id).await.unwrap());
+        assert!(!repo.delete_definition(made.id).await.unwrap());
+        assert!(repo.list_definitions().await.unwrap().is_empty());
+    }
+
+    /// A schedule's clock: what is due, and what `mark_fired` does to it.
+    ///
+    /// 🚨 The **positive** side is the one worth having. `due_schedules` returning nothing is also
+    /// what a broken predicate returns, so a test that only checks "a future schedule is not due"
+    /// passes against a query that is due for nothing, ever
+    /// (`rejection-only-tests-pass-when-everything-rejects`).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_schedule_becomes_due_and_marking_it_fired_moves_it_on(pool: sqlx::PgPool) {
+        let repo = ReportsRepo::new(pool.clone());
+        let def = repo
+            .create_definition("weekly health", None, &spec(), None)
+            .await
+            .unwrap();
+        let past = Utc::now() - chrono::Duration::hours(1);
+        let future = Utc::now() + chrono::Duration::hours(1);
+
+        let id = repo
+            .create_schedule(&schedule_input(def.id), past, Some("alice"))
+            .await
+            .unwrap();
+        let listed = repo.list_schedules().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        let made = &listed[0];
+        assert_eq!(made.id, id);
+        assert_eq!(made.definition_id, def.id);
+        assert_eq!(made.definition_name, "weekly health");
+        assert_eq!(made.frequency, Cadence::Weekly);
+        assert!(made.enabled);
+        assert!(made.last_status.is_none());
+
+        let due = repo.due_schedules().await.unwrap();
+        assert_eq!(
+            due.len(),
+            1,
+            "a schedule whose next run is in the past is due"
+        );
+        assert_eq!(due[0].id, id);
+
+        repo.mark_fired(id, ReportScheduleStatus::Queued, future)
+            .await
+            .unwrap();
+        assert!(
+            repo.due_schedules().await.unwrap().is_empty(),
+            "marking it fired moved the next run into the future"
+        );
+        let after = repo.list_schedules().await.unwrap();
+        assert_eq!(after[0].last_status, Some(ReportScheduleStatus::Queued));
+        assert!(after[0].last_run_ms.is_some());
+
+        // Disabled is not the same as not due: the predicate must exclude it even in the past.
+        let mut off = schedule_input(def.id);
+        off.enabled = false;
+        assert!(repo
+            .update_schedule(id, &off, past, Some("bob"))
+            .await
+            .unwrap());
+        assert!(repo.due_schedules().await.unwrap().is_empty());
+
+        assert!(!repo
+            .update_schedule(Uuid::new_v4(), &off, past, None)
+            .await
+            .unwrap());
+        assert!(repo.delete_schedule(id).await.unwrap());
+        assert!(!repo.delete_schedule(id).await.unwrap());
+    }
+
+    /// A run from insert to finish, read back through all three readers, and filtered three ways.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_run_is_inserted_progressed_finished_and_read_back(pool: sqlx::PgPool) {
+        let repo = ReportsRepo::new(pool.clone());
+        let def = repo
+            .create_definition("weekly health", None, &spec(), None)
+            .await
+            .unwrap();
+
+        let run = repo
+            .insert_run(
+                Some(def.id),
+                "weekly health",
+                ReportRunTrigger::Manual,
+                1_760_000_000,
+                1_760_086_400,
+                3,
+                &spec(),
+                Some("alice"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(run.state, ReportRunState::Running);
+        assert_eq!(run.pct, 0);
+        assert_eq!(run.section_count, 3);
+        assert_eq!(run.created_by.as_deref(), Some("alice"));
+        assert_eq!(run.trigger, ReportRunTrigger::Manual);
+        assert!(run.started_ms.is_some());
+        assert!(run.finished_ms.is_none());
+
+        repo.set_run_progress(run.id, 40).await.unwrap();
+        assert_eq!(repo.get_run(run.id).await.unwrap().unwrap().pct, 40);
+
+        let html = "<h1>weekly health</h1>";
+        repo.finish_run(run.id, &spec(), html).await.unwrap();
+        let done = repo.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(done.state, ReportRunState::Succeeded);
+        assert_eq!(done.pct, 100);
+        assert!(done.finished_ms.is_some());
+
+        // Progress only moves a *running* run, so a finished one is not walked backwards by a
+        // late tick from its own task.
+        repo.set_run_progress(run.id, 10).await.unwrap();
+        assert_eq!(repo.get_run(run.id).await.unwrap().unwrap().pct, 100);
+
+        let detail = repo.get_run_detail(run.id).await.unwrap().expect("detail");
+        assert_eq!(detail.run.id, run.id);
+        assert_eq!(detail.result_json.as_ref(), Some(&spec()));
+        assert_eq!(detail.result_html.as_deref(), Some(html));
+        assert!(repo.get_run(Uuid::new_v4()).await.unwrap().is_none());
+        assert!(repo.get_run_detail(Uuid::new_v4()).await.unwrap().is_none());
+
+        let failed = repo
+            .insert_run(
+                None,
+                "ad hoc",
+                ReportRunTrigger::Scheduled,
+                1_760_000_000,
+                1_760_086_400,
+                1,
+                &spec(),
+                None,
+            )
+            .await
+            .unwrap();
+        repo.fail_run(failed.id, "the metric store said no")
+            .await
+            .unwrap();
+        let failed_row = repo.get_run(failed.id).await.unwrap().unwrap();
+        assert_eq!(failed_row.state, ReportRunState::Failed);
+        assert_eq!(
+            failed_row.error.as_deref(),
+            Some("the metric store said no")
+        );
+
+        // Every clause of RUN_FILTER_WHERE is always present and bound; each one on its own must
+        // narrow, and an empty filter must not.
+        let all = repo.list_runs(50, &RunFilter::default()).await.unwrap();
+        assert_eq!(all.len(), 2);
+        let by_def = repo
+            .list_runs(
+                50,
+                &RunFilter {
+                    definition_id: Some(def.id),
+                    ..RunFilter::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_def.len(), 1);
+        assert_eq!(by_def[0].id, run.id);
+        let by_state = repo
+            .list_runs(
+                50,
+                &RunFilter {
+                    state: Some(ReportRunState::Failed),
+                    ..RunFilter::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_state.len(), 1);
+        assert_eq!(by_state[0].id, failed.id);
+        let future = repo
+            .list_runs(
+                50,
+                &RunFilter {
+                    since: Some(Utc::now() + chrono::Duration::hours(1)),
+                    ..RunFilter::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(future.is_empty());
+
+        assert!(repo.delete_run(run.id).await.unwrap());
+        assert!(!repo.delete_run(run.id).await.unwrap());
+        assert_eq!(
+            repo.list_runs(50, &RunFilter::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// The two janitors: a run left `running` by a core that died, and runs older than the window.
+    ///
+    /// 🚨 Both directions on both, because each one deletes or rewrites rows. A janitor that takes
+    /// everything satisfies "the stale row is gone" perfectly.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_janitors_take_the_stale_rows_and_leave_the_rest(pool: sqlx::PgPool) {
+        let repo = ReportsRepo::new(pool.clone());
+        let stale = repo
+            .insert_run(
+                None,
+                "interrupted",
+                ReportRunTrigger::Scheduled,
+                1_760_000_000,
+                1_760_086_400,
+                1,
+                &spec(),
+                None,
+            )
+            .await
+            .unwrap();
+        let live = repo
+            .insert_run(
+                None,
+                "in flight",
+                ReportRunTrigger::Manual,
+                1_760_000_000,
+                1_760_086_400,
+                1,
+                &spec(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 🔧 **Measured, not assumed.** There is no age window: the sweep runs at startup, when a
+        // live run cannot exist by definition, so every queued/running row is an orphan. The
+        // fixture therefore separates the two states rather than two ages.
+        repo.finish_run(live.id, &spec(), "<p>done</p>")
+            .await
+            .unwrap();
+
+        assert_eq!(repo.fail_orphans().await.unwrap(), 1);
+        assert_eq!(
+            repo.get_run(stale.id).await.unwrap().unwrap().state,
+            ReportRunState::Failed
+        );
+        assert_eq!(
+            repo.get_run(live.id).await.unwrap().unwrap().state,
+            ReportRunState::Succeeded,
+            "a run that had already finished is not rewritten"
+        );
+        // Idempotent: the second sweep finds nothing, because the first one left it `failed`.
+        assert_eq!(repo.fail_orphans().await.unwrap(), 0);
+
+        sqlx::query("UPDATE report_runs SET created_at = now() - interval '40 days' WHERE id = $1")
+            .bind(stale.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(repo.prune_runs(60 * 86_400).await.unwrap(), 0);
+        assert_eq!(repo.prune_runs(30 * 86_400).await.unwrap(), 1);
+        assert_eq!(
+            repo.list_runs(50, &RunFilter::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
