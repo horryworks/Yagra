@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Migrations: what this binary embeds, and whether it may start against a given database.
 //!
-//! [`embedded_migrations`] is one function rather than a second `sqlx::migrate!` call, because two
-//! call sites of that macro are two answers to "what does this build embed?" that nothing keeps
-//! equal. [`NodeRepo::migrate`] applies it; `yagra-core migrations` prints it **without a
-//! database**, which is what lets an upgrade be planned from the target image (ADR-050 決定 6).
+//! [`MIGRATIONS`] is the **one** `sqlx::migrate!` call site in the workspace, because two call
+//! sites of that macro are two answers to "what does this build embed?" that nothing keeps equal.
+//! It has three readers: [`NodeRepo::migrate`] applies it, `yagra-core migrations` prints it
+//! **without a database** (ADR-050 決定 6), and `#[sqlx::test(migrator = …)]` migrates each test's
+//! throwaway database from it (ADR-114). The first two go through [`embedded_migrations`], which
+//! hands back an owned value they may adjust.
 //!
 //! 🚨 **An applied migration is immutable.** `sqlx::migrate!` checksums every file, so changing one
 //! byte in a migration that has already run makes every existing deployment refuse to start. That
@@ -16,15 +18,34 @@
 
 use super::*;
 
-/// The migration set compiled into this binary.
+/// **The one `sqlx::migrate!` call site in the workspace**, and `guards` holds it to that.
 ///
-/// One function rather than a second `sqlx::migrate!` call, because two call sites of that macro
-/// are two answers to "what does this build embed?" that nothing keeps equal. [`NodeRepo::migrate`]
-/// applies it; `yagra-core migrations` prints it **without a database**, which is what lets an
-/// upgrade be planned from the target image before anything is touched (ADR-050 decision 6).
+/// Two call sites of that macro are two answers to "what does this build embed?" that nothing
+/// keeps equal, which is why [`embedded_migrations`] was a function wrapping the macro rather
+/// than a second call of it. ADR-114 needed the same set from a *third* place —
+/// `#[sqlx::test(migrator = "crate::repo::MIGRATIONS")]`, which takes a `&'static Migrator` and
+/// so cannot call a function — so the macro moved into this static and the function reads it.
+/// The count is unchanged: still one macro, now with two readers instead of one.
+///
+/// A `static` works because `Migrator`'s fields are `pub` (`#[doc(hidden)]`, semver-exempt) for
+/// exactly this purpose — sqlx-core's own comment says they exist so `migrate!()` can initialise
+/// them "in an implicitly const-promotable context".
+pub static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
+/// The migration set compiled into this binary, as an owned value the caller may adjust.
+///
+/// [`NodeRepo::migrate`] needs ownership: it may call `set_ignore_missing` (ADR-050 decision 7).
+/// `yagra-core migrations` prints it **without a database**, which is what lets an upgrade be
+/// planned from the target image before anything is touched (ADR-050 decision 6).
 #[must_use]
 pub fn embedded_migrations() -> sqlx::migrate::Migrator {
-    sqlx::migrate!("../../migrations")
+    sqlx::migrate::Migrator {
+        // `Cow::Borrowed` — the clone copies a pointer, not 101 migrations.
+        migrations: MIGRATIONS.migrations.clone(),
+        ignore_missing: MIGRATIONS.ignore_missing,
+        locking: MIGRATIONS.locking,
+        no_tx: MIGRATIONS.no_tx,
+    }
 }
 
 /// May this binary start against a database whose migration history it does not fully recognise?
@@ -303,5 +324,130 @@ mod tests {
                  starting. Add it to GRANDFATHERED_REVERSIBLE instead."
             );
         }
+    }
+
+    // ── Against a real database (ADR-114) ────────────────────────────────────────────────
+    //
+    // These take `migrations = false`, which is the one place in the crate that wants an
+    // *unmigrated* database: everything below is about `NodeRepo::migrate` itself, and a harness
+    // that had already run it would be testing nothing.
+
+    /// **Every embedded migration applies, in order, to an empty database.**
+    ///
+    /// Nothing proved this before ADR-114. The set is 101 files and the only thing that had ever
+    /// run them from nothing was a deployment — so a migration that is fine on top of the
+    /// previous release and broken from scratch would first be seen by a *new install*, which is
+    /// the one path with no rollback and the one this repository has repeatedly found unguarded.
+    ///
+    /// The count assertion is the floor: `run()` returning `Ok` over zero migrations looks exactly
+    /// like `run()` succeeding over all of them.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_embedded_migration_applies_to_an_empty_database(pool: sqlx::PgPool) {
+        let embedded = embedded_migrations().iter().count();
+        assert!(embedded >= 100, "only {embedded} migrations are embedded");
+
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.migrate().await.expect("migrate an empty database");
+
+        let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .expect("read _sqlx_migrations");
+        assert_eq!(
+            applied,
+            i64::try_from(embedded).unwrap(),
+            "the database has {applied} of {embedded} migrations applied"
+        );
+        // And the schema is usable, not merely recorded: `nodes` is the table the first migration
+        // creates and the last release still reads.
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 0);
+    }
+
+    /// **Migrating twice does nothing the second time**, which is what every restart does.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migrating_a_second_time_applies_nothing(pool: sqlx::PgPool) {
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.migrate().await.expect("first migrate");
+        let after_first: Vec<i64> = sqlx::query_scalar(
+            "SELECT version FROM _sqlx_migrations WHERE success ORDER BY version",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read versions");
+
+        repo.migrate().await.expect("second migrate");
+        let after_second: Vec<i64> = sqlx::query_scalar(
+            "SELECT version FROM _sqlx_migrations WHERE success ORDER BY version",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read versions");
+
+        assert_eq!(after_first, after_second);
+    }
+
+    /// **A database a newer core migrated still boots** (ADR-050 決定 7) — the downgrade path.
+    ///
+    /// [`relax_ignore_missing`] is unit-tested above as a pure function; what was never tested is
+    /// that [`NodeRepo::migrate`] actually consults it and passes the answer to sqlx. That is the
+    /// half a rollback depends on, and the half that fails as a refusal to start.
+    ///
+    /// Paired with the rejection below, deliberately: a `migrate` that always succeeded would
+    /// satisfy this test on its own.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_database_migrated_by_a_newer_core_still_boots(pool: sqlx::PgPool) {
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.migrate().await.expect("migrate");
+        record_foreign_migration(&pool, 999_999, "a version from a future release").await;
+
+        repo.migrate()
+            .await
+            .expect("a database that is merely ahead must still boot");
+    }
+
+    /// **A hole in the middle of the history refuses to boot**, which is a different database or
+    /// a different migration set — the misconfiguration the sqlx guard exists to catch.
+    ///
+    /// Version 0 is the only spelling available: the embedded set is 1…N with no gaps, so every
+    /// value inside its range is one we know. Below the range is still "unknown and not ahead",
+    /// which is exactly the predicate.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_history_we_do_not_recognise_refuses_to_boot(pool: sqlx::PgPool) {
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.migrate().await.expect("migrate");
+        record_foreign_migration(&pool, 0, "a version from somebody else's migration set").await;
+
+        let err = repo
+            .migrate()
+            .await
+            .expect_err("an unrecognised history must not be forgiven");
+        let text = format!("{err:#}");
+        assert!(
+            text.contains('0'),
+            "the refusal should name the version it did not recognise: {text}"
+        );
+    }
+
+    /// Write a row into sqlx's own bookkeeping table, as a core with a different set would have.
+    ///
+    /// The checksum is deliberately not a real one: nothing reads it on this path
+    /// (`ignore_missing` does not touch `VersionMismatch`), and computing one would make the
+    /// fixture look like it was asserting something it is not.
+    async fn record_foreign_migration(pool: &sqlx::PgPool, version: i64, description: &str) {
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations \
+             (version, description, success, checksum, execution_time) \
+             VALUES ($1, $2, true, $3, 0)",
+        )
+        .bind(version)
+        .bind(description)
+        .bind(vec![0u8; 48])
+        .execute(pool)
+        .await
+        .expect("insert a foreign migration row");
     }
 }

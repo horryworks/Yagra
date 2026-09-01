@@ -13,10 +13,11 @@
 //! Always append. Changing an existing built-in also needs a range-delete migration, because the
 //! stable id's `ON CONFLICT` shadows the stale row (`extensibility.md` §6).
 //!
-//! ⚠️ **[`NodeRepo::seed_builtin_profiles`] has no unit test and this split did not give it one.**
-//! Its effect is thirty-odd INSERTs against a live database, which is not a seam of the shape
-//! ADR-092 introduced, so the only thing exercising it is that it runs on every boot of every
-//! deployment. That is a real gate, but it is the only one.
+//! ✅ **[`NodeRepo::seed_builtin_profiles`] is tested now** (ADR-114). This doc used to say it had
+//! no test and could not have one: its effect is thirty-odd INSERTs against a live database, which
+//! is not a seam of the shape ADR-092 introduced, so the only thing exercising it was that it runs
+//! on every boot of every deployment. `#[sqlx::test]` runs those INSERTs — including, at last, a
+//! check that every seeded id really is its array position rather than a comment asking for it.
 
 use std::collections::HashMap;
 
@@ -34,8 +35,13 @@ pub(super) const DEMO_NODE_ID: Uuid = Uuid::nil();
 
 impl NodeRepo {
     /// If the inventory is empty, seed a few demo nodes so the walking skeleton shows
-    /// real ICMP data immediately. Idempotent: only seeds an empty table, so it won't
-    /// resurrect nodes an operator has deleted.
+    /// real ICMP data immediately. Idempotent: only seeds an empty table, so a node an operator
+    /// deleted stays deleted **as long as any node remains**.
+    ///
+    /// ⚠️ **Emptying the inventory completely brings all three back on the next boot**, because
+    /// the guard is `count(*) = 0` and nothing records that this deployment has already been
+    /// bootstrapped. Measured by `the_demo_seed_returns_once_the_inventory_is_completely_empty`
+    /// (ADR-114); the doc here used to claim otherwise.
     pub async fn seed_demo_nodes_if_empty(&self) -> anyhow::Result<()> {
         let count: i64 = sqlx::query("SELECT count(*) AS n FROM nodes")
             .fetch_one(&self.pool)
@@ -399,5 +405,201 @@ impl NodeRepo {
             "seeded built-in collection templates + device profiles + classification rules"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::seed_ids::SeedRange;
+
+    /// The catalogue tables [`NodeRepo::seed_builtin_profiles`] **fills**, with the columns that
+    /// identify a row in each.
+    ///
+    /// ⚠️ Two of the eight this file declares in [`super::super::guards`] are deliberately absent,
+    /// and the difference is the point: that list is "tables whose name may appear in this file's
+    /// SQL", which is not the same set.
+    ///
+    /// * `collection_items` is only ever **deleted** from here — the legacy profile-scope rows the
+    ///   built-in profiles used to carry. A first cut of this test asserted the seed fills it and
+    ///   failed, which is the check working.
+    /// * `nodes` belongs to [`NodeRepo::seed_demo_nodes_if_empty`], a different decision, below.
+    const CATALOGUE: [(&str, &str); 6] = [
+        ("collection_templates", "id"),
+        ("collection_template_items", "template_id, metric_name"),
+        ("profiles", "id"),
+        // A join table with a composite primary key and no `id` column.
+        ("profile_collection_templates", "profile_id, template_id"),
+        ("classification_rules", "id"),
+        ("thresholds", "id"),
+    ];
+
+    /// **Bootstrapping an empty database fills every catalogue table.**
+    ///
+    /// This function had no test at all before ADR-114 — the module doc said so in as many words,
+    /// and said why: its effect is thirty-odd INSERTs against a live database. The only thing
+    /// exercising it was that it runs on every boot of every deployment.
+    ///
+    /// Each table is asserted separately rather than as a total, because the failure worth
+    /// catching is one loop silently writing nothing while the others still do.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn bootstrapping_fills_every_catalogue_table(pool: sqlx::PgPool) {
+        let repo = crate::pgtest::repo(pool.clone());
+        for (table, _) in CATALOGUE {
+            assert_eq!(
+                crate::pgtest::rows(&pool, table).await,
+                0,
+                "{table} is not empty before the seed"
+            );
+        }
+
+        repo.seed_builtin_profiles().await.expect("seed");
+
+        for (table, _) in CATALOGUE {
+            assert!(
+                crate::pgtest::rows(&pool, table).await > 0,
+                "{table} is still empty after the seed"
+            );
+        }
+        // The other half of what this function does: it removes the legacy profile-scope
+        // collection items rather than writing any. Nothing seeds that table.
+        assert_eq!(crate::pgtest::rows(&pool, "collection_items").await, 0);
+    }
+
+    /// **Seeding twice changes nothing** — which is what the second boot of every deployment does.
+    ///
+    /// The whole `ON CONFLICT DO NOTHING` scheme rests on this, and the way it breaks is not a
+    /// duplicate row (the constraints stop that) but a *re-keyed* one: a row whose id is derived
+    /// from an array position inserts beside the old one rather than colliding with it. So the
+    /// comparison is over the key sets, not the counts.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn seeding_twice_leaves_the_same_rows(pool: sqlx::PgPool) {
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.seed_builtin_profiles().await.expect("first seed");
+        let before = catalogue_keys(&pool).await;
+
+        repo.seed_builtin_profiles().await.expect("second seed");
+        let after = catalogue_keys(&pool).await;
+
+        assert_eq!(before, after, "the second seed changed the catalogue");
+        assert!(
+            before.iter().all(|(_, keys)| !keys.is_empty()),
+            "a table was compared while empty: {before:?}"
+        );
+    }
+
+    /// 🚨 **Every seeded id is its entry's array position.**
+    ///
+    /// The landmine CLAUDE.md names by hand: `SeedRange::X.id(i)` takes `i` from the position in
+    /// `yagra_common::builtin_*()`, so **inserting an entry mid-array silently re-keys every later
+    /// row** and breaks the node→profile bindings of every existing deployment. Until now the only
+    /// thing standing between that and production was the warning comment.
+    ///
+    /// The two named catalogues are checked per name, so a failure reports *which* entry moved
+    /// rather than that something did.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_seeded_id_is_its_arrays_position(pool: sqlx::PgPool) {
+        crate::pgtest::repo(pool.clone())
+            .seed_builtin_profiles()
+            .await
+            .expect("seed");
+
+        let expected_profiles: Vec<(Uuid, String)> = yagra_common::builtin_profiles()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (SeedRange::Profiles.id(i), p.name.to_owned()))
+            .collect();
+        assert!(!expected_profiles.is_empty(), "the catalogue is empty");
+        assert_eq!(stored(&pool, "profiles").await, expected_profiles);
+
+        let expected_templates: Vec<(Uuid, String)> = yagra_common::builtin_templates()
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (SeedRange::CollectionTemplates.id(i), t.name.to_owned()))
+            .collect();
+        assert_eq!(
+            stored(&pool, "collection_templates").await,
+            expected_templates
+        );
+
+        // Classification rules have no unique name, so they are compared by id alone — which is
+        // still exactly what shifts when an entry is inserted mid-array.
+        let expected_rules: Vec<Uuid> = (0..yagra_common::builtin_classification_rules().len())
+            .map(|i| SeedRange::ClassificationRules.id(i))
+            .collect();
+        let stored_rules: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM classification_rules ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .expect("read classification_rules");
+        assert_eq!(stored_rules, expected_rules);
+    }
+
+    /// ⚠️ **Emptying the inventory completely brings the demo nodes back.**
+    ///
+    /// 🔧 **Measured, not intended.** The doc on [`NodeRepo::seed_demo_nodes_if_empty`] said it
+    /// "won't resurrect nodes an operator has deleted", and that is true of *some* — the guard is
+    /// `count(*) = 0`, so deleting one node keeps the rest safe. It is false of the case the
+    /// sentence describes as a whole: delete every node and the next boot seeds three again.
+    ///
+    /// This test pins what the code does rather than what the comment claimed, and the comment has
+    /// been narrowed to match. Whether the behaviour itself should change is a separate decision
+    /// (it needs somewhere to record "already bootstrapped", which is a stored setting and a new
+    /// default) and is recorded in ADR-114 rather than made here.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_demo_seed_returns_once_the_inventory_is_completely_empty(pool: sqlx::PgPool) {
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.seed_demo_nodes_if_empty().await.expect("first seed");
+        let seeded = crate::pgtest::rows(&pool, "nodes").await;
+        assert!(seeded > 0, "the demo seed wrote no nodes");
+
+        // Delete one: the guard holds, because the table is not empty.
+        let first = repo.list_nodes().await.expect("list")[0].id.as_uuid();
+        repo.delete_node(first).await.expect("delete one");
+        repo.seed_demo_nodes_if_empty().await.expect("second seed");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "nodes").await,
+            seeded - 1,
+            "a single deleted node was resurrected"
+        );
+
+        // Delete the rest: the guard does not hold, and the whole set comes back.
+        for node in repo.list_nodes().await.expect("list") {
+            repo.delete_node(node.id.as_uuid()).await.expect("delete");
+        }
+        repo.seed_demo_nodes_if_empty().await.expect("third seed");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "nodes").await,
+            seeded,
+            "the guard is `count(*) = 0`; an empty inventory is seeded again"
+        );
+    }
+
+    /// `(id, name)` of every row of `table`, ordered by id.
+    async fn stored(pool: &sqlx::PgPool, table: &str) -> Vec<(Uuid, String)> {
+        // Interpolated because a table name cannot be bound; every caller is a literal above.
+        sqlx::query_as::<_, (Uuid, String)>(&format!("SELECT id, name FROM {table} ORDER BY id"))
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| panic!("read {table}: {e}"))
+    }
+
+    /// Every catalogue table's key set as text, ordered — comparable across two seeds.
+    async fn catalogue_keys(pool: &sqlx::PgPool) -> Vec<(&'static str, Vec<String>)> {
+        let mut out = Vec::new();
+        for (table, key) in CATALOGUE {
+            let keys: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT concat_ws('/', {key}) FROM {table} ORDER BY 1"
+            ))
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| panic!("read {table}: {e}"));
+            out.push((table, keys));
+        }
+        out
     }
 }

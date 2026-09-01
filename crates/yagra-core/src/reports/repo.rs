@@ -6,9 +6,10 @@
 //! [\`super::runner\`] or [\`super::sections\`] would be the store-separation rule breaking in the
 //! place nobody looks.
 //!
-//! ⚠️ **No test in this module builds a \`ReportsRepo\`.** It needs a live database, and the seams
-//! that would let it be faked are a separate job (ADR-102 decision 5) — the gate on these 399 lines
-//! is generating a report on a real deployment.
+//! ⚠️ **No test in this module builds a \`ReportsRepo\`**, and that is now a gap rather than a
+//! limit. It used to be both: faking it needed seams (ADR-102 決定 5, done in ADR-112) and running
+//! it needed a live database (ADR-114, done). Neither obstacle is left — the gate on these lines is
+//! still generating a report on a real deployment, because nobody has written the tests yet.
 
 use super::*;
 

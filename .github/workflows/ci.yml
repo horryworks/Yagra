@@ -102,6 +102,25 @@ jobs:
     # See the note above `jobs:` — fork PRs are not built.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # The database tests (ADR-114) need a running PostgreSQL, not a compile-time one: the workspace
+    # has no `sqlx::query!` macros and no `.sqlx` directory, so the *build* still needs nothing.
+    # `#[sqlx::test]` creates one throwaway database per test from this server, which is why the
+    # account is the image's superuser — it must be able to CREATE DATABASE.
+    #
+    # Pinned to the same image every deployment runs (`docker-compose.yml`). A test suite passing
+    # against a different major than production is a weaker statement than it looks.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -132,6 +151,19 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      # 🚨 A SECOND command, and it is not a duplicate of the one above.
+      #
+      # The database tests carry `#[ignore]` so that `cargo test` on a machine with no PostgreSQL
+      # stays green (ADR-114) — which means the run above skips them. This is the run that does not.
+      #
+      # ⚠️ `--all-targets` is load-bearing. `--include-ignored` also un-ignores doctests written as
+      # ```ignore, which are illustrative snippets that were never meant to compile;
+      # `yagra-common/src/srcread.rs` holds one that fails immediately. `--all-targets` covers
+      # lib/bin/test targets and excludes doctests, so the step above remains the one that runs them.
+      - name: Test (database)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: cargo test --workspace --all-targets -- --include-ignored
 
   frontend:
     name: frontend (web)

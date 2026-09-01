@@ -1177,4 +1177,152 @@ mod tests {
         let src = production_source();
         assert_eq!(src.matches("at time zone 'UTC'").count(), 2);
     }
+
+    // ── Against a real database (ADR-114) ────────────────────────────────────────────────
+    //
+    // ADR-112 Increment 2 moved the "Fires in window" count out of a fold over
+    // `recent_history(1000)` and into `fires_by_severity`. It said, in as many words, what that
+    // cost: "resolutions are not fires" and "the window excludes what is outside it" had been
+    // assertions over the fold, reachable from a fake, and became SQL that no fake can see. These
+    // are those assertions, back — and the third is the one the hardware could not answer.
+
+    /// A fire (or resolution) for `subject`, at `at_unix_ms`, with `severity`.
+    fn fire(node: Uuid, severity: Severity, at_unix_ms: i64) -> Alert {
+        Alert {
+            subject: yagra_alert::Subject::Node(NodeId::from(node)),
+            check: CheckId::from(Uuid::new_v4()),
+            severity,
+            state: NodeState::Critical,
+            at_unix_ms,
+            metric: "icmp_rtt_ms".to_owned(),
+            breach: None,
+            flapping: false,
+            root_cause: None,
+            ifindex: None,
+        }
+    }
+
+    /// **A fire is `resolved = false`, at or after the window's start.**
+    ///
+    /// Three ways to be counted wrongly, one fixture: a resolution inside the window, a fire
+    /// before it, and a fire on the boundary itself (`>=`, so it counts).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_fires_inside_the_window_are_counted(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "n1", 1, None).await;
+        let store = AlertHistoryStore::new(pool.clone());
+        let since = 10_000i64;
+        store
+            .record_batch(&[
+                (fire(node, Severity::Critical, since), false), // on the boundary
+                (fire(node, Severity::Critical, since + 5), false),
+                (fire(node, Severity::Warning, since + 5), false),
+                (fire(node, Severity::Critical, since + 5), true), // a resolution, not a fire
+                (fire(node, Severity::Critical, since - 1), false), // one millisecond too early
+            ])
+            .await
+            .expect("record");
+
+        let mut counts = store.fires_by_severity(since).await.expect("count");
+        counts.sort();
+        assert_eq!(
+            counts,
+            vec![("critical".to_owned(), 2), ("warning".to_owned(), 1)],
+            "a resolution or an out-of-window row was counted as a fire"
+        );
+
+        // The acceptance side, so a query that had stopped matching anything cannot pass: widen
+        // the window and the row that was excluded appears.
+        let all = store.fires_by_severity(0).await.expect("count");
+        assert_eq!(all.iter().map(|(_, n)| n).sum::<i64>(), 4);
+    }
+
+    /// **The two numbers on one page cannot disagree.**
+    ///
+    /// "Fires in window" and "Top alerting nodes" are two sections of the same report, two
+    /// paragraphs apart, and they used to be produced by different mechanisms over different
+    /// row sets. Since ADR-112 Increment 2 they share [`AlertHistoryStore::FIRES_SINCE`] and are
+    /// given the same lower bound; this runs both against one fixture and adds them up.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_halves_of_the_alert_story_agree_on_one_fixture(pool: sqlx::PgPool) {
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+        let store = AlertHistoryStore::new(pool.clone());
+        let since = 10_000i64;
+        let mut records: Vec<(Alert, bool)> = Vec::new();
+        for _ in 0..7 {
+            records.push((fire(a, Severity::Critical, since + 1), false));
+        }
+        for _ in 0..3 {
+            records.push((fire(b, Severity::Warning, since + 1), false));
+        }
+        // Noise neither is allowed to count.
+        records.push((fire(a, Severity::Critical, since + 1), true));
+        records.push((fire(b, Severity::Critical, since - 1), false));
+        store.record_batch(&records).await.expect("record");
+
+        let by_severity: i64 = store
+            .fires_by_severity(since)
+            .await
+            .expect("severity")
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+        let by_node: i64 = store
+            .top_nodes_by_fires(since, 100)
+            .await
+            .expect("nodes")
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+
+        assert_eq!(by_severity, 10);
+        assert_eq!(by_node, by_severity, "the report's two totals disagree");
+    }
+
+    /// 🎯 **More than a thousand fires in the window are all counted.**
+    ///
+    /// The defect ADR-112 Increment 2 fixed: the count used to come from a fold over the most
+    /// recent 1,000 history rows, so a busy window silently reported fewer fires than it held —
+    /// and fires and resolutions shared that budget, so the effective ceiling depended on the mix.
+    ///
+    /// 🚨 **The deployment could not answer this.** `.210`'s seven-day window held 816 rows
+    /// (503 fires, 313 resolutions), so the old code and the new one both said 503 and the fix was
+    /// only ever confirmed as "not broken". 1,200 fires plus 400 resolutions is 1,600 rows — over
+    /// the old cap in total, and over it in fires alone.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_window_holding_more_than_a_thousand_fires_reports_all_of_them(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "busy", 1, None).await;
+        let store = AlertHistoryStore::new(pool.clone());
+        let since = 10_000i64;
+        let mut records: Vec<(Alert, bool)> = Vec::with_capacity(1_600);
+        for i in 0..1_200i64 {
+            records.push((fire(node, Severity::Critical, since + i), false));
+        }
+        for i in 0..400i64 {
+            records.push((fire(node, Severity::Critical, since + i), true));
+        }
+        store.record_batch(&records).await.expect("record");
+
+        let total: i64 = store
+            .fires_by_severity(since)
+            .await
+            .expect("count")
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(total, 1_200, "the count is capped again");
+        assert_eq!(
+            store
+                .top_nodes_by_fires(since, 100)
+                .await
+                .expect("nodes")
+                .first()
+                .map(|(_, n)| *n),
+            Some(1_200),
+            "the ranking and the count no longer agree past the old cap"
+        );
+    }
 }

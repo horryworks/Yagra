@@ -4,8 +4,13 @@
 //! Things `events/` must hold true that have no type: that the predicate and its binder agree on
 //! how many parameters there are, that the events INSERT binds every column it names, and that a
 //! query only appears in a file allowed to hold one. Each is answered by reading the module's own
-//! source, which is the only technique available — the alternatives need a live PostgreSQL, which
-//! is exactly what these files are the adapter for.
+//! source.
+//!
+//! ⚠️ **This doc used to say that was the only technique available, because the alternatives needed
+//! a live PostgreSQL.** ADR-114 gave the suite one. These three stay: how many parameters a
+//! predicate has, whether an INSERT binds every column it names, and which file a query may live
+//! in are facts about the *text*. Running the query answers none of them — it answers what the
+//! query returned, on the fixture in front of it.
 //!
 //! Declared `#[cfg(test)] mod guards;` in [`super`], which is how [`crate::module_source`]'s
 //! exclusion derives it — a scan that lives in the text it scans matches its own literals. ADR-086

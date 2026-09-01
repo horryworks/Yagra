@@ -2,9 +2,12 @@
 //! What the poll dispatcher is allowed to read, expressed as four traits (ADR-111).
 //!
 //! Before this file [`PollDispatcher`](super::PollDispatcher) held eight concrete repositories,
-//! seven of which need a live PostgreSQL. That is why **473 production lines shipped with no
-//! tests**: not because nobody wrote them, but because no test could construct the value they are
-//! methods on. ADR-096 決定 3 and ADR-098 決定 4 each measured that and deliberately stopped; this
+//! seven of which need a live PostgreSQL — which, at the time, no test in the workspace had. That
+//! is why **473 production lines shipped with no tests**: not because nobody wrote them, but
+//! because no test could construct the value they are methods on. (ADR-114 has since given the
+//! suite a database, so the *other* repair was available too. It would have been the worse one:
+//! a seam says what the dispatcher is allowed to read, and a real store says only what one
+//! fixture happened to contain.) ADR-096 決定 3 and ADR-098 決定 4 each measured that and deliberately stopped; this
 //! is the rest of it, and the same shape [`crate::analysis::seams`] took.
 //!
 //! The traits are cut by **what the caller needs**, never per repository (ADR-092 決定 1) — nine

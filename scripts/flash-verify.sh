@@ -6,16 +6,27 @@
 # already-materialized source, so only the test harnesses are compiled here.
 #
 # This is what replaced CI on a `main` push (see the note at the top of .github/workflows/ci.yml).
-# It runs the same two things CI's `backend` job ran — full-workspace clippy including test code,
-# and `cargo test --workspace` — but on the box that is already warm for this commit, and
-# concurrently with the deploy, which is network-bound and needs no CPU.
+# It runs the same things CI's `backend` job runs — full-workspace clippy including test code,
+# `cargo test --workspace`, and the database tests behind it — but on the box that is already warm
+# for this commit, and concurrently with the deploy, which is network-bound and needs no CPU.
 #
 # It must NOT be started while flash-build.sh is running: both take cargo's lock on the shared
 # target volume, so overlapping them serialises them anyway, and the ship-gate is the one on the
 # critical path.
 #
-# Tests need no external services — the workspace has no `sqlx::query!` compile-time macros and no
-# `.sqlx` offline directory, which is also why CI ran them with no service containers.
+# **Tests need a PostgreSQL** (ADR-114). The build still does not — the workspace has no
+# `sqlx::query!` compile-time macros and no `.sqlx` offline directory — but `#[sqlx::test]` gives
+# each database test a throwaway database at *run* time, so this script stands one up, hands its URL
+# to the test container over a private network, and removes both on the way out.
+#
+# ⚠️ **Those tests are `#[ignore]`d, so a run without `--include-ignored` skips them silently.**
+# A push to `main` starts no CI (see the note at the top of .github/workflows/ci.yml), which makes
+# this script the only gate they ever pass through on the way to the two boxes.
+#
+# ⚠️ **Two test commands, and the second one needs `--all-targets`.** `--include-ignored` also
+# un-ignores doctests written as ```ignore — which are illustrative snippets that do not compile,
+# and `yagra-common/src/srcread.rs` holds one that fails immediately. `--all-targets` covers
+# lib/bin/test targets and deliberately excludes doctests, so the first command is what runs those.
 #
 # ⚠️ **This lints with the PINNED toolchain (1.90), not with whatever `stable` is today.** That is
 # the right call for the compile — the binary that ships is the one that was linted — but it means
@@ -35,7 +46,35 @@ SRC=${SRC:-/var/tmp/yagra-flash-src}
 docker image inspect "$BUILDER" >/dev/null 2>&1 \
   || { echo "flash-verify: $BUILDER missing — run scripts/flash-build.sh first" >&2; exit 1; }
 
-docker run --rm \
+PG=${PG:-yagra-flash-pg}
+NET=${NET:-yagra-flash-net}
+
+# Both are removed on every exit path, including a failed test run: the container holds a port and
+# ~30 MB of tmpfs, and a leftover one makes the next run's `docker run --name` fail rather than
+# reusing it. The network goes last because the container is attached to it.
+cleanup() {
+  docker rm -f "$PG" >/dev/null 2>&1 || true
+  docker network rm "$NET" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+cleanup
+
+docker network create "$NET" >/dev/null
+docker run -d --name "$PG" --network "$NET" \
+  -e POSTGRES_PASSWORD=postgres postgres:17-alpine >/dev/null
+
+# 🚨 Fail here rather than falling through. If the server never comes up, sqlx dies inside the test
+# container with a connection error per test, which reads as "the database tests are broken" — the
+# most expensive possible way to learn that a container did not start.
+ready=""
+for _ in $(seq 1 60); do
+  if docker exec "$PG" pg_isready -q 2>/dev/null; then ready=1; break; fi
+  sleep 1
+done
+[ -n "$ready" ] || { echo "flash-verify: $PG never became ready" >&2; docker logs "$PG" >&2; exit 1; }
+
+docker run --rm --network "$NET" \
+  -e DATABASE_URL="postgres://postgres:postgres@$PG:5432/postgres" \
   -v "$SRC":/app \
   -v yagra-flash-target:/app/target \
   -v yagra-flash-registry:/usr/local/cargo/registry \
@@ -44,4 +83,5 @@ docker run --rm \
     set -e
     cargo clippy --workspace --all-targets --profile $PROFILE -- -D warnings
     cargo test --workspace --profile $PROFILE
+    cargo test --workspace --all-targets --profile $PROFILE -- --include-ignored
   "

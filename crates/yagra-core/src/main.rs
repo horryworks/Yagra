@@ -77,6 +77,10 @@ mod notifications;
 mod notify_facts;
 mod notify_render;
 mod oidc;
+/// Tests that run against a real PostgreSQL: the convention, the fixtures, and the checks
+/// that keep the convention honest (ADR-114). Test-only, like `module_source` above.
+#[cfg(test)]
+mod pgtest;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;

@@ -53,6 +53,21 @@ The repository conventions, should they be useful to you:
 
 - `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets -- -D warnings`, then
   `cargo test --workspace`. CI gates on all three; the formatting check failing fails everything.
+- **The database tests do not run by default, and they are not optional.** Tests that need a real
+  PostgreSQL carry `#[ignore]`, so the run above skips them and prints how many
+  (`… 0 failed; N ignored`). To run them, point `DATABASE_URL` at a server whose account can
+  `CREATE DATABASE` — each test gets a throwaway one — and add `--all-targets -- --include-ignored`:
+
+  ```
+  docker run -d --name yagra-pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+  echo 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres' > .env   # gitignored
+  cargo test --workspace --all-targets -- --include-ignored
+  ```
+
+  `--all-targets` is not optional either: `--include-ignored` would otherwise also try to compile
+  doc examples written as ```ignore, which were never meant to compile. CI runs both commands.
+  A **failed** database test leaves its database behind for inspection; drop the `_sqlx_test`
+  schema and the `_sqlx_test_*` databases to tidy up.
 - In `web/`: `npm run test`, `npm run lint`, `npm run i18n:check`, `npm run build`. Every
   user-facing string exists in **both** English and Japanese, and the parity check enforces it.
 - API shapes are **generated, not hand-written**. Changing a handler under

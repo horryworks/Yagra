@@ -392,3 +392,217 @@ impl NodeRepo {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A walk that reports one port, filling only the two columns the metadata walk fills.
+    fn walk(node: Uuid, ifindex: i32, name: &str, alias: Option<&str>) -> InterfaceBatchRow {
+        (
+            node,
+            InterfaceUpsert {
+                ifindex,
+                if_name: Some(name.to_owned()),
+                if_alias: alias.map(str::to_owned),
+                if_speed: None,
+                if_duplex: None,
+                if_type: None,
+                if_media: None,
+                transceiver_model: None,
+                rx_power_low_dbm: None,
+                rx_power_high_dbm: None,
+                tx_power_low_dbm: None,
+                tx_power_high_dbm: None,
+            },
+        )
+    }
+
+    /// `last_seen` for one row, at full precision.
+    ///
+    /// [`InterfaceMeta::last_seen_s`] is Unix **seconds**, which cannot tell "not rewritten" from
+    /// "rewritten twice within the same second" — the exact distinction every test below turns on.
+    async fn last_seen(
+        pool: &sqlx::PgPool,
+        node: Uuid,
+        ifindex: i32,
+    ) -> chrono::DateTime<chrono::Utc> {
+        sqlx::query_scalar("SELECT last_seen FROM interfaces WHERE node_id = $1 AND ifindex = $2")
+            .bind(node)
+            .bind(ifindex)
+            .fetch_one(pool)
+            .await
+            .expect("read last_seen")
+    }
+
+    /// Move one row's clock back, as if the walk had last touched it `secs` ago.
+    async fn age(pool: &sqlx::PgPool, node: Uuid, ifindex: i32, secs: i64) {
+        sqlx::query(
+            "UPDATE interfaces SET last_seen = now() - interval '1 second' * $3 \
+             WHERE node_id = $1 AND ifindex = $2",
+        )
+        .bind(node)
+        .bind(ifindex)
+        .bind(secs as f64)
+        .execute(pool)
+        .await
+        .expect("age the row");
+    }
+
+    /// 🚨 **A second walk reporting the same thing writes nothing** (ADR-110 Increment 1).
+    ///
+    /// A table walk re-reports every port every time and a live device changes none of these
+    /// columns, so writing unconditionally was 1,159,864 row updates per cycle at fleet scale and
+    /// was what broke the receiving side first. The saving was measured on hardware (5.02×); what
+    /// was never checked anywhere is the statement itself, and the `WHERE` clause that carries it
+    /// is assembled from a `LazyLock<String>` at runtime.
+    ///
+    /// "Nothing was written" is read off `last_seen`, because the clock column is on the same
+    /// lazy touch: a row the `WHERE` excluded keeps the timestamp it had.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_walk_that_reports_no_change_rewrites_no_row(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+        let rows = vec![
+            walk(node, 1, "Gi0/1", Some("uplink")),
+            walk(node, 2, "Gi0/2", Some("access")),
+        ];
+
+        repo.upsert_interfaces_batch(&rows).await.expect("first");
+        let first = (
+            last_seen(&pool, node, 1).await,
+            last_seen(&pool, node, 2).await,
+        );
+
+        repo.upsert_interfaces_batch(&rows).await.expect("second");
+        let second = (
+            last_seen(&pool, node, 1).await,
+            last_seen(&pool, node, 2).await,
+        );
+
+        assert_eq!(first, second, "an unchanged walk rewrote its rows");
+        // The acceptance side: a statement that had stopped inserting anything would make the two
+        // reads fail rather than pass, but one that had stopped *updating* would satisfy the
+        // equality above forever. The next test is the other half.
+        assert_eq!(repo.list_interfaces(node).await.unwrap().len(), 2);
+    }
+
+    /// **A changed column is written, and only its own row is.**
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_the_row_that_changed_is_rewritten(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.upsert_interfaces_batch(&[
+            walk(node, 1, "Gi0/1", Some("uplink")),
+            walk(node, 2, "Gi0/2", Some("access")),
+        ])
+        .await
+        .expect("first");
+        let before = (
+            last_seen(&pool, node, 1).await,
+            last_seen(&pool, node, 2).await,
+        );
+
+        repo.upsert_interfaces_batch(&[
+            walk(node, 1, "Gi0/1", Some("uplink-2")),
+            walk(node, 2, "Gi0/2", Some("access")),
+        ])
+        .await
+        .expect("second");
+
+        let after = (
+            last_seen(&pool, node, 1).await,
+            last_seen(&pool, node, 2).await,
+        );
+        assert!(after.0 > before.0, "the changed row was not rewritten");
+        assert_eq!(
+            after.1, before.1,
+            "an unchanged row was rewritten beside it"
+        );
+
+        let stored = repo.list_interfaces(node).await.unwrap();
+        let alias = |ifindex| {
+            stored
+                .iter()
+                .find(|i| i.ifindex == ifindex)
+                .and_then(|i| i.if_alias.clone())
+        };
+        assert_eq!(alias(1).as_deref(), Some("uplink-2"));
+        assert_eq!(alias(2).as_deref(), Some("access"));
+    }
+
+    /// ⚠️ **A writer that says nothing about a column must not blank it.**
+    ///
+    /// The row has several writers — the metadata walk, the optical probe and the MAU walk each
+    /// fill different columns — so every column is `COALESCE(EXCLUDED.c, interfaces.c)`. The
+    /// documented consequence is real and worth pinning from both sides: a walk sending `NULL`
+    /// leaves the previous value in place *forever*, which is why correcting a stored value takes
+    /// a poller change **and** a one-time `UPDATE` (migrations 0086 and 0088).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_writer_with_nothing_to_say_about_a_column_leaves_it_alone(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+
+        // The optical probe fills the power window and nothing else.
+        let mut optical = walk(node, 1, "Gi0/1", Some("uplink"));
+        optical.1.rx_power_low_dbm = Some(-9.5);
+        repo.upsert_interfaces_batch(&[optical])
+            .await
+            .expect("optical");
+
+        // The metadata walk then reports the same port, knowing nothing about optics.
+        repo.upsert_interfaces_batch(&[walk(node, 1, "Gi0/1", Some("uplink-2"))])
+            .await
+            .expect("metadata");
+
+        let stored = repo.list_interfaces(node).await.unwrap();
+        let row = stored.iter().find(|i| i.ifindex == 1).expect("the row");
+        assert_eq!(
+            row.if_alias.as_deref(),
+            Some("uplink-2"),
+            "the change landed"
+        );
+        assert_eq!(
+            row.rx_power_low_dbm,
+            Some(-9.5),
+            "the other writer's column was blanked"
+        );
+    }
+
+    /// **The lazy clock touch fires only once the row is old enough** — both directions.
+    ///
+    /// This is the half of ADR-110 Increment 1 that keeps "write only what changed" from making a
+    /// live port look stale: `last_seen` is still advanced by a walk that changed nothing, just
+    /// not on every cycle. [`INTERFACE_TOUCH_SECS`] is the boundary, and the invariant
+    /// `2 * INTERFACE_TOUCH_SECS < INTERFACE_STALE_SECS` is what makes the lag safe.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_unchanged_row_is_touched_only_once_it_is_old_enough(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+        let rows = vec![walk(node, 1, "Gi0/1", Some("uplink"))];
+        repo.upsert_interfaces_batch(&rows).await.expect("insert");
+
+        // Not yet old enough: still skipped.
+        age(&pool, node, 1, INTERFACE_TOUCH_SECS / 2).await;
+        let young = last_seen(&pool, node, 1).await;
+        repo.upsert_interfaces_batch(&rows).await.expect("young");
+        assert_eq!(
+            last_seen(&pool, node, 1).await,
+            young,
+            "a row inside the touch window was rewritten"
+        );
+
+        // Past the window: touched, even though nothing about it changed.
+        age(&pool, node, 1, INTERFACE_TOUCH_SECS + 60).await;
+        let old = last_seen(&pool, node, 1).await;
+        repo.upsert_interfaces_batch(&rows).await.expect("old");
+        assert!(
+            last_seen(&pool, node, 1).await > old,
+            "a row past the touch window was never refreshed — every port would go stale"
+        );
+    }
+}

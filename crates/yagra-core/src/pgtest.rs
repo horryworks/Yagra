@@ -1,0 +1,255 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! **Tests that run against a real PostgreSQL** — the convention, the fixtures, and the checks
+//! that keep the convention honest (ADR-114).
+//!
+//! ## Why this exists
+//!
+//! Roughly 3,950 production lines of this crate are raw SQL with no tests, and ADR-111, ADR-112
+//! and ADR-113 each stopped at the same sentence: the remaining lines are SQL, and the only way
+//! to check SQL is to run it. Cutting more seams does not reach them. `#[sqlx::test]` does: it
+//! creates a throwaway database per test, migrates it, and hands the body a [`sqlx::PgPool`].
+//!
+//! ## The convention — two attributes, in this order
+//!
+//! ```ignore
+//! #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+//! #[ignore = "needs DATABASE_URL"]
+//! async fn a_fresh_database_starts_empty(pool: sqlx::PgPool) {
+//!     let repo = crate::pgtest::repo(pool);
+//!     assert_eq!(repo.list_nodes().await.unwrap().len(), 0);
+//! }
+//! ```
+//!
+//! * **`migrator` rather than `migrations = "…"`.** The path form expands to a second
+//!   `sqlx::migrate!`, and `repo/migrate.rs` exists to keep that macro to one call site — two
+//!   sites are two answers to "what does this build embed?" that nothing keeps equal.
+//! * **The mark goes second**, because `#[sqlx::test]` is the attribute macro and everything
+//!   after it is what the macro receives and re-emits above the `#[test]` it generates.
+//!
+//! ## Why a mark and not a cargo feature
+//!
+//! sqlx offers no third option: with no `DATABASE_URL` its harness **panics** rather than
+//! skipping (`sqlx-postgres/src/testing/mod.rs` — `dotenvy::var("DATABASE_URL").expect(…)`), so a
+//! plain `cargo test` on a machine with no database would fail. A cargo feature would hide these
+//! tests from the default build entirely — including from `clippy --all-targets` — and code that
+//! is neither compiled nor linted locally rots without anyone seeing it. The mark keeps them
+//! compiled and linted always; only the *running* is opt-in, and CI and `scripts/flash-verify.sh`
+//! both opt in on every run.
+//!
+//! ## Running them
+//!
+//! ```text
+//! docker run -d --name yagra-pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+//! echo 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres' > .env   # gitignored
+//! cargo test --workspace -- --include-ignored
+//! ```
+//!
+//! The account must be able to `CREATE DATABASE`; sqlx makes one per test, named from a hash of
+//! the test's path, and drops it again **only when the test passed** — a failed test leaves its
+//! database behind on purpose, to be inspected. Dropping the `_sqlx_test` schema (and the
+//! `_sqlx_test_*` databases it lists) is the tidy-up.
+
+use sqlx::PgPool;
+use uuid::Uuid;
+
+/// A [`NodeRepo`](crate::repo::NodeRepo) over the pool the test harness handed us.
+///
+/// Thin, and deliberately the only wrapper here: every other store already takes a pool
+/// (`AlertHistoryStore::new`, `EventRepo::new`, `ReportsRepo::new`, …), so a test builds those
+/// directly and there is nothing for this module to add.
+#[must_use]
+pub fn repo(pool: PgPool) -> crate::repo::NodeRepo {
+    crate::repo::NodeRepo::from_pool(pool)
+}
+
+/// A folder group, created through the production writer.
+///
+/// Fixtures here go through the real repository rather than a hand-written `INSERT` on purpose:
+/// an insert spelled out in a test is a second copy of the schema that drifts silently, and the
+/// table-placement guards (`repo/guards.rs`, `events/guards.rs`) would not see it — they read
+/// production text, and this module is test-only.
+pub async fn group(pool: &PgPool, name: &str) -> Uuid {
+    crate::groups::GroupRepo::new(pool.clone())
+        .create(name, crate::groups::GroupType::Site, None, None)
+        .await
+        .expect("create group")
+}
+
+/// A node with an address derived from `n`, optionally in `group`.
+pub async fn node(pool: &PgPool, name: &str, n: u8, group: Option<Uuid>) -> Uuid {
+    let repo = repo(pool.clone());
+    let addr = std::net::IpAddr::from([10, 0, 0, n]);
+    let id = repo
+        .create_node(name, addr, None, None, None, None, None, None)
+        .await
+        .expect("create node");
+    if let Some(g) = group {
+        repo.set_node_group(id, Some(g)).await.expect("set group");
+    }
+    id
+}
+
+/// Rows in `table`. A `count(*)` spelled once rather than in every test that needs one.
+pub async fn rows(pool: &PgPool, table: &str) -> i64 {
+    // The name is interpolated because a table name cannot be a bind parameter. Every caller is
+    // a literal in this crate's own tests, so there is no input to sanitise.
+    sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|e| panic!("count {table}: {e}"))
+}
+
+#[cfg(test)]
+mod guards {
+    use std::path::{Path, PathBuf};
+
+    use yagra_common::srcread::{file_name, read, rs_files};
+
+    /// How many database tests must exist for the check below to mean anything.
+    ///
+    /// Deliberately below the real count: this is a floor against the detector going blind, not a
+    /// target. Raise it when a whole new area gets covered, not per test.
+    const MIN_DATABASE_TESTS: usize = 12;
+
+    /// This crate's `src` directory.
+    fn src() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
+    }
+
+    /// Every `.rs` file under `src`, as `(name, raw text)`.
+    ///
+    /// 🚨 **Raw**, not [`crate::module_source::code`]. That reader removes every test-only item,
+    /// which is *all* of the population these checks are about — pointed at it they would search
+    /// an empty string, find nothing, and pass forever. That is the same failure the reader
+    /// itself exists to stop, met from the other side.
+    fn raw_files() -> Vec<(String, String)> {
+        let mut paths = Vec::new();
+        rs_files(&src(), &mut paths);
+        paths.iter().map(|p| (file_name(p), read(p))).collect()
+    }
+
+    /// Line numbers of every database test in `text`, paired with whether it carries the mark.
+    ///
+    /// Both needles are assembled at runtime. Written out as literals they would appear in this
+    /// file, which is one of the files scanned, and the check would then be reporting on itself
+    /// (`self-matching-needle-has-two-directions`).
+    fn database_tests(text: &str) -> Vec<(usize, bool)> {
+        let attr = format!("#[{}::test", "sqlx");
+        let mark = format!("#[{}", "ignore");
+        let lines: Vec<&str> = text.lines().collect();
+        let mut out = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if !line.trim_start().starts_with(&attr) {
+                continue;
+            }
+            // The mark must be the very next line. An attribute anywhere below the macro is
+            // re-emitted above the generated `#[test]` and would work, but only the adjacent one
+            // is unambiguous to a human reading the test.
+            let marked = lines
+                .get(i + 1)
+                .is_some_and(|l| l.trim_start().starts_with(&mark));
+            out.push((i + 1, marked));
+        }
+        out
+    }
+
+    /// **A database test may not run by default**, so `cargo test` never starts needing a server.
+    ///
+    /// Without this, one forgotten mark turns a green workspace run on a machine with no
+    /// PostgreSQL into a failing one, and the failure looks like a broken test rather than a
+    /// missing attribute.
+    #[test]
+    fn every_database_test_is_ignored_by_default() {
+        // Acceptance side first, on text that is not on disk: a scanner that has stopped matching
+        // is indistinguishable from a clean crate (rejection-only tests pass when everything is
+        // rejected).
+        let attr = format!("#[{}::test", "sqlx");
+        let mark = format!("#[{}", "ignore");
+        let sample =
+            format!("{attr}(migrator = \"m\")]\n{mark}]\nasync fn good() {{}}\n{attr}]\nasync fn bad() {{}}\n");
+        let found = database_tests(&sample);
+        assert_eq!(
+            found.len(),
+            2,
+            "the scanner no longer reads the idiom it exists to find: {found:?}"
+        );
+        assert_eq!(
+            (found[0].1, found[1].1),
+            (true, false),
+            "the scanner cannot tell a marked test from an unmarked one: {found:?}"
+        );
+
+        let files = raw_files();
+        assert!(
+            files.len() >= 150,
+            "only {} files were read under src/; nothing below is being checked",
+            files.len()
+        );
+        let mut total = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for (name, text) in &files {
+            for (line, marked) in database_tests(text) {
+                total += 1;
+                if !marked {
+                    offenders.push(format!("{name}:{line}"));
+                }
+            }
+        }
+        // 🚨 The floor counts the database tests **found**, not the files walked. The population
+        // this rule is about is "somebody wrote a database test"; a detector that stopped seeing
+        // them reports a clean crate in exactly the same words as a clean crate.
+        assert!(
+            total >= MIN_DATABASE_TESTS,
+            "only {total} database test(s) were found under src/; the detector has stopped \
+             matching and the assertion below is vacuous"
+        );
+        assert!(
+            offenders.is_empty(),
+            "{offenders:?} run by default. A database test needs the ignore attribute on the line \
+             below its `sqlx::test` attribute — see `crate::pgtest`"
+        );
+    }
+
+    /// **The migration macro keeps exactly one call site**, which is what `repo/migrate.rs` says.
+    ///
+    /// Two call sites are two answers to "what does this build embed?" that nothing keeps equal.
+    /// ADR-114 needed the set from a third place and it would have been very easy to write the
+    /// path form of the test attribute on every test instead — that spelling expands to the
+    /// macro, once per test.
+    #[test]
+    fn the_migration_macro_has_exactly_one_call_site() {
+        let needle = format!("{}::migrate!(", "sqlx");
+        assert!(
+            format!("static M: Migrator = {needle}\"../../migrations\");").contains(&needle),
+            "the needle no longer matches the idiom it exists to find"
+        );
+
+        let files = raw_files();
+        assert!(
+            files.len() >= 150,
+            "only {} files were read under src/",
+            files.len()
+        );
+        let sites: Vec<String> = files
+            .iter()
+            .flat_map(|(name, text)| {
+                text.lines()
+                    .enumerate()
+                    .filter(|(_, l)| !l.trim_start().starts_with("//") && l.contains(&needle))
+                    .map(|(i, _)| format!("{name}:{}", i + 1))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            sites.len(),
+            1,
+            "the migration macro is called from {} place(s): {sites:?}. It must be called once, \
+             from `repo/migrate.rs`'s `MIGRATIONS` static, and read from there",
+            sites.len()
+        );
+        assert!(
+            sites[0].starts_with("migrate.rs:"),
+            "the one call site moved out of `repo/migrate.rs`: {sites:?}"
+        );
+    }
+}

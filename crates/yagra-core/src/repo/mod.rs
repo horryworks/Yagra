@@ -2,9 +2,15 @@
 //! PostgreSQL metadata: the node inventory, the deployment's own settings, and the bootstrap.
 //!
 //! Metadata — nodes, profiles, thresholds, alert history — lives in PostgreSQL (store separation,
-//! CLAUDE.md Architecture). This is an I/O adapter (live-only), so it is exercised in deployment,
-//! not unit tests; the domain types it returns ([`Node`]) are tested in `yagra-common`. Queries are
-//! runtime `sqlx::query` (not the compile-time macro) so the build needs no live database.
+//! CLAUDE.md Architecture). Queries are runtime `sqlx::query` (not the compile-time macro) so **the
+//! build** needs no live database — that is still true and is a separate claim from the next one.
+//!
+//! ⚠️ **This module used to say it was "exercised in deployment, not unit tests".** Since ADR-114
+//! it is not: `#[sqlx::test]` gives each test its own throwaway database, so the SQL here can be
+//! run rather than only read. Those tests carry `#[ignore]` and run under `--include-ignored`, so
+//! a machine with no PostgreSQL still gets a green `cargo test` — see [`crate::pgtest`]. The
+//! source-reading checks in [`guards`] stay: they answer questions about the *text* (which table a
+//! statement names, which constant it clamps to) that executing the statement cannot.
 //!
 //! ## Where a method goes: the table its SQL names
 //!
@@ -78,6 +84,11 @@ pub use interfaces::{
 };
 pub use listing::{NodeListing, StaticNodeList, NODE_SCAN_MAX, NODE_SEARCH_MAX};
 pub use migrate::embedded_migrations;
+// The static itself is read by `embedded_migrations` above; only *this name* is test-only, and it
+// exists because `#[sqlx::test(migrator = "crate::repo::MIGRATIONS")]` needs a path it can spell
+// from outside `migrate`. Unconditional, it is dead code in the shipped binary.
+#[cfg(test)]
+pub use migrate::MIGRATIONS;
 #[allow(unused_imports)]
 pub use nodes::TopologyRow;
 // Re-exported for `TopologyRow`'s reason above, not by oversight: both are the return type of a
@@ -203,6 +214,23 @@ impl NodeRepo {
     #[must_use]
     pub fn pool(&self) -> PgPool {
         self.pool.clone()
+    }
+
+    /// Wrap a pool somebody else opened — the inverse of [`pool`](Self::pool).
+    ///
+    /// Every sibling store already had this constructor (`AlertHistoryStore::new`,
+    /// `EventRepo::new`, `ReportsRepo::new`, `AnalysisRepo::new` are all `fn new(PgPool)`);
+    /// `NodeRepo` never did, because the binary only ever reaches one through
+    /// [`connect`](Self::connect), which owns the retry loop and the `YAGRA_PG_MAX_CONNECTIONS`
+    /// default — neither of which a caller holding a pool wants.
+    ///
+    /// `#[cfg(test)]` because `#[sqlx::test]` (ADR-114) is its only caller: it hands the test a
+    /// `PgPool` against a freshly migrated throwaway database. Left unconditional it is dead code
+    /// in the shipped binary, which `clippy --all-targets` says out loud.
+    #[cfg(test)]
+    #[must_use]
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     /// Cheap liveness probe: `SELECT 1` against the pool. `false` on any failure (DB down,

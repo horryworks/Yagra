@@ -356,4 +356,125 @@ mod tests {
         let hits = list.search(None, "sw-", NODE_SCAN_MAX * 2).await.unwrap();
         assert_eq!(hits.len(), 600, "fewer nodes exist than the ceiling allows");
     }
+
+    // ── Against a real database (ADR-114) ────────────────────────────────────────────────
+    //
+    // The test above asserts the rules the SQL encodes. These run the SQL.
+
+    /// 🚨 **The two implementations answer the same question the same way.**
+    ///
+    /// [`StaticNodeList`] is a mirror of [`NodeRepo`]'s `SCOPE_PREDICATE` (extensibility.md §2),
+    /// and until ADR-114 only the mirror could be executed. So the scope test above — which is
+    /// named for the SQL — was checking the Rust's agreement with a *description* of the SQL, and
+    /// the SQL half of an ADR-014 rule was enforced by reading.
+    ///
+    /// Both stores are given the identical fixture and asked the identical questions. The
+    /// comparison is over ids, not rows: the two produce the same `Node` values by construction
+    /// (one reads them, the other was built from them), so comparing whole rows would be
+    /// comparing the fixture with itself.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_node_stores_scope_identically(pool: sqlx::PgPool) {
+        let tokyo = crate::pgtest::group(&pool, "tokyo").await;
+        let osaka = crate::pgtest::group(&pool, "osaka").await;
+        let in_tokyo = crate::pgtest::node(&pool, "in-tokyo", 1, Some(tokyo)).await;
+        let ungrouped = crate::pgtest::node(&pool, "ungrouped", 2, None).await;
+        let in_osaka = crate::pgtest::node(&pool, "in-osaka", 3, Some(osaka)).await;
+
+        let sql = crate::pgtest::repo(pool.clone());
+        let memory = StaticNodeList(sql.list_nodes().await.expect("read the fixture back"));
+        assert_eq!(memory.0.len(), 3, "the fixture did not land");
+
+        for (label, scope) in [
+            ("unrestricted", None),
+            ("one group", Some(&[tokyo][..])),
+            ("both groups", Some(&[tokyo, osaka][..])),
+            // The inversion that would be a privilege escalation if the two disagreed.
+            ("no groups", Some(&[][..])),
+        ] {
+            assert_eq!(
+                sql.count(scope).await.unwrap(),
+                memory.count(scope).await.unwrap(),
+                "count disagrees with {label}"
+            );
+            assert_eq!(
+                page_ids(&sql, scope).await,
+                page_ids(&memory, scope).await,
+                "list_page disagrees with {label}"
+            );
+            let mut a = sql.node_group_map(scope).await.unwrap();
+            let mut b = memory.node_group_map(scope).await.unwrap();
+            a.sort_unstable();
+            b.sort_unstable();
+            assert_eq!(a, b, "node_group_map disagrees with {label}");
+            for term in ["", "in-", "10.0.0."] {
+                let mut a: Vec<Uuid> = sql
+                    .search(scope, term, 50)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|n| n.id.as_uuid())
+                    .collect();
+                let mut b: Vec<Uuid> = memory
+                    .search(scope, term, 50)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|n| n.id.as_uuid())
+                    .collect();
+                a.sort_unstable();
+                b.sort_unstable();
+                assert_eq!(a, b, "search({term:?}) disagrees with {label}");
+            }
+        }
+
+        // The acceptance side. Every assertion above is an equality, and two stores that both
+        // returned nothing would satisfy all of them — which is exactly the shape of a scope
+        // predicate that has stopped matching. So pin what the answers actually are.
+        assert_eq!(sql.count(None).await.unwrap(), 3);
+        assert_eq!(page_ids(&sql, Some(&[tokyo])).await, vec![in_tokyo]);
+        assert!(
+            !page_ids(&sql, Some(&[tokyo, osaka]))
+                .await
+                .contains(&ungrouped),
+            "an ungrouped node must never reach a scoped caller"
+        );
+        assert!(page_ids(&sql, Some(&[osaka])).await.contains(&in_osaka));
+        assert!(page_ids(&sql, Some(&[])).await.is_empty());
+    }
+
+    /// **`search` really is capped in SQL**, not only in the mirror.
+    ///
+    /// `guards.rs::the_search_cap_is_declared_once` reads both implementations' text and checks
+    /// they clamp against the shared constant. What it cannot see is whether the clamped value
+    /// reaches the `LIMIT`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_sql_search_honours_the_limit_it_is_given(pool: sqlx::PgPool) {
+        for i in 1..=5u8 {
+            crate::pgtest::node(&pool, &format!("node-{i}"), i, None).await;
+        }
+        let sql = crate::pgtest::repo(pool.clone());
+        assert_eq!(sql.search(None, "", 50).await.unwrap().len(), 5);
+        assert_eq!(sql.search(None, "", 2).await.unwrap().len(), 2);
+        // A caller asking for more than the shared cap gets the cap, not its own number.
+        assert_eq!(
+            sql.search(None, "", NODE_SEARCH_MAX * 10)
+                .await
+                .unwrap()
+                .len(),
+            5
+        );
+    }
+
+    /// Ids of the first page, in the order the store returned them.
+    async fn page_ids(store: &impl NodeListing, groups: GroupFilter<'_>) -> Vec<Uuid> {
+        store
+            .list_page(groups, None, 100)
+            .await
+            .unwrap()
+            .iter()
+            .map(|n| n.id.as_uuid())
+            .collect()
+    }
 }

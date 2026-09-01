@@ -2,8 +2,16 @@
 //! The checks that read this module **as source text** (ADR-094).
 //!
 //! Things `repo/` must hold true that have no type. Each is answered by reading the module's own
-//! source, which is the only technique available: the alternative needs a live PostgreSQL, which
-//! is exactly what these files are the adapter for.
+//! source.
+//!
+//! ⚠️ **This doc used to say that was the only technique available, because the alternative needed
+//! a live PostgreSQL.** Since ADR-114 the suite has one. These checks stay anyway, because they do
+//! not answer the same question: which table a statement *names*, and which constant an expression
+//! *clamps to*, are facts about the text. Running the statement cannot see either — it sees the
+//! answer the statement gave, which is the same answer a second, wrong implementation would give
+//! on the fixture in front of it. Where a behavioural test **is** stronger, prefer it: the
+//! interface upsert's own tests now execute what `the_upsert_writes_every_column_it_inserts`
+//! could only read.
 //!
 //! Declared `#[cfg(test)] mod guards;` in [`super`], which is how [`crate::module_source`]'s
 //! exclusion derives it — a scan that lives in the text it scans matches its own literals. ADR-086
@@ -13,11 +21,14 @@ use std::collections::BTreeSet;
 
 /// The search cap is one number, and no implementation may re-clamp to its own.
 ///
-/// A source-reading test rather than a behavioural one because the PostgreSQL path needs a
-/// live database — and that is exactly where the regression lived: the API edge clamped to
-/// 500 and documented that as the maximum, while `NodeRepo::search` re-clamped to 100, so
-/// filtering a large fleet silently returned 100 rows. The needle is built at runtime; a
-/// literal written out in this file would match itself and fail forever (testing.md).
+/// A source-reading test, and still the right one after ADR-114 gave the suite a database. The
+/// regression it exists for was the API edge clamping to 500 and documenting that as the maximum
+/// while `NodeRepo::search` re-clamped to 100 — so filtering a large fleet silently returned 100
+/// rows. A behavioural test sees that only with more than 100 nodes in the fixture *and* a caller
+/// asking for more; what is actually wrong is that a second number exists at all, and that is a
+/// fact about the text. (`listing.rs` now also runs the query, which is the complementary half.)
+/// The needle is built at runtime; a literal written out in this file would match itself and fail
+/// forever (testing.md).
 ///
 /// Reads through [`crate::module_source`] rather than `include_str!`, so it keeps seeing both
 /// implementations now that this module is a directory (ADR-094). `include_str!` needs a
@@ -180,8 +191,10 @@ fn every_statement_names_a_table_its_file_declares() {
 /// enough. The staleness flag must not fire below that, or the fleet's Interfaces tabs would fill
 /// with "no longer reported" for ports that are answering perfectly.
 ///
-/// ⚠️ There is no live PostgreSQL in this suite, so nothing else in the workspace can catch a
-/// widened touch window. Raising `INTERFACE_TOUCH_SECS` to 450 keeps every other test green.
+/// ⚠️ **Nothing else catches a widened touch window.** Raising `INTERFACE_TOUCH_SECS` to 450 keeps
+/// every other test in the workspace green — including the database tests ADR-114 added, which
+/// exercise the boundary relative to whatever the constant currently says rather than against
+/// `INTERFACE_STALE_SECS`. This arithmetic is the only thing holding the two numbers together.
 #[test]
 fn no_skippable_interval_leaves_a_row_old_enough_to_look_stale() {
     use super::interfaces::{INTERFACE_STALE_SECS, INTERFACE_TOUCH_SECS};
@@ -237,8 +250,9 @@ fn no_skippable_interval_leaves_a_row_old_enough_to_look_stale() {
 /// list, which is a literal because each column needs its own `unnest` cast. A column added there
 /// and forgotten in `VALUE_COLUMNS` would be written once, on the row's first insert, and **never
 /// updated again** — the device would report a new speed or a new alias forever and Yagra would
-/// keep the original, with no compile error, no runtime error, and no live PostgreSQL in this
-/// suite to notice.
+/// keep the original, with no compile error and no runtime error. ⚠️ ADR-114's database tests do
+/// not close this either: they exercise the columns they name, and the whole failure is a column
+/// nobody named.
 ///
 /// It reads the **generated statement**, not the source text: that is the thing that actually runs,
 /// and it makes the check immune to how the SQL happens to be spelled. Needles are assembled at
