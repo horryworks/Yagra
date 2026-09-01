@@ -41,7 +41,7 @@ fn fmt_vl_time_dt(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
-/// Quote a value for safe interpolation into a LogsQL phrase/exact filter. Escapes `\` and `"`
+/// Quote a value for safe interpolation into a LogsQL phrase/exact filter. Escapes `` and `"`
 /// so a device-supplied search term can't break out of the quoted token (injection guard,
 /// mirroring `store.rs`'s `promql_label_escape` discipline for PromQL).
 fn logsql_quote(v: &str) -> String {

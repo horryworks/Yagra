@@ -772,7 +772,7 @@ mod tests {
         assert_eq!(direction, Some(Direction::Above));
     }
 
-    /// Collapse every run of whitespace to one space and drop the `\` line-continuations, so a
+    /// Collapse every run of whitespace to one space and drop the `` line-continuations, so a
     /// statement's meaning is compared rather than how its string literal happens to be wrapped.
     /// (`include_str!` hands back the raw source, backslashes and all.)
     fn squash(s: &str) -> String {

@@ -17,27 +17,27 @@
 //! ## How this module is split (ADR-102)
 //!
 //! By **which stage of making one report** a piece belongs to, and the mechanical form of that
-//! question is **"does it \`.await\`?"** — the two agreed exactly when it was measured, which is why
+//! question is **"does it `.await`?"** — the two agreed exactly when it was measured, which is why
 //! the rule is worth having rather than a description after the fact.
 //!
 //! | file | the question it answers |
 //! |---|---|
-//! | [\`types\`] | what a report *is* — the enums, the DTOs, the spec the WebUI owns |
-//! | [\`catalog\`] | what you may put in one — the section menu \`GET /reports/sections\` serves |
-//! | [\`render\`] | how it looks — a section's value, the HTML, the SVG, the CSV, the document |
-//! | [\`repo\`] | where it is kept — definitions, schedules and runs in PostgreSQL |
-//! | [\`runner\`] | how one gets made — insert, spawn, drive the sections, persist, broadcast |
-//! | [\`sections\`] | where each section's numbers come from — the six \`render_*\` |
-//! | [\`seams\`] | what making one is allowed to *reach* — three traits, and their live impls |
+//! | [`types`] | what a report *is* — the enums, the DTOs, the spec the WebUI owns |
+//! | [`catalog`] | what you may put in one — the section menu `GET /reports/sections` serves |
+//! | [`render`] | how it looks — a section's value, the HTML, the SVG, the CSV, the document |
+//! | [`repo`] | where it is kept — definitions, schedules and runs in PostgreSQL |
+//! | [`runner`] | how one gets made — insert, spawn, drive the sections, persist, broadcast |
+//! | [`sections`] | where each section's numbers come from — the six `render_*` |
+//! | [`seams`] | what making one is allowed to *reach* — three traits, and their live impls |
 //!
-//! 🚨 **\`types\`, \`catalog\` and \`render\` never \`.await\`, and \`guards\` refuses it.** That is not
+//! 🚨 **`types`, `catalog` and `render` never `.await`, and `guards` refuses it.** That is not
 //! tidiness: it is what keeps the pure half of a section — the arithmetic, the selector, the
 //! formatting — somewhere a test can reach, which is where all seven of this module's behaviour
 //! tests already live. The impure half fetches and hands off, and nothing else.
 //!
-//! Shared vocabulary lives **here** rather than in a sibling, for the reason \`repo/mod.rs\` and
-//! \`events/mod.rs\` give: a child sees its parent's private items, so the constants, the clock and
-//! the two date formatters cost no \`pub(super)\` at all.
+//! Shared vocabulary lives **here** rather than in a sibling, for the reason `repo/mod.rs` and
+//! `events/mod.rs` give: a child sees its parent's private items, so the constants, the clock and
+//! the two date formatters cost no `pub(super)` at all.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

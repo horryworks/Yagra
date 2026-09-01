@@ -1418,7 +1418,7 @@ pub fn new_run_id() -> String {
 
 /// Is this one of our own run ids?
 ///
-/// Also the guarantee that `bundle/<id>.tar` is a name and not a path: a value with no `/`, no `\`
+/// Also the guarantee that `bundle/<id>.tar` is a name and not a path: a value with no `/`, no ``
 /// and no `.` cannot climb out of the directory or shadow another run's file. Checked here rather
 /// than trusted from the caller so the property holds at the point it is relied on.
 #[must_use]

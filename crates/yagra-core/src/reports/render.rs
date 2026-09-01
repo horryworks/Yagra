@@ -2,16 +2,16 @@
 //! **How a report looks** — a section's value and its two outputs, the inline chart, the CSV, and
 //! the document that wraps it all.
 //!
-//! Everything here runs on numbers already in hand: \`super::guards\` refuses an \`.await\` in this
-//! file, which is what keeps the arithmetic of a section (\`availability_from_snapshots\`, the
+//! Everything here runs on numbers already in hand: `super::guards` refuses an `.await` in this
+//! file, which is what keeps the arithmetic of a section (`availability_from_snapshots`, the
 //! metric selector, the SI formatting) reachable from a unit test. Seven of this module's eleven
 //! tests are here for that reason.
 //!
-//! 🚨 **Device-supplied text is escaped on the way in** (\`security.md\`): node names and device
-//! strings reach both the WebUI viewer and the PDF renderer, so [\`esc\`] is not optional decoration.
+//! 🚨 **Device-supplied text is escaped on the way in** (`security.md`): node names and device
+//! strings reach both the WebUI viewer and the PDF renderer, so [`esc`] is not optional decoration.
 //!
-//! Not split further into "a section" and "the document": [\`esc\`] is called from both halves and
-//! [\`Section\`] straddles them, so the line would be arbitrary — and at 323 lines this is not even
+//! Not split further into "a section" and "the document": [`esc`] is called from both halves and
+//! [`Section`] straddles them, so the line would be arbitrary — and at 323 lines this is not even
 //! the largest file here.
 
 use super::*;

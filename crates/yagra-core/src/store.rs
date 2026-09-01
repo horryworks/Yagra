@@ -618,7 +618,7 @@ fn selector(key: &SeriesKey) -> String {
     }
 }
 
-/// Escape a PromQL / exposition **label value** (`\` then `"`). Host self-series labels
+/// Escape a PromQL / exposition **label value** (`` then `"`). Host self-series labels
 /// (`instance` = poller id or `core`, `mount` = a configured alias) are already sanitized and
 /// low-cardinality, but escape defensively so a stray quote can't break the selector or a line.
 fn promql_label_escape(v: &str) -> String {

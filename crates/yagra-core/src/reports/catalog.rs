@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! **What you may put in a report** — the section menu, served at \`GET /reports/sections\` and used
+//! **What you may put in a report** — the section menu, served at `GET /reports/sections` and used
 //! to validate a definition's sections at the API edge.
 //!
 //! Mirrors the dashboard widget registry: each entry names an existing data source and declares its
 //! settings, which the builder renders generically. Adding a section starts here — the other two
-//! sites are [\`super::runner\`]'s dispatch arm and the \`render_*\` beside it in
-//! [\`super::sections\`].
+//! sites are [`super::runner`]'s dispatch arm and the `render_*` beside it in
+//! [`super::sections`].
 
 use serde::Serialize;
 

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! **Where each section's numbers come from** — the six \`render_*\`, one per section kind.
+//! **Where each section's numbers come from** — the six `render_*`, one per section kind.
 //!
-//! Each one fetches from the seams [\`super::runner\`] holds and hands the result to
-//! [\`super::render\`]; the arithmetic they need is over there, where a test can reach it. That
-//! division is the whole reason the split line is "does it \`.await\`" — see [\`super\`].
+//! Each one fetches from the seams [`super::runner`] holds and hands the result to
+//! [`super::render`]; the arithmetic they need is over there, where a test can reach it. That
+//! division is the whole reason the split line is "does it `.await`" — see [`super`].
 //!
-//! Adding a section: an entry in [\`super::catalog\`], an arm in
-//! [\`super::runner::ReportRunner::render_section\`], and a \`render_*\` here. Two of the three are
+//! Adding a section: an entry in [`super::catalog`], an arm in
+//! [`super::runner::ReportRunner::render_section`], and a `render_*` here. Two of the three are
 //! in this directory and the compiler finds neither, so the catalog test is what notices a kind
 //! that has no renderer.
 

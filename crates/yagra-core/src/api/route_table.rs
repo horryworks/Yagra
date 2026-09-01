@@ -1730,7 +1730,7 @@ pub(crate) fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
 /// both. ADR-062 shipped exactly that: two optical arrays returned by `get_interface_series` and
 /// named in no description, with every test green.
 ///
-/// Returns `None` for an unknown tool or one declared without a description. Rust's `\`-newline
+/// Returns `None` for an unknown tool or one declared without a description. Rust's ``-newline
 /// continuation is undone here so a caller can search for a phrase without caring where the source
 /// happened to wrap; the result is whitespace-normalized for the same reason.
 pub(crate) fn declared_mcp_tool_description(tool: &str) -> Option<String> {
@@ -1753,7 +1753,7 @@ pub(crate) fn declared_mcp_tool_description(tool: &str) -> Option<String> {
         let Some((raw, _)) = rest.rsplit_once('"') else {
             continue;
         };
-        // A `\` at end of line eats the newline *and* the next line's indentation, so the compiled
+        // A `` at end of line eats the newline *and* the next line's indentation, so the compiled
         // string has none of it. Reproduce that by collapsing all runs of whitespace.
         return Some(raw.split_whitespace().collect::<Vec<_>>().join(" "));
     }

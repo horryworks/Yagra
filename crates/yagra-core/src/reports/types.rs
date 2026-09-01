@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! **What a report is** — the closed sets, the rows the API serves, and the document the WebUI owns.
 //!
-//! Nothing here reaches outside the process, which \`super::guards\` checks: no \`.await\`, no
-//! \`async fn\`. The one behaviour test is the token/serde round trip the three enums owe
-//! (\`testing.md\`), and it can be a plain unit test precisely because of that.
+//! Nothing here reaches outside the process, which `super::guards` checks: no `.await`, no
+//! `async fn`. The one behaviour test is the token/serde round trip the three enums owe
+//! (`testing.md`), and it can be a plain unit test precisely because of that.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

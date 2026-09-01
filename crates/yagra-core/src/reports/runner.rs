@@ -3,15 +3,15 @@
 //! broadcast.
 //!
 //! Generation never touches a device, so (like the analysis runner, ADR-022) it is a background
-//! \`tokio\` task inside core rather than a poller/bus job. [\`ReportRunner::run_now\`] returns as
+//! `tokio` task inside core rather than a poller/bus job. [`ReportRunner::run_now`] returns as
 //! soon as the row exists; everything after that happens on the spawned task.
 //!
-//! 🚨 **[\`ReportRunner::render_section\`] delegates and nothing else**, and \`super::guards\` refuses
+//! 🚨 **[`ReportRunner::render_section`] delegates and nothing else**, and `super::guards` refuses
 //! a seam inside it — the handle names it looks for are **derived from the struct below**, so a
 //! renamed or folded-away field cannot quietly turn that check into a needle matching nothing
-//! (ADR-112 decision 5 — which is precisely what folding \`history\` into \`alerts\` would have
+//! (ADR-112 decision 5 — which is precisely what folding `history` into `alerts` would have
 //! done). A dispatch
-//! that is allowed to answer a case itself grows one: \`worker::execute\`'s HTTP arm reached 101
+//! that is allowed to answer a case itself grows one: `worker::execute`'s HTTP arm reached 101
 //! lines that way, measured on the day it was split (ADR-099).
 
 use super::*;

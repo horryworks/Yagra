@@ -363,7 +363,7 @@ pub fn password_is_bindable(password: &str) -> bool {
 
 /// Split the first RDN of a DN into `(attribute, value)`, honouring `\,` and `\=` escapes.
 ///
-/// `CN=Net\,Ops,OU=Groups,DC=x` has the first RDN `CN=Net\,Ops`, not `CN=Net\`.
+/// `CN=Net\,Ops,OU=Groups,DC=x` has the first RDN `CN=Net\,Ops`, not `CN=Net`.
 #[must_use]
 pub fn parse_first_rdn(dn: &str) -> Option<(String, String)> {
     let mut escaped = false;
