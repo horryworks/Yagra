@@ -167,6 +167,27 @@ async fn run_sync_loop<B, S>(
     tracing::warn!("working-set sync stream ended");
 }
 
+/// Record the polling deficit — **including a zero, which is the whole point of the function**.
+///
+/// The polling deficit had no instrument until the 50,000-node load test went looking for one
+/// (2026-08-29). ⚠️ Distinct from `yagra_poll_skipped_backpressure_total`, which counts a job that
+/// WAS dispatched and then dropped at the device single-flight guard. 🚨 And read
+/// [`WorkingSet::due`]'s doc before trusting a 0: until specs started keeping their `next_due` when
+/// deferred, this stayed at zero on a poller serving 26.9 of the 1,017 polls per second its
+/// intervals asked for.
+///
+/// 🚨 **The call this replaced was wrapped in `if missed > 0`, and that made the series absent
+/// rather than zero.** `metrics-exporter-prometheus` renders only the keys it has been handed at
+/// least once, so on a healthy deployment `/metrics` carried no `yagra_poll_cycles_missed_total`
+/// line at all — not even a `# TYPE`. Read on the live poller 2026-09-01, beside
+/// `yagra_poll_deferred_specs 0`, which is a gauge and is therefore set every round. **Absent and
+/// "wired to the wrong branch" are the same text**, which is exactly the reading ADR-108
+/// Increment 2 set out to make impossible. Incrementing by 0 leaves the value alone and registers
+/// the series.
+fn record_cycles_missed(missed: u64) {
+    metrics::counter!("yagra_poll_cycles_missed_total").increment(missed);
+}
+
 /// Pop what is due and feed it to the worker, re-reading the clock at least once per
 /// [`working_set::SCHEDULER_TICK`].
 ///
@@ -222,15 +243,7 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
                 let due = ws.due(last_ask, room);
                 (due, ws.take_cycles_missed())
             };
-            // The polling deficit, which had no instrument until the 50,000-node load test went
-            // looking for one (2026-08-29). ⚠️ Distinct from `yagra_poll_skipped_backpressure_total`,
-            // which counts a job that WAS dispatched and then dropped at the device single-flight
-            // guard. 🚨 And read its doc on `WorkingSet::due` before trusting a 0: until specs
-            // started keeping their `next_due` when deferred, this stayed at zero on a poller
-            // serving 26.9 of the 1,017 polls per second its intervals asked for.
-            if missed > 0 {
-                metrics::counter!("yagra_poll_cycles_missed_total").increment(missed);
-            }
+            record_cycles_missed(missed);
             let mut jobs = due.into_iter();
             let Some(first) = jobs.next() else {
                 break; // nothing due — hand the reservation back and wait for the next tick
@@ -328,6 +341,51 @@ mod tests {
         assert!(
             rendered.contains("yagra_working_set_timers 2"),
             "the index gauge is missing from:\n{rendered}"
+        );
+    }
+
+    /// A poller that has missed nothing still publishes the counter, reading `0`.
+    ///
+    /// 🚨 **This is a regression test for a line that was invisible on the deployment, not for a
+    /// wrong number.** The emission used to be wrapped in `if missed > 0`, and
+    /// `metrics-exporter-prometheus` renders only keys it has been handed — so a healthy
+    /// poller's `/metrics` had no `yagra_poll_cycles_missed_total` line at all. An operator
+    /// reading it saw the same thing they would see if the counter were wired to a branch that
+    /// never runs. The assertion is on the **rendered text**, for the same reason the demand
+    /// gauge above is: that text is what an operator reads, and a float that never reaches it
+    /// proves nothing.
+    #[test]
+    fn a_poller_that_missed_nothing_still_publishes_the_counter() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || record_cycles_missed(0));
+
+        let rendered = handle.render();
+        assert!(
+            rendered.contains("yagra_poll_cycles_missed_total 0"),
+            "a zero deficit must still render the series, or a quiet poller and an unwired counter read the same:\n{rendered}"
+        );
+    }
+
+    /// …and a poller that has missed cycles reports how many.
+    ///
+    /// The other half of the pair. Alone, the test above passes for a function that ignores its
+    /// argument entirely — the instrument-shaped form of
+    /// `rejection-only-tests-pass-when-everything-rejects`: a check that only ever looks at the
+    /// quiet case.
+    #[test]
+    fn the_counter_carries_the_number_of_missed_cycles() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_cycles_missed(0);
+            record_cycles_missed(7);
+        });
+
+        let rendered = handle.render();
+        assert!(
+            rendered.contains("yagra_poll_cycles_missed_total 7"),
+            "the tally must accumulate across rounds:\n{rendered}"
         );
     }
 }

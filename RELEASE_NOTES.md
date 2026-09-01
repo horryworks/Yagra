@@ -82,6 +82,13 @@
 
 ### Improvements
 
+- **`yagra_poll_cycles_missed_total` now appears on a healthy poller, reading `0`.** It used to be
+  emitted only when the deficit was non-zero, and `metrics-exporter-prometheus` renders only the
+  keys it has been handed — so a poller that was keeping up published no such line at all, not
+  even a `# TYPE`. A dashboard or alert rule built on it saw the same thing whether the poller was
+  healthy or the counter was never wired. It is now recorded every scheduling round, so the series
+  exists from startup. The value is unchanged.
+
 - **The LLM root-cause agent can now ask what metrics a node actually has.** `list_node_metrics` is
   the tool the MCP instructions tell every client to call before `query_metrics`, because metric
   names differ per device — but it was missing from the agent's own tool list, so the model had to
