@@ -14,19 +14,14 @@ import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { Chips, EmptyList, FindingRow, MonoLine, ReportToolbar, RightRail } from '../kit';
 import { correlationDirection, detailNum, sortByDetail, sortCommon } from '../format';
+import {
+  correlationPair as pairOf,
+  correlationR as rOf,
+  correlationText as rText,
+} from '../findingFacts';
+import { correlationColor as colorFor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-/** Both halves of the "A ↔ B" pair label the backend composes. */
-function pairOf(f: AnalysisFinding): [string, string] {
-  const parts = f.metric.split(' ↔ ');
-  return [parts[0] ?? f.metric, parts[1] ?? ''];
-}
-
-const rOf = (f: AnalysisFinding) => detailNum(f, 'r') ?? 0;
-/** Signed r to 2 dp with an explicit sign, so +0.91 and -0.91 never read alike. */
-const rText = (r: number) => `r = ${r >= 0 ? '+' : ''}${r.toFixed(2)}`;
-const colorFor = (r: number) => (r >= 0 ? 'var(--series-1)' : 'var(--series-4)');
 
 function CorrelationRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');

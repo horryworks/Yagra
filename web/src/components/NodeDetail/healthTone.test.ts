@@ -4,7 +4,8 @@
 // bands are written as a range instead of a ladder.
 
 import { describe, expect, it } from 'vitest';
-import { certTone, httpToneVar, operState } from './healthTone';
+import { certTone, httpToneVar, operLabel, operState } from './healthTone';
+import type { TFunction } from 'i18next';
 
 describe('certTone', () => {
   it('bands days-to-expiry at 7 and 30', () => {
@@ -43,5 +44,23 @@ describe('httpToneVar', () => {
     expect(httpToneVar('up')).toBe('var(--status-ok)');
     expect(httpToneVar('warning')).toBe('var(--status-warning)');
     expect(httpToneVar('critical')).toBe('var(--status-critical)');
+  });
+});
+
+describe('operLabel', () => {
+  const t = ((key: string) => key) as unknown as TFunction;
+
+  it('has three answers, not two', () => {
+    // `null` is "the walk has not reported this port", which is NOT down. Folding it into down
+    // would draw an alarm for a port nobody has looked at yet.
+    expect(operLabel(1, t)).toBe('interfaces.operUp');
+    expect(operLabel(2, t)).toBe('interfaces.operDown');
+    expect(operLabel(null, t)).toBe('interfaces.operUnknown');
+  });
+
+  it('treats every non-1 ifOperStatus as down', () => {
+    // 3 testing / 4 unknown / 5 dormant / 6 notPresent / 7 lowerLayerDown — none of them is up, and
+    // the tab's summary counts on exactly that.
+    for (const v of [3, 4, 5, 6, 7, 0]) expect(operLabel(v, t)).toBe('interfaces.operDown');
   });
 });

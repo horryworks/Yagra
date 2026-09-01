@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  UNGROUPED,
   asGroupType,
   buildNodeTree,
   descendantNodes,
   filterTerm,
-  flattenTree,
+  findTreeGroup,
   flatRowKey,
+  flattenTree,
+  groupDeletionImpact,
   groupOptions,
   groupPath,
   isSelfOrDescendant,
@@ -14,9 +17,11 @@ import {
   revealedGroupKeys,
   subtreeGroupIds,
   tallyStates,
-  UNGROUPED,
+  type StateCounts,
+  type TreeGroup,
   visibleOpenGroupKeys,
 } from './nodeTree';
+import type { TFunction } from 'i18next';
 import { GROUP_TYPES } from '../types/api';
 import type { NodeGroup, NodeState, NodeSummary } from '../types/api';
 
@@ -644,3 +649,50 @@ describe('subtreeGroupIds', () => {
   });
 });
 
+describe('findTreeGroup', () => {
+  const g = (id: string, children: TreeGroup[] = []): TreeGroup =>
+    ({ id, name: id, parent_id: null, children, nodes: [] }) as unknown as TreeGroup;
+
+  it('finds a group at any depth', () => {
+    const deep = g('leaf');
+    const roots = [g('a', [g('b', [deep])]), g('c')];
+    expect(findTreeGroup(roots, 'a')?.id).toBe('a');
+    expect(findTreeGroup(roots, 'c')?.id).toBe('c');
+    expect(findTreeGroup(roots, 'leaf')).toBe(deep);
+  });
+
+  it('returns null rather than throwing for an id that is not in the tree', () => {
+    // Reachable: the detail pane keeps a selection while the tree reloads without it.
+    expect(findTreeGroup([g('a')], 'gone')).toBeNull();
+    expect(findTreeGroup([], 'a')).toBeNull();
+  });
+});
+
+describe('groupDeletionImpact', () => {
+  const grp = (id: string, parent_id: string | null = null) =>
+    ({ id, name: id, parent_id }) as NodeGroup;
+  const counts = (n: number): StateCounts =>
+    ({ ok: n, warning: 0, critical: 0, unknown: 0, unreachable: 0, maintenance: 0 }) as StateCounts;
+  // Renders each interpolation inline so an assertion can name the numbers without fighting
+  // nested JSON escaping.
+  const t = ((key: string, opts?: Record<string, unknown>) =>
+    opts && 'count' in opts
+      ? `${key}=${opts.count}`
+      : `${key}[${Object.values(opts ?? {}).join(',')}]`) as unknown as TFunction;
+
+  it('counts only DIRECT subgroups and the group’s own members', () => {
+    const groups = [grp('a'), grp('b', 'a'), grp('c', 'b'), grp('d', 'a')];
+    const out = groupDeletionImpact(groups, { a: counts(4) }, grp('a'), t);
+    // `c` is a grandchild — it is not counted, which is what the dialog's sentence claims.
+    expect(out).toContain('count.subgroup=2');
+    expect(out).toContain('count.memberNode=4');
+  });
+
+  it('says zero rather than nothing when the roll-up has not arrived', () => {
+    // `groupCounts` is fetched separately, so the dialog can open before it lands. Reporting
+    // "0 members" is honest; omitting the clause would read as "this group is empty".
+    const out = groupDeletionImpact([grp('a')], {}, grp('a'), t);
+    expect(out).toContain('count.subgroup=0');
+    expect(out).toContain('count.memberNode=0');
+  });
+});

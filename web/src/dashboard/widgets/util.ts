@@ -2,15 +2,21 @@
 // Pure helpers shared by the dashboard widgets (kept side-effect-free so they unit-test in the
 // node env). State roll-ups, worst-state precedence, and alert-history bucketing live here.
 
-import type {
-  AlertHistoryRow,
-  CalendarBucket,
-  MetricTopAgg,
-  NodeGroup,
-  NodeState,
-  NodeSummary,
-  TopologyNode,
+import {
+  EVENT_KINDS,
+  type AlertHistoryRow,
+  type CalendarBucket,
+  type EventKind,
+  type InterfaceTopEntry,
+  type MetricTopAgg,
+  type NodeGroup,
+  type NodeState,
+  type NodeSummary,
+  type RankedInterfaces,
+  type TopologyNode,
 } from '../../types/api';
+import { formatBps } from '../../lib/format';
+import type { DeltaRow } from '../primitives/DeltaBars';
 // Worst-first precedence for rolling a set of node states up to a single "group" state.
 import { SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
 import type { WidgetSettings } from '../types';
@@ -331,4 +337,59 @@ export function topLevelRollupFromCounts(
   }
   for (const s of stats) s.pct = s.total > 0 ? Math.round((s.up / s.total) * 100) : 0;
   return stats.filter((s) => s.total > 0);
+}
+
+/** Which event kind the feed widget is narrowed to, or `undefined` for all of them.
+ *
+ *  Narrowed through `EVENT_KINDS` rather than a hand-written `||` chain: the settings bag is
+ *  user-editable JSON that round-trips through storage and the server, so an unrecognised value
+ *  must degrade to "all kinds" — while a *new* `EventKind` is picked up with no edit here. */
+export function eventKindOf(settings: WidgetSettings | undefined): EventKind | undefined {
+  const k = settings?.kind;
+  return EVENT_KINDS.find((kind) => kind === k);
+}
+
+/** Which end of a conversation the top-AS widget ranks by. Anything that is not the literal `src`
+ *  reads as `dst`, which is the default the widget ships with. */
+export function flowDirOf(settings: WidgetSettings | undefined): 'src' | 'dst' {
+  return settings?.dir === 'src' ? 'src' : 'dst';
+}
+
+/** `node · interface` for a fleet interface ranking.
+ *
+ *  ⚠️ Falls back through name → alias → `if<index>` rather than showing a bare number: `ifindex` is
+ *  a row key, not a port number (`ifindex-label-is-a-row-key`), so a naked `7` reads as port 7 and
+ *  is usually not. Two widgets had their own byte-identical copy of this. */
+export function interfaceEntryLabel(
+  e: Pick<InterfaceTopEntry, 'node_name' | 'if_name' | 'if_alias' | 'ifindex'>,
+): string {
+  const iface = e.if_name ?? e.if_alias ?? `if${e.ifindex}`;
+  return `${e.node_name} · ${iface}`;
+}
+
+/** A whole percentage, for the CPU/memory rankings. */
+export const percentText = (v: number) => `${Math.round(v)}%`;
+
+/** Signed throughput deltas as bar rows.
+ *
+ *  ⚠️ The sign is carried in the TEXT with a real minus sign (U+2212), while `value` keeps its own
+ *  sign for the bar's direction. Formatting `Math.abs` and dropping the sign would make a drop and
+ *  a spike of the same size render identically. */
+export function deltaBarRows(data: RankedInterfaces | null): DeltaRow[] {
+  return (data?.entries ?? []).map((e) => ({
+    label: interfaceEntryLabel(e),
+    value: e.value,
+    valueText: `${e.value >= 0 ? '+' : '−'}${formatBps(Math.abs(e.value))}`,
+  }));
+}
+
+/** Sparse HH:MM column labels for a timestamp axis — about six evenly spaced ticks, whatever the
+ *  bucket count is, with the rest blank so the heat-map's columns stay readable. */
+export function timeColLabels(timestamps: number[]): string[] {
+  const every = Math.max(1, Math.ceil(timestamps.length / 6));
+  return timestamps.map((t, i) =>
+    i % every === 0
+      ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : '',
+  );
 }

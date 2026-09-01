@@ -17,9 +17,9 @@ import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { localTimeZone } from '../../lib/format';
 import type { SuppressionTarget } from '../../lib/suppression';
+import { toRfc3339 } from '../../lib/format';
 
 const TZ = localTimeZone();
-const toRfc3339 = (local: string) => new Date(local).toISOString();
 /** Scope choices when not locked to a right-click target. */
 type CreateScope = 'node' | 'group_id' | 'profile';
 

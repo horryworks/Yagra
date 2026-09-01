@@ -12,11 +12,11 @@ import { MetricChart, PALETTE } from '../../components/MetricChart/MetricChart';
 import { formatAsn, formatBytes, formatSi } from '../../lib/format';
 import { portLabel, protoName } from '../../lib/flowLabels';
 import { api } from '../../services/api';
-import type { ViewActionProps, WidgetProps, WidgetSettings } from '../types';
+import type { ViewActionProps, WidgetProps } from '../types';
 import { Donut, type DonutSegment } from '../primitives/Donut';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import { usePolled } from '../usePolled';
-import { flowTrendSeries, trailingSecs } from './util';
+import { flowDirOf as dirOf, flowTrendSeries, trailingSecs } from './util';
 
 /** Trailing window for the flow widgets (last hour). */
 const SPAN_SECS = 3600;
@@ -44,10 +44,6 @@ export function FlowTopTalkersWidget() {
 }
 
 /** Read the src/dst AS direction from instance settings (default destination). */
-function dirOf(settings: WidgetSettings | undefined): 'src' | 'dst' {
-  return settings?.dir === 'src' ? 'src' : 'dst';
-}
-
 /** View-mode header action for the top-AS widget: source ↔ destination AS.
  *
  *  Same ranking seen from the other end — a lens, not a subject (ADR-072 decision 1). */

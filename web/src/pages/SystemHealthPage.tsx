@@ -29,10 +29,11 @@ import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
 import { formatBytes, formatUtil } from '../lib/format';
 import { diskHeadline } from './diskHeadline';
-import { groupHosts, mountPct, peakOf, sectionCharts } from './hostSections';
+import { groupHosts, mountPct, sectionCharts } from './hostSections';
 import type { HostSection } from './hostSections';
 import type { DependencyHealth, HostInfo, HostMetricRange } from '../types/api';
 import './SystemHealthPage.css';
+import { peakHeadline } from './hostSections';
 
 const REFRESH_MS = 15_000;
 /** A bounded gauge's Y range — CPU/mem/disk read 0–100%, so the baseline is 0. Module-level so
@@ -143,20 +144,6 @@ function HostMetricCard({
       )}
     </div>
   );
-}
-
-/** A multi-host card's headline: the worst current reading in the section, and whose it is.
- *
- *  One number cannot describe several hosts honestly, and "is anything in this pool hot" is the
- *  question a pool section is opened to answer — so the headline names the peak rather than
- *  averaging it away or going blank. Single-host sections keep their own reading instead. */
-function peakHeadline(
-  hosts: HostInfo[],
-  pick: (h: HostInfo) => number | null | undefined,
-  format: (v: number) => string,
-): string {
-  const peak = peakOf(hosts, pick);
-  return peak ? `${format(peak.value)} · ${peak.instance}` : '—';
 }
 
 /** One section — core, or one pool — with every host in it overlaid on shared charts.

@@ -13,6 +13,7 @@ import {
   mountPct,
   mountUnion,
   overlaySeries,
+  peakHeadline,
   peakOf,
   sectionCharts,
 } from './hostSections';
@@ -283,5 +284,25 @@ describe('mountPct', () => {
     expect(mountPct(h, 'root')).toBe(25);
     expect(mountPct(h, 'database')).toBeNull();
     expect(mountPct(h, 'nope')).toBeNull();
+  });
+});
+
+describe('peakHeadline', () => {
+  const h = (instance: string, cpu: number | null) =>
+    ({ instance, cpu_pct: cpu }) as unknown as HostInfo;
+
+  it('names the peak’s value and the host it was on', () => {
+    const out = peakHeadline(
+      [h('core-1', 12), h('poller-2', 68)],
+      (x) => x.cpu_pct,
+      (v) => `${v}%`,
+    );
+    expect(out).toBe('68% · poller-2');
+  });
+
+  it('shows an em dash when nothing reported, rather than 0', () => {
+    // "0%" would be a claim about the fleet; the dash says the sample is missing.
+    expect(peakHeadline([], (x) => x.cpu_pct, (v) => `${v}%`)).toBe('—');
+    expect(peakHeadline([h('core-1', null)], (x) => x.cpu_pct, (v) => `${v}%`)).toBe('—');
   });
 });

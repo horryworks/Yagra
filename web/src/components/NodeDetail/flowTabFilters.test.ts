@@ -11,8 +11,10 @@ import {
   flowFilters,
   flowQueryFilters,
   ipToken,
+  toRows,
   toggleFlowValue,
 } from './flowTabFilters';
+import { formatBytes } from '../../lib/format';
 import {
   activeFilterCount,
   defaultFilters,
@@ -174,5 +176,29 @@ describe('the clear-all count', () => {
   it('counts one narrowed column once, however many values it holds', () => {
     expect(activeFilterCount(cols, { proto: '6,17', port: '80,443' })).toBe(2);
     expect(activeFilterCount(cols, {})).toBe(0);
+  });
+});
+
+describe('toRows', () => {
+  it('turns any of the four drill-downs into byte-valued bars', () => {
+    // Generic because the four (talkers, conversations, ports, ASes) agree on nothing except
+    // "there is a label and there is a byte count".
+    const rows = toRows(
+      [
+        { who: '10.0.0.1', bytes: 2048 },
+        { who: '10.0.0.2', bytes: 1_500_000 },
+      ],
+      (x) => x.who,
+      (x) => x.bytes,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0].label).toBe('10.0.0.1');
+    expect(rows[0].value).toBe(2048);
+    expect(rows[0].valueText).toBe(formatBytes(2048));
+    expect(rows[1].valueText).toBe(formatBytes(1_500_000));
+  });
+
+  it('renders nothing for an empty answer rather than throwing', () => {
+    expect(toRows([], (x: { n: string }) => x.n, () => 0)).toEqual([]);
   });
 });

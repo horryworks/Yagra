@@ -61,7 +61,15 @@ pub(crate) const AGENT_TOOLS: &[&str] = &[
     "get_neighbors",
     "get_topology",
     "get_dns_chain",
-    // The measurements
+    // The measurements. `list_node_metrics` comes FIRST on purpose: `mcp/mod.rs::INSTRUCTIONS`
+    // tells every client to ask what a node has before querying it, because metric names differ per
+    // device — and the agent is a client. It was not excluded by a decision; it was simply not on
+    // the list when the list was written, so the model had to guess names (ADR-113 Inc.2).
+    //
+    // ⚠️ Its two neighbours in that gap stay out. `get_audit` needs `ViewAudit`, which this
+    // allow-list is deliberately below; `get_interface_thresholds` explains *why a port is red*,
+    // and what an incident explanation needs is *what happened*, which `get_active_alerts` returns.
+    "list_node_metrics",
     "query_metrics",
     "get_interface_series",
     "top_metrics",
@@ -250,6 +258,42 @@ mod tests {
                 "{banned} must not be callable by the RCA agent"
             );
         }
+    }
+
+    /// The two reads ADR-113 Inc.2 decided to keep out, and the one it let in.
+    ///
+    /// All three now have an arm in `call_in`, so nothing about the *dispatcher* separates them any
+    /// more — the only thing that does is this list, and a name is cheap to add. Both exclusions are
+    /// judgements rather than impossibilities, so they are written down as assertions with their
+    /// reasons rather than left to whoever next reads the list:
+    ///
+    /// * `get_audit` needs `ViewAudit`. This allow-list is deliberately view-level (see the module
+    ///   header), and "who changed what" is not what an incident explanation is made of.
+    /// * `get_interface_thresholds` answers *why a port is red*. What the agent needs is *what
+    ///   happened*, and `get_active_alerts` already returns the fact that it went red.
+    ///
+    /// ⚠️ If either becomes wanted, change it here **and** revisit ADR-113 Inc.2 — the decision is
+    /// recorded, not derived, so a silent addition would leave the ADR saying the opposite.
+    #[test]
+    fn the_two_excluded_reads_stay_excluded_and_the_included_one_stays_included() {
+        for excluded in ["get_audit", "get_interface_thresholds"] {
+            assert!(
+                !AGENT_TOOLS.contains(&excluded),
+                "{excluded} was added to the agent allow-list; ADR-113 Inc.2 excluded it on purpose"
+            );
+        }
+        // The accept side. Without it this test would pass just as well on an empty allow-list
+        // (`rejection-only-tests-pass-when-everything-rejects`), and the gap this increment closed
+        // — the agent guessing metric names — would reopen with nothing failing.
+        assert!(
+            AGENT_TOOLS.contains(&"list_node_metrics"),
+            "the agent must be able to ask what metrics a node has before querying them; \
+             `mcp::INSTRUCTIONS` tells every client to, and the agent is a client"
+        );
+        // …and it must come before the tool it is a precondition for, because the model reads the
+        // schema list in order.
+        let pos = |n: &str| AGENT_TOOLS.iter().position(|t| *t == n);
+        assert!(pos("list_node_metrics") < pos("query_metrics"));
     }
 
     /// The branches the agent reaches that demand more than `View` are ones the runtime check can

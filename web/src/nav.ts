@@ -472,3 +472,22 @@ export function sectionForPath(pathname: string): NavSection {
   }
   return NAV[0];
 }
+
+/**
+ * The section and item label keys for a route, or `null`s when the route is not in the nav.
+ *
+ * Used by the placeholder screen to name where the visitor is. `null` rather than a thrown error or
+ * a guessed label: a route can legitimately be outside `NAV` (a detail page, `/login`), and the
+ * caller renders a generic heading for those.
+ */
+export function labelKeysForPath(pathname: string): {
+  sectionKey: string | null;
+  labelKey: string | null;
+} {
+  for (const s of NAV) {
+    for (const item of sectionItems(s)) {
+      if (item.path === pathname) return { sectionKey: s.labelKey, labelKey: item.labelKey };
+    }
+  }
+  return { sectionKey: null, labelKey: null };
+}

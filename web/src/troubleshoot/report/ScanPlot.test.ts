@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { buildScanPlot, type ScanPoint } from './ScanPlot';
+import { buildScanPlot, lg, type ScanPoint } from './ScanPlot';
 
 const p = (src: string, dst: number, ports: number): ScanPoint => ({
   src,
@@ -56,5 +56,16 @@ describe('buildScanPlot', () => {
     const m = buildScanPlot([p('a', 2, 3)])!;
     expect(m.xTicks.length).toBeGreaterThanOrEqual(2);
     expect(m.plot.w).toBeGreaterThan(0);
+  });
+});
+
+describe('lg', () => {
+  it('floors at one host, so a single-target source plots at the origin', () => {
+    // Math.log10(0) is -Infinity, which would put the point outside the plot with no clue why.
+    expect(lg(0)).toBe(0);
+    expect(lg(1)).toBe(0);
+    expect(lg(10)).toBe(1);
+    expect(lg(1000)).toBe(3);
+    expect(lg(-5)).toBe(0);
   });
 });

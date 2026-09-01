@@ -10,7 +10,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { api } from '../../services/api';
 import { formatBps, formatDbm, formatPps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
@@ -52,74 +51,22 @@ import {
   LIST_MIN_PX,
 } from './interfaceDockHeight';
 import { interfaceColumns } from './tabFilters';
-import { duplexEmptyReason, duplexState, mediaApplies } from './linkMode';
+import { duplexState } from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
 import { facetCounts } from '../../lib/filterCounts';
 import { buildPredicate } from '../../lib/filterPredicate';
+import { dockBudget, stickyChromeHeight } from './interfaceDockHeight';
+import { operLabel } from './healthTone';
+import { duplexTitle, mediaTitle } from './linkMode';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 const SPARK_WINDOW_SECS = 3600;
 const SPARK_STEP_SECS = 120;
 const SPARK_W = 120;
 const SPARK_H = 26;
-/** The list's sticky chrome — the header and, on a desktop, the filter row under it — measured
- *  rather than mirrored from CSS. It was a `LIST_HEAD_H = 32` constant, and both of the things a
- *  mirror does went wrong: ADR-053 added a 34px sticky filter row below the header and nobody
- *  updated the number, so a selected row near the top was scrolled *under* the filter row; and
- *  mobile hides both, so the number reserved 32px of nothing. A `display: none` element measures 0,
- *  which is exactly the answer wanted in that case. */
-function stickyChromeHeight(list: HTMLElement): number {
-  return Array.from(list.querySelectorAll('.nd-if-head, .nd-if-filters')).reduce(
-    (h, el) => h + el.getBoundingClientRect().height,
-    0,
-  );
-}
-
-/** The height `.nd-if-list` and the dock share: the tab body minus the fixed chrome above them —
- *  the toolbar, plus the error banner when one is showing. Measured rather than mirrored, for the
- *  same reason `stickyChromeHeight` measures.
- *
- *  ⚠️ NOT `window.innerHeight`. This pane sits under the app shell's top bar, the node identity
- *  header and the tab strip, which cost roughly 230px on a 720p window — sizing the dock against the
- *  window would let it push the list off the bottom.
- *  ⚠️ A future `flex: none` sibling of `.nd-if` must be added to this selector, or the dock
- *  over-claims by that sibling's height. */
-function dockBudget(root: HTMLElement): number {
-  const chrome = Array.from(
-    root.querySelectorAll(':scope > .nd-if-toolbar, :scope > .form-error'),
-  ).reduce((h, el) => h + el.getBoundingClientRect().height, 0);
-  return root.clientHeight - chrome;
-}
-
-/** Human oper label from ifOperStatus (1 = up). */
-function operLabel(oper: number | null, t: TFunction): string {
-  if (oper == null) return t('interfaces.operUnknown');
-  return oper === 1 ? t('interfaces.operUp') : t('interfaces.operDown');
-}
-
-/** Tooltip for an empty duplex cell — why there is nothing there (ADR-063). `undefined` when the
- *  cell has a value, so a populated cell carries no `title` at all rather than a redundant one. */
-function duplexTitle(r: InterfaceRow, t: TFunction): string | undefined {
-  const reason = duplexEmptyReason(r.if_duplex, r.if_type);
-  return reason ? t(`interfaces.duplexEmpty.${reason}`) : undefined;
-}
-
-/** Tooltip for the media cell: the transceiver's part string when there is one, otherwise why the
- *  cell is empty. Both are worth saying and they never collide — a port with a resolved medium and
- *  a known module shows the module, which is the extra fact. */
-function mediaTitle(r: InterfaceRow, t: TFunction): string | undefined {
-  if (r.transceiver_model) {
-    return t('interfaces.transceiver', { model: r.transceiver_model });
-  }
-  if (r.if_media) return undefined;
-  return mediaApplies(r.if_type)
-    ? t('interfaces.mediaEmpty.unknown')
-    : t('interfaces.mediaEmpty.notApplicable');
-}
-
 interface Props {
   nodeId: string;
   /** Interface rows (loaded + interval-refreshed by the orchestrator, shared with the tab badge). */

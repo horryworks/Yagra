@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
-  clampDockHeight,
-  defaultDockHeight,
   DOCK_MIN_PX,
   DOCK_STEP_PX,
+  LIST_MIN_PX,
+  clampDockHeight,
+  defaultDockHeight,
+  dockBudget,
   heightFromDrag,
   heightFromKey,
-  LIST_MIN_PX,
   resolveDockHeight,
+  stickyChromeHeight,
 } from './interfaceDockHeight';
 
 /** The dock's own chrome, the number `DOCK_MIN_PX` was derived from. */
@@ -119,5 +121,37 @@ describe('the two floors', () => {
     // A guard on the constants themselves: raising either floor without noticing it swallowed the
     // other would make every container below ~420px degenerate. 460 is a plausible split-pane.
     expect(DOCK_MIN_PX + LIST_MIN_PX).toBeLessThan(460);
+  });
+});
+
+describe('measuring the chrome, rather than mirroring it', () => {
+  /** A stand-in element: `querySelectorAll` answers with the heights it was given. */
+  const el = (heights: number[], clientHeight = 0) =>
+    ({
+      clientHeight,
+      querySelectorAll: () => heights.map((height) => ({ getBoundingClientRect: () => ({ height }) })),
+    }) as unknown as HTMLElement;
+
+  it('adds up every sticky element it finds', () => {
+    expect(stickyChromeHeight(el([32, 34]))).toBe(66);
+    expect(stickyChromeHeight(el([32]))).toBe(32);
+  });
+
+  it('answers zero when the chrome is hidden', () => {
+    // Mobile hides both the header and the filter row. A `display: none` element measures 0, which
+    // is exactly the answer wanted — the constant this replaced reserved 32px of nothing there.
+    expect(stickyChromeHeight(el([]))).toBe(0);
+    expect(stickyChromeHeight(el([0, 0]))).toBe(0);
+  });
+
+  it('subtracts the fixed chrome from the pane, not from the window', () => {
+    // ⚠️ The pane sits under the shell's top bar, the identity header and the tab strip. Sizing
+    // against `window.innerHeight` would let the dock push the list off the bottom.
+    expect(dockBudget(el([40], 600))).toBe(560);
+    expect(dockBudget(el([40, 24], 600))).toBe(536);
+  });
+
+  it('reports the whole pane when nothing is above the list', () => {
+    expect(dockBudget(el([], 600))).toBe(600);
   });
 });

@@ -8,7 +8,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { addRoleMapRow, fromRoleMapRows, toRoleMapRows } from './roleMapForm';
+import { addRoleMapRow, asRole, fromRoleMapRows, toRoleMapRows } from './roleMapForm';
+import { ROLES } from '../types/api';
 
 const rows = (pairs: [string, 'viewer' | 'operator' | 'admin'][]) =>
   pairs.map(([group, role], key) => ({ key, group, role }));
@@ -57,5 +58,18 @@ describe('the role-map rows', () => {
     const next = addRoleMapRow(start);
     expect(new Set(next.map((r) => r.key)).size).toBe(next.length);
     expect(next[next.length - 1].group).toBe('');
+  });
+});
+
+describe('asRole', () => {
+  it('accepts the roles this build knows and refuses everything else', () => {
+    // The value comes from an IdP's group mapping, so it is external text. Anything unrecognised
+    // must become `null` — a mapping that silently kept an unknown string would grant nothing and
+    // look configured.
+    for (const r of ROLES) expect(asRole(r)).toBe(r);
+    expect(asRole('auditor')).toBeNull();
+    expect(asRole('')).toBeNull();
+    expect(asRole(null)).toBeNull();
+    expect(asRole(undefined)).toBeNull();
   });
 });

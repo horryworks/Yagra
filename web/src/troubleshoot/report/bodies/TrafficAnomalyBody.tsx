@@ -17,22 +17,14 @@ import { formatBytes } from '../../../lib/format';
 import { relTime } from '../../format';
 import { Chips, EmptyList, FindingRow, NodeRef, RatioMeter, ReportToolbar, RightRail } from '../kit';
 import { detailNum, ratioBucket, sevOf, sortByDetail, sortCommon } from '../format';
+import {
+  trafficBaselineBytes as baseOf,
+  trafficPeakBytes as peakOf,
+  trafficRatio as ratioOf,
+} from '../findingFacts';
+import { severityColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const peakOf = (f: AnalysisFinding) => detailNum(f, 'peak_bytes') ?? 0;
-const baseOf = (f: AnalysisFinding) => detailNum(f, 'baseline_mean_bytes') ?? 0;
-const ratioOf = (f: AnalysisFinding) => {
-  const b = baseOf(f);
-  return b > 0 ? peakOf(f) / b : Infinity;
-};
-
-function sevColor(f: AnalysisFinding): string {
-  const s = sevOf(f);
-  if (s === 'crit') return 'var(--status-critical)';
-  if (s === 'warn') return 'var(--status-warning)';
-  return 'var(--series-6)';
-}
 
 function TrafficRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');
@@ -79,7 +71,7 @@ export function TrafficAnomalyBody({ findings }: ReportBodyProps) {
           label: `${i + 1}. ${f.node_name}`,
           value: peakOf(f),
           valueText: formatBytes(peakOf(f)),
-          color: sevColor(f),
+          color: severityColor(f, 'var(--series-6)'),
         })),
     [findings],
   );

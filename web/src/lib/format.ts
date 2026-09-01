@@ -498,3 +498,12 @@ export function formatSi(n: number): string {
   }
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
+
+export const agoSec = (sec: number | null): string =>
+  sec == null ? '—' : relativeTime(new Date(sec * 1000).toISOString());
+
+export const toRfc3339 = (local: string) => new Date(local).toISOString();
+
+export function timeValue(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}

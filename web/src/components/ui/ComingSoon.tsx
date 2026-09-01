@@ -6,21 +6,12 @@
 
 import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { NAV, sectionItems } from '../../nav';
 import { PageHeader } from './PageHeader';
 import { Card } from './Card';
 import './ComingSoon.css';
+import { labelKeysForPath } from '../../nav';
 
 /** Resolve the current path to its nav label keys (or nulls when off-nav). */
-function labelKeysForPath(pathname: string): { sectionKey: string | null; labelKey: string | null } {
-  for (const s of NAV) {
-    for (const item of sectionItems(s)) {
-      if (item.path === pathname) return { sectionKey: s.labelKey, labelKey: item.labelKey };
-    }
-  }
-  return { sectionKey: null, labelKey: null };
-}
-
 export function ComingSoon() {
   const { t } = useTranslation('nav');
   const { pathname } = useLocation();

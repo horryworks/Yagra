@@ -185,6 +185,21 @@ impl YagraMcp {
             "fleet_state_history" => self.state_history_in(p!(StateHistoryParams), scope).await,
             "get_report_runs" => self.report_runs_in(p!(ReportRunsParams), scope).await,
             "get_dns_chain" => self.dns_chain_in(p!(DnsChainParams), scope).await,
+            // The three reads ADR-113 declared undispatchable and ADR-113 Inc.2 decided about.
+            // Having an arm is not the same as being offered: the RCA agent takes
+            // `list_node_metrics` and deliberately not the other two (see `rca::agent::AGENT_TOOLS`).
+            "list_node_metrics" => {
+                self.list_node_metrics_in(p!(NodeMetricsParams), scope)
+                    .await
+            }
+            "get_interface_thresholds" => {
+                self.get_interface_thresholds_in(p!(InterfaceThresholdsParams), scope)
+                    .await
+            }
+            // ⚠️ No scope argument, and that is not an omission: the audit log is a record of who
+            // changed what, not a view of nodes, so `get_audit` is the one tool that does not go
+            // through `admit`. Its permission gate is `ViewAudit` on the wrapper.
+            "get_audit" => self.audit_in(p!(AuditParams)).await,
             "get_system_health" => {
                 let p = p!(SystemHealthParams);
                 match HealthSection::parse(&p.section) {
@@ -599,13 +614,17 @@ mod tests {
     ///
     /// `rca/agent.rs::every_agent_tool_has_an_in_process_arm` walks the *allow-list*, so it proves
     /// nothing about a tool the agent is not offered — two arms (`get_report_runs`,
-    /// `list_discovered_endpoints`) are outside it, and eight declared tools have no arm at all.
-    /// Declaring the eight makes a ninth a test failure rather than a silent gap: a new **read**
-    /// tool that lands with no arm is invisible to the RCA agent forever, and nothing else notices.
+    /// `list_discovered_endpoints`) are outside it. Declaring the rest makes one more a test
+    /// failure rather than a silent gap: a new **read** tool that lands with no arm is invisible to
+    /// the RCA agent forever, and nothing else notices.
     ///
-    /// ⚠️ The last three are reads and are **not** a decision anyone recorded — they were found by
-    /// this test (ADR-113 decision 5). `list_node_metrics` in particular is the tool `INSTRUCTIONS`
-    /// tells every client to call before `query_metrics`.
+    /// ✅ **The three reads ADR-113 found here are gone (Inc.2).** They had no arm and were also
+    /// absent from the agent's allow-list, so the declaration said "undecided" about two different
+    /// things at once. All three dispatch now; what the agent may *call* is a separate decision and
+    /// lives in `rca::agent::AGENT_TOOLS`, where `list_node_metrics` was added and the other two
+    /// were deliberately not.
+    ///
+    /// ⚠️ What remains is policy, not backlog. A tool added here needs a reason of the same kind.
     const NOT_DISPATCHABLE: &[&str] = &[
         // Writes: the in-process caller is a language model, and MCP's write surface is frozen at
         // three tools it is deliberately not offered (ADR-042 decision 6).
@@ -615,10 +634,6 @@ mod tests {
         // Starts work and spends money; the agent must not recurse into itself.
         "run_analysis",
         "run_rca",
-        // ⚠️ Reads with no arm. Not yet decided — see the doc above.
-        "get_audit",
-        "get_interface_thresholds",
-        "list_node_metrics",
     ];
 
     #[tokio::test]

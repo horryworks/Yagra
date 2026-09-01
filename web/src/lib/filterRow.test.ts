@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { filterRowForced, filterRowVisible } from './filterRow';
+import { filterRowForced, filterRowVisible, slotAlign, slotKey } from './filterRow';
 
 describe('filterRowVisible', () => {
   it('never draws the row on a phone, whatever the preference says', () => {
@@ -31,5 +31,24 @@ describe('filterRowVisible', () => {
     // fails here rather than only in the browser.
     expect(filterRowForced(0)).toBe(false);
     expect(filterRowForced(1)).toBe(true);
+  });
+});
+
+describe('grid slots', () => {
+  // The row is positional: one child per grid column, sharing a template with the header and every
+  // data row. Reading a slot wrongly slides every later control out from under its header, and no
+  // test that inspects state can see it.
+  it('reads a key from either spelling of a slot, and none from an empty track', () => {
+    expect(slotKey('name')).toBe('name');
+    expect(slotKey({ key: 'value' })).toBe('value');
+    expect(slotKey({ key: 'value', align: 'right' })).toBe('value');
+    expect(slotKey(null)).toBeNull();
+  });
+
+  it('reads alignment only from the object form', () => {
+    expect(slotAlign({ key: 'v', align: 'right' })).toBe('right');
+    expect(slotAlign({ key: 'v' })).toBeUndefined();
+    expect(slotAlign('name')).toBeUndefined();
+    expect(slotAlign(null)).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { alertSubject, rootCause, subjectNodeId } from './alertSubject';
+import { alertRowKey, alertSubject, rootCause, subjectNodeId } from './alertSubject';
 
 const NODE = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 
@@ -67,5 +67,18 @@ describe('rootCause', () => {
     expect(
       rootCause({ node: 'pool:tokyo', subject_kind: 'pool', subject_name: 'tokyo', root_cause: other }),
     ).toEqual({ kind: 'upstream', nodeId: other });
+  });
+});
+
+describe('alertRowKey', () => {
+  it('separates the same node’s different checks, and one check’s two severities', () => {
+    // Both cases are live: a node alerts on several checks at once, and a check is briefly present
+    // at two severities while it escalates. A key that collapsed either would make React reuse one
+    // row's DOM for another alert.
+    const a = { node: 'n1', check: 'icmp', severity: 'warning' };
+    expect(alertRowKey(a)).toBe('n1|icmp|warning');
+    expect(alertRowKey({ ...a, check: 'snmp' })).not.toBe(alertRowKey(a));
+    expect(alertRowKey({ ...a, severity: 'critical' })).not.toBe(alertRowKey(a));
+    expect(alertRowKey({ ...a, node: 'n2' })).not.toBe(alertRowKey(a));
   });
 });

@@ -35,7 +35,7 @@ import type {
   NodeDetail,
 } from '../../types/api';
 import { MetricChart, PALETTE } from '../MetricChart/MetricChart';
-import { RankedBars, type RankedRow } from '../../dashboard/primitives/RankedBars';
+import { RankedBars } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
 import { RangeControl, DEFAULT_RANGE, resolveRange, type Range } from './RangeControl';
 import { FlowSankey } from './FlowSankey';
@@ -43,6 +43,7 @@ import { FlowSankey } from './FlowSankey';
 // implementation rather than a second copy that has to be fixed twice.
 import { flowTrendSeries } from '../../dashboard/widgets/util';
 import './FlowTab.css';
+import { toRows } from './flowTabFilters';
 
 /** How many rows each Top-N and the conversations table hold.
  *
@@ -51,9 +52,6 @@ import './FlowTab.css';
  *  narrow ten out of thousands and then report "no conversations match". Narrowing conversations
  *  means asking the server for a different top-N — which is what the drill-down bar does. */
 const TOP_N = 10;
-
-const toRows = <T,>(items: T[], label: (x: T) => string, value: (x: T) => number): RankedRow[] =>
-  items.map((x) => ({ label: label(x), value: value(x), valueText: formatBytes(value(x)) }));
 
 export function FlowTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');

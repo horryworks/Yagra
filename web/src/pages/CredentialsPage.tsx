@@ -13,7 +13,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { CredentialSummary } from '../types/api';
@@ -58,6 +57,7 @@ import { CREDENTIAL_KINDS, type CredentialKind } from '../lib/credentialKinds';
 import './CredentialsPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { kindLabel, usageLabel } from './credentialList';
 
 /** The creatable kinds and their type come from `lib/credentialKinds.ts`, which is also what the
  *  node-binding, URL-monitor and discovery pickers filter on — one list, so a kind added here
@@ -67,23 +67,19 @@ type Kind = CredentialKind;
 
 // Kind → { i18n label key, icon }. The label is resolved with `t` at the call site (never at
 // module load) so it follows the active language.
-const KIND_META: Record<string, { labelKey: string; Icon: ComponentType }> = {
-  snmp_v2c: { labelKey: 'cred.kind.snmp_v2c', Icon: HashIcon },
-  snmp_v3: { labelKey: 'cred.kind.snmp_v3', Icon: ShieldIcon },
-  http_auth: { labelKey: 'cred.kind.http_auth', Icon: KeyIcon },
-  api_token: { labelKey: 'cred.kind.api_token', Icon: KeyIcon },
+/** The icon per credential kind. ⚠️ The **label** half lives in `credentialList.ts` — icons are
+ *  components, and that file is loaded by a test in a node environment. `kindIcons` in this file
+ *  and `CREDENTIAL_KIND_LABEL_KEYS` there are keyed by the same strings, and
+ *  `credentialList.test.ts` pins that they agree. */
+const KIND_ICONS: Record<string, ComponentType> = {
+  snmp_v2c: HashIcon,
+  snmp_v3: ShieldIcon,
+  http_auth: KeyIcon,
+  api_token: KeyIcon,
   // Meraki keys are created via Settings ▸ Integrations; shown here read-only.
-  meraki_api: { labelKey: 'cred.kind.meraki_api', Icon: KeyIcon },
+  meraki_api: KeyIcon,
 };
 
-
-const kindLabel = (kind: string, t: TFunction) => {
-  const meta = KIND_META[kind];
-  return meta ? t(meta.labelKey) : kind;
-};
-
-const usageLabel = (n: number, t: TFunction) =>
-  n === 0 ? t('cred.usage.unused') : t('cred.usage.count', { count: n });
 
 
 /** The SNMPv3 (USM) sub-form. Controlled — the same fields back the add and edit modals. */
@@ -525,7 +521,7 @@ export function CredentialsPage() {
         width: '1.7fr',
         sortable: true,
         render: (c) => {
-          const Icon = KIND_META[c.kind]?.Icon ?? KeyIcon;
+          const Icon = KIND_ICONS[c.kind] ?? KeyIcon;
           return (
             <span className="yt-name">
               <span className="yt-typeicon" title={kindLabel(c.kind, t)}>
@@ -541,7 +537,7 @@ export function CredentialsPage() {
         header: t('cred.cols.type'),
         width: '150px',
         render: (c) => {
-          const Icon = KIND_META[c.kind]?.Icon ?? KeyIcon;
+          const Icon = KIND_ICONS[c.kind] ?? KeyIcon;
           return (
             <span className="yt-chip">
               <Icon />

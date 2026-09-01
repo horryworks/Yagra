@@ -11,6 +11,7 @@ import { api, ApiError } from '../services/api';
 import type { ReportDefinition, Cadence, ReportSchedule } from '../types/api';
 import { WEEKDAY_OPTIONS } from '../lib/cadence';
 import { SELECTABLE_CADENCES } from '../lib/cadence';
+import { timeValue } from '../lib/format';
 
 interface Props {
   definitions: ReportDefinition[];
@@ -18,10 +19,6 @@ interface Props {
   schedule: ReportSchedule | null;
   onClose: () => void;
   onSaved: () => void;
-}
-
-function timeValue(hour: number, minute: number): string {
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props) {

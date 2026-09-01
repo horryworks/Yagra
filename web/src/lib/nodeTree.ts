@@ -3,6 +3,7 @@
 // shapes, answer "is X a descendant of Y" for drag-drop cycle guards, and roll up the health of a
 // group's descendant nodes. Kept free of React so they can be unit-tested directly.
 
+import type { TFunction } from 'i18next';
 import { GROUP_TYPES } from '../types/api';
 import type { GroupType, NodeGroup, NodeState, NodeSummary } from '../types/api';
 import { DISPLAY_ORDER, PROBLEM_STATES, emptyStateCounts } from './nodeState';
@@ -498,3 +499,30 @@ export function isSelfOrDescendant(
 //
 // `NodePage.truncated` is the server's own answer now. Deleted rather than left for the text-only
 // case: a helper that is right for one caller and quietly wrong for the next is worse than none.
+
+/** Find a group's built node (with children + nodes resolved) anywhere in the tree. */
+export function findTreeGroup(roots: TreeGroup[], id: string): TreeGroup | null {
+  for (const g of roots) {
+    if (g.id === id) return g;
+    const hit = findTreeGroup(g.children, id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** One-line impact summary for deleting a group: how many direct subgroups and member nodes
+ *  will be re-parented (nothing is deleted). The member count comes from the server per-group
+ *  rollup (A-3) so it's correct without loading the group's members. Pluralised for readability. */
+export function groupDeletionImpact(
+  groups: NodeGroup[],
+  groupCounts: Record<string, StateCounts>,
+  g: NodeGroup,
+  t: TFunction,
+): string {
+  const subs = groups.filter((x) => x.parent_id === g.id).length;
+  const members = groupCounts[g.id] ? countsTotal(groupCounts[g.id]) : 0;
+  return t('deleteGroup.impact', {
+    subgroups: t('count.subgroup', { count: subs }),
+    members: t('count.memberNode', { count: members }),
+  });
+}

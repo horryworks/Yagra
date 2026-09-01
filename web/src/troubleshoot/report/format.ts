@@ -327,6 +327,21 @@ export function ratioBucket(r: number): 'x10' | 'x3' | 'low' {
   if (r >= 3) return 'x3';
   return 'low';
 }
+/** How much of a node's traffic one conversation accounts for. The filter axis on the Saturation
+ *  report — "is this link carrying one flow, or many?"
+ *
+ *  ⚠️ Two buckets, not three: below 0.8 there is nothing to say beyond "shared", so a third tier
+ *  would be a filter chip that never changes the answer. */
+export function shareBucket(ratio: number): 'high' | 'mid' {
+  return ratio >= 0.8 ? 'high' : 'mid';
+}
+
+/** How far a node's high-severity share moved, in **percentage points**. The filter axis on the
+ *  Severity shift report. Same two-tier reasoning as [`shareBucket`]. */
+export function ppBucket(pp: number): 'big' | 'mid' {
+  return pp >= 30 ? 'big' : 'mid';
+}
+
 
 /** Split the backend's synthetic `kind: 'info'` tier-unavailable rows out of the real findings.
  *

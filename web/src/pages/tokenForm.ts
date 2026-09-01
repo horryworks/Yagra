@@ -6,6 +6,7 @@
 // credential can do and how long it lives, which is not something to leave to the type checker and
 // a careful reader.
 
+import type { Role } from '../types/api';
 import type { TokenSurface, UserKind, UserSummary } from '../types/api';
 
 /** Expiry choices offered in the dialog. `never` is deliberate — see `EXPIRY_PRESETS`. */
@@ -146,3 +147,7 @@ export function daysUntilExpiry(expiresAt: string | null | undefined, now: Date)
   const ms = new Date(expiresAt).getTime() - now.getTime();
   return ms <= 0 ? null : Math.ceil(ms / 86_400_000);
 }
+
+/** Elevated roles read as a warmer tone so a non-viewer token stands out in the list. */
+export const roleTone = (role: Role): 'neutral' | 'info' | 'warning' =>
+  role === 'admin' ? 'warning' : role === 'operator' ? 'info' : 'neutral';

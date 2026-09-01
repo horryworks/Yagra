@@ -57,10 +57,7 @@ import { TimeCell } from '../components/ui/tableCells';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
 import './ApiTokensPage.css';
-
-/** Elevated roles read as a warmer tone so a non-viewer token stands out in the list. */
-const roleTone = (role: Role): 'neutral' | 'info' | 'warning' =>
-  role === 'admin' ? 'warning' : role === 'operator' ? 'info' : 'neutral';
+import { roleTone } from './tokenForm';
 
 /** Tone per token state. Every non-active state reads as a problem, because each one means the
  *  token is refused — and an admin looking at the list needs "this does not work" to be visible

@@ -34,9 +34,13 @@ const PAD_Y = 6;
  *  Sized to fit the reserved LABEL_W at the AS line's font. */
 const AS_LABEL_MAX = 22;
 
-const num = (n: number): string => n.toFixed(1);
+/** One decimal, always — the SVG lays values out on a fixed grid, so `12` and `12.0` are
+ *  different widths. Exported for its test; it has no caller outside this module. */
+export const num = (n: number): string => n.toFixed(1);
 
-const truncate = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+/** Clip a label to `max` characters, the ellipsis included in the budget. Exported for its test. */
+export const truncate = (s: string, max: number): string =>
+  s.length > max ? `${s.slice(0, max - 1)}…` : s;
 
 /** One src→dst ribbon. */
 export interface SankeyBand {

@@ -17,22 +17,12 @@ import {
   groupPath,
   STATE_ORDER,
   tallyStates,
-  type TreeGroup,
 } from '../../lib/nodeTree';
 import { stateLabel } from '../../lib/format';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import './NodeDetail.css';
-
-/** Find a group's built node (with children + nodes resolved) anywhere in the tree. */
-function findTreeGroup(roots: TreeGroup[], id: string): TreeGroup | null {
-  for (const g of roots) {
-    if (g.id === id) return g;
-    const hit = findTreeGroup(g.children, id);
-    if (hit) return hit;
-  }
-  return null;
-}
+import { findTreeGroup } from '../../lib/nodeTree';
 
 interface Props {
   group: NodeGroup;

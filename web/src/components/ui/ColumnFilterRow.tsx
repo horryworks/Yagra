@@ -25,16 +25,11 @@ import { useTranslation } from 'react-i18next';
 import { ColumnFilterCell } from './ColumnFilterCell';
 import { useFilterRowVisible } from './MobileFilterSheet';
 import type { FilterState, FilterableColumn } from '../../lib/columnFilter';
+import { slotKey } from '../../lib/filterRow';
+import { slotAlign } from '../../lib/filterRow';
 
-/** One grid track of the row.
- *
- *  `null` is an **empty track**, and it is not padding: the grid is positional, so a column that
- *  simply skipped its cell would slide every later control out from under its header. Say `null`
- *  where a column has no filter — a picture, a live number, an input the operator is typing into. */
-export type FilterSlot = string | null | { key: string; align?: 'right' };
-
-const slotKey = (s: FilterSlot): string | null => (s === null ? null : typeof s === 'string' ? s : s.key);
-const slotAlign = (s: FilterSlot) => (s === null || typeof s === 'string' ? undefined : s.align);
+import type { FilterSlot } from '../../lib/filterRow';
+export type { FilterSlot };
 
 interface Props<T> {
   columns: readonly FilterableColumn<T>[];

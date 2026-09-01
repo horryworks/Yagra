@@ -47,7 +47,8 @@ export function resolveRange(range: Range): { from: number; to: number } {
 // that sets only one. (`lib/filterParams.ts` does use search params — a list's filters have no store
 // behind them, so there the URL *is* the single source. That file states the rule in general.)
 
-const pad2 = (n: number) => String(n).padStart(2, '0');
+/** Two-digit zero pad, for the local-time inputs. Exported for its test. */
+export const pad2 = (n: number) => String(n).padStart(2, '0');
 
 /** Compact range readout for the calendar button, e.g. "6/12 12:00–6/17 09:30" (local time). */
 // TODO(i18n): M/D HH:MM ordering is hardcoded; route through a formatting layer when localization lands.

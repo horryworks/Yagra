@@ -3,38 +3,39 @@ import { describe, expect, it } from 'vitest';
 import type { UpgradeStatus } from '../types/api';
 import type { ComponentRow, Convergence } from './upgradeStatus';
 import {
-  buildKind,
-  componentReason,
-  convergePhase,
-  convergeProgress,
-  convergeState,
   CORE_ID,
-  darkPools,
-  unpreparedSites,
-  defaultSelection,
+  UPGRADE_PROGRESS_STEPS,
+  UPGRADE_RUN_STEPS,
+  buildKind,
   bundleTagFromFilename,
   canApply,
   canOffer,
   canUploadBundle,
+  componentReason,
+  convergePhase,
+  convergeProgress,
+  convergeState,
+  darkPools,
+  defaultSelection,
   isRunning,
   lastChecked,
   looksLikeReleaseTag,
   mechanism,
-  rowLocked,
-  rowPlan,
   rollback,
   rollbacks,
+  rowLocked,
+  rowPlan,
   runPhase,
   runState,
   runStep,
   shortRef,
   shouldPoll,
+  shouldPollConvergence,
   stepProgress,
   switchPending,
-  UPGRADE_PROGRESS_STEPS,
-  shouldPollConvergence,
-  UPGRADE_RUN_STEPS,
+  unpreparedSites,
   upgrades,
+  uptime,
 } from './upgradeStatus';
 
 function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
@@ -618,5 +619,22 @@ describe('convergePhase', () => {
       ),
     ).toBe(false);
     expect(shouldPollConvergence(status(), null)).toBe(false);
+  });
+});
+
+describe('uptime', () => {
+  it('drops to the two largest useful units at each scale', () => {
+    expect(uptime(0)).toBe('0m');
+    expect(uptime(59)).toBe('0m');
+    expect(uptime(60)).toBe('1m');
+    expect(uptime(3600)).toBe('1h 0m');
+    expect(uptime(3660)).toBe('1h 1m');
+    expect(uptime(86_400)).toBe('1d 0h');
+    expect(uptime(90_000)).toBe('1d 1h');
+  });
+
+  it('never reports minutes once it is reporting days', () => {
+    // A process up for weeks is read for "is this the restart I just did"; minutes are noise there.
+    expect(uptime(1_000_000)).toBe('11d 13h');
   });
 });

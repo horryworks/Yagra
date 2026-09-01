@@ -9,7 +9,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../../types/api';
@@ -23,6 +22,7 @@ import { SELECTABLE_MERAKI_TIERS } from '../merakiTiers';
 import './MerakiIntegrationPage.css';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
+import { tierList } from '../merakiTiers';
 
 // The visible region name is a translation key; the base_url (the technical Meraki endpoint) is not.
 const REGIONS: { labelKey: string; base_url: string }[] = [
@@ -31,9 +31,6 @@ const REGIONS: { labelKey: string; base_url: string }[] = [
   { labelKey: 'meraki.regions.china', base_url: 'https://api.meraki.cn' },
   { labelKey: 'meraki.regions.usGov', base_url: 'https://api.gov-meraki.com' },
 ];
-
-const tierList = (tiers: string[], t: TFunction) =>
-  tiers.length ? tiers.map((x) => t(`meraki.tier.${x}`)).join(', ') : t('meraki.tiersNone');
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select). */
 function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {

@@ -81,6 +81,13 @@
   single-flight guard. The new one is a job that was never dispatched at all.
 
 ### Improvements
+
+- **The LLM root-cause agent can now ask what metrics a node actually has.** `list_node_metrics` is
+  the tool the MCP instructions tell every client to call before `query_metrics`, because metric
+  names differ per device — but it was missing from the agent's own tool list, so the model had to
+  guess names and a wrong guess came back as an empty series it could not tell from a quiet one.
+  Nothing else about the agent changed; `get_audit` and `get_interface_thresholds` are still
+  deliberately outside its reach.
 - **The `pollers.desired_pool` column is dropped.** It recorded where an operator wanted a poller to
   be, as opposed to where it said it was — a gap that existed only while moving a poller meant
   editing the site's `.env` and restarting it. v0.3.4 closed that gap in the same release that

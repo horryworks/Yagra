@@ -7,6 +7,7 @@
 // `--status-*` variables rather than inventing a colour.
 
 import type { NodeState } from '../../types/api';
+import type { TFunction } from 'i18next';
 
 /** A three-way tone shared by the URL/DNS health cards, keyed to the status palette. */
 export type HealthTone = 'up' | 'warning' | 'critical';
@@ -35,4 +36,13 @@ export function certTone(days: number): HealthTone {
 export function operState(oper: number | null): NodeState {
   if (oper == null) return 'unknown';
   return oper === 1 ? 'ok' : 'critical';
+}
+
+/** Human oper label from `ifOperStatus` (1 = up).
+ *
+ *  ⚠️ Three answers, not two: `null` is "the walk has not reported this port", which is not the
+ *  same as down. Folding it into down would draw an alarm for a port nobody has looked at yet. */
+export function operLabel(oper: number | null, t: TFunction): string {
+  if (oper == null) return t('interfaces.operUnknown');
+  return oper === 1 ? t('interfaces.operUp') : t('interfaces.operDown');
 }

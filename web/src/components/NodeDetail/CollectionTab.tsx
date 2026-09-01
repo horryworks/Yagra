@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { useRangeStore } from '../../store';
-import { formatSi, pointsToSeries, relativeTime, scalarDisplay } from '../../lib/format';
+import { formatSi, pointsToSeries, scalarDisplay } from '../../lib/format';
 import type { CollectionTemplate, NodeDetail, NodeMetricEntry } from '../../types/api';
 import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
@@ -34,6 +34,7 @@ import { buildPredicate } from '../../lib/filterPredicate';
 import { metricColumns } from './tabFilters';
 import { viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
+import { agoSec } from '../../lib/format';
 
 type CollState = 'ok' | 'failing' | 'none';
 
@@ -43,9 +44,6 @@ interface Loaded {
   profileName: string | null;
   credentialName: string | null;
 }
-
-const agoSec = (sec: number | null): string =>
-  sec == null ? '—' : relativeTime(new Date(sec * 1000).toISOString());
 
 /** One metric's row: name, status, series fan-out, and — when it expands — its chart. */
 function MetricRow({

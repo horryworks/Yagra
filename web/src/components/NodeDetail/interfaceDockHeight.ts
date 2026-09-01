@@ -114,3 +114,38 @@ export function heightFromKey(
   if (dir === 0) return null;
   return clampDockHeight(current + dir * DOCK_STEP_PX, containerPx);
 }
+
+// ── Measuring the chrome the dock and the list share ────────────────────────────────────────────
+//
+// Both of these read the DOM, and both are here rather than in the component for the reason the
+// arithmetic above is: a mirror of a CSS value is a number that goes stale silently. They take an
+// element and ask it, so a test can hand them a stand-in and pin what they add up.
+
+/** The list's sticky chrome — the header and, on a desktop, the filter row under it.
+ *
+ *  ⚠️ **Measured, never mirrored.** It was a `LIST_HEAD_H = 32` constant, and both of the things a
+ *  mirror does went wrong: ADR-053 added a 34px sticky filter row below the header and nobody
+ *  updated the number, so a selected row near the top scrolled *under* the filter row; and mobile
+ *  hides both, so the number reserved 32px of nothing. A `display: none` element measures 0, which
+ *  is exactly the answer wanted in that case. */
+export function stickyChromeHeight(list: HTMLElement): number {
+  return Array.from(list.querySelectorAll('.nd-if-head, .nd-if-filters')).reduce(
+    (h, el) => h + el.getBoundingClientRect().height,
+    0,
+  );
+}
+
+/** The height `.nd-if-list` and the dock share: the tab body minus the fixed chrome above them —
+ *  the toolbar, plus the error banner when one is showing.
+ *
+ *  ⚠️ NOT `window.innerHeight`. This pane sits under the app shell's top bar, the node identity
+ *  header and the tab strip, which cost roughly 230px on a 720p window — sizing the dock against
+ *  the window would let it push the list off the bottom.
+ *  ⚠️ A future `flex: none` sibling of `.nd-if` must be added to this selector, or the dock
+ *  over-claims by that sibling's height. */
+export function dockBudget(root: HTMLElement): number {
+  const chrome = Array.from(
+    root.querySelectorAll(':scope > .nd-if-toolbar, :scope > .form-error'),
+  ).reduce((h, el) => h + el.getBoundingClientRect().height, 0);
+  return root.clientHeight - chrome;
+}

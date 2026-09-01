@@ -10,8 +10,8 @@ import { useEffect, useRef } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { buildChartScales } from './scales';
-import { idleLegendIdx } from './legend';
 import './MetricChart.css';
+import { applyIdleLegend, resolveColor } from './chartColor';
 
 /** Default series palette (In / Out / aux …), indexed by series position, as theme tokens. In a DOM
  *  or SVG (via inline `style`/CSS) `var(--series-N)` resolves directly; passed to MetricChart as a
@@ -35,17 +35,6 @@ const SERIES_FALLBACK = ['#4c8dd6', '#9b7bd4', '#4caf9b', '#d68a4c', '#b05c8e', 
 
 /** Resolve a color that may be a `var(--token)` reference against `cs` (the element's computed
  *  style). Non-var strings pass through unchanged; an unresolvable var falls back. */
-function resolveColor(
-  raw: string | undefined,
-  cs: CSSStyleDeclaration,
-  fallback: string,
-): string {
-  if (!raw) return fallback;
-  const m = raw.match(/^var\((--[\w-]+)\)$/);
-  if (!m) return raw;
-  return cs.getPropertyValue(m[1]).trim() || fallback;
-}
-
 // First-paint estimate of uPlot's title+legend chrome height (px) in `fill` mode, before the real
 // elements exist to measure. Corrected to the exact measured value immediately after construction.
 const FILL_CHROME_ESTIMATE = 28;
@@ -115,12 +104,6 @@ interface Props {
  *  chart reports its current values instead of a column of `--`. Runs after uPlot has set the
  *  legend itself (the `setCursor` hook fires at the end of `updateCursor`), and only when uPlot has
  *  no index of its own — a real hover, including one arriving over `syncKey`, always wins. */
-function applyIdleLegend(u: uPlot) {
-  if (u.cursor.idx != null) return;
-  const idx = idleLegendIdx(u.data.slice(1) as (number | null)[][]);
-  if (idx != null) u.setLegend({ idx }, false);
-}
-
 export function MetricChart({
   title,
   timestamps,

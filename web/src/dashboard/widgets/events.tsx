@@ -13,13 +13,12 @@ import { Select } from '../../components/ui/Field';
 import { useEntityNames } from '../../components/ui/EntityName';
 import { relativeTime } from '../../lib/format';
 import { api } from '../../services/api';
-import { EVENT_KINDS, type EventKind } from '../../types/api';
 import { Donut, type DonutSegment } from '../primitives/Donut';
 import { KpiTile } from '../primitives/KpiTile';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
-import type { ViewActionProps, WidgetProps, WidgetSettings } from '../types';
+import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
-import { densifyTimeBuckets, trailingIso } from './util';
+import { densifyTimeBuckets, eventKindOf as kindOf, trailingIso } from './util';
 
 /** Trailing window for every event widget (last 24h). */
 const SPAN_SECS = 86_400;
@@ -52,17 +51,6 @@ const ACTION_COLOR: Record<string, string> = {
 };
 
 // ── Event feed (live) ────────────────────────────────────────────────────────────────
-
-/** The kind filter from instance settings (undefined = all kinds).
- *
- *  Narrowed through `EVENT_KINDS` rather than a hand-written `||` chain: settings are persisted
- *  `unknown`, so an unrecognised value must fall back to "all kinds" — but a *new* `EventKind`
- *  would have been silently unrecognised too, quietly turning a saved per-kind filter into the
- *  unfiltered feed. */
-function kindOf(settings: WidgetSettings | undefined): EventKind | undefined {
-  const k = settings?.kind;
-  return EVENT_KINDS.find((kind) => kind === k);
-}
 
 export function EventFeedWidget({ instance }: WidgetProps) {
   const { t } = useTranslation('dashboard');

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildIncidentTimeline,
+  laneOf,
   signalLabel,
   signalTone,
   type TimelineSignal,
@@ -112,5 +113,17 @@ describe('signalLabel', () => {
   // subject own activity, so an operator sees another device traffic shift as this one.
   it('attributes a corroborating neighbour signal to its node', () => {
     expect(signalLabel({ label: 'linkDown', node_name: 'core-sw-01' })).toBe('core-sw-01: linkDown');
+  });
+});
+
+describe('laneOf', () => {
+  it('keeps the three known kinds and lands everything else in `other`', () => {
+    // A signal kind a newer core invented must still be plotted somewhere — dropping it would make
+    // the incident look smaller than it was.
+    expect(laneOf('metric')).toBe('metric');
+    expect(laneOf('event')).toBe('event');
+    expect(laneOf('flow')).toBe('flow');
+    expect(laneOf('syslog')).toBe('other');
+    expect(laneOf('')).toBe('other');
   });
 });

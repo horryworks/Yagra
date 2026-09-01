@@ -16,9 +16,10 @@ import {
   activeAlertLabels,
   alertPredicate,
   readFilters,
-  writeFilters,
   type FilterableAlert,
   type NameOf,
+  urlOnlyResolver,
+  writeFilters,
 } from './activeAlertFilters';
 
 const NAMES: Record<string, string> = {
@@ -259,5 +260,15 @@ describe('the URL codec', () => {
     const params = new URLSearchParams('tab=map&severity=info');
     writeFilters(cols(), params, DEFAULTS);
     expect(params.toString()).toBe('tab=map');
+  });
+});
+
+describe('urlOnlyResolver', () => {
+  it('throws rather than answering, because the URL codec must never read a row', () => {
+    // The column set is built twice: once to render (with a real name resolver) and once purely to
+    // encode and decode the URL. If the second ever reached for a row it would be reading state
+    // that does not exist at that point — this stand-in makes that a loud failure instead of
+    // `undefined` flowing into a query parameter.
+    expect(() => urlOnlyResolver('any-id')).toThrow(/must not read a row/);
   });
 });

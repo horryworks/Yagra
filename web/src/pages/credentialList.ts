@@ -87,3 +87,27 @@ export function credentialFilters(
     },
   };
 }
+
+/** A credential kind's display label, falling back to the raw token for a kind this build does not
+ *  know. A newer core can store a kind this WebUI has never heard of; showing `snmp_v4` is honest,
+ *  and showing nothing would make the row look broken. */
+/** The i18n key per credential kind. ⚠️ The **label** half of what used to be one `KIND_META`
+ *  map in the page; the icon half stays there, because an icon is a component and this file is
+ *  loaded by a test in a node environment. Both halves are keyed by the same strings. */
+export const CREDENTIAL_KIND_LABEL_KEYS: Record<string, string> = {
+  snmp_v2c: 'cred.kind.snmp_v2c',
+  snmp_v3: 'cred.kind.snmp_v3',
+  http_auth: 'cred.kind.http_auth',
+  api_token: 'cred.kind.api_token',
+  meraki_api: 'cred.kind.meraki_api',
+};
+
+export const kindLabel = (kind: string, t: TFunction) => {
+  const key = CREDENTIAL_KIND_LABEL_KEYS[kind];
+  return key ? t(key) : kind;
+};
+
+/** How many nodes reference a credential — "unused" is its own phrase rather than "0 nodes",
+ *  because unused is the state an operator is looking for when deciding what may be deleted. */
+export const usageLabel = (n: number, t: TFunction) =>
+  n === 0 ? t('cred.usage.unused') : t('cred.usage.count', { count: n });

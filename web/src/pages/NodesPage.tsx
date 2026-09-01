@@ -19,7 +19,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -35,7 +34,7 @@ import type {
   PoolOption,
   SuppressionExemption,
 } from '../types/api';
-import { countsTotal, mergeNodesById, type StateCounts } from '../lib/nodeTree';
+import { mergeNodesById, type StateCounts } from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { FILTER_SEARCH_LIMIT, useFilterSearch } from './useFilterSearch';
 import {
@@ -88,6 +87,7 @@ import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
+import { groupDeletionImpact } from '../lib/nodeTree';
 
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
@@ -1037,19 +1037,3 @@ export function NodesPage() {
   );
 }
 
-/** One-line impact summary for deleting a group: how many direct subgroups and member nodes
- *  will be re-parented (nothing is deleted). The member count comes from the server per-group
- *  rollup (A-3) so it's correct without loading the group's members. Pluralised for readability. */
-function groupDeletionImpact(
-  groups: NodeGroup[],
-  groupCounts: Record<string, StateCounts>,
-  g: NodeGroup,
-  t: TFunction,
-): string {
-  const subs = groups.filter((x) => x.parent_id === g.id).length;
-  const members = groupCounts[g.id] ? countsTotal(groupCounts[g.id]) : 0;
-  return t('deleteGroup.impact', {
-    subgroups: t('count.subgroup', { count: subs }),
-    members: t('count.memberNode', { count: members }),
-  });
-}

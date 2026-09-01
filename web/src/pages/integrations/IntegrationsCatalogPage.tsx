@@ -8,45 +8,16 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { api } from '../../services/api';
 import { PageHeader } from '../../components/ui/PageHeader';
+import {
+  merakiStatusLabel,
+  merakiStatusTone,
+  type MerakiStatus,
+} from './merakiStatus';
 import { classifyLoadError } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import './IntegrationsCatalogPage.css';
-
-// ADR-056: `forbidden` is its own state and not folded into `not-configured`. The catch below used
-// to map every failure to "not configured", which reads as a fact about the deployment when it is
-// really a fact about the caller — the same lie the Credentials screen was telling, one card wide.
-type MerakiStatus =
-  | { kind: 'loading' }
-  | { kind: 'unavailable' }
-  | { kind: 'forbidden' }
-  | { kind: 'not-configured' }
-  | { kind: 'connected'; orgs: number; pollingOn: boolean };
-
-function merakiStatusLabel(s: MerakiStatus, t: TFunction): string {
-  switch (s.kind) {
-    case 'loading':
-      return t('integrations.status.checking');
-    case 'unavailable':
-      return t('integrations.status.unavailable');
-    case 'forbidden':
-      return t('integrations.status.forbidden');
-    case 'not-configured':
-      return t('integrations.status.notConfigured');
-    case 'connected':
-      if (!s.pollingOn) return t('integrations.status.pollingPaused');
-      return t('integrations.status.connected', { count: s.orgs });
-  }
-}
-
-/** Chip tone classes are neutral/derived — never the --status-* node-state palette. */
-function merakiStatusTone(s: MerakiStatus): string {
-  if (s.kind === 'connected') return s.pollingOn ? 'ok' : 'paused';
-  if (s.kind === 'unavailable' || s.kind === 'forbidden') return 'muted';
-  return 'idle';
-}
 
 export function IntegrationsCatalogPage() {
   const { t } = useTranslation('system');

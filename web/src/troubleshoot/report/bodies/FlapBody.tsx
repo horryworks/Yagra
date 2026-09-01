@@ -14,19 +14,11 @@ import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { Chips, EmptyList, FindingRow, NodeRef, ReportToolbar, RightRail } from '../kit';
-import { detailNum, flapBucket, sevOf, sortByDetail, sortCommon } from '../format';
+import { flapBucket, sortByDetail, sortCommon } from '../format';
+import { flapCount as flapsOf, perHour as rateOf } from '../findingFacts';
+import { severityColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const flapsOf = (f: AnalysisFinding) => detailNum(f, 'flaps') ?? 0;
-const rateOf = (f: AnalysisFinding) => detailNum(f, 'per_hour') ?? 0;
-
-function sevColor(f: AnalysisFinding): string {
-  const s = sevOf(f);
-  if (s === 'crit') return 'var(--status-critical)';
-  if (s === 'warn') return 'var(--status-warning)';
-  return 'var(--series-1)';
-}
 
 function FlapRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');
@@ -63,7 +55,7 @@ export function FlapBody({ findings }: ReportBodyProps) {
           label: `${i + 1}. ${f.node_name}`,
           value: rateOf(f),
           valueText: t('report.flap.perHour', { rate: rateOf(f).toFixed(1) }),
-          color: sevColor(f),
+          color: severityColor(f, 'var(--series-1)'),
         })),
     [findings, t],
   );

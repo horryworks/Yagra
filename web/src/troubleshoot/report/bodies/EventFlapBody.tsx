@@ -27,20 +27,16 @@ import {
   ReportToolbar,
   RightRail,
 } from '../kit';
-import { detailNum, eventRuleName, groupByRule, sevOf, sortByDetail, sortCommon } from '../format';
+import { eventRuleName, groupByRule, sevOf, sortByDetail, sortCommon } from '../format';
+import {
+  eventFlapClears as clearsOf,
+  eventFlapCycles as cyclesOf,
+  eventFlapFires as firesOf,
+  perHour as rateOf,
+} from '../findingFacts';
+import { scoreTone as sevFor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const cyclesOf = (f: AnalysisFinding) => detailNum(f, 'cycles') ?? 0;
-const rateOf = (f: AnalysisFinding) => detailNum(f, 'per_hour') ?? 0;
-const firesOf = (f: AnalysisFinding) => detailNum(f, 'fires') ?? 0;
-const clearsOf = (f: AnalysisFinding) => detailNum(f, 'clears') ?? 0;
-
-function sevFor(score: number): 'crit' | 'warn' | 'info' {
-  if (score >= 90) return 'crit';
-  if (score >= 75) return 'warn';
-  return 'info';
-}
 
 function FlapRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');

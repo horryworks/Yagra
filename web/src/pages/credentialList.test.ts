@@ -13,10 +13,16 @@
 import { describe, expect, it } from 'vitest';
 import type { CredentialSummary } from '../types/api';
 import {
+  CREDENTIAL_KIND_LABEL_KEYS,
+  DEFAULT_CREDENTIAL_SORT,
   credentialFilters,
   credentialSortValues,
-  DEFAULT_CREDENTIAL_SORT,
+  kindLabel,
+  usageLabel,
 } from './credentialList';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { TFunction } from 'i18next';
 import { specColumns, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
 import { buildPredicate } from '../lib/filterPredicate';
 import { encodeCondition } from '../lib/filterCondition';
@@ -100,5 +106,52 @@ describe('the sort', () => {
     const afterDesc = nextSort({ by: 'name', dir: 'asc' }, 'name');
     expect(afterDesc).toEqual({ by: 'name', dir: 'desc' });
     expect(nextSort(afterDesc, 'used_by')).toEqual({ by: 'used_by', dir: 'asc' });
+  });
+});
+
+describe('credential kind and usage labels', () => {
+  const t = ((key: string, opts?: Record<string, unknown>) =>
+    opts && 'count' in opts ? `${key}=${opts.count}` : key) as unknown as TFunction;
+
+  it('labels every kind this build knows', () => {
+    expect(kindLabel('snmp_v2c', t)).toBe('cred.kind.snmp_v2c');
+    expect(kindLabel('meraki_api', t)).toBe('cred.kind.meraki_api');
+  });
+
+  it('shows the raw token for a kind a newer core stored', () => {
+    // Honest beats blank: an empty cell reads as a broken row, `snmp_v4` reads as "upgrade me".
+    expect(kindLabel('snmp_v4', t)).toBe('snmp_v4');
+    expect(kindLabel('', t)).toBe('');
+  });
+
+  it('gives "unused" its own phrase rather than counting to zero', () => {
+    // Unused is the state an operator looks for when deciding what may be deleted.
+    expect(usageLabel(0, t)).toBe('cred.usage.unused');
+    expect(usageLabel(1, t)).toBe('cred.usage.count=1');
+    expect(usageLabel(12, t)).toBe('cred.usage.count=12');
+  });
+});
+
+describe('the credential-kind maps are two halves of one thing', () => {
+  // The labels live here and the icons live in `CredentialsPage.tsx`, because an icon is a
+  // component and this module is loaded by a test in a node environment. Nothing but this makes
+  // them agree — a kind added to one and not the other renders with a key for a label, or with the
+  // generic key icon, and both look plausible.
+  //
+  // Read as TEXT rather than imported: importing the page would pull React and every modal it
+  // renders into a node-environment test, to check a five-line object literal.
+  const src = readFileSync(join(__dirname, 'CredentialsPage.tsx'), 'utf8');
+
+  it('finds the map it is supposed to be reading', () => {
+    // Without this, a renamed const makes every assertion below vacuously true.
+    expect(src).toContain('const KIND_ICONS: Record<string, ComponentType> = {');
+  });
+
+  it('names exactly the same kinds on both sides', () => {
+    const block = src.slice(src.indexOf('const KIND_ICONS'));
+    const body = block.slice(block.indexOf('{'), block.indexOf('};') + 1);
+    const iconKinds = [...body.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]).sort();
+    expect(iconKinds.length).toBeGreaterThan(3);
+    expect(iconKinds).toEqual(Object.keys(CREDENTIAL_KIND_LABEL_KEYS).sort());
   });
 });

@@ -2,16 +2,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   DUPLEX_STATES,
+  IF_TYPE_ETHERNET_CSMACD,
+  SPEED_TIERS,
   duplexApplies,
   duplexEmptyReason,
   duplexState,
-  IF_TYPE_ETHERNET_CSMACD,
-  SPEED_TIERS,
-  speedTier,
+  duplexTitle,
   mediaApplies,
   mediaText,
+  mediaTitle,
+  speedTier,
   type SpeedTier,
 } from './linkMode';
+import type { TFunction } from 'i18next';
+import type { InterfaceRow } from '../../types/api';
 
 describe('speedTier', () => {
   it('buckets the standard Ethernet rates exactly', () => {
@@ -141,5 +145,49 @@ describe('duplexEmptyReason', () => {
     // An SFP port is ethernetCsmacd, so the question applies and the honest answer is "no reading",
     // not "not applicable". Encoded here because it is the case most likely to be "fixed" wrongly.
     expect(duplexEmptyReason(null, IF_TYPE_ETHERNET_CSMACD)).toBe('unknown');
+  });
+});
+
+describe('the two cell tooltips', () => {
+  const t = ((key: string, opts?: Record<string, unknown>) =>
+    opts && 'model' in opts ? `${key}=${opts.model}` : key) as unknown as TFunction;
+  const row = (over: Partial<InterfaceRow> = {}) =>
+    ({ if_duplex: null, if_type: null, if_media: null, transceiver_model: null, ...over }) as InterfaceRow;
+
+  it('says nothing at all when the duplex cell has a value', () => {
+    // A populated cell carries no `title`, rather than a redundant one — a tooltip that repeats the
+    // cell is noise on every hover.
+    expect(duplexTitle(row({ if_duplex: 'full' }), t)).toBeUndefined();
+    expect(duplexTitle(row({ if_duplex: 'half' }), t)).toBeUndefined();
+  });
+
+  it('distinguishes "could not read it" from "the question does not apply"', () => {
+    expect(duplexTitle(row({ if_type: IF_TYPE_ETHERNET_CSMACD }), t)).toBe(
+      'interfaces.duplexEmpty.unknown',
+    );
+    expect(duplexTitle(row({ if_type: 24 }), t)).toBe('interfaces.duplexEmpty.notApplicable');
+    // Unknown ifType reads as "could not read", never as an excuse — see `duplexApplies`.
+    expect(duplexTitle(row(), t)).toBe('interfaces.duplexEmpty.unknown');
+  });
+
+  it('prefers the transceiver model over every empty-cell explanation', () => {
+    // A port with a resolved medium AND a known module shows the module: that is the extra fact.
+    expect(mediaTitle(row({ transceiver_model: 'SFP-10G-LR', if_media: '10GBASE-LR' }), t)).toBe(
+      'interfaces.transceiver=SFP-10G-LR',
+    );
+    expect(mediaTitle(row({ transceiver_model: 'SFP-10G-LR' }), t)).toBe(
+      'interfaces.transceiver=SFP-10G-LR',
+    );
+  });
+
+  it('says nothing when the media cell has a value and no module is known', () => {
+    expect(mediaTitle(row({ if_media: '1000BASE-T' }), t)).toBeUndefined();
+  });
+
+  it('splits the empty media cell the same way the duplex cell splits', () => {
+    expect(mediaTitle(row({ if_type: IF_TYPE_ETHERNET_CSMACD }), t)).toBe(
+      'interfaces.mediaEmpty.unknown',
+    );
+    expect(mediaTitle(row({ if_type: 24 }), t)).toBe('interfaces.mediaEmpty.notApplicable');
   });
 });

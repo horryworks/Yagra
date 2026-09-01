@@ -40,15 +40,9 @@ import {
   writeFilters,
   type NameOf,
 } from './activeAlertFilters';
+import { urlOnlyResolver } from './activeAlertFilters';
 
-/** A resolver for the column set that only the URL codec and the labels look at.
- *
- *  It throws rather than returning the id, because returning something plausible would let a future
- *  edit read a row through these columns and get a raw UUID where a name belongs, silently. Only the
- *  free-text column's `readText` calls a resolver, and nothing in the codec path reads a row. */
-const urlOnlyResolver: NameOf = () => {
-  throw new Error('activeAlertFilters: the URL-codec column set must not read a row');
-};
+;
 
 export function ActiveAlertsPage() {
   const { t } = useTranslation('alerts');

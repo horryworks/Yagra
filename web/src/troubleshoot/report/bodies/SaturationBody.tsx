@@ -15,18 +15,15 @@ import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { formatBps, formatBytes, formatUtil } from '../../../lib/format';
 import { Chips, EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
-import { detailNum, detailStr, sevOf, sortByDetail, sortCommon } from '../format';
+import { detailStr, sevOf, shareBucket, sortByDetail, sortCommon } from '../format';
+import {
+  saturationConversationBytes as convBytes,
+  saturationInterfaceBps as ifaceBps,
+  saturationNodeBytes as nodeBytes,
+  saturationRatio as ratioOf,
+} from '../findingFacts';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const ratioOf = (f: AnalysisFinding) => detailNum(f, 'ratio') ?? 0;
-const convBytes = (f: AnalysisFinding) => detailNum(f, 'conversation_bytes') ?? 0;
-const nodeBytes = (f: AnalysisFinding) => detailNum(f, 'node_bytes') ?? 0;
-const ifaceBps = (f: AnalysisFinding) => detailNum(f, 'interface_bps');
-
-function shareBucket(ratio: number): 'high' | 'mid' {
-  return ratio >= 0.8 ? 'high' : 'mid';
-}
 
 function SaturationRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');

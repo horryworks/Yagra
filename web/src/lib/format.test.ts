@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  agoSec,
   alertWhat,
   alertWhatOf,
   deriveMem,
   formatAsn,
   formatBps,
-  formatPps,
   formatBytes,
   formatCount,
   formatDaysToExpiry,
   formatDbm,
+  formatPps,
   formatUptimeTicks,
   formatUtil,
   httpStatusLabel,
@@ -25,6 +26,8 @@ import {
   stateColorValue,
   stateColorVar,
   stateLabel,
+  timeValue,
+  toRfc3339,
 } from './format';
 
 describe('format', () => {
@@ -406,5 +409,28 @@ describe('formatDbm', () => {
   // ⚠️ dBm is logarithmic: it must never be SI-scaled the way bit rates are.
   it('never applies an SI prefix', () => {
     expect(formatDbm(-1500)).toBe('-1500.0 dBm');
+  });
+});
+
+describe('helpers lifted out of the .tsx screens', () => {
+  it('agoSec renders a relative time, and an em dash for no timestamp', () => {
+    expect(agoSec(null)).toBe('—');
+    expect(typeof agoSec(Math.floor(Date.now() / 1000) - 120)).toBe('string');
+    expect(agoSec(Math.floor(Date.now() / 1000) - 120)).not.toBe('—');
+  });
+
+  it('toRfc3339 turns a datetime-local value into UTC', () => {
+    // Both suppression dialogs had their own copy of this one-liner. The property that matters is
+    // that the browser's local zone is applied on the way in — the server stores UTC.
+    const local = '2026-03-01T12:30';
+    const iso = toRfc3339(local);
+    expect(iso).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(new Date(iso).getTime()).toBe(new Date(local).getTime());
+  });
+
+  it('timeValue zero-pads a schedule’s time of day', () => {
+    expect(timeValue(0, 0)).toBe('00:00');
+    expect(timeValue(9, 5)).toBe('09:05');
+    expect(timeValue(23, 59)).toBe('23:59');
   });
 });

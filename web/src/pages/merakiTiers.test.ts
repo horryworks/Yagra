@@ -2,7 +2,8 @@
 // The cadence dialog's tier checkboxes, pinned to the backend's full tier list.
 
 import { describe, expect, it } from 'vitest';
-import { MERAKI_TIERS, SELECTABLE_MERAKI_TIERS } from './merakiTiers';
+import { MERAKI_TIERS, SELECTABLE_MERAKI_TIERS, tierList } from './merakiTiers';
+import type { TFunction } from 'i18next';
 
 describe('MERAKI_TIERS', () => {
   it('lists every backend tier exactly once, in cadence order', () => {
@@ -26,5 +27,18 @@ describe('SELECTABLE_MERAKI_TIERS', () => {
       (tier) => !(SELECTABLE_MERAKI_TIERS as readonly string[]).includes(tier),
     );
     expect(omitted).toEqual(['inventory']);
+  });
+});
+
+describe('tierList', () => {
+  const t = ((key: string) => key) as unknown as TFunction;
+
+  it('joins the tiers a org collects', () => {
+    expect(tierList(['availability', 'uplink'], t)).toBe('meraki.tier.availability, meraki.tier.uplink');
+  });
+
+  it('gives an org with no tiers a sentence, not an empty cell', () => {
+    // An org added but not yet configured is a real state, and a blank cell reads as a broken row.
+    expect(tierList([], t)).toBe('meraki.tiersNone');
   });
 });

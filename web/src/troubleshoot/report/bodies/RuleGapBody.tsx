@@ -34,6 +34,7 @@ import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
 import { fmtCount, sortByDetail } from '../format';
 import { gapCount, gapSignature, gapSource, ruleGapColumns, ruleGapFilters } from '../reportFilters';
+import { sourceColor as srcColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
@@ -42,14 +43,6 @@ import type { AnalysisFinding } from '../../../types/api';
 const sigOf = gapSignature;
 const srcOf = gapSource;
 const countOf = gapCount;
-
-/** Categorical colours for the source kinds (series palette — these are not statuses). */
-const SRC_COLORS: Record<string, string> = {
-  trap: 'var(--series-5)',
-  syslog: 'var(--series-1)',
-  webhook: 'var(--series-3)',
-};
-const srcColor = (k: string) => SRC_COLORS[k] ?? 'var(--text-tertiary)';
 
 export function RuleGapBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');

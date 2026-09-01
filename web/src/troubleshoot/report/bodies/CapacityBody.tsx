@@ -16,21 +16,15 @@ import { RankedBars, type RankedRow } from '../../../dashboard/primitives/Ranked
 import { formatUtil } from '../../../lib/format';
 import { CapacityRunway, type RunwayDetail } from '../CapacityRunway';
 import { Chips, EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
-import { capacityBucket, detailNum, humanDays, sevOf, sortCommon } from '../format';
+import { capacityBucket, humanDays, sevOf, sortCommon } from '../format';
+import {
+  capacityCurrent as currentOf,
+  capacitySlopePerDay as slopeOf,
+  capacityTteDays as tteOf,
+} from '../findingFacts';
+import { capacityTone, toneColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const tteOf = (f: AnalysisFinding) => detailNum(f, 'tte_days') ?? Infinity;
-const currentOf = (f: AnalysisFinding) => detailNum(f, 'current') ?? 0;
-const slopeOf = (f: AnalysisFinding) => detailNum(f, 'slope_per_day') ?? 0;
-
-/** Bucket → colour: the same 30/90-day thresholds the backend scores against. */
-function bucketColor(tte: number): string {
-  const b = capacityBucket(tte);
-  if (b === 'soon') return 'var(--status-critical)';
-  if (b === 'mid') return 'var(--status-warning)';
-  return 'var(--series-1)';
-}
 
 function CapacityRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');
@@ -79,7 +73,7 @@ export function CapacityBody({ findings }: ReportBodyProps) {
           label: `${i + 1}. ${f.node_name} · ${f.metric}`,
           value: currentOf(f),
           valueText: formatUtil(currentOf(f)),
-          color: bucketColor(tteOf(f)),
+          color: toneColor(capacityTone(tteOf(f)), 'var(--series-1)'),
         })),
     [findings],
   );

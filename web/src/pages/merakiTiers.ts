@@ -11,6 +11,8 @@
 // `src/**/*.test.ts`. `i18nEnumKeys.test.ts` demands both locales carry every tier's label, and the
 // test next door pins the dialog's subset to the full list.
 
+import type { TFunction } from 'i18next';
+
 /**
  * Every tier the backend defines, in cadence order (most frequent → least).
  *
@@ -39,3 +41,9 @@ export const SELECTABLE_MERAKI_TIERS = [
 ] as const satisfies readonly MerakiTier[];
 
 export type SelectableMerakiTier = (typeof SELECTABLE_MERAKI_TIERS)[number];
+
+/** The tiers a Meraki organization is collecting, as one localized list — or the "none" phrase.
+ *  An empty list is a real state (an org added but not yet configured), so it gets a sentence
+ *  rather than an empty cell. */
+export const tierList = (tiers: string[], t: TFunction) =>
+  tiers.length ? tiers.map((x) => t(`meraki.tier.${x}`)).join(', ') : t('meraki.tiersNone');

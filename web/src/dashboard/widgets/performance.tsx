@@ -8,13 +8,17 @@ import { useTranslation } from 'react-i18next';
 import { Select } from '../../components/ui/Field';
 import { formatBps, formatRtt } from '../../lib/format';
 import { api } from '../../services/api';
-import type { InterfaceTopEntry, InterfaceTopMetric, MetricTopAgg } from '../../types/api';
+import type { InterfaceTopMetric, MetricTopAgg } from '../../types/api';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
 // The now/1h window reader lives in `util.ts` — the metric Top-N widget plans its query from the
 // same settings key in a file tests can reach, and one default is the point of sharing it.
-import { topAggOf as aggOf } from './util';
+import {
+  interfaceEntryLabel as ifaceLabel,
+  percentText as pct,
+  topAggOf as aggOf,
+} from './util';
 
 /** Shared **view-mode** header action for every Top-N widget: the now / 1h-max window selector.
  *
@@ -77,8 +81,6 @@ export function TopRttWidget({ instance }: WidgetProps) {
   );
 }
 
-const pct = (v: number) => `${Math.round(v)}%`;
-
 export function TopCpuWidget({ instance }: WidgetProps) {
   const { t } = useTranslation('dashboard');
   return (
@@ -106,13 +108,6 @@ export function TopMemoryWidget({ instance }: WidgetProps) {
 }
 
 /** A friendly `node · interface` label for an interface Top-N row. */
-function ifaceLabel(
-  e: Pick<InterfaceTopEntry, 'node_name' | 'if_name' | 'if_alias' | 'ifindex'>,
-): string {
-  const iface = e.if_name ?? e.if_alias ?? `if${e.ifindex}`;
-  return `${e.node_name} · ${iface}`;
-}
-
 /** A fleet interface Top-N widget over `/metrics/interface-top`. */
 function InterfaceTopN({
   agg,

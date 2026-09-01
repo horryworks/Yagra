@@ -24,16 +24,13 @@ import {
   RightRail,
 } from '../kit';
 import { detailNum, fmtCount, ratioBucket, sevOf, sortByDetail, sortCommon } from '../format';
+import {
+  stormBaseline as baseOf,
+  stormPeak as peakOf,
+  stormRatio as ratioOf,
+} from '../findingFacts';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const peakOf = (f: AnalysisFinding) => detailNum(f, 'peak') ?? 0;
-const baseOf = (f: AnalysisFinding) => detailNum(f, 'baseline_mean') ?? 0;
-/** How many times over baseline the peak went; `Infinity` when the node had no baseline at all. */
-const ratioOf = (f: AnalysisFinding) => {
-  const b = baseOf(f);
-  return b > 0 ? peakOf(f) / b : Infinity;
-};
 
 /** Ratio bucket — the filter axis that makes a storm comparable across differently-busy nodes. */
 function StormRow({ finding }: { finding: AnalysisFinding }) {

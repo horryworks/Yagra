@@ -247,3 +247,17 @@ export function mountPct(h: HostInfo, mount: string): number | null {
   if (!d || d.size_bytes <= 0) return null;
   return (d.used_bytes / d.size_bytes) * 100;
 }
+
+/** A multi-host card's headline: the worst current reading in the section, and whose it is.
+ *
+ *  One number cannot describe several hosts honestly, and "is anything in this pool hot" is the
+ *  question a pool section is opened to answer — so the headline names the peak rather than
+ *  averaging it away or going blank. Single-host sections keep their own reading instead. */
+export function peakHeadline(
+  hosts: HostInfo[],
+  pick: (h: HostInfo) => number | null | undefined,
+  format: (v: number) => string,
+): string {
+  const peak = peakOf(hosts, pick);
+  return peak ? `${format(peak.value)} · ${peak.instance}` : '—';
+}

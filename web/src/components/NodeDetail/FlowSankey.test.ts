@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
-import { buildSankey, SANKEY_MAX_LINKS, MIN_NODE_H } from './FlowSankey';
+import { buildSankey, num, truncate, SANKEY_MAX_LINKS, MIN_NODE_H } from './FlowSankey';
 import type { FlowConversation } from '../../types/api';
 
 const convo = (
@@ -88,5 +88,22 @@ describe('buildSankey', () => {
     );
     const model = buildSankey(many);
     expect(model!.bands.length).toBeLessThanOrEqual(SANKEY_MAX_LINKS);
+  });
+});
+
+describe('the SVG’s own formatters', () => {
+  it('always shows one decimal, so a fixed-width grid stays aligned', () => {
+    expect(num(12)).toBe('12.0');
+    expect(num(12.34)).toBe('12.3');
+    expect(num(0)).toBe('0.0');
+  });
+
+  it('counts the ellipsis inside the character budget', () => {
+    // `slice(0, max - 1)` + '…' — the result is exactly `max`, never `max + 1`, which is what
+    // would push a label past the band it is drawn in.
+    expect(truncate('short', 10)).toBe('short');
+    expect(truncate('abcdefghij', 10)).toBe('abcdefghij');
+    expect(truncate('abcdefghijk', 10)).toBe('abcdefghi…');
+    expect(truncate('abcdefghijk', 10)).toHaveLength(10);
   });
 });

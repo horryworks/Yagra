@@ -29,6 +29,7 @@ import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { AlertSubjectName } from './AlertSubjectName';
 import { AlertWhatText } from './AlertWhatText';
 import './AlertRows.css';
+import { alertRowKey as rowKey } from '../lib/alertSubject';
 
 type SortedAlert = ReturnType<typeof sortedAlerts>[number];
 
@@ -76,7 +77,6 @@ interface Props {
   emptyFiltered?: ReactNode;
 }
 
-const rowKey = (a: SortedAlert) => `${a.node}|${a.check}|${a.severity}`;
 
 const ROW_PX = 30; // desktop --row-h; virtualizer size hint (rows are measured, so it's only a hint)
 const CARD_PX = 96; // taller wrapped row on mobile before it is measured

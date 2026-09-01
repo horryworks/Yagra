@@ -16,7 +16,6 @@ import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import { formatBps } from '../../lib/format';
-import { interfaceScopeId } from '../../lib/interfaceScope';
 import {
   PORT_RULE_BASES,
   PORT_RULE_SUBJECTS,
@@ -34,6 +33,7 @@ import {
   type RateUnit,
 } from '../../lib/portRuleForm';
 import type { MatchingThreshold, StoredThreshold } from '../../types/api';
+import { boundSentence, isOwnRule } from './interfaceRuleText';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Select, TextInput } from '../ui/Field';
@@ -50,17 +50,6 @@ interface Props {
   /** The device's own declared speed, in bits/sec, or null when it reports none. */
   speedBps: number | null;
   onClose: () => void;
-}
-
-/** Whether a rule is stored *on this port* — the only ones this dialog may edit. */
-function isOwnRule(row: MatchingThreshold, nodeId: string, ifindex: number): boolean {
-  // `includes`, not `[0] ===`: a rule may name several targets since ADR-078. An interface rule
-  // is capped at one server-side, so in practice this reads the single element — but asking the
-  // list is what keeps the answer right if that cap is ever lifted.
-  return (
-    row.rule.scope_level === 'interface' &&
-    row.rule.scope_ids.includes(interfaceScopeId(nodeId, ifindex))
-  );
 }
 
 export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onClose }: Props) {
@@ -258,37 +247,6 @@ function RuleRow({
 }
 
 /** The bound, said the way the subject means it. */
-function boundSentence(
-  rule: StoredThreshold,
-  form: PortRuleForm | null,
-  speedBps: number | null,
-  t: (key: string, opts?: Record<string, unknown>) => string,
-): string {
-  if (form && PORT_SUBJECT_SPECS[form.subject].fixedBounds) {
-    return t('interfaces.rules.linkNotUp');
-  }
-  const unit =
-    form && PORT_SUBJECT_SPECS[form.subject].hasBasis && form.basis === 'absolute'
-      ? null
-      : (form && PORT_SUBJECT_SPECS[form.subject].unit) || '';
-  const show = (v: number | null | undefined): string | null => {
-    if (v == null) return null;
-    if (unit === null) return formatBps(v);
-    if (unit === '%') {
-      const bps = bpsOfPercent(v, speedBps);
-      return bps == null ? `${v}%` : `${v}% (${formatBps(bps)})`;
-    }
-    return `${v}${unit ? ` ${unit}` : ''}`;
-  };
-  const parts = [
-    show(rule.warning) && t('interfaces.rules.warnIs', { value: show(rule.warning) }),
-    show(rule.critical) && t('interfaces.rules.critIs', { value: show(rule.critical) }),
-  ].filter(Boolean);
-  const direction = t(`interfaces.rules.${rule.direction === 'above' ? 'aboveShort' : 'belowShort'}`);
-  const cadence = form && PORT_SUBJECT_SPECS[form.subject].cadence === 'minutes' ? 'Minutes' : 'Polls';
-  const dwell = t(`interfaces.rules.dwellShort${cadence}`, { count: rule.dwell_samples });
-  return `${direction} ${parts.join(' / ')} · ${dwell}`;
-}
 
 /** Add or edit — the port-shaped form. */
 function PortRuleFormView({

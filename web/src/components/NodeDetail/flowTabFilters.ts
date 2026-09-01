@@ -23,6 +23,8 @@ import {
 } from '../../lib/columnFilter';
 import { PROTO_NAMES, portLabel } from '../../lib/flowLabels';
 import type { TFunction } from 'i18next';
+import { formatBytes } from '../../lib/format';
+import type { RankedRow } from '../../dashboard/primitives/RankedBars';
 
 /**
  * How many values one drill-down may carry.
@@ -169,3 +171,14 @@ export function toggleFlowValue(
 export function chartIgnoresFilters(state: Record<string, string>): boolean {
   return Boolean(state.port?.trim() || state.peer?.trim() || state.asn?.trim());
 }
+
+/** Byte-valued rows for the flow drill-down bars.
+ *
+ *  Generic over the row type because the four drill-downs (talkers, conversations, ports, ASes)
+ *  carry different shapes and only agree on "there is a label and there is a byte count". */
+export const toRows = <T,>(
+  items: T[],
+  label: (x: T) => string,
+  value: (x: T) => number,
+): RankedRow[] =>
+  items.map((x) => ({ label: label(x), value: value(x), valueText: formatBytes(value(x)) }));

@@ -60,6 +60,7 @@ import {
   upgrades,
 } from './upgradeStatus';
 import './UpgradePage.css';
+import { uptime } from './upgradeStatus';
 
 /** How often to re-read the status while a run is in flight.
  *
@@ -237,17 +238,6 @@ function ConvergeProgress({
       <p className="upgrade-hint muted">{t('converge.serial')}</p>
     </div>
   );
-}
-
-/** Seconds → a coarse "3d 4h" / "12m" string. Coarse on purpose: this answers "did core restart
- *  while nobody was looking?", not "how long exactly". */
-function uptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
 }
 
 export function UpgradePage() {

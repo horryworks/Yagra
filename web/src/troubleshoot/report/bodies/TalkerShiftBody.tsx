@@ -12,27 +12,15 @@ import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { formatBytes } from '../../../lib/format';
 import { Chips, EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
-import { detailNum, detailStr, sortByDetail, sortCommon } from '../format';
+import { sortByDetail, sortCommon } from '../format';
+import {
+  talkerAddr as addrOf,
+  talkerBytes as bytesOf,
+  talkerRank as rankOf,
+} from '../findingFacts';
+import { rankTone, toneColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const addrOf = (f: AnalysisFinding) => detailStr(f, 'addr');
-const bytesOf = (f: AnalysisFinding) => detailNum(f, 'bytes') ?? 0;
-/** 1-based rank the new talker entered at (the backend stores it 1-based in `detail`). */
-const rankOf = (f: AnalysisFinding) => detailNum(f, 'rank') ?? 99;
-
-/** Rank tone mirrors the backend's novelty scoring: #1 is the strongest signal. */
-function rankTone(rank: number): 'crit' | 'warn' | 'info' {
-  if (rank <= 1) return 'crit';
-  if (rank <= 3) return 'warn';
-  return 'info';
-}
-
-function toneColor(tone: 'crit' | 'warn' | 'info'): string {
-  if (tone === 'crit') return 'var(--status-critical)';
-  if (tone === 'warn') return 'var(--status-warning)';
-  return 'var(--series-6)';
-}
 
 function TalkerRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');
@@ -75,7 +63,7 @@ export function TalkerShiftBody({ findings }: ReportBodyProps) {
           label: `${i + 1}. ${addrOf(f) ?? f.node_name}`,
           value: bytesOf(f),
           valueText: formatBytes(bytesOf(f)),
-          color: toneColor(rankTone(rankOf(f))),
+          color: toneColor(rankTone(rankOf(f)), 'var(--series-6)'),
         })),
     [findings],
   );

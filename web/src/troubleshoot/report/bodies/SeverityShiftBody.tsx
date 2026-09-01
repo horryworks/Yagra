@@ -14,19 +14,15 @@ import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { DeltaBars, type DeltaRow } from '../../../dashboard/primitives/DeltaBars';
 import { Chips, EmptyList, FindingRow, NodeRef, ReportToolbar, RightRail, TwinTrack } from '../kit';
-import { detailNum, fmtCount, sevOf, sortCommon } from '../format';
+import { detailNum, fmtCount, ppBucket, sevOf, sortCommon } from '../format';
+import {
+  shiftBaselineFrac as baseFrac,
+  shiftDeltaPp as deltaPp,
+  shiftRecentFrac as recentFrac,
+  shiftVolume as volumeOf,
+} from '../findingFacts';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-const recentFrac = (f: AnalysisFinding) => detailNum(f, 'recent_high_frac') ?? 0;
-const baseFrac = (f: AnalysisFinding) => detailNum(f, 'baseline_high_frac') ?? 0;
-/** The shift, in percentage points — the report's primary axis. */
-const deltaPp = (f: AnalysisFinding) => (recentFrac(f) - baseFrac(f)) * 100;
-const volumeOf = (f: AnalysisFinding) => detailNum(f, 'recent_total') ?? 0;
-
-function ppBucket(pp: number): 'big' | 'mid' {
-  return pp >= 30 ? 'big' : 'mid';
-}
 
 function ShiftRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');

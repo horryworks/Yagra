@@ -11,8 +11,8 @@ import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Field';
 import { formatBps, formatPps, formatSi } from '../../lib/format';
 import { api } from '../../services/api';
-import type { InterfaceRow, InterfaceTopEntry, RankedInterfaces } from '../../types/api';
-import { DeltaBars, type DeltaRow } from '../primitives/DeltaBars';
+import type { InterfaceRow } from '../../types/api';
+import { DeltaBars } from '../primitives/DeltaBars';
 import { Heatmap } from '../primitives/Heatmap';
 import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
@@ -32,30 +32,7 @@ import {
   type LinkSeries,
   type RosterState,
 } from './interfaceTraffic';
-import { trailingSecs } from './util';
-
-/** Sparse HH:MM column labels for a timestamp axis (label ~6 evenly-spaced ticks). */
-function timeColLabels(timestamps: number[]): string[] {
-  const every = Math.max(1, Math.ceil(timestamps.length / 6));
-  return timestamps.map((t, i) =>
-    i % every === 0
-      ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : '',
-  );
-}
-
-function ifaceLabel(e: InterfaceTopEntry): string {
-  const iface = e.if_name ?? e.if_alias ?? `if${e.ifindex}`;
-  return `${e.node_name} · ${iface}`;
-}
-
-function toRows(data: RankedInterfaces | null): DeltaRow[] {
-  return (data?.entries ?? []).map((e) => ({
-    label: ifaceLabel(e),
-    value: e.value,
-    valueText: `${e.value >= 0 ? '+' : '−'}${formatBps(Math.abs(e.value))}`,
-  }));
-}
+import { deltaBarRows as toRows, timeColLabels, trailingSecs } from './util';
 
 export function TrafficSpikesWidget() {
   const { t } = useTranslation('dashboard');

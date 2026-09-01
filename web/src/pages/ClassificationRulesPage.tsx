@@ -33,6 +33,7 @@ import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { ruleToInput } from './classificationRuleForm';
 
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
@@ -267,18 +268,6 @@ export function ClassificationRulesPage() {
 }
 
 /** Normalize a rule (or edited copy) into the create/update request body. */
-function ruleToInput(r: ClassificationRule): ClassificationRuleInput {
-  return {
-    priority: r.priority,
-    sysobjectid_prefix: r.sysobjectid_prefix,
-    sysdescr_regex: r.sysdescr_regex,
-    profile_id: r.profile_id,
-    vendor: r.vendor,
-    model: r.model,
-    enabled: r.enabled,
-  };
-}
-
 /** Add or edit a classification rule (focused-editing modal). */
 function RuleModal({
   mode,

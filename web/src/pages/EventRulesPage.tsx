@@ -28,26 +28,10 @@ import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import './EventRulesPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { ruleToInput } from './eventRuleForm';
 
 function SeverityBadge({ value }: { value: Severity }) {
   return <Badge tone={SEVERITY_TONE[value]}>{severityLabel(value)}</Badge>;
-}
-
-function ruleToInput(r: EventRule): EventRuleInput {
-  return {
-    name: r.name,
-    enabled: r.enabled,
-    source_kind: r.source_kind,
-    source_id: r.source_id,
-    node_id: r.node_id,
-    match_kind: r.match_kind,
-    pattern: r.pattern,
-    clear_pattern: r.clear_pattern,
-    severity: r.severity,
-    ttl_secs: r.ttl_secs,
-    min_count: r.min_count,
-    window_secs: r.window_secs,
-  };
 }
 
 export function EventRulesPage() {

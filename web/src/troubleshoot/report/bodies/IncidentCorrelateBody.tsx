@@ -28,28 +28,16 @@ import {
   signalLabel,
   signalTone,
   type Lane,
-  type TimelineSignal,
 } from '../IncidentTimeline';
 import { Chips, EmptyList, ReportToolbar } from '../kit';
 import { peerCountOf, sevOf, sortCommon } from '../format';
+import {
+  incidentEarliest as earliestOf,
+  incidentKinds as kindsOf,
+  incidentTimeline as timelineOf,
+} from '../findingFacts';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
-
-/** The timeline array out of a finding's detail, defensively typed. */
-function timelineOf(f: AnalysisFinding): TimelineSignal[] {
-  const raw = (f.detail as { timeline?: unknown } | null | undefined)?.timeline;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (s): s is TimelineSignal =>
-      typeof s === 'object' && s !== null && typeof (s as TimelineSignal).at === 'number',
-  );
-}
-
-const kindsOf = (f: AnalysisFinding) => new Set(timelineOf(f).map((s) => s.kind));
-const earliestOf = (f: AnalysisFinding) => {
-  const ts = timelineOf(f).map((s) => s.at);
-  return ts.length ? Math.min(...ts) : 0;
-};
 
 const LANE_COLORS: Record<Lane, string> = {
   metric: 'var(--series-1)',

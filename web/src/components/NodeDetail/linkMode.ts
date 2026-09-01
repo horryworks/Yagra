@@ -5,6 +5,9 @@
 // `include: ['src/**/*.test.ts']`, so a rule written inside `InterfacesTab.tsx` is a rule no test
 // can reach. The same split `interfaceMetrics.ts` and `tabs.ts` use.
 
+import type { TFunction } from 'i18next';
+import type { InterfaceRow } from '../../types/api';
+
 /** Speed buckets the filter offers, coarsest question first: "which ports are not at their rate?"
  *
  *  ⚠️ A **fixed** list, not one derived from the rows on screen. Deriving filter options from the
@@ -130,4 +133,30 @@ export function mediaApplies(ifType: number | null | undefined): boolean {
 export function mediaText(media: string | null | undefined): string | null {
   const trimmed = media?.trim();
   return trimmed ? trimmed : null;
+}
+
+/** Tooltip for an empty duplex cell — why there is nothing there (ADR-063).
+ *
+ *  `undefined` when the cell has a value, so a populated cell carries no `title` at all rather
+ *  than a redundant one. */
+export function duplexTitle(r: InterfaceRow, t: TFunction): string | undefined {
+  const reason = duplexEmptyReason(r.if_duplex, r.if_type);
+  return reason ? t(`interfaces.duplexEmpty.${reason}`) : undefined;
+}
+
+/** Tooltip for the media cell: the transceiver's part string when there is one, otherwise why the
+ *  cell is empty.
+ *
+ *  The two never collide — a port with a resolved medium AND a known module shows the module,
+ *  which is the extra fact. The empty case splits in two on purpose: "this port type has no
+ *  medium to report" and "it should have one and we have not read it" send an operator to
+ *  different places. */
+export function mediaTitle(r: InterfaceRow, t: TFunction): string | undefined {
+  if (r.transceiver_model) {
+    return t('interfaces.transceiver', { model: r.transceiver_model });
+  }
+  if (r.if_media) return undefined;
+  return mediaApplies(r.if_type)
+    ? t('interfaces.mediaEmpty.unknown')
+    : t('interfaces.mediaEmpty.notApplicable');
 }

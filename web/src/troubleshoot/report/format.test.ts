@@ -14,7 +14,9 @@ import {
   humanDays,
   maxDetail,
   peerCountOf,
+  ppBucket,
   ratioBucket,
+  shareBucket,
   scanPattern,
   sevOf,
   splitNotices,
@@ -234,6 +236,27 @@ describe('ratioBucket', () => {
 
   it('treats a negative ratio as low rather than banding it', () => {
     expect(ratioBucket(-5)).toBe('low');
+  });
+});
+
+describe('the two-tier filter buckets', () => {
+  // Both moved here from the `.tsx` bodies that defined them, where nothing ran them. The
+  // boundaries are the whole content of these functions: they are the filter chips an operator
+  // narrows a report with, so an off-by-one puts a row under the wrong chip and it simply looks
+  // like the report found less.
+  it('calls a conversation carrying 80% of a node high, inclusively', () => {
+    expect(shareBucket(0.8)).toBe('high');
+    expect(shareBucket(0.7999)).toBe('mid');
+    expect(shareBucket(1)).toBe('high');
+    expect(shareBucket(0)).toBe('mid');
+  });
+
+  it('calls a 30-point severity shift big, inclusively', () => {
+    expect(ppBucket(30)).toBe('big');
+    expect(ppBucket(29.9)).toBe('mid');
+    // A shift downward is still `mid`: this axis asks "how much did it move up", and the report
+    // only carries rows the backend already decided moved the wrong way.
+    expect(ppBucket(-40)).toBe('mid');
   });
 });
 

@@ -17,10 +17,9 @@ import { groupOptions } from '../../lib/nodeTree';
 import { localTimeZone, LIVENESS_METRIC } from '../../lib/format';
 import { type SuppressionTarget } from '../../lib/suppression';
 import { MetricPicker } from '../MetricPicker/MetricPicker';
+import { toRfc3339 } from '../../lib/format';
 
 const TZ = localTimeZone();
-const toRfc3339 = (local: string) => new Date(local).toISOString();
-
 interface Props {
   /** Only consulted when the scope is chosen here — a locked scope names its own entity. */
   groups?: NodeGroup[];

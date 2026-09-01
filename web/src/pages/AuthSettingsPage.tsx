@@ -48,6 +48,7 @@ import { TextInput, Select } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './AuthSettingsPage.css';
+import { asRole } from './roleMapForm';
 
 
 /** One editable IdP-group → role mapping row. */
@@ -55,12 +56,6 @@ interface MapRow {
   group: string;
   role: Role;
 }
-
-/** Narrow a role as the API reports it: Rust types `role_map` values and `default_role` as bare
- *  `String`s, so the contract cannot promise the union the pickers below are keyed by (the write
- *  path does reject an unknown role, so this only ever fires on data written around the API). */
-const asRole = (value: string | null | undefined): Role | null =>
-  ROLES.find((r) => r === value) ?? null;
 
 /** Add or edit an OIDC provider. On edit the client_secret is left intact unless "replace" is set. */
 function ProviderModal({

@@ -10,7 +10,7 @@
  *  Lives in a `.ts` because Vitest here runs `environment: 'node'` with `include:
  *  ['src/ **\/*.test.ts']`, so a test written in a `.tsx` is a file nothing runs. */
 
-import type { Role } from '../types/api';
+import { ROLES, type Role } from '../types/api';
 
 /** One editable row. Rows carry a stable `key` because a group name is editable and starts empty,
  *  so it cannot be the React key without rows swapping identity as somebody types. */
@@ -53,3 +53,9 @@ export function addRoleMapRow(rows: readonly RoleMapRow[]): RoleMapRow[] {
   const next = rows.reduce((max, r) => Math.max(max, r.key), -1) + 1;
   return [...rows, { key: next, group: '', role: 'viewer' }];
 }
+
+/** Narrow a role as the API reports it: Rust types `role_map` values and `default_role` as bare
+ *  `String`s, so the contract cannot promise the union the pickers below are keyed by (the write
+ *  path does reject an unknown role, so this only ever fires on data written around the API). */
+export const asRole = (value: string | null | undefined): Role | null =>
+  ROLES.find((r) => r === value) ?? null;

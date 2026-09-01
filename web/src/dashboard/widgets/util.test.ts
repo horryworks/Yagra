@@ -9,7 +9,13 @@ import type {
 } from '../../types/api';
 import {
   bucketAlertsByHour,
+  deltaBarRows,
+  eventKindOf,
+  flowDirOf,
+  interfaceEntryLabel,
+  percentText,
   rootCauseRows,
+  timeColLabels,
   calendarMatrix,
   countsTotal,
   densifyTimeBuckets,
@@ -367,5 +373,98 @@ describe('flow / event widget helpers', () => {
 
   it('flowTrendSeries is empty for no points', () => {
     expect(flowTrendSeries([], (p) => String(p), ['#a'])).toEqual({ timestamps: [], series: [] });
+  });
+});
+
+describe('settings-bag readers', () => {
+  // The bag is user-editable JSON that has round-tripped through storage and the server, so every
+  // one of these has to answer for a value that is not in the union at all.
+  it('narrows the event kind through the union and falls back to all kinds', () => {
+    expect(eventKindOf({ kind: 'syslog' })).toBe('syslog');
+    expect(eventKindOf({ kind: 'trap' })).toBe('trap');
+    expect(eventKindOf({ kind: 'smoke-signal' })).toBeUndefined();
+    expect(eventKindOf({})).toBeUndefined();
+    expect(eventKindOf(undefined)).toBeUndefined();
+  });
+
+  it('reads the flow direction as dst unless src is spelled exactly', () => {
+    expect(flowDirOf({ dir: 'src' })).toBe('src');
+    expect(flowDirOf({ dir: 'dst' })).toBe('dst');
+    expect(flowDirOf({ dir: 'SRC' })).toBe('dst');
+    expect(flowDirOf(undefined)).toBe('dst');
+  });
+});
+
+describe('interfaceEntryLabel', () => {
+  const e = (over: Partial<Parameters<typeof interfaceEntryLabel>[0]> = {}) => ({
+    node_name: 'edge-1',
+    if_name: null,
+    if_alias: null,
+    ifindex: 7,
+    ...over,
+  });
+
+  it('prefers the name, then the alias, then the index', () => {
+    expect(interfaceEntryLabel(e({ if_name: 'Gi0/1', if_alias: 'uplink' }))).toBe('edge-1 · Gi0/1');
+    expect(interfaceEntryLabel(e({ if_alias: 'uplink' }))).toBe('edge-1 · uplink');
+    // ⚠️ `if7`, never a bare `7`: ifindex is a row key, not a port number, so an unadorned number
+    // reads as "port 7" and usually is not.
+    expect(interfaceEntryLabel(e())).toBe('edge-1 · if7');
+  });
+});
+
+describe('percentText', () => {
+  it('rounds to a whole percent', () => {
+    expect(percentText(12.4)).toBe('12%');
+    expect(percentText(12.5)).toBe('13%');
+    expect(percentText(0)).toBe('0%');
+  });
+});
+
+describe('deltaBarRows', () => {
+  const entry = (value: number) => ({
+    node_id: 'n1',
+    node_name: 'edge-1',
+    ifindex: 1,
+    if_name: 'Gi0/1',
+    if_alias: null,
+    value,
+  });
+
+  it('keeps the sign on the bar AND in the text', () => {
+    // The bar's direction comes from `value`; the reader's does from `valueText`. Formatting
+    // `Math.abs` without re-adding the sign would render a drop and a spike identically.
+    const rows = deltaBarRows({ entries: [entry(8_000_000), entry(-8_000_000)] } as never);
+    expect(rows[0].value).toBeGreaterThan(0);
+    expect(rows[0].valueText).toBe('+8.0 Mbps');
+    expect(rows[1].value).toBeLessThan(0);
+    // U+2212, not a hyphen: it lines up with the digits at the same width as the plus.
+    expect(rows[1].valueText).toBe('\u22128.0 Mbps');
+  });
+
+  it('renders nothing at all rather than throwing when the query has not answered', () => {
+    expect(deltaBarRows(null)).toEqual([]);
+    expect(deltaBarRows({} as never)).toEqual([]);
+  });
+});
+
+describe('timeColLabels', () => {
+  it('labels about six columns and blanks the rest, whatever the bucket count', () => {
+    const stamps = (n: number) => Array.from({ length: n }, (_, i) => 1_700_000_000 + i * 300);
+    for (const n of [6, 12, 40, 288]) {
+      const labels = timeColLabels(stamps(n));
+      expect(labels).toHaveLength(n);
+      const shown = labels.filter((l) => l !== '').length;
+      expect(shown).toBeGreaterThanOrEqual(1);
+      expect(shown).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it('always labels the first column, so the axis has a start', () => {
+    expect(timeColLabels([1_700_000_000, 1_700_000_300])[0]).not.toBe('');
+  });
+
+  it('does not divide by zero on an empty axis', () => {
+    expect(timeColLabels([])).toEqual([]);
   });
 });

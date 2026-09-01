@@ -27,26 +27,20 @@ import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/co
 import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
 import { EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
-import { fmtCount, sevOf, sortByDetail, sortCommon } from '../format';
+import { fmtCount, sortByDetail, sortCommon } from '../format';
 import {
   authProbeColumns,
   authProbeFilterLabels,
   probeCount,
   probeSource,
 } from '../reportFilters';
+import { severityColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
 // Shared with the specs that filter on them (`reportFilters.ts`) — never a second copy.
 const srcOf = probeSource;
 const countOf = probeCount;
-
-function sevColor(f: AnalysisFinding): string {
-  const s = sevOf(f);
-  if (s === 'crit') return 'var(--status-critical)';
-  if (s === 'warn') return 'var(--status-warning)';
-  return 'var(--series-5)';
-}
 
 function AuthRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');
@@ -89,7 +83,7 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
           label: `${i + 1}. ${srcOf(f) ?? t('report.auth_probe.unknownSource')}`,
           value: countOf(f),
           valueText: fmtCount(countOf(f)),
-          color: sevColor(f),
+          color: severityColor(f, 'var(--series-5)'),
         })),
     [findings, t],
   );

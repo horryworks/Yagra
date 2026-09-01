@@ -11,6 +11,7 @@ import {
   formatCompactRange,
   localInputToIso,
   localInputToUnix,
+  pad2,
   rangeInputsValid,
   resolveRange,
   unixToLocalInput,
@@ -96,5 +97,14 @@ describe('localInputToIso', () => {
     const secs = Math.floor(Date.UTC(2024, 5, 15, 8, 45) / 1000);
     const iso = localInputToIso(unixToLocalInput(secs));
     expect(iso).toBe(new Date(secs * 1000).toISOString());
+  });
+});
+
+describe('pad2', () => {
+  it('pads to two digits and leaves longer values alone', () => {
+    expect(pad2(0)).toBe('00');
+    expect(pad2(9)).toBe('09');
+    expect(pad2(23)).toBe('23');
+    expect(pad2(100)).toBe('100');
   });
 });

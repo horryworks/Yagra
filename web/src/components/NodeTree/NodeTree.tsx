@@ -27,7 +27,6 @@ import {
   filterTerm,
   flattenTree,
   flatRowKey,
-  isSelfOrDescendant,
   type FlatRow,
   type StateCounts,
   type TreeGroup,
@@ -46,6 +45,22 @@ import { Button } from '../ui/Button';
 import { ActionMenu } from '../ui/ActionMenu';
 import { WrenchIcon, BellIcon, BellOffIcon } from '../ui/icons';
 import { HealthBar } from '../HealthBar/HealthBar';
+import {
+  dropAction,
+  dropAllowed,
+  dropPosition,
+  rootDropAction,
+  type DragItem,
+  type DropAction,
+  type DropPos,
+  type Target,
+} from './nodeTreeDnd';
+import {
+  groupMenuHasItems,
+  hasSuppression,
+  rootMenuHasItems,
+  type MenuCapabilities,
+} from './nodeTreeMenu';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
 
@@ -60,13 +75,7 @@ const BASE_PAD = 6;
  *  flattened list virtualizes with a uniform estimate (S13). */
 const ROW_H = 30;
 
-type DragItem = { kind: 'node' | 'group'; id: string };
-type DropPos = 'before' | 'after' | 'inside';
 type DropTarget = { id: string | 'root'; position: DropPos; ok: boolean } | null;
-/** What a drop landed on: a group/node row (with its sibling scope) or the root zone. */
-type Target =
-  | { kind: 'group'; id: string; scope: string | null }
-  | { kind: 'node'; id: string; scope: string | null };
 type Menu =
   | { x: number; y: number; kind: 'group'; group: TreeGroup }
   | { x: number; y: number; kind: 'node'; node: NodeSummary }
@@ -266,9 +275,11 @@ export function NodeTree({
   //
   // A node row always has one item — Open, which is navigation and needs no permission — so its
   // menu always opens. The other two are conditional, because an empty menu is worse than none.
-  const canSuppress = !!onSetMaintenance || !!onSetMute;
-  const groupMenuHasItems = canEdit || canSuppress || !!onAddNode;
-  const rootMenuHasItems = !!onAddNode;
+  const caps: MenuCapabilities = {
+    canEdit,
+    canSuppress: !!onSetMaintenance || !!onSetMute,
+    canAddNode: !!onAddNode,
+  };
 
   // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active, plus
   // the dashed-outline variant for a node released from a suppression it inherited. Each is a
@@ -367,23 +378,6 @@ export function NodeTree({
     );
   };
 
-  /** Whether this row currently has anything the release panel could act on or explain. */
-  const hasSuppression = (target: SuppressionTarget, node?: NodeSummary): boolean => {
-    if (target.kind === 'group') {
-      return (
-        !!suppression?.maintenanceGroups.has(target.id) ||
-        !!suppression?.muteGroups.has(target.id)
-      );
-    }
-    return (
-      !!suppression?.maintenanceNodes.has(target.id) ||
-      !!suppression?.muteNodes.has(target.id) ||
-      !!suppression?.exemptMaintenanceNodes.has(target.id) ||
-      !!suppression?.exemptMuteNodes.has(target.id) ||
-      node?.state === 'maintenance'
-    );
-  };
-
   // The Maintenance/Mute quick-duration section appended to a row's context menu. A preset fires
   // immediately (now + length); "Custom…" opens the full create form prefilled with the scope.
   //
@@ -433,7 +427,7 @@ export function NodeTree({
         <div className="ntree-menu-sep" />
         {onSetMaintenance && row(t('tree.maintenance'), onSetMaintenance)}
         {onSetMute && row(t('tree.mute'), onSetMute)}
-        {onRelease && hasSuppression(target, node) && (
+        {onRelease && hasSuppression(suppression, target, node) && (
           <button
             type="button"
             onClick={() =>
@@ -516,34 +510,10 @@ export function NodeTree({
     setDropTarget(null);
   };
 
-  /** Read the drop position from the cursor's Y in the row. A node dragged over a group always
-   *  means "inside" (a node can't be a sibling of a group); otherwise the top/bottom quarters of a
-   *  group (or top/bottom half of a node) are before/after, the middle of a group is inside. */
+  /** The cursor's position inside the row, as the numbers `dropPosition` decides from. */
   const positionFor = (e: React.DragEvent, targetIsGroup: boolean): DropPos => {
-    if (drag?.kind === 'node' && targetIsGroup) return 'inside';
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const h = rect.height || 1;
-    if (targetIsGroup) {
-      if (y < h * 0.25) return 'before';
-      if (y > h * 0.75) return 'after';
-      return 'inside';
-    }
-    return y < h * 0.5 ? 'before' : 'after';
-  };
-
-  /** Whether the current drag may drop on `target` at `position` (cycle guard for group nesting). */
-  const dropAllowed = (target: Target, position: DropPos): boolean => {
-    if (!drag) return false;
-    if (drag.kind === 'node') {
-      // A node can reorder next to another node or be assigned into a group, but not onto itself.
-      return !(target.kind === 'node' && target.id === drag.id);
-    }
-    // Dragging a group: it relates to groups only, never to a node, and never to itself.
-    if (target.kind === 'node' || target.id === drag.id) return false;
-    if (position === 'inside') return !isSelfOrDescendant(groups, drag.id, target.id);
-    // before/after re-parents the group to the target's parent scope.
-    return target.scope == null || !isSelfOrDescendant(groups, drag.id, target.scope);
+    return dropPosition(e.clientY - rect.top, rect.height, targetIsGroup, drag?.kind ?? null);
   };
 
   const onRowDragOver = (e: React.DragEvent, target: Target, targetIsGroup: boolean) => {
@@ -552,7 +522,7 @@ export function NodeTree({
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
     const position = positionFor(e, targetIsGroup);
-    setDropTarget({ id: target.id, position, ok: dropAllowed(target, position) });
+    setDropTarget({ id: target.id, position, ok: dropAllowed(groups, drag, target, position) });
   };
 
   const onRowDrop = (e: React.DragEvent, target: Target, targetIsGroup: boolean) => {
@@ -560,30 +530,38 @@ export function NodeTree({
     e.stopPropagation();
     if (!drag) return;
     const position = positionFor(e, targetIsGroup);
-    if (!dropAllowed(target, position)) {
+    if (!dropAllowed(groups, drag, target, position)) {
       reset();
       return;
     }
-    if (drag.kind === 'node') {
-      if (target.kind === 'group') {
-        onMoveNode(drag.id, target.id); // assign into the group (append)
-      } else {
-        const rel = position === 'before' ? { before: target.id } : { after: target.id };
-        onReorderNode(drag.id, { groupId: target.scope, ...rel });
-      }
-    } else if (position === 'inside') {
-      onMoveGroup(drag.id, target.id); // nest under the group (append)
-    } else {
-      const rel = position === 'before' ? { before: target.id } : { after: target.id };
-      onReorderGroup(drag.id, { parentId: target.scope, ...rel });
-    }
+    perform(dropAction(drag, target, position));
     reset();
+  };
+
+  /** Turn a decided action into the callback it names. The exhaustive switch is what makes a new
+   *  `DropAction` shape a compile error here rather than a drop that does nothing. */
+  const perform = (a: DropAction) => {
+    switch (a.kind) {
+      case 'move-node':
+        return onMoveNode(a.nodeId, a.groupId);
+      case 'move-group':
+        return onMoveGroup(a.groupId, a.parentId);
+      case 'reorder-node':
+        return onReorderNode(a.nodeId, {
+          groupId: a.groupId,
+          ...(a.before ? { before: a.before } : { after: a.after }),
+        });
+      case 'reorder-group':
+        return onReorderGroup(a.groupId, {
+          parentId: a.parentId,
+          ...(a.before ? { before: a.before } : { after: a.after }),
+        });
+    }
   };
 
   const dropOnRoot = () => {
     if (!drag) return;
-    if (drag.kind === 'node') onMoveNode(drag.id, null);
-    else onMoveGroup(drag.id, null);
+    perform(rootDropAction(drag));
     reset();
   };
 
@@ -612,7 +590,7 @@ export function NodeTree({
         onDragOver={(e) => onRowDragOver(e, target, true)}
         onDrop={(e) => onRowDrop(e, target, true)}
         onContextMenu={(e) => {
-          if (!groupMenuHasItems) return;
+          if (!groupMenuHasItems(caps)) return;
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY, kind: 'group', group });
         }}
@@ -818,7 +796,7 @@ export function NodeTree({
           dropOnRoot();
         }}
         onContextMenu={(e) => {
-          if (!rootMenuHasItems) return;
+          if (!rootMenuHasItems(caps)) return;
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
         }}
@@ -889,7 +867,7 @@ export function NodeTree({
             <p
               className="muted ntree-empty"
               onContextMenu={(e) => {
-                if (!rootMenuHasItems) return;
+                if (!rootMenuHasItems(caps)) return;
                 e.preventDefault();
                 setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
               }}

@@ -82,3 +82,14 @@ export function rootCause(a: HasSubject & { root_cause?: string | null }): RootC
     ? { kind: 'self' }
     : { kind: 'upstream', nodeId: a.root_cause };
 }
+
+/**
+ * A React key for one row of the active-alert list.
+ *
+ * ⚠️ All three parts are needed. One node can be alerting on several checks at once, and the same
+ * check can be present at two severities during a transition — a key that dropped either would
+ * make React reuse one row's DOM for another alert, which on a virtualized list shows as a row
+ * that keeps the previous alert's expanded state.
+ */
+export const alertRowKey = (a: { node: string; check: string; severity: string }) =>
+  `${a.node}|${a.check}|${a.severity}`;

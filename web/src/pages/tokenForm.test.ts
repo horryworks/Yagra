@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
-  canSubmit,
   DEFAULT_EXPIRY,
-  daysUntilExpiry,
   EXPIRY_CHOICES,
+  canSubmit,
+  daysUntilExpiry,
   expiryFromChoice,
   ownerChoices,
   ownerIsScoped,
-  tokenState,
+  roleTone,
   toggleSurface,
+  tokenState,
 } from './tokenForm';
 import type { UserSummary } from '../types/api';
 import { TOKEN_SURFACES } from '../types/api';
@@ -158,5 +159,15 @@ describe('token owner scope', () => {
     // Guessing "scoped" would hide the control on a page whose account list failed to load, which
     // reads as the feature being missing rather than as a load failure.
     expect(ownerIsScoped([], 'nobody', 'me')).toBe(false);
+  });
+});
+
+describe('roleTone', () => {
+  it('escalates the tone with the role’s reach', () => {
+    // The list is scanned for "which of these can do damage", so admin has to read differently
+    // from operator at a glance, and viewer has to read as unremarkable.
+    expect(roleTone('admin')).toBe('warning');
+    expect(roleTone('operator')).toBe('info');
+    expect(roleTone('viewer')).toBe('neutral');
   });
 });

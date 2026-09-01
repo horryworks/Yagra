@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { NAV, sectionForPath, sectionItems, sidebarGroups } from './nav';
+import { NAV, labelKeysForPath, sectionForPath, sectionItems, sidebarGroups } from './nav';
 import enNav from './locales/en/nav.json';
 
 /** Resolve a dotted i18n key (e.g. 'nodes.metricSets') against the English nav bundle. */
@@ -205,5 +205,21 @@ describe('sidebarGroups', () => {
       .flatMap((g) => g.items.map((i) => i.path));
     expect(soonPaths).toEqual([]);
     expect(NAV.flatMap(sectionItems).filter((i) => !i.implemented)).toEqual([]);
+  });
+});
+
+describe('labelKeysForPath', () => {
+  it('names the section and item for a route the nav declares', () => {
+    const first = sectionItems(NAV[0])[0];
+    expect(labelKeysForPath(first.path)).toEqual({
+      sectionKey: NAV[0].labelKey,
+      labelKey: first.labelKey,
+    });
+  });
+
+  it('answers nulls for a route outside the nav rather than guessing a label', () => {
+    // Detail pages and `/login` are legitimately absent; the caller renders a generic heading.
+    expect(labelKeysForPath('/nodes/abc-123')).toEqual({ sectionKey: null, labelKey: null });
+    expect(labelKeysForPath('')).toEqual({ sectionKey: null, labelKey: null });
   });
 });
