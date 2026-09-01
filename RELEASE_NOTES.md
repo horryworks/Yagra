@@ -357,8 +357,8 @@
   alerting nodes" section two pages later in the same document.** The summary counted alert fires by
   folding the most recent **1000** alert-history rows in memory and then filtering them to the
   report's window, so any deployment with more than that many alert transitions inside the window
-  under-reported — and because those 1000 rows are shared with the *resolutions*, the effective
-  ceiling was closer to 500 fires. The ranking beside it has always been a database aggregate with
+  under-reported — and because those 1000 rows are shared with the *resolutions*, the ceiling on
+  fires alone is lower still, by however much of the log is alerts clearing. The ranking beside it has always been a database aggregate with
   no such ceiling, so one report could contradict itself. The count is now an aggregate too, taken
   from the same instant as the ranking. Reports generated before this version keep the numbers they
   were rendered with; re-run one to get the corrected figure.
