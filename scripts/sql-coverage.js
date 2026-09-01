@@ -66,10 +66,39 @@ const files = cp
   .split('\n')
   .filter((f) => f.endsWith('.rs') && f.includes('/src/'));
 
+// Drop a top-level `#[cfg(test)] mod … { … }` before counting.
+//
+// ⚠️ The question is which SQL the *product* holds, and a test's own statement would otherwise be
+// counted as production and then found in the log — inflating the executed side with the very
+// thing being measured. (It did: adding one `query_scalar` to a test moved the totals.)
+//
+// Deliberately NOT the `srcread` rule, which removes **every** top-level test-only item. Cutting a
+// stray test-only `use` would risk removing production text after it and *under*-report the gap,
+// which is the direction that looks like success. This removes only the block it can see the
+// braces of, so anything it fails to recognise stays counted.
+function withoutTestModules(src) {
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const at = src.indexOf('\n#[cfg(test)]', i);
+    if (at < 0) return out + src.slice(i);
+    const open = src.indexOf('{', at);
+    if (open < 0) return out + src.slice(i);
+    let depth = 0;
+    let j = open;
+    for (; j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}' && --depth === 0) break;
+    }
+    out += src.slice(i, at);
+    i = j + 1;
+  }
+}
+
 const NEEDLE = 'sqlx::query';
 const rows = [];
 for (const f of files) {
-  const s = fs.readFileSync(f, 'utf8');
+  const s = withoutTestModules(fs.readFileSync(f, 'utf8'));
   let i = 0;
   let total = 0;
   let unknown = 0;
