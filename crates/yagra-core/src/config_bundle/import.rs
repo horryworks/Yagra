@@ -238,4 +238,288 @@ mod tests {
             assert!(next > now, "{freq} produced a past instant: {next}");
         }
     }
+
+    /// Which tables the round trip must fill, and the number of rows [`testkit::full_bundle`] puts
+    /// in each. Written out rather than derived from the bundle: the point of the fixture is that
+    /// every collection is non-empty, and a table that quietly lost its row would still satisfy a
+    /// count derived from the same value.
+    #[cfg(test)]
+    const EXPECTED_ROWS: [(&str, i64); 16] = [
+        ("profiles", 2),
+        ("collection_templates", 1),
+        ("collection_template_items", 1),
+        ("profile_collection_templates", 1),
+        ("classification_rules", 1),
+        ("node_groups", 2),
+        ("nodes", 2),
+        ("thresholds", 1),
+        ("url_checks", 1),
+        ("dns_checks", 1),
+        ("forward_destinations", 1),
+        ("event_sources", 1),
+        ("event_rules", 1),
+        ("report_definitions", 1),
+        ("report_schedules", 1),
+        ("analysis_schedules", 1),
+    ];
+
+    /// The fifteen tables the module doc says a bundle deliberately does not carry.
+    ///
+    /// `config_bundle/guards.rs` already refuses a *write* to any of them by reading this module's
+    /// text. This is the other half: the import actually runs, and they are still empty afterwards.
+    /// A guard that reads text cannot see a write performed through a helper.
+    #[cfg(test)]
+    const NEVER_CARRIED: [&str; 15] = [
+        "users",
+        "api_tokens",
+        "credentials",
+        "notification_channels",
+        "routing_rules",
+        "ldap_config",
+        "oidc_providers",
+        "llm_config",
+        "meraki_orgs",
+        "pollers",
+        "mib_catalog",
+        "user_dashboards",
+        "shared_dashboard",
+        "user_preferences",
+        "maintenance_windows",
+    ];
+
+    /// Every table the bundle carries arrives, and nothing is dropped on the way in.
+    ///
+    /// This is the test ADR-116 exists for. Before it, `import_inventory.rs` and
+    /// `import_attached.rs` ran **two of their ten statements each** under the whole suite: every
+    /// statement sits in a `for … in &bundle.<collection>`, and the only round trip that existed
+    /// exported a deployment holding one group.
+    ///
+    /// 🚨 The three `parent_id` assertions are the ones worth keeping. Each of profiles, groups and
+    /// nodes applies its parent in a **second pass**, so a bundle whose rows are all roots imports
+    /// perfectly while three `UPDATE`s never execute.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bundle_that_fills_every_collection_imports_into_an_empty_deployment(
+        pool: sqlx::PgPool,
+    ) {
+        let bundle = testkit::full_bundle();
+        let mut before = Vec::new();
+        for (table, _) in EXPECTED_ROWS {
+            before.push(crate::pgtest::rows(&pool, table).await);
+        }
+
+        let report = ConfigBundleRepo::new(pool.clone())
+            .import(&bundle, false)
+            .await
+            .expect("import");
+        assert!(!report.dry_run);
+
+        for (i, (table, want)) in EXPECTED_ROWS.into_iter().enumerate() {
+            let after = crate::pgtest::rows(&pool, table).await;
+            assert_eq!(
+                after - before[i],
+                want,
+                "{table} gained the wrong row count"
+            );
+        }
+
+        // Nothing was dropped or skipped for want of a reference: the fixture is self-consistent,
+        // so any such note means the importer could not resolve something it was handed.
+        for note in &report.notes {
+            assert!(
+                !matches!(
+                    note.code,
+                    NoteCode::SkippedMissingReference
+                        | NoteCode::SkippedInvalidValue
+                        | NoteCode::ReferenceDropped
+                ),
+                "{:?} on {} ({:?})",
+                note.code,
+                note.table,
+                note.field
+            );
+        }
+
+        // The second pass, for each of the three tables that has one.
+        for (table, child, parent) in [
+            ("profiles", bundle.profiles[1].id, bundle.profiles[0].id),
+            (
+                "node_groups",
+                bundle.node_groups[1].id,
+                bundle.node_groups[0].id,
+            ),
+            ("nodes", bundle.nodes[1].id, bundle.nodes[0].id),
+        ] {
+            let got: Option<Uuid> =
+                sqlx::query_scalar(&format!("SELECT parent_id FROM {table} WHERE id = $1"))
+                    .bind(child)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or_else(|e| panic!("read {table}.parent_id: {e}"));
+            assert_eq!(got, Some(parent), "{table} never had its parent applied");
+        }
+    }
+
+    /// `dry_run` runs the whole import and commits none of it.
+    ///
+    /// The report is the same one a real run would produce — that is the point of it being the same
+    /// code path with a rollback rather than a second, less-tested one — so this asserts the report
+    /// is populated *and* the tables are untouched. Asserting only the second would pass for an
+    /// importer that did nothing at all.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_dry_run_reports_what_it_would_do_and_writes_none_of_it(pool: sqlx::PgPool) {
+        let bundle = testkit::full_bundle();
+        let mut before = Vec::new();
+        for (table, _) in EXPECTED_ROWS {
+            before.push(crate::pgtest::rows(&pool, table).await);
+        }
+
+        let report = ConfigBundleRepo::new(pool.clone())
+            .import(&bundle, true)
+            .await
+            .expect("dry run");
+        assert!(report.dry_run);
+        assert_eq!(report.tables.len(), EXPECTED_ROWS.len());
+        for (table, want) in EXPECTED_ROWS {
+            let r = report
+                .tables
+                .iter()
+                .find(|t| t.table == table)
+                .unwrap_or_else(|| panic!("{table} missing from the report"));
+            assert_eq!(i64::from(r.created), want, "{table} created count");
+        }
+
+        for (i, (table, _)) in EXPECTED_ROWS.into_iter().enumerate() {
+            assert_eq!(
+                crate::pgtest::rows(&pool, table).await,
+                before[i],
+                "{table} was written by a dry run"
+            );
+        }
+    }
+
+    /// Importing the same bundle twice updates every row and creates none.
+    ///
+    /// The importer is upsert-only, so the second run is the case an operator actually hits — a
+    /// bundle re-applied after an edit. A row counted as created twice would mean a duplicate.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_same_bundle_imported_twice_creates_nothing_the_second_time(pool: sqlx::PgPool) {
+        let bundle = testkit::full_bundle();
+        let repo = ConfigBundleRepo::new(pool.clone());
+        repo.import(&bundle, false).await.expect("first import");
+        let mut counts = Vec::new();
+        for (table, _) in EXPECTED_ROWS {
+            counts.push(crate::pgtest::rows(&pool, table).await);
+        }
+
+        let second = repo.import(&bundle, false).await.expect("second import");
+        for (table, want) in EXPECTED_ROWS {
+            let r = second
+                .tables
+                .iter()
+                .find(|t| t.table == table)
+                .unwrap_or_else(|| panic!("{table} missing from the report"));
+            assert_eq!(r.created, 0, "{table} created a row on the second import");
+            assert_eq!(i64::from(r.updated), want, "{table} updated count");
+        }
+        for (i, (table, _)) in EXPECTED_ROWS.into_iter().enumerate() {
+            assert_eq!(
+                crate::pgtest::rows(&pool, table).await,
+                counts[i],
+                "{table} grew on the second import"
+            );
+        }
+    }
+
+    /// An import writes nothing into the fifteen tables the format deliberately leaves out.
+    ///
+    /// An import is a write path reachable by anyone who may upload a document, so this list is the
+    /// security design of the feature rather than a completeness question: `users`, `api_tokens`
+    /// and `oidc_providers` are how an import would otherwise become the shortest route to granting
+    /// yourself a role.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_tables_a_bundle_does_not_carry_are_untouched_by_an_import(pool: sqlx::PgPool) {
+        let mut before = Vec::new();
+        for table in NEVER_CARRIED {
+            before.push(crate::pgtest::rows(&pool, table).await);
+        }
+        ConfigBundleRepo::new(pool.clone())
+            .import(&testkit::full_bundle(), false)
+            .await
+            .expect("import");
+        for (i, table) in NEVER_CARRIED.into_iter().enumerate() {
+            assert_eq!(
+                crate::pgtest::rows(&pool, table).await,
+                before[i],
+                "the import wrote to {table}"
+            );
+        }
+    }
+
+    /// Export reads back every row the import wrote.
+    ///
+    /// Containment rather than equality: a deployment seeds built-ins of its own, and the exporter
+    /// filters those out, so the two documents are not the same length. What must hold is that no
+    /// id the importer accepted is missing from what the exporter can see — which is the property a
+    /// second deployment depends on when the bundle is carried onward.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_exporter_sees_every_row_the_importer_wrote(pool: sqlx::PgPool) {
+        let sent = testkit::full_bundle();
+        let repo = ConfigBundleRepo::new(pool.clone());
+        repo.import(&sent, false).await.expect("import");
+        let back = repo.export().await.expect("export");
+
+        for p in &sent.profiles {
+            assert!(
+                back.profiles.iter().any(|q| q.id == p.id),
+                "profile {}",
+                p.id
+            );
+        }
+        for g in &sent.node_groups {
+            assert!(
+                back.node_groups.iter().any(|h| h.id == g.id),
+                "group {}",
+                g.id
+            );
+        }
+        for n in &sent.nodes {
+            assert!(back.nodes.iter().any(|m| m.id == n.id), "node {}", n.id);
+        }
+        for t in &sent.thresholds {
+            assert!(
+                back.thresholds.iter().any(|u| u.id == t.id),
+                "threshold {}",
+                t.id
+            );
+        }
+        assert!(back
+            .url_checks
+            .iter()
+            .any(|u| u.node_id == sent.url_checks[0].node_id));
+        assert!(back
+            .dns_checks
+            .iter()
+            .any(|d| d.node_id == sent.dns_checks[0].node_id));
+        assert!(back
+            .event_rules
+            .iter()
+            .any(|r| r.id == sent.event_rules[0].id));
+        assert!(back
+            .report_schedules
+            .iter()
+            .any(|s| s.id == sent.report_schedules[0].id));
+        assert!(back
+            .analysis_schedules
+            .iter()
+            .any(|s| s.id == sent.analysis_schedules[0].id));
+        assert_eq!(
+            back.app_settings.map(|a| a.default_poll_interval_secs),
+            Some(120)
+        );
+    }
 }
