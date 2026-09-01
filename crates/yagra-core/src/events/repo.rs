@@ -592,3 +592,431 @@ impl EventRepo {
         Ok((matched, unmatched))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::testkit;
+
+    /// Sixty seconds of event time, as milliseconds, starting from a fixed instant.
+    ///
+    /// A literal rather than `now()`: the aggregates below bucket on **event time**, and a fixture
+    /// anchored to the wall clock would put two records either side of a bucket boundary on some
+    /// runs and not others.
+    const T0: i64 = 1_760_000_000_000;
+
+    /// One record, with every field a query below actually reads spelled out.
+    ///
+    /// Built here rather than in `events/testkit.rs` because nothing outside this module needs it:
+    /// the testkit's own doc says a helper used by one module stays in that module.
+    fn record(
+        msg: EventMsg,
+        node_id: Option<Uuid>,
+        rule: Option<Uuid>,
+        action: EventAction,
+    ) -> PersistRecord {
+        PersistRecord {
+            signature: signature_of(&msg),
+            msg,
+            node_id,
+            source_id: None,
+            matched_rule_id: rule,
+            action,
+        }
+    }
+
+    fn syslog_at(message: &str, at_ms: i64) -> EventMsg {
+        let mut m = testkit::syslog_msg(message);
+        m.at_unix_ms = at_ms;
+        m
+    }
+
+    fn rule_params<'a>(name: &'a str, pattern: &'a str) -> RuleParams<'a> {
+        RuleParams {
+            name,
+            enabled: true,
+            source_kind: Some("syslog"),
+            source_id: None,
+            node_id: None,
+            match_kind: "substring",
+            pattern,
+            clear_pattern: Some("link up"),
+            severity: "warning",
+            ttl_secs: 1800,
+            min_count: 1,
+            window_secs: 60,
+        }
+    }
+
+    /// A webhook source through its whole life: created, listed, renamed, deleted.
+    ///
+    /// `create_source` is the only writer that mints a token, and the plaintext is returned exactly
+    /// once — so this is also the only place the stored digest can be checked against the value the
+    /// operator was shown.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_webhook_source_is_created_listed_renamed_and_deleted(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let repo = EventRepo::new(pool.clone());
+
+        let (id, token) = repo.create_source("branch", Some(node)).await.unwrap();
+        assert!(!token.is_empty());
+        let listed = repo.list_sources().await.unwrap();
+        let made = listed.iter().find(|s| s.id == id).expect("source listed");
+        assert_eq!(made.name, "branch");
+        assert!(made.enabled);
+        assert_eq!(made.node_id, Some(node));
+
+        assert!(repo
+            .update_source(id, "branch-2", false, None)
+            .await
+            .unwrap());
+        let after = repo.list_sources().await.unwrap();
+        let made = after
+            .iter()
+            .find(|s| s.id == id)
+            .expect("source still listed");
+        assert_eq!(made.name, "branch-2");
+        assert!(!made.enabled);
+        assert_eq!(made.node_id, None);
+
+        // A row that is not there reports false rather than erroring — the API edge turns that
+        // into a 404, so the distinction is load-bearing.
+        assert!(!repo
+            .update_source(Uuid::new_v4(), "ghost", true, None)
+            .await
+            .unwrap());
+        assert!(repo.delete_source(id).await.unwrap());
+        assert!(!repo.delete_source(id).await.unwrap());
+        assert!(repo
+            .list_sources()
+            .await
+            .unwrap()
+            .iter()
+            .all(|s| s.id != id));
+    }
+
+    /// Rotating a token invalidates the previous one, and a disabled source is indistinguishable
+    /// from one that does not exist.
+    ///
+    /// 🚨 The last assertion is a security property, not a tidiness one: `UnknownOrDisabled` is one
+    /// variant on purpose, so a caller probing ids cannot tell a real source from a fabricated one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rotated_token_replaces_the_one_before_it(pool: sqlx::PgPool) {
+        let repo = EventRepo::new(pool.clone());
+        let (id, first) = repo.create_source("branch", None).await.unwrap();
+        assert_eq!(
+            repo.verify_token(id, &first).await.unwrap(),
+            TokenVerify::Ok { node_id: None }
+        );
+        assert_eq!(
+            repo.verify_token(id, "not-the-token").await.unwrap(),
+            TokenVerify::BadToken
+        );
+
+        let second = repo.rotate_token(id).await.unwrap().expect("rotated");
+        assert_ne!(first, second);
+        assert_eq!(
+            repo.verify_token(id, &second).await.unwrap(),
+            TokenVerify::Ok { node_id: None }
+        );
+        assert_eq!(
+            repo.verify_token(id, &first).await.unwrap(),
+            TokenVerify::BadToken
+        );
+
+        assert!(repo.update_source(id, "branch", false, None).await.unwrap());
+        assert_eq!(
+            repo.verify_token(id, &second).await.unwrap(),
+            TokenVerify::UnknownOrDisabled
+        );
+        assert_eq!(
+            repo.verify_token(Uuid::new_v4(), &second).await.unwrap(),
+            TokenVerify::UnknownOrDisabled
+        );
+        assert!(repo.rotate_token(Uuid::new_v4()).await.unwrap().is_none());
+    }
+
+    /// A rule through its whole life, including the fields the engine compiles from.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_event_rule_is_created_listed_edited_and_deleted(pool: sqlx::PgPool) {
+        let repo = EventRepo::new(pool.clone());
+        let id = repo
+            .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
+            .await
+            .unwrap();
+
+        let rules = repo.list_rules().await.unwrap();
+        let made = rules.iter().find(|r| r.id == id).expect("rule listed");
+        assert_eq!(made.pattern, "LINK-3-UPDOWN");
+        assert_eq!(made.match_kind, EventMatchKind::Substring);
+        assert_eq!(made.clear_pattern.as_deref(), Some("link up"));
+        assert_eq!(made.ttl_secs, 1800);
+
+        let mut edited = rule_params("link down", "%LINK-3-UPDOWN:");
+        edited.enabled = false;
+        edited.match_kind = "regex";
+        edited.severity = "critical";
+        assert!(repo.update_rule(id, &edited).await.unwrap());
+        let rules = repo.list_rules().await.unwrap();
+        let made = rules
+            .iter()
+            .find(|r| r.id == id)
+            .expect("rule still listed");
+        assert!(!made.enabled);
+        assert_eq!(made.match_kind, EventMatchKind::Regex);
+        assert_eq!(made.pattern, "%LINK-3-UPDOWN:");
+
+        assert!(!repo.update_rule(Uuid::new_v4(), &edited).await.unwrap());
+        assert!(repo.delete_rule(id).await.unwrap());
+        assert!(!repo.delete_rule(id).await.unwrap());
+    }
+
+    /// A batch is written, and the filter reads back exactly the rows it names.
+    ///
+    /// ⚠️ `EVENT_FILTER_WHERE` has three implementations (here, `logstore.rs`, `matchRanges.ts`).
+    /// A mirror test already pins them to each other; this is the first time the PostgreSQL one is
+    /// **evaluated by PostgreSQL**.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_batch_is_written_and_the_filter_reads_back_what_it_names(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let other = crate::pgtest::node(&pool, "rtr-2", 12, None).await;
+        let repo = EventRepo::new(pool.clone());
+        let rule = repo
+            .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
+            .await
+            .unwrap();
+
+        let a = record(
+            syslog_at("%LINK-3-UPDOWN: GE0/0/1 down", T0),
+            Some(node),
+            Some(rule),
+            EventAction::Fired,
+        );
+        let b = record(
+            syslog_at("%LINK-3-UPDOWN: GE0/0/1 up", T0 + 1_000),
+            Some(node),
+            Some(rule),
+            EventAction::Cleared,
+        );
+        let c = record(
+            syslog_at("routine housekeeping", T0 + 2_000),
+            Some(other),
+            None,
+            EventAction::None,
+        );
+        let mut trap = testkit::trap_msg("1.3.6.1.6.3.1.1.5.3");
+        trap.at_unix_ms = T0 + 3_000;
+        let d = record(trap, Some(other), None, EventAction::None);
+
+        assert_eq!(
+            repo.insert_events_batch(&[&a, &b, &c, &d]).await.unwrap(),
+            4
+        );
+        // An empty batch is not a degenerate INSERT — it returns before building one.
+        assert_eq!(repo.insert_events_batch(&[]).await.unwrap(), 0);
+
+        let all = repo.list_events(&EventFilter::default(), 50).await.unwrap();
+        assert_eq!(all.len(), 4);
+
+        let one_node = EventFilter {
+            node_id: Some(node),
+            ..EventFilter::default()
+        };
+        assert_eq!(repo.list_events(&one_node, 50).await.unwrap().len(), 2);
+
+        let matched = EventFilter {
+            matched: Some(true),
+            ..EventFilter::default()
+        };
+        assert_eq!(repo.list_events(&matched, 50).await.unwrap().len(), 2);
+
+        let traps = EventFilter {
+            kinds: vec!["trap".to_owned()],
+            ..EventFilter::default()
+        };
+        assert_eq!(repo.list_events(&traps, 50).await.unwrap().len(), 1);
+
+        // Empty means every kind, which is the one spelling of "unfiltered" the type allows.
+        let every_kind = EventFilter {
+            kinds: Vec::new(),
+            ..EventFilter::default()
+        };
+        assert_eq!(repo.list_events(&every_kind, 50).await.unwrap().len(), 4);
+
+        let window = EventFilter {
+            since: DateTime::from_timestamp_millis(T0 + 2_000),
+            ..EventFilter::default()
+        };
+        assert_eq!(repo.list_events(&window, 50).await.unwrap().len(), 2);
+
+        // The scope restriction is subtractive, and an empty visible set means nothing is visible.
+        let scoped = EventFilter {
+            visible_node_ids: Some(Vec::new()),
+            ..EventFilter::default()
+        };
+        assert!(repo.list_events(&scoped, 50).await.unwrap().is_empty());
+    }
+
+    /// Every aggregate counts what the batch actually contains.
+    ///
+    /// One test rather than seven because they share a fixture whose shape is the whole point: the
+    /// auth phrase, the unmatched signature, the syslog severity and the fire/clear pair each exist
+    /// to make exactly one of these queries return a row. Split apart, six of them would be
+    /// asserting emptiness — which every one of them also returns when its SQL is wrong
+    /// (`rejection-only-tests-pass-when-everything-rejects`).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_aggregate_counts_what_the_batch_contains(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let repo = EventRepo::new(pool.clone());
+        let rule = repo
+            .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
+            .await
+            .unwrap();
+
+        let mut fired = syslog_at("%LINK-3-UPDOWN: GE0/0/1 down", T0);
+        fired.syslog_severity = Some(3);
+        let mut cleared = syslog_at("%LINK-3-UPDOWN: GE0/0/1 up", T0 + 1_000);
+        cleared.syslog_severity = Some(3);
+        // Unmatched, and carrying a signature: `COALESCE(trap_oid, signature, app_name)` falls to
+        // the app name, which is the tier that clusters plain syslog.
+        let mut noisy = syslog_at("disk usage nominal", T0 + 2_000);
+        noisy.app_name = Some("housekeeper".to_owned());
+        noisy.syslog_severity = Some(6);
+        // Unmatched, and an authentication signal by phrase rather than by trap OID.
+        let mut auth = syslog_at("Failed password for invalid user root", T0 + 3_000);
+        auth.syslog_severity = Some(4);
+
+        let rows = [
+            record(fired, Some(node), Some(rule), EventAction::Fired),
+            record(cleared, Some(node), Some(rule), EventAction::Cleared),
+            record(noisy, Some(node), None, EventAction::None),
+            record(auth, Some(node), None, EventAction::None),
+        ];
+        let refs: Vec<&PersistRecord> = rows.iter().collect();
+        assert_eq!(repo.insert_events_batch(&refs).await.unwrap(), 4);
+
+        let f = EventFilter::default();
+
+        let buckets = repo.event_counts_by_bucket(&f, 60).await.unwrap();
+        assert_eq!(buckets.iter().map(|b| b.count).sum::<i64>(), 4);
+
+        let flap = repo.event_flap_stats(T0 - 1, T0 + 10_000).await.unwrap();
+        let stat = flap
+            .iter()
+            .find(|s| s.rule_id == rule)
+            .expect("the fired/cleared pair is one flap row");
+        assert_eq!(stat.fires, 1);
+        assert_eq!(stat.clears, 1);
+        assert_eq!(stat.rule_name, "link down");
+        // The window is on event time, so a window that excludes them finds nothing.
+        assert!(repo
+            .event_flap_stats(T0 - 10_000, T0 - 1)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let sev = repo.event_severity_counts(&f).await.unwrap();
+        assert_eq!(
+            sev.iter().find(|s| s.severity == 3).map(|s| s.count),
+            Some(2)
+        );
+        assert_eq!(
+            sev.iter().find(|s| s.severity == 6).map(|s| s.count),
+            Some(1)
+        );
+
+        let sigs = repo.event_unmatched_signatures(&f, 10).await.unwrap();
+        assert!(
+            sigs.iter().any(|s| s.signature == "housekeeper"),
+            "unmatched signatures: {sigs:?}"
+        );
+        // Matched rows are excluded, so the rule's own pattern never appears here.
+        assert!(sigs.iter().all(|s| s.count == 1));
+
+        let auth_rows = repo.event_auth_sources(&f, 10).await.unwrap();
+        assert_eq!(auth_rows.len(), 1, "auth sources: {auth_rows:?}");
+        assert_eq!(auth_rows[0].count, 1);
+        assert_eq!(auth_rows[0].node_id, Some(node));
+
+        let by_kind = repo
+            .stats_grouped(&f, EventStatGroup::Kind, 10)
+            .await
+            .unwrap();
+        assert_eq!(by_kind.iter().map(|b| b.count).sum::<i64>(), 4);
+        let by_action = repo
+            .stats_grouped(&f, EventStatGroup::Action, 10)
+            .await
+            .unwrap();
+        assert_eq!(by_action.len(), 3, "fired / cleared / none: {by_action:?}");
+
+        let series = repo.stats_series(&f, 60, false).await.unwrap();
+        assert_eq!(series.iter().map(|b| b.count).sum::<i64>(), 4);
+        let split = repo.stats_series(&f, 60, true).await.unwrap();
+        assert_eq!(split.iter().map(|b| b.count).sum::<i64>(), 4);
+    }
+
+    /// Retention deletes by age and keeps what is inside the window — both directions, and the two
+    /// windows are independent.
+    ///
+    /// 🚨 The ages are set with a direct `UPDATE`, which is the one thing this module's tests do by
+    /// hand. `recorded_at` defaults to `now()` on insert and nothing in the product ever writes it,
+    /// so there is no production writer to go through; the alternative is passing a negative window
+    /// so that "older than" is satisfied by everything, which would prove the statement runs and
+    /// nothing about whether it selects the right rows.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn retention_deletes_by_age_and_keeps_what_is_inside_the_window(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let repo = EventRepo::new(pool.clone());
+        let rule = repo
+            .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
+            .await
+            .unwrap();
+
+        let old_matched = record(
+            syslog_at("%LINK-3-UPDOWN: old", T0),
+            Some(node),
+            Some(rule),
+            EventAction::Fired,
+        );
+        let new_matched = record(
+            syslog_at("%LINK-3-UPDOWN: new", T0 + 1_000),
+            Some(node),
+            Some(rule),
+            EventAction::Fired,
+        );
+        let old_plain = record(
+            syslog_at("old chatter", T0),
+            Some(node),
+            None,
+            EventAction::None,
+        );
+        let new_plain = record(
+            syslog_at("new chatter", T0 + 1_000),
+            Some(node),
+            None,
+            EventAction::None,
+        );
+        repo.insert_events_batch(&[&old_matched, &new_matched, &old_plain, &new_plain])
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE events SET recorded_at = now() - interval '2 days' WHERE id = ANY($1)")
+            .bind(vec![old_matched.msg.event_id, old_plain.msg.event_id])
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Nothing is old enough for a three-day window.
+        assert_eq!(repo.prune_old(259_200, 259_200).await.unwrap(), (0, 0));
+        // The unmatched window alone takes the aged unmatched row, and leaves the matched one.
+        assert_eq!(repo.prune_old(259_200, 86_400).await.unwrap(), (0, 1));
+        assert_eq!(repo.prune_old(86_400, 86_400).await.unwrap(), (1, 0));
+        assert_eq!(crate::pgtest::rows(&pool, "events").await, 2);
+    }
+}
