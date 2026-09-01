@@ -16,6 +16,7 @@
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
+import { DOCK_MIN_PX } from '../../src/components/NodeDetail/interfaceDockHeight';
 
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 
@@ -97,6 +98,28 @@ test('the chart fills the dock instead of collapsing to the uPlot floor', async 
   // unfixed while every structural assertion passed.
   expect(chart, 'chart collapsed — a link in the fill chain is missing').toBeGreaterThan(dock * 0.4);
   expect(chart, 'no taller than before this change').toBeGreaterThan(CHART_HEIGHT_BEFORE);
+});
+
+test('the dock chrome still leaves the floor its promised chart height', async ({ page }) => {
+  await openDock(page);
+  const dock = await heightOf(page, '.nd-if-dock');
+  const plot = await heightOf(page, '.nd-if-chart > .metricchart-fill');
+  const chrome = dock - plot;
+
+  // 🚨 This is the check `DOCK_MIN_PX`'s doc asks for and never had. That constant is 260 because
+  // the dock's chrome was counted off the CSS at "roughly 120px", so the floor would still leave
+  // the charts the 132px they had before the dock shipped. Nothing measured it, and the note there
+  // said so: if the chrome grows, 260 quietly stops meaning what its name says, and the failure is
+  // a chart that is *smaller* than before — the exact inverse of the change.
+  //
+  // Measured 2026-09-01 at this viewport: dock 317, plot 204, chrome **113** — the estimate was
+  // 7px conservative, which is the safe direction. The assertion is on the budget rather than on
+  // 113, because a chrome that shrinks is not a regression; only one that eats the floor is.
+  expect(
+    chrome,
+    'the dock chrome now costs more than the floor can pay: DOCK_MIN_PX would leave the charts ' +
+      'shorter than they were before the dock shipped, which is what that constant exists to stop',
+  ).toBeLessThanOrEqual(DOCK_MIN_PX - CHART_HEIGHT_BEFORE);
 });
 
 test('dragging the top edge upward makes the dock and its charts taller', async ({ page }) => {

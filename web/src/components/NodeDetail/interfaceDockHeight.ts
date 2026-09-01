@@ -24,8 +24,14 @@
  * legend, the padding and two gaps) costs roughly 120px, and the floor exists to guarantee **the
  * charts never get smaller than the 132px they were before this shipped**. 120 + 132 ≈ 260.
  *
- * ⚠️ That 120 is read off the CSS, not measured in a browser. If the dock's chrome changes, this
- * number is the thing that silently stops meaning what its name says.
+ * ✅ Measured 2026-09-01 (ADR-058 ①), in a real layout engine at 1280x1000: dock 317px, chart
+ * plot 204px, so the chrome costs **113px** — the 120 above was 7px conservative, which is the
+ * safe direction, and the floor therefore leaves 147px of chart against a bar of 132.
+ *
+ * ⚠️ The number that matters is not 113, it is the budget: this constant only means what its name
+ * says while the chrome fits in `DOCK_MIN_PX - 132` = 128px. `tests/ui/interfaceDock.spec.ts`
+ * asserts exactly that, in a browser, so a chrome that grows fails a test instead of silently
+ * shipping charts smaller than the ones this replaced.
  */
 export const DOCK_MIN_PX = 260;
 
