@@ -2151,4 +2151,38 @@ mod tests {
             "the id must stay overridable per deployment, not be hardcoded: {poller}",
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A poller's anchor node is stored against its inventory row.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn anchoring_a_poller_stores_the_node_against_its_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let admin = st.admin.clone().expect("live state");
+        admin
+            .pollers
+            .ensure_registered(&["site-a".to_owned()], "default")
+            .await
+            .expect("register");
+        let node = crate::pgtest::node(&pool, "anchor", 3, None).await;
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/pollers/site-a/anchor",
+            &tok,
+            Some(serde_json::json!({ "node_id": node })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        let (status, list) = send(&st, "GET", "/api/v1/pollers", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(
+            list.to_string().contains(&node.to_string()),
+            "the anchor is not on the poller row: {list}"
+        );
+    }
 }

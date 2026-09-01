@@ -1040,4 +1040,30 @@ mod tests {
         tier.enabled_tiers = vec!["not-a-tier".to_owned()];
         assert_eq!(check_cadence(&tier).unwrap_err().code(), "invalid_tier");
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The Meraki polling switch is written to the deployment's settings.
+    ///
+    /// This endpoint and not `POST /meraki/orgs`: creating an organization validates the API key
+    /// against the Dashboard API before storing anything, so it cannot be accepted without a
+    /// network. What is provable here is the half that lives in PostgreSQL.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn setting_the_meraki_polling_switch_reaches_the_settings_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let admin = st.admin.clone().expect("live state");
+        assert!(admin.repo.get_meraki_polling_enabled().await);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/meraki/polling",
+            &tok,
+            Some(serde_json::json!({ "enabled": false })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert!(!admin.repo.get_meraki_polling_enabled().await);
+    }
 }

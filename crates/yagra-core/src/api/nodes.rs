@@ -2091,4 +2091,31 @@ mod tests {
         let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(page["truncated"], false);
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// Creating a node answers 201, writes the row, and the node is then listed.
+    ///
+    /// The whole point of ADR-115: before it, no test in this module had ever seen a 201 from any
+    /// endpoint, because every fixture was skeleton mode and this handler answered 503.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_node_writes_the_row_and_then_lists_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes",
+            &tok,
+            Some(serde_json::json!({ "name": "core-sw-01", "address": "10.0.0.1" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/nodes", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(list.to_string().contains("core-sw-01"), "{list}");
+    }
 }

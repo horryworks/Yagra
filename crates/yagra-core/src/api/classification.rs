@@ -377,4 +377,41 @@ mod tests {
             }
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A classification rule is stored against a profile that exists.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_classification_rule_stores_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let before = crate::pgtest::rows(&pool, "classification_rules").await;
+        let (_, profile) = send(
+            &st,
+            "POST",
+            "/api/v1/profiles",
+            &tok,
+            Some(serde_json::json!({ "name": "classified" })),
+        )
+        .await;
+        let profile_id = profile["id"].as_str().expect("profile id").to_owned();
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/classification-rules",
+            &tok,
+            Some(serde_json::json!({
+                "priority": 10,
+                "sysobjectid_prefix": "1.3.6.1.4.1.9",
+                "profile_id": profile_id,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "classification_rules").await,
+            before + 1
+        );
+    }
 }

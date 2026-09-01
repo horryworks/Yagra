@@ -965,4 +965,28 @@ mod tests {
             "invalid_collection_item"
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A collection template is created on top of the seeded ones, not instead of them.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_collection_template_adds_one_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let before = crate::pgtest::rows(&pool, "collection_templates").await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/collection-templates",
+            &tok,
+            Some(serde_json::json!({ "name": "a template of my own" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "collection_templates").await,
+            before + 1
+        );
+    }
 }

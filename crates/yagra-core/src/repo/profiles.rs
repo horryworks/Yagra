@@ -147,3 +147,80 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::pgtest;
+
+    /// A profile is created, found by both lookups, edited, and deleted once.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_profile_round_trips_through_both_lookups(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        let id = repo
+            .create_profile("my switch", "switch", Some("Acme"), Some(120))
+            .await
+            .expect("create");
+
+        assert_eq!(
+            repo.profile_id_for_name("my switch")
+                .await
+                .expect("by name"),
+            Some(id)
+        );
+        assert!(repo
+            .profile_id_for_name("no such profile")
+            .await
+            .expect("by name")
+            .is_none());
+        assert_eq!(
+            repo.profile_id_for_category("switch")
+                .await
+                .expect("by category"),
+            Some(id),
+            "the category lookup did not find the profile just created"
+        );
+
+        assert!(repo
+            .update_profile(id, "my other switch", "switch", None, None)
+            .await
+            .expect("update"));
+        let listed = repo.list_profiles().await.expect("list");
+        let mine = listed.iter().find(|p| p.id == id).expect("the profile");
+        assert_eq!(mine.name, "my other switch");
+        assert_eq!(mine.vendor, None);
+        assert_eq!(mine.poll_interval_secs, None);
+
+        assert!(repo.delete_profile(id).await.expect("delete"));
+        assert!(
+            !repo.delete_profile(id).await.expect("delete"),
+            "a second delete claimed to have removed the same profile"
+        );
+        assert!(repo.get_node(id).await.expect("read").is_none());
+    }
+
+    /// Only a profile that overrides the interval is in the override map.
+    ///
+    /// The scheduler reads this map per sweep; a profile that appears in it with the *global*
+    /// default would silently pin every node bound to it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_a_profile_with_its_own_interval_is_an_override(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        let fast = repo
+            .create_profile("fast", "switch", None, Some(15))
+            .await
+            .expect("create");
+        let inherits = repo
+            .create_profile("inherits", "router", None, None)
+            .await
+            .expect("create");
+
+        let overrides = repo.profile_interval_overrides().await.expect("overrides");
+        assert_eq!(overrides.get(&fast).copied(), Some(15));
+        assert!(
+            !overrides.contains_key(&inherits),
+            "a profile with no override of its own is in the override map"
+        );
+    }
+}

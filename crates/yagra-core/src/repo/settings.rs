@@ -139,13 +139,23 @@ impl NodeRepo {
     /// Each column is read independently and falls back on its own, so a deployment mid-upgrade —
     /// where migration `0065` has not run and the L3 columns do not exist yet — still gets working
     /// neighbour settings rather than the whole struct collapsing to defaults.
+    /// 🚨 **Every column the writer writes must be in this projection.**
+    /// `try_get` on a column the query did not select returns `Err`, and each field below turns
+    /// an `Err` into the *default* — which is what an absent column looks like mid-upgrade, and
+    /// is the whole reason for the fallbacks. The two are indistinguishable here, so a column
+    /// left out of the `SELECT` does not fail: it silently pins that setting to its default
+    /// forever. `media_discovery_enabled` and `media_interval_secs` were in exactly that state
+    /// from ADR-063 Inc.2 until ADR-115 — written by the API, stored in the row, and read back
+    /// as `true` / 3600 by the UI and the scheduler alike, so switching the media walk off did
+    /// nothing at all. `every_adjacency_switch_round_trips_in_its_own_column` is what says so.
     pub async fn get_adjacency_settings(&self) -> AdjacencySettings {
         let fallback = AdjacencySettings::default();
         let Ok(Some(row)) = sqlx::query(
             "SELECT neighbor_discovery_enabled, neighbor_interval_secs, \
                     l3_discovery_enabled, l3_interval_secs, \
                     arp_discovery_enabled, arp_interval_secs, \
-                    routing_discovery_enabled, routing_interval_secs \
+                    routing_discovery_enabled, routing_interval_secs, \
+                    media_discovery_enabled, media_interval_secs \
              FROM app_settings WHERE id = TRUE",
         )
         .fetch_optional(&self.pool)
@@ -313,5 +323,114 @@ impl NodeRepo {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pgtest;
+
+    /// Seeding twice writes the defaults once and never overwrites what an operator changed.
+    ///
+    /// Boot runs the seeder on every start, so "it does not undo yesterday's edit" is a property of
+    /// every restart rather than of the first one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn seeding_never_overwrites_a_value_an_operator_changed(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        repo.seed_app_settings(30, 7).await.expect("first seed");
+        assert_eq!(repo.get_default_poll_interval().await.expect("read"), 30);
+        assert_eq!(pgtest::rows(&pool, "app_settings").await, 1);
+
+        repo.set_default_poll_interval(90).await.expect("operator");
+        repo.seed_app_settings(30, 7).await.expect("second seed");
+        assert_eq!(
+            repo.get_default_poll_interval().await.expect("read"),
+            90,
+            "a restart reset the operator's poll interval to the default"
+        );
+        assert_eq!(pgtest::rows(&pool, "app_settings").await, 1);
+    }
+
+    /// Every retention window round-trips, including the one added after the first release.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_retention_windows_round_trip(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        repo.seed_app_settings(30, 7).await.expect("seed");
+        let want = crate::retention::RetentionSettings {
+            alert_linked_days: 45,
+            unmatched_event_hours: 12,
+            report_run_days: 60,
+            flow_days: 3,
+            diagnostic_days: 21,
+        };
+        repo.set_retention_settings(&want).await.expect("write");
+        assert_eq!(repo.get_retention_settings().await, want);
+    }
+
+    /// Every adjacency switch and interval round-trips — all ten of them.
+    ///
+    /// Ten fields written by one statement: a bind in the wrong position is not a compile error and
+    /// would silently swap two switches, which is how an opt-in walk turns itself on.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_adjacency_switch_round_trips_in_its_own_column(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        repo.seed_app_settings(30, 7).await.expect("seed");
+        let want = crate::neighbors::AdjacencySettings {
+            neighbors_enabled: true,
+            // Distinct values inside the 300..=86400 each column is CHECKed into, so a bind in
+            // the wrong position swaps two numbers this test can tell apart.
+            neighbors_interval_secs: 600,
+            l3_enabled: false,
+            l3_interval_secs: 900,
+            arp_enabled: true,
+            arp_interval_secs: 1200,
+            routing_enabled: false,
+            routing_interval_secs: 1500,
+            media_enabled: true,
+            media_interval_secs: 1800,
+        };
+        repo.set_adjacency_settings(&want).await.expect("write");
+        assert_eq!(repo.get_adjacency_settings().await, want);
+    }
+
+    /// The topology mode is stored, and its timestamp moves only when the mode actually changes.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_topology_mode_and_the_moment_it_changed(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        repo.seed_app_settings(30, 7).await.expect("seed");
+        assert_eq!(repo.get_topology_mode().await, TopologyMode::Manual);
+
+        repo.set_topology_mode(TopologyMode::Shadow)
+            .await
+            .expect("write");
+        assert_eq!(repo.get_topology_mode().await, TopologyMode::Shadow);
+        let first = repo.topology_mode_since().await.expect("a timestamp");
+
+        repo.set_topology_mode(TopologyMode::Derived)
+            .await
+            .expect("write");
+        assert_eq!(repo.get_topology_mode().await, TopologyMode::Derived);
+        assert!(
+            repo.topology_mode_since().await.expect("a timestamp") >= first,
+            "the mode changed but the moment it changed went backwards"
+        );
+    }
+
+    /// The Meraki polling switch defaults on and can be turned off and back on.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_meraki_switch_moves_in_both_directions(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        repo.seed_app_settings(30, 7).await.expect("seed");
+        assert!(repo.get_meraki_polling_enabled().await);
+        repo.set_meraki_polling_enabled(false).await.expect("off");
+        assert!(!repo.get_meraki_polling_enabled().await);
+        repo.set_meraki_polling_enabled(true).await.expect("on");
+        assert!(repo.get_meraki_polling_enabled().await);
     }
 }

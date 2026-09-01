@@ -50,6 +50,8 @@ pub(crate) mod fleet;
 pub(crate) mod flow;
 pub(crate) mod forwarding;
 pub(crate) mod groups;
+#[cfg(test)]
+mod guards;
 pub(crate) mod health;
 mod ldap;
 pub(crate) mod maintenance;

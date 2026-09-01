@@ -415,4 +415,31 @@ mod tests {
             );
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// An operator-defined metric is added to the catalogue, on top of the built-ins.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_catalogue_entry_adds_one_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let before = crate::pgtest::rows(&pool, "mib_catalog").await;
+        assert!(before > 0, "the built-in catalogue was not seeded");
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/mib-catalog",
+            &tok,
+            Some(serde_json::json!({
+                "metric_name": "my_widget_temp_c",
+                "oid": "1.3.6.1.4.1.99999.1.1",
+                "collection": "scalar",
+                "metric_kind": "gauge",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "mib_catalog").await, before + 1);
+    }
 }

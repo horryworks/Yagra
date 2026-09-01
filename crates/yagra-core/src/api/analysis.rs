@@ -1698,4 +1698,33 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A schedule is created and stored — the 201 and the row, not one or the other.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_schedule_answers_201_and_stores_the_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/analysis/schedules",
+            &tok,
+            Some(serde_json::json!({
+                "tool": "anomaly",
+                "scope_kind": "all",
+                "scope_label": "the fleet",
+                "window_secs": 3600,
+                "frequency": "daily",
+                "at_hour": 3,
+                "at_minute": 0,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert!(body["id"].is_string(), "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "analysis_schedules").await, 1);
+    }
 }

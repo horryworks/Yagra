@@ -270,4 +270,36 @@ mod tests {
             .expect("response");
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The directory configuration is stored, and its bind password never comes back out.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn storing_the_directory_config_seals_the_bind_password(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/settings/ldap",
+            &tok,
+            Some(serde_json::json!({
+                "host": "dc01.corp.invalid",
+                "bind_dn": "cn=yagra,ou=svc,dc=corp",
+                "bind_password": "s3cr3t-bind",
+                "user_base_dn": "ou=people,dc=corp",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "ldap_config").await, 1);
+
+        let (status, read) = send(&st, "GET", "/api/v1/settings/ldap", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{read}");
+        assert!(
+            !read.to_string().contains("s3cr3t-bind"),
+            "the bind password came back out"
+        );
+    }
 }

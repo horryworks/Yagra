@@ -509,4 +509,37 @@ mod tests {
             enabled: true,
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// An SSO provider is created, and its client secret never comes back out.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_provider_seals_the_client_secret(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/settings/oidc",
+            &tok,
+            Some(serde_json::json!({
+                "name": "corp idp",
+                "issuer": "https://idp.corp.invalid",
+                "client_id": "yagra",
+                "client_secret": "s3cr3t-client",
+                "redirect_uri": "https://yagra.corp.invalid/auth/oidc/callback",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "oidc_providers").await, 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/settings/oidc", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(
+            !list.to_string().contains("s3cr3t-client"),
+            "the list returned the client secret"
+        );
+    }
 }

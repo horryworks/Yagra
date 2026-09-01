@@ -1051,4 +1051,38 @@ mod tests {
         assert!(truncated(501, 500));
         assert!(!truncated(0, 0));
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A threshold rule is created on top of the seeded ones.
+    ///
+    /// Node-scoped deliberately: `icmp_rtt_ms` already carries a **seeded global** rule, and a
+    /// second rule at the same (level, targets, metric) is refused with `409` — which is
+    /// ADR-081 working. A narrower scope is the shape an operator actually adds.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_threshold_rule_adds_one_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let before = crate::pgtest::rows(&pool, "thresholds").await;
+        assert!(before > 0, "the seeded default rules are missing");
+        let node = crate::pgtest::node(&pool, "slow-link", 6, None).await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/thresholds",
+            &tok,
+            Some(serde_json::json!({
+                "scope_level": "node",
+                "scope_ids": [node.to_string()],
+                "metric": "icmp_rtt_ms",
+                "direction": "above",
+                "warning": 120.0,
+                "critical": 400.0,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "thresholds").await, before + 1);
+    }
 }

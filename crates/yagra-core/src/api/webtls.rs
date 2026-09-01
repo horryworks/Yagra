@@ -330,4 +330,25 @@ mod tests {
         // above ever start matching those, this test has stopped meaning anything.
         assert!(view.contains("key_algorithm"), "the view lost its metadata");
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// Regenerating the WebUI certificate stores one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn regenerating_the_web_certificate_stores_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        // `imported_by` is a foreign key into `users`, so the caller needs a real account.
+        let (tok, _) = account_token(&st, "fixture-admin", yagra_common::Role::Admin).await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/settings/tls/regenerate",
+            &tok,
+            Some(serde_json::json!({ "names": ["yagra.invalid"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "web_tls_config").await, 1);
+    }
 }

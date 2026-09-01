@@ -421,4 +421,35 @@ mod tests {
         // A community string has no parseable shape, so anything non-empty is accepted here.
         assert!(check_secret_shape("snmp_v2c", b"public").is_ok());
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A credential is stored sealed, and the list never hands the secret back (ADR-018).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_credential_seals_it_and_the_list_never_returns_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/credentials",
+            &tok,
+            Some(serde_json::json!({
+                "name": "lab community",
+                "kind": "snmp_v2c",
+                "secret": "s3cr3t-community",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/credentials", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(
+            !list.to_string().contains("s3cr3t-community"),
+            "the list returned the secret"
+        );
+    }
 }

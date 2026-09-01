@@ -1413,4 +1413,40 @@ mod tests {
             err.message()
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The upgrade switch is written, and the store agrees in both directions.
+    ///
+    /// Both directions because an idempotent write and a dead one look the same from one call —
+    /// see `closing-a-check-must-be-tested-with-reopening`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_upgrade_switch_moves_and_moves_back(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let repo = st.upgrade.clone().expect("live state");
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/system/upgrade/enabled",
+            &tok,
+            Some(serde_json::json!({ "enabled": false })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert!(!repo.enabled().await);
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/system/upgrade/enabled",
+            &tok,
+            Some(serde_json::json!({ "enabled": true })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert!(repo.enabled().await);
+    }
 }

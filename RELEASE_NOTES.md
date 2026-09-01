@@ -353,6 +353,16 @@
 
 ### Bug Fixes
 
+- **Turning the interface media walk off in Settings did nothing.** The switch and its interval
+  were written to the settings row correctly, and then read back as their defaults by everything —
+  the Settings page that re-rendered them, and the scheduler that decides whether to issue the walk.
+  So an operator could switch `ifMauTable` collection off, see it come back on, and have their
+  devices keep being walked once an hour. The reader's `SELECT` named eight of the ten columns the
+  writer writes, and a column that is not selected is indistinguishable, at the point it is read,
+  from a column that does not exist yet mid-upgrade — which is what the per-field fallback to the
+  default is *for*. Present since the media walk shipped. The projection now names every column, and
+  a test writes all ten values and reads all ten back.
+
 - **A report's "Fires in window" was silently low on a busy fleet, and disagreed with the "Top
   alerting nodes" section two pages later in the same document.** The summary counted alert fires by
   folding the most recent **1000** alert-history rows in memory and then filtering them to the

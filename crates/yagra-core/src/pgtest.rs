@@ -4,10 +4,18 @@
 //!
 //! ## Why this exists
 //!
-//! Roughly 3,950 production lines of this crate are raw SQL with no tests, and ADR-111, ADR-112
-//! and ADR-113 each stopped at the same sentence: the remaining lines are SQL, and the only way
-//! to check SQL is to run it. Cutting more seams does not reach them. `#[sqlx::test]` does: it
-//! creates a throwaway database per test, migrates it, and hands the body a [`sqlx::PgPool`].
+//! ADR-111, ADR-112 and ADR-113 each stopped at the same sentence: the remaining lines are SQL,
+//! and the only way to check SQL is to run it. Cutting more seams does not reach them.
+//! `#[sqlx::test]` does: it creates a throwaway database per test, migrates it, and hands the
+//! body a [`sqlx::PgPool`].
+//!
+//! ⚠️ **The number that used to be here has moved, so it is stated as a date.** At ADR-114 it was
+//! ~3,950 production lines of untested SQL; ADR-114 took it to 3,566 across ten files, and
+//! ADR-115 to **2,111 across five** (measured 2026-09-01: `events/repo.rs`,
+//! `config_bundle/import_attached.rs`, `reports/repo.rs`, `config_bundle/import_inventory.rs`,
+//! `examples/seed_nodes.rs`). The two `config_bundle` files are *exercised* end to end by
+//! `api/config_bundle.rs`'s export→import round trip; what they lack is a test of their own.
+//! **Say "untested", never "untestable"** — the obstacle was removed in ADR-114.
 //!
 //! ## The convention — two attributes, in this order
 //!
@@ -109,7 +117,10 @@ mod guards {
     ///
     /// Deliberately below the real count: this is a floor against the detector going blind, not a
     /// target. Raise it when a whole new area gets covered, not per test.
-    const MIN_DATABASE_TESTS: usize = 12;
+    // Raised from 12 by ADR-115, which took the population from 18 to 79. The floor is about
+    // the *detector*, not about coverage: it has to be able to tell "nothing is wrong" apart from
+    // "the needle stopped matching", and a floor left at its first value stops doing that.
+    const MIN_DATABASE_TESTS: usize = 70;
 
     /// This crate's `src` directory.
     fn src() -> PathBuf {

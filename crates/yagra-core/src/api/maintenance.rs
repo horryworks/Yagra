@@ -1436,4 +1436,31 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A maintenance window is created over a node that exists.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_maintenance_window_stores_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node = crate::pgtest::node(&pool, "under-maintenance", 2, None).await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/maintenance-windows",
+            &tok,
+            Some(serde_json::json!({
+                "name": "firmware",
+                "scope_level": "node",
+                "scope_id": node.to_string(),
+                "starts_at": "2030-01-01T00:00:00Z",
+                "ends_at": "2030-01-01T02:00:00Z",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "maintenance_windows").await, 1);
+    }
 }

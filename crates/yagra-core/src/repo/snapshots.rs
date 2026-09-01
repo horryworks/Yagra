@@ -85,3 +85,76 @@ impl NodeRepo {
         Ok(res.rows_affected())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::pgtest;
+
+    /// A snapshot goes in as one row per state and comes back out inside its window.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_snapshot_reads_back_inside_its_window_and_not_outside_it(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        repo.insert_state_snapshot(&[("ok".to_owned(), 41), ("unreachable".to_owned(), 1)])
+            .await
+            .expect("insert");
+        assert_eq!(pgtest::rows(&pool, "node_state_snapshots").await, 2);
+
+        let now = chrono::Utc::now().timestamp();
+        let inside = repo
+            .state_history(now - 3600, now + 3600)
+            .await
+            .expect("history");
+        assert_eq!(inside.len(), 2);
+        let ok = inside
+            .iter()
+            .find(|(_, state, _)| state == "ok")
+            .expect("the ok row");
+        assert_eq!(ok.2, 41);
+
+        let before = repo
+            .state_history(now - 7200, now - 3600)
+            .await
+            .expect("history");
+        assert!(
+            before.is_empty(),
+            "a window that ended an hour ago returned a snapshot taken now"
+        );
+    }
+
+    /// An empty snapshot writes nothing — the early return, which the timeline depends on.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_empty_snapshot_writes_no_row(pool: sqlx::PgPool) {
+        pgtest::repo(pool.clone())
+            .insert_state_snapshot(&[])
+            .await
+            .expect("insert");
+        assert_eq!(pgtest::rows(&pool, "node_state_snapshots").await, 0);
+    }
+
+    /// Pruning keeps what is inside the retention window and removes what is outside it.
+    ///
+    /// ⚠️ The exact boundary is not reachable here: rows are stamped `now()` by the writer, so a
+    /// test cannot place one at the cut without backdating it with SQL of its own — which would be
+    /// a second copy of the schema. What is provable is that the predicate points the right way,
+    /// which is the direction this has been got wrong in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn pruning_keeps_what_is_inside_the_window(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        repo.insert_state_snapshot(&[("ok".to_owned(), 7)])
+            .await
+            .expect("insert");
+
+        assert_eq!(
+            repo.prune_state_snapshots(3600).await.expect("prune"),
+            0,
+            "a row taken a moment ago was pruned by an hour-long retention window"
+        );
+        assert_eq!(pgtest::rows(&pool, "node_state_snapshots").await, 1);
+
+        assert_eq!(repo.prune_state_snapshots(0).await.expect("prune"), 1);
+        assert_eq!(pgtest::rows(&pool, "node_state_snapshots").await, 0);
+    }
+}

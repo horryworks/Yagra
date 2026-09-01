@@ -772,4 +772,37 @@ mod tests {
         let err = mutation_result(UserMutation::NotFound, id).unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// An account is created and can be listed; its password is never returned.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_an_account_stores_it_without_returning_the_password(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (tok, _) = account_token(&st, "fixture-admin", yagra_common::Role::Admin).await;
+        let before = crate::pgtest::rows(&pool, "users").await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/users",
+            &tok,
+            Some(serde_json::json!({
+                "username": "viewer-sam",
+                "password": "a-long-enough-password",
+                "role": "viewer",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "users").await, before + 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/users", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(list.to_string().contains("viewer-sam"), "{list}");
+        assert!(
+            !list.to_string().contains("a-long-enough-password"),
+            "the list returned the password"
+        );
+    }
 }

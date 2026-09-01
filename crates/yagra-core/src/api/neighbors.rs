@@ -609,4 +609,27 @@ mod tests {
         assert!(!neighbors::interval_in_bounds(cfg.min_interval_secs - 1));
         assert!(!neighbors::interval_in_bounds(cfg.max_interval_secs + 1));
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The adjacency settings are written and read back as they were sent.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn adjacency_settings_round_trip_through_the_settings_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/settings/neighbors",
+            &tok,
+            Some(serde_json::json!({ "enabled": true, "interval_secs": 1800 })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let admin = st.admin.clone().expect("live state");
+        let settings = admin.repo.get_adjacency_settings().await;
+        assert!(settings.neighbors_enabled);
+        assert_eq!(settings.neighbors_interval_secs, 1800);
+    }
 }

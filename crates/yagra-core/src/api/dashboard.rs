@@ -338,4 +338,26 @@ mod tests {
             "layout_too_large"
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A layout is saved against the calling account and read back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn saving_a_layout_stores_it_for_the_calling_account(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (tok, _) = account_token(&st, "fixture-dash", yagra_common::Role::Viewer).await;
+        let layout = serde_json::json!({ "widgets": [{ "id": "fleet-summary" }] });
+        let (status, body) =
+            send(&st, "PUT", "/api/v1/dashboard", &tok, Some(layout.clone())).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "user_dashboards").await, 1);
+
+        let (status, read) = send(&st, "GET", "/api/v1/dashboard", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{read}");
+        assert!(
+            read.to_string().contains("fleet-summary"),
+            "the saved layout did not come back: {read}"
+        );
+    }
 }

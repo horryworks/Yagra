@@ -685,4 +685,46 @@ mod tests {
         assert!(!resolved.is_all());
         assert!(!resolved.allows_group(Some(ids(2))));
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A group-scoped caller's node list is narrowed by the SQL, not by anything after it.
+    ///
+    /// The vertical path — token → [`NodeScope`] → `SCOPE_PREDICATE` → PostgreSQL — had no test
+    /// before ADR-115. `repo/listing.rs` pins the SQL against the in-memory mirror, and the units
+    /// below pin the resolution, but nothing ran a real request against a real database and looked
+    /// at what came back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_sees_only_the_nodes_in_their_own_group(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        crate::pgtest::node(&pool, "in-my-group", 10, Some(mine)).await;
+        crate::pgtest::node(&pool, "in-their-group", 11, Some(theirs)).await;
+        crate::pgtest::node(&pool, "in-no-group", 12, None).await;
+
+        let unrestricted = token(&st, yagra_common::Role::Admin);
+        let (status, all) = send(&st, "GET", "/api/v1/nodes", &unrestricted, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{all}");
+        let all = all.to_string();
+        assert!(
+            all.contains("in-my-group") && all.contains("in-their-group"),
+            "{all}"
+        );
+
+        let restricted = scoped_token(&st, &[mine]);
+        let (status, page) = send(&st, "GET", "/api/v1/nodes", &restricted, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        let page = page.to_string();
+        assert!(page.contains("in-my-group"), "own group missing: {page}");
+        assert!(
+            !page.contains("in-their-group"),
+            "another group leaked: {page}"
+        );
+        assert!(
+            !page.contains("in-no-group"),
+            "an ungrouped node leaked: {page}"
+        );
+    }
 }

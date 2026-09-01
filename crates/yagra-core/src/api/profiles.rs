@@ -363,4 +363,26 @@ mod tests {
             );
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A profile is created on top of the built-in ones.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_profile_adds_one_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let before = crate::pgtest::rows(&pool, "profiles").await;
+        assert!(before > 0, "the built-in profiles were not seeded");
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/profiles",
+            &tok,
+            Some(serde_json::json!({ "name": "my own switch", "poll_interval_secs": 120 })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "profiles").await, before + 1);
+    }
 }

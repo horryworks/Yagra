@@ -598,4 +598,29 @@ mod tests {
             Some("東京拠点".to_owned())
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A pool is created and listed.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_pool_stores_it_and_lists_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let before = crate::pgtest::rows(&pool, "pools").await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/pools",
+            &tok,
+            Some(serde_json::json!({ "name": "edge", "description": "remote sites" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "pools").await, before + 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/pools", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(list.to_string().contains("edge"), "{list}");
+    }
 }

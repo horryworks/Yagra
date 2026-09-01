@@ -647,4 +647,26 @@ mod tests {
             );
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// Regenerating the bus certificate stores one, and stores exactly one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn regenerating_the_bus_certificate_stores_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        // An account that exists: the row records who issued the certificate, and that column
+        // is a foreign key into `users`. A session for an id with no row answers 500.
+        let (tok, _) = account_token(&st, "fixture-admin", yagra_common::Role::Admin).await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/settings/bus/certificate",
+            &tok,
+            Some(serde_json::json!({ "names": ["yagra.invalid", "10.0.0.1"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "bus_tls_config").await, 1);
+    }
 }

@@ -938,4 +938,34 @@ mod tests {
         assert_eq!(parse_severity_opt(Some("CRITICAL")), Err(()));
         assert_eq!(parse_severity_opt(Some("")), Err(()));
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A channel is created sealed: stored, listed, and its target never returned.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_channel_stores_it_without_returning_its_config(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/notification-channels",
+            &tok,
+            Some(serde_json::json!({
+                "name": "ops webhook",
+                "config": { "kind": "webhook", "url": "http://10.0.0.9/hook/s3cr3t-path" },
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "notification_channels").await, 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/notification-channels", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(
+            !list.to_string().contains("s3cr3t-path"),
+            "the list returned the channel's target"
+        );
+    }
 }

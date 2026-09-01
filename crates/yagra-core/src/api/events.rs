@@ -898,4 +898,28 @@ mod tests {
             "invalid_rule"
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// An event source is created and appears in the list.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_an_event_source_stores_it_and_lists_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/event-sources",
+            &tok,
+            Some(serde_json::json!({ "name": "the lab firewall" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "event_sources").await, 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/event-sources", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(list.to_string().contains("the lab firewall"), "{list}");
+    }
 }

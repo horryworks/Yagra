@@ -42,7 +42,7 @@ const DEFAULT_API_ADDR: &str = "0.0.0.0:8080";
 /// left is that the owner stops signing in, so an OIDC-owned token is treated as dead once its owner
 /// has been absent this long. Thirty days is long enough not to punish a holiday and short enough
 /// that an offboarded account's credentials do not outlive the quarter.
-const DEFAULT_PAT_OIDC_IDLE_DAYS: i64 = 30;
+pub(crate) const DEFAULT_PAT_OIDC_IDLE_DAYS: i64 = 30;
 
 /// Live-mode configuration. Absent ⇒ skeleton mode.
 #[derive(Debug, Clone)]

@@ -724,7 +724,12 @@ impl Notifier {
     /// Split out of [`Self::from_env`] for the same reason as [`Self::install_routing`]: `from_env`
     /// reads process-wide environment variables, so a test cannot choose a default route without
     /// changing what every other test in the process sees.
-    fn with_default(default: Option<Arc<dyn NotifyChannel>>) -> Self {
+    ///
+    /// ⚠️ **A fixture builds its notifier here, never through [`Self::from_env`].** That
+    /// reader takes `YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*` from the process environment, so a
+    /// developer who happens to have one exported would make a test deliver a real webhook or a
+    /// real mail. `with_default(None)` has no route at all and so cannot (`api::tests_support`).
+    pub(crate) fn with_default(default: Option<Arc<dyn NotifyChannel>>) -> Self {
         Self {
             routing: RwLock::new(Arc::new(Routing {
                 default: default.map(|c| Arc::new(Dispatcher::new(c, RetryPolicy::default()))),

@@ -556,4 +556,47 @@ mod tests {
         assert_eq!(lines.next().unwrap(), "\"t\",\"u\",\"a\",\"200\"");
         assert!(lines.next().is_none());
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A mutating call leaves an audit row naming the caller and the status it got.
+    ///
+    /// The middleware writes it, so nothing in this module's other tests can see it: they call a
+    /// domain's own `routes()`, and `audit_mw` is applied by `router()`. This one goes through the
+    /// whole router, which is the only way the row is written at all.
+    ///
+    /// The read is included because "who changed what" is only answered if **both** halves work,
+    /// and the two are separate code paths — `audit_mw` writes and `list_audit` reads.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_mutating_call_is_recorded_against_the_account_that_made_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (tok, _) = account_token(&st, "auditor-kim", yagra_common::Role::Admin).await;
+        assert_eq!(crate::pgtest::rows(&pool, "audit_log").await, 0);
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes",
+            &tok,
+            Some(serde_json::json!({ "name": "audited-01", "address": "10.0.0.7" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "audit_log").await, 1);
+
+        let (status, log) = send(&st, "GET", "/api/v1/audit", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{log}");
+        let text = log.to_string();
+        assert!(text.contains("auditor-kim"), "the actor is missing: {text}");
+        assert!(
+            text.contains("/api/v1/nodes"),
+            "the action is missing: {text}"
+        );
+
+        // A read is not audited — otherwise the log is a request trace and nobody can find a change
+        // in it. Asserted here because the deny-list that decides this is a list, and a list grows.
+        send(&st, "GET", "/api/v1/nodes", &tok, None).await;
+        assert_eq!(crate::pgtest::rows(&pool, "audit_log").await, 1);
+    }
 }

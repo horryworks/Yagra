@@ -258,4 +258,28 @@ mod tests {
         // constants, so there is nothing to learn from running it (clippy asks for this form).
         const { assert!(MAX_USER_PREFS_BYTES < MAX_JSON_DOC_BYTES) };
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// Preferences are stored against the calling account and read back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn preferences_round_trip_for_the_calling_account(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (tok, _) = account_token(&st, "fixture-prefs", yagra_common::Role::Viewer).await;
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/preferences",
+            &tok,
+            Some(serde_json::json!({ "density": "compact" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "user_preferences").await, 1);
+
+        let (status, read) = send(&st, "GET", "/api/v1/preferences", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{read}");
+        assert!(read.to_string().contains("compact"), "{read}");
+    }
 }

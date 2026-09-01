@@ -492,4 +492,28 @@ mod tests {
         // not "recently healthy".
         assert!(!bus_sweep_is_fresh(None, 30, now));
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The deployment's default poll interval is written, and the store agrees afterwards.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn setting_the_default_poll_interval_reaches_the_settings_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/config",
+            &tok,
+            Some(serde_json::json!({ "default_poll_interval_secs": 45 })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let admin = st.admin.clone().expect("live state");
+        assert_eq!(
+            admin.repo.get_default_poll_interval().await.expect("read"),
+            45
+        );
+    }
 }

@@ -399,4 +399,33 @@ mod tests {
             );
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The retention windows are written and read back as they were sent.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn retention_windows_round_trip_through_the_settings_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/settings/retention",
+            &tok,
+            Some(serde_json::json!({
+                "alert_linked_days": 45,
+                "unmatched_event_hours": 12,
+                "report_run_days": 60,
+                "flow_days": 3,
+                "diagnostic_days": 21,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let admin = st.admin.clone().expect("live state");
+        let settings = admin.repo.get_retention_settings().await;
+        assert_eq!(settings.alert_linked_days, 45);
+        assert_eq!(settings.flow_days, 3);
+    }
 }

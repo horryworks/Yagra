@@ -224,4 +224,36 @@ mod tests {
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!err.message().to_lowercase().contains("row"));
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// Export then import the same deployment: the round trip is accepted and adds nothing.
+    ///
+    /// The document this sends is the one this build produced a moment earlier, so a field the
+    /// exporter writes and the importer cannot read fails here rather than at a customer's second
+    /// deployment.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bundle_this_deployment_exported_imports_back_into_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "tokyo", "group_type": "site" })),
+        )
+        .await;
+        let profiles = crate::pgtest::rows(&pool, "profiles").await;
+        let groups = crate::pgtest::rows(&pool, "node_groups").await;
+
+        let (status, bundle) = send(&st, "GET", "/api/v1/config/bundle", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{bundle}");
+
+        let (status, report) = send(&st, "POST", "/api/v1/config/bundle", &tok, Some(bundle)).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{report}");
+        assert_eq!(crate::pgtest::rows(&pool, "profiles").await, profiles);
+        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, groups);
+    }
 }

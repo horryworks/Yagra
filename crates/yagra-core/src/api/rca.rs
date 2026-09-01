@@ -487,4 +487,36 @@ mod tests {
             .unwrap()
             .contains("API key"));
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The LLM provider configuration is stored, and its API key is write-only (ADR-029).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn storing_the_llm_config_never_hands_the_key_back(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/llm/config",
+            &tok,
+            Some(serde_json::json!({
+                "provider": "claude",
+                "model": "claude-sonnet-5",
+                "api_key": "sk-s3cr3t-key",
+                "enabled": false,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "llm_config").await, 1);
+
+        let (status, read) = send(&st, "GET", "/api/v1/llm/config", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{read}");
+        assert!(
+            !read.to_string().contains("sk-s3cr3t-key"),
+            "the configuration read handed the key back"
+        );
+    }
 }

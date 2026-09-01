@@ -596,3 +596,265 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pgtest;
+
+    /// A node written through the production writer comes back with every column it was given.
+    ///
+    /// The whole point of this file's SQL, and until ADR-115 nothing ran a line of it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_created_node_reads_back_with_every_column_it_was_given(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        let id = repo
+            .create_node(
+                "core-sw-01",
+                "10.1.2.3".parse().expect("address"),
+                Some("edge"),
+                None,
+                None,
+                None,
+                Some("Cisco"),
+                Some("C9300"),
+            )
+            .await
+            .expect("create");
+        let node = repo.get_node(id).await.expect("read").expect("the node");
+        assert_eq!(node.name, "core-sw-01");
+        assert_eq!(node.address.to_string(), "10.1.2.3");
+        assert_eq!(node.pool.as_deref(), Some("edge"));
+        assert_eq!(node.vendor.as_deref(), Some("Cisco"));
+        assert_eq!(node.model.as_deref(), Some("C9300"));
+        assert_eq!(repo.list_nodes().await.expect("list").len(), 1);
+    }
+
+    /// Every setter reports whether it found the row — and says `false` for one that is not there.
+    ///
+    /// Both directions on purpose: a setter that reported `true` unconditionally would satisfy any
+    /// test that only ever names a node that exists, and the callers branch on this to answer 404.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_setter_reports_whether_it_found_the_row(pool: sqlx::PgPool) {
+        let group = pgtest::group(&pool, "tokyo").await;
+        let id = pgtest::node(&pool, "n1", 1, None).await;
+        let parent = pgtest::node(&pool, "n2", 2, None).await;
+        let repo = pgtest::repo(pool);
+        let absent = Uuid::new_v4();
+
+        assert!(repo.set_node_group(id, Some(group)).await.expect("group"));
+        assert!(!repo
+            .set_node_group(absent, Some(group))
+            .await
+            .expect("group"));
+        assert!(repo.set_node_pool(id, Some("edge")).await.expect("pool"));
+        assert!(!repo
+            .set_node_pool(absent, Some("edge"))
+            .await
+            .expect("pool"));
+        assert!(repo
+            .set_node_parent(id, Some(parent))
+            .await
+            .expect("parent"));
+        assert!(!repo
+            .set_node_parent(absent, Some(parent))
+            .await
+            .expect("parent"));
+
+        let node = repo.get_node(id).await.expect("read").expect("the node");
+        assert_eq!(node.pool.as_deref(), Some("edge"));
+        assert_eq!(node.parent, Some(yagra_common::NodeId::from(parent)));
+        // The folder is not a column on the node the API returns, so it is read where it lives.
+        assert_eq!(
+            repo.nodes_in_groups(&[group]).await.expect("in group"),
+            vec![id]
+        );
+    }
+
+    /// Placing a node sets its folder and its order, and both readers agree afterwards.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn placing_a_node_is_visible_to_both_order_readers(pool: sqlx::PgPool) {
+        let group = pgtest::group(&pool, "osaka").await;
+        let first = pgtest::node(&pool, "a", 1, None).await;
+        let second = pgtest::node(&pool, "b", 2, None).await;
+        let repo = pgtest::repo(pool);
+
+        assert!(repo.place_node(second, Some(group), 20.0).await.expect("b"));
+        assert!(repo.place_node(first, Some(group), 10.0).await.expect("a"));
+
+        let ordered = repo
+            .ordered_nodes_in_group(Some(group))
+            .await
+            .expect("ordered");
+        assert_eq!(
+            ordered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![first, second],
+            "the group is not returned in sort order"
+        );
+        let orders = repo
+            .node_sort_orders(&[first, second])
+            .await
+            .expect("orders");
+        assert_eq!(orders.get(&first).copied(), Some(10.0));
+        assert_eq!(orders.get(&second).copied(), Some(20.0));
+    }
+
+    /// 🚨 An import creates a row per entry, **even for an address already monitored**.
+    ///
+    /// Written expecting the opposite, and pinned to what is true. The statement carries no
+    /// `ON CONFLICT` and `nodes.address` has no `UNIQUE`, so nothing between
+    /// `POST /api/v1/discovery/import` and the table refuses a second import of the same sweep.
+    ///
+    /// What that costs is not cosmetic: [`NodeRepo::address_map`] is a `HashMap` keyed by
+    /// address, and it is how a syslog line and a flow record find the node they belong to. With
+    /// two nodes at one address, one of them silently wins and the other is never attributed.
+    ///
+    /// Behaviour is unchanged here on purpose — de-duplicating is a decision about *which*
+    /// existing node an import should adopt, and about what the UI should offer instead.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn importing_the_same_addresses_twice_creates_them_once(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let rows = vec![
+            NewNode {
+                name: "imported-1",
+                address: "10.9.0.1".parse().expect("address"),
+                profile: None,
+                credential: None,
+                vendor: None,
+                model: None,
+            },
+            NewNode {
+                name: "imported-2",
+                address: "10.9.0.2".parse().expect("address"),
+                profile: None,
+                credential: None,
+                vendor: None,
+                model: None,
+            },
+        ];
+        assert_eq!(repo.import_nodes(&rows).await.expect("first"), 2);
+        assert_eq!(pgtest::rows(&pool, "nodes").await, 2);
+
+        assert_eq!(repo.import_nodes(&rows).await.expect("second"), 2);
+        assert_eq!(
+            pgtest::rows(&pool, "nodes").await,
+            4,
+            "importing the same addresses twice no longer duplicates them — good, but the doc\n\
+             above and `address_map`'s callers were written against the old behaviour"
+        );
+        // And this is the consequence, stated as an assertion rather than as prose: two nodes,
+        // one entry in the map every attribution path reads.
+        assert_eq!(repo.address_map().await.expect("map").len(), 2);
+    }
+
+    /// Deleting reports whether it removed anything, and the row is gone afterwards.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn deleting_a_node_removes_it_once(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "doomed", 1, None).await;
+        let repo = pgtest::repo(pool.clone());
+        assert!(repo.delete_node(id).await.expect("first"));
+        assert!(
+            !repo.delete_node(id).await.expect("second"),
+            "a second delete claimed to have removed the same row"
+        );
+        assert!(repo.get_node(id).await.expect("read").is_none());
+        assert_eq!(pgtest::rows(&pool, "nodes").await, 0);
+    }
+
+    /// The name search matches a substring, honours its cap, and stays inside the caller's scope.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_name_search_is_capped_and_scoped(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        pgtest::node(&pool, "edge-router-1", 1, Some(mine)).await;
+        pgtest::node(&pool, "edge-router-2", 2, Some(mine)).await;
+        pgtest::node(&pool, "edge-router-3", 3, Some(theirs)).await;
+        let repo = pgtest::repo(pool);
+
+        let all = repo
+            .node_ids_by_name_like(None, "edge-router", 10)
+            .await
+            .expect("search");
+        assert_eq!(all.len(), 3);
+        let capped = repo
+            .node_ids_by_name_like(None, "edge-router", 2)
+            .await
+            .expect("search");
+        assert_eq!(capped.len(), 2, "the cap was not applied");
+        let scoped = repo
+            .node_ids_by_name_like(Some(&[mine]), "edge-router", 10)
+            .await
+            .expect("search");
+        assert_eq!(scoped.len(), 2, "the scope did not narrow the search");
+        assert!(repo
+            .node_ids_by_name_like(None, "no-such-name", 10)
+            .await
+            .expect("search")
+            .is_empty());
+    }
+
+    /// The id→name lookup answers only for nodes the caller may see.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_name_lookup_answers_only_inside_the_scope(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let a = pgtest::node(&pool, "visible", 1, Some(mine)).await;
+        let b = pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
+        let repo = pgtest::repo(pool);
+
+        let unrestricted = repo.node_names(None, &[a, b]).await.expect("names");
+        assert_eq!(unrestricted.len(), 2);
+
+        let scoped = repo
+            .node_names(Some(&[mine]), &[a, b])
+            .await
+            .expect("names");
+        assert_eq!(scoped.get(&a).map(String::as_str), Some("visible"));
+        assert!(
+            !scoped.contains_key(&b),
+            "a name outside the caller's scope was resolved"
+        );
+    }
+
+    /// The address map is keyed by the address the node was created with.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_address_map_is_keyed_by_address(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "mapped", 42, None).await;
+        let repo = pgtest::repo(pool);
+        let map = repo.address_map().await.expect("map");
+        assert_eq!(
+            map.get(&"10.0.0.42".parse::<IpAddr>().expect("address")),
+            Some(&id)
+        );
+    }
+
+    /// A suppression opt-out is stored, listed, and can be taken back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_suppression_opt_out_can_be_set_and_cleared(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "never-suppress-me", 1, None).await;
+        let repo = pgtest::repo(pool);
+        assert!(repo.suppression_opt_outs().await.is_empty());
+
+        assert!(repo.set_suppression_opt_out(id, true).await.expect("set"));
+        let opted = repo.suppression_opt_outs().await;
+        assert!(opted.contains(&yagra_common::NodeId::from(id)));
+
+        assert!(repo
+            .set_suppression_opt_out(id, false)
+            .await
+            .expect("clear"));
+        assert!(
+            repo.suppression_opt_outs().await.is_empty(),
+            "clearing the opt-out left the node on the list"
+        );
+    }
+}

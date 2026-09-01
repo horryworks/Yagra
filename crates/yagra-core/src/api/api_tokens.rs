@@ -536,4 +536,36 @@ mod tests {
             );
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The raw token is returned by the mint and by nothing afterwards.
+    ///
+    /// The list is checked in the same test on purpose: "only its hash is stored" is a claim about
+    /// two endpoints, and asserting the 201 alone would leave the half that matters unread.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn minting_a_token_hands_back_the_raw_value_once_and_never_again(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (tok, _) = account_token(&st, "fixture-admin", yagra_common::Role::Admin).await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/api-tokens",
+            &tok,
+            Some(serde_json::json!({ "name": "ci", "role": "viewer" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        let raw = body["token"].as_str().expect("the raw token").to_owned();
+        assert!(!raw.is_empty(), "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "api_tokens").await, 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/api-tokens", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(
+            !list.to_string().contains(&raw),
+            "the list handed the raw token back"
+        );
+    }
 }

@@ -1466,4 +1466,28 @@ mod tests {
             );
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A URL monitor creates both halves — the node and its check row.
+    ///
+    /// A private address on purpose: ADR-033's SSRF rule permits private targets and blocks
+    /// link-local ones, and using a public hostname here would make the test depend on DNS.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_url_monitor_writes_the_node_and_the_check(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/url-monitors",
+            &tok,
+            Some(serde_json::json!({ "name": "health", "url": "http://10.0.0.5/health" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 1);
+        assert_eq!(crate::pgtest::rows(&pool, "url_checks").await, 1);
+    }
 }

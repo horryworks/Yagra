@@ -1124,4 +1124,35 @@ mod tests {
         assert_eq!(daily.day_of_month, None);
         assert_eq!(daily.day_of_week, None);
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A report definition is created and listed.
+    ///
+    /// `200`, not `201`: this endpoint answers with the created definition itself, which is
+    /// what its `#[utoipa::path]` documents and therefore what the WebUI is generated against.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_report_definition_stores_it_and_lists_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/reports/definitions",
+            &tok,
+            Some(serde_json::json!({
+                "name": "monthly availability",
+                "spec": { "sections": [] },
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert!(body["id"].is_string(), "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "report_definitions").await, 1);
+
+        let (status, list) = send(&st, "GET", "/api/v1/reports/definitions", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert!(list.to_string().contains("monthly availability"), "{list}");
+    }
 }

@@ -410,4 +410,34 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(resp.headers()[axum::http::header::RETRY_AFTER], "42");
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// An account created through the store can sign in, and the token it gets works.
+    ///
+    /// End to end on purpose: the password hash, the login handler and the session store are three
+    /// separate mechanisms, and each has its own unit tests that cannot see the other two.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_real_account_can_sign_in_and_use_what_it_is_given(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (_, _) = account_token(&st, "operator-jo", yagra_common::Role::Operator).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/auth/login",
+            "",
+            Some(serde_json::json!({
+                "username": "operator-jo",
+                "password": "correct horse battery staple",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let issued = body["token"].as_str().expect("a session token").to_owned();
+
+        let (status, nodes) = send(&st, "GET", "/api/v1/nodes", &issued, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{nodes}");
+    }
 }

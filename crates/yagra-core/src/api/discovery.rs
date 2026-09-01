@@ -1112,4 +1112,34 @@ mod tests {
             "the budget absorbs a sysDescr of {break_even} bytes on every one of              {MAX_SCAN_TARGETS} devices before the message stops fitting. Below 750 the margin              over the {OBSERVED_WORST_SYSDESCR} bytes measured on real hardware is too thin to              call a margin -- if a field was just added to DiscoveredDevice, this is the number              that has to be re-decided rather than the floor that has to be lowered. At {CEILING}              nothing was found to fail at all, which would mean this test measures nothing."
         );
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A sweep is accepted and becomes a scan the caller can look up by id.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn starting_a_sweep_is_accepted_and_the_scan_is_listed(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/scan",
+            &tok,
+            Some(serde_json::json!({ "targets": ["10.0.0.1"], "communities": ["public"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED, "{body}");
+        let id = body["scan_id"].as_str().expect("scan id").to_owned();
+
+        let (status, scan) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/discovery/scan/{id}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{scan}");
+    }
 }

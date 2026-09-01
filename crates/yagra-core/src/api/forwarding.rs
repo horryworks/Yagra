@@ -738,4 +738,29 @@ mod tests {
             assert!(!target_is_local(remote), "{remote}");
         }
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// A forwarding destination is created and stored.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn creating_a_forward_destination_stores_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/forwarding/destinations",
+            &tok,
+            Some(serde_json::json!({
+                "name": "the siem",
+                "source_kind": "syslog",
+                "dest_kind": "syslog_udp",
+                "target": "10.0.0.9:514",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "forward_destinations").await, 1);
+    }
 }

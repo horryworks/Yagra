@@ -1003,4 +1003,30 @@ mod tests {
         // Skeleton mode has no write side, so this is the typed 503 — not an empty 200.
         assert_eq!(json["error"]["code"], "admin_unavailable");
     }
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// An operator's decision about a link is stored — the one topology table that is a source of
+    /// truth rather than a recomputable cache.
+    ///
+    /// `200`, not `201`: recording a decision is idempotent, so the endpoint documents an OK
+    /// carrying the id rather than a creation.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn pinning_a_link_stores_the_override(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let a = crate::pgtest::node(&pool, "left", 4, None).await;
+        let b = crate::pgtest::node(&pool, "right", 5, None).await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/topology/link-overrides",
+            &tok,
+            Some(serde_json::json!({ "a_node": a, "b_node": b, "action": "pin" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "link_overrides").await, 1);
+    }
 }
