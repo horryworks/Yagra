@@ -1056,11 +1056,11 @@ impl YagraMcp {
                 Err(e) => tool_error(TOOL, "list forward destinations", &e),
             },
             // ── reports ──────────────────────────────────────────────────────
-            ConfigKind::ReportDefinitions => match a.reports.repo().list_definitions().await {
+            ConfigKind::ReportDefinitions => match a.reports_repo.list_definitions().await {
                 Ok(list) => ok_json(TOOL, &list),
                 Err(e) => tool_error(TOOL, "list report definitions", &e),
             },
-            ConfigKind::ReportSchedules => match a.reports.repo().list_schedules().await {
+            ConfigKind::ReportSchedules => match a.reports_repo.list_schedules().await {
                 Ok(list) => ok_json(TOOL, &list),
                 Err(e) => tool_error(TOOL, "list report schedules", &e),
             },

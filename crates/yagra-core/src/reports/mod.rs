@@ -28,6 +28,7 @@
 //! | [\`repo\`] | where it is kept — definitions, schedules and runs in PostgreSQL |
 //! | [\`runner\`] | how one gets made — insert, spawn, drive the sections, persist, broadcast |
 //! | [\`sections\`] | where each section's numbers come from — the six \`render_*\` |
+//! | [\`seams\`] | what making one is allowed to *reach* — three traits, and their live impls |
 //!
 //! 🚨 **\`types\`, \`catalog\` and \`render\` never \`.await\`, and \`guards\` refuses it.** That is not
 //! tidiness: it is what keeps the pure half of a section — the arithmetic, the selector, the
@@ -46,11 +47,16 @@ mod catalog;
 mod render;
 mod repo;
 mod runner;
+mod seams;
 mod sections;
 mod types;
 
 #[cfg(test)]
 mod guards;
+// The fakes a behaviour test builds a `ReportRunner` from (ADR-112). Test-only, so
+// `module_source` derives it out and the source-reading checks never see it.
+#[cfg(test)]
+mod testkit;
 
 pub use catalog::*;
 pub use render::*;

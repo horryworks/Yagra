@@ -113,7 +113,7 @@ use crate::pollers::PollerRepo;
 use crate::preferences::UserPrefsRepo;
 
 use crate::repo::{NodeListing, NodeRepo};
-use crate::reports::ReportRunner;
+use crate::reports::{ReportRunner, ReportsRepo};
 use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
 use crate::store::MetricStore;
@@ -164,6 +164,11 @@ pub struct AdminState {
     /// Reports (Dashboard → Reports): definitions/schedules/runs + the background generator. A
     /// TSDB+PostgreSQL-read computation in core (shared resource — admin-edited, ADR-017).
     pub reports: Arc<ReportRunner>,
+    /// Report definitions/schedules/runs in PostgreSQL. Held **beside** the runner rather than
+    /// reached through it: a background generator is not a service locator for a store, and
+    /// keeping the concrete type out of `ReportRunner` is what lets that runner be built from
+    /// seams in a test (ADR-112).
+    pub reports_repo: Arc<ReportsRepo>,
     /// Per-node URL-monitor configs (HTTP/HTTPS endpoint checks).
     pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
     /// Per-node DNS-monitor configs plus the observed resolution chains and their history.

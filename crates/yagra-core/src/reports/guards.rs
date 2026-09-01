@@ -115,6 +115,9 @@ const PURITY: &[(&str, bool)] = &[
     ("runner.rs", false),
     // Each section fetches its own numbers from the stores.
     ("sections.rs", false),
+    // The traits the two above reach through, and the live implementations behind them
+    // (ADR-112). Impure by definition: every method here forwards to a store.
+    ("seams.rs", false),
 ];
 
 /// **A pure file never `.await`s, and an impure one does.**
@@ -195,7 +198,7 @@ fn the_pure_half_never_waits_on_the_outside_world() {
     );
     assert!(
         impure_waits >= 35,
-        "only {impure_waits} awaits were seen on the impure side (47 at ADR-102)"
+        "only {impure_waits} awaits were seen on the impure side (58 at ADR-112, 47 at ADR-102)"
     );
 }
 
@@ -221,6 +224,9 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ),
     ("runner.rs", &[]),
     ("sections.rs", &[]),
+    // Forwards to repositories and names no table itself. If a seam implementation ever
+    // writes its own SQL, the store it should be forwarding to is the thing that is missing.
+    ("seams.rs", &[]),
 ];
 
 /// **A statement may only name a table its file has declared** — and every file is in the table.
@@ -296,6 +302,13 @@ fn every_statement_names_a_table_its_file_declares() {
 /// renamed method, a changed signature, a reader pointed at the wrong file — satisfies "no arm
 /// fetches anything" perfectly, which is `rejection-only-tests-pass-when-everything-rejects` read
 /// backwards.
+///
+/// 🚨 **The handles are derived from the struct, not listed here, and that is a repair** (ADR-112).
+/// This check used to name `store`/`nodes`/`alerts`/`history` as literals. ADR-112 folded `history`
+/// into `alerts` and renamed `repo` to `runs` — after which one literal matched nothing, one was
+/// never in the list, and **both failures are silent** because every assertion here is a negation.
+/// A needle that cannot match is `rejection-only-tests-pass-when-everything-rejects` with no
+/// symptom at all. Deriving them means the next field is checked the moment it exists.
 #[test]
 fn the_section_dispatch_delegates_and_fetches_nothing() {
     let code = files()
@@ -322,9 +335,29 @@ fn the_section_dispatch_delegates_and_fetches_nothing() {
          a body this test never actually read"
     );
 
+    // Every handle the runner holds, read out of its own declaration. The struct is in the same
+    // text this test already has, so there is no second list to keep in step.
+    let decl = code
+        .split_once("pub struct ReportRunner {")
+        .expect("the runner struct is still declared in reports/runner.rs")
+        .1;
+    let decl = decl.split_once('}').map_or(decl, |(d, _)| d);
+    let handles: Vec<&str> = decl
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("pub(super) "))
+        .filter_map(|l| l.split_once(':'))
+        .map(|(name, _)| name.trim())
+        .collect();
+    assert!(
+        handles.len() >= 4,
+        "only {} handles were read off ReportRunner ({handles:?}); the loop below would be \
+         searching for nothing, which is exactly how this check broke in ADR-112",
+        handles.len()
+    );
+
     // Assembled at runtime so this file's own prose cannot satisfy the search, the same discipline
     // every other source-reading check here uses.
-    for seam in ["store", "nodes", "alerts", "history"] {
+    for seam in handles {
         let reach = format!("{}.{seam}", "self");
         assert!(
             !body.contains(&reach),

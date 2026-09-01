@@ -176,7 +176,7 @@ async fn list_report_definitions(
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
-    let defs = admin.reports.repo().list_definitions().await.map_err(|e| {
+    let defs = admin.reports_repo.list_definitions().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "list report definitions",
@@ -240,8 +240,7 @@ async fn create_report_definition(
     let name = checked_definition(&body)?;
     let user = actor.0;
     let def = admin
-        .reports
-        .repo()
+        .reports_repo
         .create_definition(
             name,
             body.description.as_deref(),
@@ -284,8 +283,7 @@ async fn update_report_definition(
     let name = checked_definition(&body)?;
     let user = actor.0;
     let updated = admin
-        .reports
-        .repo()
+        .reports_repo
         .update_definition(
             id,
             name,
@@ -328,8 +326,7 @@ async fn delete_report_definition(
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     let deleted = admin
-        .reports
-        .repo()
+        .reports_repo
         .delete_definition(id)
         .await
         .map_err(|e| {
@@ -508,8 +505,7 @@ pub(crate) async fn report_runs(
     };
     let limit = limit.unwrap_or(50).clamp(1, 500);
     admin
-        .reports
-        .repo()
+        .reports_repo
         .list_runs(limit, filter)
         .await
         .map_err(|e| {
@@ -547,8 +543,7 @@ pub(crate) async fn report_run_detail(
     reports_are_fleet_wide(scope)?;
     let admin = st.admin.as_ref().ok_or_else(|| no_run(id))?;
     admin
-        .reports
-        .repo()
+        .reports_repo
         .get_run_detail(id)
         .await
         .map_err(|e| {
@@ -573,7 +568,7 @@ async fn delete_report_run(
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let deleted = admin.reports.repo().delete_run(id).await.map_err(|e| {
+    let deleted = admin.reports_repo.delete_run(id).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "delete report run",
@@ -630,8 +625,7 @@ async fn export_report_run(
     reports_are_fleet_wide(&scope)?;
     let admin = st.admin.as_ref().ok_or_else(|| no_run(id))?;
     let detail = admin
-        .reports
-        .repo()
+        .reports_repo
         .get_run_detail(id)
         .await
         .map_err(|e| {
@@ -758,7 +752,7 @@ async fn list_report_schedules(
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
-    let list = admin.reports.repo().list_schedules().await.map_err(|e| {
+    let list = admin.reports_repo.list_schedules().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "list report schedules",
@@ -832,8 +826,7 @@ async fn create_report_schedule(
     let (input, next) = parse_schedule_body(body)?;
     let user = actor.0;
     let id = admin
-        .reports
-        .repo()
+        .reports_repo
         .create_schedule(&input, next, user.as_deref())
         .await
         .map_err(|e| {
@@ -872,8 +865,7 @@ async fn update_report_schedule(
     let (input, next) = parse_schedule_body(body)?;
     let user = actor.0;
     let updated = admin
-        .reports
-        .repo()
+        .reports_repo
         .update_schedule(id, &input, next, user.as_deref())
         .await
         .map_err(|e| {
@@ -909,18 +901,13 @@ async fn delete_report_schedule(
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let deleted = admin
-        .reports
-        .repo()
-        .delete_schedule(id)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "delete report schedule",
-                "failed to delete report schedule",
-            )
-        })?;
+    let deleted = admin.reports_repo.delete_schedule(id).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "delete report schedule",
+            "failed to delete report schedule",
+        )
+    })?;
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {

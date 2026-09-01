@@ -800,6 +800,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         dispatcher,
         analysis,
         reports,
+        reports_repo: reports_repo.clone(),
         url_checks,
         dns_checks,
         neighbors: neighbor_repo.clone(),
@@ -1374,7 +1375,11 @@ impl LeaderTasks {
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
         spawn_cancellable(
             &self.shutdown,
-            run_report_scheduler(self.reports.clone(), self.repo.clone()),
+            run_report_scheduler(
+                self.reports.clone(),
+                self.reports_repo.clone(),
+                self.repo.clone(),
+            ),
         );
         // Analysis schedule-firing loop (60s tick) — same cadence maths, different admission rules.
         spawn_cancellable(
@@ -1870,12 +1875,15 @@ async fn run_meraki_scheduler(
 /// scheduled), and advance `next_run_at` from the preset cadence. Generation is in-process in core
 /// (no device I/O), so this loop only enqueues — the runner's background task does the work. Failures
 /// degrade to a warn so one bad schedule never stalls the others.
-async fn run_report_scheduler(reports: Arc<reports::ReportRunner>, settings: Arc<NodeRepo>) {
+async fn run_report_scheduler(
+    reports: Arc<reports::ReportRunner>,
+    repo: Arc<reports::ReportsRepo>,
+    settings: Arc<NodeRepo>,
+) {
     use chrono::Utc;
     const TICK_SECS: u64 = 60;
     // Prune ~hourly (every 60 ticks) rather than every minute.
     let mut tick: u64 = 0;
-    let repo = reports.repo();
     loop {
         tokio::time::sleep(Duration::from_secs(TICK_SECS)).await;
         tick = tick.wrapping_add(1);
