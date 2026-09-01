@@ -10,11 +10,20 @@
 //! body a [`sqlx::PgPool`].
 //!
 //! ⚠️ **The number that used to be here has moved, so it is stated as a date.** At ADR-114 it was
-//! ~3,950 production lines of untested SQL; ADR-114 took it to 3,566 across ten files, and
-//! ADR-115 to **2,111 across five** (measured 2026-09-01: `events/repo.rs`,
-//! `config_bundle/import_attached.rs`, `reports/repo.rs`, `config_bundle/import_inventory.rs`,
-//! `examples/seed_nodes.rs`). The two `config_bundle` files are *exercised* end to end by
-//! `api/config_bundle.rs`'s export→import round trip; what they lack is a test of their own.
+//! ~3,950 production lines of untested SQL; ADR-114 took it to 3,566 across ten files, ADR-115 to
+//! 2,111 across five, and ADR-116 to **189 lines in one file** — `examples/seed_nodes.rs`, a
+//! load-test rig outside `src/`. Every production file holding SQL now has a test or an entry in
+//! `guards::SQL_WITHOUT_A_TEST_OF_ITS_OWN` saying why not.
+//!
+//! 🚨 **"The file has a test" is not "the SQL runs", and the two disagree in both directions.**
+//! Measured on 2026-09-01 with `scripts/sql-coverage.sh` — a throwaway server with
+//! `log_statement=all`, matched against the literals in the source — the workspace's 474
+//! statements went from **143 executed / 242 never executed / 89 unresolvable** to
+//! **186 / 199 / 89**. `arp.rs`, `neighbors.rs` and `topology_links.rs` all carry tests and run
+//! none of their SQL; `config_bundle/export.rs` carries none and runs all seventeen of its
+//! statements, through `api/config_bundle.rs`. The guard answers the cheap question; that script
+//! answers the real one, and is deliberately not a gate.
+//!
 //! **Say "untested", never "untestable"** — the obstacle was removed in ADR-114.
 //!
 //! ## The convention — two attributes, in this order
@@ -261,6 +270,120 @@ mod guards {
         assert!(
             sites[0].starts_with("migrate.rs:"),
             "the one call site moved out of `repo/migrate.rs`: {sites:?}"
+        );
+    }
+
+    /// Files holding raw SQL that have no test **in the file**, each with the reason why.
+    ///
+    /// ⚠️ **Not a backlog.** Each entry is an argument that a test does not belong *here*, not a
+    /// note that one has yet to be written. The list was two entries when it was created and the
+    /// intent is that it stays that way.
+    const SQL_WITHOUT_A_TEST_OF_ITS_OWN: [(&str, &str); 2] = [
+        (
+            "import_inventory.rs",
+            "one `write` taking a transaction, and half of one operation: it hands the four id \
+             sets to `import_attached` (ADR-101), so the two are driven together by the round \
+             trip in `import.rs`. Testing this half alone would mean building a `Transaction` to \
+             ask a question the round trip already answers better.",
+        ),
+        (
+            "import_attached.rs",
+            "the other half of the same operation, and the one that cannot run first — it takes \
+             what `import_inventory` returns. Same round trip, same file.",
+        ),
+    ];
+
+    /// **A file with raw SQL has a test, or says why not.**
+    ///
+    /// ADR-116's rule. Before it, four files held 1,927 lines and sixty-two statements between
+    /// them with no test at all, and the reason had stopped being true: ADR-114 removed the
+    /// obstacle and nobody went back.
+    ///
+    /// 🚨 **What this can and cannot say.** It can say the file has a test. It cannot say the SQL
+    /// *runs* — a file full of statements and one unrelated unit test passes here. That question
+    /// needs the statements a server actually executed, which is `scripts/sql-coverage.sh`, and it
+    /// is deliberately not a gate: standing a server up costs more than a check earns, and its
+    /// `unknown` bucket means the number cannot reach zero. Measured 2026-09-01, the two answers
+    /// disagree in **both** directions — `arp.rs`, `neighbors.rs` and `topology_links.rs` each
+    /// pass this check and run none of their SQL, while `config_bundle/export.rs` fails it and
+    /// runs all seventeen of its statements through `api/config_bundle.rs`.
+    ///
+    /// Raw text, like its two neighbours: the tests it looks for are exactly what
+    /// [`crate::module_source`] removes.
+    #[test]
+    fn every_file_with_raw_sql_has_a_test_of_its_own() {
+        // Assembled, not written out: this file holds SQL of its own (`pgtest::rows`), so it is in
+        // the population, and a literal needle would also match the line declaring it.
+        let sql = format!("{}::query", "sqlx");
+        let any_test = |text: &str| {
+            [
+                format!("#[{}]", "test"),
+                format!("#[{}::test", "tokio"),
+                format!("#[{}::test", "sqlx"),
+            ]
+            .iter()
+            .any(|n| text.contains(n.as_str()))
+        };
+
+        // Acceptance side first, on text that is not on disk: a detector that has stopped matching
+        // reports a clean crate in the same words as a clean crate.
+        assert!(
+            !any_test(&format!("fn f() {{ {sql}(\"SELECT 1\"); }}")),
+            "the detector no longer recognises a file with SQL and no test"
+        );
+        assert!(
+            any_test(&format!(
+                "fn f() {{ {sql}(\"SELECT 1\"); }}\n#[{}]\nfn t() {{}}",
+                "test"
+            )),
+            "the detector no longer recognises a test"
+        );
+
+        let with_sql: Vec<(String, String)> = raw_files()
+            .into_iter()
+            .filter(|(_, text)| text.contains(sql.as_str()))
+            .collect();
+        // 🚨 The floor counts the files that **survived the filter**, which is the set the loop
+        // below walks. Counting `raw_files()` instead would leave the assertion vacuous the moment
+        // the needle stopped matching (`floor-must-count-what-was-checked`).
+        assert!(
+            with_sql.len() >= 45,
+            "only {} file(s) under src/ were found to hold SQL; the detector has stopped matching \
+             and the assertion below is vacuous",
+            with_sql.len()
+        );
+
+        let offenders: Vec<String> = with_sql
+            .iter()
+            .filter(|(_, text)| !any_test(text))
+            .map(|(name, _)| name.clone())
+            .collect();
+        let exempt: Vec<&str> = SQL_WITHOUT_A_TEST_OF_ITS_OWN
+            .iter()
+            .map(|(f, _)| *f)
+            .collect();
+
+        let unexcused: Vec<&String> = offenders
+            .iter()
+            .filter(|n| !exempt.contains(&n.as_str()))
+            .collect();
+        assert!(
+            unexcused.is_empty(),
+            "{unexcused:?} hold raw SQL and no test. Write one — the database is there since \
+             ADR-114 — or add the file to `SQL_WITHOUT_A_TEST_OF_ITS_OWN` with the reason a test \
+             does not belong in it"
+        );
+
+        // The other direction: an exemption whose file has since gained a test, or moved, is a
+        // reason nobody is reading any more.
+        let stale: Vec<&str> = exempt
+            .iter()
+            .filter(|e| !offenders.iter().any(|o| o == *e))
+            .copied()
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "{stale:?} are excused from having a test and no longer need to be. Remove the entry"
         );
     }
 }

@@ -71,3 +71,24 @@ async fn run_host_collector(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// The one statement in this file still resolves on the server we run against.
+    ///
+    /// A small claim, deliberately. The statement lives inside the sampling loop of a background
+    /// task, so nothing can reach it without running the task; what a test *can* do is ask whether
+    /// `pg_database_size` is still there and still returns a size. That is worth one test because
+    /// the failure is silent — the `Err` arm logs at debug and the sample simply goes out without
+    /// its `database` disk, so a function renamed by a PostgreSQL major version would take the
+    /// database-growth trend away with no error anyone sees.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_database_size_statement_still_resolves(pool: sqlx::PgPool) {
+        let bytes: i64 = sqlx::query_scalar("SELECT pg_database_size(current_database())")
+            .fetch_one(&pool)
+            .await
+            .expect("pg_database_size");
+        assert!(bytes > 0, "a migrated database is not zero bytes");
+    }
+}

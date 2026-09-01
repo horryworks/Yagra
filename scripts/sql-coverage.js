@@ -95,10 +95,31 @@ function withoutTestModules(src) {
   }
 }
 
+// `const NAME: &str = "…";` in this file, so a `format!("SELECT {NAME} FROM …")` can be resolved.
+//
+// Without this, every statement in a file that keeps its column list in a const lands in the
+// `unknown` bucket and the file reads as untested when it is not: reports/repo.rs measured 8/22
+// with fourteen unknown, and all fourteen were `{RUN_COLS}` / `{DEF_COLS}` / `{SCHED_COLS}`.
+function stringConsts(src) {
+  const out = {};
+  const re = /const\s+([A-Z][A-Z0-9_]*)\s*:\s*&'?\w*\s*str\s*=\s*"/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    let e = m.index + m[0].length;
+    let val = '';
+    while (e < src.length && src[e] !== '"') {
+      if (src[e] === '\\') { val += src[e + 1] === 'n' ? ' ' : src[e + 1]; e += 2; } else { val += src[e]; e++; }
+    }
+    out[m[1]] = val;
+  }
+  return out;
+}
+
 const NEEDLE = 'sqlx::query';
 const rows = [];
 for (const f of files) {
   const s = withoutTestModules(fs.readFileSync(f, 'utf8'));
+  const consts = stringConsts(s);
   let i = 0;
   let total = 0;
   let unknown = 0;
@@ -108,7 +129,14 @@ for (const f of files) {
     const open = s.indexOf('(', i);
     if (open < 0) { i += NEEDLE.length; continue; }
     let k = open + 1;
-    while (k < s.length && /\s/.test(s[k])) k++;
+    // `sqlx::query(&format!("…"))` is as common here as `sqlx::query("…")`; step over the borrow
+    // and the macro so the literal inside is read rather than counted as unresolvable.
+    for (;;) {
+      while (k < s.length && /\s/.test(s[k])) k++;
+      if (s[k] === '&') { k++; continue; }
+      if (s.startsWith('format!(', k)) { k += 'format!('.length; continue; }
+      break;
+    }
     let lit = null;
     const rawStr = s.slice(k).match(/^r(#*)"/);
     if (rawStr) {
@@ -122,6 +150,15 @@ for (const f of files) {
         if (s[e] === '\\') { out += s[e + 1] === 'n' ? ' ' : s[e + 1]; e += 2; } else { out += s[e]; e++; }
       }
       lit = out;
+    }
+    if (lit !== null) {
+      // Substitute the file's own string consts, then give up if anything is still interpolated:
+      // a `{}` filled from an expression cannot be resolved by reading, and guessing would put a
+      // statement in the "executed" column on the strength of a prefix.
+      lit = lit.replace(/\{([A-Z][A-Z0-9_]*)\}/g, (whole, name) =>
+        Object.hasOwn(consts, name) ? consts[name] : whole,
+      );
+      if (/\{[^}]*\}/.test(lit)) lit = null;
     }
     if (lit === null) unknown++; else literals.push(norm(lit));
     i += NEEDLE.length;
