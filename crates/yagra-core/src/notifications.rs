@@ -671,4 +671,118 @@ mod tests {
             .await
             .expect("template"));
     }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rule_round_trips_including_the_severity_that_means_all(pool: sqlx::PgPool) {
+        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let a = repo
+            .create_channel("A", &a_webhook("https://a.example.test/hook"))
+            .await
+            .expect("channel");
+        let b = repo
+            .create_channel("B", &a_webhook("https://b.example.test/hook"))
+            .await
+            .expect("channel");
+
+        // `None` is stored as NULL and read back as `None`, which the fan-out reads as "any
+        // severity". Storing a token for it instead would make the catch-all rule the one rule
+        // that matches nothing after a vocabulary change.
+        let catch_all = repo
+            .create_rule("Everything", None, &[a, b])
+            .await
+            .expect("rule");
+        let criticals = repo
+            .create_rule("Criticals only", Some(Severity::Critical), &[b])
+            .await
+            .expect("rule");
+
+        let rules = repo.list_rules().await.expect("rules");
+        assert_eq!(
+            rules.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [catch_all, criticals],
+            "ordered by created_at"
+        );
+        assert_eq!(rules[0].name, "Everything");
+        assert_eq!(rules[0].severity, None);
+        assert_eq!(rules[1].severity, Some(Severity::Critical));
+        assert!(rules[0].enabled, "a new rule is enabled");
+
+        // The channel list is an array column and it comes back as it was stored.
+        //
+        // ⚠️ This is a round-trip assertion and **not** an ordering contract, which the first
+        // version of this comment claimed. `notify::matched` collects the ids into a
+        // `BTreeSet`, so the array's order is discarded before anything is delivered —
+        // checked, because a rationale nobody verified is the kind that outlives the code it
+        // describes.
+        assert_eq!(rules[0].channel_ids, vec![a, b]);
+        assert_eq!(rules[1].channel_ids, vec![b]);
+
+        // A rule may name no channel at all: that is how an operator parks one without deleting
+        // the severity filter they tuned.
+        let parked = repo
+            .create_rule("Parked", Some(Severity::Info), &[])
+            .await
+            .expect("rule");
+        let rules = repo.list_rules().await.expect("rules");
+        let last = rules
+            .iter()
+            .find(|r| r.id == parked)
+            .expect("the parked rule");
+        assert!(last.channel_ids.is_empty());
+        assert_eq!(last.severity, Some(Severity::Info));
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn switching_a_rule_off_and_deleting_it_each_say_whether_they_found_it(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let channel = repo
+            .create_channel("A", &a_webhook("https://a.example.test/hook"))
+            .await
+            .expect("channel");
+        let rule = repo
+            .create_rule("Everything", None, &[channel])
+            .await
+            .expect("rule");
+        let other = repo
+            .create_rule("Criticals", Some(Severity::Critical), &[channel])
+            .await
+            .expect("rule");
+
+        assert!(repo.set_rule_enabled(rule, false).await.expect("disable"));
+        let rules = repo.list_rules().await.expect("rules");
+        assert_eq!(
+            rules.iter().map(|r| (r.id, r.enabled)).collect::<Vec<_>>(),
+            [(rule, false), (other, true)],
+            "switching one rule off must not switch its neighbours off"
+        );
+        assert!(repo.set_rule_enabled(rule, true).await.expect("enable"));
+        assert!(repo.list_rules().await.expect("rules")[0].enabled);
+
+        // Both writes report whether they found the row — the API edge turns `false` into a 404,
+        // so a statement that always claimed one would make editing a deleted rule look like it
+        // worked.
+        assert!(!repo
+            .set_rule_enabled(Uuid::new_v4(), false)
+            .await
+            .expect("disable"));
+
+        assert!(repo.delete_rule(rule).await.expect("delete"));
+        assert_eq!(
+            repo.list_rules()
+                .await
+                .expect("rules")
+                .iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
+            [other]
+        );
+        assert!(!repo.delete_rule(rule).await.expect("delete"));
+        // …and deleting a rule leaves the channel it named alone. The cascade runs the other way
+        // round only (`delete_channel` prunes the rules' arrays).
+        assert_eq!(repo.list_channels().await.expect("channels").len(), 1);
+    }
 }
