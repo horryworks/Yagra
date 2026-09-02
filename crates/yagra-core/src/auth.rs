@@ -1818,4 +1818,253 @@ mod tests {
             Err(AuthError::Invalid)
         ));
     }
+
+    // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------
+    //
+    // The durable revocation table is the half of ADR-016 Increment 2a a unit test cannot reach:
+    // the in-memory denylist is well covered above, and the whole point of the table is what
+    // happens to it **across a process**. None of its four statements had ever been executed.
+
+    fn unix_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs()
+    }
+
+    /// A logged-out token and a revoked account both survive the process that revoked them.
+    ///
+    /// This is the property the table exists for: a signed token outlives its minter, so a restart
+    /// that forgot the revocation would silently sign the holder back in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_revoked_token_and_a_revoked_user_both_survive_a_restart(pool: sqlx::PgPool) {
+        assert!(
+            load_active_revocations(&pool)
+                .await
+                .expect("load")
+                .is_empty(),
+            "a fresh database reported a revocation nobody made"
+        );
+
+        let uid = Uuid::new_v4();
+        let t = unix_now();
+        let token = AuthRevoke::Token {
+            hash: "deadbeef".to_owned(),
+            exp_unix: t + 3600,
+        };
+        let user = AuthRevoke::User {
+            uid,
+            cutoff_iat: t,
+            exp_unix: t + 7200,
+        };
+        persist_revocation(&pool, &token).await.expect("token");
+        persist_revocation(&pool, &user).await.expect("user");
+
+        let loaded = load_active_revocations(&pool).await.expect("load");
+        assert_eq!(
+            loaded.len(),
+            2,
+            "a revocation did not come back: {loaded:?}"
+        );
+        assert!(
+            loaded.contains(&token),
+            "the token revocation came back changed: {loaded:?}"
+        );
+        assert!(
+            loaded.contains(&user),
+            "the user revocation came back changed: {loaded:?}"
+        );
+    }
+
+    /// Re-revoking keeps the **strictest** answer on both columns — never simply the newest write.
+    ///
+    /// A second revocation carrying a nearer expiry, or an earlier cutoff, would otherwise narrow
+    /// one already recorded and let a denied token back in early.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn re_revoking_keeps_the_later_expiry_and_the_later_cutoff(pool: sqlx::PgPool) {
+        let uid = Uuid::new_v4();
+        let t = unix_now();
+        let token = |exp: u64| AuthRevoke::Token {
+            hash: "deadbeef".to_owned(),
+            exp_unix: exp,
+        };
+        let user = |cutoff: u64, exp: u64| AuthRevoke::User {
+            uid,
+            cutoff_iat: cutoff,
+            exp_unix: exp,
+        };
+
+        persist_revocation(&pool, &token(t + 3600))
+            .await
+            .expect("a");
+        persist_revocation(&pool, &token(t + 60)).await.expect("b");
+        persist_revocation(&pool, &user(t + 100, t + 3600))
+            .await
+            .expect("c");
+        persist_revocation(&pool, &user(t + 10, t + 60))
+            .await
+            .expect("d");
+
+        let loaded = load_active_revocations(&pool).await.expect("load");
+        assert_eq!(loaded.len(), 2, "the conflict target is not (kind, key)");
+        assert!(
+            loaded.contains(&token(t + 3600)),
+            "a nearer expiry overwrote a further one, so the token stops being denied early: \
+             {loaded:?}"
+        );
+        assert!(
+            loaded.contains(&user(t + 100, t + 3600)),
+            "an earlier cutoff or a nearer expiry won: {loaded:?}"
+        );
+
+        // The other direction, so this is not merely "the second write is ignored".
+        persist_revocation(&pool, &token(t + 7200))
+            .await
+            .expect("e");
+        assert!(
+            load_active_revocations(&pool)
+                .await
+                .expect("load")
+                .contains(&token(t + 7200)),
+            "a strictly later expiry did not win"
+        );
+    }
+
+    /// An entry past its expiry is neither loaded nor kept, and pruning leaves the live ones.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_expired_revocation_is_not_loaded_and_is_pruned_while_a_live_one_stays(
+        pool: sqlx::PgPool,
+    ) {
+        let t = unix_now();
+        let live = AuthRevoke::Token {
+            hash: "live".to_owned(),
+            exp_unix: t + 3600,
+        };
+        persist_revocation(
+            &pool,
+            &AuthRevoke::Token {
+                hash: "expired".to_owned(),
+                exp_unix: t - 3600,
+            },
+        )
+        .await
+        .expect("expired");
+        persist_revocation(&pool, &live).await.expect("live");
+        assert_eq!(crate::pgtest::rows(&pool, "auth_revocations").await, 2);
+
+        let loaded = load_active_revocations(&pool).await.expect("load");
+        assert_eq!(
+            loaded.len(),
+            1,
+            "an expired revocation was loaded into the denylist: {loaded:?}"
+        );
+        assert!(loaded.contains(&live));
+
+        assert_eq!(
+            prune_revocations(&pool).await.expect("prune"),
+            1,
+            "pruning took the wrong number of rows"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "auth_revocations").await, 1);
+        assert_eq!(
+            prune_revocations(&pool).await.expect("prune"),
+            0,
+            "pruning twice removed a live revocation"
+        );
+    }
+
+    /// A `kind` this binary has never heard of is skipped, not fatal — the N/N-1 rule for a column
+    /// with no `CHECK`, which is the same call `LinkSource`'s token list makes.
+    ///
+    /// ⚠️ The row is inserted by hand because **no production writer can produce it**, which is the
+    /// entire point of the test. Everything else here goes through the real writer, per
+    /// [`crate::pgtest`].
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_kind_this_binary_does_not_know_is_skipped_rather_than_failing_the_load(
+        pool: sqlx::PgPool,
+    ) {
+        let t = unix_now();
+        let known = AuthRevoke::Token {
+            hash: "known".to_owned(),
+            exp_unix: t + 3600,
+        };
+        persist_revocation(&pool, &known).await.expect("known");
+        sqlx::query(
+            "INSERT INTO auth_revocations (kind, key, cutoff_iat, expires_at) \
+             VALUES ('device', 'from-a-newer-core', NULL, now() + interval '1 hour')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert an unknown kind");
+
+        let loaded = load_active_revocations(&pool).await.expect("load");
+        assert_eq!(
+            loaded.len(),
+            1,
+            "a row written by a newer core either failed the load or was misread: {loaded:?}"
+        );
+        assert!(loaded.contains(&known));
+    }
+
+    /// The bootstrap admin is seeded exactly once, and the second call says so rather than seeding
+    /// another — which is what the caller uses to decide whether to announce a generated password.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_default_admin_is_seeded_once_and_only_once(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        assert!(
+            store
+                .ensure_default_admin("a-bootstrap-password")
+                .await
+                .expect("seed"),
+            "an empty users table was not seeded"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "users").await, 1);
+
+        assert!(
+            !store
+                .ensure_default_admin("a-different-password")
+                .await
+                .expect("seed again"),
+            "seeding twice reported that it had seeded again"
+        );
+        assert_eq!(
+            crate::pgtest::rows(&pool, "users").await,
+            1,
+            "a second admin was created"
+        );
+    }
+
+    /// Which path a username takes, in one lookup. A name with no account is `Unknown` —
+    /// deliberately not `Refused`, because the caller may still offer it to a directory, and that
+    /// is how a first sign-in provisions an account.
+    ///
+    /// ⚠️ `Refused` and `External` are not exercised here: producing those accounts needs
+    /// `create_service` and `set_enabled`, which belong to the next slice of this file.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_unknown_name_stays_offerable_to_a_directory_and_a_local_account_does_not(
+        pool: sqlx::PgPool,
+    ) {
+        let store = UserStore::new(pool.clone());
+        assert_eq!(
+            store.login_route("nobody").await.expect("route"),
+            LoginRoute::Unknown,
+            "a name with no account must stay offerable to a directory"
+        );
+
+        store
+            .ensure_default_admin("a-bootstrap-password")
+            .await
+            .expect("seed");
+        assert_eq!(
+            store.login_route("admin").await.expect("route"),
+            LoginRoute::Local,
+            "the seeded admin is a local account and must be verified locally"
+        );
+    }
 }
