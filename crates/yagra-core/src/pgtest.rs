@@ -19,10 +19,16 @@
 //! Measured on 2026-09-01 with `scripts/sql-coverage.sh` — a throwaway server with
 //! `log_statement=all`, matched against the literals in the source — the workspace's 474
 //! statements went from **143 executed / 242 never executed / 89 unresolvable** to
-//! **186 / 199 / 89**. `arp.rs`, `neighbors.rs` and `topology_links.rs` all carry tests and run
-//! none of their SQL; `config_bundle/export.rs` carries none and runs all seventeen of its
-//! statements, through `api/config_bundle.rs`. The guard answers the cheap question; that script
-//! answers the real one, and is deliberately not a gate.
+//! **186 / 199 / 89**. `arp.rs`, `neighbors.rs` and `topology_links.rs` each carried tests and ran
+//! **none** of their SQL, while `config_bundle/export.rs` carried none and ran all seventeen of
+//! its statements through `api/config_bundle.rs`. The guard answers the cheap question; that
+//! script answers the real one, and is deliberately not a gate.
+//!
+//! Those three ran their SQL for the first time on 2026-09-02, and the third of them found a
+//! shipped defect on the first run: all three of `arp.rs`'s address projections read an `inet`
+//! with an explicit cast to text, which renders the netmask (`10.0.0.1/32`) and does not parse —
+//! so every discovered endpoint listed as `0.0.0.0` and every monitored node was reported as
+//! unmonitored. Five tests failed; no source-reading check could have said anything about it.
 //!
 //! **Say "untested", never "untestable"** — the obstacle was removed in ADR-114.
 //!
@@ -114,6 +120,32 @@ pub async fn rows(pool: &PgPool, table: &str) -> i64 {
         .fetch_one(pool)
         .await
         .unwrap_or_else(|e| panic!("count {table}: {e}"))
+}
+
+/// One `TIMESTAMPTZ` column of the row a node owns.
+///
+/// For the columns a repository *writes* and exposes no reader for. `node_arp.first_seen` is the
+/// case this was written for: the ARP store keeps "this port has looked like this for three weeks"
+/// and nothing in production ever selects it, so without this the rule that an unchanged walk must
+/// not restart the clock is assertable only as text — which cannot tell a `CASE` that works from
+/// one that is spelled right and evaluates the wrong way.
+///
+/// Deliberately narrow rather than a general "run this statement": a test that can spell any SQL
+/// becomes a second copy of the schema, which is what the fixtures above exist to avoid.
+pub async fn node_timestamp(
+    pool: &PgPool,
+    table: &str,
+    column: &str,
+    node: Uuid,
+) -> chrono::DateTime<chrono::Utc> {
+    // Interpolated for the same reason `rows` interpolates: neither a table nor a column name can
+    // be a bind parameter. Every caller is a literal in this crate's own tests, and the node id —
+    // the only value that comes from anywhere — is bound.
+    sqlx::query_scalar(&format!("SELECT {column} FROM {table} WHERE node_id = $1"))
+        .bind(node)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|e| panic!("{table}.{column}: {e}"))
 }
 
 #[cfg(test)]
@@ -305,7 +337,7 @@ mod guards {
     /// is deliberately not a gate: standing a server up costs more than a check earns, and its
     /// `unknown` bucket means the number cannot reach zero. Measured 2026-09-01, the two answers
     /// disagree in **both** directions — `arp.rs`, `neighbors.rs` and `topology_links.rs` each
-    /// pass this check and run none of their SQL, while `config_bundle/export.rs` fails it and
+    /// passed this check and ran none of their SQL, while `config_bundle/export.rs` fails it and
     /// runs all seventeen of its statements through `api/config_bundle.rs`.
     ///
     /// Raw text, like its two neighbours: the tests it looks for are exactly what

@@ -246,9 +246,15 @@ impl DiscoveredRepo {
     /// an endpoint that is "unmonitored" only because a node was created between them. Addresses
     /// that fail to parse are dropped rather than failing the sweep — a malformed row must not stop
     /// discovery for the whole fleet.
+    ///
+    /// 🚨 **`host(address)`, never `address::TEXT`.** An explicit cast to text renders an `inet`
+    /// *with* its masklen (`10.0.0.1/32`, `2001:db8::1/128`) even though the default display omits
+    /// it, and `IpAddr::from_str` rejects that — so the drop-on-parse-failure above silently threw
+    /// away **every** node address, and every monitored node was reported as an unmonitored
+    /// endpoint. `host()` is documented to return the address alone.
     pub async fn known_addresses(&self) -> anyhow::Result<BTreeSet<IpAddr>> {
         let rows = sqlx::query(
-            "SELECT address::TEXT AS ip FROM nodes \
+            "SELECT host(address) AS ip FROM nodes \
              UNION \
              SELECT a->>'ip' AS ip FROM node_l3, \
                     jsonb_array_elements(coalesce(addresses->'addresses', '[]'::jsonb)) a",
@@ -359,7 +365,7 @@ impl DiscoveredRepo {
         // One statement with nullable bind parameters rather than four assembled shapes: the filters
         // are independent, and a builder would put caller-supplied values next to a format string.
         let rows = sqlx::query(
-            "SELECT d.id, d.ip::TEXT AS ip, d.mac, d.via_node, d.via_ifindex, \
+            "SELECT d.id, host(d.ip) AS ip, d.mac, d.via_node, d.via_ifindex, \
                     d.first_seen, d.last_seen, d.promoted_node_id \
              FROM l3_discovered d \
              LEFT JOIN nodes n ON n.id = d.via_node \
@@ -386,6 +392,10 @@ impl DiscoveredRepo {
                     // A row whose address will not parse should not fail the page; `0.0.0.0` is
                     // visibly wrong rather than silently absent, and the column is INET so this is
                     // unreachable short of a manual edit.
+                    //
+                    // 🚨 It was reachable on **every** row until the projection above became
+                    // `host(ip)`: `ip::TEXT` renders an `inet` with its masklen, which does not
+                    // parse, so the whole list read `0.0.0.0`. See `known_addresses`.
                     ip: ip
                         .parse()
                         .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
@@ -407,7 +417,7 @@ impl DiscoveredRepo {
     /// One endpoint by id — what the import handler reads before creating a node from it.
     pub async fn get(&self, id: Uuid) -> anyhow::Result<Option<DiscoveredEndpoint>> {
         let row = sqlx::query(
-            "SELECT id, ip::TEXT AS ip, mac, via_node, via_ifindex, first_seen, last_seen, \
+            "SELECT id, host(ip) AS ip, mac, via_node, via_ifindex, first_seen, last_seen, \
                     promoted_node_id \
              FROM l3_discovered WHERE id = $1",
         )
@@ -629,5 +639,438 @@ mod tests {
             DEFAULT_ARP_INTERVAL_SECS
         ));
         const { assert!(DEFAULT_ARP_INTERVAL_SECS > crate::neighbors::DEFAULT_NEIGHBOR_INTERVAL_SECS) };
+    }
+
+    /// **An address leaves PostgreSQL through `host()`, never through a cast to text.**
+    ///
+    /// `inet`'s text output carries the masklen (`10.0.0.1/32`) while its default display does not,
+    /// so `address::TEXT` looks right in psql and hands Rust a string `IpAddr::from_str` rejects.
+    /// All three statements here had it, and all three failed silently: node addresses vanished
+    /// from the known set, and every listed endpoint read `0.0.0.0`.
+    ///
+    /// The database tests below are the stronger check — this one exists to name the trap in the
+    /// place someone would reintroduce it, and to fail rather than merely be un-read.
+    #[test]
+    fn an_address_is_read_through_host_and_never_cast_to_text() {
+        let src = production_source();
+        assert_eq!(
+            src.matches("host(").count(),
+            3,
+            "the three address projections are no longer reading through `host()`"
+        );
+        for needle in ["address::TEXT", "ip::TEXT"] {
+            assert!(
+                !src.contains(needle),
+                "{needle} renders an inet with its masklen, which does not parse as an address"
+            );
+        }
+    }
+
+    // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------
+    //
+    // Everything above is either the pure rule (`unmonitored`) or a reading of this module's text.
+    // Neither can say whether the eleven statements do what the words claim, and one of the two
+    // stores here is the only one in ADR-043 whose reader joins to a *second* table — which is
+    // exactly where a scope predicate goes wrong quietly.
+    use crate::l3::L3Repo;
+    use crate::pgtest;
+    use yagra_common::{L3Address, L3Snapshot};
+
+    /// A node with an address of the test's choosing, through the production writer.
+    async fn node_at(pool: &sqlx::PgPool, name: &str, addr: &str) -> Uuid {
+        pgtest::repo(pool.clone())
+            .create_node(name, ip(addr), None, None, None, None, None, None)
+            .await
+            .expect("create node")
+    }
+
+    fn observation(addr: &str, via: Uuid, ifindex: u32) -> EndpointObservation {
+        EndpointObservation {
+            ip: ip(addr),
+            mac: Some("aa:bb:cc:dd:ee:ff".to_owned()),
+            via_node: NodeId(via),
+            via_ifindex: ifindex,
+        }
+    }
+
+    /// A summary goes in whole, comes back whole, and the coverage line counts it — including the
+    /// truncation flag, which is what says the endpoint list is a sample rather than the network.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_observed_summary_reads_back_and_the_totals_count_it(pool: sqlx::PgPool) {
+        let repo = ArpRepo::new(pool.clone());
+        assert!(
+            repo.observation_watermark()
+                .await
+                .expect("watermark")
+                .is_none(),
+            "a fresh database reported an ARP walk that never happened"
+        );
+        assert_eq!(repo.totals().await.expect("totals"), (0, 0, 0));
+
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let seen_by_a = summary(&[(8, "192.168.50.10"), (8, "192.168.50.11")]);
+        let seen_by_b = ArpSummary::new(vec![ArpEntry::new(9, ip("192.168.50.12"))], true);
+        repo.record_observation(a, &seen_by_a).await.expect("a");
+        repo.record_observation(b, &seen_by_b).await.expect("b");
+
+        let all = repo.all_current().await.expect("all_current");
+        assert_eq!(all.len(), 2, "the unpaged read did not return every node");
+        assert_eq!(
+            all.iter().find(|(id, _)| id.0 == a).map(|(_, s)| s),
+            Some(&seen_by_a),
+            "a summary came back attached to the wrong node, or not at all"
+        );
+        assert_eq!(
+            all.iter().find(|(id, _)| id.0 == b).map(|(_, s)| s),
+            Some(&seen_by_b)
+        );
+
+        assert_eq!(
+            repo.totals().await.expect("totals"),
+            (3, 2, 1),
+            "the coverage line does not agree with what was stored (observed, nodes, truncated)"
+        );
+        assert_eq!(
+            repo.observation_watermark().await.expect("watermark"),
+            Some(pgtest::node_timestamp(&pool, "node_arp", "last_seen", b).await),
+            "the watermark is not the newest last_seen in the table"
+        );
+    }
+
+    /// `first_seen` answers "this port has looked like this for three weeks", so an unchanged walk
+    /// must not restart it and a changed one must.
+    ///
+    /// ⚠️ Read through [`pgtest::node_timestamp`] because `node_arp.first_seen` has **no reader in
+    /// production** — the column is written by this statement and consulted by nothing else, so
+    /// without the fixture the rule is only assertable as text.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_unchanged_walk_keeps_first_seen_and_a_changed_one_restarts_it(pool: sqlx::PgPool) {
+        let node = pgtest::node(&pool, "rtr", 1, None).await;
+        let repo = ArpRepo::new(pool.clone());
+        let held = summary(&[(8, "192.168.50.10")]);
+        repo.record_observation(node, &held).await.expect("first");
+        let started = pgtest::node_timestamp(&pool, "node_arp", "first_seen", node).await;
+
+        repo.record_observation(node, &held).await.expect("same");
+        assert_eq!(
+            pgtest::rows(&pool, "node_arp").await,
+            1,
+            "the summary was stored twice — the conflict target is not the node"
+        );
+        assert_eq!(
+            pgtest::node_timestamp(&pool, "node_arp", "first_seen", node).await,
+            started,
+            "an unchanged walk restarted the clock, so every endpoint looks new every six hours"
+        );
+        assert!(
+            pgtest::node_timestamp(&pool, "node_arp", "last_seen", node).await > started,
+            "last_seen did not move, so the sweep would never trigger again"
+        );
+
+        repo.record_observation(node, &summary(&[(8, "192.168.50.99")]))
+            .await
+            .expect("changed");
+        assert!(
+            pgtest::node_timestamp(&pool, "node_arp", "first_seen", node).await > started,
+            "first_seen did not restart when the walk actually saw something else"
+        );
+    }
+
+    /// **The false positive the sweep exists to avoid.** A router monitored on its management
+    /// address answers ARP for its LAN interface too, so the known set has to carry every reported
+    /// interface address as well as every node address — otherwise the router's own gateway
+    /// address is reported as an unmonitored endpoint on every segment it terminates.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn known_addresses_covers_node_addresses_and_reported_interface_addresses(
+        pool: sqlx::PgPool,
+    ) {
+        let rtr = node_at(&pool, "rtr", "10.20.0.1").await;
+        L3Repo::new(pool.clone())
+            .record_observation(
+                rtr,
+                &L3Snapshot::new(vec![L3Address::new(8, ip("192.168.50.1"), 24)]),
+            )
+            .await
+            .expect("record l3");
+
+        let known = DiscoveredRepo::new(pool.clone())
+            .known_addresses()
+            .await
+            .expect("known");
+        assert!(
+            known.contains(&ip("10.20.0.1")),
+            "the node's own address is not in the known set: {known:?}"
+        );
+        assert!(
+            known.contains(&ip("192.168.50.1")),
+            "a reported interface address is not in the known set, so the router's own gateway \
+             address would be reported as an unmonitored endpoint: {known:?}"
+        );
+        assert!(
+            !known.contains(&ip("192.168.50.77")),
+            "an address nobody reported is in the known set, which would hide real endpoints"
+        );
+    }
+
+    /// An endpoint seen again keeps `first_seen` — how long it was on the network before anyone
+    /// monitored it — and takes the newer observation for everything else.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_endpoint_seen_again_keeps_first_seen_and_takes_the_new_observation(
+        pool: sqlx::PgPool,
+    ) {
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let repo = DiscoveredRepo::new(pool.clone());
+
+        assert_eq!(
+            repo.upsert_batch(&[]).await.expect("empty"),
+            0,
+            "an empty sweep wrote something"
+        );
+        assert_eq!(
+            repo.upsert_batch(&[observation("192.168.50.10", a, 8)])
+                .await
+                .expect("upsert"),
+            1
+        );
+        let first = repo
+            .list_page(None, None, false, None, 10)
+            .await
+            .expect("list")
+            .remove(0);
+        assert_eq!(first.ip, ip("192.168.50.10"));
+        assert_eq!(first.via_node, Some(NodeId(a)));
+        assert_eq!(first.via_ifindex, Some(8));
+        assert_eq!(first.mac.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
+        assert_eq!(first.promoted_node_id, None);
+        assert_eq!(
+            first.first_seen, first.last_seen,
+            "an endpoint seen once already looks re-observed"
+        );
+
+        let mut again = observation("192.168.50.10", b, 3);
+        again.mac = None;
+        repo.upsert_batch(&[again]).await.expect("re-upsert");
+        assert_eq!(
+            pgtest::rows(&pool, "l3_discovered").await,
+            1,
+            "the same endpoint stored twice — the identity is not the address"
+        );
+        let second = repo
+            .list_page(None, None, false, None, 10)
+            .await
+            .expect("list")
+            .remove(0);
+        assert_eq!(second.id, first.id);
+        assert_eq!(
+            second.first_seen, first.first_seen,
+            "first_seen moved, so 'how long was this here unmonitored' is now wrong"
+        );
+        assert!(second.last_seen > first.last_seen);
+        assert_eq!(second.via_node, Some(NodeId(b)));
+        assert_eq!(second.via_ifindex, Some(3));
+        assert_eq!(second.mac, None, "the conflict path did not update the row");
+    }
+
+    /// An endpoint that becomes a node stops being a finding — and asking twice changes nothing,
+    /// which is what the `IS DISTINCT FROM` guard is for.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn promotion_points_the_row_at_the_node_that_now_monitors_it(pool: sqlx::PgPool) {
+        let via = pgtest::node(&pool, "rtr", 1, None).await;
+        let repo = DiscoveredRepo::new(pool.clone());
+        repo.upsert_batch(&[
+            observation("192.168.50.10", via, 8),
+            observation("192.168.50.11", via, 8),
+        ])
+        .await
+        .expect("upsert");
+        assert_eq!(
+            repo.reconcile_promotions().await.expect("reconcile"),
+            0,
+            "an endpoint nobody monitors was reported as promoted"
+        );
+
+        let host = node_at(&pool, "host", "192.168.50.10").await;
+        assert_eq!(repo.reconcile_promotions().await.expect("reconcile"), 1);
+        assert_eq!(
+            repo.reconcile_promotions().await.expect("reconcile"),
+            0,
+            "reconciling twice rewrote a row that was already correct"
+        );
+
+        let listed = repo
+            .list_page(None, None, false, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(
+            listed.len(),
+            1,
+            "a promoted endpoint is still in the unmonitored list"
+        );
+        assert_eq!(listed[0].ip, ip("192.168.50.11"));
+
+        let with_promoted = repo
+            .list_page(None, None, true, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(
+            with_promoted.len(),
+            2,
+            "asking for promoted rows did not bring the promoted one back"
+        );
+        let promoted = with_promoted
+            .iter()
+            .find(|e| e.ip == ip("192.168.50.10"))
+            .expect("the promoted endpoint");
+        assert_eq!(promoted.promoted_node_id, Some(NodeId(host)));
+
+        let fetched = repo
+            .get(promoted.id)
+            .await
+            .expect("get")
+            .expect("the row just listed");
+        assert_eq!(&fetched, promoted, "get and list disagree about one row");
+        assert!(
+            repo.get(Uuid::new_v4()).await.expect("get").is_none(),
+            "an unknown id returned an endpoint"
+        );
+    }
+
+    /// Pruning drops what aged out, then enforces the ceiling by dropping the **oldest seen** —
+    /// so what survives is what is currently on the network.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn pruning_ages_rows_out_then_enforces_the_ceiling_oldest_first(pool: sqlx::PgPool) {
+        let via = pgtest::node(&pool, "rtr", 1, None).await;
+        let repo = DiscoveredRepo::new(pool.clone());
+        // One call each, so `last_seen` genuinely orders them; a single batch stamps one `now()`
+        // and the ceiling would then be deciding on the surrogate id alone.
+        for addr in ["192.168.50.10", "192.168.50.11", "192.168.50.12"] {
+            repo.upsert_batch(&[observation(addr, via, 8)])
+                .await
+                .expect("upsert");
+        }
+
+        assert_eq!(
+            repo.prune(3600, 10).await.expect("prune"),
+            0,
+            "rows seen a moment ago were pruned by an hour-long window under a ceiling of ten"
+        );
+        assert_eq!(pgtest::rows(&pool, "l3_discovered").await, 3);
+
+        assert_eq!(
+            repo.prune(3600, 1).await.expect("prune"),
+            2,
+            "the ceiling did not take the two rows over it"
+        );
+        let left = repo
+            .list_page(None, None, false, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(left.len(), 1);
+        assert_eq!(
+            left[0].ip,
+            ip("192.168.50.12"),
+            "the ceiling kept the oldest-seen row instead of the newest"
+        );
+
+        assert_eq!(repo.prune(0, 10).await.expect("prune"), 1);
+        assert_eq!(pgtest::rows(&pool, "l3_discovered").await, 0);
+    }
+
+    /// **The scope rule, executed**, plus the two filters and the cursor that share its statement.
+    ///
+    /// The predicate joins through `via_node`, so an endpoint seen only by a node the caller cannot
+    /// see must not be listed — otherwise the list leaks the existence of segments outside the
+    /// scope.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_listing_is_scoped_by_the_observing_node_and_pages_by_cursor(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let ours = pgtest::node(&pool, "ours", 1, Some(mine)).await;
+        let alien = pgtest::node(&pool, "alien", 2, Some(theirs)).await;
+        let repo = DiscoveredRepo::new(pool.clone());
+        for (addr, via) in [
+            ("192.168.50.10", ours),
+            ("192.168.50.11", ours),
+            ("192.168.60.10", alien),
+        ] {
+            repo.upsert_batch(&[observation(addr, via, 8)])
+                .await
+                .expect("upsert");
+        }
+
+        // Acceptance first: a predicate that refuses everything reads exactly like one that works.
+        assert_eq!(
+            repo.list_page(None, None, false, None, 10)
+                .await
+                .expect("list")
+                .len(),
+            3,
+            "an unrestricted caller must see every endpoint"
+        );
+
+        let scoped = repo
+            .list_page(Some(&[mine]), None, false, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(
+            scoped.len(),
+            2,
+            "the scope did not filter on the observing node's group"
+        );
+        assert!(
+            scoped.iter().all(|e| e.via_node == Some(NodeId(ours))),
+            "an endpoint seen only outside the scope was listed"
+        );
+        assert!(
+            repo.list_page(Some(&[]), None, false, None, 10)
+                .await
+                .expect("list")
+                .is_empty(),
+            "an empty scope matched something"
+        );
+
+        let by_observer = repo
+            .list_page(None, Some(alien), false, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(by_observer.len(), 1);
+        assert_eq!(by_observer[0].ip, ip("192.168.60.10"));
+
+        // ⚠️ The bounded loop is part of the assertion: a cursor that stopped being applied would
+        // hand back the same newest row forever, and an unbounded `loop` would hang, not fail.
+        let mut seen: Vec<(DateTime<Utc>, Uuid)> = Vec::new();
+        let mut before: Option<(DateTime<Utc>, Uuid)> = None;
+        for _ in 0..8 {
+            let page = repo
+                .list_page(None, None, false, before, 1)
+                .await
+                .expect("list");
+            let Some(row) = page.first() else { break };
+            assert_eq!(page.len(), 1, "LIMIT is not being applied");
+            seen.push((row.last_seen, row.id));
+            before = Some((row.last_seen, row.id));
+        }
+        assert_eq!(
+            seen.len(),
+            3,
+            "the cursor walk did not end after the three endpoints: {seen:?}"
+        );
+        let mut descending = seen.clone();
+        descending.sort_unstable();
+        descending.reverse();
+        descending.dedup();
+        assert_eq!(
+            descending, seen,
+            "the page did not come back newest-seen first, or a row came back twice: {seen:?}"
+        );
     }
 }

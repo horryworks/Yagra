@@ -401,6 +401,19 @@
 
 ### Bug Fixes
 
+- **Every discovered endpoint was listed as `0.0.0.0`, and every monitored node was reported as
+  unmonitored.** Both come from one mistake in three statements: an address was read out of
+  PostgreSQL with an explicit cast to text. `inet`'s default display omits the netmask, but the
+  cast does not — `10.0.0.1` comes back as `10.0.0.1/32` (and `2001:db8::1` as
+  `2001:db8::1/128`), which is not a parseable address. So the endpoint list fell to its "this
+  cannot happen" placeholder on every row, the known-address set the sweep subtracts silently lost
+  **all** of its node addresses, and importing a discovered endpoint would have created a node at
+  `0.0.0.0`. The three projections now use `host()`, which returns the address alone. Discovery
+  is off by default (ADR-043 Increment 3), so a deployment that never enabled the ARP walk was
+  never affected; one that did will see its endpoint list correct itself on the next sweep, and the
+  rows written for its own nodes age out inside the seven-day retention window without any manual
+  cleanup.
+
 - **Turning the interface media walk off in Settings did nothing.** The switch and its interval
   were written to the settings row correctly, and then read back as their defaults by everything —
   the Settings page that re-rendered them, and the scheduler that decides whether to issue the walk.
