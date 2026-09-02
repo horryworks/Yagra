@@ -1103,4 +1103,181 @@ mod tests {
         // Idempotent by construction: nothing is left running, so a second sweep finds nothing.
         assert_eq!(repo.fail_orphans().await.expect("orphans"), 0);
     }
+
+    /// A schedule input: `tool`, daily at 03:30.
+    fn a_schedule(tool: AnalysisTool, enabled: bool) -> ScheduleInput {
+        ScheduleInput {
+            params: a_job(tool),
+            cadence: crate::cadence::Schedule {
+                frequency: crate::cadence::Cadence::Daily,
+                day_of_week: None,
+                day_of_month: None,
+                at_hour: 3,
+                at_minute: 30,
+            },
+            enabled,
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_schedule_round_trips_and_an_update_replaces_every_field_it_names(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let at = Utc::now() + chrono::Duration::hours(3);
+        let id = repo
+            .create_schedule(&a_schedule(AnalysisTool::Anomaly, true), at, Some("horry"))
+            .await
+            .expect("create");
+
+        let got = repo.get_schedule(id).await.expect("get").expect("row");
+        assert_eq!(got.id, id);
+        assert_eq!(got.tool, "anomaly");
+        assert_eq!(got.scope_kind, "all");
+        assert_eq!(got.scope_label, "Whole fleet");
+        assert_eq!(got.frequency, crate::cadence::Cadence::Daily);
+        assert_eq!(got.at_hour, 3);
+        assert_eq!(got.at_minute, 30);
+        assert_eq!(got.day_of_week, None);
+        assert_eq!(got.day_of_month, None);
+        assert!(got.enabled);
+        assert_eq!(got.params["depth"], "standard");
+        // A schedule that has never fired says so, rather than saying it fired at the epoch.
+        assert_eq!(got.last_run_ms, None);
+        assert_eq!(got.last_status, None);
+
+        // The weekly form fills a column the daily one leaves NULL, which is what makes "replaces
+        // every field it names" worth pinning: an UPDATE that left `day_of_week` behind would put
+        // the old cadence's day beside the new cadence's frequency, and the schedule then fires on
+        // a day nobody chose.
+        let mut weekly = a_schedule(AnalysisTool::Capacity, false);
+        weekly.cadence.frequency = crate::cadence::Cadence::Weekly;
+        weekly.cadence.day_of_week = Some(2);
+        weekly.cadence.at_hour = 19;
+        weekly.cadence.at_minute = 5;
+        let later = at + chrono::Duration::days(1);
+        assert!(repo
+            .update_schedule(id, &weekly, later, Some("horry_op"))
+            .await
+            .expect("update"));
+
+        let after = repo.get_schedule(id).await.expect("get").expect("row");
+        assert_eq!(after.tool, "capacity");
+        assert_eq!(after.frequency, crate::cadence::Cadence::Weekly);
+        assert_eq!(after.day_of_week, Some(2));
+        assert_eq!(after.at_hour, 19);
+        assert_eq!(after.at_minute, 5);
+        assert!(!after.enabled);
+        assert!(after.next_run_ms > got.next_run_ms);
+
+        // A write to an id that is not there reports it rather than reporting success — the API
+        // edge is what turns that `false` into a 404, so a statement that always claimed a row
+        // would make every edit of a deleted schedule look like it worked.
+        assert!(!repo
+            .update_schedule(Uuid::new_v4(), &weekly, later, None)
+            .await
+            .expect("update"));
+        assert!(repo
+            .get_schedule(Uuid::new_v4())
+            .await
+            .expect("get")
+            .is_none());
+
+        assert!(repo.delete_schedule(id).await.expect("delete"));
+        assert!(repo.get_schedule(id).await.expect("get").is_none());
+        assert!(!repo.delete_schedule(id).await.expect("delete"));
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_due_query_takes_only_enabled_schedules_whose_time_has_come(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let now = Utc::now();
+        let overdue = repo
+            .create_schedule(
+                &a_schedule(AnalysisTool::Anomaly, true),
+                now - chrono::Duration::minutes(5),
+                None,
+            )
+            .await
+            .expect("create");
+        // Disabled **and** overdue. Both halves of `enabled = true AND next_run_at <= now()` have
+        // to hold: a schedule an operator switched off must not fire because its time passed while
+        // it was off, which is the shape a one-clause due-query has.
+        let switched_off = repo
+            .create_schedule(
+                &a_schedule(AnalysisTool::Flap, false),
+                now - chrono::Duration::minutes(2),
+                None,
+            )
+            .await
+            .expect("create");
+        let not_yet = repo
+            .create_schedule(
+                &a_schedule(AnalysisTool::Capacity, true),
+                now + chrono::Duration::hours(6),
+                None,
+            )
+            .await
+            .expect("create");
+
+        let due = repo.due_schedules().await.expect("due");
+        assert_eq!(due.iter().map(|s| s.id).collect::<Vec<_>>(), [overdue]);
+
+        // The full list carries all three, soonest first — the settings page shows what is
+        // scheduled, not what is runnable, so this query deliberately has no predicate.
+        let all = repo.list_schedules().await.expect("list");
+        assert_eq!(
+            all.iter().map(|s| s.id).collect::<Vec<_>>(),
+            [overdue, switched_off, not_yet]
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_fire_advances_the_schedule_and_a_deferral_deliberately_does_not(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let id = repo
+            .create_schedule(
+                &a_schedule(AnalysisTool::Anomaly, true),
+                Utc::now() - chrono::Duration::minutes(1),
+                None,
+            )
+            .await
+            .expect("create");
+        let before = repo.get_schedule(id).await.expect("get").expect("row");
+        assert_eq!(repo.due_schedules().await.expect("due").len(), 1);
+
+        // Admission control was full. The status is recorded and **nothing else moves**: the
+        // schedule has to stay due so the next tick retries it. Advancing `next_run_at` here is
+        // how a whole cycle disappears — nothing ran, and nothing afterwards says so.
+        repo.mark_deferred(id).await.expect("defer");
+        let deferred = repo.get_schedule(id).await.expect("get").expect("row");
+        assert_eq!(deferred.last_status, Some(AnalysisScheduleStatus::Busy));
+        assert_eq!(deferred.next_run_ms, before.next_run_ms);
+        // …and `last_run_at` stays unstamped: nothing ran, and a schedule reporting a last run
+        // that produced no row is the confusing half of this failure mode.
+        assert_eq!(deferred.last_run_ms, None);
+        assert_eq!(
+            repo.due_schedules().await.expect("due").len(),
+            1,
+            "a deferred schedule is still due"
+        );
+
+        // The other direction: a fire that produced a run does move it, and stamps both columns.
+        let next = Utc::now() + chrono::Duration::days(1);
+        repo.mark_fired(id, AnalysisScheduleStatus::Queued, next)
+            .await
+            .expect("fire");
+        let fired = repo.get_schedule(id).await.expect("get").expect("row");
+        assert_eq!(fired.last_status, Some(AnalysisScheduleStatus::Queued));
+        assert!(fired.last_run_ms.is_some());
+        assert!(fired.next_run_ms > before.next_run_ms);
+        assert!(repo.due_schedules().await.expect("due").is_empty());
+
+        // Neither write touches `enabled` — a deferral is not a switch-off, and a fire is not one
+        // either. A schedule that quietly disabled itself would never be seen to stop.
+        assert!(fired.enabled);
+    }
 }
