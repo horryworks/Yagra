@@ -144,30 +144,49 @@ pub async fn credential(pool: &PgPool, name: &str, kind: &str) -> Uuid {
         .unwrap_or_else(|e| panic!("create credential {name}: {e}"))
 }
 
-/// One `TIMESTAMPTZ` column of the row a node owns.
+/// One `TIMESTAMPTZ` column of the row a node owns (`WHERE node_id = …`).
 ///
-/// For the columns a repository *writes* and exposes no reader for. `node_arp.first_seen` is the
-/// case this was written for: the ARP store keeps "this port has looked like this for three weeks"
-/// and nothing in production ever selects it, so without this the rule that an unchanged walk must
-/// not restart the clock is assertable only as text — which cannot tell a `CASE` that works from
-/// one that is spelled right and evaluates the wrong way.
-///
-/// Deliberately narrow rather than a general "run this statement": a test that can spell any SQL
-/// becomes a second copy of the schema, which is what the fixtures above exist to avoid.
+/// The common case of [`timestamp_of`], spelled out so the majority of callers cannot get the key
+/// column's name wrong.
 pub async fn node_timestamp(
     pool: &PgPool,
     table: &str,
     column: &str,
     node: Uuid,
 ) -> chrono::DateTime<chrono::Utc> {
+    timestamp_of(pool, table, column, "node_id", node).await
+}
+
+/// One `TIMESTAMPTZ` column of one row, found by a uuid key.
+///
+/// For the columns a repository *writes* and exposes no reader for. `node_arp.first_seen` is the
+/// case this was written for: the ARP store keeps "this port has looked like this for three weeks"
+/// and nothing in production ever selects it, so without this the rule that an unchanged walk must
+/// not restart the clock is assertable only as text — which cannot tell a `CASE` that works from
+/// one that is spelled right and evaluates the wrong way. `meraki_orgs.last_sync_at` is the second.
+///
+/// Deliberately narrow rather than a general "run this statement": a test that can spell any SQL
+/// becomes a second copy of the schema, which is what the fixtures above exist to avoid.
+///
+/// ⚠️ Three of the five arguments are names, so the order matters and nothing checks it: it is
+/// `(table, column, key_column, key)`. Prefer [`node_timestamp`] where it fits.
+pub async fn timestamp_of(
+    pool: &PgPool,
+    table: &str,
+    column: &str,
+    key_column: &str,
+    key: Uuid,
+) -> chrono::DateTime<chrono::Utc> {
     // Interpolated for the same reason `rows` interpolates: neither a table nor a column name can
-    // be a bind parameter. Every caller is a literal in this crate's own tests, and the node id —
-    // the only value that comes from anywhere — is bound.
-    sqlx::query_scalar(&format!("SELECT {column} FROM {table} WHERE node_id = $1"))
-        .bind(node)
-        .fetch_one(pool)
-        .await
-        .unwrap_or_else(|e| panic!("{table}.{column}: {e}"))
+    // be a bind parameter. Every caller is a literal in this crate's own tests, and the key — the
+    // only value that comes from anywhere — is bound.
+    sqlx::query_scalar(&format!(
+        "SELECT {column} FROM {table} WHERE {key_column} = $1"
+    ))
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|e| panic!("{table}.{column}: {e}"))
 }
 
 #[cfg(test)]

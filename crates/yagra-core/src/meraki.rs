@@ -1083,4 +1083,263 @@ mod tests {
             "an empty selection changed the scope"
         );
     }
+
+    fn device(serial: &str, network: &str, network_name: &str) -> MerakiImportDevice {
+        MerakiImportDevice {
+            serial: serial.to_owned(),
+            name: format!("dev-{serial}"),
+            model: Some("MR46".to_owned()),
+            product_type: "wireless".to_owned(),
+            network_id: network.to_owned(),
+            network_name: network_name.to_owned(),
+            lan_ip: Some("10.4.0.9".parse().expect("addr")),
+            profile_id: None,
+        }
+    }
+
+    /// Importing devices creates one HostTree group per network under the org's root, one node per
+    /// device, and the binding that makes the node a Meraki device — all in one transaction.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn importing_devices_creates_a_node_and_one_group_per_network(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let id = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+        let org = repo.get(id).await.expect("get").expect("the org");
+
+        let mut headless = device("Q3-3", "N_2", "Two");
+        headless.lan_ip = None;
+        let imported = repo
+            .import_devices(
+                &org,
+                &[
+                    device("Q3-1", "N_1", "One"),
+                    device("Q3-2", "N_1", "One"),
+                    headless,
+                ],
+            )
+            .await
+            .expect("import");
+        assert_eq!(imported, 3);
+        assert_eq!(pgtest::rows(&pool, "nodes").await, 3);
+        assert_eq!(pgtest::rows(&pool, "meraki_devices").await, 3);
+        assert_eq!(
+            pgtest::rows(&pool, "node_groups").await,
+            3,
+            "expected the org root plus one group per network, created once each"
+        );
+
+        let groups = crate::groups::GroupRepo::new(pool.clone())
+            .list()
+            .await
+            .expect("groups");
+        let one = groups
+            .iter()
+            .find(|g| g.id == network_group_id(id, "N_1"))
+            .expect("the group for N_1");
+        assert_eq!(one.name, "One");
+        assert_eq!(
+            one.parent_id,
+            Some(org_group_id(id)),
+            "a network group was not filed under the org's root"
+        );
+
+        let nodes = pgtest::repo(pool.clone())
+            .list_nodes()
+            .await
+            .expect("nodes");
+        let first = nodes
+            .iter()
+            .find(|n| n.name == "dev-Q3-1")
+            .expect("the first device");
+        assert_eq!(first.vendor.as_deref(), Some("Cisco Meraki"));
+        assert_eq!(first.model.as_deref(), Some("MR46"));
+        assert_eq!(
+            first.group,
+            Some(yagra_common::GroupId(network_group_id(id, "N_1"))),
+            "the node was not filed in its network's group"
+        );
+        assert_eq!(
+            first.address,
+            "10.4.0.9".parse::<std::net::IpAddr>().unwrap()
+        );
+        let unaddressed = nodes
+            .iter()
+            .find(|n| n.name == "dev-Q3-3")
+            .expect("the device with no LAN address");
+        assert_eq!(
+            unaddressed.address,
+            std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            "a device Meraki reported no address for did not fall back to the placeholder"
+        );
+
+        // The binding, read back through the join that supplies the org's *external* id.
+        let devices = MerakiDeviceRepo::new(pool.clone());
+        let bound = devices
+            .get(first.id.as_uuid())
+            .await
+            .expect("get")
+            .expect("the binding");
+        assert_eq!(bound.org_uuid, id);
+        assert_eq!(
+            bound.org_id, "1",
+            "the join did not supply the org's Meraki-side id"
+        );
+        assert_eq!(bound.serial, "Q3-1");
+        assert_eq!(bound.network_id, "N_1");
+        assert_eq!(bound.product_type, "wireless");
+        assert_eq!(bound.model.as_deref(), Some("MR46"));
+    }
+
+    /// The device reads answer for the org they were asked about, and `filter_meraki` keeps only
+    /// the nodes that are Meraki devices out of a mixed list.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_device_reads_are_scoped_to_their_org(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let plain = pgtest::node(&pool, "an-snmp-switch", 1, None).await;
+
+        let mut ids = Vec::new();
+        for (org_id, name, serial, net) in
+            [("1", "Acme", "Q3-1", "N_1"), ("2", "Other", "Q3-9", "N_9")]
+        {
+            let uuid = repo
+                .create(org_id, name, "https://api.meraki.com", cred)
+                .await
+                .expect("create");
+            let org = repo.get(uuid).await.expect("get").expect("org");
+            repo.import_devices(&org, &[device(serial, net, "Net")])
+                .await
+                .expect("import");
+            ids.push(uuid);
+        }
+        let (acme, other) = (ids[0], ids[1]);
+
+        let devices = MerakiDeviceRepo::new(pool.clone());
+        assert_eq!(
+            devices.node_ids().await.expect("node_ids").len(),
+            2,
+            "the fleet-wide set did not return both orgs' devices"
+        );
+        assert_eq!(
+            devices.serials(acme).await.expect("serials"),
+            ["Q3-1".to_owned()].into_iter().collect(),
+            "the serial set is not scoped to its org"
+        );
+        assert_eq!(
+            devices.serials(other).await.expect("serials"),
+            ["Q3-9".to_owned()].into_iter().collect()
+        );
+        let refs = devices.device_refs(acme).await.expect("device_refs");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].serial, "Q3-1");
+
+        let mut mixed: Vec<Uuid> = devices
+            .node_ids()
+            .await
+            .expect("node_ids")
+            .into_iter()
+            .collect();
+        mixed.push(plain);
+        let meraki_only = devices.filter_meraki(&mixed).await.expect("filter");
+        assert_eq!(
+            meraki_only.len(),
+            2,
+            "the filter dropped a Meraki device or kept the SNMP node"
+        );
+        assert!(
+            !meraki_only.contains(&plain),
+            "an ordinary node was reported as a Meraki device"
+        );
+        assert!(
+            devices.filter_meraki(&[]).await.expect("filter").is_empty(),
+            "filtering an empty list returned something"
+        );
+        assert!(
+            devices.get(plain).await.expect("get").is_none(),
+            "an ordinary node has a Meraki binding"
+        );
+    }
+
+    /// Purging removes the org, its device nodes and its groups, and leaves every other org alone.
+    /// `touch_sync` stamps the column that says when the last reconcile happened.
+    ///
+    /// ⚠️ `last_sync_at` is read through [`pgtest::timestamp_of`] because **nothing in production
+    /// selects it** — it is not in `MerakiOrgRepo::COLUMNS`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn purging_an_org_takes_its_devices_and_groups_and_leaves_the_others(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let mut ids = Vec::new();
+        for (org_id, name, serial) in [("1", "Acme", "Q3-1"), ("2", "Other", "Q3-9")] {
+            let uuid = repo
+                .create(org_id, name, "https://api.meraki.com", cred)
+                .await
+                .expect("create");
+            let org = repo.get(uuid).await.expect("get").expect("org");
+            repo.import_devices(&org, &[device(serial, "N_1", "One")])
+                .await
+                .expect("import");
+            ids.push(uuid);
+        }
+        let (acme, other) = (ids[0], ids[1]);
+        repo.upsert_networks(acme, &[("N_1".to_owned(), "One".to_owned())])
+            .await
+            .expect("enumerate");
+
+        repo.touch_sync(acme).await.expect("touch");
+        let synced = pgtest::timestamp_of(&pool, "meraki_orgs", "last_sync_at", "id", acme).await;
+        repo.touch_sync(acme).await.expect("touch again");
+        assert!(
+            pgtest::timestamp_of(&pool, "meraki_orgs", "last_sync_at", "id", acme).await > synced,
+            "the reconcile stamp did not move"
+        );
+
+        assert_eq!(pgtest::rows(&pool, "nodes").await, 2);
+        assert_eq!(pgtest::rows(&pool, "node_groups").await, 4);
+
+        assert!(
+            repo.purge(acme).await.expect("purge"),
+            "purge reported the org missing"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "meraki_orgs").await,
+            1,
+            "purging took more than the org it was asked about"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "nodes").await,
+            1,
+            "the purged org's device nodes survived, or another org's did not"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "meraki_devices").await,
+            1,
+            "the device bindings did not cascade with their nodes"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "meraki_org_networks").await,
+            0,
+            "the network scope did not cascade with the org"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "node_groups").await,
+            2,
+            "the purged org's root and network groups were not removed, or the other org's were"
+        );
+        assert!(
+            repo.get(other).await.expect("get").is_some(),
+            "purging one org removed another"
+        );
+
+        assert!(
+            !repo.purge(acme).await.expect("purge"),
+            "purging an org that is already gone reported success"
+        );
+    }
 }
