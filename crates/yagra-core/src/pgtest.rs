@@ -122,6 +122,24 @@ pub async fn rows(pool: &PgPool, table: &str) -> i64 {
         .unwrap_or_else(|e| panic!("count {table}: {e}"))
 }
 
+/// A sealed credential, created through the production writer.
+///
+/// For the tables that carry a `REFERENCES credentials (id)` foreign key — `meraki_orgs`, `nodes`,
+/// `url_checks` — where a hand-written `INSERT` would be a second copy of the envelope-encryption
+/// columns as well as of the schema.
+///
+/// The key-encryption key is a fixed in-memory one, the same stand-in `api::tests_support` uses and
+/// for the same reason: the sealed value round-trips inside this test and nowhere else, so nothing
+/// here says anything about a real deployment's KEK handling.
+pub async fn credential(pool: &PgPool, name: &str, kind: &str) -> Uuid {
+    let kek: crate::secrets::Kek =
+        std::sync::Arc::new(yagra_secrets::StaticKeyProvider::single([7u8; 32]));
+    crate::secrets::CredentialStore::new(pool.clone(), kek)
+        .create(name, kind, b"a-test-secret")
+        .await
+        .unwrap_or_else(|e| panic!("create credential {name}: {e}"))
+}
+
 /// One `TIMESTAMPTZ` column of the row a node owns.
 ///
 /// For the columns a repository *writes* and exposes no reader for. `node_arp.first_seen` is the

@@ -722,4 +722,146 @@ mod tests {
             network_group_id(org_uuid, "N_2")
         );
     }
+
+    // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------
+    //
+    // Two of this file's twenty-four statements had ever reached a server, both through the API.
+    // The org lifecycle below is the half the scheduler reads on every sweep.
+    use crate::pgtest;
+
+    /// Creating an org also creates its HostTree root group, in one transaction, and the row reads
+    /// back with the cadence defaults the migration declares.
+    ///
+    /// 🚨 The defaults are the point of reading them here: they are `DEFAULT` clauses in the
+    /// migration and `CHECK`-bounded, so nothing in Rust would notice one changing.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_org_is_created_with_its_root_group_and_reads_back(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        assert!(repo.list().await.expect("list").is_empty());
+
+        let id = repo
+            .create("123456", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+
+        let org = repo
+            .get(id)
+            .await
+            .expect("get")
+            .expect("the org just created");
+        assert_eq!(org.org_id, "123456");
+        assert_eq!(org.name, "Acme");
+        assert_eq!(org.base_url, "https://api.meraki.com");
+        assert_eq!(org.credential_id, cred);
+        assert!(org.enabled, "a new org was created paused");
+        assert_eq!(
+            org.group_id,
+            Some(org_group_id(id)),
+            "the org is not bound to its own deterministic root group"
+        );
+        assert_eq!(
+            (
+                org.availability_secs,
+                org.uplink_secs,
+                org.traffic_secs,
+                org.inventory_secs
+            ),
+            (300, 300, 1800, 21600),
+            "the per-tier cadence defaults are not what the migration declares"
+        );
+        assert!((org.target_rps - 2.0).abs() < f64::EPSILON);
+        assert_eq!(
+            org.enabled_tiers,
+            vec![
+                "availability".to_owned(),
+                "uplink".to_owned(),
+                "traffic".to_owned()
+            ],
+            "the default tier set changed"
+        );
+
+        // The root group is a real row, named after the org, at the top of the tree.
+        assert_eq!(pgtest::rows(&pool, "node_groups").await, 1);
+        let groups = crate::groups::GroupRepo::new(pool.clone())
+            .list()
+            .await
+            .expect("groups");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].id, org_group_id(id));
+        assert_eq!(groups[0].name, "Acme");
+        assert_eq!(
+            groups[0].parent_id, None,
+            "the org's root group was filed under something"
+        );
+
+        assert!(
+            repo.get(Uuid::new_v4()).await.expect("get").is_none(),
+            "an id that does not exist returned an org"
+        );
+    }
+
+    /// The scheduler reads only the enabled orgs; the Integrations page reads all of them. Pausing
+    /// an org must not lose its configuration.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_enabled_orgs_reach_the_scheduler_and_pausing_keeps_the_configuration(
+        pool: sqlx::PgPool,
+    ) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let zed = repo
+            .create("2", "Zed", "https://api.meraki.com", cred)
+            .await
+            .expect("create zed");
+        let acme = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create acme");
+
+        // Both listings are ordered by name, so the UI and the scheduler agree on an order.
+        let all = repo.list().await.expect("list");
+        assert_eq!(
+            all.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(),
+            vec!["Acme", "Zed"],
+            "the listing is not ordered by name"
+        );
+        assert_eq!(repo.list_enabled().await.expect("enabled").len(), 2);
+
+        assert!(
+            repo.set_enabled(zed, false).await.expect("disable"),
+            "disabling an org that exists reported that it did not"
+        );
+        let enabled = repo.list_enabled().await.expect("enabled");
+        assert_eq!(
+            enabled.len(),
+            1,
+            "a paused org is still being polled: {:?}",
+            enabled.iter().map(|o| &o.name).collect::<Vec<_>>()
+        );
+        assert_eq!(enabled[0].id, acme);
+        assert_eq!(
+            repo.list().await.expect("list").len(),
+            2,
+            "pausing an org removed it from the Integrations page"
+        );
+        let paused = repo.get(zed).await.expect("get").expect("zed");
+        assert!(!paused.enabled);
+        assert_eq!(paused.org_id, "2", "pausing an org lost its configuration");
+
+        assert!(
+            repo.set_enabled(zed, true).await.expect("enable"),
+            "re-enabling was refused"
+        );
+        assert_eq!(repo.list_enabled().await.expect("enabled").len(), 2);
+
+        assert!(
+            !repo
+                .set_enabled(Uuid::new_v4(), false)
+                .await
+                .expect("disable"),
+            "disabling an org that does not exist reported success"
+        );
+    }
 }
