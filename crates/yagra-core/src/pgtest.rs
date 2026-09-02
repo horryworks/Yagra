@@ -30,6 +30,10 @@
 //! so every discovered endpoint listed as `0.0.0.0` and every monitored node was reported as
 //! unmonitored. Five tests failed; no source-reading check could have said anything about it.
 //!
+//! Measured again the same day, after `auth.rs` and half of `meraki.rs`: **240 executed / 145
+//! never executed / 90 unresolvable**. `auth.rs` is 29/29. The number moves with the suite, so
+//! re-derive it rather than quoting this line — the two commands are in `scripts/sql-coverage.sh`.
+//!
 //! **Say "untested", never "untestable"** — the obstacle was removed in ADR-114.
 //!
 //! ## The convention — two attributes, in this order

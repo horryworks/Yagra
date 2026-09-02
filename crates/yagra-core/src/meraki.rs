@@ -864,4 +864,223 @@ mod tests {
             "disabling an org that does not exist reported success"
         );
     }
+
+    /// The per-tier cadence and the rate budget round-trip, an unknown org is reported rather than
+    /// silently succeeding, and the migration's `CHECK` bounds are a real backstop.
+    ///
+    /// 🚨 The bounds are asserted by writing through them. They exist because a cadence of a few
+    /// seconds against a cloud API with a shared rate budget is how an org gets itself throttled,
+    /// and the API edge's own validation is not the only thing standing between an operator and
+    /// that — this is.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_cadence_round_trips_and_the_check_bounds_refuse_an_absurd_one(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let id = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+
+        let tiers = vec!["availability".to_owned(), "inventory".to_owned()];
+        assert!(
+            repo.update_cadence(id, 600, 900, 3600, 43200, &tiers, 4.5)
+                .await
+                .expect("update"),
+            "updating an org that exists reported that it did not"
+        );
+        let org = repo.get(id).await.expect("get").expect("the org");
+        assert_eq!(
+            (
+                org.availability_secs,
+                org.uplink_secs,
+                org.traffic_secs,
+                org.inventory_secs
+            ),
+            (600, 900, 3600, 43200)
+        );
+        assert!((org.target_rps - 4.5).abs() < f64::EPSILON);
+        assert_eq!(
+            org.enabled_tiers, tiers,
+            "the enabled tier set did not survive the round trip"
+        );
+
+        assert!(
+            !repo
+                .update_cadence(Uuid::new_v4(), 600, 600, 3600, 43200, &tiers, 2.0)
+                .await
+                .expect("update"),
+            "updating an org that does not exist reported success"
+        );
+
+        // Below the floor, above the ceiling, and outside the rate budget: each refused by the
+        // column's own constraint, with the stored row untouched.
+        for (label, res) in [
+            (
+                "availability below the floor",
+                repo.update_cadence(id, 30, 600, 3600, 43200, &tiers, 2.0)
+                    .await,
+            ),
+            (
+                "inventory above the ceiling",
+                repo.update_cadence(id, 600, 600, 3600, 999_999, &tiers, 2.0)
+                    .await,
+            ),
+            (
+                "a rate budget over the cap",
+                repo.update_cadence(id, 600, 600, 3600, 43200, &tiers, 99.0)
+                    .await,
+            ),
+        ] {
+            assert!(res.is_err(), "{label} was accepted");
+        }
+        let after = repo.get(id).await.expect("get").expect("the org");
+        assert_eq!(
+            after.availability_secs, 600,
+            "a refused write landed anyway"
+        );
+        assert!((after.target_rps - 4.5).abs() < f64::EPSILON);
+    }
+
+    /// **Re-enumerating an org must not take its networks out of scope.**
+    ///
+    /// 🚨 The conflict clause writes the name and the timestamp and deliberately not `monitored` —
+    /// that flag is an operator's choice, and every enumerate would otherwise silently reset it,
+    /// which reads as monitoring quietly stopping for the networks somebody asked for.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn re_enumerating_updates_the_name_but_never_the_monitored_flag(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let org = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+
+        repo.upsert_networks(
+            org,
+            &[
+                ("N_1".to_owned(), "Branch".to_owned()),
+                ("N_2".to_owned(), "Aylesbury".to_owned()),
+            ],
+        )
+        .await
+        .expect("enumerate");
+        assert_eq!(
+            repo.list_networks(org).await.expect("list"),
+            vec![
+                ("N_2".to_owned(), "Aylesbury".to_owned(), false),
+                ("N_1".to_owned(), "Branch".to_owned(), false),
+            ],
+            "networks are not listed by name, or arrive already in scope"
+        );
+
+        repo.set_networks_monitored(org, &["N_1".to_owned()], true)
+            .await
+            .expect("monitor");
+        assert_eq!(
+            repo.monitored_network_ids(org).await.expect("monitored"),
+            vec!["N_1".to_owned()]
+        );
+
+        // The next enumerate renames one network and re-reports both.
+        repo.upsert_networks(
+            org,
+            &[
+                ("N_1".to_owned(), "Branch (renamed)".to_owned()),
+                ("N_2".to_owned(), "Aylesbury".to_owned()),
+            ],
+        )
+        .await
+        .expect("re-enumerate");
+        assert_eq!(
+            pgtest::rows(&pool, "meraki_org_networks").await,
+            2,
+            "re-enumerating duplicated a network"
+        );
+        assert_eq!(
+            repo.monitored_network_ids(org).await.expect("monitored"),
+            vec!["N_1".to_owned()],
+            "re-enumerating took a network out of scope, so collection would stop silently"
+        );
+        let listed = repo.list_networks(org).await.expect("list");
+        let branch = listed
+            .iter()
+            .find(|(id, _, _)| id == "N_1")
+            .expect("the renamed network");
+        assert_eq!(
+            branch.1, "Branch (renamed)",
+            "the enumerate did not follow the rename"
+        );
+        assert!(branch.2, "the monitored flag was lost");
+    }
+
+    /// Only the monitored networks narrow the collect calls, and an empty selection changes
+    /// nothing at all rather than clearing the lot.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_monitored_networks_narrow_the_collect_calls(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let acme = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("acme");
+        let other = repo
+            .create("2", "Other", "https://api.meraki.com", cred)
+            .await
+            .expect("other");
+        repo.upsert_networks(
+            acme,
+            &[
+                ("N_1".to_owned(), "One".to_owned()),
+                ("N_2".to_owned(), "Two".to_owned()),
+            ],
+        )
+        .await
+        .expect("enumerate acme");
+        repo.upsert_networks(other, &[("N_1".to_owned(), "Theirs".to_owned())])
+            .await
+            .expect("enumerate other");
+
+        assert!(
+            repo.monitored_network_ids(acme)
+                .await
+                .expect("monitored")
+                .is_empty(),
+            "a freshly enumerated network was already in scope"
+        );
+
+        repo.set_networks_monitored(acme, &["N_1".to_owned(), "N_2".to_owned()], true)
+            .await
+            .expect("monitor both");
+        let mut monitored = repo.monitored_network_ids(acme).await.expect("monitored");
+        monitored.sort();
+        assert_eq!(monitored, vec!["N_1".to_owned(), "N_2".to_owned()]);
+        assert!(
+            repo.monitored_network_ids(other)
+                .await
+                .expect("monitored")
+                .is_empty(),
+            "the selection reached another org's network of the same id"
+        );
+
+        repo.set_networks_monitored(acme, &["N_2".to_owned()], false)
+            .await
+            .expect("unmonitor one");
+        assert_eq!(
+            repo.monitored_network_ids(acme).await.expect("monitored"),
+            vec!["N_1".to_owned()]
+        );
+
+        // The early return: an empty selection is a no-op, not "clear everything".
+        repo.set_networks_monitored(acme, &[], false)
+            .await
+            .expect("empty");
+        assert_eq!(
+            repo.monitored_network_ids(acme).await.expect("monitored"),
+            vec!["N_1".to_owned()],
+            "an empty selection changed the scope"
+        );
+    }
 }
