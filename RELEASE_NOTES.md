@@ -82,6 +82,13 @@
 
 ### Improvements
 
+- **Five more counters now appear on a healthy deployment instead of being absent.** Measured on a
+  running box: `yagra_result_metrics_persist_dropped_total`,
+  `yagra_result_meta_persist_dropped_total`, `yagra_vm_samples_dropped_total`,
+  `yagra_vm_write_retries_total` and `yagra_result_history_persist_fallback_total` published no
+  line at all — not even a `# TYPE` — until the first time each one moved. They are exactly the
+  counters an operator alerts on, so "nothing is wrong" and "this alert is watching a metric that
+  does not exist" were the same text. All five are now handed to the recorder at startup at `0`.
 - **Core now says how short its metrics queue ran, not just that it dropped something.** When
   VictoriaMetrics slows down — which a large series count makes it do periodically — poll results
   arrive faster than they leave, the queue between them fills, and everything past the cap is
@@ -90,16 +97,25 @@
   much was thrown away and nothing about **how much room would have been enough**. Four new
   per-shard metrics answer that: `yagra_vm_backlog_needed_current` and
   `yagra_vm_backlog_needed_high_water` report where an unbounded queue would have stood — the
-  depth plus everything shed since it was last empty — and `yagra_vm_backlog_episodes_total` /
-  `yagra_vm_backlog_short_episodes_total` count backlogs and the ones that cost data. A backlog
-  that cost data also logs a warning naming the shortfall. All four are published from startup at
-  `0`, so "healthy" and "this was never wired up" are no longer the same text.
-- **The metrics queue's size is now an operator setting, `YAGRA_RESULT_QUEUE_CAP` (default 8192,
-  unchanged).** Raising it buys seconds of VictoriaMetrics stall at a linear cost in memory — a
-  queued result is about 21 KB at 24 ports. Read `yagra_vm_backlog_needed_high_water` on the
-  deployment before choosing a number; it is exactly the figure that sizes this. Values above
-  131072 are clamped and logged. The total is divided among `YAGRA_VM_WRITERS`, not repeated per
-  writer, so this is the tier's ceiling rather than each writer's.
+  depth plus everything shed in the current minute. `yagra_vm_backlog_needed_window_peak` reports
+  the same figure for the last completed minute, so unlike the high-water mark it comes back down
+  and an alert can be written against it, and `yagra_vm_backlog_windows_total` /
+  `yagra_vm_backlog_short_windows_total` count minutes and the ones that cost data. A minute that
+  cost data also logs a warning naming the shortfall. All five are published from startup at `0`,
+  so "healthy" and "this was never wired up" are no longer the same text.
+- **The metrics queue holds twice as much, and its size is now an operator setting.** The default
+  goes from 8192 poll results to **16384**, and `YAGRA_RESULT_QUEUE_CAP` overrides it. The new
+  figure is measured rather than chosen: on the load rig at 2,500 results/s against 50,000 nodes
+  with 24 ports each, two runs of the same load differed only in how much data VictoriaMetrics was
+  already holding. The first never filled more than 13% of the queue and shed nothing; the second
+  pinned it at the cap and shed 15,800 results, while the new high-water metric reported that an
+  unbounded queue would have reached 16,396 — a shortfall of exactly a factor of two.
+  ⚠️ **It costs memory, linearly**: a queued result is about 21 KB at 24 ports, so the extra slots
+  are up to ~170 MB of resident memory on a fleet that actually fills them. A deployment that never
+  fills the first half never allocates the second. 🚨 **It buys seconds, not immunity** — a long
+  enough VictoriaMetrics stall exhausts any bound, and the number that fits *your* deployment is
+  its own `yagra_vm_backlog_needed_high_water`. Values above 131072 are clamped and logged, and the
+  total is divided among `YAGRA_VM_WRITERS` rather than repeated per writer.
 - **`yagra_poll_cycles_missed_total` now appears on a healthy poller, reading `0`.** It used to be
   emitted only when the deficit was non-zero, and `metrics-exporter-prometheus` renders only the
   keys it has been handed — so a poller that was keeping up published no such line at all, not

@@ -50,6 +50,24 @@ use crate::{arp, dns_check, l3, l3_routing, meraki, neighbors, scheduler};
 /// measured against is a VictoriaMetrics one (ADR-110 Increment 5), and widening the metadata and
 /// history queues on the same evidence would be changing something nobody has measured.
 pub(crate) const RESULT_PERSIST_CHANNEL_CAP: usize = 8192;
+/// What the **metrics** tier defaults to, which is twice the bound above (ADR-110 Increment 5).
+///
+/// **Measured, not chosen.** On the load rig at 2,500 results/s against 50,000 nodes x 24 ports,
+/// two runs of the same load differed only in how much VictoriaMetrics had already been asked to
+/// hold. The first ran with the queue 13% full and shed nothing. The second — same box, same
+/// snapshot, same rate, one run's worth of extra data in the store — pinned the queue at its cap
+/// and shed 15,800 results, while `yagra_vm_backlog_needed_high_water` said an unbounded queue
+/// would have reached **16,396**. So the shortfall was a factor of two, and this is that factor.
+///
+/// ⚠️ **The cost is linear and it is not small**: at 24 ports a queued result is about 21 KB, so
+/// the extra 8,192 slots are ~170 MB of worst-case resident memory. A deployment that never fills
+/// the first half never allocates the second, so a small one is unaffected.
+///
+/// 🚨 **This buys seconds, not immunity.** The thing being ridden out is a VictoriaMetrics that
+/// cannot keep up; a stall long enough will exhaust any bound. The measurement that matters on a
+/// given deployment is its own `yagra_vm_backlog_needed_high_water`, which is why the operator can
+/// override this.
+const METRICS_QUEUE_CAP_DEFAULT: usize = 16_384;
 /// Most the metrics tier's queue may be set to, however large a number an operator types.
 ///
 /// At 24 ports a queued result is ~21 KB, so this ceiling is already ~2.7 GB of worst-case
@@ -145,7 +163,7 @@ fn queue_cap_from(requested: Option<usize>) -> usize {
             RESULT_QUEUE_CAP_MAX
         }
         Some(n) => n,
-        None => RESULT_PERSIST_CHANNEL_CAP,
+        None => METRICS_QUEUE_CAP_DEFAULT,
     }
 }
 
@@ -157,8 +175,8 @@ fn queue_cap_from(requested: Option<usize>) -> usize {
 /// **The total stopped being a constant in ADR-110 Increment 5.** Dividing is still right — the
 /// reason above did not change — but 8,192 was chosen before anyone had measured what a
 /// VictoriaMetrics stall costs, and it turns out to be the number that decides how much of one a
-/// deployment rides out. So the total is [`result_queue_cap`]: the constant by default, and an
-/// operator's own figure once they have read `yagra_vm_backlog_needed_high_water` on their box.
+/// deployment rides out. So the total is [`result_queue_cap`]: [`METRICS_QUEUE_CAP_DEFAULT`]
+/// unless an operator has read `yagra_vm_backlog_needed_high_water` on their own box and chosen.
 /// What a larger total buys is seconds of stall; what it costs is resident memory, linearly.
 const fn per_shard_channel_cap(total: usize, shards: usize) -> usize {
     let n = total / shards;
@@ -223,26 +241,49 @@ pub(crate) struct VmWriters {
 /// that: a result is shed only when the channel is full, so `depth + shed` is exactly where an
 /// unbounded queue would have stood.
 ///
-/// "Since the queue was last empty" is the window, because emptying is when a backlog demonstrably
-/// ended (ADR-110 Increment 5).
+/// The measurement is folded up **per window**, and the window is a stretch of time, not a stretch
+/// of backlog (ADR-110 Increment 5).
+///
+/// 🚨 **The first version folded when the queue was observed empty, and at fleet rates that never
+/// happens.** Measured on the load rig at 2,500 results/s: the writer drains, flushes, and by the
+/// time it looks, more has arrived — **one fold in 285 seconds**, so the two counters and the
+/// warning below were dead in exactly the conditions they exist for, while looking perfectly
+/// healthy. A wall-clock window closes whatever the load is doing. Emptying still folds too, so
+/// an idle deployment reports promptly rather than waiting out the window.
 #[derive(Default)]
 struct ShardBacklog {
-    /// Results shed by this shard since its queue was last empty.
-    shed_since_empty: AtomicUsize,
-    /// The largest `depth + shed` this shard has reached since its queue was last empty.
-    peak_since_empty: AtomicUsize,
-    /// The largest `peak_since_empty` ever reached, over the life of the process.
+    /// Results shed by this shard since the current window opened.
+    shed_in_window: AtomicUsize,
+    /// The largest `depth + shed` this shard has reached since the current window opened.
+    peak_in_window: AtomicUsize,
+    /// The largest `peak_in_window` ever reached, over the life of the process.
     ///
-    /// A gauge that only rises, deliberately: at steady state an episode's peak is overwritten
-    /// within milliseconds, so a scrape every 15 s would never see the one that mattered. **This
-    /// is the number that sizes the queue**; the two counters beside it are what an alert reads.
+    /// A gauge that only rises, deliberately: a window's peak is replaced every minute, so a
+    /// scrape every 15 s can still miss the one that mattered. **This is the number that sizes the
+    /// queue**; the windowed gauge beside it is the one an alert can watch, because it comes down.
     high_water: AtomicUsize,
+}
+
+/// How long a backlog window runs before it is folded up and reported.
+///
+/// One minute, against the two things it trades between: long enough that a periodic
+/// VictoriaMetrics stall (~20 s, every 30–60 s when it happens) falls inside a window rather than
+/// being split across two, and short enough that the windowed gauge follows an incident rather
+/// than describing the whole run.
+const BACKLOG_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether a shard's backlog window should be folded now.
+///
+/// Separated from the writer loop so both halves can be tested: the second one is the half that
+/// was missing, and its absence was invisible to a test in which the queue does empty.
+fn window_is_due(queue_empty: bool, elapsed: std::time::Duration) -> bool {
+    queue_empty || elapsed >= BACKLOG_WINDOW
 }
 
 impl ShardBacklog {
     /// Record where an unbounded queue would stand right now, and publish it.
     fn observe(&self, shard: usize, estimate: usize) {
-        self.peak_since_empty.fetch_max(estimate, Ordering::Relaxed);
+        self.peak_in_window.fetch_max(estimate, Ordering::Relaxed);
         let high = self
             .high_water
             .fetch_max(estimate, Ordering::Relaxed)
@@ -253,30 +294,52 @@ impl ShardBacklog {
             .set(high as f64);
     }
 
-    /// The queue reached empty: fold the episode away and report what it cost.
-    ///
-    /// `None` means there was no episode to close — the queue has been empty all along, which is
-    /// the steady state and must not be counted as an episode.
-    fn close_episode(&self) -> Option<(usize, usize)> {
-        let peak = self.peak_since_empty.swap(0, Ordering::Relaxed);
-        let shed = self.shed_since_empty.swap(0, Ordering::Relaxed);
-        (peak > 0).then_some((peak, shed))
+    /// Fold the current window away: return its peak and what it shed, and start a fresh one.
+    fn close_window(&self) -> (usize, usize) {
+        let peak = self.peak_in_window.swap(0, Ordering::Relaxed);
+        let shed = self.shed_in_window.swap(0, Ordering::Relaxed);
+        (peak, shed)
     }
+}
+
+/// Hand every counter this module publishes **only when something goes wrong** to the recorder
+/// once, at zero.
+///
+/// 🚨 `metrics-exporter-prometheus` renders only the keys it has been handed at least once, so a
+/// counter that is first touched by a failure publishes **no line at all** while nothing is
+/// failing — not even a `# TYPE`. Measured on a healthy deployment before this existed: all five
+/// of the counters below were absent, which are precisely the five an operator would alert on.
+/// "Nothing is wrong" and "this was never wired up" were the same text, and the same bug had
+/// already shipped once in the poller (ADR-108 Increment 3).
+///
+/// ⚠️ **The list is hand-maintained, and nothing derives it.** There is no mechanical way to tell a
+/// failure counter from an ordinary one, so a new one added to this module has to be added here
+/// too. The test beside it fails naming the key, which is the only reminder there is.
+fn register_failure_counters_at_zero() {
+    metrics::counter!("yagra_result_metrics_persist_dropped_total", "reason" => "channel_full")
+        .increment(0);
+    metrics::counter!("yagra_result_meta_persist_dropped_total", "reason" => "channel_full")
+        .increment(0);
+    metrics::counter!("yagra_vm_samples_dropped_total", "reason" => "spill_full").increment(0);
+    metrics::counter!("yagra_vm_write_retries_total").increment(0);
+    metrics::counter!("yagra_result_history_persist_fallback_total").increment(0);
 }
 
 /// Fold one finished backlog episode into the counters, and say so in the log when it cost data.
 ///
 /// `cap` is read from the receiver rather than passed in, so it cannot disagree with the channel
 /// the episode actually happened on.
-fn close_backlog_episode(backlog: &ShardBacklog, shard: usize, cap: usize) {
-    let Some((peak, shed)) = backlog.close_episode() else {
-        return;
-    };
-    metrics::counter!("yagra_vm_backlog_episodes_total", "shard" => shard.to_string()).increment(1);
-    metrics::gauge!("yagra_vm_backlog_needed_current", "shard" => shard.to_string()).set(0.0);
+fn close_backlog_window(backlog: &ShardBacklog, shard: usize, cap: usize) {
+    let (peak, shed) = backlog.close_window();
+    let label = shard.to_string();
+    metrics::counter!("yagra_vm_backlog_windows_total", "shard" => label.clone()).increment(1);
+    // The window's own peak, which — unlike the high-water mark — comes back down, so an alert can
+    // be written against it.
+    metrics::gauge!("yagra_vm_backlog_needed_window_peak", "shard" => label.clone())
+        .set(peak as f64);
+    metrics::gauge!("yagra_vm_backlog_needed_current", "shard" => label.clone()).set(0.0);
     if shed > 0 {
-        metrics::counter!("yagra_vm_backlog_short_episodes_total", "shard" => shard.to_string())
-            .increment(1);
+        metrics::counter!("yagra_vm_backlog_short_windows_total", "shard" => label).increment(1);
         tracing::warn!(
             shard,
             peak,
@@ -301,9 +364,9 @@ impl VmWriters {
         // the whole point of the number is that a full queue keeps growing on paper.
         let backlog = &self.backlog[shard];
         let shed = if matches!(sent, Err(TrySendError::Full(_))) {
-            backlog.shed_since_empty.fetch_add(1, Ordering::Relaxed) + 1
+            backlog.shed_in_window.fetch_add(1, Ordering::Relaxed) + 1
         } else {
-            backlog.shed_since_empty.load(Ordering::Relaxed)
+            backlog.shed_in_window.load(Ordering::Relaxed)
         };
         let depth = tx.max_capacity().saturating_sub(tx.capacity());
         backlog.observe(shard, depth + shed);
@@ -341,7 +404,7 @@ impl VmWriters {
     /// `try_send` directly rather than reading the rendered exposition.
     #[cfg(test)]
     fn backlog_estimate(&self, shard: usize) -> usize {
-        self.backlog[shard].peak_since_empty.load(Ordering::Relaxed)
+        self.backlog[shard].peak_in_window.load(Ordering::Relaxed)
     }
 }
 
@@ -359,6 +422,9 @@ pub(crate) fn start_vm_writers(
     let queue_cap = result_queue_cap();
     let channel_cap = per_shard_channel_cap(queue_cap, shards);
     let spill_cap = per_shard_spill_cap(shards);
+    // Called from both writer startups rather than one: `increment(0)` twice costs nothing, and
+    // which of the two tiers starts first is not something this should depend on.
+    register_failure_counters_at_zero();
     let mut txs = Vec::with_capacity(shards);
     // One array, shared by the senders and by every writer task — the counters have to be the same
     // objects on both sides or the estimate is built from half the story.
@@ -374,9 +440,11 @@ pub(crate) fn start_vm_writers(
         // something goes wrong is **absent** on a healthy deployment — the same text as "wired to a
         // branch that never runs". ADR-108 Increment 3 shipped exactly that bug for a whole year.
         backlog[shard].observe(shard, 0);
-        metrics::counter!("yagra_vm_backlog_episodes_total", "shard" => shard.to_string())
+        metrics::gauge!("yagra_vm_backlog_needed_window_peak", "shard" => shard.to_string())
+            .set(0.0);
+        metrics::counter!("yagra_vm_backlog_windows_total", "shard" => shard.to_string())
             .increment(0);
-        metrics::counter!("yagra_vm_backlog_short_episodes_total", "shard" => shard.to_string())
+        metrics::counter!("yagra_vm_backlog_short_windows_total", "shard" => shard.to_string())
             .increment(0);
         tokio::spawn(run_vm_writer(
             rx,
@@ -723,6 +791,9 @@ async fn run_vm_writer(
     let mut spill: std::collections::VecDeque<Vec<Arc<PollResult>>> =
         std::collections::VecDeque::new();
     let mut buf: Vec<Arc<PollResult>> = Vec::with_capacity(VM_BATCH_MAX_RESULTS);
+    // Local to the task rather than shared: one writer owns one shard's window, so there is
+    // nothing to synchronise, and `tokio::time::Instant` is what a paused-clock test can move.
+    let mut window_opened = tokio::time::Instant::now();
     loop {
         tokio::select! {
             biased;
@@ -772,10 +843,12 @@ async fn run_vm_writer(
                             }
                         }
                         flush_vm(&store, &mut buf, &mut spill, spill_cap).await;
-                        // Empty means the backlog this shard was carrying is demonstrably over,
-                        // which is the only moment its peak can be folded away and reported.
-                        if rx.is_empty() {
-                            close_backlog_episode(&backlog[shard], shard, rx.max_capacity());
+                        // Fold the backlog window up: on an empty queue, or when its time is up.
+                        // 🚨 The clock is the half that matters — at fleet rates the queue is never
+                        // observed empty here, so folding only on empty folds once in five minutes.
+                        if window_is_due(rx.is_empty(), window_opened.elapsed()) {
+                            close_backlog_window(&backlog[shard], shard, rx.max_capacity());
+                            window_opened = tokio::time::Instant::now();
                         }
                         // The per-shard depth, under its own name: the tier's total is published
                         // by `VmWriters::try_send`, and one name carrying both would be summed
@@ -863,6 +936,7 @@ pub(crate) async fn run_pg_writer(
     history: Arc<AlertHistoryStore>,
     shutdown: CancellationToken,
 ) {
+    register_failure_counters_at_zero();
     let mut meta_buf: Vec<MetaRecord> = Vec::with_capacity(RESULT_PERSIST_BATCH_MAX);
     let mut hist_buf: Vec<HistoryRecord> = Vec::with_capacity(RESULT_PERSIST_BATCH_MAX);
     loop {
@@ -1537,7 +1611,13 @@ mod tests {
     /// would not be comparable with anything measured before it.
     #[test]
     fn the_queue_total_is_the_constant_unless_an_operator_says_otherwise() {
-        assert_eq!(queue_cap_from(None), RESULT_PERSIST_CHANNEL_CAP);
+        assert_eq!(queue_cap_from(None), METRICS_QUEUE_CAP_DEFAULT);
+        assert_eq!(
+            METRICS_QUEUE_CAP_DEFAULT,
+            2 * RESULT_PERSIST_CHANNEL_CAP,
+            "the measured shortfall was a factor of two; a default that drifts off that has lost \
+             the measurement behind it"
+        );
         assert_eq!(queue_cap_from(Some(16_384)), 16_384);
         assert_eq!(
             queue_cap_from(Some(RESULT_QUEUE_CAP_MAX + 1)),
@@ -1592,8 +1672,9 @@ mod tests {
         for key in [
             "yagra_vm_backlog_needed_current",
             "yagra_vm_backlog_needed_high_water",
-            "yagra_vm_backlog_episodes_total",
-            "yagra_vm_backlog_short_episodes_total",
+            "yagra_vm_backlog_needed_window_peak",
+            "yagra_vm_backlog_windows_total",
+            "yagra_vm_backlog_short_windows_total",
         ] {
             let values = rendered_values(&rendered, key);
             assert_eq!(
@@ -1607,9 +1688,29 @@ mod tests {
             );
             inspected += values.len();
         }
+        // And the counters that only move when something fails — measured absent on a healthy
+        // deployment before `register_failure_counters_at_zero` existed, which is the whole point:
+        // these five are the ones an operator alerts on.
+        for key in [
+            "yagra_result_metrics_persist_dropped_total",
+            "yagra_result_meta_persist_dropped_total",
+            "yagra_vm_samples_dropped_total",
+            "yagra_vm_write_retries_total",
+            "yagra_result_history_persist_fallback_total",
+        ] {
+            let values = rendered_values(&rendered, key);
+            assert_eq!(
+                values.len(),
+                1,
+                "{key} is absent, so a healthy deployment and a broken wiring read the same \
+                 — add it to register_failure_counters_at_zero. Rendered:\n{rendered}"
+            );
+            assert_eq!(values[0], 0.0, "{key} did not start at zero");
+            inspected += 1;
+        }
         // The floor counts what was inspected, not what was found wrong: a renderer that stopped
         // matching would otherwise report a clean tree.
-        assert!(inspected >= 4, "only {inspected} series were inspected");
+        assert!(inspected >= 10, "only {inspected} series were inspected");
         shutdown.cancel();
     }
 
@@ -1646,21 +1747,60 @@ mod tests {
             "the estimate stopped at the cap, so it cannot say how short the queue was"
         );
         assert_eq!(
-            vm.backlog[0].close_episode(),
-            Some((cap + shed, shed)),
-            "closing the episode must report both the peak and what it cost"
+            vm.backlog[0].close_window(),
+            (cap + shed, shed),
+            "closing the window must report both the peak and what it cost"
         );
         assert_eq!(
-            vm.backlog[0].close_episode(),
-            None,
-            "an empty queue is not an episode — counting it would drown the real ones"
+            vm.backlog[0].close_window(),
+            (0, 0),
+            "a folded window starts the next one from nothing"
         );
     }
 
-    /// The episode is closed by the **writer**, when its queue empties. Without that call the peak
-    /// never resets, the first backlog stands forever, and every later episode is folded into it.
+    /// **The fold has two triggers and the clock is the one that matters.**
+    ///
+    /// 🚨 This test exists because the first version had only the empty-queue trigger, and that
+    /// version passed every test in this file. On the load rig at 2,500 results/s the writer
+    /// drains, flushes, and by the time it looks at the queue more has arrived — so the window
+    /// folded **once in 285 seconds**, and `yagra_vm_backlog_windows_total`,
+    /// `yagra_vm_backlog_short_windows_total` and the shortfall warning were all dead at exactly
+    /// the load they exist for, while a healthy-looking `0` was published for each. An instrument
+    /// that stops working under load is worse than none, because it reads the same as calm.
+    #[test]
+    fn the_window_folds_on_an_empty_queue_and_also_on_the_clock() {
+        use std::time::Duration;
+        assert!(
+            window_is_due(true, Duration::ZERO),
+            "an empty queue folds the window straight away"
+        );
+        assert!(
+            !window_is_due(false, Duration::ZERO),
+            "a busy queue with time left on the window must not fold"
+        );
+        assert!(
+            window_is_due(false, BACKLOG_WINDOW),
+            "THE ONE THAT WAS MISSING: a queue that never empties still folds when its time is up"
+        );
+        assert!(
+            !window_is_due(false, BACKLOG_WINDOW - Duration::from_millis(1)),
+            "the window must not fold early"
+        );
+        assert!(
+            BACKLOG_WINDOW >= Duration::from_secs(30),
+            "a window shorter than the stall it measures would split one incident across two"
+        );
+    }
+    /// **The window is folded by the writer, and folding on time is the half that was missing.**
+    ///
+    /// 🚨 The first version folded only when the queue was observed empty. That is what this test
+    /// exercises, and it passed — while on the load rig at 2,500 results/s the queue is never
+    /// observed empty and the fold happened **once in 285 seconds**, leaving the counters and the
+    /// warning dead in exactly the conditions they exist for. So the decision itself is tested
+    /// next door (`the_window_folds_on_an_empty_queue_and_also_on_the_clock`); this one keeps the
+    /// wiring honest — that the writer calls it at all.
     #[tokio::test]
-    async fn the_writer_closes_the_backlog_episode_when_its_queue_empties() {
+    async fn the_writer_folds_the_backlog_window_when_its_queue_empties() {
         let fake = Arc::new(FakeStore::new(false));
         let store: Arc<dyn MetricStore> = fake.clone();
         let shutdown = CancellationToken::new();
