@@ -789,6 +789,7 @@ pub(crate) async fn reconcile_exemptions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pgtest;
     use std::net::{IpAddr, Ipv4Addr};
     use yagra_common::ProfileId;
 
@@ -1184,5 +1185,197 @@ mod tests {
             reconcile_exemption(at(7), Some(at(7))),
             ExemptionUpdate::Keep
         );
+    }
+
+    // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------
+    //
+    // One of this file's eighteen statements had ever reached a server. The window CRUD below
+    // carries a predicate whose whole job is to refuse an operation, which is exactly the shape a
+    // source-reading check can describe and cannot exercise.
+
+    /// A window reads back with the times it was given, and says whether it covers *now* — which is
+    /// computed by the database at read time, not stored.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_window_reads_back_and_says_whether_it_covers_now(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        assert!(repo.list_windows().await.expect("list").is_empty());
+
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let running = repo
+            .create_window("tonight", "node", "n-1", now - hour, now + hour)
+            .await
+            .expect("create running");
+        let later = repo
+            .create_window("next week", "group", "g-1", now + hour, now + hour * 2)
+            .await
+            .expect("create later");
+        let over = repo
+            .create_window("last week", "node", "n-2", now - hour * 3, now - hour * 2)
+            .await
+            .expect("create over");
+
+        let listed = repo.list_windows().await.expect("list");
+        assert_eq!(
+            listed.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![later, running, over],
+            "windows are not listed newest-start first"
+        );
+        let by = |id: Uuid| listed.iter().find(|w| w.id == id).expect("the window");
+        assert!(
+            by(running).active,
+            "a window covering now did not read active"
+        );
+        assert!(
+            !by(later).active,
+            "a window that has not started read active"
+        );
+        assert!(!by(over).active, "a window that has ended read active");
+
+        let w = by(running);
+        assert_eq!(w.name, "tonight");
+        assert_eq!(w.level, WindowScope::Node);
+        assert_eq!(w.scope_id, "n-1");
+        assert!(w.enabled, "a new window was created disabled");
+        assert_eq!(by(later).level, WindowScope::Group);
+
+        // Disabling takes it out of force without touching its times.
+        assert!(
+            repo.set_window_enabled(running, false)
+                .await
+                .expect("disable"),
+            "disabling a window that exists reported that it did not"
+        );
+        let after = repo.list_windows().await.expect("list");
+        let w = after.iter().find(|w| w.id == running).expect("the window");
+        assert!(!w.enabled);
+        assert!(
+            !w.active,
+            "a disabled window still reads as covering now, so the UI would show suppression that \
+             is not happening"
+        );
+        assert_eq!(w.starts_at, by(running).starts_at, "disabling moved a time");
+        assert!(
+            !repo
+                .set_window_enabled(Uuid::new_v4(), false)
+                .await
+                .expect("disable"),
+            "disabling a window that does not exist reported success"
+        );
+    }
+
+    /// **Ending a window "now" is refused unless it is actually running.**
+    ///
+    /// 🚨 The `starts_at <= now()` clause is the load-bearing half: writing `ends_at = now()` on a
+    /// window that has not begun would store `ends_at < starts_at` — the inversion the API edge
+    /// rejects, and the one that suppresses nothing while looking to the operator like it worked.
+    /// The UI only offers the button on an active window; this predicate is what makes that true of
+    /// *any* caller.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn ending_a_window_now_is_refused_unless_it_is_running(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let running = repo
+            .create_window("tonight", "node", "n-1", now - hour, now + hour)
+            .await
+            .expect("create");
+        let later = repo
+            .create_window("next week", "node", "n-2", now + hour, now + hour * 2)
+            .await
+            .expect("create");
+        let over = repo
+            .create_window("last week", "node", "n-3", now - hour * 3, now - hour * 2)
+            .await
+            .expect("create");
+        let paused = repo
+            .create_window("paused", "node", "n-4", now - hour, now + hour)
+            .await
+            .expect("create");
+        repo.set_window_enabled(paused, false)
+            .await
+            .expect("disable");
+
+        for (label, id) in [
+            ("one that has not started", later),
+            ("one that already ended", over),
+            ("a disabled one", paused),
+            ("one that does not exist", Uuid::new_v4()),
+        ] {
+            assert!(
+                !repo.end_window_now(id).await.expect("end"),
+                "ending {label} reported that a row moved"
+            );
+        }
+        let untouched = repo.list_windows().await.expect("list");
+        let future = untouched
+            .iter()
+            .find(|w| w.id == later)
+            .expect("the window");
+        assert!(
+            future.ends_at > future.starts_at,
+            "the refused end inverted the window's times: {} .. {}",
+            future.starts_at,
+            future.ends_at
+        );
+
+        // The acceptance side: a running window does end, and the row stays as the record of the
+        // maintenance that actually happened.
+        assert!(
+            repo.end_window_now(running).await.expect("end"),
+            "ending a running window did nothing"
+        );
+        let listed = repo.list_windows().await.expect("list");
+        let ended = listed
+            .iter()
+            .find(|w| w.id == running)
+            .expect("the window is still there");
+        assert!(
+            !ended.active,
+            "the window is still in force after being ended"
+        );
+        assert!(
+            ended.enabled,
+            "ending a window disabled it instead of closing it"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "maintenance_windows").await,
+            4,
+            "ending a window deleted the evidence that it existed"
+        );
+        assert!(
+            !repo.end_window_now(running).await.expect("end"),
+            "ending an already-ended window reported that a row moved"
+        );
+    }
+
+    /// Deleting removes the row and says whether one was there.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn deleting_a_window_removes_exactly_that_row(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let a = repo
+            .create_window("a", "node", "n-1", now - hour, now + hour)
+            .await
+            .expect("create a");
+        repo.create_window("b", "node", "n-2", now - hour, now + hour)
+            .await
+            .expect("create b");
+
+        assert!(repo.delete_window(a).await.expect("delete"));
+        assert_eq!(pgtest::rows(&pool, "maintenance_windows").await, 1);
+        assert!(
+            !repo.delete_window(a).await.expect("delete"),
+            "deleting a window twice reported success twice"
+        );
+        assert!(
+            !repo.delete_window(Uuid::new_v4()).await.expect("delete"),
+            "deleting a window that never existed reported success"
+        );
+        assert_eq!(repo.list_windows().await.expect("list").len(), 1);
     }
 }
