@@ -2299,4 +2299,258 @@ mod tests {
             "re-enabling did not restore the sign-in path"
         );
     }
+
+    /// A correct password authenticates, returns the account's own principal, and records the
+    /// login. A wrong one and an unknown name both answer the same `None`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_correct_password_authenticates_and_records_the_login(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        let UserCreateOutcome::Created(alice) = store
+            .create("alice", "a-password", "operator")
+            .await
+            .expect("create")
+        else {
+            panic!("create refused");
+        };
+        assert_eq!(
+            store.list().await.expect("list")[0].last_login_at,
+            None,
+            "an account that has never signed in reported a last login"
+        );
+
+        let (id, principal) = store
+            .verify("alice", "a-password")
+            .await
+            .expect("verify")
+            .expect("the correct password was refused");
+        assert_eq!(id, alice, "verify returned another account's id");
+        assert_eq!(principal.role, Role::Operator);
+        assert_eq!(
+            principal.scope,
+            Scope::All,
+            "the principal did not carry the account's stored scope"
+        );
+        assert!(
+            store.list().await.expect("list")[0].last_login_at.is_some(),
+            "a successful login was not recorded"
+        );
+
+        assert!(
+            store
+                .verify("alice", "the-wrong-password")
+                .await
+                .expect("verify")
+                .is_none(),
+            "a wrong password authenticated"
+        );
+        assert!(
+            store
+                .verify("nobody", "a-password")
+                .await
+                .expect("verify")
+                .is_none(),
+            "an account that does not exist authenticated"
+        );
+    }
+
+    /// A disabled account and a non-local one never reach the password check — and the caller
+    /// cannot tell either apart from a wrong password, which is the point.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_disabled_or_non_local_account_never_authenticates(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        let UserCreateOutcome::Created(alice) = store
+            .create("alice", "a-password", "operator")
+            .await
+            .expect("create")
+        else {
+            panic!("create refused");
+        };
+        store.create_service("ci", "admin").await.expect("service");
+
+        // The acceptance side first: alice authenticates while enabled, so the refusals below are
+        // the guard working rather than the fixture being broken.
+        assert!(store
+            .verify("alice", "a-password")
+            .await
+            .expect("verify")
+            .is_some());
+
+        store.set_enabled(alice, false).await.expect("disable");
+        assert!(
+            store
+                .verify("alice", "a-password")
+                .await
+                .expect("verify")
+                .is_none(),
+            "a disabled account authenticated with its still-correct password"
+        );
+        assert!(
+            store
+                .verify("ci", "anything")
+                .await
+                .expect("verify")
+                .is_none(),
+            "a service account authenticated"
+        );
+    }
+
+    /// **Granting Admin clears a group scope, in the same statement.**
+    ///
+    /// 🚨 Both directions, because the fragment is a `CASE`: promoting to Admin must reset the
+    /// scope, and *any other* role change must leave it alone. A one-sided test passes just as well
+    /// against `scope = '"All"'` with no condition at all, which would silently widen every
+    /// operator the moment their role was touched.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn granting_admin_clears_a_scope_and_any_other_role_change_leaves_it(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        let narrow = Scope::groups(["site-a"]);
+        let UserCreateOutcome::Created(alice) = store
+            .create("alice", "a-password", "operator")
+            .await
+            .expect("create")
+        else {
+            panic!("create refused");
+        };
+        let UserCreateOutcome::Created(bob) = store
+            .create("bob", "a-password", "viewer")
+            .await
+            .expect("create")
+        else {
+            panic!("create refused");
+        };
+        for id in [alice, bob] {
+            assert!(matches!(
+                store.set_scope(id, &narrow).await.expect("set_scope"),
+                UserMutation::Done
+            ));
+            assert_eq!(
+                store.scope_of(id).await.expect("scope_of"),
+                Some(narrow.clone()),
+                "the scope did not survive the round trip"
+            );
+        }
+
+        assert!(matches!(
+            store.set_role(alice, "admin").await.expect("set_role"),
+            UserMutation::Done
+        ));
+        assert_eq!(
+            store.scope_of(alice).await.expect("scope_of"),
+            Some(Scope::All),
+            "promoting to Admin left a group scope in place — a narrowed view of a fleet the \
+             account can already reconfigure"
+        );
+
+        assert!(matches!(
+            store.set_role(bob, "operator").await.expect("set_role"),
+            UserMutation::Done
+        ));
+        assert_eq!(
+            store.scope_of(bob).await.expect("scope_of"),
+            Some(narrow.clone()),
+            "a role change that did not grant Admin widened the account to the whole fleet"
+        );
+
+        // The other half of the same invariant: an Admin cannot be narrowed afterwards either.
+        assert!(matches!(
+            store.set_scope(alice, &narrow).await.expect("set_scope"),
+            UserMutation::AdminIsUnscoped
+        ));
+        assert_eq!(
+            store.scope_of(alice).await.expect("scope_of"),
+            Some(Scope::All),
+            "the refused narrowing was written anyway"
+        );
+
+        assert!(store
+            .scope_of(Uuid::new_v4())
+            .await
+            .expect("scope_of")
+            .is_none());
+        assert!(matches!(
+            store.set_scope(Uuid::new_v4(), &narrow).await.expect("set"),
+            UserMutation::NotFound
+        ));
+    }
+
+    /// A password can be set only on a local account, and setting one replaces the old.
+    ///
+    /// Refusing a directory or service account is not merely tidy: writing a real hash over the
+    /// sentinel answered 200 and told an admin they had set a password that can never be used —
+    /// which is the first thing somebody tries when a directory user cannot sign in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_password_can_only_be_set_on_a_local_account(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        let UserCreateOutcome::Created(alice) = store
+            .create("alice", "the-old-password", "operator")
+            .await
+            .expect("create")
+        else {
+            panic!("create refused");
+        };
+        let UserCreateOutcome::Created(ci) =
+            store.create_service("ci", "viewer").await.expect("service")
+        else {
+            panic!("create refused");
+        };
+
+        assert!(matches!(
+            store
+                .set_password(alice, "the-new-password")
+                .await
+                .expect("set_password"),
+            UserMutation::Done
+        ));
+        assert!(
+            store
+                .verify("alice", "the-new-password")
+                .await
+                .expect("verify")
+                .is_some(),
+            "the new password does not authenticate"
+        );
+        assert!(
+            store
+                .verify("alice", "the-old-password")
+                .await
+                .expect("verify")
+                .is_none(),
+            "the old password still authenticates"
+        );
+
+        assert!(
+            matches!(
+                store
+                    .set_password(ci, "a-password")
+                    .await
+                    .expect("set_password"),
+                UserMutation::NotLocal
+            ),
+            "a service account was told it had been given a password"
+        );
+        assert!(
+            store
+                .verify("ci", "a-password")
+                .await
+                .expect("verify")
+                .is_none(),
+            "the refused password was written anyway"
+        );
+        assert_eq!(
+            store.login_route("ci").await.expect("route"),
+            LoginRoute::Refused
+        );
+
+        assert!(matches!(
+            store
+                .set_password(Uuid::new_v4(), "a-password")
+                .await
+                .expect("set_password"),
+            UserMutation::NotFound
+        ));
+    }
 }
