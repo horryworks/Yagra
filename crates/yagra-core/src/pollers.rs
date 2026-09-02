@@ -818,4 +818,209 @@ mod tests {
             );
         }
     }
+
+    // ── Database tests (ADR-114) ───────────────────────────────────────────────────────
+    //
+    // The heartbeat write. Two of its properties were paid for in production: the pool it reports
+    // is written only when the row is created (ADR-107 Inc.2), and a beat from an id with no row
+    // creates one only when the deployment says it may (ADR-065 Inc.3) — without which deleting a
+    // poller in the WebUI did not delete it, because the live connection recreated the row inside
+    // ten seconds.
+
+    const V: &str = "0.3.4";
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_heartbeat_creates_a_poller_once_and_afterwards_only_refreshes_it(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = PollerRepo::new(pool.clone());
+        let inc1 = Uuid::new_v4();
+        let got = repo
+            .upsert_seen("site-a", "east", V, inc1, &["10.0.0.5".into()])
+            .await
+            .expect("beat");
+        assert_eq!(got.as_deref(), Some("east"), "the pool it was created in");
+
+        let before = &repo.list().await.expect("list")[0];
+        assert_eq!(before.id, "site-a");
+        assert_eq!(before.pool, "east");
+        assert_eq!(before.last_version.as_deref(), Some(V));
+        assert_eq!(before.last_incarnation, Some(inc1));
+        assert_eq!(before.mgmt_addrs, vec!["10.0.0.5".to_owned()]);
+        assert!(!before.has_token, "a poller admitted by the shared secret");
+        assert_eq!(before.token_issued_at, None);
+        assert_eq!(before.anchor_node_id, None);
+        let first_seen = before.first_seen.clone();
+
+        // 🚨 A later beat reporting a *different* pool must not move it. After the row exists core
+        // owns the pool, and a poller that could reassign itself would undo an operator's move on
+        // its next beat — the beat arrives every ten seconds, so the move would never stick.
+        let inc2 = Uuid::new_v4();
+        let got = repo
+            .upsert_seen(
+                "site-a",
+                "west",
+                "0.3.5",
+                inc2,
+                &["10.0.0.6".into(), "10.0.0.7".into()],
+            )
+            .await
+            .expect("beat");
+        assert_eq!(
+            got.as_deref(),
+            Some("east"),
+            "the reply is the pool the inventory holds, not the one the beat claimed"
+        );
+
+        let after = &repo.list().await.expect("list")[0];
+        assert_eq!(after.pool, "east");
+        assert_eq!(after.first_seen, first_seen, "first contact does not move");
+        assert_ne!(after.last_seen, after.first_seen, "but the last one does");
+        // Everything the poller genuinely owns *is* refreshed.
+        assert_eq!(after.last_version.as_deref(), Some("0.3.5"));
+        assert_eq!(after.last_incarnation, Some(inc2));
+        assert_eq!(
+            after.mgmt_addrs,
+            vec!["10.0.0.6".to_owned(), "10.0.0.7".to_owned()],
+            "the address list is replaced, not merged"
+        );
+
+        // Addresses come back bare. `inet` renders a mask when cast to text (`10.0.0.6/32`), which
+        // is why the projection is `host(a)` — the same trap `arp.rs` shipped.
+        assert!(
+            after.mgmt_addrs.iter().all(|a| !a.contains('/')),
+            "{:?}",
+            after.mgmt_addrs
+        );
+
+        // A second poller is its own row, and the list is by id.
+        repo.upsert_seen("site-b", "west", V, Uuid::new_v4(), &[])
+            .await
+            .expect("beat");
+        assert_eq!(
+            repo.list()
+                .await
+                .expect("list")
+                .iter()
+                .map(|p| (p.id.as_str(), p.pool.as_str()))
+                .collect::<Vec<_>>(),
+            [("site-a", "east"), ("site-b", "west")]
+        );
+
+        // …and the pool set is the distinct pools of the inventory, which is what the scheduler
+        // waits on before falling back to legacy per-job dispatch.
+        let mut pools = repo.pools().await.expect("pools");
+        pools.sort();
+        assert_eq!(pools, ["east", "west"]);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_beat_from_an_unregistered_poller_creates_a_row_only_when_allowed(
+        pool: sqlx::PgPool,
+    ) {
+        let inc = Uuid::new_v4();
+
+        // The default, and the historical behaviour: on a bus that does not gate connections,
+        // heartbeating is the only way a poller can appear at all.
+        let open = PollerRepo::new(pool.clone());
+        assert_eq!(
+            open.upsert_seen("site-a", "east", V, inc, &[])
+                .await
+                .expect("beat")
+                .as_deref(),
+            Some("east")
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "pollers").await, 1);
+
+        // The other direction, and the reason it exists. Deleting a poller in the WebUI did not
+        // delete it: the live connection kept beating and the upsert recreated the row within ten
+        // seconds. NATS does not re-authenticate an established connection, so refusing the
+        // reconnect is not enough on its own.
+        let gated = PollerRepo::new(pool.clone()).with_auto_register(false);
+        assert!(gated.delete("site-a").await.expect("delete"));
+        assert_eq!(
+            gated
+                .upsert_seen("site-a", "east", V, inc, &[])
+                .await
+                .expect("beat"),
+            None,
+            "the beat must not resurrect a deleted poller"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "pollers").await, 0);
+
+        // …and an id nobody ever registered is refused the same way, rather than being an error.
+        assert_eq!(
+            gated
+                .upsert_seen("never-seen", "east", V, inc, &[])
+                .await
+                .expect("beat"),
+            None
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "pollers").await, 0);
+
+        // A registered poller still refreshes under the gate — the mode blocks creation, not the
+        // heartbeat, and a deployment where beats stopped landing would look identical to one
+        // where every poller had died.
+        open.upsert_seen("site-b", "west", V, inc, &[])
+            .await
+            .expect("beat");
+        let inc2 = Uuid::new_v4();
+        assert_eq!(
+            gated
+                .upsert_seen("site-b", "ignored", "0.3.5", inc2, &["10.0.0.9".into()])
+                .await
+                .expect("beat")
+                .as_deref(),
+            Some("west")
+        );
+        let row = &gated.list().await.expect("list")[0];
+        assert_eq!(row.last_incarnation, Some(inc2));
+        assert_eq!(row.mgmt_addrs, vec!["10.0.0.9".to_owned()]);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_anchor_is_the_operators_and_a_heartbeat_leaves_it_alone(pool: sqlx::PgPool) {
+        let repo = PollerRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        repo.upsert_seen("site-a", "east", V, Uuid::new_v4(), &[])
+            .await
+            .expect("beat");
+
+        assert!(repo.set_anchor("site-a", Some(node)).await.expect("anchor"));
+        assert_eq!(
+            repo.list().await.expect("list")[0].anchor_node_id,
+            Some(node)
+        );
+
+        // 🚨 The heartbeat writes neither the anchor nor `first_seen`. One statement writing both
+        // the operator's column and the poller's would make the poller the last writer, and the
+        // anchor would revive its old value on the next beat — ten seconds later, every time.
+        repo.upsert_seen(
+            "site-a",
+            "east",
+            "0.3.5",
+            Uuid::new_v4(),
+            &["10.0.0.5".into()],
+        )
+        .await
+        .expect("beat");
+        assert_eq!(
+            repo.list().await.expect("list")[0].anchor_node_id,
+            Some(node),
+            "a heartbeat overwrote the operator's anchor"
+        );
+
+        // Clearing is the same call with `None`, so an operator can undo a placement.
+        assert!(repo.set_anchor("site-a", None).await.expect("anchor"));
+        assert_eq!(repo.list().await.expect("list")[0].anchor_node_id, None);
+
+        // An id that is not there reports it rather than reporting success.
+        assert!(!repo
+            .set_anchor("never-seen", Some(node))
+            .await
+            .expect("anchor"));
+    }
 }
