@@ -825,6 +825,304 @@ mod tests {
         assert!(!repo.delete_item(doomed).await.expect("delete"));
         assert!(!repo.delete_item(Uuid::new_v4()).await.expect("delete"));
     }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_metric_is_a_counter_from_either_table_it_can_be_declared_in(pool: sqlx::PgPool) {
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let template = match repo
+            .create_template("Interfaces", None)
+            .await
+            .expect("template")
+        {
+            CreateTemplateOutcome::Created(id) => id,
+            CreateTemplateOutcome::NameTaken => panic!("a fresh database cannot have this name"),
+        };
+
+        // Nothing declares it, so nothing says it is a counter. This is the answer that lets a
+        // threshold be created, so a statement that failed open here would let an operator set a
+        // fixed bound on a monotonic value and never see it fire.
+        assert!(!repo
+            .metric_declared_counter("cpu_load")
+            .await
+            .expect("probe"));
+
+        repo.create_item(
+            "node",
+            node,
+            "cpu_load",
+            "1.3.6.1.4.1.9.1",
+            "scalar",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("item");
+        assert!(
+            !repo
+                .metric_declared_counter("cpu_load")
+                .await
+                .expect("probe"),
+            "a gauge is not a counter"
+        );
+
+        // Declared at a scope…
+        repo.create_item(
+            "node",
+            node,
+            "if_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            "table",
+            "counter",
+            true,
+        )
+        .await
+        .expect("item");
+        assert!(repo
+            .metric_declared_counter("if_in_octets")
+            .await
+            .expect("probe"));
+
+        // …and the other half of the `OR EXISTS`: declared only on a template. An item defined on
+        // a template and one defined at a scope are the same thing to a poller, so a probe that
+        // consulted one table would answer "not a counter" about half the fleet's counters.
+        repo.create_template_item(
+            template,
+            "if_out_errors",
+            "1.3.6.1.2.1.2.2.1.20",
+            "table",
+            "counter",
+            true,
+        )
+        .await
+        .expect("template item");
+        assert!(repo
+            .metric_declared_counter("if_out_errors")
+            .await
+            .expect("probe"));
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_per_interface_set_unions_the_catalog_with_both_item_tables(pool: sqlx::PgPool) {
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let template = match repo
+            .create_template("Interfaces", None)
+            .await
+            .expect("template")
+        {
+            CreateTemplateOutcome::Created(id) => id,
+            CreateTemplateOutcome::NameTaken => panic!("a fresh database cannot have this name"),
+        };
+
+        // The built-in half answers on an empty database — the operator tables only add to it.
+        let builtin = repo.per_interface_metric_names().await.expect("set");
+        // Both names come out of the catalogue rather than being spelled here: a metric name that
+        // does not exist satisfies the negation below without checking anything, and the positive
+        // one was wrong on the first run (the built-in is `if_hc_in_octets`, not `if_in_octets`).
+        let table_builtin = yagra_common::builtin_catalog()
+            .into_iter()
+            .find(yagra_common::item_publishes_per_interface)
+            .expect("the catalogue has a per-interface table item");
+        assert!(builtin.contains(&table_builtin.metric_name), "{builtin:?}");
+        let scalar_builtin = yagra_common::builtin_catalog()
+            .into_iter()
+            .find(|i| i.kind == CollectionKind::Scalar)
+            .expect("the catalogue has a scalar");
+        assert!(
+            !builtin.contains(&scalar_builtin.metric_name),
+            "{builtin:?}"
+        );
+
+        // A table item whose column base is an ifTable/ifXTable column: per-interface.
+        repo.create_item(
+            "node",
+            node,
+            "if_in_broadcast",
+            "1.3.6.1.2.1.31.1.1.1.3",
+            "table",
+            "counter",
+            true,
+        )
+        .await
+        .expect("item");
+        // A table item indexed by something else — a vendor CPU table. The row keys look exactly
+        // like ifIndexes and are not (ADR-011), which is why the OID decides and not the values.
+        repo.create_item(
+            "node",
+            node,
+            "cpu_5sec",
+            "1.3.6.1.4.1.9.9.109.1.1.1.1.3",
+            "table",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("item");
+        // A scalar, whatever its OID.
+        repo.create_item(
+            "node",
+            node,
+            "sensor_temp",
+            "1.3.6.1.2.1.31.1.1.1.9",
+            "scalar",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("item");
+        // Template-only, and per-interface. The doc says consulting one table would "silently
+        // leave half the fleet's interface metrics sharing a single check" — this is that half.
+        //
+        // 🚨 The name must be one the built-in catalogue does not already carry, and that is
+        // asserted rather than assumed: the first version of this used `if_out_discards`, which
+        // *is* a built-in, so dropping the template table from the UNION left the test green.
+        const TEMPLATE_ONLY: &str = "template_only_if_counter";
+        assert!(!builtin.contains(TEMPLATE_ONLY), "{builtin:?}");
+        repo.create_template_item(
+            template,
+            TEMPLATE_ONLY,
+            "1.3.6.1.2.1.2.2.1.19",
+            "table",
+            "counter",
+            true,
+        )
+        .await
+        .expect("template item");
+
+        let set = repo.per_interface_metric_names().await.expect("set");
+        assert!(set.contains("if_in_broadcast"), "{set:?}");
+        assert!(set.contains(TEMPLATE_ONLY), "the template table: {set:?}");
+        assert!(
+            !set.contains("cpu_5sec"),
+            "not an interface-indexed table: {set:?}"
+        );
+        assert!(!set.contains("sensor_temp"), "a scalar: {set:?}");
+        // …and the built-ins are still there: the union adds, it does not replace.
+        assert!(set.contains(&table_builtin.metric_name), "{set:?}");
+
+        // `enabled` is deliberately not consulted: the question is what the metric *is*, and the
+        // engine asks it once per distinct metric name on every poll result. A disabled item whose
+        // name is still arriving from somewhere else must not change the answer.
+        repo.create_item(
+            "node",
+            node,
+            "if_in_unknown_protos",
+            "1.3.6.1.2.1.2.2.1.15",
+            "table",
+            "counter",
+            false,
+        )
+        .await
+        .expect("item");
+        assert!(repo
+            .per_interface_metric_names()
+            .await
+            .expect("set")
+            .contains("if_in_unknown_protos"));
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_template_with_no_metrics_still_lists_with_a_count_of_zero(pool: sqlx::PgPool) {
+        let repo = CollectionRepo::new(pool.clone());
+        let profile = crate::pgtest::profile(&pool, "Generic switch").await;
+        let created = |o: CreateTemplateOutcome| match o {
+            CreateTemplateOutcome::Created(id) => id,
+            CreateTemplateOutcome::NameTaken => panic!("a fresh database cannot have this name"),
+        };
+        let filled = created(
+            repo.create_template("A interfaces", Some("two"))
+                .await
+                .expect("t"),
+        );
+        let empty = created(repo.create_template("B empty", None).await.expect("t"));
+
+        for (metric, oid) in [
+            ("if_in_octets", "1.3.6.1.2.1.31.1.1.1.6"),
+            ("if_out_octets", "1.3.6.1.2.1.31.1.1.1.10"),
+        ] {
+            repo.create_template_item(filled, metric, oid, "table", "counter", true)
+                .await
+                .expect("template item");
+        }
+
+        // 🚨 The join is a LEFT JOIN and the count is `count(i.id)`, not `count(*)`. With
+        // `count(*)` the empty template reports **1** — the one all-NULL row the outer join
+        // produced — and the templates list tells the operator a metric is there to find.
+        let all = repo.list_templates().await.expect("list");
+        assert_eq!(
+            all.iter()
+                .map(|t| (t.name.as_str(), t.item_count))
+                .collect::<Vec<_>>(),
+            [("A interfaces", 2), ("B empty", 0)]
+        );
+        assert_eq!(all[0].description.as_deref(), Some("two"));
+        assert_eq!(all[1].description, None);
+
+        // A template's metrics are its own, by name order.
+        let items = repo.list_template_items(filled).await.expect("items");
+        assert_eq!(
+            items
+                .iter()
+                .map(|i| i.item.metric_name.as_str())
+                .collect::<Vec<_>>(),
+            ["if_in_octets", "if_out_octets"]
+        );
+        assert_eq!(items[0].item.kind, CollectionKind::Table);
+        assert_eq!(items[0].item.metric_kind, MetricKind::Counter);
+        assert!(items[0].enabled);
+        assert!(repo
+            .list_template_items(empty)
+            .await
+            .expect("items")
+            .is_empty());
+
+        // The profile's own list is the same shape, restricted to what is attached.
+        repo.set_profile_templates(profile, &[filled])
+            .await
+            .expect("attach");
+        let attached = repo
+            .list_profile_templates(profile)
+            .await
+            .expect("attached");
+        assert_eq!(
+            attached
+                .iter()
+                .map(|t| (t.name.as_str(), t.item_count))
+                .collect::<Vec<_>>(),
+            [("A interfaces", 2)]
+        );
+        assert!(repo
+            .list_profile_templates(Uuid::new_v4())
+            .await
+            .expect("attached")
+            .is_empty());
+
+        // Deleting takes the metrics and the attachment with it — both are `ON DELETE CASCADE`
+        // from here, so neither has a statement of its own to go wrong separately.
+        assert!(repo.delete_template(filled).await.expect("delete"));
+        assert_eq!(
+            crate::pgtest::rows(&pool, "collection_template_items").await,
+            0
+        );
+        assert_eq!(
+            crate::pgtest::rows(&pool, "profile_collection_templates").await,
+            0
+        );
+        assert_eq!(
+            repo.list_templates()
+                .await
+                .expect("list")
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            ["B empty"]
+        );
+        assert!(!repo.delete_template(filled).await.expect("delete"));
+    }
 }
 
 #[cfg(test)]
