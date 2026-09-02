@@ -1553,4 +1553,103 @@ mod tests {
             "an ended window outside the caller's scope was deleted"
         );
     }
+
+    /// A node mute and a group mute store different shapes, and the group one **drops the check
+    /// name it was handed**.
+    ///
+    /// 🚨 That is not tidiness. A group mute silences the whole node set; storing a per-check name
+    /// beside it would list back to the operator as "this group is muted for `icmp`", which is not
+    /// what the mute does. The writer decides it, so only running it can say whether it did.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_group_mute_drops_the_check_name_a_node_mute_keeps(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let until = Utc::now() + chrono::Duration::hours(1);
+        let node = Uuid::new_v4();
+        let group = Uuid::new_v4();
+
+        let per_check = repo
+            .create_mute("node", node, Some("icmp"), until, Some("cable work"))
+            .await
+            .expect("node mute");
+        let whole_group = repo
+            .create_mute("group", group, Some("icmp"), until, None)
+            .await
+            .expect("group mute");
+
+        let mutes = repo.list_mutes().await.expect("list");
+        assert_eq!(mutes.len(), 2);
+        let one = mutes.iter().find(|m| m.id == per_check).expect("node mute");
+        assert_eq!(one.scope_kind, MuteScope::Node);
+        assert_eq!(one.node_id, Some(node));
+        assert_eq!(one.group_id, None);
+        assert_eq!(one.check_name.as_deref(), Some("icmp"));
+        assert_eq!(one.reason.as_deref(), Some("cable work"));
+
+        let all = mutes
+            .iter()
+            .find(|m| m.id == whole_group)
+            .expect("group mute");
+        assert_eq!(all.scope_kind, MuteScope::Group);
+        assert_eq!(all.group_id, Some(group));
+        assert_eq!(
+            all.node_id, None,
+            "a group mute was also bound to a node, so it would silence twice over"
+        );
+        assert_eq!(
+            all.check_name, None,
+            "a group mute kept a check name — it silences every check, so this would list back to \
+             the operator as something the mute does not do"
+        );
+        assert_eq!(all.reason, None);
+    }
+
+    /// Expired mutes are dropped on read, and what is left comes back soonest-expiring first.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_expired_mute_is_dropped_on_read_and_the_rest_are_soonest_first(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        repo.create_mute("node", Uuid::new_v4(), None, now - hour, None)
+            .await
+            .expect("expired");
+        let later = repo
+            .create_mute("node", Uuid::new_v4(), None, now + hour * 2, None)
+            .await
+            .expect("later");
+        let sooner = repo
+            .create_mute("node", Uuid::new_v4(), None, now + hour, None)
+            .await
+            .expect("sooner");
+        assert_eq!(pgtest::rows(&pool, "mutes").await, 3);
+
+        let mutes = repo.list_mutes().await.expect("list");
+        assert_eq!(
+            mutes.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![sooner, later],
+            "mutes are not returned soonest-expiring first, or an expired one is still silencing"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "mutes").await,
+            2,
+            "the expired mute was filtered out of the answer but left in the table, so it grows \
+             without bound"
+        );
+
+        assert!(repo.delete_mute(sooner).await.expect("delete"));
+        assert_eq!(
+            repo.list_mutes()
+                .await
+                .expect("list")
+                .iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>(),
+            vec![later]
+        );
+        assert!(
+            !repo.delete_mute(sooner).await.expect("delete"),
+            "deleting a mute twice reported success twice"
+        );
+    }
 }
