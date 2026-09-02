@@ -637,4 +637,203 @@ mod tests {
             "the predicate uses the slot reserved for LIMIT: {FINDING_SEARCH_WHERE}"
         );
     }
+
+    // ── Database tests (ADR-114) ───────────────────────────────────────────────────────
+    //
+    // The five statements that decide what the runs list says a run is doing. Two of them carry a
+    // state guard, so each is exercised in **both** directions: a test that only shows the guard
+    // letting the intended write through is satisfied just as well by a statement with no guard at
+    // all, and the guard is the whole point of those two.
+
+    /// Run parameters for a job, so no test spells the ten fields out.
+    ///
+    /// A value constructor, not a schema copy — every field goes through the production writer.
+    fn a_job(tool: AnalysisTool) -> JobParams {
+        JobParams {
+            tool,
+            scope_kind: ScopeKind::All,
+            scope_id: None,
+            scope_label: "Whole fleet".into(),
+            window_secs: 3_600,
+            baseline_secs: 86_400,
+            sensitivity: 3.0,
+            depth: "standard".into(),
+            family: "all".into(),
+            notify: false,
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_inserted_run_comes_back_running_with_the_values_it_was_given(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let job = repo
+            .insert(&a_job(AnalysisTool::Capacity), Some("horry"))
+            .await
+            .expect("insert");
+
+        // `state` is interpolated from the enum rather than bound, so this is the one place that
+        // shows the token lands *in* the column rather than beside it.
+        assert_eq!(job.state, AnalysisJobState::Running);
+        assert_eq!(job.tool, "capacity");
+        assert_eq!(job.scope_kind, "all");
+        assert_eq!(job.scope_id, None);
+        assert_eq!(job.scope_label, "Whole fleet");
+        assert_eq!(job.pct, 0);
+        assert_eq!(job.finding_count, 0);
+        // `$7` is the phase caption and `$8` the username who launched it. Swapping the two
+        // compiles, inserts, and puts the operator's name where the progress caption goes.
+        assert_eq!(job.phase.as_deref(), Some("Queued — fetching history…"));
+        assert_eq!(job.params["window_secs"], 3_600);
+        assert_eq!(job.params["depth"], "standard");
+        assert_eq!(job.params["notify"], false);
+        // `started_at = now()` is in the INSERT; the other two are what the epoch-ms projections
+        // do with a column that is still NULL.
+        assert!(job.started_ms.is_some());
+        assert!(job.finished_ms.is_none());
+        assert!(job.created_ms > 0);
+
+        // …and it reads back the same through `get`, which selects the same columns separately.
+        let read = repo
+            .get(job.id)
+            .await
+            .expect("get")
+            .expect("the row just inserted");
+        assert_eq!(read.id, job.id);
+        assert_eq!(read.state, AnalysisJobState::Running);
+        assert_eq!(read.phase, job.phase);
+        assert_eq!(read.params, job.params);
+        assert!(repo.get(Uuid::new_v4()).await.expect("get").is_none());
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn progress_moves_a_running_run_and_leaves_a_finished_one_alone(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let job = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+
+        repo.set_progress(job.id, 40, "Scanning 120 nodes…")
+            .await
+            .expect("progress");
+        let running = repo.get(job.id).await.expect("get").expect("row");
+        assert_eq!(running.pct, 40);
+        assert_eq!(running.phase.as_deref(), Some("Scanning 120 nodes…"));
+
+        // Out of range is clamped before it reaches the column, so the runs list can draw the bar
+        // without checking it first.
+        repo.set_progress(job.id, 250, "Still scanning…")
+            .await
+            .expect("progress");
+        assert_eq!(repo.get(job.id).await.expect("get").expect("row").pct, 100);
+
+        // The other direction of `AND state = 'running'`. The runner's last progress message can
+        // arrive after its own completion; without the guard it would pull `pct` back off 100 and
+        // put a caption back on a run that has already reported its findings.
+        repo.finish(job.id, 7, "7 anomalies · 3 nodes")
+            .await
+            .expect("finish");
+        repo.set_progress(job.id, 55, "Scanning…")
+            .await
+            .expect("progress");
+        let done = repo.get(job.id).await.expect("get").expect("row");
+        assert_eq!(done.state, AnalysisJobState::Done);
+        assert_eq!(done.pct, 100);
+        assert_eq!(done.phase, None);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn finishing_clears_the_caption_and_records_what_the_run_produced(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let job = repo
+            .insert(&a_job(AnalysisTool::Flap), None)
+            .await
+            .expect("insert");
+        repo.set_progress(job.id, 60, "Scoring…")
+            .await
+            .expect("progress");
+
+        repo.finish(job.id, 23, "23 flaps · 8 nodes")
+            .await
+            .expect("finish");
+        let done = repo.get(job.id).await.expect("get").expect("row");
+        assert_eq!(done.state, AnalysisJobState::Done);
+        assert_eq!(done.pct, 100);
+        // Cleared, not left holding the last phase it reached: a finished run still captioned
+        // "Scoring…" reads as one that is still working.
+        assert_eq!(done.phase, None);
+        assert_eq!(done.finding_count, 23);
+        assert_eq!(done.summary.as_deref(), Some("23 flaps · 8 nodes"));
+        assert_eq!(done.error, None);
+        assert!(done.finished_ms.is_some());
+        assert!(done.finished_ms >= done.started_ms);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn failing_keeps_the_progress_the_run_reached_and_says_why_it_stopped(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let job = repo
+            .insert(&a_job(AnalysisTool::Correlation), None)
+            .await
+            .expect("insert");
+        repo.set_progress(job.id, 40, "Fetching series…")
+            .await
+            .expect("progress");
+
+        repo.fail(job.id, "metric store unreachable")
+            .await
+            .expect("fail");
+        let failed = repo.get(job.id).await.expect("get").expect("row");
+        assert_eq!(failed.state, AnalysisJobState::Failed);
+        assert_eq!(failed.error.as_deref(), Some("metric store unreachable"));
+        assert_eq!(failed.phase, None);
+        assert!(failed.finished_ms.is_some());
+        // `fail` deliberately does not touch `pct`, unlike `finish`. How far a run got before it
+        // broke is the first thing anyone asks of a failed run, and forcing it to 0 or to 100
+        // would answer with a number nothing measured.
+        assert_eq!(failed.pct, 40);
+        assert_eq!(failed.summary, None);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn cancelling_stops_a_running_run_and_cannot_rewrite_a_finished_one(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+
+        let running = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+        repo.mark_cancelled(running.id).await.expect("cancel");
+        let stopped = repo.get(running.id).await.expect("get").expect("row");
+        assert_eq!(stopped.state, AnalysisJobState::Cancelled);
+        assert_eq!(stopped.phase, None);
+        assert!(stopped.finished_ms.is_some());
+
+        // The other direction. An operator pressing Cancel on a run that completed while the page
+        // was open must not turn a finished run into a cancelled one — the findings are already
+        // written and still shown, so the runs list would then disagree with them.
+        let finished = repo
+            .insert(&a_job(AnalysisTool::Capacity), None)
+            .await
+            .expect("insert");
+        repo.finish(finished.id, 4, "4 forecasts")
+            .await
+            .expect("finish");
+        let before = repo.get(finished.id).await.expect("get").expect("row");
+        repo.mark_cancelled(finished.id).await.expect("cancel");
+        let after = repo.get(finished.id).await.expect("get").expect("row");
+        assert_eq!(after.state, AnalysisJobState::Done);
+        assert_eq!(after.summary.as_deref(), Some("4 forecasts"));
+        assert_eq!(after.pct, 100);
+        // The guarded statement also writes `finished_at = now()`, so this is what says the write
+        // did not happen at all rather than happening and being overwritten by something else.
+        assert_eq!(after.finished_ms, before.finished_ms);
+    }
 }
