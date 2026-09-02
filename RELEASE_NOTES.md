@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.6 — the time-range selector moves the chart it sits above, and an ICMP-only node finally has one
+
 ### Bug Fixes
 
 - **The 1h / 6h / 24h / 3d / 7d selector now moves the chart it sits above.** Every chart with a
@@ -24,9 +26,9 @@
   visible span and the line appeared to stop.
 - **Interfaces ▸ the throughput chart's `Auto` button releases the vertical axis again.** Switching
   to `Bandwidth` scaled it to the link speed, and switching back left it there.
-- **The node Overview's ICMP round-trip chart follows the range selector.** It was a fixed last-30
-  -minutes trend that ignored the buttons. On a node monitored by ICMP alone that was the only chart
-  on the tab, and the tab in fact offered no range control at all — it now has one.
+- **The node Overview's ICMP round-trip chart follows the range selector.** It was a fixed
+  last-30-minutes trend that ignored the buttons. On a node monitored by ICMP alone that was the
+  only chart on the tab, and the tab in fact offered no range control at all — it now has one.
 
 ## v0.3.5 — a first remote site can be stood up from the WebUI, and a poller now says whether it is keeping up
 
