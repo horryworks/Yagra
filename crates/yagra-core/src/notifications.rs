@@ -452,4 +452,223 @@ mod tests {
         assert_eq!(parse_severity(None), None);
         assert_eq!(severity_str(Severity::Warning), "warning");
     }
+
+    // ── Database tests (ADR-114) ───────────────────────────────────────────────────────
+    //
+    // A channel's config is a secret (a webhook URL, an SMTP password, a PagerDuty routing key),
+    // so the first thing these check is that it is not in the row. The rest is the enabled/deleted
+    // arithmetic that decides whether a notification is delivered — where every mistake is silent
+    // in one direction (nothing arrives) and loud in the other (it arrives from a channel the
+    // operator switched off).
+
+    fn a_webhook(url: &str) -> ChannelConfig {
+        ChannelConfig::Webhook {
+            url: url.to_owned(),
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_channels_config_is_sealed_and_never_comes_back_in_the_metadata(pool: sqlx::PgPool) {
+        const SECRET: &str = "https://hooks.example.test/T000/B000/zzTOPSECRETzz";
+        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let id = repo
+            .create_channel("Ops webhook", &a_webhook(SECRET))
+            .await
+            .expect("create");
+
+        // Nothing on the row carries the URL in the clear. Read as text over every column the
+        // table has, so a column added later that happens to hold it fails this rather than
+        // shipping quietly.
+        let dumped: String = sqlx::query_scalar(
+            "SELECT string_agg(notification_channels::text, ' ') FROM notification_channels",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("dump");
+        assert!(
+            !dumped.contains("zzTOPSECRETzz"),
+            "the channel config reached the database in the clear"
+        );
+
+        // The metadata list is what the API serves, and it carries no config at all — there is no
+        // field on `ChannelSummary` for one, which is the point.
+        let listed = repo.list_channels().await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+        assert_eq!(listed[0].name, "Ops webhook");
+        assert_eq!(listed[0].kind, ChannelKind::Webhook);
+        assert!(listed[0].enabled, "a new channel is enabled");
+        assert_eq!(listed[0].subject_template, None);
+        assert_eq!(listed[0].body_template, None);
+
+        // …and the core-side read opens it again, which is what says the seal is reversible with
+        // the same key rather than merely opaque.
+        let open = repo.list_open_channels().await.expect("open");
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, id);
+        assert_eq!(open[0].config, a_webhook(SECRET));
+
+        // The declared kind is stored beside the sealed blob, so the list can group and filter
+        // without opening anything. It has to be the config's own kind, not a separate argument.
+        let jsm = repo
+            .create_channel(
+                "JSM",
+                &ChannelConfig::Jsm {
+                    api_url: "https://api.atlassian.test/jsm".into(),
+                    api_key: "GenieKey zzALSOSECRETzz".into(),
+                },
+            )
+            .await
+            .expect("create");
+        let listed = repo.list_channels().await.expect("list");
+        assert_eq!(
+            listed.iter().map(|c| (c.id, c.kind)).collect::<Vec<_>>(),
+            [(id, ChannelKind::Webhook), (jsm, ChannelKind::Jsm)],
+            "ordered by created_at"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_switched_off_channel_is_still_listed_and_no_longer_delivers(pool: sqlx::PgPool) {
+        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let on = repo
+            .create_channel("Stays on", &a_webhook("https://a.example.test/hook"))
+            .await
+            .expect("create");
+        let off = repo
+            .create_channel("Switched off", &a_webhook("https://b.example.test/hook"))
+            .await
+            .expect("create");
+
+        assert!(repo.set_channel_enabled(off, false).await.expect("disable"));
+
+        // The editor still shows it — an operator has to be able to switch it back on.
+        let listed = repo.list_channels().await.expect("list");
+        assert_eq!(
+            listed.iter().map(|c| (c.id, c.enabled)).collect::<Vec<_>>(),
+            [(on, true), (off, false)]
+        );
+
+        // The delivery snapshot does not. `WHERE enabled = true` is the only thing standing
+        // between "switched off" and a notification arriving from it anyway.
+        let open = repo.list_open_channels().await.expect("open");
+        assert_eq!(open.iter().map(|c| c.id).collect::<Vec<_>>(), [on]);
+
+        // …and back on again, because a switch that only travels one way is half a switch.
+        assert!(repo.set_channel_enabled(off, true).await.expect("enable"));
+        let open = repo.list_open_channels().await.expect("open");
+        assert_eq!(open.iter().map(|c| c.id).collect::<Vec<_>>(), [on, off]);
+
+        // An id that is not there reports it rather than reporting success.
+        assert!(!repo
+            .set_channel_enabled(Uuid::new_v4(), false)
+            .await
+            .expect("disable"));
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn deleting_a_channel_takes_it_out_of_every_rule_that_named_it(pool: sqlx::PgPool) {
+        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let doomed = repo
+            .create_channel("Doomed", &a_webhook("https://a.example.test/hook"))
+            .await
+            .expect("create");
+        let kept = repo
+            .create_channel("Kept", &a_webhook("https://b.example.test/hook"))
+            .await
+            .expect("create");
+        let both = repo
+            .create_rule("Everything", None, &[doomed, kept])
+            .await
+            .expect("rule");
+        let only_doomed = repo
+            .create_rule("Just the doomed one", Some(Severity::Critical), &[doomed])
+            .await
+            .expect("rule");
+
+        assert!(repo.delete_channel(doomed).await.expect("delete"));
+
+        // 🚨 This is two statements, and the first one is the one that matters. Without the
+        // `array_remove` the rules keep an id that no longer names a channel, and the fan-out then
+        // routes an alert to nothing — silently, because a missing channel is indistinguishable
+        // from one that delivered.
+        let rules = repo.list_rules().await.expect("rules");
+        let by_id = |id: Uuid| rules.iter().find(|r| r.id == id).expect("rule");
+        assert_eq!(by_id(both).channel_ids, vec![kept]);
+        assert!(
+            by_id(only_doomed).channel_ids.is_empty(),
+            "a rule left pointing at a deleted channel: {:?}",
+            by_id(only_doomed).channel_ids
+        );
+
+        // The rules themselves survive — deleting a channel is not deleting the routing an
+        // operator built around it.
+        assert_eq!(rules.len(), 2);
+        assert_eq!(repo.list_channels().await.expect("list").len(), 1);
+        assert!(!repo.delete_channel(doomed).await.expect("delete"));
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_template_override_is_replaced_as_a_pair_not_merged(pool: sqlx::PgPool) {
+        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let id = repo
+            .create_channel("Ops", &a_webhook("https://a.example.test/hook"))
+            .await
+            .expect("create");
+
+        assert!(repo
+            .set_channel_template(
+                id,
+                &ChannelTemplate {
+                    subject: Some("[{{severity}}] {{node}}".into()),
+                    body: Some("{{metric}} = {{value}}".into()),
+                },
+            )
+            .await
+            .expect("template"));
+        let listed = repo.list_channels().await.expect("list");
+        assert_eq!(
+            listed[0].subject_template.as_deref(),
+            Some("[{{severity}}] {{node}}")
+        );
+        assert_eq!(
+            listed[0].body_template.as_deref(),
+            Some("{{metric}} = {{value}}")
+        );
+
+        // Clearing one field must clear it. The dialog owns both, so a partial update would leave
+        // whichever one the operator cleared silently in place and the channel would keep sending
+        // wording nobody could find in the editor.
+        assert!(repo
+            .set_channel_template(
+                id,
+                &ChannelTemplate {
+                    subject: None,
+                    body: Some("only the body now".into()),
+                },
+            )
+            .await
+            .expect("template"));
+        let listed = repo.list_channels().await.expect("list");
+        assert_eq!(listed[0].subject_template, None);
+        assert_eq!(
+            listed[0].body_template.as_deref(),
+            Some("only the body now")
+        );
+
+        // The core-side read carries the same pair — the renderer reads it from there, not from
+        // the metadata list, so the two must agree.
+        let open = repo.list_open_channels().await.expect("open");
+        assert_eq!(open[0].template.subject, None);
+        assert_eq!(open[0].template.body.as_deref(), Some("only the body now"));
+
+        assert!(!repo
+            .set_channel_template(Uuid::new_v4(), &ChannelTemplate::default())
+            .await
+            .expect("template"));
+    }
 }
