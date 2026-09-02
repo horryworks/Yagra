@@ -2067,4 +2067,236 @@ mod tests {
             "the seeded admin is a local account and must be verified locally"
         );
     }
+
+    /// A created account shows up in the listing with the fields the writer chose for it, and a
+    /// duplicate username is refused by name rather than by a 500.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_created_account_appears_in_the_listing_and_a_duplicate_name_is_refused(
+        pool: sqlx::PgPool,
+    ) {
+        let store = UserStore::new(pool.clone());
+        let UserCreateOutcome::Created(human) = store
+            .create("alice", "a-password", "operator")
+            .await
+            .expect("create")
+        else {
+            panic!("creating a fresh username was refused");
+        };
+        let UserCreateOutcome::Created(robot) = store
+            .create_service("ci", "admin")
+            .await
+            .expect("create service")
+        else {
+            panic!("creating a fresh service account was refused");
+        };
+
+        let listed = store.list().await.expect("list");
+        assert_eq!(listed.len(), 2, "the listing did not return both accounts");
+        let alice = listed
+            .iter()
+            .find(|u| u.id == human)
+            .expect("the human account");
+        assert_eq!(alice.username, "alice");
+        assert_eq!(alice.role, "operator");
+        assert_eq!(alice.auth_source, "local");
+        assert!(alice.enabled, "a new account was created disabled");
+        assert_eq!(
+            alice.scope,
+            Scope::All,
+            "a new account was created already narrowed"
+        );
+        assert_eq!(
+            alice.last_login_at, None,
+            "an account that has never signed in reported a last login"
+        );
+        let ci = listed
+            .iter()
+            .find(|u| u.id == robot)
+            .expect("the service account");
+        assert_eq!(ci.auth_source, "service");
+        assert_eq!(ci.role, "admin");
+
+        assert!(
+            matches!(
+                store
+                    .create("alice", "another-password", "viewer")
+                    .await
+                    .expect("create duplicate"),
+                UserCreateOutcome::UsernameTaken
+            ),
+            "a duplicate username was not reported as taken"
+        );
+        assert_eq!(
+            crate::pgtest::rows(&pool, "users").await,
+            2,
+            "the refused duplicate still wrote a row"
+        );
+    }
+
+    /// **The lock-out guard.** The only admin cannot be deleted, and a second one lifts the refusal.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_last_admin_cannot_be_deleted(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        store
+            .ensure_default_admin("a-bootstrap-password")
+            .await
+            .expect("seed");
+        let first = store.list().await.expect("list")[0].id;
+
+        assert!(
+            matches!(
+                store.delete(first).await.expect("delete"),
+                UserMutation::LastAdmin
+            ),
+            "the only admin was deletable — the deployment would be unmanageable"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "users").await, 1);
+        assert!(
+            matches!(
+                store.delete(Uuid::new_v4()).await.expect("delete"),
+                UserMutation::NotFound
+            ),
+            "deleting an id that does not exist did not say so"
+        );
+
+        let UserCreateOutcome::Created(second) = store
+            .create("admin2", "a-password", "admin")
+            .await
+            .expect("create")
+        else {
+            panic!("could not create a second admin");
+        };
+        assert!(
+            matches!(
+                store.delete(first).await.expect("delete"),
+                UserMutation::Done
+            ),
+            "a second admin did not lift the refusal"
+        );
+        let left = store.list().await.expect("list");
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, second);
+    }
+
+    /// **A service account holding the Admin role does not count**, on either guard.
+    ///
+    /// 🚨 This is the whole reason `CAN_LOG_IN` exists, and until now it was pinned only as text:
+    /// an automation's identity can carry Admin, but nobody can sign into it, so counting one would
+    /// let the last human admin be disabled and leave the WebUI unreachable with no way back in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_service_admin_does_not_stand_in_for_the_last_human_admin(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        store
+            .ensure_default_admin("a-bootstrap-password")
+            .await
+            .expect("seed");
+        let human = store.list().await.expect("list")[0].id;
+        store
+            .create_service("ci", "admin")
+            .await
+            .expect("create service");
+
+        assert!(
+            matches!(
+                store.set_enabled(human, false).await.expect("disable"),
+                UserMutation::LastAdmin
+            ),
+            "a service account stood in for the last human admin on the disable guard"
+        );
+        assert!(
+            matches!(
+                store.delete(human).await.expect("delete"),
+                UserMutation::LastAdmin
+            ),
+            "a service account stood in for the last human admin on the delete guard"
+        );
+
+        // The acceptance side: a *human* second admin does lift both, so this is not a guard that
+        // refuses everything.
+        store
+            .create("admin2", "a-password", "admin")
+            .await
+            .expect("create");
+        assert!(
+            matches!(
+                store.set_enabled(human, false).await.expect("disable"),
+                UserMutation::Done
+            ),
+            "a second human admin did not lift the disable guard"
+        );
+    }
+
+    /// Disabling is refused only while it would lock everyone out; enabling is always allowed, and
+    /// a disabled account is `Refused` at login rather than offered to a directory.
+    ///
+    /// That last part is the branch R4 deferred: consulting a directory on behalf of an account an
+    /// admin has switched off would let a directory sign-in resurrect it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_disabled_account_and_a_service_account_are_both_refused_at_login(
+        pool: sqlx::PgPool,
+    ) {
+        let store = UserStore::new(pool.clone());
+        let UserCreateOutcome::Created(alice) = store
+            .create("alice", "a-password", "operator")
+            .await
+            .expect("create")
+        else {
+            panic!("create refused");
+        };
+        store
+            .create_service("ci", "viewer")
+            .await
+            .expect("create service");
+
+        assert_eq!(
+            store.login_route("alice").await.expect("route"),
+            LoginRoute::Local
+        );
+        assert_eq!(
+            store.login_route("ci").await.expect("route"),
+            LoginRoute::Refused,
+            "a service account was offered a sign-in path"
+        );
+
+        assert!(
+            matches!(
+                store.set_enabled(alice, false).await.expect("disable"),
+                UserMutation::Done
+            ),
+            "disabling a non-admin was refused"
+        );
+        assert_eq!(
+            store.login_route("alice").await.expect("route"),
+            LoginRoute::Refused,
+            "a disabled account is still offerable to a directory, which could resurrect it"
+        );
+        assert!(
+            !store
+                .list()
+                .await
+                .expect("list")
+                .iter()
+                .find(|u| u.id == alice)
+                .expect("alice")
+                .enabled,
+            "the listing still reports the account as enabled"
+        );
+
+        assert!(
+            matches!(
+                store.set_enabled(alice, true).await.expect("enable"),
+                UserMutation::Done
+            ),
+            "enabling was refused"
+        );
+        assert_eq!(
+            store.login_route("alice").await.expect("route"),
+            LoginRoute::Local,
+            "re-enabling did not restore the sign-in path"
+        );
+    }
 }
