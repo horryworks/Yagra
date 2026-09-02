@@ -1652,4 +1652,136 @@ mod tests {
             "deleting a mute twice reported success twice"
         );
     }
+
+    /// Releasing a node twice **extends** its release rather than leaving two rows, and the two
+    /// exemption kinds are independent.
+    ///
+    /// 🚨 The upsert is keyed on `(kind, node_id)`. Two rows for one node would give the reader an
+    /// expiry to choose between, and whichever it picked would be right half the time — a node
+    /// silently back under suppression while the operator's second release said otherwise.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn releasing_a_node_twice_extends_it_and_the_kinds_are_independent(pool: sqlx::PgPool) {
+        use chrono::SubsecRound;
+        let repo = MaintenanceRepo::new(pool.clone());
+        // Truncated to what PostgreSQL stores: TIMESTAMPTZ is microsecond-resolution and the
+        // platform clock here is finer, so an untruncated instant cannot round-trip exactly.
+        let now = Utc::now().trunc_subsecs(6);
+        let hour = chrono::Duration::hours(1);
+        let node = pgtest::node(&pool, "a", 1, None).await;
+
+        assert!(repo
+            .exempt_nodes(ExemptionKind::Maintenance)
+            .await
+            .expect("exempt")
+            .is_empty());
+
+        repo.set_exemption(ExemptionKind::Maintenance, node, now + hour)
+            .await
+            .expect("release");
+        repo.set_exemption(ExemptionKind::Maintenance, node, now + hour * 3)
+            .await
+            .expect("release again");
+        assert_eq!(
+            pgtest::rows(&pool, "suppression_exemptions").await,
+            1,
+            "releasing the same node twice left two rows for the reader to choose between"
+        );
+        let listed = repo.list_exemptions().await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].kind, ExemptionKind::Maintenance);
+        assert_eq!(listed[0].node_id, node);
+        assert_eq!(
+            listed[0].until_at,
+            (now + hour * 3).to_rfc3339(),
+            "the second release did not extend the first"
+        );
+
+        // The same node released from the other kind is a separate row, and neither read sees the
+        // other's.
+        repo.set_exemption(ExemptionKind::Mute, node, now + hour)
+            .await
+            .expect("release from mute");
+        assert_eq!(pgtest::rows(&pool, "suppression_exemptions").await, 2);
+        assert_eq!(
+            repo.exempt_nodes(ExemptionKind::Maintenance)
+                .await
+                .expect("exempt"),
+            vec![node]
+        );
+        assert_eq!(
+            repo.exempt_nodes(ExemptionKind::Mute)
+                .await
+                .expect("exempt"),
+            vec![node]
+        );
+
+        assert!(
+            repo.clear_exemption(ExemptionKind::Mute, node)
+                .await
+                .expect("clear"),
+            "clearing an exemption that exists reported that it did not"
+        );
+        assert_eq!(
+            repo.exempt_nodes(ExemptionKind::Maintenance)
+                .await
+                .expect("exempt"),
+            vec![node],
+            "clearing one kind put the node back under the other"
+        );
+        assert!(repo
+            .exempt_nodes(ExemptionKind::Mute)
+            .await
+            .expect("exempt")
+            .is_empty());
+        assert!(
+            !repo
+                .clear_exemption(ExemptionKind::Mute, node)
+                .await
+                .expect("clear"),
+            "clearing an exemption twice reported success twice"
+        );
+    }
+
+    /// An expired release puts the node back under suppression, and the row is removed rather than
+    /// merely filtered out.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_expired_release_puts_the_node_back_and_is_swept(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let lapsed = pgtest::node(&pool, "lapsed", 1, None).await;
+        let held = pgtest::node(&pool, "held", 2, None).await;
+        repo.set_exemption(ExemptionKind::Maintenance, lapsed, now - hour)
+            .await
+            .expect("lapsed");
+        repo.set_exemption(ExemptionKind::Maintenance, held, now + hour)
+            .await
+            .expect("held");
+        assert_eq!(pgtest::rows(&pool, "suppression_exemptions").await, 2);
+
+        assert_eq!(
+            repo.list_exemptions()
+                .await
+                .expect("list")
+                .into_iter()
+                .map(|e| e.node_id)
+                .collect::<Vec<_>>(),
+            vec![held],
+            "an expired release is still being reported to the operator"
+        );
+        assert_eq!(
+            repo.exempt_nodes(ExemptionKind::Maintenance)
+                .await
+                .expect("exempt"),
+            vec![held],
+            "a node whose release ran out is still exempt from suppression"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "suppression_exemptions").await,
+            1,
+            "the expired row was filtered out of the answer but left in the table"
+        );
+    }
 }
