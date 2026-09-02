@@ -586,6 +586,245 @@ mod tests {
             );
         }
     }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn re_adding_a_metric_at_one_scope_edits_it_instead_of_adding_a_second(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let other = crate::pgtest::node(&pool, "core-sw-02", 12, None).await;
+
+        let first = repo
+            .create_item(
+                "node",
+                node,
+                "cpu_load",
+                "1.3.6.1.4.1.9.1",
+                "scalar",
+                "gauge",
+                true,
+            )
+            .await
+            .expect("create");
+        // The upsert is on `(scope_level, scope_id, metric_name)`. Re-adding the same metric edits
+        // the row and returns the id it already had, which is what lets the API answer without a
+        // 409 — a second row would give the scheduler two answers for one metric name.
+        let again = repo
+            .create_item(
+                "node",
+                node,
+                "cpu_load",
+                "1.3.6.1.4.1.2011.5",
+                "table",
+                "counter",
+                false,
+            )
+            .await
+            .expect("create");
+        assert_eq!(again, first, "the upsert must return the row it updated");
+        assert_eq!(crate::pgtest::rows(&pool, "collection_items").await, 1);
+
+        let stored = repo.list_items("node", node).await.expect("list");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].item.oid, "1.3.6.1.4.1.2011.5");
+        assert_eq!(stored[0].item.kind, CollectionKind::Table);
+        assert_eq!(stored[0].item.metric_kind, MetricKind::Counter);
+        assert!(!stored[0].enabled);
+
+        // The same metric name at a *different* scope is a different row — the uniqueness is per
+        // scope, which is the whole point of a per-node override existing at all.
+        let elsewhere = repo
+            .create_item(
+                "node",
+                other,
+                "cpu_load",
+                "1.3.6.1.4.1.9.1",
+                "scalar",
+                "gauge",
+                true,
+            )
+            .await
+            .expect("create");
+        assert_ne!(elsewhere, first);
+        assert_eq!(crate::pgtest::rows(&pool, "collection_items").await, 2);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn what_a_node_collects_is_its_profiles_templates_plus_its_own_overrides(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let profile = crate::pgtest::profile(&pool, "Generic switch").await;
+
+        let template = match repo
+            .create_template("Interfaces", Some("the usual"))
+            .await
+            .expect("create template")
+        {
+            CreateTemplateOutcome::Created(id) => id,
+            CreateTemplateOutcome::NameTaken => panic!("a fresh database cannot have this name"),
+        };
+        repo.create_template_item(
+            template,
+            "if_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            "table",
+            "counter",
+            true,
+        )
+        .await
+        .expect("template item");
+        // Disabled in the template. A poller that collected it anyway would walk a table nobody
+        // asked for on every node carrying this profile.
+        repo.create_template_item(
+            template,
+            "if_out_errors",
+            "1.3.6.1.2.1.2.2.1.20",
+            "table",
+            "counter",
+            false,
+        )
+        .await
+        .expect("template item");
+        repo.set_profile_templates(profile, &[template])
+            .await
+            .expect("attach");
+
+        repo.create_item(
+            "node",
+            node,
+            "cpu_load",
+            "1.3.6.1.4.1.9.1",
+            "scalar",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("node item");
+        repo.create_item(
+            "node",
+            node,
+            "sensor_temp",
+            "1.3.6.1.4.1.9.2",
+            "scalar",
+            "gauge",
+            false,
+        )
+        .await
+        .expect("node item");
+        // A *group*-scope row carrying the node's own id. The node read filters on
+        // `scope_level = 'node'` as well as on the id, and without that half this row would be
+        // collected from a scope the operator never attached to this node.
+        repo.create_item(
+            "group",
+            node,
+            "not_mine",
+            "1.3.6.1.4.1.9.3",
+            "scalar",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("group item");
+
+        let mut got = repo
+            .list_items_for_node(node, Some(profile))
+            .await
+            .expect("for node");
+        got.sort_by(|a, b| a.item.metric_name.cmp(&b.item.metric_name));
+        assert_eq!(
+            got.iter()
+                .map(|s| (s.level, s.item.metric_name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (ScopeLevel::Node, "cpu_load"),
+                (ScopeLevel::Profile, "if_in_octets"),
+            ]
+        );
+        // The level each item reports is what lets the resolver let a node override its profile,
+        // so a read that returned the right metrics under the wrong level would resolve backwards.
+        assert_eq!(got[1].item.kind, CollectionKind::Table);
+        assert_eq!(got[1].item.metric_kind, MetricKind::Counter);
+
+        // With no profile the template half is not queried at all — a node with no profile
+        // collects only what was put on it.
+        let node_only = repo
+            .list_items_for_node(node, None)
+            .await
+            .expect("for node");
+        assert_eq!(
+            node_only
+                .iter()
+                .map(|s| s.item.metric_name.as_str())
+                .collect::<Vec<_>>(),
+            ["cpu_load"]
+        );
+
+        // Another node carrying the same profile gets the profile half and nothing of this node's.
+        let sibling = crate::pgtest::node(&pool, "core-sw-02", 12, None).await;
+        let theirs = repo
+            .list_items_for_node(sibling, Some(profile))
+            .await
+            .expect("for node");
+        assert_eq!(
+            theirs
+                .iter()
+                .map(|s| (s.level, s.item.metric_name.as_str()))
+                .collect::<Vec<_>>(),
+            [(ScopeLevel::Profile, "if_in_octets")]
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn deleting_an_item_removes_exactly_that_row(pool: sqlx::PgPool) {
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let doomed = repo
+            .create_item(
+                "node",
+                node,
+                "cpu_load",
+                "1.3.6.1.4.1.9.1",
+                "scalar",
+                "gauge",
+                true,
+            )
+            .await
+            .expect("create");
+        repo.create_item(
+            "node",
+            node,
+            "mem_used",
+            "1.3.6.1.4.1.9.2",
+            "scalar",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("create");
+
+        assert!(repo.delete_item(doomed).await.expect("delete"));
+        assert_eq!(
+            repo.list_items("node", node)
+                .await
+                .expect("list")
+                .iter()
+                .map(|i| i.item.metric_name.as_str())
+                .collect::<Vec<_>>(),
+            ["mem_used"]
+        );
+
+        // An id that is not there reports it rather than reporting success — the API edge turns
+        // that `false` into a 404, so a statement that always claimed a row would make deleting an
+        // already-deleted item look like it worked.
+        assert!(!repo.delete_item(doomed).await.expect("delete"));
+        assert!(!repo.delete_item(Uuid::new_v4()).await.expect("delete"));
+    }
 }
 
 #[cfg(test)]
@@ -598,7 +837,11 @@ mod parse_tests {
     /// correctly and the enum handled it correctly, but the reader in between fell through a
     /// wildcard to `Scalar`. The scheduler then built an SNMP GET of a table root, the optical
     /// probe was never created, and `list_node_metrics` reported the metric as node-level — all
-    /// without an error or a log line. Only a test that crosses the writer/reader seam sees it.
+    /// without an error or a log line.
+    ///
+    /// ⚠️ This one crosses the writer/reader seam **in Rust only** —
+    /// [`an_item_round_trips_with_the_kind_the_wildcard_used_to_swallow`] below is the same
+    /// claim through a real column, and is the one that would have caught the original bug.
     #[test]
     fn the_reader_accepts_every_token_the_seeder_writes() {
         for kind in CollectionKind::ALL {
@@ -624,5 +867,98 @@ mod parse_tests {
     fn metric_kinds_round_trip_too() {
         assert_eq!(parse_metric_kind("counter"), MetricKind::Counter);
         assert_eq!(parse_metric_kind("gauge"), MetricKind::Gauge);
+    }
+
+    // ── Database tests (ADR-114) ───────────────────────────────────────────────────────
+    //
+    // What a node collects. The reader above (`parse_collection_kind`) carries a 🚨 about a
+    // wildcard that shipped a silent total failure, and the reason it survived is stated there:
+    // *every test used the enum directly and never went through the database*. These do.
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_item_round_trips_with_the_kind_the_wildcard_used_to_swallow(pool: sqlx::PgPool) {
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+
+        // Every kind, written as its stored token and read back through the parser. `optical` is
+        // the one that matters: it was seeded, read back as `Scalar`, dispatched as an SNMP GET of
+        // a table root, and produced nothing — no error, no log line, green suite.
+        for (i, kind) in CollectionKind::ALL.iter().enumerate() {
+            repo.create_item(
+                "node",
+                node,
+                &format!("m{i}_{}", kind.as_str()),
+                "1.3.6.1.2.1.1.3.0",
+                kind.as_str(),
+                "gauge",
+                true,
+            )
+            .await
+            .expect("create item");
+        }
+
+        let stored = repo.list_items("node", node).await.expect("list");
+        assert_eq!(stored.len(), CollectionKind::ALL.len());
+        for (item, kind) in stored.iter().zip(CollectionKind::ALL) {
+            assert_eq!(
+                item.item.kind, kind,
+                "{} came back as {:?}",
+                item.item.metric_name, item.item.kind
+            );
+        }
+
+        // `ORDER BY metric_name`, which is what makes the zip above a statement about pairs rather
+        // than about whatever order the rows happened to be inserted in.
+        assert_eq!(
+            stored
+                .iter()
+                .map(|i| i.item.metric_name.as_str())
+                .collect::<Vec<_>>(),
+            ["m0_scalar", "m1_table", "m2_optical"]
+        );
+
+        // The other three columns the row mapper reads, and the scope it reports itself at.
+        let one = &stored[0];
+        assert_eq!(one.item.oid, "1.3.6.1.2.1.1.3.0");
+        assert_eq!(one.item.metric_kind, MetricKind::Gauge);
+        assert_eq!(one.scope_level, ScopeLevel::Node);
+        assert_eq!(one.scope_id, node);
+        assert!(one.enabled);
+
+        // A counter is not a gauge, and threshold creation branches on exactly this.
+        repo.create_item(
+            "node",
+            node,
+            "if_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            "table",
+            "counter",
+            false,
+        )
+        .await
+        .expect("create item");
+        let counters = repo.list_items("node", node).await.expect("list");
+        let octets = counters
+            .iter()
+            .find(|i| i.item.metric_name == "if_in_octets")
+            .expect("the counter");
+        assert_eq!(octets.item.metric_kind, MetricKind::Counter);
+        // …and a disabled item is still *listed* — the editor has to show what it can re-enable.
+        // Only the scheduler's read filters on `enabled`, which the next test covers.
+        assert!(!octets.enabled);
+
+        // The list is keyed on both halves of the scope: another scope's items are not this
+        // scope's, even when the id matches.
+        assert!(repo
+            .list_items("profile", node)
+            .await
+            .expect("list")
+            .is_empty());
+        assert!(repo
+            .list_items("node", Uuid::new_v4())
+            .await
+            .expect("list")
+            .is_empty());
     }
 }

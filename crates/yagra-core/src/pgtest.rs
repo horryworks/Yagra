@@ -116,6 +116,21 @@ pub async fn node(pool: &PgPool, name: &str, n: u8, group: Option<Uuid>) -> Uuid
     id
 }
 
+/// A device profile, created through the production writer.
+///
+/// For the tables keyed by `REFERENCES profiles (id)` — `profile_collection_templates` is the one
+/// this was written for, where a hand-rolled uuid is refused by the foreign key rather than by
+/// anything a test would recognise.
+///
+/// `generic-snmp` is the column's own default and the category an operator-created profile gets,
+/// so a test that does not care about the category is not silently exercising an unusual one.
+pub async fn profile(pool: &PgPool, name: &str) -> Uuid {
+    repo(pool.clone())
+        .create_profile(name, "generic-snmp", None, None)
+        .await
+        .unwrap_or_else(|e| panic!("create profile {name}: {e}"))
+}
+
 /// Rows in `table`. A `count(*)` spelled once rather than in every test that needs one.
 pub async fn rows(pool: &PgPool, table: &str) -> i64 {
     // The name is interpolated because a table name cannot be a bind parameter. Every caller is
