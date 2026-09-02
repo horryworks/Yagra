@@ -1123,6 +1123,76 @@ mod tests {
         );
         assert!(!repo.delete_template(filled).await.expect("delete"));
     }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn removing_a_metric_from_a_template_cannot_reach_another_templates_row(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = CollectionRepo::new(pool.clone());
+        let created = |o: CreateTemplateOutcome| match o {
+            CreateTemplateOutcome::Created(id) => id,
+            CreateTemplateOutcome::NameTaken => panic!("a fresh database cannot have this name"),
+        };
+        let mine = created(repo.create_template("A mine", None).await.expect("t"));
+        let theirs = created(repo.create_template("B theirs", None).await.expect("t"));
+        let my_item = repo
+            .create_template_item(
+                mine,
+                "if_in_octets",
+                "1.3.6.1.2.1.31.1.1.1.6",
+                "table",
+                "counter",
+                true,
+            )
+            .await
+            .expect("item");
+        let their_item = repo
+            .create_template_item(
+                theirs,
+                "if_out_octets",
+                "1.3.6.1.2.1.31.1.1.1.10",
+                "table",
+                "counter",
+                true,
+            )
+            .await
+            .expect("item");
+
+        // 🚨 The delete is keyed on `(id, template_id)`, not on the id alone. The item id comes
+        // from the URL, so keying on it alone would let an operator editing one template remove a
+        // metric from another — and both templates would look correct to whoever was looking at
+        // the one they meant to edit.
+        assert!(
+            !repo
+                .delete_template_item(mine, their_item)
+                .await
+                .expect("delete"),
+            "an item id from another template must not be removable through this template"
+        );
+        assert_eq!(
+            repo.list_template_items(theirs).await.expect("items").len(),
+            1
+        );
+
+        assert!(repo
+            .delete_template_item(mine, my_item)
+            .await
+            .expect("delete"));
+        assert!(repo
+            .list_template_items(mine)
+            .await
+            .expect("items")
+            .is_empty());
+        assert_eq!(
+            repo.list_template_items(theirs).await.expect("items").len(),
+            1
+        );
+        assert!(!repo
+            .delete_template_item(mine, my_item)
+            .await
+            .expect("delete"));
+    }
 }
 
 #[cfg(test)]
