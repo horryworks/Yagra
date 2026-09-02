@@ -450,6 +450,7 @@ export RUST_LOG=info
 | `YAGRA_CLICKHOUSE_URL` | 未設定 ⇒ フローストア無効 | ClickHouse HTTP URL — オプトインのトラフィックフローストア（未設定だとフロー API は 503 を返す） |
 | `YAGRA_PG_MAX_CONNECTIONS` | `20` | PostgreSQL 接続プールの上限（HA のリーダーはこれに加えて advisory lock 用の +1 接続を保持） |
 | `YAGRA_VM_WRITERS` | コア数（最大 4） | VictoriaMetrics へメトリクスを書くタスクの本数。ノード id でシャードするので 1 系列の順序は保たれる。キューと spill の上限は本数で割られる（増えない）。`1` で従来の 1 本構成に戻る |
+| `YAGRA_RESULT_QUEUE_CAP` | `8192` | VictoriaMetrics が遅くなっている間、メトリクス層が抱えられるポール結果の件数。系列数が多いと VictoriaMetrics は周期的に失速し、この上限を超えたぶんは捨てられる（メトリクスは best-effort 層なので設計どおりだが、グラフの穴にはなる）。**変える前にこのデプロイの `yagra_vm_backlog_needed_high_water` を読むこと** —— 上限が無ければキューがどこまで伸びたかを表す値なので、そのままこの設定を決める数字になる。24 ポートで 1 件約 21 KB なのでメモリは線形に増える。`YAGRA_VM_WRITERS` の本数で割られる。131072 を超える値は丸められる（ログに出る） |
 | **API とセキュリティ** | | |
 | `YAGRA_KEK_FILE` | 未設定 ⇒ 一時 dev 鍵 | マウントした 32 バイト鍵ファイルへのパス |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` のバインドアドレス |

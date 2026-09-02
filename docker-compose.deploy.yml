@@ -213,6 +213,11 @@ services:
       # repeated, so raising this does not raise what core can hold. Set 1 to get the old
       # single-writer behaviour back, byte for byte.
       YAGRA_VM_WRITERS: ${YAGRA_VM_WRITERS:-}
+      # How many poll results the metrics tier may hold while VictoriaMetrics is slow (default
+      # 8192, ADR-110 Increment 5). Read yagra_vm_backlog_needed_high_water before raising it: it
+      # says how deep an unbounded queue would have gone during the stalls this box actually had.
+      # At 24 ports a queued result is ~21 KB, so the memory cost is linear.
+      YAGRA_RESULT_QUEUE_CAP: ${YAGRA_RESULT_QUEUE_CAP:-}
       YAGRA_TSDB_URL: http://victoriametrics:8428
       # Event log store (ADR-024): passive events searched from + written to VictoriaLogs;
       # PostgreSQL keeps only alert-linked rows. Unset to keep events entirely in PostgreSQL.

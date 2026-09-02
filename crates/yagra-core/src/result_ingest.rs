@@ -23,6 +23,7 @@
 //! every dwell-based alert as a flood. It therefore reaches the VM and metadata writers only, and
 //! that is the property [`consume_results_backfill`]'s own test pins.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use futures::{Stream, StreamExt};
@@ -43,7 +44,18 @@ use crate::{arp, dns_check, l3, l3_routing, meraki, neighbors, scheduler};
 /// Bounded queue between the single result matcher and each async batch persist writer (ADR-025,
 /// mirroring the event pipeline's ADR-024 split). Like events, sustained overload sheds the newest
 /// record rather than blocking the matcher or growing memory unbounded.
+///
+/// The default for all three tiers, and **the metrics tier is the only one an operator can
+/// override** ([`result_queue_cap`]). That is deliberate rather than tidy: the stall this bound was
+/// measured against is a VictoriaMetrics one (ADR-110 Increment 5), and widening the metadata and
+/// history queues on the same evidence would be changing something nobody has measured.
 pub(crate) const RESULT_PERSIST_CHANNEL_CAP: usize = 8192;
+/// Most the metrics tier's queue may be set to, however large a number an operator types.
+///
+/// At 24 ports a queued result is ~21 KB, so this ceiling is already ~2.7 GB of worst-case
+/// resident memory — far past any measurement, and past the point where a bigger queue is a better
+/// answer than a bigger VictoriaMetrics. A request above it is clamped **and logged**.
+const RESULT_QUEUE_CAP_MAX: usize = 131_072;
 /// Largest batch a result persist writer flushes at once (PG param ceiling: history is 11 cols/row,
 /// well under 65535 at this cap; interface/identity use array `unnest`, unbounded by params).
 const RESULT_PERSIST_BATCH_MAX: usize = 500;
@@ -106,12 +118,50 @@ fn writer_count_from(requested: Option<usize>, cores: usize) -> usize {
     }
 }
 
+/// How large the metrics tier's queue is in total: `YAGRA_RESULT_QUEUE_CAP` if an operator set it,
+/// otherwise [`RESULT_PERSIST_CHANNEL_CAP`].
+///
+/// Read once, at startup, beside the writer count — the two are one decision (the total is divided
+/// among the writers) and reading them apart is how they would come to disagree.
+fn result_queue_cap() -> usize {
+    queue_cap_from(
+        std::env::var("YAGRA_RESULT_QUEUE_CAP")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0),
+    )
+}
+
+/// The decision itself, separated from where its input comes from so it can be tested: reading an
+/// environment variable is a process-global mutation that parallel tests cannot do safely.
+fn queue_cap_from(requested: Option<usize>) -> usize {
+    match requested {
+        Some(n) if n > RESULT_QUEUE_CAP_MAX => {
+            tracing::warn!(
+                requested = n,
+                max = RESULT_QUEUE_CAP_MAX,
+                "YAGRA_RESULT_QUEUE_CAP above the cap; using the cap"
+            );
+            RESULT_QUEUE_CAP_MAX
+        }
+        Some(n) => n,
+        None => RESULT_PERSIST_CHANNEL_CAP,
+    }
+}
+
 /// One shard's share of the metrics queue. **The tier's total is what is bounded, not each
 /// shard's**: at 24 ports a queued result is ~21 KB, so giving every shard the full cap would
 /// multiply the tier's worst-case memory by the writer count. Dividing keeps `N = 1` identical
 /// to the single-writer design, byte for byte.
-const fn per_shard_channel_cap(shards: usize) -> usize {
-    let n = RESULT_PERSIST_CHANNEL_CAP / shards;
+///
+/// **The total stopped being a constant in ADR-110 Increment 5.** Dividing is still right — the
+/// reason above did not change — but 8,192 was chosen before anyone had measured what a
+/// VictoriaMetrics stall costs, and it turns out to be the number that decides how much of one a
+/// deployment rides out. So the total is [`result_queue_cap`]: the constant by default, and an
+/// operator's own figure once they have read `yagra_vm_backlog_needed_high_water` on their box.
+/// What a larger total buys is seconds of stall; what it costs is resident memory, linearly.
+const fn per_shard_channel_cap(total: usize, shards: usize) -> usize {
+    let n = total / shards;
     if n == 0 {
         1
     } else {
@@ -156,6 +206,86 @@ fn shard_of(node: yagra_common::NodeId, shards: usize) -> usize {
 #[derive(Clone)]
 pub(crate) struct VmWriters {
     txs: Arc<[tokio::sync::mpsc::Sender<Arc<PollResult>>]>,
+    /// Per-shard backlog bookkeeping, indexed exactly as `txs` is.
+    ///
+    /// A second array rather than a field on a per-shard struct, for one reason: the writer task
+    /// has to reach its own counters, and anything it held that also carried the `Sender` would
+    /// keep the channel open forever — `rx.recv()` returns `None` only once every sender is
+    /// dropped, which is how a writer learns to shut down. This array holds no sender.
+    backlog: Arc<[ShardBacklog]>,
+}
+
+/// Where one shard's queue **would** stand if the queue had no bound.
+///
+/// The cap is what makes a shed invisible: `yagra_result_metrics_persist_dropped_total` says how
+/// many results were thrown away, and nothing says **how many slots short the queue was** — which
+/// is the only number that can size it. Counting the sheds and adding them to the depth answers
+/// that: a result is shed only when the channel is full, so `depth + shed` is exactly where an
+/// unbounded queue would have stood.
+///
+/// "Since the queue was last empty" is the window, because emptying is when a backlog demonstrably
+/// ended (ADR-110 Increment 5).
+#[derive(Default)]
+struct ShardBacklog {
+    /// Results shed by this shard since its queue was last empty.
+    shed_since_empty: AtomicUsize,
+    /// The largest `depth + shed` this shard has reached since its queue was last empty.
+    peak_since_empty: AtomicUsize,
+    /// The largest `peak_since_empty` ever reached, over the life of the process.
+    ///
+    /// A gauge that only rises, deliberately: at steady state an episode's peak is overwritten
+    /// within milliseconds, so a scrape every 15 s would never see the one that mattered. **This
+    /// is the number that sizes the queue**; the two counters beside it are what an alert reads.
+    high_water: AtomicUsize,
+}
+
+impl ShardBacklog {
+    /// Record where an unbounded queue would stand right now, and publish it.
+    fn observe(&self, shard: usize, estimate: usize) {
+        self.peak_since_empty.fetch_max(estimate, Ordering::Relaxed);
+        let high = self
+            .high_water
+            .fetch_max(estimate, Ordering::Relaxed)
+            .max(estimate);
+        metrics::gauge!("yagra_vm_backlog_needed_current", "shard" => shard.to_string())
+            .set(estimate as f64);
+        metrics::gauge!("yagra_vm_backlog_needed_high_water", "shard" => shard.to_string())
+            .set(high as f64);
+    }
+
+    /// The queue reached empty: fold the episode away and report what it cost.
+    ///
+    /// `None` means there was no episode to close — the queue has been empty all along, which is
+    /// the steady state and must not be counted as an episode.
+    fn close_episode(&self) -> Option<(usize, usize)> {
+        let peak = self.peak_since_empty.swap(0, Ordering::Relaxed);
+        let shed = self.shed_since_empty.swap(0, Ordering::Relaxed);
+        (peak > 0).then_some((peak, shed))
+    }
+}
+
+/// Fold one finished backlog episode into the counters, and say so in the log when it cost data.
+///
+/// `cap` is read from the receiver rather than passed in, so it cannot disagree with the channel
+/// the episode actually happened on.
+fn close_backlog_episode(backlog: &ShardBacklog, shard: usize, cap: usize) {
+    let Some((peak, shed)) = backlog.close_episode() else {
+        return;
+    };
+    metrics::counter!("yagra_vm_backlog_episodes_total", "shard" => shard.to_string()).increment(1);
+    metrics::gauge!("yagra_vm_backlog_needed_current", "shard" => shard.to_string()).set(0.0);
+    if shed > 0 {
+        metrics::counter!("yagra_vm_backlog_short_episodes_total", "shard" => shard.to_string())
+            .increment(1);
+        tracing::warn!(
+            shard,
+            peak,
+            shed,
+            cap,
+            short_by = peak.saturating_sub(cap),
+            "metrics queue ran short while VictoriaMetrics was slow; samples were dropped"
+        );
+    }
 }
 
 impl VmWriters {
@@ -165,7 +295,18 @@ impl VmWriters {
     /// with two different label sets is double-counted by any `sum by()` over it.
     fn try_send(&self, result: &Arc<PollResult>) -> Result<(), TrySendError<Arc<PollResult>>> {
         let shard = shard_of(result.node_id, self.txs.len());
-        let sent = self.txs[shard].try_send(Arc::clone(result));
+        let tx = &self.txs[shard];
+        let sent = tx.try_send(Arc::clone(result));
+        // Count the shed first, so the estimate published below already includes this result:
+        // the whole point of the number is that a full queue keeps growing on paper.
+        let backlog = &self.backlog[shard];
+        let shed = if matches!(sent, Err(TrySendError::Full(_))) {
+            backlog.shed_since_empty.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            backlog.shed_since_empty.load(Ordering::Relaxed)
+        };
+        let depth = tx.max_capacity().saturating_sub(tx.capacity());
+        backlog.observe(shard, depth + shed);
         metrics::gauge!("yagra_persist_queue_depth", "stream" => "metrics")
             .set(self.depth() as f64);
         sent
@@ -189,7 +330,18 @@ impl VmWriters {
     /// running a writer task.
     #[cfg(test)]
     fn from_senders(txs: Vec<tokio::sync::mpsc::Sender<Arc<PollResult>>>) -> Self {
-        Self { txs: txs.into() }
+        let backlog: Vec<ShardBacklog> = (0..txs.len()).map(|_| ShardBacklog::default()).collect();
+        Self {
+            txs: txs.into(),
+            backlog: backlog.into(),
+        }
+    }
+
+    /// This shard's estimate of where an unbounded queue would stand, for a test that drives
+    /// `try_send` directly rather than reading the rendered exposition.
+    #[cfg(test)]
+    fn backlog_estimate(&self, shard: usize) -> usize {
+        self.backlog[shard].peak_since_empty.load(Ordering::Relaxed)
     }
 }
 
@@ -204,27 +356,48 @@ pub(crate) fn start_vm_writers(
     shutdown: CancellationToken,
 ) -> VmWriters {
     let shards = vm_writer_count();
-    let channel_cap = per_shard_channel_cap(shards);
+    let queue_cap = result_queue_cap();
+    let channel_cap = per_shard_channel_cap(queue_cap, shards);
     let spill_cap = per_shard_spill_cap(shards);
     let mut txs = Vec::with_capacity(shards);
+    // One array, shared by the senders and by every writer task — the counters have to be the same
+    // objects on both sides or the estimate is built from half the story.
+    let backlog: Arc<[ShardBacklog]> = (0..shards)
+        .map(|_| ShardBacklog::default())
+        .collect::<Vec<_>>()
+        .into();
     for shard in 0..shards {
         let (tx, rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(channel_cap);
         txs.push(tx);
+        // Hand every backlog key to the recorder once, at zero. `metrics-exporter-prometheus`
+        // renders only keys it has been handed at least once, so a series that first appears when
+        // something goes wrong is **absent** on a healthy deployment — the same text as "wired to a
+        // branch that never runs". ADR-108 Increment 3 shipped exactly that bug for a whole year.
+        backlog[shard].observe(shard, 0);
+        metrics::counter!("yagra_vm_backlog_episodes_total", "shard" => shard.to_string())
+            .increment(0);
+        metrics::counter!("yagra_vm_backlog_short_episodes_total", "shard" => shard.to_string())
+            .increment(0);
         tokio::spawn(run_vm_writer(
             rx,
             store.clone(),
             shutdown.clone(),
             shard,
             spill_cap,
+            Arc::clone(&backlog),
         ));
     }
     tracing::info!(
         shards,
+        queue_cap,
         channel_cap,
         spill_cap,
         "VictoriaMetrics writers started"
     );
-    VmWriters { txs: txs.into() }
+    VmWriters {
+        txs: txs.into(),
+        backlog,
+    }
 }
 
 /// One interface row for the batched metadata upsert (matcher extracts it from the result so the
@@ -539,12 +712,13 @@ async fn enqueue_history(
 /// occupancy. One task can use one core, so an occupancy near 1.0 means the queue behind it is
 /// pinned because this is the constraint — and an occupancy well under 1.0 while the queue is
 /// pinned means it is not (ADR-110 Increment 2).
-pub(crate) async fn run_vm_writer(
+async fn run_vm_writer(
     mut rx: tokio::sync::mpsc::Receiver<Arc<PollResult>>,
     store: Arc<dyn MetricStore>,
     shutdown: CancellationToken,
     shard: usize,
     spill_cap: usize,
+    backlog: Arc<[ShardBacklog]>,
 ) {
     let mut spill: std::collections::VecDeque<Vec<Arc<PollResult>>> =
         std::collections::VecDeque::new();
@@ -598,6 +772,11 @@ pub(crate) async fn run_vm_writer(
                             }
                         }
                         flush_vm(&store, &mut buf, &mut spill, spill_cap).await;
+                        // Empty means the backlog this shard was carrying is demonstrably over,
+                        // which is the only moment its peak can be folded away and reported.
+                        if rx.is_empty() {
+                            close_backlog_episode(&backlog[shard], shard, rx.max_capacity());
+                        }
                         // The per-shard depth, under its own name: the tier's total is published
                         // by `VmWriters::try_send`, and one name carrying both would be summed
                         // twice by anything aggregating over it.
@@ -1066,6 +1245,11 @@ mod tests {
         );
     }
 
+    /// The backlog array a single-shard writer needs, for a test that spawns one directly.
+    fn one_shard() -> Arc<[ShardBacklog]> {
+        vec![ShardBacklog::default()].into()
+    }
+
     /// A [`MetricStore`] whose `write_batch` succeeds or fails on demand, for exercising the VM
     /// writer's retry/spill bookkeeping without a network. The read methods are never hit here.
     struct FakeStore {
@@ -1327,7 +1511,8 @@ mod tests {
     fn sharding_does_not_raise_the_metrics_tier_bound() {
         for shards in 1..=VM_WRITERS_MAX {
             assert!(
-                per_shard_channel_cap(shards) * shards <= RESULT_PERSIST_CHANNEL_CAP,
+                per_shard_channel_cap(RESULT_PERSIST_CHANNEL_CAP, shards) * shards
+                    <= RESULT_PERSIST_CHANNEL_CAP,
                 "shards={shards}: queued results across the tier exceed the single-writer bound"
             );
             assert!(
@@ -1336,8 +1521,191 @@ mod tests {
             );
         }
         // And one writer is the old design exactly, so `YAGRA_VM_WRITERS=1` cannot regress.
-        assert_eq!(per_shard_channel_cap(1), RESULT_PERSIST_CHANNEL_CAP);
+        assert_eq!(
+            per_shard_channel_cap(RESULT_PERSIST_CHANNEL_CAP, 1),
+            RESULT_PERSIST_CHANNEL_CAP
+        );
         assert_eq!(per_shard_spill_cap(1), VM_SPILL_MAX_BATCHES);
+    }
+
+    /// The queue total an operator asks for is honoured, refused above the ceiling, and defaulted
+    /// when they ask for nothing — the same three answers `writer_count_from` gives, and tested the
+    /// same way, because reading the environment is a process-global mutation.
+    ///
+    /// 🚨 **The default has to stay byte-identical to the constant.** This knob exists so an A/B on
+    /// a load rig can run the same image twice; if merely adding it moved the default, the two legs
+    /// would not be comparable with anything measured before it.
+    #[test]
+    fn the_queue_total_is_the_constant_unless_an_operator_says_otherwise() {
+        assert_eq!(queue_cap_from(None), RESULT_PERSIST_CHANNEL_CAP);
+        assert_eq!(queue_cap_from(Some(16_384)), 16_384);
+        assert_eq!(
+            queue_cap_from(Some(RESULT_QUEUE_CAP_MAX + 1)),
+            RESULT_QUEUE_CAP_MAX,
+            "a number past the ceiling is clamped, not honoured"
+        );
+        // Whatever total is chosen, the division still holds the tier — not each shard — to it.
+        for shards in 1..=VM_WRITERS_MAX {
+            assert!(per_shard_channel_cap(16_384, shards) * shards <= 16_384);
+        }
+    }
+
+    /// Every rendered value of one metric, whatever labels it carries.
+    ///
+    /// 🚨 The prefix is matched **up to its delimiter**. `yagra_vm_backlog_needed` is a prefix of
+    /// `yagra_vm_backlog_needed_current`, so a plain `starts_with` would let one key answer for
+    /// another and an absent series would look present.
+    fn rendered_values(rendered: &str, metric: &str) -> Vec<f64> {
+        rendered
+            .lines()
+            .filter(|line| {
+                line.strip_prefix(metric)
+                    .is_some_and(|rest| rest.starts_with('{') || rest.starts_with(' '))
+            })
+            .filter_map(|line| line.rsplit(' ').next())
+            .filter_map(|value| value.parse::<f64>().ok())
+            .collect()
+    }
+
+    /// **A healthy deployment must publish all four backlog keys, at zero.**
+    ///
+    /// 🚨 This is the bug ADR-108 Increment 3 shipped for a year, in a different file:
+    /// `metrics-exporter-prometheus` renders only the keys it has been handed at least once, so a
+    /// series that first appears when something goes wrong is **absent** while nothing is wrong —
+    /// and "absent" is the same text as "wired to a branch that never runs". An operator cannot
+    /// tell those apart, and neither can an alert.
+    #[tokio::test]
+    async fn a_healthy_metrics_tier_publishes_every_backlog_key_at_zero() {
+        let fake = Arc::new(FakeStore::new(false));
+        let store: Arc<dyn MetricStore> = fake.clone();
+        let shutdown = CancellationToken::new();
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        // Registration happens synchronously inside `start_vm_writers`, so the local recorder sees
+        // it; anything the spawned writers publish later would not, and this test asserts nothing
+        // about that.
+        let vm =
+            metrics::with_local_recorder(&recorder, || start_vm_writers(store, shutdown.clone()));
+        let rendered = handle.render();
+
+        let mut inspected = 0;
+        for key in [
+            "yagra_vm_backlog_needed_current",
+            "yagra_vm_backlog_needed_high_water",
+            "yagra_vm_backlog_episodes_total",
+            "yagra_vm_backlog_short_episodes_total",
+        ] {
+            let values = rendered_values(&rendered, key);
+            assert_eq!(
+                values.len(),
+                vm.shards(),
+                "{key} is missing a shard (or absent entirely) in:\n{rendered}"
+            );
+            assert!(
+                values.iter().all(|v| *v == 0.0),
+                "{key} did not start at zero: {values:?}"
+            );
+            inspected += values.len();
+        }
+        // The floor counts what was inspected, not what was found wrong: a renderer that stopped
+        // matching would otherwise report a clean tree.
+        assert!(inspected >= 4, "only {inspected} series were inspected");
+        shutdown.cancel();
+    }
+
+    /// **The estimate has to keep counting past the cap, which is the whole point of it.**
+    ///
+    /// Once the queue is full its depth stops moving, so depth alone says "8,192" at every load
+    /// above the cap and a deployment shedding ten thousand results a second looks exactly like one
+    /// shedding ten. Adding the sheds back answers the only question that can size the queue —
+    /// where an unbounded one would have stood.
+    #[tokio::test]
+    async fn the_backlog_estimate_keeps_counting_past_the_cap() {
+        let cap = 4;
+        // `_rx` is bound, not dropped: a closed channel refuses with `Closed`, not `Full`, and this
+        // test is about the full case.
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(cap);
+        let vm = VmWriters::from_senders(vec![tx]);
+        let result = sample_result();
+
+        for _ in 0..cap {
+            vm.try_send(&result)
+                .expect("the queue has room until it is full");
+        }
+        let shed = 7;
+        for _ in 0..shed {
+            assert!(
+                matches!(vm.try_send(&result), Err(TrySendError::Full(_))),
+                "a full queue must shed rather than block"
+            );
+        }
+
+        assert_eq!(
+            vm.backlog_estimate(0),
+            cap + shed,
+            "the estimate stopped at the cap, so it cannot say how short the queue was"
+        );
+        assert_eq!(
+            vm.backlog[0].close_episode(),
+            Some((cap + shed, shed)),
+            "closing the episode must report both the peak and what it cost"
+        );
+        assert_eq!(
+            vm.backlog[0].close_episode(),
+            None,
+            "an empty queue is not an episode — counting it would drown the real ones"
+        );
+    }
+
+    /// The episode is closed by the **writer**, when its queue empties. Without that call the peak
+    /// never resets, the first backlog stands forever, and every later episode is folded into it.
+    #[tokio::test]
+    async fn the_writer_closes_the_backlog_episode_when_its_queue_empties() {
+        let fake = Arc::new(FakeStore::new(false));
+        let store: Arc<dyn MetricStore> = fake.clone();
+        let shutdown = CancellationToken::new();
+        let vm = start_vm_writers(store, shutdown.clone());
+        let shards = vm.shards();
+
+        // One node per shard, found by search — the ids are opaque, so the routing decides.
+        let mut per_shard: Vec<Option<NodeId>> = vec![None; shards];
+        while per_shard.iter().any(Option::is_none) {
+            let node = NodeId::new();
+            per_shard[shard_of(node, shards)].get_or_insert(node);
+        }
+        for node in per_shard.iter().flatten() {
+            let mut r = (*sample_result()).clone();
+            r.node_id = *node;
+            vm.try_send(&Arc::new(r)).expect("a fresh shard has room");
+        }
+        assert!(
+            (0..shards).any(|s| vm.backlog_estimate(s) > 0),
+            "the sender did not record a backlog, so this test would pass vacuously"
+        );
+
+        for _ in 0..200 {
+            if fake.seen_nodes().len() >= shards {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        // The flush is what closes the episode, and it happens just after the store is called.
+        for _ in 0..200 {
+            if (0..shards).all(|s| vm.backlog_estimate(s) == 0) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        for shard in 0..shards {
+            assert_eq!(
+                vm.backlog_estimate(shard),
+                0,
+                "shard {shard} of {shards} still carries its peak after the queue emptied: \
+                 the writer is not closing episodes"
+            );
+        }
+        shutdown.cancel();
     }
 
     /// The linger has to do both halves: hold a partial batch back long enough for the rest of it
@@ -1349,7 +1717,14 @@ mod tests {
         let store: Arc<dyn MetricStore> = fake.clone();
         let shutdown = CancellationToken::new();
         let (tx, rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
-        tokio::spawn(run_vm_writer(rx, store, shutdown.clone(), 0, 8));
+        tokio::spawn(run_vm_writer(
+            rx,
+            store,
+            shutdown.clone(),
+            0,
+            8,
+            one_shard(),
+        ));
 
         tx.send(sample_result())
             .await
@@ -1378,7 +1753,14 @@ mod tests {
         let store: Arc<dyn MetricStore> = fake.clone();
         let shutdown = CancellationToken::new();
         let (tx, rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
-        tokio::spawn(run_vm_writer(rx, store, shutdown.clone(), 0, 8));
+        tokio::spawn(run_vm_writer(
+            rx,
+            store,
+            shutdown.clone(),
+            0,
+            8,
+            one_shard(),
+        ));
 
         tx.send(sample_result())
             .await

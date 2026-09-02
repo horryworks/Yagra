@@ -82,6 +82,24 @@
 
 ### Improvements
 
+- **Core now says how short its metrics queue ran, not just that it dropped something.** When
+  VictoriaMetrics slows down — which a large series count makes it do periodically — poll results
+  arrive faster than they leave, the queue between them fills, and everything past the cap is
+  dropped. That shedding is by design (metrics are the best-effort tier and a lost sample is
+  refilled by the next poll), but until now the only evidence was a drop counter, which says how
+  much was thrown away and nothing about **how much room would have been enough**. Four new
+  per-shard metrics answer that: `yagra_vm_backlog_needed_current` and
+  `yagra_vm_backlog_needed_high_water` report where an unbounded queue would have stood — the
+  depth plus everything shed since it was last empty — and `yagra_vm_backlog_episodes_total` /
+  `yagra_vm_backlog_short_episodes_total` count backlogs and the ones that cost data. A backlog
+  that cost data also logs a warning naming the shortfall. All four are published from startup at
+  `0`, so "healthy" and "this was never wired up" are no longer the same text.
+- **The metrics queue's size is now an operator setting, `YAGRA_RESULT_QUEUE_CAP` (default 8192,
+  unchanged).** Raising it buys seconds of VictoriaMetrics stall at a linear cost in memory — a
+  queued result is about 21 KB at 24 ports. Read `yagra_vm_backlog_needed_high_water` on the
+  deployment before choosing a number; it is exactly the figure that sizes this. Values above
+  131072 are clamped and logged. The total is divided among `YAGRA_VM_WRITERS`, not repeated per
+  writer, so this is the tier's ceiling rather than each writer's.
 - **`yagra_poll_cycles_missed_total` now appears on a healthy poller, reading `0`.** It used to be
   emitted only when the deficit was non-zero, and `metrics-exporter-prometheus` renders only the
   keys it has been handed — so a poller that was keeping up published no such line at all, not
