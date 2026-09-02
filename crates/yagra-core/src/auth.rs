@@ -2553,4 +2553,246 @@ mod tests {
             UserMutation::NotFound
         ));
     }
+
+    /// A directory identity nobody has seen before is provisioned on the spot, unrestricted, and
+    /// routes to its own provider afterwards.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_new_external_identity_is_provisioned_unrestricted(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        let provider = Uuid::new_v4();
+        let ExternalUpsert::Ok(id, principal) = store
+            .upsert_external_user(UserKind::Oidc, provider, "sub-1", "alice", Role::Operator)
+            .await
+            .expect("upsert")
+        else {
+            panic!("a fresh directory identity was refused");
+        };
+        assert_eq!(principal.role, Role::Operator);
+        assert_eq!(
+            principal.scope,
+            Scope::All,
+            "a just-provisioned account was born narrowed, before anyone could have narrowed it"
+        );
+
+        let listed = store.list().await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+        assert_eq!(listed[0].username, "alice");
+        assert_eq!(listed[0].auth_source, "oidc");
+        assert!(
+            listed[0].last_login_at.is_some(),
+            "the provisioning sign-in was not recorded"
+        );
+        assert_eq!(
+            store.login_route("alice").await.expect("route"),
+            LoginRoute::External(UserKind::Oidc),
+            "an externally-backed account did not route to a directory"
+        );
+        assert!(
+            store
+                .verify("alice", "anything")
+                .await
+                .expect("verify")
+                .is_none(),
+            "the password sentinel authenticated"
+        );
+    }
+
+    /// A second sign-in refreshes the role from the directory — which is authoritative about who
+    /// somebody is — but keeps the scope an admin assigned here.
+    ///
+    /// 🚨 Re-deriving the scope would widen it back to unrestricted on the user's next sign-in,
+    /// silently. And promoting through SSO must clear it in the same statement, exactly as the
+    /// local path does: this is the *second* role-setting path `ADMIN_IS_UNSCOPED` covers, and the
+    /// one no test had ever run.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_second_sign_in_refreshes_the_role_and_keeps_the_assigned_scope(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        let provider = Uuid::new_v4();
+        let narrow = Scope::groups(["site-a"]);
+        let ExternalUpsert::Ok(id, _) = store
+            .upsert_external_user(UserKind::Ldap, provider, "sub-1", "alice", Role::Viewer)
+            .await
+            .expect("first")
+        else {
+            panic!("provisioning refused");
+        };
+        store.set_scope(id, &narrow).await.expect("set_scope");
+
+        let ExternalUpsert::Ok(again, principal) = store
+            .upsert_external_user(UserKind::Ldap, provider, "sub-1", "alice", Role::Operator)
+            .await
+            .expect("second")
+        else {
+            panic!("the second sign-in was refused");
+        };
+        assert_eq!(again, id, "the same identity was given a second account");
+        assert_eq!(crate::pgtest::rows(&pool, "users").await, 1);
+        assert_eq!(
+            principal.role,
+            Role::Operator,
+            "the role was not refreshed from the directory"
+        );
+        assert_eq!(
+            principal.scope, narrow,
+            "the scope an admin assigned was re-derived and widened"
+        );
+        assert_eq!(store.scope_of(id).await.expect("scope_of"), Some(narrow));
+
+        // Promotion through SSO clears it, in the statement that grants the role.
+        let ExternalUpsert::Ok(_, promoted) = store
+            .upsert_external_user(UserKind::Ldap, provider, "sub-1", "alice", Role::Admin)
+            .await
+            .expect("third")
+        else {
+            panic!("the promotion sign-in was refused");
+        };
+        assert_eq!(promoted.role, Role::Admin);
+        assert_eq!(
+            promoted.scope,
+            Scope::All,
+            "an SSO promotion left a group scope on an Admin — a narrowed view of a fleet the \
+             account can already reconfigure"
+        );
+        assert_eq!(
+            store.scope_of(id).await.expect("scope_of"),
+            Some(Scope::All)
+        );
+    }
+
+    /// A disabled account cannot be signed back in through the directory.
+    ///
+    /// The control is worth nothing otherwise: disabling revokes the sessions, and the next SSO
+    /// login would mint a fresh one — for exactly the accounts an operator is least able to switch
+    /// off at the source.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_disabled_external_account_is_refused_rather_than_signed_back_in(pool: sqlx::PgPool) {
+        let store = UserStore::new(pool.clone());
+        let provider = Uuid::new_v4();
+        let ExternalUpsert::Ok(id, _) = store
+            .upsert_external_user(UserKind::Oidc, provider, "sub-1", "alice", Role::Operator)
+            .await
+            .expect("provision")
+        else {
+            panic!("provisioning refused");
+        };
+        store.set_enabled(id, false).await.expect("disable");
+
+        assert!(
+            matches!(
+                store
+                    .upsert_external_user(
+                        UserKind::Oidc,
+                        provider,
+                        "sub-1",
+                        "alice",
+                        Role::Operator
+                    )
+                    .await
+                    .expect("upsert"),
+                ExternalUpsert::Disabled
+            ),
+            "a disabled account was signed back in through the directory"
+        );
+
+        // The acceptance side: re-enabling restores it, so this is not a path that refuses always.
+        store.set_enabled(id, true).await.expect("enable");
+        assert!(
+            matches!(
+                store
+                    .upsert_external_user(
+                        UserKind::Oidc,
+                        provider,
+                        "sub-1",
+                        "alice",
+                        Role::Operator
+                    )
+                    .await
+                    .expect("upsert"),
+                ExternalUpsert::Ok(_, _)
+            ),
+            "re-enabling did not restore the directory sign-in"
+        );
+    }
+
+    /// A directory rename follows the account — the identity is `(provider, subject)`, not the
+    /// name — but never onto a username somebody else owns, in either direction.
+    ///
+    /// For LDAP the username **is** what the person types at the form, so both halves matter: a
+    /// rename that is not followed locks them out, and one that takes an existing name would hand
+    /// somebody another account.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_directory_rename_follows_the_account_but_never_takes_an_owned_name(
+        pool: sqlx::PgPool,
+    ) {
+        let store = UserStore::new(pool.clone());
+        let provider = Uuid::new_v4();
+        store
+            .create("bob", "a-password", "viewer")
+            .await
+            .expect("local bob");
+        let ExternalUpsert::Ok(id, _) = store
+            .upsert_external_user(UserKind::Ldap, provider, "sub-1", "alice", Role::Viewer)
+            .await
+            .expect("provision")
+        else {
+            panic!("provisioning refused");
+        };
+
+        // Renamed in the directory: the same subject signs in under a new name.
+        store
+            .upsert_external_user(UserKind::Ldap, provider, "sub-1", "alice2", Role::Viewer)
+            .await
+            .expect("rename");
+        assert_eq!(crate::pgtest::rows(&pool, "users").await, 2);
+        let renamed = store
+            .list()
+            .await
+            .expect("list")
+            .into_iter()
+            .find(|u| u.id == id)
+            .expect("the external account");
+        assert_eq!(
+            renamed.username, "alice2",
+            "a directory rename was not followed, so the person can never sign in again"
+        );
+
+        // Renamed onto a name somebody else owns: the refresh must decline, not steal it.
+        store
+            .upsert_external_user(UserKind::Ldap, provider, "sub-1", "bob", Role::Viewer)
+            .await
+            .expect("collide");
+        let still = store
+            .list()
+            .await
+            .expect("list")
+            .into_iter()
+            .find(|u| u.id == id)
+            .expect("the external account");
+        assert_eq!(
+            still.username, "alice2",
+            "the rename took a username another account owns"
+        );
+
+        // A *new* identity landing on an owned name is refused outright rather than suffixed.
+        assert!(
+            matches!(
+                store
+                    .upsert_external_user(UserKind::Ldap, provider, "sub-2", "bob", Role::Viewer)
+                    .await
+                    .expect("new identity"),
+                ExternalUpsert::UsernameTaken(_)
+            ),
+            "a new directory identity took over an existing account's username"
+        );
+        assert_eq!(
+            crate::pgtest::rows(&pool, "users").await,
+            2,
+            "the refused provisioning wrote a row anyway"
+        );
+    }
 }
