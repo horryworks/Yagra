@@ -1378,4 +1378,179 @@ mod tests {
         );
         assert_eq!(repo.list_windows().await.expect("list").len(), 1);
     }
+
+    /// The two reads the alert engine and the release path use return exactly the windows in force
+    /// — and `active_windows` carries the instant each one stops, which is what an exemption is
+    /// sized to.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_windows_in_force_reach_the_alert_engine(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        assert!(repo.active_scopes().await.expect("scopes").is_empty());
+
+        repo.create_window("running", "node", "in-force", now - hour, now + hour)
+            .await
+            .expect("running");
+        repo.create_window("later", "node", "not-yet", now + hour, now + hour * 2)
+            .await
+            .expect("later");
+        repo.create_window("over", "node", "finished", now - hour * 3, now - hour * 2)
+            .await
+            .expect("over");
+        let paused = repo
+            .create_window("paused", "node", "switched-off", now - hour, now + hour)
+            .await
+            .expect("paused");
+        repo.set_window_enabled(paused, false)
+            .await
+            .expect("disable");
+
+        let scopes = repo.active_scopes().await.expect("scopes");
+        assert_eq!(
+            scopes,
+            vec![(WindowScope::Node, "in-force".to_owned())],
+            "a window that is not in force is suppressing alerts, or one that is has been dropped"
+        );
+
+        let windows = repo.active_windows().await.expect("windows");
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].0, WindowScope::Node);
+        assert_eq!(windows[0].1, "in-force");
+        assert!(
+            windows[0].2 > now,
+            "the coverage instant an exemption is sized to is already in the past"
+        );
+        assert!(
+            windows[0].2 < now + hour * 2,
+            "the coverage instant belongs to a different window"
+        );
+    }
+
+    /// The upgrade path closes **its own** windows and nobody else's, and leaves the rows behind.
+    ///
+    /// The process that opens an upgrade window is never the process that sees the run finish, so
+    /// this matches the window family rather than an id. That is exactly why it has to be narrow:
+    /// a predicate one token wider would silence-cancel every operator's maintenance on the next
+    /// upgrade.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_upgrade_path_closes_only_its_own_windows(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let operators = repo
+            .create_window("tonight", "node", "n-1", now - hour, now + hour)
+            .await
+            .expect("operator window");
+        repo.create_window(
+            "upgrade",
+            WindowScope::System.as_str(),
+            UPGRADE_SCOPE_ID,
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(14),
+        )
+        .await
+        .expect("upgrade window");
+        assert_eq!(repo.active_scopes().await.expect("scopes").len(), 2);
+
+        assert_eq!(
+            repo.end_upgrade_windows().await.expect("close"),
+            1,
+            "the upgrade close touched the wrong number of windows"
+        );
+        let scopes = repo.active_scopes().await.expect("scopes");
+        assert_eq!(
+            scopes,
+            vec![(WindowScope::Node, "n-1".to_owned())],
+            "the upgrade close cancelled an operator's maintenance, or did not close its own"
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "maintenance_windows").await,
+            2,
+            "the upgrade close deleted the record of the silence it caused"
+        );
+        assert!(
+            repo.list_windows()
+                .await
+                .expect("list")
+                .iter()
+                .any(|w| w.id == operators && w.active),
+            "the operator's window stopped being in force"
+        );
+
+        assert_eq!(
+            repo.end_upgrade_windows().await.expect("close"),
+            0,
+            "closing an already-closed upgrade window reported work"
+        );
+    }
+
+    /// **Two rules in one statement, and each is load-bearing on its own.**
+    ///
+    /// 🚨 `ids` is the caller's *visible* set, which is what makes this honour group scope, and
+    /// `ends_at <= now()` is evaluated by the database. Dropping the id clause would clear the
+    /// whole deployment's ended windows for a scoped caller; dropping the time clause would delete
+    /// windows that are still suppressing alerts.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn clearing_ended_windows_honours_both_the_visible_set_and_the_clock(pool: sqlx::PgPool) {
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let mine_ended = repo
+            .create_window("mine, over", "node", "n-1", now - hour * 3, now - hour * 2)
+            .await
+            .expect("a");
+        let mine_running = repo
+            .create_window("mine, running", "node", "n-2", now - hour, now + hour)
+            .await
+            .expect("b");
+        let theirs_ended = repo
+            .create_window(
+                "theirs, over",
+                "node",
+                "n-9",
+                now - hour * 3,
+                now - hour * 2,
+            )
+            .await
+            .expect("c");
+
+        assert_eq!(
+            repo.delete_ended_windows(&[]).await.expect("empty"),
+            0,
+            "an empty visible set deleted something"
+        );
+        assert_eq!(pgtest::rows(&pool, "maintenance_windows").await, 3);
+
+        // The caller can see two of the three, and only one of those has ended.
+        assert_eq!(
+            repo.delete_ended_windows(&[mine_ended, mine_running])
+                .await
+                .expect("clear"),
+            1,
+            "the clear took the wrong number of windows"
+        );
+        let left: Vec<Uuid> = repo
+            .list_windows()
+            .await
+            .expect("list")
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert!(
+            !left.contains(&mine_ended),
+            "the ended window in the visible set survived"
+        );
+        assert!(
+            left.contains(&mine_running),
+            "a window still suppressing alerts was deleted"
+        );
+        assert!(
+            left.contains(&theirs_ended),
+            "an ended window outside the caller's scope was deleted"
+        );
+    }
 }
