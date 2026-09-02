@@ -572,6 +572,14 @@ mod tests {
             FINDING_SEARCH_WHERE.contains("(f.created_at, f.id) <"),
             "the cursor must be the row value, not the timestamp alone: {FINDING_SEARCH_WHERE}"
         );
+        // …and strictly. ⚠️ The needle above is a **prefix of `<=`**, so it went on matching when
+        // the comparison was widened — measured, ADR-116 増分 6. An inclusive cursor repeats the
+        // boundary row on every page, which the database test beside this one catches and this
+        // one, on its own, did not.
+        assert!(
+            !FINDING_SEARCH_WHERE.contains("(f.created_at, f.id) <="),
+            "an inclusive cursor repeats the row the previous page ended on: {FINDING_SEARCH_WHERE}"
+        );
         // Findings carry no tool of their own; `?tool=` is only answerable through the run.
         assert!(
             sql.contains("JOIN analysis_jobs j ON j.id = f.job_id"),
@@ -1279,5 +1287,368 @@ mod tests {
         // Neither write touches `enabled` — a deferral is not a switch-off, and a fire is not one
         // either. A schedule that quietly disabled itself would never be seen to stop.
         assert!(fired.enabled);
+    }
+
+    /// A finding named by `metric`, about `node`, scoring `score`, with `kind` spelled out.
+    ///
+    /// The wider form of [`a_finding`] — the cross-run search filters on `kind` and on the node's
+    /// *current* name, so those two cannot be constants here.
+    fn a_named_finding(
+        score: f64,
+        node: Option<Uuid>,
+        node_name: &str,
+        metric: &str,
+        kind: &str,
+        severity: &str,
+    ) -> NewFinding {
+        NewFinding {
+            score,
+            severity: severity.into(),
+            node_id: node,
+            node_name: node_name.into(),
+            metric: metric.into(),
+            kind: kind.into(),
+            when_label: "today 03:12".into(),
+            duration: "6 min".into(),
+            detail: serde_json::json!({}),
+        }
+    }
+
+    fn a_search(limit: i64) -> FindingSearch<'static> {
+        FindingSearch {
+            limit,
+            ..Default::default()
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_saved_findings_search_narrows_on_every_filter_it_offers(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let core = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let edge = crate::pgtest::node(&pool, "edge-rtr-02", 12, None).await;
+
+        let anomaly = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+        let capacity = repo
+            .insert(&a_job(AnalysisTool::Capacity), None)
+            .await
+            .expect("insert");
+        repo.insert_findings(
+            anomaly.id,
+            &[
+                a_named_finding(
+                    90.0,
+                    Some(core),
+                    "core-sw-01",
+                    "cpu_load",
+                    "spike",
+                    SEV_CRIT,
+                ),
+                a_named_finding(
+                    30.0,
+                    Some(edge),
+                    "edge-rtr-02",
+                    "if_in_octets",
+                    "dip",
+                    SEV_WARN,
+                ),
+            ],
+        )
+        .await
+        .expect("findings");
+        repo.insert_findings(
+            capacity.id,
+            &[a_named_finding(
+                60.0,
+                Some(core),
+                "core-sw-01",
+                "disk_used",
+                "exhaustion",
+                SEV_WARN,
+            )],
+        )
+        .await
+        .expect("findings");
+
+        let metrics =
+            |rows: &[SavedFinding]| rows.iter().map(|f| f.metric.clone()).collect::<Vec<_>>();
+
+        // Unfiltered. Every clause is present with a NULL bind, so this is also the assertion that
+        // an empty `tool`/`severity` set becomes NULL rather than an empty array — `= ANY('{}')`
+        // matches nothing, which would turn "no filter" into "no results".
+        let all = repo.search_findings(&a_search(50)).await.expect("search");
+        assert_eq!(metrics(&all), ["disk_used", "if_in_octets", "cpu_load"]);
+        // Newest first, and the run's tool travels with the finding through the join — a finding
+        // row records what was found, never which diagnostic found it.
+        assert_eq!(all[0].tool, "capacity");
+        assert_eq!(all[2].tool, "anomaly");
+
+        // The tool filter is a set, and it goes through the join.
+        let by_tool = repo
+            .search_findings(&FindingSearch {
+                tool: &[AnalysisTool::Anomaly],
+                ..a_search(50)
+            })
+            .await
+            .expect("search");
+        assert_eq!(metrics(&by_tool), ["if_in_octets", "cpu_load"]);
+
+        let by_severity = repo
+            .search_findings(&FindingSearch {
+                severity: &[SEV_CRIT],
+                ..a_search(50)
+            })
+            .await
+            .expect("search");
+        assert_eq!(metrics(&by_severity), ["cpu_load"]);
+
+        let by_node = repo
+            .search_findings(&FindingSearch {
+                node_id: Some(edge),
+                ..a_search(50)
+            })
+            .await
+            .expect("search");
+        assert_eq!(metrics(&by_node), ["if_in_octets"]);
+
+        // `q` matches the metric **or** the kind, because the Saved-findings *What* column renders
+        // both and a filter mounted on a column should match what that column shows. Case-folded.
+        assert_eq!(
+            metrics(
+                &repo
+                    .search_findings(&FindingSearch {
+                        q: Some("CPU"),
+                        ..a_search(50)
+                    })
+                    .await
+                    .expect("search")
+            ),
+            ["cpu_load"]
+        );
+        assert_eq!(
+            metrics(
+                &repo
+                    .search_findings(&FindingSearch {
+                        q: Some("exhaust"),
+                        ..a_search(50)
+                    })
+                    .await
+                    .expect("search")
+            ),
+            ["disk_used"],
+            "the kind half of `q`"
+        );
+
+        // `node_q` is a substring of the node's **current** name, resolved through `nodes` — not of
+        // the name the run denormalised into the row.
+        assert_eq!(
+            metrics(
+                &repo
+                    .search_findings(&FindingSearch {
+                        node_q: Some("edge"),
+                        ..a_search(50)
+                    })
+                    .await
+                    .expect("search")
+            ),
+            ["if_in_octets"]
+        );
+
+        // Inclusive at both ends: an operator asking for 30–60 and not seeing the rows that score
+        // exactly 30 or exactly 60 reads as missing data, not as a boundary convention.
+        assert_eq!(
+            metrics(
+                &repo
+                    .search_findings(&FindingSearch {
+                        min_score: Some(30.0),
+                        max_score: Some(60.0),
+                        ..a_search(50)
+                    })
+                    .await
+                    .expect("search")
+            ),
+            ["disk_used", "if_in_octets"]
+        );
+
+        // The page size is the bind *after* the twelve filters. Off by one there and it lands in
+        // `max_score`, which answers a different question and returns everything unpaged.
+        assert_eq!(
+            repo.search_findings(&a_search(1))
+                .await
+                .expect("search")
+                .len(),
+            1
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_saved_findings_search_never_widens_the_callers_own_scope(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let theirs = crate::pgtest::group(&pool, "Site A").await;
+        let ours = crate::pgtest::group(&pool, "Site B").await;
+        let their_node = crate::pgtest::node(&pool, "a-sw-01", 21, Some(theirs)).await;
+        let our_node = crate::pgtest::node(&pool, "b-sw-01", 22, Some(ours)).await;
+
+        let job = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+        repo.insert_findings(
+            job.id,
+            &[
+                a_named_finding(
+                    90.0,
+                    Some(their_node),
+                    "a-sw-01",
+                    "theirs",
+                    "spike",
+                    SEV_CRIT,
+                ),
+                a_named_finding(50.0, Some(our_node), "b-sw-01", "ours", "spike", SEV_WARN),
+                // A fleet-level finding: the flow-tier-off notice and the summary rows have no
+                // node. `NULL IN (…)` is never true, so it is visible only to a caller with no
+                // group restriction at all — the same rule the per-job endpoint applies in Rust.
+                a_named_finding(10.0, None, "", "fleet", "notice", SEV_INFO),
+            ],
+        )
+        .await
+        .expect("findings");
+
+        let metrics =
+            |rows: &[SavedFinding]| rows.iter().map(|f| f.metric.clone()).collect::<Vec<_>>();
+        let unrestricted = repo.search_findings(&a_search(50)).await.expect("search");
+        assert_eq!(metrics(&unrestricted), ["fleet", "ours", "theirs"]);
+
+        // `$7` is what the caller **may** see. Never optional, so dropping it is not something a
+        // caller can arrange.
+        let scoped = repo
+            .search_findings(&FindingSearch {
+                groups: Some(&[ours][..]),
+                ..a_search(50)
+            })
+            .await
+            .expect("search");
+        assert_eq!(
+            metrics(&scoped),
+            ["ours"],
+            "the fleet-level row is not theirs to see either"
+        );
+
+        // `$8` is the group they **asked** to narrow to — a request, and it can only narrow. A
+        // scoped caller naming someone else's group gets nothing, rather than that group.
+        let asked_for_theirs = repo
+            .search_findings(&FindingSearch {
+                groups: Some(&[ours][..]),
+                in_group: Some(&[theirs][..]),
+                ..a_search(50)
+            })
+            .await
+            .expect("search");
+        assert!(
+            asked_for_theirs.is_empty(),
+            "binding a request into $7 would let a caller widen their own scope by omitting a \
+             query parameter: {asked_for_theirs:?}"
+        );
+
+        // …and the same request from an unrestricted caller is honoured.
+        let unrestricted_asking = repo
+            .search_findings(&FindingSearch {
+                in_group: Some(&[theirs][..]),
+                ..a_search(50)
+            })
+            .await
+            .expect("search");
+        assert_eq!(metrics(&unrestricted_asking), ["theirs"]);
+
+        // An empty scope matches nothing — a caller with no groups sees no findings, rather than
+        // all of them. This is the direction `Some(&[])` exists to express.
+        assert!(repo
+            .search_findings(&FindingSearch {
+                groups: Some(&[][..]),
+                ..a_search(50)
+            })
+            .await
+            .expect("search")
+            .is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_findings_cursor_walks_every_row_exactly_once(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let job = repo
+            .insert(&a_job(AnalysisTool::Flap), None)
+            .await
+            .expect("insert");
+        for i in 0..5u8 {
+            repo.insert_findings(
+                job.id,
+                &[a_named_finding(
+                    f64::from(i),
+                    None,
+                    "",
+                    &format!("m{i}"),
+                    "flap",
+                    SEV_INFO,
+                )],
+            )
+            .await
+            .expect("findings");
+        }
+
+        // Two at a time, following the cursor the previous page's last row hands back.
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+        for _ in 0..5 {
+            let page = repo
+                .search_findings(&FindingSearch {
+                    before: cursor.map(|(at, _)| at),
+                    before_id: cursor.map(|(_, id)| id),
+                    ..a_search(2)
+                })
+                .await
+                .expect("search");
+            if page.is_empty() {
+                break;
+            }
+            let last = page.last().expect("non-empty");
+            cursor = Some((
+                DateTime::parse_from_rfc3339(&last.at)
+                    .expect("rfc3339")
+                    .with_timezone(&Utc),
+                last.id,
+            ));
+            seen.extend(page.iter().map(|f| f.metric.clone()));
+        }
+
+        // Newest first, each row once. ⚠️ This walk does **not** construct the case the id in the
+        // cursor exists for — two rows written inside the same microsecond — because every insert
+        // here is its own statement and therefore its own `now()`. What it does pin is that the
+        // row-value comparison pages at all: a cursor written as `created_at < $1 AND id < $2`
+        // instead of `(created_at, id) < ($1, $2)` drops rows here.
+        assert_eq!(seen, ["m4", "m3", "m2", "m1", "m0"]);
+
+        // The cursor with no id reads as "strictly before this instant" — the third row's own
+        // timestamp excludes it and everything newer.
+        let third = &repo.search_findings(&a_search(50)).await.expect("search")[2];
+        let rest = repo
+            .search_findings(&FindingSearch {
+                before: Some(
+                    DateTime::parse_from_rfc3339(&third.at)
+                        .expect("rfc3339")
+                        .with_timezone(&Utc),
+                ),
+                ..a_search(50)
+            })
+            .await
+            .expect("search");
+        assert_eq!(
+            rest.iter().map(|f| f.metric.clone()).collect::<Vec<_>>(),
+            ["m1", "m0"]
+        );
     }
 }
