@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.5 — a first remote site can be stood up from the WebUI, and a poller now says whether it is keeping up
+
 ### Breaking changes
 
 - **This release does not stand behind the in-place upgrade path — install fresh instead.** The
