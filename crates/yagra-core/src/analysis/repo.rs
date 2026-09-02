@@ -836,4 +836,271 @@ mod tests {
         // did not happen at all rather than happening and being overwritten by something else.
         assert_eq!(after.finished_ms, before.finished_ms);
     }
+
+    /// One finding, with the fields a test cares about named and the rest filled in.
+    fn a_finding(score: f64, node: Option<Uuid>, metric: &str) -> NewFinding {
+        NewFinding {
+            score,
+            severity: if score >= 80.0 { SEV_CRIT } else { SEV_WARN }.into(),
+            node_id: node,
+            node_name: "core-sw-01".into(),
+            metric: metric.into(),
+            kind: "spike".into(),
+            when_label: "today 03:12".into(),
+            duration: "6 min".into(),
+            detail: serde_json::json!({ "expected": 1.0, "actual": 9.5 }),
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn findings_come_back_by_score_and_only_for_the_run_that_produced_them(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let mine = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+        let other = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+
+        repo.insert_findings(
+            mine.id,
+            &[
+                a_finding(20.0, Some(node), "if_in_octets"),
+                a_finding(91.0, Some(node), "cpu_load"),
+                // A fleet-level finding carries no node. The column is nullable and the row
+                // mapper reads it as an `Option`; a `NOT NULL` here would drop exactly the rows
+                // that say something about the fleet rather than about one device.
+                a_finding(55.0, None, "fleet_reachability"),
+            ],
+        )
+        .await
+        .expect("insert findings");
+        repo.insert_findings(other.id, &[a_finding(99.0, Some(node), "not_mine")])
+            .await
+            .expect("insert findings");
+
+        let got = repo.findings(mine.id).await.expect("findings");
+        assert_eq!(got.len(), 3, "the other run's finding must not be here");
+        // Highest score first — the report reads this order and does not re-sort.
+        assert_eq!(
+            got.iter().map(|f| f.metric.as_str()).collect::<Vec<_>>(),
+            ["cpu_load", "fleet_reachability", "if_in_octets"]
+        );
+
+        let top = &got[0];
+        assert!((top.score - 91.0).abs() < f64::EPSILON);
+        assert_eq!(top.severity, SEV_CRIT);
+        assert_eq!(top.node_id, Some(node));
+        assert_eq!(top.node_name, "core-sw-01");
+        assert_eq!(top.kind, "spike");
+        assert_eq!(top.when_label, "today 03:12");
+        assert_eq!(top.duration, "6 min");
+        // The report draws its chart out of this blob, so it has to survive the JSONB round trip
+        // rather than arriving as the string `{"expected":1.0,...}`.
+        assert_eq!(top.detail["actual"], 9.5);
+        assert_eq!(got[1].node_id, None);
+
+        assert!(repo
+            .findings(Uuid::new_v4())
+            .await
+            .expect("findings")
+            .is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_runs_list_is_newest_first_and_each_filter_narrows_it_alone(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let first = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+        // `created_at` is the server's `now()`, and the `since` filter below asks for an instant
+        // strictly between the two rows — so they have to be measurably apart for that assertion
+        // to be about anything.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let second = repo
+            .insert(&a_job(AnalysisTool::Capacity), None)
+            .await
+            .expect("insert");
+        repo.finish(second.id, 2, "2 forecasts")
+            .await
+            .expect("finish");
+
+        // No filter is not "no clause": every clause is in the statement with a NULL bind. If the
+        // predicate were assembled conditionally instead, this is the branch that would be missing.
+        let all = repo.list(50, &JobFilter::default()).await.expect("list");
+        assert_eq!(
+            all.iter().map(|j| j.id).collect::<Vec<_>>(),
+            [second.id, first.id],
+            "newest first"
+        );
+
+        // …and the limit is applied after that ordering, not before it.
+        let one = repo.list(1, &JobFilter::default()).await.expect("list");
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id, second.id);
+
+        let by_tool = repo
+            .list(
+                50,
+                &JobFilter {
+                    tool: Some("anomaly"),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("list");
+        assert_eq!(by_tool.iter().map(|j| j.id).collect::<Vec<_>>(), [first.id]);
+
+        let by_state = repo
+            .list(
+                50,
+                &JobFilter {
+                    state: Some(AnalysisJobState::Done),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("list");
+        assert_eq!(
+            by_state.iter().map(|j| j.id).collect::<Vec<_>>(),
+            [second.id]
+        );
+
+        // Inclusive at the bound: `>=`, so a run created at exactly the instant the operator asked
+        // about is in the answer rather than one row off the edge of it.
+        //
+        // ⚠️ The instant is read out of the raw column, **not** from `created_ms` beside it. That
+        // projection is `(EXTRACT(EPOCH FROM created_at) * 1000)::bigint` and the cast to bigint
+        // *rounds*, so it names an instant up to half a millisecond after the row it describes —
+        // filtering on it excludes that row about half the time, which is what this assertion did
+        // on its first run. It is a display value; the findings cursor pages on `created_at`
+        // itself for the same reason.
+        let exactly_first =
+            crate::pgtest::timestamp_of(&pool, "analysis_jobs", "created_at", "id", first.id).await;
+        let inclusive = repo
+            .list(
+                50,
+                &JobFilter {
+                    since: Some(exactly_first),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("list");
+        assert_eq!(
+            inclusive.iter().map(|j| j.id).collect::<Vec<_>>(),
+            [second.id, first.id]
+        );
+
+        // …and one microsecond past it — the column's own resolution — drops that row and no other.
+        let by_since = repo
+            .list(
+                50,
+                &JobFilter {
+                    since: Some(exactly_first + chrono::Duration::microseconds(1)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("list");
+        assert_eq!(
+            by_since.iter().map(|j| j.id).collect::<Vec<_>>(),
+            [second.id]
+        );
+
+        // Two filters that cannot both hold answer nothing, rather than one of them winning.
+        let neither = repo
+            .list(
+                50,
+                &JobFilter {
+                    tool: Some("anomaly"),
+                    state: Some(AnalysisJobState::Done),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("list");
+        assert!(neither.is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn pruning_a_run_takes_its_findings_with_it(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let job = repo
+            .insert(&a_job(AnalysisTool::Flap), None)
+            .await
+            .expect("insert");
+        repo.insert_findings(job.id, &[a_finding(70.0, None, "flap")])
+            .await
+            .expect("insert findings");
+
+        // Inside the retention window nothing goes — the sweep runs on a cadence, so a statement
+        // that deleted regardless of age would empty the table on its first tick.
+        assert_eq!(repo.prune_jobs(3_600).await.expect("prune"), 0);
+        assert_eq!(crate::pgtest::rows(&pool, "analysis_jobs").await, 1);
+
+        // Past it, the run goes — and `analysis_findings` has no statement of its own here: it is
+        // `ON DELETE CASCADE` from the job, which is why the findings table went untrimmed for as
+        // long as the jobs table did.
+        assert_eq!(repo.prune_jobs(0).await.expect("prune"), 1);
+        assert_eq!(crate::pgtest::rows(&pool, "analysis_jobs").await, 0);
+        assert_eq!(crate::pgtest::rows(&pool, "analysis_findings").await, 0);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_restart_fails_the_runs_still_in_flight_and_leaves_the_rest(pool: sqlx::PgPool) {
+        let repo = AnalysisRepo::new(pool.clone());
+        let running = repo
+            .insert(&a_job(AnalysisTool::Anomaly), None)
+            .await
+            .expect("insert");
+        let done = repo
+            .insert(&a_job(AnalysisTool::Capacity), None)
+            .await
+            .expect("insert");
+        repo.finish(done.id, 3, "3 forecasts")
+            .await
+            .expect("finish");
+        let already_failed = repo
+            .insert(&a_job(AnalysisTool::Flap), None)
+            .await
+            .expect("insert");
+        repo.fail(already_failed.id, "metric store unreachable")
+            .await
+            .expect("fail");
+
+        assert_eq!(repo.fail_orphans().await.expect("orphans"), 1);
+
+        let after = repo.get(running.id).await.expect("get").expect("row");
+        assert_eq!(after.state, AnalysisJobState::Failed);
+        assert_eq!(after.error.as_deref(), Some("core restarted while running"));
+        assert_eq!(after.phase, None);
+        assert!(after.finished_ms.is_some());
+
+        // The other direction of `WHERE state = 'running'`, and the reason it is there: a startup
+        // sweep that touched every row would relabel completed runs as crashes and overwrite the
+        // reason a genuinely failed one gives.
+        let untouched = repo.get(done.id).await.expect("get").expect("row");
+        assert_eq!(untouched.state, AnalysisJobState::Done);
+        assert_eq!(untouched.summary.as_deref(), Some("3 forecasts"));
+        let kept = repo
+            .get(already_failed.id)
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(kept.error.as_deref(), Some("metric store unreachable"));
+
+        // Idempotent by construction: nothing is left running, so a second sweep finds nothing.
+        assert_eq!(repo.fail_orphans().await.expect("orphans"), 0);
+    }
 }
