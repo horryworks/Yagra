@@ -422,4 +422,335 @@ mod tests {
             );
         }
     }
+
+    // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------
+    //
+    // Everything above reads this module's text; everything below sends its statements to a real
+    // server. The two answer different questions, and they disagree in both directions: a rewrite
+    // that keeps the words and changes the meaning passes every check above, and a projection that
+    // simply lists fewer columns than the writer writes is invisible to both the compiler and a
+    // text check. That second one is not hypothetical — `neighbors.rs` dropped two settings that
+    // way from ADR-063 until ADR-115 ran the SQL and found them.
+    use super::{DerivedLink, LinkSource, NodeId, StoredLink, TopoLinkRepo, TopologyLinkSummary};
+    use crate::pgtest;
+
+    /// Whether `rows` holds the link `want` — by its endpoint pair, which is its identity.
+    fn holds(rows: &[StoredLink], want: &DerivedLink) -> bool {
+        rows.iter()
+            .any(|r| r.a_node == Some(want.a_node) && r.b_node == Some(want.b_node))
+    }
+
+    /// Every column a link carries goes in and comes back out with the same value.
+    ///
+    /// 🚨 The subject is the **projection**, not the row count. Stopping at "one row exists" is
+    /// what lets a reader that names eight of the writer's ten columns pass.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_column_of_a_link_survives_the_round_trip(pool: sqlx::PgPool) {
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let repo = TopoLinkRepo::new(pool.clone());
+
+        let mut link = DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp);
+        link.sources.push(LinkSource::L3Subnet);
+        link.a_ifindex = Some(11);
+        link.b_ifindex = Some(22);
+        link.a_if_name = Some("Gi0/1".to_owned());
+        link.b_if_name = Some("Gi0/2".to_owned());
+        link.subnet = Some("192.168.1.0/24".to_owned());
+        link.forced_parent = Some(link.a_node);
+
+        assert_eq!(repo.upsert_batch(&[link.clone()]).await.expect("upsert"), 1);
+        assert_eq!(pgtest::rows(&pool, "node_links").await, 1);
+
+        let stored = repo.list_page(None, None, 10).await.expect("list");
+        assert_eq!(stored.len(), 1);
+        let s = &stored[0];
+        assert_eq!(s.a_node, Some(link.a_node));
+        assert_eq!(s.b_node, Some(link.b_node));
+        // The endpoints are canonically ordered, so which node landed in `a` is not this test's
+        // business — but each side's port facts must have travelled with their own side.
+        assert_eq!(s.a_ifindex, Some(11));
+        assert_eq!(s.b_ifindex, Some(22));
+        assert_eq!(s.a_if_name.as_deref(), Some("Gi0/1"));
+        assert_eq!(s.b_if_name.as_deref(), Some("Gi0/2"));
+        assert_eq!(s.subnet.as_deref(), Some("192.168.1.0/24"));
+        assert_eq!(s.forced_parent, Some(link.a_node));
+        let mut expected = vec![LinkSource::Lldp, LinkSource::L3Subnet];
+        expected.sort_unstable();
+        assert_eq!(
+            s.sources, expected,
+            "the comma-joined sources did not survive `string_to_array`"
+        );
+        assert_eq!(
+            s.first_seen, s.last_seen,
+            "a link written once already looks re-observed"
+        );
+    }
+
+    /// A second observation updates the row in place and refreshes `last_seen` — and leaves
+    /// `first_seen` where it was, which is the one fact here that cannot be recomputed.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_second_observation_updates_in_place_and_keeps_first_seen(pool: sqlx::PgPool) {
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let repo = TopoLinkRepo::new(pool.clone());
+
+        let mut link = DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp);
+        link.b_if_name = Some("Gi0/2".to_owned());
+        repo.upsert_batch(&[link.clone()]).await.expect("upsert");
+        let first = repo
+            .list_page(None, None, 10)
+            .await
+            .expect("list")
+            .remove(0);
+
+        link.b_if_name = Some("Te1/1".to_owned());
+        link.sources.push(LinkSource::Cdp);
+        repo.upsert_batch(&[link.clone()]).await.expect("re-upsert");
+
+        assert_eq!(
+            pgtest::rows(&pool, "node_links").await,
+            1,
+            "the same link was stored twice — the conflict target is not the link key"
+        );
+        let second = repo
+            .list_page(None, None, 10)
+            .await
+            .expect("list")
+            .remove(0);
+        assert_eq!(second.id, first.id);
+        assert_eq!(
+            second.first_seen, first.first_seen,
+            "first_seen was reset by a re-observation; every link would look new every cycle"
+        );
+        assert!(
+            second.last_seen > first.last_seen,
+            "last_seen did not move, so the age-based prune would delete a link still being seen"
+        );
+        assert_eq!(
+            second.b_if_name.as_deref(),
+            Some("Te1/1"),
+            "the conflict path did not update the row"
+        );
+        assert!(second.sources.contains(&LinkSource::Cdp));
+    }
+
+    /// The dependency graph's read: both endpoints and every source, with **no** scope filter —
+    /// the two links below sit in different groups and both must come back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn all_links_returns_every_pair_regardless_of_group(pool: sqlx::PgPool) {
+        let one = pgtest::group(&pool, "one").await;
+        let two = pgtest::group(&pool, "two").await;
+        let a = pgtest::node(&pool, "a", 1, Some(one)).await;
+        let b = pgtest::node(&pool, "b", 2, Some(two)).await;
+        let c = pgtest::node(&pool, "c", 3, Some(two)).await;
+        let repo = TopoLinkRepo::new(pool.clone());
+
+        let mut l3 = DerivedLink::new(NodeId(b), NodeId(c), LinkSource::L3Subnet);
+        l3.subnet = Some("10.9.0.0/24".to_owned());
+        repo.upsert_batch(&[DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp), l3])
+            .await
+            .expect("upsert");
+
+        let links = repo.all_links().await.expect("all_links");
+        assert_eq!(
+            links.len(),
+            2,
+            "the dependency graph is scoped or is dropping rows"
+        );
+        let canonical = DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp);
+        let lldp = links
+            .iter()
+            .find(|l| l.sources.contains(&LinkSource::Lldp))
+            .expect("the lldp link");
+        assert_eq!(
+            (lldp.a_node, lldp.b_node),
+            (canonical.a_node, canonical.b_node),
+            "the endpoints came back in a different order than they were stored in"
+        );
+        let subnet = links
+            .iter()
+            .find(|l| l.sources.contains(&LinkSource::L3Subnet))
+            .expect("the l3 link");
+        assert_eq!(subnet.subnet.as_deref(), Some("10.9.0.0/24"));
+    }
+
+    /// Links are removed by age, one at a time. A window three cycles wide keeps a link seen a
+    /// moment ago; a zero-length one takes it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_link_seen_this_cycle_survives_the_prune(pool: sqlx::PgPool) {
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let repo = TopoLinkRepo::new(pool.clone());
+        repo.upsert_batch(&[DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Cdp)])
+            .await
+            .expect("upsert");
+
+        assert_eq!(
+            repo.prune_stale(3600).await.expect("prune"),
+            0,
+            "a link seen a moment ago was deleted — the predicate points the wrong way"
+        );
+        assert_eq!(pgtest::rows(&pool, "node_links").await, 1);
+
+        assert_eq!(repo.prune_stale(0).await.expect("prune"), 1);
+        assert_eq!(pgtest::rows(&pool, "node_links").await, 0);
+    }
+
+    /// The derivation state is one row that each run replaces — never a second row.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_derivation_state_is_one_row_the_next_run_replaces(pool: sqlx::PgPool) {
+        let repo = TopoLinkRepo::new(pool.clone());
+        assert!(
+            repo.last_run().await.expect("last_run").is_none(),
+            "a fresh database reported a derivation run that never happened"
+        );
+
+        let first_summary = TopologyLinkSummary {
+            lldp_links: 3,
+            unmatched_lldp_rows: 7,
+            ..TopologyLinkSummary::default()
+        };
+        repo.record_run(&first_summary, 3).await.expect("record");
+        let first = repo
+            .last_run()
+            .await
+            .expect("last_run")
+            .expect("the run just recorded");
+        assert_eq!(first.link_count, 3);
+        assert_eq!(
+            first.summary, first_summary,
+            "the summary did not survive the JSONB round trip"
+        );
+
+        let next_summary = TopologyLinkSummary {
+            l3_links: 9,
+            ..TopologyLinkSummary::default()
+        };
+        repo.record_run(&next_summary, 9).await.expect("record");
+        assert_eq!(
+            pgtest::rows(&pool, "topology_derivation").await,
+            1,
+            "the second run appended a row instead of replacing the first"
+        );
+        let second = repo
+            .last_run()
+            .await
+            .expect("last_run")
+            .expect("the second run");
+        assert_eq!(second.link_count, 9);
+        assert_eq!(second.summary, next_summary);
+        assert!(second.derived_at >= first.derived_at);
+    }
+
+    /// **The scope rule, executed.** A link is returned to a scoped caller only when *both* of its
+    /// endpoints sit in a visible group — one visible end would tell that caller a node exists
+    /// outside their scope, which is the fail-open direction.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_read_returns_a_link_only_when_both_ends_are_visible(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let a = pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let b = pgtest::node(&pool, "b", 2, Some(theirs)).await;
+        let c = pgtest::node(&pool, "c", 3, Some(mine)).await;
+        let repo = TopoLinkRepo::new(pool.clone());
+        let crossing = DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp);
+        let internal = DerivedLink::new(NodeId(a), NodeId(c), LinkSource::Cdp);
+        repo.upsert_batch(&[crossing.clone(), internal.clone()])
+            .await
+            .expect("upsert");
+
+        // The acceptance side first. Without it, a predicate that refuses everything reads exactly
+        // like a predicate that is working (`rejection-only-tests-pass-when-everything-rejects`).
+        let all = repo.list_page(None, None, 10).await.expect("list");
+        assert!(
+            holds(&all, &crossing) && holds(&all, &internal),
+            "an unscoped caller must see both links"
+        );
+
+        // 🚨 **Both sides, named from the stored link rather than assumed.** The endpoints are put
+        // in canonical uuid order, so which group ends up holding `a_node` is luck — and a fixture
+        // that only ever exercises one side would let the *other* `EXISTS` be deleted and stay
+        // green half the time.
+        let a_side = if crossing.a_node == NodeId(a) {
+            mine
+        } else {
+            theirs
+        };
+        let b_side = if a_side == mine { theirs } else { mine };
+        for (scope, side) in [(a_side, "a"), (b_side, "b")] {
+            let rows = repo
+                .list_page(Some(&[scope]), None, 10)
+                .await
+                .expect("list");
+            assert!(
+                !holds(&rows, &crossing),
+                "the crossing link was returned to a caller who can see only its `{side}` endpoint"
+            );
+        }
+
+        let scoped = repo.list_page(Some(&[mine]), None, 10).await.expect("list");
+        assert!(
+            holds(&scoped, &internal),
+            "a link with both endpoints in scope was hidden"
+        );
+
+        let both = repo
+            .list_page(Some(&[mine, theirs]), None, 10)
+            .await
+            .expect("list");
+        assert!(
+            holds(&both, &crossing),
+            "widening the scope to both groups did not reveal the crossing link"
+        );
+    }
+
+    /// The cursor branch. A page of one walks every link exactly once, in id order, and stops.
+    ///
+    /// ⚠️ The bounded loop is part of the assertion: a `WHERE id > $2` that stopped being applied
+    /// would hand back the same first row forever, and an unbounded `loop` would hang rather than
+    /// fail.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn paging_by_cursor_walks_every_link_exactly_once(pool: sqlx::PgPool) {
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let c = pgtest::node(&pool, "c", 3, None).await;
+        let repo = TopoLinkRepo::new(pool.clone());
+        repo.upsert_batch(&[
+            DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp),
+            DerivedLink::new(NodeId(a), NodeId(c), LinkSource::Cdp),
+            DerivedLink::new(NodeId(b), NodeId(c), LinkSource::Ospf),
+        ])
+        .await
+        .expect("upsert");
+
+        let mut seen: Vec<i64> = Vec::new();
+        let mut after: Option<i64> = None;
+        for _ in 0..8 {
+            let page = repo.list_page(None, after, 1).await.expect("list");
+            let Some(link) = page.first() else { break };
+            assert_eq!(page.len(), 1, "LIMIT is not being applied");
+            seen.push(link.id);
+            after = Some(link.id);
+        }
+        assert_eq!(
+            seen.len(),
+            3,
+            "the cursor walk did not end after the three stored links: {seen:?}"
+        );
+        let mut ordered = seen.clone();
+        ordered.sort_unstable();
+        ordered.dedup();
+        assert_eq!(
+            ordered, seen,
+            "the cursor page returned links out of id order or returned one twice: {seen:?}"
+        );
+    }
 }
