@@ -226,7 +226,7 @@
     "body": "ノード <b>{{name}}</b> を削除しますか？インベントリの項目と、検出済みのインターフェースが消えます。収集済みのメトリクスは TSDB の保持期間が切れ次第、順次消えます。このノードが依存関係チェーンの親だった場合、配下のノードは以後このノードでは抑制されなくなります。この操作は取り消せません。"
   },
   "overview": {
-    "icmpRttTitle": "ICMP RTT · 直近 30 分",
+    "icmpRttTitle": "ICMP 応答時間",
     "noRttHistory": "RTT の履歴はまだありません…",
     "unreachableDash": "—（到達不能）",
     "urlMonitor": "URL 監視",

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Overview tab of the unified node detail. The compact core (per the redesign) is an "ICMP RTT ·
-// last 30 min" sparkline + a two-column facts grid. Below it sit the richer, relocated sections —
-// Active alerts, Device health (CPU/Mem), System (SNMP) metric cards — each of which self-hides when the
-// node has no such data, so a simple ICMP-only node shows just sparkline + facts, while a fully
-// monitored device shows everything. Nothing from the old detail page is dropped, only restyled.
+// Overview tab of the unified node detail. The compact core (per the redesign) is an ICMP RTT trend
+// + a two-column facts grid. Below it sit the richer, relocated sections — Active alerts, Device
+// health (CPU/Mem), System (SNMP) metric cards — each of which self-hides when the node has no such
+// data, so a simple ICMP-only node shows just the trend + facts, while a fully monitored device
+// shows everything. Nothing from the old detail page is dropped, only restyled.
+// The RTT chart followed the shared range control as of ADR-117; it was a fixed 30-minute sparkline
+// before that, which on an ICMP-only node was the whole reason the period buttons looked broken.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -29,6 +31,7 @@ import {
   stateLabel,
 } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
+import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import { poolFactLabel, polledByIsWarning, polledByLabel } from '../../lib/pool';
 import type {
   MetricPoint,
@@ -68,10 +71,6 @@ interface Props {
   groups: NodeGroup[];
   nodes?: NodeSummary[];
   status: NodeStatus | null;
-  /** The kind's liveness history (last ~30 min), shared with the header's "seen" line. Charted
-   *  here only for an ordinary device, where it is `icmp_rtt_ms`; for the monitor kinds it is
-   *  their own up-gauge and exists for the timestamp — see `NODE_KIND_SPEC.livenessMetric`. */
-  series: { timestamps: number[]; values: number[] };
   unreachable: boolean;
   /** Whether the viewer may reconfigure monitoring (ManageConfig). Gates the check-config edit. */
   canEdit?: boolean;
@@ -84,7 +83,6 @@ export function OverviewTab({
   groups,
   nodes,
   status,
-  series,
   unreachable,
   canEdit = false,
   onChanged,
@@ -96,23 +94,7 @@ export function OverviewTab({
       {/* Only an ordinary device is pinged at all — see `overviewShowsIcmp`. For the monitor kinds
           the equivalent chart lives in their own health card below, over their own metric. */}
       {overviewShowsIcmp(node.kind) && (
-        <section>
-          <div className="nd-section-t">{t('overview.icmpRttTitle')}</div>
-          {series.timestamps.length > 0 ? (
-            <MetricChart
-              title=""
-              timestamps={series.timestamps}
-              values={series.values}
-              height={96}
-              yFormat={(v) => `${Math.round(v)}`}
-              legendFormat={formatRtt}
-            />
-          ) : (
-            <p className="nd-muted nd-spark-empty">
-              {unreachable ? t('overview.unreachableDash') : t('overview.noRttHistory')}
-            </p>
-          )}
-        </section>
+        <IcmpHealth kind={node.kind} nodeId={node.id} unreachable={unreachable} />
       )}
 
       <div className="nd-facts">
@@ -184,6 +166,81 @@ export function OverviewTab({
       <DeviceHealth nodeId={node.id} />
       <SnmpScalars nodeId={node.id} />
     </div>
+  );
+}
+
+/** ICMP round-trip trend, over the shared chart window.
+ *
+ *  It was a fixed last-30-minute sparkline fed from `NodeDetail`'s liveness fetch, which is what
+ *  made the range selector look dead on an ICMP-only node: the only chart on its Overview ignored
+ *  the buttons — and Device health and the SNMP strip both self-hide there, so that tab in fact
+ *  carried no range control at all. It has its own fetch now (ADR-117 決定 6).
+ *
+ *  ⚠️ `NodeDetail` keeps its 30-minute fetch. That one is the source of the header's "seen …", not
+ *  of this chart; widening it would coarsen the step (120s over 7d) and make "last seen" up to two
+ *  minutes stale.
+ *
+ *  The metric comes from `NODE_KIND_SPEC` rather than being spelled `icmp_rtt_ms` here.
+ *  `overviewShowsIcmp` admits only `device`, so it is always that today — but which metric means
+ *  "we heard from this kind" is already written down in one place. */
+function IcmpHealth({
+  kind,
+  nodeId,
+  unreachable,
+}: {
+  kind: NodeDetail['kind'];
+  nodeId: string;
+  unreachable: boolean;
+}) {
+  const { t } = useTranslation('nodes');
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
+  const tick = useRefreshTick();
+  const metric = NODE_KIND_SPEC[kind].livenessMetric;
+  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+  const [win, setWin] = useState<[number, number] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const { from, to } = resolveRange(range);
+    api
+      .getNodeMetricRange(nodeId, metric, { from, to })
+      .then((r) => {
+        if (cancelled) return;
+        setSeries(pointsToSeries(r.points));
+        setWin([from, to]);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, metric, range, tick]);
+
+  return (
+    <section>
+      <div className="nd-section-head">
+        <div className="nd-section-t">{t('overview.icmpRttTitle')}</div>
+        <RangeControl value={range} onChange={setRange} />
+      </div>
+      {series.timestamps.length > 0 ? (
+        <MetricChart
+          title=""
+          timestamps={series.timestamps}
+          values={series.values}
+          height={96}
+          yFormat={(v) => `${Math.round(v)}`}
+          legendFormat={formatRtt}
+          xRange={win ?? undefined}
+        />
+      ) : (
+        <p className="nd-muted nd-spark-empty">
+          {unreachable ? t('overview.unreachableDash') : t('overview.noRttHistory')}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -927,8 +984,11 @@ function MemHealth({
  *  This was a `name: value` strip until ADR-046 Inc.6. The values were true and useless — an
  *  operator looking at `60` cannot tell a temperature that has been 60 all week from one that was
  *  40 an hour ago, and the history existed the whole time, one tab away, with nothing pointing at
- *  it. The window is the shared one (`useRangeStore`), so Device health's range picker drives both
- *  sections and there is no second control.
+ *  it. The window is the shared one (`useRangeStore`), so Device health's range picker drives this
+ *  section too and it carries no control of its own.
+ *  ⚠️ It is no longer the case that the tab shows only one — the ICMP section above has its own,
+ *  because an ICMP-only node hides both this section and Device health and was left with no way to
+ *  change the window at all (ADR-117 決定 6). The two always agree; they read the same store.
  *
  *  Note both effects here read the inventory through `fetchNodeMetrics`, which dedupes — this and
  *  `DeviceHealth` make one request between them. */

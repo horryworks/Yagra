@@ -249,7 +249,6 @@ export function NodeDetail({
         groups={groups}
         nodes={nodes}
         status={status}
-        series={series}
         unreachable={state === 'unreachable'}
         canEdit={canEdit}
         onChanged={() => setRefreshNonce((v) => v + 1)}

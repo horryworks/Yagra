@@ -174,4 +174,38 @@ test.describe('node Overview metric cards', () => {
     }
     expect(latestOf(GENERIC_EXPLAINED).length).toBeGreaterThan(0);
   });
+
+  // The window a chart is *showing* is drawn into the canvas, so no browser test can read it —
+  // `src/components/MetricChart/scales.test.ts` owns that half (ADR-117). What only this file can
+  // prove is the half before it: that pressing a preset re-asks the server for the new window. The
+  // two together are the chain from the button to the axis, and the bug lived in the second half
+  // with the first one working perfectly.
+  test('a period button re-asks for the window it names', async ({ page, mock }) => {
+    await openOverview(page);
+    const SEVEN_DAYS = 7 * 86400;
+    const spans = () =>
+      mock.requests
+        .filter((r) => r.pathname.endsWith('/range'))
+        .map((r) => {
+          const q = new URLSearchParams(r.search);
+          return Number(q.get('to')) - Number(q.get('from'));
+        });
+
+    expect(spans().length).toBeGreaterThan(0);
+    expect(spans()).not.toContain(SEVEN_DAYS);
+
+    await page.getByRole('button', { name: '7d', exact: true }).first().click();
+
+    await expect.poll(() => spans().filter((s) => s === SEVEN_DAYS).length).toBeGreaterThan(0);
+  });
+
+  // ADR-117 決定 6. The RTT chart was a fixed 30-minute sparkline that ignored the buttons, and on
+  // an ICMP-only node it is the *only* chart — Device health and the SNMP strip both self-hide —
+  // so that node's Overview carried no range control at all.
+  test('the ICMP section carries a range control of its own', async ({ page }) => {
+    await openOverview(page);
+    const icmp = page.locator('.nd-overview > section').first();
+    await expect(icmp.locator('canvas')).toHaveCount(1);
+    await expect(icmp.getByRole('group', { name: 'Time range' })).toHaveCount(1);
+  });
 });

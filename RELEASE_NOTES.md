@@ -10,6 +10,24 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **The 1h / 6h / 24h / 3d / 7d selector now moves the chart it sits above.** Every chart with a
+  time-range picker kept whichever window was in force when it first appeared, and picking a new one
+  refetched the data without moving the axis — so the selection only took effect on a page reload,
+  which is what made it look intermittent. This affected the node Overview (device health, the SNMP
+  cards, the URL and DNS monitor cards), the node Flow tab, System health, and the dashboard's
+  interface-traffic widget. The Interfaces dock was unaffected, for an accidental reason: it blanks
+  its charts when you change interface, which rebuilt them.
+- **A chart on a relative window (1h, 6h, …) now advances while you watch it.** The same defect
+  pinned the axis to the moment the chart was drawn, so new samples arrived but fell outside the
+  visible span and the line appeared to stop.
+- **Interfaces ▸ the throughput chart's `Auto` button releases the vertical axis again.** Switching
+  to `Bandwidth` scaled it to the link speed, and switching back left it there.
+- **The node Overview's ICMP round-trip chart follows the range selector.** It was a fixed last-30
+  -minutes trend that ignored the buttons. On a node monitored by ICMP alone that was the only chart
+  on the tab, and the tab in fact offered no range control at all — it now has one.
+
 ## v0.3.5 — a first remote site can be stood up from the WebUI, and a poller now says whether it is keeping up
 
 ### Breaking changes

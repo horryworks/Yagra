@@ -226,7 +226,7 @@
     "body": "Delete node <b>{{name}}</b>? This removes its inventory entry and its discovered interfaces. Collected metrics age out of the TSDB. If this node is a parent in a dependency chain, its dependents will no longer be suppressed by it. This cannot be undone."
   },
   "overview": {
-    "icmpRttTitle": "ICMP RTT · last 30 min",
+    "icmpRttTitle": "ICMP round-trip time",
     "noRttHistory": "No RTT history yet…",
     "unreachableDash": "— (unreachable)",
     "urlMonitor": "URL monitor",

@@ -65,14 +65,20 @@ interface Props {
   /** Optional Y-axis tick formatter (e.g. SI suffixes so big numbers don't clip). */
   yFormat?: (v: number) => string;
   /** Fixed Y-axis `[min, max]`; omit to auto-fit the data (uPlot default). Bounded gauges like
-   *  CPU/Mem % pass `[0, 100]` so the baseline is 0, not the data's min. Pass a stable reference
-   *  (e.g. a module-level constant) so the chart isn't rebuilt on every render. */
+   *  CPU/Mem % pass `[0, 100]` so the baseline is 0, not the data's min. **Dropping it releases the
+   *  axis back to the data** on the next update — that is the `auto` half of the Interfaces
+   *  throughput chart's Bandwidth ⇄ Auto toggle. Pass a new array only when the value changes (state
+   *  or `useMemo`): the data effect keys on it by reference, so a fresh one each render redraws. */
   yRange?: [number, number];
   /** Fixed X-axis `[from, to]` in unix seconds — pins the time window so a chart whose data
    *  doesn't fill the requested range renders the full window (the empty span stays visible)
-   *  instead of auto-fitting to the data extent. Omit to auto-fit (uPlot default). Pass a stable
-   *  reference (e.g. captured alongside the fetched series) so the chart isn't rebuilt on every
-   *  render. See `buildChartScales`. */
+   *  instead of auto-fitting to the data extent. Omit to auto-fit (uPlot default).
+   *
+   *  **Changing it moves the axis in place**: a range switch, or a relative window advancing on the
+   *  next poll, lands on the following data update with no rebuild. It did not, for as long as this
+   *  prop existed — see `buildChartScales` for why it must not be handed to uPlot as a bare array
+   *  (ADR-117). Pass a new array only when the window changes; the data effect keys on it by
+   *  reference. */
   xRange?: [number, number];
   /** Formatter for the cursor-legend value (the "Value" readout on hover). Use it to show a unit
    *  the compact axis omits (e.g. ms / bps). Falls back to `yFormat` when not given. */
@@ -121,11 +127,13 @@ export function MetricChart({
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
-  // Latest render-varying props, read by the uPlot option closures at draw time. This is what
-  // lets a poll tick refresh data WITHOUT rebuilding the chart: fresh inline formatters / a fresh
-  // `referenceLine` object each render don't change the instance, only what its closures read.
-  const live = useRef({ yFormat, legendFormat, referenceLine, referenceBands });
-  live.current = { yFormat, legendFormat, referenceLine, referenceBands };
+  // Latest render-varying props, read by the uPlot option closures at draw AND scale time. This is
+  // what lets a poll tick refresh data WITHOUT rebuilding the chart: fresh inline formatters / a
+  // fresh `referenceLine` object each render don't change the instance, only what its closures read.
+  // The axis pins belong here for the same reason — `buildChartScales` reads them through this ref
+  // on every scale pass, which is what makes a range switch land without a rebuild (ADR-117).
+  const live = useRef({ yFormat, legendFormat, referenceLine, referenceBands, xRange, yRange });
+  live.current = { yFormat, legendFormat, referenceLine, referenceBands, xRange, yRange };
 
   const resolved: ChartSeries[] =
     series ?? (values ? [{ label: title, values, color: PALETTE[0] }] : []);
@@ -183,9 +191,11 @@ export function MetricChart({
         ? Math.max(MIN_PLOT_HEIGHT, (el.clientHeight || height) - FILL_CHROME_ESTIMATE)
         : height,
       axes: [axis, yAxis],
-      // Force a fixed Y range (e.g. 0–100% gauges) and/or X window (pin to the requested time
-      // range) when asked; otherwise uPlot auto-fits the respective axis to the data.
-      scales: buildChartScales(xRange, yRange),
+      // Pin the Y range (e.g. 0–100% gauges) and/or the X window when the caller asks; each axis
+      // auto-fits its data otherwise. A getter, NOT the values: uPlot keeps whatever it is handed
+      // here for the life of the instance, so the axes have to be able to ask for the pins that are
+      // in force now rather than the ones that were in force at construction (ADR-117).
+      scales: buildChartScales(() => live.current),
       ...(syncKey ? { cursor: { sync: { key: syncKey, setSeries: false } } } : {}),
       series: [
         {},
@@ -332,12 +342,17 @@ export function MetricChart({
     const plot = plotRef.current;
     if (!plot) return;
     const data = [timestamps, ...resolved.map((s) => s.values)] as uPlot.AlignedData;
-    // setData (resetScales=true) auto-fits both axes; then re-pin any axis the caller fixed.
+    // `setData` runs uPlot's scale pass, and both range functions read `live.current` — so a changed
+    // (or dropped) axis pin lands here, with no rebuild. 🚨 That is the whole mechanism: this effect
+    // must keep calling `setData` unconditionally. An early return added above would leave the axes
+    // frozen and nothing would fail. A `setScale('x', …)` would not help either — the x range
+    // function is re-run on every pass and would overwrite it (ADR-117).
     plot.setData(data);
-    if (xRange) plot.setScale('x', { min: xRange[0], max: xRange[1] });
-    if (yRange) plot.setScale('y', { min: yRange[0], max: yRange[1] });
     // `live` already holds the current formatters / reference line; setData triggered the redraw.
-    // Keyed on data + range/refline *content* so a parent re-render with unchanged data is a no-op.
+    // The axis pins are in the deps because nothing else would ask uPlot to re-scale — they are read
+    // from `live.current` at scale time, not passed in. They key by *reference* (the reference line
+    // keys by `refKey`, its content), so a caller must hand over a new array only when the window
+    // actually changes; every call site does, out of state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timestamps, values, series, xRange, yRange, refKey, structKey]);
 
