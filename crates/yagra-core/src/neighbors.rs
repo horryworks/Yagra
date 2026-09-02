@@ -444,4 +444,260 @@ mod tests {
         }
         .in_bounds());
     }
+
+    // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------
+    //
+    // The checks above read this module's text — which is the only way to state the
+    // append-on-change rule, because it lives inside one CTE. What text cannot say is whether the
+    // statement does what the words claim, or whether the reader's projection still names every
+    // column the writer writes. Both below.
+    use crate::pgtest;
+    use yagra_common::{Neighbor, NeighborCapability, NeighborProto};
+
+    /// One adjacency with every optional field filled in, so a payload column that stopped
+    /// travelling is visible rather than defaulted away.
+    fn full_neighbor(local: &str, chassis: &str) -> Neighbor {
+        let mut n = Neighbor::new(NeighborProto::Lldp, local, chassis, "Gi1/1");
+        n.local_ifindex = Some(7);
+        n.remote_port_desc = Some("uplink to core".to_owned());
+        n.remote_sys_name = Some("core-sw-01".to_owned());
+        n.remote_sys_desc = Some("Cisco IOS".to_owned());
+        n.remote_mgmt_addr = Some("10.0.0.9".to_owned());
+        n.remote_platform = Some("C9300".to_owned());
+        n.capabilities = vec![NeighborCapability::Bridge, NeighborCapability::Router];
+        n
+    }
+
+    /// A set goes in, comes back whole, and leaves exactly one history row behind — the first
+    /// observation, which replaced nothing.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_observed_set_reads_back_with_its_payload_and_appends_its_first_change(
+        pool: sqlx::PgPool,
+    ) {
+        let node = pgtest::node(&pool, "sw", 1, None).await;
+        let repo = NeighborRepo::new(pool.clone());
+        let set = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
+        repo.record_observation(node, &set).await.expect("record");
+
+        let current = repo
+            .current(node)
+            .await
+            .expect("current")
+            .expect("the set just recorded");
+        assert_eq!(
+            current.set, set,
+            "the observed set did not survive the JSONB round trip"
+        );
+        let stored = &current.set.neighbors[0];
+        assert_eq!(stored.remote_sys_name.as_deref(), Some("core-sw-01"));
+        assert_eq!(stored.remote_mgmt_addr.as_deref(), Some("10.0.0.9"));
+        assert_eq!(stored.capabilities.len(), 2);
+        assert_eq!(
+            current.first_seen, current.last_seen,
+            "a set observed once already looks re-confirmed"
+        );
+
+        assert_eq!(pgtest::rows(&pool, "node_neighbors").await, 1);
+        let changes = repo.list_changes(node, None, 10).await.expect("changes");
+        assert_eq!(
+            changes.len(),
+            1,
+            "the first observation appended no history"
+        );
+        assert_eq!(
+            changes[0].prev_neighbor_key, None,
+            "the first-ever observation must name no predecessor"
+        );
+        assert_eq!(changes[0].set, set);
+    }
+
+    /// **The feature.** Adjacency is normally constant, so an unchanged poll must write no history
+    /// at all — and must not move `first_seen`, which is how long the adjacency has held.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_unchanged_observation_appends_no_history_and_keeps_first_seen(pool: sqlx::PgPool) {
+        let node = pgtest::node(&pool, "sw", 1, None).await;
+        let repo = NeighborRepo::new(pool.clone());
+        let set = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
+
+        repo.record_observation(node, &set).await.expect("record");
+        let first = repo.current(node).await.expect("current").expect("a set");
+        repo.record_observation(node, &set)
+            .await
+            .expect("re-record");
+        let second = repo.current(node).await.expect("current").expect("a set");
+
+        assert_eq!(
+            pgtest::rows(&pool, "node_neighbor_changes").await,
+            1,
+            "an unchanged observation appended a history row — the history gains a row per poll"
+        );
+        assert_eq!(
+            second.first_seen, first.first_seen,
+            "first_seen moved on an unchanged set, so 'how long has this held' is now wrong"
+        );
+        assert!(
+            second.last_seen > first.last_seen,
+            "last_seen did not move, so the set no longer reads as still current"
+        );
+    }
+
+    /// A real transition appends exactly one row, and that row names the key it replaced.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_changed_set_appends_a_row_naming_the_key_it_replaced(pool: sqlx::PgPool) {
+        let node = pgtest::node(&pool, "sw", 1, None).await;
+        let repo = NeighborRepo::new(pool.clone());
+        let before = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
+        let after = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:02")]);
+
+        repo.record_observation(node, &before).await.expect("first");
+        let held = repo.current(node).await.expect("current").expect("a set");
+        repo.record_observation(node, &after).await.expect("second");
+
+        let changes = repo.list_changes(node, None, 10).await.expect("changes");
+        assert_eq!(changes.len(), 2, "the transition appended no history row");
+        assert_eq!(changes[0].set, after, "history is not newest-first");
+        assert_eq!(
+            changes[0].prev_neighbor_key.as_deref(),
+            Some(before.content_key().as_str()),
+            "the change row does not name the set it replaced"
+        );
+
+        let now = repo.current(node).await.expect("current").expect("a set");
+        assert_eq!(now.set, after);
+        assert!(
+            now.first_seen > held.first_seen,
+            "first_seen did not restart when the set actually changed"
+        );
+    }
+
+    /// The derivation task's two reads: every node's current set, unpaged, and the newest
+    /// observation across the fleet.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_nodes_current_set_comes_back_and_the_watermark_names_the_newest(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = NeighborRepo::new(pool.clone());
+        assert!(
+            repo.observation_watermark()
+                .await
+                .expect("watermark")
+                .is_none(),
+            "a fresh database reported an observation that never happened"
+        );
+
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let set_a = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
+        let set_b = NeighborSet::new(vec![full_neighbor("Gi0/2", "aa:bb:cc:00:00:02")]);
+        repo.record_observation(a, &set_a).await.expect("record a");
+        repo.record_observation(b, &set_b).await.expect("record b");
+
+        let all = repo.all_current().await.expect("all_current");
+        assert_eq!(all.len(), 2, "the unpaged read did not return every node");
+        assert_eq!(
+            all.iter().find(|(id, _)| id.0 == a).map(|(_, s)| s),
+            Some(&set_a),
+            "a node's set came back attached to the wrong node, or not at all"
+        );
+        assert_eq!(
+            all.iter().find(|(id, _)| id.0 == b).map(|(_, s)| s),
+            Some(&set_b)
+        );
+
+        let newest = repo
+            .current(b)
+            .await
+            .expect("current")
+            .expect("b's set")
+            .last_seen;
+        assert_eq!(
+            repo.observation_watermark().await.expect("watermark"),
+            Some(newest),
+            "the watermark is not the newest last_seen in the table"
+        );
+    }
+
+    /// The cursor branch. A page of one walks the history newest-first, exactly once each, and
+    /// stops.
+    ///
+    /// ⚠️ The bounded loop is part of the assertion: a `(at, id) < ($2, $3)` that stopped being
+    /// applied would hand back the same newest row forever, and an unbounded `loop` would hang
+    /// instead of failing.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn change_paging_walks_the_history_newest_first_and_stops(pool: sqlx::PgPool) {
+        let node = pgtest::node(&pool, "sw", 1, None).await;
+        let repo = NeighborRepo::new(pool.clone());
+        for chassis in [
+            "aa:bb:cc:00:00:01",
+            "aa:bb:cc:00:00:02",
+            "aa:bb:cc:00:00:03",
+        ] {
+            repo.record_observation(
+                node,
+                &NeighborSet::new(vec![full_neighbor("Gi0/1", chassis)]),
+            )
+            .await
+            .expect("record");
+        }
+        assert_eq!(pgtest::rows(&pool, "node_neighbor_changes").await, 3);
+
+        let mut seen: Vec<(chrono::DateTime<chrono::Utc>, i64)> = Vec::new();
+        let mut before: Option<(chrono::DateTime<chrono::Utc>, i64)> = None;
+        for _ in 0..8 {
+            let page = repo.list_changes(node, before, 1).await.expect("changes");
+            let Some(change) = page.first() else { break };
+            assert_eq!(page.len(), 1, "LIMIT is not being applied");
+            seen.push((change.at, change.id));
+            before = Some((change.at, change.id));
+        }
+        assert_eq!(
+            seen.len(),
+            3,
+            "the cursor walk did not end after the three change rows: {seen:?}"
+        );
+        let mut descending = seen.clone();
+        descending.sort_unstable();
+        descending.reverse();
+        descending.dedup();
+        assert_eq!(
+            descending, seen,
+            "the history did not come back newest-first, or a row came back twice: {seen:?}"
+        );
+    }
+
+    /// History is pruned by age. A row written a moment ago survives an hour-long retention window
+    /// and does not survive a zero-length one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn pruning_removes_history_outside_the_window_and_keeps_what_is_inside(
+        pool: sqlx::PgPool,
+    ) {
+        let node = pgtest::node(&pool, "sw", 1, None).await;
+        let repo = NeighborRepo::new(pool.clone());
+        repo.record_observation(
+            node,
+            &NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]),
+        )
+        .await
+        .expect("record");
+
+        assert_eq!(
+            repo.prune_changes(3600).await.expect("prune"),
+            0,
+            "a change recorded a moment ago was pruned by an hour-long window"
+        );
+        assert_eq!(pgtest::rows(&pool, "node_neighbor_changes").await, 1);
+
+        assert_eq!(repo.prune_changes(0).await.expect("prune"), 1);
+        assert_eq!(pgtest::rows(&pool, "node_neighbor_changes").await, 0);
+        assert!(
+            repo.current(node).await.expect("current").is_some(),
+            "pruning the history also removed the current set"
+        );
+    }
 }
