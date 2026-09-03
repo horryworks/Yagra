@@ -1204,15 +1204,21 @@ impl AlertManager {
 
     /// Resolve every active **derived** per-interface alert whose rule no longer resolves.
     ///
-    /// The poll path already closes a stranded alert when its rule is deleted ([`Self::observe`]'s
-    /// `!alerting` branch), but it can only close checks it visits — and it never visits
-    /// `metric@ifindex` for a derived metric, because nothing polls `if_in_util_pct`. Without this
-    /// sweep, deleting a port rule left its alert open in the UI and its incident open in whatever
-    /// external tool the dedup key reached, for the life of the process.
+    /// Nothing polls `if_in_util_pct`, so [`Self::observe`] never visits `metric@ifindex` for a
+    /// derived metric and no poll can close one. Without this sweep, deleting a port rule left its
+    /// alert open in the UI and its incident open in whatever external tool the dedup key reached,
+    /// for the life of the process.
     ///
-    /// **Derived metrics only.** A *collected* per-interface metric (`if_oper_status@7`) does arrive
-    /// on the poll path, so it already has an owner; touching it here would give one alert two
-    /// closers racing each other.
+    /// **Derived metrics only, and this sweep owns the per-port dimension.** A *collected* per-port
+    /// alert whose rule was deleted is left to [`Self::resolve_orphaned_collected_alerts`] — see the
+    /// ownership table there, which is the whole answer to "exactly one closer per alert".
+    ///
+    /// 🚨 **This doc used to say the poll path already closed a collected metric's alert. It does
+    /// not, and never did** (ADR-097 Increment 6). `observe` `continue`s a sample whose threshold
+    /// does not resolve *before* `process_check` is reached, and `observe_threshold_sample` hard-
+    /// codes `alerting: true`, so the `!alerting` close branch is reachable only by the liveness
+    /// check. The two tests that encoded that belief asserted only that this sweep refuses the
+    /// alert; neither re-polled, so neither could see that nobody else took it.
     ///
     /// 🚨 **Safe only because a failed config load no longer degrades to "no rules" (ADR-080).**
     /// Before that, "the rule was deleted" and "the ruleset could not be read" were the same
@@ -1272,6 +1278,103 @@ impl AlertManager {
                 .collect()
         };
         self.resolve_orphans(orphans)
+    }
+
+    /// Resolve every active alert about a **collected** metric whose rule no longer resolves
+    /// (ADR-097 Increment 6).
+    ///
+    /// # The defect this closes, which the tree believed was already closed
+    ///
+    /// [`Self::observe`] `continue`s a sample whose threshold does not resolve *before*
+    /// [`Self::process_check`] is reached, and `observe_threshold_sample` hard-codes
+    /// `alerting: true`. So `process_check`'s `!alerting` branch — the one whose own doc says it
+    /// exists to close a stranded alert — is reachable **only** by the liveness check. Deleting a
+    /// threshold rule for `snmp_up`, `icmp_loss_pct` or any other collected metric left its alert
+    /// open in the UI, and its incident open in whatever external tool the dedup key reached, for
+    /// the life of the process. Nothing closed it. Two doc comments and two tests said otherwise;
+    /// both tests asserted only that the *derived* sweeps refuse the alert, and neither re-polled,
+    /// so neither could see that no other closer existed.
+    ///
+    /// # Which sweep closes what, and why there is exactly one of each
+    ///
+    /// | closer | closes because | over |
+    /// |---|---|---|
+    /// | `process_check`'s `!alerting` branch | rule gone | `__liveness__` — the only check that reaches it |
+    /// | [`Self::resolve_orphaned_interface_alerts`] | rule gone | derived per-port |
+    /// | [`Self::resolve_orphaned_node_derived_alerts`] | rule gone | derived node-wide |
+    /// | **this** | rule gone | **collected, both dimensions** |
+    /// | the freshness sweep (`alerts::stale`) | **data gone** | collected + derived node-wide |
+    /// | [`Self::forget_deleted_nodes`] | node gone | any node subject |
+    /// | `events::engine` | the event rule's own lifecycle | `event:*` |
+    /// | `pool_coverage` | the pool recovered | [`Subject::Pool`] |
+    ///
+    /// The split here is **derived vs collected**, not node vs port: a rule lookup answers a
+    /// per-port question as readily as a node-wide one, so there is no reason to leave a collected
+    /// `if_oper_status@7` stranded. The freshness sweep is the one that must stay node-only, and
+    /// for a different reason — the store answers about nodes.
+    ///
+    /// 🚨 **Safe only because a failed config load no longer degrades to "no rules" (ADR-080)**,
+    /// exactly as for its two derived siblings, and over a strictly larger set: if a database blip
+    /// could still empty the ruleset, this sweep would resolve every threshold alert in the fleet
+    /// and send a recovery for each.
+    ///
+    /// 🚨 **And because an engine with no config installed sweeps nothing.** `AlertConfig::default`
+    /// is what this type holds before the first refresh, and [`Self::restore`] has already seeded
+    /// the active set by then — so without the guard below, the first tick after every start would
+    /// resolve every threshold alert in the fleet and page a recovery for each. That is ADR-097
+    /// decision 7's lesson, and the guard lives **here rather than at the call site** for the same
+    /// reason: it has to hold for any caller, and most of this module's own tests configure the
+    /// manager with an empty map.
+    pub fn resolve_orphaned_collected_alerts(&self) -> Vec<NotifyAction> {
+        let orphans: Vec<CheckId> = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            if config.node_meta.is_empty() {
+                return Vec::new();
+            }
+            let active = self.active.lock().expect("alerts mutex poisoned");
+            active
+                .values()
+                .filter_map(|a| {
+                    let node = a.node()?;
+                    if !Self::is_collected_threshold_alert(a) {
+                        return None;
+                    }
+                    config
+                        .resolve(node, a.ifindex, &a.metric)
+                        .is_none()
+                        .then_some(a.check)
+                })
+                .collect()
+        };
+        self.resolve_orphans(orphans)
+    }
+
+    /// Whether this alert is about a metric a **poller collects** and a threshold rule evaluates.
+    ///
+    /// The shared admission test for the two sweeps ADR-097 Increment 6 adds. Each rejection names
+    /// the closer that owns what it drops, and the table in
+    /// [`Self::resolve_orphaned_collected_alerts`] is the whole of it — one function so the two
+    /// sweeps cannot come to disagree about what they are for.
+    ///
+    /// The caller has already established that the subject is a node.
+    fn is_collected_threshold_alert(a: &Alert) -> bool {
+        // Liveness is `process_check`'s, and it is the one check that actually reaches the
+        // `!alerting` branch.
+        if a.metric == LIVENESS {
+            return false;
+        }
+        // A passive-event alert has no series and no threshold rule; `events::engine` owns its
+        // whole lifecycle, and closing one from outside permanently suppresses the rule's re-fire.
+        if a.metric.starts_with(crate::events::EVENT_METRIC_PREFIX) {
+            return false;
+        }
+        // Derived metrics belong to the two sweeps that already own them.
+        if crate::derived::derived_node_metric(&a.metric).is_some()
+            || crate::interface_util::derived_metric_name(&a.metric).is_some()
+        {
+            return false;
+        }
+        true
     }
 
     /// Close every alert about a node the inventory no longer holds, and forget what the engine
@@ -1385,15 +1488,24 @@ impl AlertManager {
     ///
     /// Removing the entry rather than resetting it is the honest form: the rule that set this
     /// check's dwell is gone, so its window carries no meaning to preserve.
+    ///
+    /// ⚠️ **The alert is resolved first, and the dwell window is dropped only if it was still
+    /// open.** The three sweeps that predate ADR-097 Increment 6 collect their orphans and call
+    /// this with no `.await` in between, so for them the two orders are the same. The freshness
+    /// sweep is the first to ask a store between reading `active` and acting — and over that gap a
+    /// check can recover through the poll path. Dropping `states` unconditionally would then throw
+    /// away the dwell window of a **live** check that has nothing wrong with it, which is the same
+    /// permanent silence this function's whole doc is about, arrived at from the other side.
     fn resolve_orphans(&self, orphans: Vec<CheckId>) -> Vec<NotifyAction> {
         orphans
             .into_iter()
             .filter_map(|check| {
+                let action = self.resolve_event_alert(check)?;
                 self.states
                     .lock()
                     .expect("states mutex poisoned")
                     .remove(&check);
-                self.resolve_event_alert(check)
+                Some(action)
             })
             .collect()
     }
@@ -4017,10 +4129,16 @@ mod tests {
         );
     }
 
-    /// A *collected* node metric arrives on the poll path, so that path already closes it. The
-    /// derived sweep must not touch it.
+    /// A *collected* node metric belongs to [`AlertManager::resolve_orphaned_collected_alerts`],
+    /// not to the derived sweep — and somebody has to take it.
+    ///
+    /// 🚨 **This test used to assert that the poll path would close it, and the poll path never
+    /// could** (ADR-097 Increment 6). Every assertion in it was a refusal, and it never re-polled,
+    /// so it could not see that no other closer existed: `observe` `continue`s a sample whose
+    /// threshold does not resolve before `process_check` is reached. The positive half below is
+    /// what makes the refusal above mean something.
     #[test]
-    fn the_node_orphan_sweep_leaves_collected_metrics_to_the_poll_path() {
+    fn the_node_derived_sweep_leaves_collected_metrics_to_the_collected_sweep() {
         use yagra_bus::Sample;
         use yagra_common::{ThresholdBounds, ThresholdRule};
         let node = NodeId::new();
@@ -4047,12 +4165,46 @@ mod tests {
         mgr.set_config(cfg(Vec::new(), meta_for(node)));
         assert!(
             mgr.resolve_orphaned_node_derived_alerts().is_empty(),
-            "a collected metric already has a closer; two would race"
+            "a collected metric is not the derived sweep's; two closers would race"
         );
         assert_eq!(
             mgr.active_alerts().len(),
             1,
-            "still the poll path's to close"
+            "…and it is still open until its own sweep runs"
+        );
+
+        let acts = mgr.resolve_orphaned_collected_alerts();
+        assert_eq!(
+            acts.len(),
+            1,
+            "the collected sweep is the one that closes it, got {acts:?}"
+        );
+        assert!(matches!(acts[0], NotifyAction::Resolve(_)));
+        assert!(mgr.active_alerts().is_empty());
+        assert!(
+            mgr.resolve_orphaned_collected_alerts().is_empty(),
+            "the sweep runs every tick for the life of the process; it must be idempotent"
+        );
+
+        // 🚨 And the check must still be able to fire. Closing an alert without dropping its dwell
+        // window leaves the state machine committed, so a recreated rule sees no transition.
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "huawei_mem_usage",
+                    ThresholdBounds::above(Some(1.0), Some(99.0)),
+                    1,
+                ),
+            )],
+            meta_for(node),
+        ));
+        let acts = mgr.observe(&r);
+        assert!(
+            acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))),
+            "a collected metric whose rule was deleted and recreated must alert again, got {acts:?}"
         );
     }
 
@@ -4103,10 +4255,15 @@ mod tests {
         );
     }
 
-    /// A *collected* per-interface metric arrives on the poll path, so that path already closes it
-    /// when its rule goes. Two closers on one alert is a race, not a belt and braces.
+    /// A *collected* per-port metric belongs to
+    /// [`AlertManager::resolve_orphaned_collected_alerts`] too — the split between the sweeps is
+    /// derived-vs-collected, not node-vs-port, because a rule lookup answers a per-port question as
+    /// readily as a node-wide one.
+    ///
+    /// 🚨 Same correction as its node-wide sibling: this used to assert the poll path would close
+    /// it, and nothing did.
     #[test]
-    fn the_orphan_sweep_leaves_collected_port_alerts_to_the_poll_path() {
+    fn the_interface_sweep_leaves_collected_port_alerts_to_the_collected_sweep() {
         use yagra_bus::Sample;
         use yagra_common::{MetricKind, ThresholdRule};
 
@@ -4135,9 +4292,151 @@ mod tests {
         mgr.set_config(cfg(Vec::new(), meta_for(node)).with_per_interface(per_if));
         assert!(
             mgr.resolve_orphaned_interface_alerts().is_empty(),
-            "the poll path owns this one"
+            "a collected port metric is not the derived sweep's; two closers would race"
         );
         assert_eq!(mgr.active_alerts().len(), 1);
+
+        let acts = mgr.resolve_orphaned_collected_alerts();
+        assert_eq!(
+            acts.len(),
+            1,
+            "the collected sweep closes the port dimension too, got {acts:?}"
+        );
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    // ---- ADR-097 Increment 6: the collected sweep's refusals ----
+
+    /// 🚨 **The accepting half, and it is load-bearing.** A sweep that closed everything would
+    /// satisfy every other assertion about this function; only this one can tell them apart.
+    #[test]
+    fn the_collected_sweep_leaves_an_alert_whose_rule_still_resolves() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(vec![snmp_up_rule(1)], meta_for(node)));
+        let _ = mgr.observe(&snmp_down(node, CheckOutcome::Reachable, 0));
+        assert_eq!(
+            mgr.active_alerts().len(),
+            1,
+            "the alert is open to begin with"
+        );
+
+        assert!(
+            mgr.resolve_orphaned_collected_alerts().is_empty(),
+            "the rule is still there; nothing is orphaned"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// Liveness is `process_check`'s — the one check that actually reaches the `!alerting` branch.
+    #[test]
+    fn the_collected_sweep_never_closes_a_liveness_alert() {
+        let node = NodeId::new();
+        let mgr = manager();
+        // No rules at all, so `resolve` answers `None` for everything. The liveness alert must
+        // still survive this sweep.
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]);
+
+        assert!(
+            mgr.resolve_orphaned_collected_alerts().is_empty(),
+            "the liveness alert is not this sweep's to close"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// 🚨 A passive-event alert has no threshold rule and no series, so both of ADR-097 Increment 6's
+    /// sweeps would take it. Closing one from outside `events::engine` leaves its `runtime.active`
+    /// entry behind, which suppresses the rule's re-fire **permanently** — worse than a wrong close.
+    #[test]
+    fn the_collected_sweep_never_closes_an_event_alert() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        let metric = format!("{}link flap", crate::events::EVENT_METRIC_PREFIX);
+        mgr.restore(vec![open_alert(node, &metric, NodeState::Critical)]);
+
+        assert!(
+            mgr.resolve_orphaned_collected_alerts().is_empty(),
+            "an event alert belongs to events::engine, whole lifecycle"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// The prefix exclusion is only sound if no metric a poller can emit collides with it.
+    #[test]
+    fn no_catalogue_metric_name_starts_with_the_event_prefix() {
+        let prefix = crate::events::EVENT_METRIC_PREFIX;
+        let mut checked = 0usize;
+        for name in crate::metric_meaning::CHECK_METRICS {
+            assert!(!name.starts_with(prefix), "{name} collides with `{prefix}`");
+            checked += 1;
+        }
+        for d in crate::derived::DERIVED_NODE_METRICS {
+            assert!(
+                !d.name.starts_with(prefix),
+                "{} collides with `{prefix}`",
+                d.name
+            );
+            checked += 1;
+        }
+        for name in crate::interface_util::DERIVED_INTERFACE_METRICS {
+            assert!(!name.starts_with(prefix), "{name} collides with `{prefix}`");
+            checked += 1;
+        }
+        for (item, _) in crate::mib::builtin_mib_rows() {
+            assert!(
+                !item.metric_name.starts_with(prefix),
+                "{} collides with `{prefix}`",
+                item.metric_name
+            );
+            checked += 1;
+        }
+        // A floor, because everything above asks whether something is *absent*: over an empty
+        // iteration that is a claim about nothing.
+        assert!(
+            checked >= 100,
+            "only {checked} metric names were inspected; the catalogues did not load"
+        );
+    }
+
+    /// A pool-coverage alert is `pool_coverage`'s, and it has no node to resolve a rule against.
+    #[test]
+    fn the_collected_sweep_never_closes_a_pool_subject_alert() {
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(NodeId::new())));
+        mgr.raise_pool_coverage_alert("default", 1_000);
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        assert!(
+            mgr.resolve_orphaned_collected_alerts().is_empty(),
+            "a pool subject has no inventory row and no threshold rule"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// 🚨 The disaster case, the same one `an_empty_node_map_resolves_nothing` guards for the
+    /// deleted-node sweep: `AlertConfig::default` is what the manager holds before the first
+    /// refresh, and `restore` has already seeded the active set by then.
+    ///
+    /// ⚠️ Written with `snmp_up` rather than `__liveness__` on purpose — the liveness alert is
+    /// refused by this sweep for a second, unrelated reason, so it would pass whether the guard
+    /// existed or not.
+    #[test]
+    fn an_engine_with_no_config_installed_sweeps_no_collected_alert() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        mgr.restore(vec![open_alert(node, "snmp_up", NodeState::Critical)]);
+
+        assert!(
+            mgr.resolve_orphaned_collected_alerts().is_empty(),
+            "no config installed is not the same as no rules configured"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        // The other side: once a config really is installed and really has no rule, it closes.
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        assert_eq!(mgr.resolve_orphaned_collected_alerts().len(), 1);
     }
 
     // ---- ADR-097 Increment 4: a deleted node's alerts are closed, not abandoned ----

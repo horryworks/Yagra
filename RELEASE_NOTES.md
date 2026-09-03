@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Deleting a threshold rule now closes the alert it had raised.** For a *collected* metric —
+  `snmp_up`, `icmp_loss_pct`, an interface counter, anything a poller actually measures — deleting
+  the rule left its alert open in the UI, and its incident open in PagerDuty or Jira Service
+  Management, for as long as the process ran. Restarting did not help: the open alert is read back
+  out of history at startup. Only alerts for *computed* metrics (utilisation percentages, memory
+  ratios) were ever closed this way. A new leader-side sweep now closes a collected metric's alert
+  within five minutes of its rule being removed, writes the resolution to the alert history, and
+  delivers the recovery to the channels the original alert was routed to.
+
 ## v0.3.6 — the time-range selector moves the chart it sits above, and an ICMP-only node finally has one
 
 ### Bug Fixes

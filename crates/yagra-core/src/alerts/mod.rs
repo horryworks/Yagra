@@ -66,6 +66,7 @@ pub(crate) mod notify;
 pub(crate) mod restore;
 pub(crate) mod rules;
 pub(crate) mod sink;
+pub(crate) mod stale;
 #[cfg(test)]
 pub(crate) mod testkit;
 

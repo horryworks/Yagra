@@ -95,6 +95,21 @@ use crate::alerts::NotifyAction;
 const DEDUP_WINDOW_MS: i64 = 5_000;
 /// Bounded size of the burst-dedup window.
 const DEDUP_CAP: usize = 4096;
+/// The prefix every passive-event alert carries in its `metric`, and the marker that says
+/// **this alert has no time series behind it**.
+///
+/// An event alert is raised by [`engine`] from a syslog line or a trap, not from a poll result, so
+/// nothing ever writes `event:<rule name>` to the TSDB. Anything that reasons about an alert by
+/// asking the store whether its metric is still arriving therefore has to recognise and skip these
+/// — otherwise every one of them reads as "the data stopped" on the very first look.
+///
+/// 🚨 **Closing one from outside this module is worse than a wrong answer.** `engine` mutates the
+/// manager's alert and its own `runtime.active` under one lock precisely because the two must not
+/// diverge: a manager-side resolve that leaves the runtime entry behind makes the rule's re-fire
+/// **permanently** suppressed. The freshness sweep (ADR-097 Increment 6) excludes them by this
+/// constant, with a test.
+pub(crate) const EVENT_METRIC_PREFIX: &str = "event:";
+
 /// TTL sweeper cadence.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(15);
 // Retention windows are no longer declared here: they are operator-configurable and live in

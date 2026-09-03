@@ -1365,6 +1365,17 @@ impl LeaderTasks {
                 self.alert_sink("a deleted-node resolution"),
             ),
         );
+        // Checks nothing is evaluating any more (ADR-097 Increment 6). Two shapes with one owner:
+        // a collected metric whose threshold rule was deleted — which the poll path was believed to
+        // close and never did — and a metric that simply stopped arriving because the check that
+        // produced it was removed. Leader-only for the same reason as every loop above it.
+        spawn_cancellable(
+            &self.shutdown,
+            alerts::stale::run_stale_check_watch(
+                self.alerts.clone(),
+                self.alert_sink("a stale-check resolution"),
+            ),
+        );
         spawn_cancellable(
             &self.shutdown,
             pool_coverage::run_pool_coverage_watch(

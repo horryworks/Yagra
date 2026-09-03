@@ -344,7 +344,7 @@ impl EventEngine {
                 continue;
             }
 
-            let check = check_id(node_id, &format!("event:{}", rule.id));
+            let check = check_id(node_id, &format!("{EVENT_METRIC_PREFIX}{}", rule.id));
 
             // Clear takes precedence over fire for the same message (anti-flap). Remove
             // from BOTH active sets under the same lock so a concurrent sweep/plan can't
@@ -395,7 +395,7 @@ impl EventEngine {
                 at_unix_ms: msg.at_unix_ms,
                 root_cause: None,
                 flapping: false,
-                metric: format!("event:{}", rule.name),
+                metric: format!("{EVENT_METRIC_PREFIX}{}", rule.name),
                 breach: None,
                 // A passive event names its node, never a port: syslog and traps carry an
                 // interface in their *text*, not as a series key we could resolve to an ifIndex.
