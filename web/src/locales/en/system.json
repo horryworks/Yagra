@@ -298,14 +298,10 @@
     "overallDegraded": "Degraded",
     "noHistory": "No history yet…",
     "core": "Core / Web",
+    "coreInstance": "Core / Web · {{instance}}",
+    "sectionPoller": "Pool {{pool}} / {{instance}}",
     "hostResources": "Host resources",
-    "sectionPool": "Pool {{pool}}",
     "sectionToggleAria": "Toggle {{section}}",
-    "pollerCount_one": "{{count}} poller",
-    "pollerCount_other": "{{count}} pollers",
-    "offlineCount_one": "{{count}} offline",
-    "offlineCount_other": "{{count}} offline",
-    "offlineSuffix": " (offline)",
     "deps": {
       "postgres": "PostgreSQL",
       "tsdb": "VictoriaMetrics (TSDB)",
@@ -322,7 +318,6 @@
     "metric": {
       "cpu": "CPU",
       "loadAverage": "Load average",
-      "loadAverage1m": "Load average (1m)",
       "memory": "Memory",
       "disk": "Disk · {{mount}}",
       "diskShort": "Disk"

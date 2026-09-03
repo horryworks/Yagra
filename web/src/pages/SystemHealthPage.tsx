@@ -9,10 +9,11 @@
 // Split out of the former "Pollers & system health" page so Settings ▸ Pollers can be reserved for
 // future distributed-poller configuration.
 //
-// Host resources is grouped: one section for core and one per poller pool, with every host in a
-// section overlaid on the same charts. It replaced a `<select>` that showed one instance at a time,
-// which made the only comparison anyone actually wants — this poller against core, or against its
-// pool-mates — a matter of switching and remembering. The grouping and series rules are in
+// Host resources is one section per host: each core, then each poller under its pool name. It has
+// been narrowed twice — a `<select>` showing one instance at a time, then one section per *pool*
+// with its pollers overlaid on shared charts. The overlay hid what it was meant to show: two
+// pollers reading within a point of each other drew as one line and the headline named only the
+// worst, so the page read as a pool-level gauge (ADR-118). The grouping and series rules are in
 // `hostSections.ts` where they can be tested; what is left here is layout and fetching.
 
 import { useEffect, useMemo, useState } from 'react';
@@ -29,11 +30,10 @@ import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
 import { formatBytes, formatUtil } from '../lib/format';
 import { diskHeadline } from './diskHeadline';
-import { groupHosts, mountPct, sectionCharts } from './hostSections';
+import { groupHosts, hostCharts } from './hostSections';
 import type { HostSection } from './hostSections';
 import type { DependencyHealth, HostInfo, HostMetricRange } from '../types/api';
 import './SystemHealthPage.css';
-import { peakHeadline } from './hostSections';
 
 const REFRESH_MS = 15_000;
 /** A bounded gauge's Y range — CPU/mem/disk read 0–100%, so the baseline is 0. Module-level so
@@ -146,37 +146,42 @@ function HostMetricCard({
   );
 }
 
-/** One section — core, or one pool — with every host in it overlaid on shared charts.
+/** One host's section — a core, or one poller under its pool name.
  *
  *  **A collapsed section fetches nothing, and that is the cost control.** `/system/hosts` is one
- *  cheap call driving every section's header and summary, while an expanded section costs one range
- *  request per host every 15s and each of those is six-plus TSDB queries server-side. Bounding the
- *  fan-out by what the operator has open is the only bound that tracks what they are looking at. */
+ *  cheap call driving every section's header and summary, while an expanded one costs a range
+ *  request every 15s and each of those is six-plus TSDB queries server-side. Bounding the fan-out
+ *  by what the operator has open is the only bound that tracks what they are looking at.
+ *
+ *  ⚠️ Splitting per host did **not** change that arithmetic: the per-pool version already issued
+ *  one request per host. What it costs is the granularity of the toggle — a pool of many pollers is
+ *  now many sections to fold away rather than one, which ADR-118 records as deferred, not solved. */
 function HostSectionView({ section, range }: { section: HostSection; range: Range }) {
   const { t } = useTranslation('system');
   const [open, setOpen] = useState(true);
-  const [ranges, setRanges] = useState<HostMetricRange[]>([]);
+  const [hostRange, setHostRange] = useState<HostMetricRange | null>(null);
   const [win, setWin] = useState<[number, number] | null>(null);
 
-  // A string, not the array: `section.hosts` is rebuilt by `groupHosts` on every 15s inventory
-  // refresh, so depending on the array itself would tear down and restart the interval each time.
-  const instanceKey = section.hosts.map((h) => h.instance).join('\n');
+  const host = section.host;
+  // The id, not the object: `groupHosts` rebuilds `section.host` on every 15s inventory refresh, so
+  // depending on the object itself would tear down and restart the interval each time.
+  const instance = host.instance;
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    const ids = instanceKey.length > 0 ? instanceKey.split('\n') : [];
     const load = () => {
       const { from, to } = resolveRange(range);
-      // One request per host, concurrently. A failure resolves to null so a single unreachable
-      // poller leaves a gap in its own line rather than blanking the whole section.
-      Promise.all(ids.map((id) => api.getHostMetricRange(id, { from, to }).catch(() => null))).then(
-        (rs) => {
+      // A failure resolves to null so an unreachable poller draws empty cards rather than
+      // propagating its error to the page.
+      api
+        .getHostMetricRange(instance, { from, to })
+        .catch(() => null)
+        .then((r) => {
           if (cancelled) return;
-          setRanges(rs.filter((r): r is HostMetricRange => r != null));
+          setHostRange(r);
           setWin([from, to]);
-        },
-      );
+        });
     };
     load();
     const id = setInterval(load, REFRESH_MS);
@@ -184,30 +189,21 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
       cancelled = true;
       clearInterval(id);
     };
-  }, [open, instanceKey, range]);
+  }, [open, instance, range]);
 
-  // Every host keeps its entry even with no trends yet, so its colour stays put — see `hostSections`.
-  const entries = useMemo(
-    () =>
-      section.hosts.map((h) => ({
-        label: h.online ? h.instance : `${h.instance}${t('health.offlineSuffix')}`,
-        range: ranges.find((r) => r.instance === h.instance) ?? null,
-      })),
-    [section.hosts, ranges, t],
-  );
-  const charts = useMemo(() => sectionCharts(entries, PALETTE), [entries]);
+  const charts = useMemo(() => hostCharts(hostRange, PALETTE), [hostRange]);
 
   const title =
-    section.kind === 'core' ? t('health.core') : t('health.sectionPool', { pool: section.pool });
-  const offline = section.hosts.filter((h) => !h.online).length;
-  // `null` once there is more than one host — the signal to switch every headline to the peak.
-  const only = section.hosts.length === 1 ? section.hosts[0] : null;
+    section.kind === 'core'
+      ? section.coreAmbiguous
+        ? t('health.coreInstance', { instance })
+        : t('health.core')
+      : t('health.sectionPoller', { pool: section.pool, instance });
 
-  const memHeadline = only
-    ? only.mem_used_bytes != null && only.mem_total_bytes != null && only.mem_total_bytes > 0
-      ? `${formatBytes(only.mem_used_bytes)} / ${formatBytes(only.mem_total_bytes)}`
-      : formatUtil(only.mem_used_pct ?? null)
-    : peakHeadline(section.hosts, (h) => h.mem_used_pct, formatUtil);
+  const memHeadline =
+    host.mem_used_bytes != null && host.mem_total_bytes != null && host.mem_total_bytes > 0
+      ? `${formatBytes(host.mem_used_bytes)} / ${formatBytes(host.mem_total_bytes)}`
+      : formatUtil(host.mem_used_pct ?? null);
 
   return (
     <section className="host-section">
@@ -224,23 +220,16 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
           </span>
           <span className="host-section-title">{title}</span>
         </button>
-        {section.kind === 'pool' && (
-          <span className="host-section-meta muted">
-            {t('health.pollerCount', { count: section.hosts.length })}
-            {offline > 0 && ` · ${t('health.offlineCount', { count: offline })}`}
-          </span>
-        )}
+        {/* The offline marker used to ride on the series label, where the legend named the host.
+            The legend now names 1m/5m/15m, so it has to be said here or not at all. */}
+        {!host.online && <span className="host-section-meta">{t('health.unreachable')}</span>}
       </div>
 
       {open ? (
         <div className="host-metrics">
           <HostMetricCard
             label={t('health.metric.cpu')}
-            value={
-              only
-                ? formatUtil(only.cpu_pct ?? null)
-                : peakHeadline(section.hosts, (h) => h.cpu_pct, formatUtil)
-            }
+            value={formatUtil(host.cpu_pct ?? null)}
             timestamps={charts.cpu.timestamps}
             series={charts.cpu.series}
             yFormat={formatUtil}
@@ -248,19 +237,10 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
             win={win}
           />
           <HostMetricCard
-            // Two hosts or more and the colour means the host, so 5m/15m give up their two colours.
-            label={
-              charts.load.multi
-                ? t('health.metric.loadAverage1m')
-                : t('health.metric.loadAverage')
-            }
-            value={
-              only
-                ? only.load1 != null
-                  ? only.load1.toFixed(2)
-                  : '—'
-                : peakHeadline(section.hosts, (h) => h.load1, (v) => v.toFixed(2))
-            }
+            // One host per section ⇒ the colour is free to mean the window again, so all three
+            // load averages are drawn rather than 5m/15m giving up their colours to pool-mates.
+            label={t('health.metric.loadAverage')}
+            value={host.load1 != null ? host.load1.toFixed(2) : '—'}
             timestamps={charts.load.timestamps}
             series={charts.load.series}
             yFormat={(v) => v.toFixed(2)}
@@ -280,11 +260,7 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
             <HostMetricCard
               key={d.mount}
               label={t('health.metric.disk', { mount: d.mount })}
-              value={
-                only
-                  ? diskHeadline(only.disks.find((c) => c.mount === d.mount))
-                  : peakHeadline(section.hosts, (h) => mountPct(h, d.mount), formatUtil)
-              }
+              value={diskHeadline(host.disks.find((c) => c.mount === d.mount))}
               timestamps={d.timestamps}
               series={d.series}
               yFormat={d.known ? formatUtil : formatBytes}
@@ -298,28 +274,27 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
         // Collapsed still answers "is anything wrong in here" — from the inventory call the page
         // already makes, so folding a section away costs the charts and nothing else.
         <ul className="host-section-summary">
-          {section.hosts.map((h) => (
-            <li key={h.instance} className={h.online ? undefined : 'hs-offline'}>
-              <span className="hs-name">{h.instance}</span>
-              <span className="hs-val muted">
-                {t('health.metric.cpu')} <b>{formatUtil(h.cpu_pct ?? null)}</b>
-              </span>
-              <span className="hs-val muted">
-                {t('health.metric.memory')} <b>{formatUtil(h.mem_used_pct ?? null)}</b>
-              </span>
-              <span className="hs-val muted">
-                {t('health.metric.diskShort')} <b>{formatUtil(h.disk_used_pct ?? null)}</b>
-              </span>
-              {!h.online && <span className="hs-val">{t('health.unreachable')}</span>}
-            </li>
-          ))}
+          <li className={host.online ? undefined : 'hs-offline'}>
+            <span className="hs-name">{host.instance}</span>
+            <span className="hs-val muted">
+              {t('health.metric.cpu')} <b>{formatUtil(host.cpu_pct ?? null)}</b>
+            </span>
+            <span className="hs-val muted">
+              {t('health.metric.memory')} <b>{formatUtil(host.mem_used_pct ?? null)}</b>
+            </span>
+            <span className="hs-val muted">
+              {t('health.metric.diskShort')} <b>{formatUtil(host.disk_used_pct ?? null)}</b>
+            </span>
+            {!host.online && <span className="hs-val">{t('health.unreachable')}</span>}
+          </li>
         </ul>
       )}
     </section>
   );
 }
 
-/** Host resources, as one section for core and one per poller pool, over a shared range picker. */
+/** Host resources, as one section per host — each core, then each poller under its pool name —
+ *  over a shared range picker. */
 function HostResourcesCard() {
   const { t } = useTranslation('system');
   const [hosts, setHosts] = useState<HostInfo[]>([]);

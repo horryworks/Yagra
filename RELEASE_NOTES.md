@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Host resources now shows one section per poller instead of one per pool.** On Settings ▸ Yagra
+  health, the pollers in a pool used to share a set of charts, drawn as overlaid lines with a single
+  headline naming whichever one read highest. When two pollers report within a point of each other —
+  0.1% and 0.1% CPU, 14% and 13% memory — the lines land on top of one another and the page reads as
+  a pool-level gauge rather than a per-poller one. Each host now gets its own section, titled with
+  its pool and instance (`Pool test1 / yagra-poller2a`), and its own headline figures. A pool with a
+  single poller is titled the same way, so the heading reads consistently however many there are.
+  Two consequences worth knowing: **the load-average chart shows 1m, 5m and 15m again for every
+  host** — it collapsed to 1m alone as soon as a pool held two pollers, because the colour had to
+  mean the host — and a pool is now several sections to fold away rather than one. The number of
+  requests the page makes is unchanged; it already fetched per host.
+
 ### Bug Fixes
 
 - **Host resource charts are no longer blank for a poller that core moved between pools.** On

@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Grouping and series assembly for the System Health "Host resources" sections.
  *
- *  The page used to show one instance at a time behind a `<select>`, so comparing a poller against
- *  core — or against its own pool-mates — meant switching and remembering. These functions turn the
- *  flat `/system/hosts` list into **one section for core and one per pool**, and overlay every host
- *  in a section onto the same charts.
+ *  **One section is one host.** The page used to show one instance at a time behind a `<select>`,
+ *  then briefly one section per *pool* with every poller in it overlaid on shared charts. Both
+ *  answered "is anything in here hot" and neither answered "what is *this* poller doing" — with two
+ *  pollers reading 0.1%/0.1%, 14%/13% and 8.6%/7.6% the lines sat on top of each other and the
+ *  headline named only the worst one, so the page read as a pool-level gauge (ADR-118).
  *
- *  Two rules live here because they are the only ones with judgement in them, and both are
- *  invisible to the type system:
+ *  The one rule with judgement in it, and it is invisible to the type system:
  *
- *  1. **Colour is assigned by position within the section**, so a pool of six stays inside the
- *     palette even on a fleet with thirty pollers. Past six the palette repeats; the legend is what
- *     distinguishes them. Nothing is dropped — a host you cannot see is worse than a colour you
- *     have seen before.
- *  2. **A section holding one host keeps the 1m/5m/15m load detail**; two or more collapse to
- *     `load1` so the colour can mean the host instead. There is no reason to discard detail when
- *     there is nothing to compare against.
+ *  > **Colour means the load window, not the host.** A section holds one host, so `1m`/`5m`/`15m`
+ *  > take the first three palette entries and every other card draws a single line. Nothing wraps
+ *  > and nothing competes for a colour, which is the whole reason the section boundary moved.
+ *
+ *  ⚠️ `overlaySeries` survived the split and is not vestigial: the load card still puts three
+ *  series on one axis, and those three point lists need not share timestamps.
  *
  *  Lives in a `.ts` for the reason `diskHeadline.ts` gives: Vitest here runs `environment: 'node'`
- *  with `include: ['src/ **\/*.test.ts']`, so anything left inside `SystemHealthPage.tsx` cannot be
+ *  with an `src/**` + `.test.ts` include, so anything left inside `SystemHealthPage.tsx` cannot be
  *  reached by a test. `palette` is injected rather than imported, following `flowTrendSeries` — it
- *  keeps this layer free of chart dependencies and lets a test pin the wrap-around with two colours.
+ *  keeps this layer free of chart dependencies and lets a test pin the assignment with two colours.
  */
 
 import { alignTo, pctSeries } from '../lib/seriesMath';
@@ -34,83 +33,55 @@ export interface OverlaySeries {
   color: string;
 }
 
-/** Core, or one pool's pollers. `key` is stable across refreshes so React and the expand/collapse
- *  state can be keyed by it. */
+/** One host — core, or one poller. `key` is stable across refreshes so React and the
+ *  expand/collapse state can be keyed by it. */
 export interface HostSection {
   key: string;
   kind: 'core' | 'pool';
-  /** The pool name for a `pool` section, `null` for core. */
+  /** The pool name for a poller, `null` for core. Drives the heading and nothing else. */
   pool: string | null;
-  /** Sorted by instance id, which is what makes the colour assignment stable. */
-  hosts: HostInfo[];
+  host: HostInfo;
+  /** True only when more than one core reports — an HA pair. The heading names the instance in
+   *  that case alone, because `Core / Web` is the name of a role and `Core / Web · core` stutters. */
+  coreAmbiguous: boolean;
 }
 
-/** Split the host inventory into core and per-pool sections.
+/** One section per host: core(s) first, then pollers by pool name and by instance within a pool.
  *
- *  Core first, then pools by name; hosts inside a section by instance id. Both orderings exist for
- *  the same reason — the colour a host gets is its index here, so an unstable order would recolour
- *  the charts on every 15s refresh. A poller arriving or leaving still shifts the hosts after it;
- *  that is the honest cost of not persisting a colour per instance forever. */
+ *  The ordering is what keeps the page from reshuffling under the 15s inventory refresh. It also
+ *  costs less than the per-pool overlay it replaced: a poller arriving or leaving now inserts or
+ *  removes a section, where before it shifted every later host's colour (ADR-118). */
 export function groupHosts(hosts: HostInfo[]): HostSection[] {
-  const core = hosts.filter((h) => h.role === 'core');
-  const byPool = new Map<string, HostInfo[]>();
-  for (const h of hosts) {
-    if (h.role === 'core') continue;
-    // A poller always carries its pool; `??` is here so a malformed row groups somewhere visible
-    // rather than disappearing from the page entirely.
-    const pool = h.pool ?? '';
-    const list = byPool.get(pool);
-    if (list) list.push(h);
-    else byPool.set(pool, [h]);
-  }
   const byInstance = (a: HostInfo, b: HostInfo) => a.instance.localeCompare(b.instance);
-  const sections: HostSection[] = [];
-  if (core.length > 0) {
-    sections.push({ key: 'core', kind: 'core', pool: null, hosts: [...core].sort(byInstance) });
-  }
-  for (const pool of [...byPool.keys()].sort((a, b) => a.localeCompare(b))) {
-    sections.push({
-      key: `pool:${pool}`,
-      kind: 'pool',
-      pool,
-      hosts: (byPool.get(pool) ?? []).sort(byInstance),
-    });
-  }
-  return sections;
+  const cores = hosts.filter((h) => h.role === 'core').sort(byInstance);
+  const pollers = hosts
+    .filter((h) => h.role !== 'core')
+    // A poller always carries its pool; `??` is here so a malformed row sorts somewhere visible
+    // rather than disappearing from the page entirely.
+    .sort((a, b) => (a.pool ?? '').localeCompare(b.pool ?? '') || byInstance(a, b));
+  const coreAmbiguous = cores.length > 1;
+  return [
+    ...cores.map((host) => ({
+      key: `host:${host.instance}`,
+      kind: 'core' as const,
+      pool: null,
+      host,
+      coreAmbiguous,
+    })),
+    ...pollers.map((host) => ({
+      key: `host:${host.instance}`,
+      kind: 'pool' as const,
+      pool: host.pool ?? '',
+      host,
+      coreAmbiguous: false,
+    })),
+  ];
 }
 
-/** One host's trends, or `null` while its fetch is outstanding or has failed.
+/** Overlay per-window point lists onto one shared timestamp axis.
  *
- *  A missing range keeps its entry rather than being filtered out: dropping it would shift every
- *  later host's colour, and an empty series in the legend says "no history for this one" where an
- *  absent row says nothing at all. */
-export interface HostEntry {
-  label: string;
-  range: HostMetricRange | null;
-}
-
-/** Every filesystem mount any host in the section reports, in first-seen order.
- *
- *  Mounts genuinely differ within a section — core carries `root`, `metrics` and the `database`
- *  size proxy while a poller carries only `root` — so the card list is a union and a host with no
- *  reading for a mount simply draws no line on it. */
-export function mountUnion(entries: HostEntry[]): string[] {
-  const seen = new Set<string>();
-  const mounts: string[] = [];
-  for (const e of entries) {
-    for (const d of e.range?.disks ?? []) {
-      if (seen.has(d.mount)) continue;
-      seen.add(d.mount);
-      mounts.push(d.mount);
-    }
-  }
-  return mounts;
-}
-
-/** Overlay per-host point lists onto one shared timestamp axis.
- *
- *  The axis is the union of every host's timestamps, so hosts whose polls landed on different
- *  seconds still share an X axis; a host with no reading at a given timestamp gets `null`, which
+ *  The axis is the union of every series' timestamps, so windows whose samples landed on different
+ *  seconds still share an X axis; a series with no reading at a given timestamp gets `null`, which
  *  uPlot draws as a gap rather than a cliff to zero (`alignTo`'s contract). */
 export function overlaySeries(
   points: { label: string; points: MetricPoint[] }[],
@@ -127,24 +98,23 @@ export function overlaySeries(
   return { timestamps, series };
 }
 
-/** Memory used-% as points, so it can share an axis with the other hosts.
+/** Memory used-% as points, so it goes through the same axis assembly as everything else.
  *
- *  `pctSeries` returns its own axis and a gapless `number[]`, which is right for a single series
- *  and wrong for an overlay — so its output is folded back into points and the axis work is left to
- *  `overlaySeries`. Its two drop rules (no matching size, non-positive size) are what we want and
- *  are already tested, hence reusing it rather than re-deriving the division here. */
+ *  `pctSeries` returns its own axis and a gapless `number[]`; folding its output back into points
+ *  and leaving the axis work to `overlaySeries` keeps one path through this module. Its two drop
+ *  rules (no matching size, non-positive size) are what we want and are already tested, hence
+ *  reusing it rather than re-deriving the division here. */
 export function memPctPoints(range: HostMetricRange | null): MetricPoint[] {
   if (!range) return [];
   const { timestamps, values } = pctSeries(range.mem_used_bytes, range.mem_total_bytes);
   return timestamps.map((t, i) => ({ t, v: values[i] }));
 }
 
-/** One mount's chart across the section.
+/** One mount's chart.
  *
- *  `known` is per-mount, not per-host: if *any* host in the section reports a capacity for it, the
- *  card is a percentage and a host reporting size 0 contributes gaps. When no host reports one —
- *  the PostgreSQL `database` proxy — the card falls back to a bare-bytes trend, because a
- *  percentage of an unknown capacity would be an invention. */
+ *  `known` says whether this host reports a capacity for the mount: with one, the card is a
+ *  percentage; without one — the PostgreSQL `database` size proxy — it falls back to a bare-bytes
+ *  trend, because a percentage of an unknown capacity would be an invention. */
 export interface DiskChart {
   mount: string;
   known: boolean;
@@ -152,112 +122,41 @@ export interface DiskChart {
   series: OverlaySeries[];
 }
 
-function diskPoints(disk: HostDiskRange | undefined, known: boolean): MetricPoint[] {
-  if (!disk) return [];
+function diskPoints(disk: HostDiskRange, known: boolean): MetricPoint[] {
   if (!known) return disk.used_bytes;
   const { timestamps, values } = pctSeries(disk.used_bytes, disk.size_bytes);
   return timestamps.map((t, i) => ({ t, v: values[i] }));
 }
 
-/** Everything the section's cards need, so the `.tsx` holds layout and nothing else. */
-export interface SectionCharts {
+/** Everything one host's cards need, so the `.tsx` holds layout and nothing else. */
+export interface HostCharts {
   cpu: { timestamps: number[]; series: OverlaySeries[] };
-  /** `multi` is false only when the section holds one host, in which case `series` is 1m/5m/15m
-   *  for that host rather than one line per host. The caller uses it to pick the card title. */
-  load: { timestamps: number[]; series: OverlaySeries[]; multi: boolean };
+  /** Always 1m/5m/15m. A section is one host, so the colour is free to mean the window. */
+  load: { timestamps: number[]; series: OverlaySeries[] };
   mem: { timestamps: number[]; series: OverlaySeries[] };
+  /** In the order the host reports its mounts, which is the order the collector writes them. */
   disks: DiskChart[];
 }
 
-export function sectionCharts(entries: HostEntry[], palette: string[]): SectionCharts {
-  const cpu = overlaySeries(
-    entries.map((e) => ({ label: e.label, points: e.range?.cpu_pct ?? [] })),
-    palette,
-  );
-  const mem = overlaySeries(
-    entries.map((e) => ({ label: e.label, points: memPctPoints(e.range) })),
-    palette,
-  );
-  // Rule 2: nothing to compare against ⇒ keep the 1m/5m/15m detail the single-instance card had.
-  const multi = entries.length > 1;
-  const single = entries[0];
-  const load = multi
-    ? {
-        ...overlaySeries(
-          entries.map((e) => ({ label: e.label, points: e.range?.load1 ?? [] })),
-          palette,
-        ),
-        multi,
-      }
-    : {
-        ...overlaySeries(
-          [
-            { label: '1m', points: single?.range?.load1 ?? [] },
-            { label: '5m', points: single?.range?.load5 ?? [] },
-            { label: '15m', points: single?.range?.load15 ?? [] },
-          ],
-          palette,
-        ),
-        multi,
-      };
-  const disks = mountUnion(entries).map((mount) => {
-    const known = entries.some((e) =>
-      (e.range?.disks ?? []).some((d) => d.mount === mount && d.size_bytes.some((p) => p.v > 0)),
-    );
-    return {
-      mount,
-      known,
-      ...overlaySeries(
-        entries.map((e) => ({
-          label: e.label,
-          points: diskPoints(
-            (e.range?.disks ?? []).find((d) => d.mount === mount),
-            known,
-          ),
-        })),
-        palette,
-      ),
-    };
-  });
-  return { cpu, load, mem, disks };
-}
-
-/** The host in the section currently reading highest for one measure, or `null` when none reports.
- *
- *  Multi-host cards cannot show a single headline number honestly, so they show the worst one and
- *  name it — which is the question a pool section is opened to answer ("is anything in here hot?").
- *  Single-host sections keep their own reading and do not use this. */
-export function peakOf(
-  hosts: HostInfo[],
-  pick: (h: HostInfo) => number | null | undefined,
-): { instance: string; value: number } | null {
-  let best: { instance: string; value: number } | null = null;
-  for (const h of hosts) {
-    const v = pick(h);
-    if (v == null || !Number.isFinite(v)) continue;
-    if (!best || v > best.value) best = { instance: h.instance, value: v };
-  }
-  return best;
-}
-
-/** A host's current used-% for one mount, for `peakOf` and the collapsed summary row. `null` when
- *  the host does not report the mount, or reports it without a capacity. */
-export function mountPct(h: HostInfo, mount: string): number | null {
-  const d = h.disks.find((x) => x.mount === mount);
-  if (!d || d.size_bytes <= 0) return null;
-  return (d.used_bytes / d.size_bytes) * 100;
-}
-
-/** A multi-host card's headline: the worst current reading in the section, and whose it is.
- *
- *  One number cannot describe several hosts honestly, and "is anything in this pool hot" is the
- *  question a pool section is opened to answer — so the headline names the peak rather than
- *  averaging it away or going blank. Single-host sections keep their own reading instead. */
-export function peakHeadline(
-  hosts: HostInfo[],
-  pick: (h: HostInfo) => number | null | undefined,
-  format: (v: number) => string,
-): string {
-  const peak = peakOf(hosts, pick);
-  return peak ? `${format(peak.value)} · ${peak.instance}` : '—';
+/** `range` is `null` while the host's fetch is outstanding or has failed — the cards then draw
+ *  empty rather than vanishing, so a section that is loading stays distinguishable from a host
+ *  that reports nothing. */
+export function hostCharts(range: HostMetricRange | null, palette: string[]): HostCharts {
+  const one = (label: string, points: MetricPoint[]) => overlaySeries([{ label, points }], palette);
+  return {
+    cpu: one('cpu', range?.cpu_pct ?? []),
+    load: overlaySeries(
+      [
+        { label: '1m', points: range?.load1 ?? [] },
+        { label: '5m', points: range?.load5 ?? [] },
+        { label: '15m', points: range?.load15 ?? [] },
+      ],
+      palette,
+    ),
+    mem: one('mem', memPctPoints(range)),
+    disks: (range?.disks ?? []).map((d) => {
+      const known = d.size_bytes.some((p) => p.v > 0);
+      return { mount: d.mount, known, ...one(d.mount, diskPoints(d, known)) };
+    }),
+  };
 }

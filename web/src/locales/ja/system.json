@@ -290,14 +290,10 @@
     "overallDegraded": "劣化",
     "noHistory": "履歴はまだありません…",
     "core": "Core / Web",
+    "coreInstance": "Core / Web · {{instance}}",
+    "sectionPoller": "プール {{pool}} / {{instance}}",
     "hostResources": "ホストリソース",
-    "sectionPool": "プール {{pool}}",
     "sectionToggleAria": "{{section}} の開閉",
-    "pollerCount_one": "ポーラー {{count}} 台",
-    "pollerCount_other": "ポーラー {{count}} 台",
-    "offlineCount_one": "オフライン {{count}} 台",
-    "offlineCount_other": "オフライン {{count}} 台",
-    "offlineSuffix": "（オフライン）",
     "deps": {
       "postgres": "PostgreSQL",
       "tsdb": "VictoriaMetrics (TSDB)",
@@ -314,7 +310,6 @@
     "metric": {
       "cpu": "CPU",
       "loadAverage": "ロードアベレージ",
-      "loadAverage1m": "ロードアベレージ (1m)",
       "memory": "メモリ",
       "disk": "ディスク · {{mount}}",
       "diskShort": "ディスク"

@@ -1,22 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The Host-resources sections: grouping, the shared timestamp axis, and the two rules that decide
-// what a chart means.
+// The Host-resources sections: one per host, the shared timestamp axis, and the one rule that
+// decides what a colour means.
 //
-// The multi-host cases matter most here because **they cannot be reproduced on the test server** —
-// it runs one poller in one pool, so the overlay path, the palette wrap and the load-series
-// collapse have no other gate than this file.
+// 🚨 **This file is the only automated gate on the split.** The Tier1 walk builds its fixtures from
+// the OpenAPI document and `tests/support/openapi.ts` emits arrays with exactly one element, so
+// `/system/hosts` there returns a single host — the browser walk cannot tell a page that splits two
+// pollers apart from one that overlays them. Multi-host behaviour is checked here or nowhere
+// (ADR-118); the rendered page is checked by a person on the two-poller box.
 
 import { describe, expect, it } from 'vitest';
-import {
-  groupHosts,
-  memPctPoints,
-  mountPct,
-  mountUnion,
-  overlaySeries,
-  peakHeadline,
-  peakOf,
-  sectionCharts,
-} from './hostSections';
+import { groupHosts, hostCharts, memPctPoints, overlaySeries } from './hostSections';
 import type { HostInfo, HostMetricRange, MetricPoint } from '../types/api';
 
 const pts = (...pairs: [number, number][]): MetricPoint[] => pairs.map(([t, v]) => ({ t, v }));
@@ -44,109 +37,92 @@ const range = (instance: string, over: Partial<HostMetricRange> = {}): HostMetri
 });
 
 describe('groupHosts', () => {
-  it('puts core first and then the pools by name', () => {
+  it('emits one section per host, never one per pool', () => {
+    // The defect ADR-118 fixed: two pollers in one pool used to share a section, and therefore a
+    // chart and a headline. Counting sections is what tells the two layouts apart.
     const sections = groupHosts([
-      host('p-tokyo', 'poller', 'tokyo'),
-      host('p-b', 'poller', 'default'),
+      host('p2', 'poller', 'test1'),
       host('core', 'core', null),
-      host('p-a', 'poller', 'default'),
+      host('p1', 'poller', 'test1'),
     ]);
-    expect(sections.map((s) => s.key)).toEqual(['core', 'pool:default', 'pool:tokyo']);
-    expect(sections[0].kind).toBe('core');
-    expect(sections[1].pool).toBe('default');
+    expect(sections).toHaveLength(3);
+    expect(sections.map((s) => s.host.instance)).toEqual(['core', 'p1', 'p2']);
+    expect(sections.map((s) => s.key)).toEqual(['host:core', 'host:p1', 'host:p2']);
   });
 
-  it('orders hosts inside a section by instance id', () => {
-    // Load-bearing: the colour a host gets is its index here, so an unstable order would recolour
-    // every chart on each 15s refresh.
-    const [pool] = groupHosts([
-      host('zeta', 'poller', 'default'),
-      host('alpha', 'poller', 'default'),
-      host('mid', 'poller', 'default'),
+  it('puts cores first, then pollers by pool name and by instance inside a pool', () => {
+    const sections = groupHosts([
+      host('b1', 'poller', 'zulu'),
+      host('a2', 'poller', 'alpha'),
+      host('core', 'core', null),
+      host('a1', 'poller', 'alpha'),
     ]);
-    expect(pool.hosts.map((h) => h.instance)).toEqual(['alpha', 'mid', 'zeta']);
+    expect(sections.map((s) => `${s.pool ?? 'core'}/${s.host.instance}`)).toEqual([
+      'core/core',
+      'alpha/a1',
+      'alpha/a2',
+      'zulu/b1',
+    ]);
+  });
+
+  it('names the instance only when more than one core reports', () => {
+    // `Core / Web · core` stutters on the single-core deployment everyone runs; an HA pair has no
+    // other way to say which of the two a section is.
+    const single = groupHosts([host('core', 'core', null), host('p1', 'poller', 'default')]);
+    expect(single.map((s) => s.coreAmbiguous)).toEqual([false, false]);
+    const pair = groupHosts([host('core-a', 'core', null), host('core-b', 'core', null)]);
+    expect(pair.map((s) => s.coreAmbiguous)).toEqual([true, true]);
   });
 
   it('emits no core section when core is absent, rather than an empty one', () => {
-    const sections = groupHosts([host('p-a', 'poller', 'default')]);
-    expect(sections.map((s) => s.kind)).toEqual(['pool']);
+    expect(groupHosts([host('p1', 'poller', 'default')]).map((s) => s.kind)).toEqual(['pool']);
   });
 
-  it('still groups a poller whose pool is missing', () => {
-    // Shouldn't happen — the coordinator always carries a pool — but disappearing from the page is
-    // a worse failure than an oddly-labelled section.
-    const sections = groupHosts([host('p-a', 'poller', null)]);
+  it('still shows a poller whose pool is missing', () => {
+    // A malformed row has to land somewhere visible: silently dropping it would make a poller that
+    // *is* reporting look like one that never came up.
+    const sections = groupHosts([host('p1', 'poller', null)]);
     expect(sections).toHaveLength(1);
-    expect(sections[0].hosts.map((h) => h.instance)).toEqual(['p-a']);
-  });
-});
-
-describe('mountUnion', () => {
-  it('unions the mounts across the section in first-seen order', () => {
-    // The real shape on the test server: core carries three, its poller carries one.
-    const mounts = mountUnion([
-      {
-        label: 'core',
-        range: range('core', {
-          disks: [
-            { mount: 'root', used_bytes: [], size_bytes: [] },
-            { mount: 'metrics', used_bytes: [], size_bytes: [] },
-            { mount: 'database', used_bytes: [], size_bytes: [] },
-          ],
-        }),
-      },
-      {
-        label: 'p-a',
-        range: range('p-a', { disks: [{ mount: 'root', used_bytes: [], size_bytes: [] }] }),
-      },
-    ]);
-    expect(mounts).toEqual(['root', 'metrics', 'database']);
-  });
-
-  it('ignores hosts whose trends have not arrived', () => {
-    expect(mountUnion([{ label: 'p-a', range: null }])).toEqual([]);
+    expect(sections[0].pool).toBe('');
   });
 });
 
 describe('overlaySeries', () => {
-  it('aligns hosts onto the union axis and gaps what one of them did not report', () => {
+  it('aligns series onto the union axis and gaps what one of them did not report', () => {
     const { timestamps, series } = overlaySeries(
       [
-        { label: 'core', points: pts([10, 1], [30, 3]) },
-        { label: 'p-a', points: pts([20, 2], [30, 9]) },
+        { label: '1m', points: pts([1, 10], [3, 30]) },
+        { label: '5m', points: pts([2, 20], [3, 33]) },
       ],
-      ['c1', 'c2'],
+      ['#a', '#b'],
     );
-    expect(timestamps).toEqual([10, 20, 30]);
-    // `null`, never 0 — a zero would draw a cliff to the floor and read as an outage.
-    expect(series[0].values).toEqual([1, null, 3]);
-    expect(series[1].values).toEqual([null, 2, 9]);
+    expect(timestamps).toEqual([1, 2, 3]);
+    expect(series[0].values).toEqual([10, null, 30]);
+    expect(series[1].values).toEqual([null, 20, 33]);
   });
 
-  it('wraps the palette rather than dropping a host past its end', () => {
+  it('wraps the palette rather than dropping a series past its end', () => {
     const { series } = overlaySeries(
       [
-        { label: 'a', points: pts([1, 1]) },
-        { label: 'b', points: pts([1, 1]) },
-        { label: 'c', points: pts([1, 1]) },
+        { label: '1m', points: pts([1, 1]) },
+        { label: '5m', points: pts([1, 2]) },
+        { label: '15m', points: pts([1, 3]) },
       ],
-      ['c1', 'c2'],
+      ['#a', '#b'],
     );
     expect(series).toHaveLength(3);
-    expect(series.map((s) => s.color)).toEqual(['c1', 'c2', 'c1']);
+    expect(series.map((s) => s.color)).toEqual(['#a', '#b', '#a']);
   });
 });
 
 describe('memPctPoints', () => {
   it('derives used-% and drops a reading with no usable total', () => {
-    const points = memPctPoints(
-      range('core', {
-        mem_used_bytes: pts([10, 50], [20, 25], [30, 10]),
-        // t=20 has no total at all; t=30's is zero. Both would invent a percentage.
-        mem_total_bytes: pts([10, 100], [30, 0]),
-      }),
-    );
-    expect(points).toEqual([{ t: 10, v: 50 }]);
+    const r = range('core', {
+      mem_used_bytes: pts([1, 512], [2, 256], [3, 128]),
+      // t=2 has no matching total; t=3's total is zero.
+      mem_total_bytes: pts([1, 1024], [3, 0]),
+    });
+    expect(memPctPoints(r)).toEqual([{ t: 1, v: 50 }]);
   });
 
   it('is empty for a host whose trends have not arrived', () => {
@@ -154,155 +130,64 @@ describe('memPctPoints', () => {
   });
 });
 
-describe('sectionCharts — the load rule', () => {
-  it('keeps 1m/5m/15m when the section holds a single host', () => {
-    const charts = sectionCharts(
-      [
-        {
-          label: 'core',
-          range: range('core', {
-            load1: pts([10, 1]),
-            load5: pts([10, 2]),
-            load15: pts([10, 3]),
-          }),
-        },
-      ],
-      ['c1', 'c2', 'c3'],
+describe('hostCharts', () => {
+  it('always draws all three load averages, whatever pool the host is in', () => {
+    // The per-pool layout collapsed to load1 as soon as a pool held two pollers, because the colour
+    // had to mean the host. One host per section gives the colour back to the window (ADR-118).
+    const charts = hostCharts(
+      range('p1', { load1: pts([1, 0.1]), load5: pts([1, 0.2]), load15: pts([1, 0.3]) }),
+      ['#a', '#b', '#c'],
     );
-    expect(charts.load.multi).toBe(false);
     expect(charts.load.series.map((s) => s.label)).toEqual(['1m', '5m', '15m']);
-    expect(charts.load.series.map((s) => s.values[0])).toEqual([1, 2, 3]);
+    expect(charts.load.series.map((s) => s.values[0])).toEqual([0.1, 0.2, 0.3]);
   });
 
-  it('collapses to load1 per host once there is something to compare against', () => {
-    const charts = sectionCharts(
-      [
-        { label: 'p-a', range: range('p-a', { load1: pts([10, 3]), load5: pts([10, 9]) }) },
-        { label: 'p-b', range: range('p-b', { load1: pts([10, 1]), load5: pts([10, 9]) }) },
-      ],
-      ['c1', 'c2'],
+  it('draws a single line for cpu and memory', () => {
+    const charts = hostCharts(
+      range('p1', {
+        cpu_pct: pts([1, 12]),
+        mem_used_bytes: pts([1, 512]),
+        mem_total_bytes: pts([1, 1024]),
+      }),
+      ['#a'],
     );
-    expect(charts.load.multi).toBe(true);
-    expect(charts.load.series.map((s) => s.label)).toEqual(['p-a', 'p-b']);
-    // The 5m series is deliberately not drawn — the colour now means the host.
-    expect(charts.load.series.map((s) => s.values[0])).toEqual([3, 1]);
+    expect(charts.cpu.series).toHaveLength(1);
+    expect(charts.cpu.series[0].values).toEqual([12]);
+    expect(charts.mem.series).toHaveLength(1);
+    expect(charts.mem.series[0].values).toEqual([50]);
   });
-});
 
-describe('sectionCharts — disks', () => {
-  it('reads a mount as a percentage when any host reports a capacity for it', () => {
-    const charts = sectionCharts(
-      [
-        {
-          label: 'core',
-          range: range('core', {
-            disks: [{ mount: 'root', used_bytes: pts([10, 25]), size_bytes: pts([10, 100]) }],
-          }),
-        },
-        {
-          label: 'p-a',
-          range: range('p-a', {
-            disks: [{ mount: 'root', used_bytes: pts([10, 60]), size_bytes: pts([10, 100]) }],
-          }),
-        },
-      ],
-      ['c1', 'c2'],
+  it('reads a mount as a percentage when the host reports a capacity for it', () => {
+    const charts = hostCharts(
+      range('p1', {
+        disks: [{ mount: 'root', used_bytes: pts([1, 250]), size_bytes: pts([1, 1000]) }],
+      }),
+      ['#a'],
     );
     expect(charts.disks).toHaveLength(1);
     expect(charts.disks[0].known).toBe(true);
-    expect(charts.disks[0].series.map((s) => s.values[0])).toEqual([25, 60]);
+    expect(charts.disks[0].series[0].values).toEqual([25]);
   });
 
   it('falls back to bare bytes for a store that reports no capacity', () => {
-    // The PostgreSQL `database` proxy: size_bytes is 0, so a percentage would be an invention.
-    const charts = sectionCharts(
-      [
-        {
-          label: 'core',
-          range: range('core', {
-            disks: [{ mount: 'database', used_bytes: pts([10, 4096]), size_bytes: pts([10, 0]) }],
-          }),
-        },
-      ],
-      ['c1'],
+    // The PostgreSQL `database` proxy: a percentage of an unknown capacity would be an invention.
+    const charts = hostCharts(
+      range('core', {
+        disks: [{ mount: 'database', used_bytes: pts([1, 2048]), size_bytes: pts([1, 0]) }],
+      }),
+      ['#a'],
     );
     expect(charts.disks[0].known).toBe(false);
-    expect(charts.disks[0].series[0].values).toEqual([4096]);
+    expect(charts.disks[0].series[0].values).toEqual([2048]);
   });
 
-  it('keeps a host that does not report the mount as an empty line, not a missing one', () => {
-    // Dropping it would shift the colours of every host after it.
-    const charts = sectionCharts(
-      [
-        {
-          label: 'core',
-          range: range('core', {
-            disks: [{ mount: 'metrics', used_bytes: pts([10, 25]), size_bytes: pts([10, 100]) }],
-          }),
-        },
-        { label: 'p-a', range: range('p-a', { disks: [] }) },
-      ],
-      ['c1', 'c2'],
-    );
-    expect(charts.disks[0].series).toHaveLength(2);
-    expect(charts.disks[0].series[1].values).toEqual([null]);
-    expect(charts.disks[0].series[1].color).toBe('c2');
-  });
-});
-
-describe('peakOf', () => {
-  const withCpu = (instance: string, cpu: number | null): HostInfo => ({
-    ...host(instance, 'poller', 'default'),
-    cpu_pct: cpu,
-  });
-
-  it('names the worst reader in the section', () => {
-    expect(peakOf([withCpu('a', 12), withCpu('b', 68), withCpu('c', 30)], (h) => h.cpu_pct)).toEqual(
-      { instance: 'b', value: 68 },
-    );
-  });
-
-  it('skips hosts with no reading and answers null when none has one', () => {
-    expect(peakOf([withCpu('a', null), withCpu('b', 4)], (h) => h.cpu_pct)).toEqual({
-      instance: 'b',
-      value: 4,
-    });
-    expect(peakOf([withCpu('a', null)], (h) => h.cpu_pct)).toBeNull();
-    expect(peakOf([], (h) => h.cpu_pct)).toBeNull();
-  });
-});
-
-describe('mountPct', () => {
-  it('derives the current percentage and refuses one for an unmeasurable store', () => {
-    const h: HostInfo = {
-      ...host('core', 'core', null),
-      disks: [
-        { mount: 'root', used_bytes: 25, size_bytes: 100 },
-        { mount: 'database', used_bytes: 4096, size_bytes: 0 },
-      ],
-    };
-    expect(mountPct(h, 'root')).toBe(25);
-    expect(mountPct(h, 'database')).toBeNull();
-    expect(mountPct(h, 'nope')).toBeNull();
-  });
-});
-
-describe('peakHeadline', () => {
-  const h = (instance: string, cpu: number | null) =>
-    ({ instance, cpu_pct: cpu }) as unknown as HostInfo;
-
-  it('names the peak’s value and the host it was on', () => {
-    const out = peakHeadline(
-      [h('core-1', 12), h('poller-2', 68)],
-      (x) => x.cpu_pct,
-      (v) => `${v}%`,
-    );
-    expect(out).toBe('68% · poller-2');
-  });
-
-  it('shows an em dash when nothing reported, rather than 0', () => {
-    // "0%" would be a claim about the fleet; the dash says the sample is missing.
-    expect(peakHeadline([], (x) => x.cpu_pct, (v) => `${v}%`)).toBe('—');
-    expect(peakHeadline([h('core-1', null)], (x) => x.cpu_pct, (v) => `${v}%`)).toBe('—');
+  it('draws empty cards while the fetch is outstanding, rather than none at all', () => {
+    // A loading section has to stay distinguishable from a host that reports nothing: the cards are
+    // there, the lines are not.
+    const charts = hostCharts(null, ['#a', '#b', '#c']);
+    expect(charts.cpu.series).toHaveLength(1);
+    expect(charts.cpu.timestamps).toEqual([]);
+    expect(charts.load.series.map((s) => s.label)).toEqual(['1m', '5m', '15m']);
+    expect(charts.disks).toEqual([]);
   });
 });
