@@ -536,6 +536,15 @@ impl VmStore {
 
     /// Run a PromQL `query_range` and parse the first series' points (oldest first). Shared
     /// by the raw `range` and the derived `rate_range`. Empty on any request/parse failure.
+    ///
+    /// 🚨 **`result[0]` is a promise the caller has to keep: leave one label free and this reads
+    /// the wrong series, silently.** Every caller must hand it a query that can only ever produce
+    /// one series — the `SeriesKey` selectors pin node and ifindex, and [`host_range_query`]
+    /// aggregates the one label its selector cannot pin. Taking `result[0]` is deliberate rather
+    /// than an oversight, and merging here instead would be worse: where a query really is
+    /// single-series, a second series is a bug, and averaging it away would hide the bug rather
+    /// than report it. The one time a label was left free the chart was blank for weeks with
+    /// every test green (ADR-082 増分 2).
     async fn query_range_points(
         &self,
         query: String,
@@ -652,14 +661,36 @@ fn finite(v: f64) -> f64 {
 /// can be dropped, and no phase can move the line. Callers must floor the step at the sample
 /// interval ([`crate::api::system`] does) — a window shorter than the sampling produces empty
 /// buckets, i.e. gaps where the old code drew a carried-forward value. (ADR-082.)
+///
+/// 🚨 **The `avg without (pool)` around it is not cosmetic — without it the chart goes blank.**
+/// A poller starts in `YAGRA_POLLER_POOL` and core can move it to another pool afterwards
+/// (ADR-107), so its *first* heartbeat is written under the boot-time pool and every later one
+/// under the real one: two series for one host, differing only in `pool`. The read selectors
+/// pin `instance` (and `mount`) and nothing else — they cannot pin `pool`, because the caller
+/// only ever knows the instance — so both come back, and
+/// [`VmStore::query_range_points`] takes `result[0]`. Results arrive in label order,
+/// so `"default"` sorts ahead of `"test1"` and **the one-point startup remnant wins over the
+/// real series, permanently** — a single point draws no line. Measured 2026-09-03 on a two-poller
+/// pool: `[0] pool="default"` 1 point, `[1] pool="test1"` 241 points, all four host charts blank
+/// while collection was perfectly healthy. Folding the label away merges them, and since both
+/// describe the same host at the same instant the merge cannot change a value. (ADR-082 増分 2.)
 fn host_range_query(selector: &str, step_s: u64) -> String {
-    format!("avg_over_time({selector}[{}s])", step_s.max(1))
+    format!(
+        "avg without (pool) (avg_over_time({selector}[{}s]))",
+        step_s.max(1)
+    )
 }
 
 /// Build the Prometheus exposition body for one host self-sample: the scalar gauges (cpu/load/mem/
 /// swap) plus a `fs_used_bytes`/`fs_size_bytes` pair per watched filesystem, all tagged
-/// `instance`/`role`(/`pool`)(/`mount`) with a trailing millisecond timestamp. The label set here
-/// is exactly what the `host_metric_range`/`host_disk_range` read selectors match on.
+/// `instance`/`role`(/`pool`)(/`mount`) with a trailing millisecond timestamp.
+///
+/// ⚠️ **The read side does not match on all four, and that asymmetry is load-bearing.**
+/// `host_metric_range`/`host_disk_range` pin `instance` (and `mount`) because those are all the
+/// caller knows; `role` cannot vary for a given instance; and `pool` *does* vary for one host —
+/// core can move a poller after it has booted — so [`host_range_query`] folds it away rather than
+/// matching it. This doc used to claim the two sets were identical. They never were, and the one
+/// unaccounted label emptied every host chart for a moved poller (ADR-082 増分 2).
 fn host_prometheus_lines(
     instance: &str,
     role: &str,
@@ -1918,18 +1949,19 @@ mod tests {
         let sel = "yagra_host_cpu_pct{instance=\"core\"}";
         assert_eq!(
             host_range_query(sel, 60),
-            "avg_over_time(yagra_host_cpu_pct{instance=\"core\"}[60s])"
+            "avg without (pool) (avg_over_time(yagra_host_cpu_pct{instance=\"core\"}[60s]))"
         );
         for step in [15u64, 60, 300, 3600] {
             let q = host_range_query(sel, step);
             assert_ne!(q, sel, "step {step}: the bare selector is what aliases");
             assert!(
-                q.starts_with("avg_over_time(") && q.ends_with(&format!("[{step}s])")),
+                q.contains(&format!("avg_over_time({sel}[{step}s])")),
                 "step {step}: window must equal the step, got {q}"
             );
         }
         // A caller that forgets to floor the step still gets a legal window, never `[0s]`.
-        assert!(host_range_query(sel, 0).ends_with("[1s])"));
+        assert!(host_range_query(sel, 0).contains("[1s]"));
+        assert!(!host_range_query(sel, 0).contains("[0s]"));
     }
 
     #[test]
@@ -1962,6 +1994,76 @@ mod tests {
         assert_eq!(body.matches("yagra_host_fs_used_bytes").count(), 2);
         assert_eq!(body.matches("yagra_host_fs_size_bytes").count(), 2);
         assert!(body.contains("yagra_host_fs_size_bytes{instance=\"edge-1\",role=\"poller\",pool=\"tokyo\",mount=\"database\"} 0 1000"));
+    }
+
+    /// 🚨 A host trend query must also fold across **`pool`**, the one label its selector cannot
+    /// pin — otherwise a poller core has moved between pools reads a one-point remnant forever.
+    ///
+    /// A poller starts in `YAGRA_POLLER_POOL` and core moves it afterwards (ADR-107), so its
+    /// first heartbeat lands under the boot-time pool and every later one under the real pool:
+    /// two series for one host. `host_metric_range` knows only the instance, so both come back,
+    /// and `query_range_points` keeps `result[0]` — which is label order, so the startup remnant
+    /// wins. Measured 2026-09-03: 1 point vs 241, and all four host charts blank while collection
+    /// was healthy (ADR-082 増分 2).
+    ///
+    /// Both folds are pinned here because either alone re-opens a different bug: drop the step
+    /// fold and the line aliases (増分 1), drop the pool fold and the line disappears.
+    #[test]
+    fn a_host_trend_query_folds_across_the_pool_its_selector_cannot_pin() {
+        for sel in [
+            "yagra_host_cpu_pct{instance=\"edge-1\"}",
+            "yagra_host_fs_used_bytes{instance=\"edge-1\",mount=\"root\"}",
+        ] {
+            let q = host_range_query(sel, 15);
+            assert!(
+                q.starts_with("avg without (pool) ("),
+                "the fold must cross `pool`, got {q}"
+            );
+            // …and it wraps the step fold rather than replacing it.
+            assert!(q.contains(&format!("avg_over_time({sel}[15s])")), "got {q}");
+        }
+    }
+
+    /// 🚨 The writer may not add a label the reader has not accounted for.
+    ///
+    /// `host_range_query` folds `pool` by name, so it closes exactly the gap that exists today.
+    /// A *new* label on these series would open the same hole again — two series for one host,
+    /// `result[0]` picking whichever sorts first — and nothing about that failure looks like a
+    /// failure: the chart is simply empty and every test stays green. So the writer is held to
+    /// the set the reader can account for: `instance` and `mount` are pinned by the selectors,
+    /// `pool` is folded away, and `role` cannot vary for a given instance. Adding a fifth means
+    /// deciding which of those three it is, here, before it ships.
+    #[test]
+    fn host_lines_carry_no_label_the_trend_read_cannot_account_for() {
+        let sample = HostSample {
+            disks: vec![yagra_common::DiskUsage {
+                mount: "root".into(),
+                used_bytes: 10,
+                size_bytes: 100,
+            }],
+            ..Default::default()
+        };
+        let body = host_prometheus_lines("edge-1", "poller", Some("tokyo"), &sample, 1_000);
+        let mut seen = std::collections::BTreeSet::new();
+        for line in body.lines().filter(|l| l.contains('{')) {
+            let labels = &line[line.find('{').unwrap() + 1..line.rfind('}').unwrap()];
+            for pair in labels.split(',') {
+                seen.insert(pair.split('=').next().unwrap().to_owned());
+            }
+        }
+        // The floor: a body that produced no labels at all would pass an emptiness check.
+        assert_eq!(
+            seen.len(),
+            4,
+            "expected exactly the four known labels, got {seen:?}"
+        );
+        for name in ["instance", "role", "pool", "mount"] {
+            assert!(seen.remove(name), "{name} is no longer written");
+        }
+        assert!(
+            seen.is_empty(),
+            "new host label(s) {seen:?} — decide in host_range_query: pinned by the selector, folded away, or invariant per instance (ADR-082 増分 2)"
+        );
     }
 
     #[test]

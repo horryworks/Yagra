@@ -10,6 +10,19 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Host resource charts are no longer blank for a poller that core moved between pools.** On
+  Settings ▸ Yagra health, a poller whose `YAGRA_POLLER_POOL` differs from the pool core actually
+  assigned it drew four empty charts — CPU, load, memory and disk — while the numbers above them
+  were correct and the poller was collecting normally. The cause was on the read side, not in
+  collection: a poller starts in its configured pool and is moved afterwards, so its very first
+  heartbeat is stored under the boot-time pool and every later one under the real pool, leaving two
+  series for one host. The trend query matched on the host alone and kept whichever series came
+  back first, which is the single-sample remnant — and one sample draws no line. The query now
+  folds the two together, so the charts fill in immediately and no historical data was lost.
+  Deployments where every poller's configured pool matches its assigned pool were never affected.
+
 ## v0.3.7 — an alert nothing is measuring any more finally closes, whether its rule was deleted or its data stopped arriving
 
 ### Bug Fixes
