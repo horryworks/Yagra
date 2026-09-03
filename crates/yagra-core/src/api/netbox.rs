@@ -85,6 +85,26 @@ fn no_server(id: Uuid) -> ApiError {
     ApiError::not_found("netbox_server_not_found", format!("no NetBox server {id}"))
 }
 
+/// The token as it will actually be sent, or a 400 if there is nothing to send.
+///
+/// 🚨 **Trim once, here, and use the result** — the three call sites disagreed before this existed:
+/// `update` trimmed, `create` and `test` validated `trim()` and then used the **untrimmed** string.
+/// A token pasted with a trailing newline was therefore sealed with the newline, and every later
+/// sync failed with *"NetBox refused the API token"* — a message that sends the operator to check a
+/// token that looks, and is, correct. The WebUI trims before sending, so this was reachable only
+/// from a REST or MCP client; the asymmetry between the three handlers is the tell that it was
+/// nobody's decision.
+fn validated_token(raw: &str) -> Result<&str, ApiError> {
+    let token = raw.trim();
+    if token.is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_token",
+            "token must not be empty",
+        ));
+    }
+    Ok(token)
+}
+
 /// Validate the fields a create and an update share, so the two cannot drift apart.
 fn validated_common(
     name: &str,
@@ -237,12 +257,7 @@ async fn create_netbox_server(
     admin: Admin,
     Json(body): Json<CreateNetboxServerReq>,
 ) -> ApiResult<(StatusCode, Json<CreatedNetboxServer>)> {
-    if body.token.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "invalid_token",
-            "token must not be empty",
-        ));
-    }
+    let token = validated_token(&body.token)?;
     let base = validated_common(
         &body.name,
         &body.base_url,
@@ -252,7 +267,7 @@ async fn create_netbox_server(
 
     // Sealed through the production writer, so the envelope-encryption columns have one author
     // (ADR-018). The plaintext exists only in this frame.
-    let secret = serde_json::json!({ "token": body.token }).to_string();
+    let secret = serde_json::json!({ "token": token }).to_string();
     let credential_id = admin
         .creds
         .create(
@@ -468,18 +483,14 @@ async fn test_netbox_connection(
     _admin: Admin,
     Json(body): Json<TestNetboxReq>,
 ) -> ApiResult<Json<TestNetboxResult>> {
-    if body.token.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "invalid_token",
-            "token must not be empty",
-        ));
-    }
+    // The same trim `create` seals with, so a token that tests clean cannot then be stored dirty.
+    let token = validated_token(&body.token)?;
     let base = netbox::validate_base_url(&body.base_url)
         .map_err(|e| ApiError::bad_request(e.code(), e.message()))?;
     if let Some(pem) = body.ca_cert_pem.as_deref() {
         netbox::validate_ca_pem(pem).map_err(|m| ApiError::bad_request("invalid_ca_cert", m))?;
     }
-    let client = NetboxClient::new(&base, &body.token, body.ca_cert_pem.as_deref())
+    let client = NetboxClient::new(&base, token, body.ca_cert_pem.as_deref())
         .map_err(|e| upstream_error("client setup", &e))?;
     let probe = client
         .probe()
@@ -598,6 +609,63 @@ mod tests {
             leaked, 0,
             "the token must never appear in a plaintext column"
         );
+    }
+
+    /// 🚨 The defect this pins was found while diagnosing a live "NetBox refused the API token"
+    /// (2026-09-03). That one turned out to be a genuinely wrong token — but the diagnosis showed
+    /// `create` and `test` validating `token.trim()` and then using the **untrimmed** string, while
+    /// `update` trimmed. A token pasted with a trailing newline would have been sealed with it and
+    /// then refused forever, with a message pointing at a token that is correct.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_token_is_sealed_trimmed_so_a_pasted_newline_cannot_break_every_later_sync(
+        pool: sqlx::PgPool,
+    ) {
+        let st = live_state(pool.clone()).await;
+        let hdr = token(&st, yagra_common::Role::Admin);
+        let res = send(
+            &st,
+            "POST",
+            "/api/v1/netbox/servers",
+            &hdr,
+            Some(serde_json::json!({
+                "name": "lab",
+                "base_url": "http://10.0.0.1:8000/",
+                "token": "  0123456789abcdef\n",
+                "sync_interval_secs": 3600
+            })),
+        )
+        .await;
+        assert_eq!(res.0, StatusCode::CREATED, "body: {}", res.1);
+
+        // Read the sealed document back through the production reader — asserting on the column
+        // would only prove something was written, not that the right bytes were.
+        let cred_id: uuid::Uuid = sqlx::query_scalar("SELECT credential_id FROM netbox_servers")
+            .fetch_one(&pool)
+            .await
+            .expect("credential_id");
+        let store = crate::secrets::CredentialStore::new(pool.clone(), crate::pgtest::kek());
+        let (kind, bytes) = store.open(cred_id).await.expect("open").expect("row");
+        assert_eq!(kind, crate::secrets::KIND_NETBOX_TOKEN);
+        let secret = crate::secrets::NetboxTokenSecret::parse(&bytes).expect("parses");
+        assert_eq!(
+            secret.token, "0123456789abcdef",
+            "the sealed token must be what will actually be sent, not what was pasted"
+        );
+
+        // …and the emptiness check still fires on something that is only whitespace.
+        let res = send(
+            &st,
+            "POST",
+            "/api/v1/netbox/servers",
+            &hdr,
+            Some(serde_json::json!({
+                "name": "blank", "base_url": "http://10.0.0.2:8000/", "token": "   \n ",
+                "sync_interval_secs": 3600
+            })),
+        )
+        .await;
+        assert_eq!(res.0, StatusCode::BAD_REQUEST, "body: {}", res.1);
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
