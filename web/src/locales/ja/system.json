@@ -443,9 +443,8 @@
     "meraki": {
       "desc": "読み取り専用の Dashboard API 監視 — Meraki 組織全体の可用性・アップリンク・トラフィック。"
     },
-    "more": {
-      "name": "その他の連携",
-      "desc": "追加のベンダー連携や通知連携は、今後のリリースでここに表示されます。"
+    "netbox": {
+      "desc": "NetBox の拠点階層を読み取り専用で取り込みます。Region と Site がフォルダーツリーになり、地図のピンも入ります。"
     }
   },
   "meraki": {
@@ -594,6 +593,63 @@
       "secret_dropped_imported_disabled": "秘密情報はデプロイ間を渡れません。ここに既に保存されている場合を除き、無効の状態で作成します。再入力してから有効にしてください",
       "webhook_token_reset": "webhook の受信トークンは渡せないため、使えないトークンを持つ無効な状態で作成します。ローテーションして、使えるトークンを発行してください",
       "schedule_next_run_recomputed": "次回実行時刻はこのデプロイの時計で再計算しました"
+    }
+  },
+  "netbox": {
+    "name": "NetBox",
+    "note": "NetBox から拠点階層を読み取り専用で取り込みます。Yagra が NetBox に書き込むことはありません。",
+    "status": {
+      "connected_one": "接続済み · {{count}} 台",
+      "connected_other": "接続済み · {{count}} 台",
+      "syncFailed": "前回の同期に失敗"
+    },
+    "servers": {
+      "title": "NetBox の登録",
+      "add": "+ NetBox を追加",
+      "empty": "NetBox がまだ登録されていません。追加すると、その Region と Site からフォルダーツリーを作成します。",
+      "ownership": "フォルダーの名前・親・地図上の位置は同期が上書きします。フォルダーに設定したポーラープールはオペレーターのもので、上書きされません。NetBox 側で削除された Site は、消さずに印を付けて表示します。"
+    },
+    "form": {
+      "addTitle": "NetBox を追加",
+      "editTitle": "NetBox の設定",
+      "name": "名前",
+      "baseUrl": "ベース URL",
+      "baseUrlHint": "既定以外のポートを使う場合は含めてください（例: http://netbox.example.com:8000）。ループバックとリンクローカルのアドレスは拒否します。プライベートアドレスは使えます。",
+      "token": "API トークン",
+      "tokenHint": "暗号化して保存します。再表示されず、API が返すこともありません。",
+      "tokenKeepHint": "空のままにすると、保存済みのトークンを使い続けます。",
+      "caCert": "CA 証明書 (任意)",
+      "caCertHint": "この NetBox に証明書を発行したプライベート CA の PEM を貼り付けてください。信頼するのはこの接続だけです。秘密鍵は貼り付けないでください。",
+      "interval": "同期の間隔 (秒)",
+      "test": "接続テスト"
+    },
+    "test": {
+      "unreachable": "そのアドレスから NetBox の API としての応答がありません。URL とポートを確認してください。",
+      "badToken": "NetBox は応答しましたが、トークンが拒否されました。API トークンを確認してください。",
+      "ok": "NetBox {{version}} に接続できました。"
+    },
+    "row": {
+      "version": "NetBox {{version}}",
+      "enabled": "有効",
+      "paused": "停止中",
+      "syncNow": "今すぐ同期"
+    },
+    "sync": {
+      "never": "未同期",
+      "ok": "前回の同期 {{at}}",
+      "missing_one": "NetBox に無いフォルダー {{count}} 件",
+      "missing_other": "NetBox に無いフォルダー {{count}} 件",
+      "failed": "前回の同期に失敗"
+    },
+    "delete": {
+      "title": "NetBox の登録を削除",
+      "body": "「{{name}}」を削除しますか？ 作成済みのフォルダーは残り、通常のフォルダーになります。ノードの所属は変わりません。"
+    },
+    "err": {
+      "test": "接続テストを実行できませんでした",
+      "save": "NetBox の設定を保存できませんでした",
+      "sync": "同期に失敗しました",
+      "delete": "NetBox の登録を削除できませんでした"
     }
   }
 }

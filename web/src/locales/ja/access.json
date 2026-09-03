@@ -21,7 +21,8 @@
       "snmp_v3": "SNMP v3（ユーザー/パスワード）",
       "http_auth": "HTTP 認証 (URL 監視)",
       "api_token": "API トークン",
-      "meraki_api": "Cisco Meraki API キー"
+      "meraki_api": "Cisco Meraki API キー",
+      "netbox_token": "NetBox API トークン"
     },
     "http": {
       "scheme": "方式",

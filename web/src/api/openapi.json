@@ -8973,6 +8973,427 @@
         }
       }
     },
+    "/api/v1/netbox/servers": {
+      "get": {
+        "tags": [
+          "netbox"
+        ],
+        "operationId": "list_netbox_servers",
+        "responses": {
+          "200": {
+            "description": "Every configured NetBox server. The API token is never included; the CA certificate is, because it is not a secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NetboxServerView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "netbox"
+        ],
+        "operationId": "create_netbox_server",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNetboxServerReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The server was registered and its token sealed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedNetboxServer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty name or token, a base_url that is malformed or refused by the SSRF policy, an invalid CA certificate, or an out-of-range interval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/netbox/servers/{id}": {
+      "put": {
+        "tags": [
+          "netbox"
+        ],
+        "operationId": "update_netbox_server",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The server id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNetboxServerReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "A field failed validation (see the create route)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "netbox"
+        ],
+        "operationId": "delete_netbox_server",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The server id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed. The folders it created are kept — disconnecting an integration never restructures the monitoring tree"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/netbox/servers/{id}/sync": {
+      "post": {
+        "tags": [
+          "netbox"
+        ],
+        "operationId": "sync_netbox_server",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The server id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sync ran; the counts say what was mirrored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncNetboxResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The NetBox call failed; the reason is stored on the server row and shown on the integration screen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/netbox/test": {
+      "post": {
+        "tags": [
+          "netbox"
+        ],
+        "operationId": "test_netbox_connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestNetboxReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The probe ran. Check `reachable` and `authenticated` — a refused token is a 200 here, not an error, because the operator needs to see which of the two fields is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestNetboxResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "base_url is malformed or refused by the SSRF policy, or the CA certificate is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The NetBox call failed; the detail is logged, never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-groups": {
       "get": {
         "tags": [
@@ -22894,6 +23315,38 @@
           }
         }
       },
+      "CreateNetboxServerReq": {
+        "type": "object",
+        "required": [
+          "name",
+          "base_url",
+          "token"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "description": "The NetBox base URL, e.g. `https://netbox.example.com`. Validated against the SSRF policy\nbefore the token is ever sent to it."
+          },
+          "ca_cert_pem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PEM for a private CA, when NetBox is not signed by a publicly trusted one."
+          },
+          "name": {
+            "type": "string"
+          },
+          "sync_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "token": {
+            "type": "string",
+            "description": "The API token. **Sealed on arrival and never returned by any endpoint.**"
+          }
+        }
+      },
       "CreateNode": {
         "type": "object",
         "description": "Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional.",
@@ -23149,6 +23602,18 @@
       "CreatedId": {
         "type": "object",
         "description": "The id of a freshly created resource — the whole body of a `201`.\n\nDeliberately one shape for every creator. The `json!({\"id\": …})` literal it replaces was written\nout per handler, which is how `{\"id\": …}` and `{\"node_id\": …}` both ended up in this API for the\nsame idea; a client then needs to know which creator it called to read the id back.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "CreatedNetboxServer": {
+        "type": "object",
         "required": [
           "id"
         ],
@@ -27991,6 +28456,78 @@
           }
         }
       },
+      "NetboxServerView": {
+        "type": "object",
+        "description": "A configured server as the API exposes it.\n\n🚨 **`credential_id` is here but the token is not, and cannot be** — the token lives sealed in\n`credentials` and this type has no field that could carry it. `ca_cert_pem` *is* returned, on\npurpose: a CA certificate is public-key material, and an operator who cannot read back what\nthey pasted cannot tell a stored certificate from a lost one.",
+        "required": [
+          "id",
+          "name",
+          "base_url",
+          "credential_id",
+          "enabled",
+          "sync_interval_secs",
+          "missing_folders"
+        ],
+        "properties": {
+          "api_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`netbox-version` learned from the last successful connection, so the screen can state the\nsupported range rather than guessing at it."
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "ca_cert_pem": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_sync_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_sync_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_sync_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "missing_folders": {
+            "type": "integer",
+            "description": "Folders this server owns that NetBox no longer lists. **Never auto-deleted** (ADR-100\ndecision 5) — surfaced so the operator can decide.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "sync_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "NodeAssignment": {
         "type": "object",
         "description": "`GET /api/v1/nodes/:id/assignment` — the node's effective pool, where that pool came from, and\nwhich poller currently holds it.",
@@ -31722,6 +32259,29 @@
           "pool"
         ]
       },
+      "SyncNetboxResult": {
+        "type": "object",
+        "required": [
+          "regions",
+          "sites",
+          "missing_folders"
+        ],
+        "properties": {
+          "missing_folders": {
+            "type": "integer",
+            "description": "Folders this server owns that NetBox no longer lists (ADR-100 decision 5 — marked, not\ndeleted).",
+            "minimum": 0
+          },
+          "regions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sites": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "SystemHealth": {
         "type": "object",
         "description": "Yagra's own health: the reachability of its backing services.",
@@ -31905,6 +32465,59 @@
           "name": {
             "type": "string",
             "description": "The name to write between `{{ }}`."
+          }
+        }
+      },
+      "TestNetboxReq": {
+        "type": "object",
+        "required": [
+          "base_url",
+          "token"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "ca_cert_pem": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "TestNetboxResult": {
+        "type": "object",
+        "description": "What a connection test found.\n\n🚨 The two booleans are separate **because a single 403 cannot tell them apart**, and that is\nthe whole value of this endpoint. NetBox requires authentication on `/api/status/`, but it sends\nits `API-Version` header on every response *including* the unauthenticated refusal — so\n`reachable && !authenticated` means \"right address, wrong token\", while `!reachable` means \"not\na NetBox, or not that address\". Collapsing them sends the operator to check the wrong field.",
+        "required": [
+          "reachable",
+          "authenticated"
+        ],
+        "properties": {
+          "api_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `API-Version` header (e.g. `4.6`), present even when the token was refused."
+          },
+          "authenticated": {
+            "type": "boolean",
+            "description": "…and it accepted the token."
+          },
+          "netbox_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The full `netbox-version` (e.g. `4.6.9`), available only once authenticated."
+          },
+          "reachable": {
+            "type": "boolean",
+            "description": "Something at that URL answered as a NetBox API."
           }
         }
       },
@@ -32773,6 +33386,43 @@
               "null"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "UpdateNetboxServerReq": {
+        "type": "object",
+        "required": [
+          "name",
+          "base_url",
+          "enabled"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "ca_cert_pem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three-state, and it has to be: absent leaves the stored CA alone, `null` clears it, a string\nreplaces it. Without the middle state there is no way to remove a certificate short of\ndeleting the server."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sync_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A replacement token. Omitted (or null) leaves the sealed one alone — which is what lets the\nsettings form round-trip without the browser ever holding the token."
           }
         }
       },

@@ -59,6 +59,7 @@ pub(crate) mod meraki;
 pub(crate) mod metrics;
 pub(crate) mod mib;
 pub(crate) mod neighbors;
+pub(crate) mod netbox;
 pub(crate) mod nodes;
 mod notifications;
 mod oidc;
@@ -195,6 +196,9 @@ pub struct AdminState {
     pub link_overrides: Arc<crate::link_overrides::LinkOverrideRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
+    /// Configured NetBox deployments and the folder tree pulled from them (ADR-100). Read-only
+    /// and outbound from core; the API token lives sealed in `creds`, never on this row.
+    pub netbox: Arc<crate::netbox::NetboxRepo>,
     /// Per-node Cisco Meraki device bindings.
     pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
     /// Passive-event sources / rules / event log (syslog/trap/webhook pipeline).
@@ -441,6 +445,7 @@ pub fn router(state: ApiState) -> Router {
         // deployments. Admin-only in both directions, and it carries no secrets.
         .merge(config_bundle::routes())
         .merge(meraki::routes())
+        .merge(netbox::routes())
         // Passive events: sources/rules CRUD + manual alert close, in `api/events.rs`.
         .merge(events::routes())
         // Machine-scoped webhook ingest, layered with its own small body cap: it is the one

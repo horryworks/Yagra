@@ -1,0 +1,130 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Settings ▸ Integrations ▸ NetBox.
+ *
+ * Every colour and size is a token — no literals (ui-conventions.md). The status colours here are
+ * deliberately NOT the `--status-*` node-state palette: a NetBox sync that failed is not a node
+ * that is down, and painting it that way puts a red thing on screen that no alert corresponds to.
+ */
+
+.netbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space-unit) * 1.5);
+}
+
+.netbox-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space-unit) * 2);
+  flex-wrap: wrap;
+  padding: calc(var(--space-unit) * 1.5) 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.netbox-row:last-child {
+  border-bottom: none;
+}
+
+.netbox-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space-unit) * 0.25);
+  min-width: 0;
+  flex: 1 1 14rem;
+}
+
+.netbox-row-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* A URL is a technical identifier, so it goes in the monospace family like an IP or an OID. */
+.netbox-row-url {
+  font-family: var(--font-family);
+  font-size: calc(var(--font-size-base) * 0.85);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.netbox-row-version {
+  font-size: calc(var(--font-size-base) * 0.8);
+  color: var(--text-tertiary);
+}
+
+.netbox-row-sync {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space-unit) * 0.25);
+  font-size: calc(var(--font-size-base) * 0.9);
+  color: var(--text-secondary);
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.netbox-missing {
+  color: var(--text-tertiary);
+}
+
+.netbox-failed {
+  color: var(--accent-color);
+  overflow-wrap: anywhere;
+}
+
+.netbox-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-unit);
+  flex-wrap: wrap;
+}
+
+.netbox-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--space-unit) * 0.5);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: calc(var(--font-size-base) * 0.9);
+}
+
+.netbox-field {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space-unit) * 0.5);
+  margin-bottom: calc(var(--space-unit) * 2);
+}
+
+.netbox-field > span:first-child {
+  color: var(--text-secondary);
+  font-size: calc(var(--font-size-base) * 0.9);
+}
+
+.netbox-hint {
+  color: var(--text-tertiary);
+  font-size: calc(var(--font-size-base) * 0.8);
+}
+
+.netbox-probe {
+  margin: 0;
+  font-size: calc(var(--font-size-base) * 0.9);
+}
+
+.netbox-probe.ok {
+  color: var(--text-secondary);
+}
+
+.netbox-probe.bad {
+  color: var(--accent-color);
+}
+
+.netbox-ownership {
+  margin-top: calc(var(--space-unit) * 2);
+  margin-bottom: 0;
+  font-size: calc(var(--font-size-base) * 0.85);
+}
+
+/* Touch: the row's controls stack rather than crowding a 44px target row. */
+@media (hover: none) {
+  .netbox-row-actions {
+    gap: calc(var(--space-unit) * 1.5);
+  }
+}

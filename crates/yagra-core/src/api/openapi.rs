@@ -132,6 +132,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::retention::Doc::openapi(),
         super::config_bundle::Doc::openapi(),
         super::meraki::Doc::openapi(),
+        super::netbox::Doc::openapi(),
         super::events::Doc::openapi(),
     ] {
         doc.merge(fragment);

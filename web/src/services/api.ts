@@ -74,6 +74,9 @@ import type {
   MetricKind,
   MetricRange,
   MetricReading,
+  NetboxServer,
+  NetboxSyncResult,
+  NetboxTestResult,
   NodeMetricEntry,
   MetricTopAgg,
   MibCatalogEntry,
@@ -943,6 +946,53 @@ export const api = {
   /** Set the global Meraki polling kill switch (safeguard: instantly halt all Meraki polling). */
   setMerakiPolling: (enabled: boolean): Promise<void> =>
     apiPut('/api/v1/meraki/polling', { body: { enabled } }),
+
+  // ── NetBox (ADR-100 Inc.1) ───────────────────────────────────────────────
+  // Read-only against NetBox; these are Yagra's own configuration for it.
+  // ⚠️ No response here ever carries the API token — see `NetboxServerView`'s doc in Rust.
+
+  /** Every configured NetBox deployment, with its last sync result. */
+  listNetboxServers: (): Promise<NetboxServer[]> => apiGet('/api/v1/netbox/servers'),
+
+  /** Register a NetBox deployment. The token is sealed server-side and never returned. */
+  createNetboxServer: (body: {
+    name: string;
+    base_url: string;
+    token: string;
+    ca_cert_pem?: string | null;
+    sync_interval_secs?: number;
+  }): Promise<{ id: string }> => apiPost('/api/v1/netbox/servers', { body }),
+
+  /** Update one. `token` omitted keeps the sealed one; `ca_cert_pem` omitted keeps the stored CA
+   *  and `null` clears it — the three-state the settings form needs to round-trip without the
+   *  browser ever holding either. */
+  updateNetboxServer: (
+    id: string,
+    body: {
+      name: string;
+      base_url: string;
+      token?: string;
+      ca_cert_pem?: string | null;
+      enabled: boolean;
+      sync_interval_secs?: number;
+    },
+  ): Promise<void> => apiPut('/api/v1/netbox/servers/{id}', { path: { id }, body }),
+
+  /** Forget a NetBox deployment. The folders it created are kept. */
+  deleteNetboxServer: (id: string): Promise<void> =>
+    apiDelete('/api/v1/netbox/servers/{id}', { path: { id } }),
+
+  /** Probe a NetBox before saving it. `reachable` and `authenticated` are separate answers —
+   *  a single failure cannot tell "wrong address" from "wrong token". */
+  testNetboxConnection: (body: {
+    base_url: string;
+    token: string;
+    ca_cert_pem?: string | null;
+  }): Promise<NetboxTestResult> => apiPost('/api/v1/netbox/test', { body }),
+
+  /** Sync one server now, rather than waiting for its cadence. */
+  syncNetboxServer: (id: string): Promise<NetboxSyncResult> =>
+    apiPost('/api/v1/netbox/servers/{id}/sync', { path: { id } }),
 
   /** One node's live status: rolled-up display state + active alerts attributed to it. */
   getNodeStatus: (id: string): Promise<NodeStatus> =>

@@ -7,6 +7,7 @@
 // union and the switch stay in the same file, which is why the type moved here too.
 
 import type { TFunction } from 'i18next';
+import { chipLabel, type Chip } from './chip';
 
 /** What this browser currently knows about the Meraki integration.
  *
@@ -20,32 +21,41 @@ export type MerakiStatus =
   | { kind: 'not-configured' }
   | { kind: 'connected'; orgs: number; pollingOn: boolean };
 
-/** The chip's text. Exhaustive over the union — no `default`, deliberately. */
-export function merakiStatusLabel(s: MerakiStatus, t: TFunction): string {
+/** The tile's chip: what it says and in what tone, in one place.
+ *
+ *  Exhaustive over the union — no `default`, deliberately.
+ *
+ *  ⚠️ Tones are neutral/derived classes, never the `--status-*` node-state palette. An integration
+ *  that cannot be reached is not a node that is down, and colouring it that way puts a red thing on
+ *  the screen that no alert corresponds to.
+ *
+ *  This is the **one** mapping. [`merakiStatusLabel`] and [`merakiStatusTone`] are projections of
+ *  it, so the label and the colour cannot come to disagree about what a state means — which they
+ *  could while each ran its own `switch`. */
+export function merakiChip(s: MerakiStatus): Chip {
   switch (s.kind) {
     case 'loading':
-      return t('integrations.status.checking');
+      return { labelKey: 'integrations.status.checking', tone: 'idle' };
     case 'unavailable':
-      return t('integrations.status.unavailable');
+      return { labelKey: 'integrations.status.unavailable', tone: 'muted' };
     case 'forbidden':
-      return t('integrations.status.forbidden');
+      return { labelKey: 'integrations.status.forbidden', tone: 'muted' };
     case 'not-configured':
-      return t('integrations.status.notConfigured');
+      return { labelKey: 'integrations.status.notConfigured', tone: 'idle' };
     case 'connected':
       // Configured but paused is not the same as configured and running, and the org count is the
       // fact that makes "connected" mean something.
-      if (!s.pollingOn) return t('integrations.status.pollingPaused');
-      return t('integrations.status.connected', { count: s.orgs });
+      if (!s.pollingOn) return { labelKey: 'integrations.status.pollingPaused', tone: 'paused' };
+      return { labelKey: 'integrations.status.connected', count: s.orgs, tone: 'ok' };
   }
 }
 
-/** The chip's tone class.
- *
- *  ⚠️ Neutral/derived classes — never the `--status-*` node-state palette. An integration that
- *  cannot be reached is not a node that is down, and colouring it that way puts a red thing on the
- *  screen that no alert corresponds to. */
+/** The chip's text. */
+export function merakiStatusLabel(s: MerakiStatus, t: TFunction): string {
+  return chipLabel(merakiChip(s), t);
+}
+
+/** The chip's tone class. */
 export function merakiStatusTone(s: MerakiStatus): string {
-  if (s.kind === 'connected') return s.pollingOn ? 'ok' : 'paused';
-  if (s.kind === 'unavailable' || s.kind === 'forbidden') return 'muted';
-  return 'idle';
+  return merakiChip(s).tone;
 }

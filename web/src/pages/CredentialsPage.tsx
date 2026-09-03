@@ -78,6 +78,8 @@ const KIND_ICONS: Record<string, ComponentType> = {
   api_token: KeyIcon,
   // Meraki keys are created via Settings ▸ Integrations; shown here read-only.
   meraki_api: KeyIcon,
+  // Likewise NetBox tokens (ADR-100) — created on the integration page, never here.
+  netbox_token: KeyIcon,
 };
 
 

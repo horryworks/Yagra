@@ -10,6 +10,24 @@
 
 ## Unreleased
 
+### New Features
+
+- **NetBox can now build the folder tree.** Settings ▸ Integrations ▸ NetBox registers a NetBox
+  deployment; Yagra then reads its Regions and Sites and mirrors them into the node folder tree,
+  with each Site's latitude and longitude filled in so the Geo map's pins appear without anyone
+  placing them. The import is **read-only in one direction** — Yagra never writes to NetBox — and
+  ownership is split per column: a sync owns each folder's name, parent and map position, while the
+  poller pool an operator sets on a folder is never touched. A Site removed in NetBox is **flagged,
+  never deleted**, because deleting a folder re-parents the nodes inside it and one mistaken click
+  in an external system should not restructure monitoring. Node placement and node creation are not
+  part of this release. The NetBox base URL is operator-supplied, so it is checked before the API
+  token is sent anywhere: loopback, link-local, multicast and unspecified addresses are refused,
+  and private addresses are allowed because that is where NetBox usually lives. A NetBox behind a
+  private CA is supported by pasting that CA's certificate on the same form — only that one
+  connection trusts it, and certificate verification is never disabled. Verified against NetBox
+  4.6; 3.x is untested. `GET /api/v1/netbox/servers` is also readable over MCP as
+  `get_config(kind=netbox_servers)`, and the API token appears in neither.
+
 ### Improvements
 
 - **Host resources now shows one section per poller instead of one per pool.** On Settings ▸ Yagra

@@ -769,6 +769,22 @@ export type MerakiOrg = components['schemas']['MerakiOrgView'];
 /** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`). */
 export type MerakiOrgOption = components['schemas']['MerakiOrgOption'];
 
+/** A configured NetBox deployment (`GET /api/v1/netbox/servers`), ADR-100.
+ *
+ *  ⚠️ Carries `ca_cert_pem` and **not** the API token — a CA certificate is public-key material,
+ *  the token is sealed server-side and has no field here to arrive in. */
+export type NetboxServer = components['schemas']['NetboxServerView'];
+
+/** What a NetBox connection probe found (`POST /api/v1/netbox/test`).
+ *
+ *  ⚠️ `reachable` and `authenticated` are separate on purpose: NetBox answers a bad token with the
+ *  same 403 it answers no token with, but sends its `API-Version` header either way — so the two
+ *  fields are what let the screen say "wrong token" rather than "cannot connect". */
+export type NetboxTestResult = components['schemas']['TestNetboxResult'];
+
+/** What one sync mirrored (`POST /api/v1/netbox/servers/{id}/sync`). */
+export type NetboxSyncResult = components['schemas']['SyncNetboxResult'];
+
 /** A network within an org, with its monitored (watch/skip) flag. */
 export type MerakiNetwork = components['schemas']['MerakiNetworkView'];
 

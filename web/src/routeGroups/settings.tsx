@@ -20,6 +20,7 @@ import { SystemHealthPage } from '../pages/SystemHealthPage';
 import { PollersPage } from '../pages/PollersPage';
 import { IntegrationsCatalogPage } from '../pages/integrations/IntegrationsCatalogPage';
 import { MerakiIntegrationPage } from '../pages/integrations/MerakiIntegrationPage';
+import { NetboxIntegrationPage } from '../pages/integrations/NetboxIntegrationPage';
 import { AiSettingsPage } from '../pages/AiSettingsPage';
 import { UsersPage } from '../pages/UsersPage';
 import { RolesPage } from '../pages/RolesPage';
@@ -42,6 +43,7 @@ export default function SettingsRoutes() {
       <Route path="pollers" element={<PollersPage />} />
       <Route path="integrations" element={<IntegrationsCatalogPage />} />
       <Route path="integrations/meraki" element={<MerakiIntegrationPage />} />
+      <Route path="integrations/netbox" element={<NetboxIntegrationPage />} />
       <Route path="ai" element={<AiSettingsPage />} />
       <Route path="users" element={<UsersPage />} />
       <Route path="roles" element={<RolesPage />} />

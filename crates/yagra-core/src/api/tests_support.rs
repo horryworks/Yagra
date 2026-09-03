@@ -242,6 +242,7 @@ pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
         topology_links: topo_link_repo,
         link_overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
         meraki_orgs: Arc::new(crate::meraki::MerakiOrgRepo::new(pool.clone())),
+        netbox: Arc::new(crate::netbox::NetboxRepo::new(pool.clone())),
         meraki_devices,
         events: events_repo,
         coordinator: Arc::new(crate::coordinator::Coordinator::new(

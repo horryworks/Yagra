@@ -181,6 +181,7 @@ pub(super) enum ConfigKind {
     MerakiOrgs,
     MerakiNetworks,
     MerakiPolling,
+    NetboxServers,
     ForwardDestinations,
     ReportDefinitions,
     ReportSchedules,
@@ -223,6 +224,7 @@ impl ConfigKind {
         "meraki_orgs",
         "meraki_networks",
         "meraki_polling",
+        "netbox_servers",
         "forward_destinations",
         "report_definitions",
         "report_schedules",
@@ -260,6 +262,7 @@ impl ConfigKind {
             "meraki_orgs" => Self::MerakiOrgs,
             "meraki_networks" => Self::MerakiNetworks,
             "meraki_polling" => Self::MerakiPolling,
+            "netbox_servers" => Self::NetboxServers,
             "forward_destinations" => Self::ForwardDestinations,
             "report_definitions" => Self::ReportDefinitions,
             "report_schedules" => Self::ReportSchedules,
@@ -299,6 +302,7 @@ impl ConfigKind {
             | Self::DiscoveryScans
             | Self::MerakiOrgs
             | Self::MerakiPolling
+            | Self::NetboxServers
             | Self::ForwardDestinations
             | Self::ReportDefinitions
             | Self::ReportSchedules
@@ -335,6 +339,7 @@ impl ConfigKind {
             Self::MerakiOrgs => "meraki_orgs",
             Self::MerakiNetworks => "meraki_networks",
             Self::MerakiPolling => "meraki_polling",
+            Self::NetboxServers => "netbox_servers",
             Self::ForwardDestinations => "forward_destinations",
             Self::ReportDefinitions => "report_definitions",
             Self::ReportSchedules => "report_schedules",
@@ -364,7 +369,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 30 values.
+    /// Which configuration to read. Required; see the tool description for the 31 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -796,7 +801,10 @@ impl YagraMcp {
                        `scan_id`), discovery_scans (the sweeps this core is holding, newest \
                        first, `limit` 1–50, default 20 — this is how to find a `scan_id`); \
                        **Meraki** — meraki_orgs, meraki_networks (needs `org_id`), \
-                       meraki_polling; **forwarding** — forward_destinations; **reports** — \
+                       meraki_polling; **NetBox** — netbox_servers (the configured NetBox \
+                       deployments the folder tree is pulled from, with each one's last sync \
+                       result and how many of its folders NetBox no longer lists; the API token \
+                       is never included); **forwarding** — forward_destinations; **reports** — \
                        report_definitions, report_schedules; **deployment settings** — retention, \
                        adjacency_settings, llm, roles, oidc, ldap. \
                        **Reading kind=thresholds.** A rule is `{scope_level, scope_ids, metric, \
@@ -1035,6 +1043,14 @@ impl YagraMcp {
                 Err(e) => tool_api_error(TOOL, &e),
             },
             ConfigKind::MerakiNetworks => match crate::api::meraki::network_views(a, id).await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_api_error(TOOL, &e),
+            },
+            // ── NetBox ───────────────────────────────────────────────────────
+            // Through the same `server_views` the REST route calls, so the two surfaces cannot
+            // answer differently (ADR-042 read parity). The view type has no field that could
+            // carry the API token, which is what makes this safe to fold rather than sanitize.
+            ConfigKind::NetboxServers => match crate::api::netbox::server_views(&a.netbox).await {
                 Ok(list) => ok_json(TOOL, &list),
                 Err(e) => tool_api_error(TOOL, &e),
             },
@@ -1435,7 +1451,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            30,
+            31,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

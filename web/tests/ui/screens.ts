@@ -36,6 +36,7 @@ export const EXTRA_SCREENS: Screen[] = [
   // Any UUID matches the `/nodes/{id}` template, so the mock answers whatever we ask for.
   { path: '/nodes/00000000-0000-4000-8000-000000000001', label: 'nodes.detail' },
   { path: '/settings/integrations/meraki', label: 'settings.integrations.meraki' },
+  { path: '/settings/integrations/netbox', label: 'settings.integrations.netbox' },
   // A report screen with no `?job=` is a scope form, not a report. The id is arbitrary — the mock
   // answers `/analysis/jobs/{id}` for any of them.
   {
@@ -143,6 +144,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/settings/about': MARKER,
   '/nodes/00000000-0000-4000-8000-000000000001': MARKER,
   '/settings/integrations/meraki': MARKER,
+  '/settings/integrations/netbox': MARKER,
   [`/troubleshoot/report/${REPORT_TOOL}`]: MARKER,
   '/login': {
     kind: 'none',

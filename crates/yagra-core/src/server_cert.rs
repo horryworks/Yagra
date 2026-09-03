@@ -283,7 +283,12 @@ pub fn default_self_signed_names(hostname: Option<&str>) -> Vec<String> {
 
 // ── internals ────────────────────────────────────────────────────────────────────────────────
 
-fn contains_private_key_block(pem: &str) -> bool {
+/// Whether a paste that is supposed to hold only certificates contains a private key block.
+///
+/// `pub(crate)` for a second caller: `netbox::validate_ca_pem` (ADR-100 decision 8) takes a pasted
+/// CA into another **plaintext, API-readable** column, so it owes the same refusal. One
+/// implementation rather than two — the security boundary is the same one.
+pub(crate) fn contains_private_key_block(pem: &str) -> bool {
     pem.contains("PRIVATE KEY-----")
 }
 

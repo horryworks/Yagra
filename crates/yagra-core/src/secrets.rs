@@ -140,6 +140,37 @@ impl SnmpV3Secret {
 /// the key is inlined into a collect job at dispatch time and never logged.
 pub const KIND_MERAKI_API: &str = "meraki_api";
 
+/// Credential kind for a NetBox API token (ADR-100). The secret is a [`NetboxTokenSecret`] JSON doc
+/// holding **only** the token; which NetBox it belongs to is the `netbox_servers` row, the same
+/// split [`KIND_MERAKI_API`] makes — so one token can back several server rows if an operator wants
+/// separate sync cadences against one deployment.
+///
+/// ⚠️ **The CA certificate is deliberately not in here.** `netbox_servers.ca_cert_pem` is public-key
+/// material, and sealing it would mean an operator could not read back what they pasted, for no
+/// security gain. What must never be echoed is this token.
+pub const KIND_NETBOX_TOKEN: &str = "netbox_token";
+
+/// The sealed JSON shape of a `netbox_token` credential: just the token. Validated at the API edge
+/// on create and parsed again at sync time; `Err` carries a static description only — never the
+/// token bytes.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NetboxTokenSecret {
+    pub token: String,
+}
+
+impl NetboxTokenSecret {
+    /// Parse and structurally validate a NetBox token secret document. `Err` carries a static
+    /// description only — never any field content (the token must never be echoed).
+    pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
+        let secret: Self =
+            serde_json::from_slice(bytes).map_err(|_| "not a valid NetBox token JSON document")?;
+        if secret.token.trim().is_empty() {
+            return Err("token must not be empty");
+        }
+        Ok(secret)
+    }
+}
+
 /// The sealed JSON shape of a `meraki_api` credential: just the API key. Validated at the API edge
 /// on create and parsed again at schedule time; `Err` carries a static description only — never the
 /// key bytes.

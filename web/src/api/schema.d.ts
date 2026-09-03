@@ -1769,6 +1769,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/netbox/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_netbox_servers"];
+        put?: never;
+        post: operations["create_netbox_server"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/netbox/servers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["update_netbox_server"];
+        post?: never;
+        delete: operations["delete_netbox_server"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/netbox/servers/{id}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sync_netbox_server"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/netbox/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["test_netbox_connection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-groups": {
         parameters: {
             query?: never;
@@ -5385,6 +5449,20 @@ export interface components {
             scope_kind: string;
             until: string;
         };
+        CreateNetboxServerReq: {
+            /**
+             * @description The NetBox base URL, e.g. `https://netbox.example.com`. Validated against the SSRF policy
+             *     before the token is ever sent to it.
+             */
+            base_url: string;
+            /** @description PEM for a private CA, when NetBox is not signed by a publicly trusted one. */
+            ca_cert_pem?: string | null;
+            name: string;
+            /** Format: int32 */
+            sync_interval_secs?: number;
+            /** @description The API token. **Sealed on arrival and never returned by any endpoint.** */
+            token: string;
+        };
         /** @description Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional. */
         CreateNode: {
             address: string;
@@ -5474,6 +5552,10 @@ export interface components {
          *     same idea; a client then needs to know which creator it called to read the id back.
          */
         CreatedId: {
+            /** Format: uuid */
+            id: string;
+        };
+        CreatedNetboxServer: {
             /** Format: uuid */
             id: string;
         };
@@ -7589,6 +7671,39 @@ export interface components {
             truncated?: boolean;
         };
         /**
+         * @description A configured server as the API exposes it.
+         *
+         *     🚨 **`credential_id` is here but the token is not, and cannot be** — the token lives sealed in
+         *     `credentials` and this type has no field that could carry it. `ca_cert_pem` *is* returned, on
+         *     purpose: a CA certificate is public-key material, and an operator who cannot read back what
+         *     they pasted cannot tell a stored certificate from a lost one.
+         */
+        NetboxServerView: {
+            /**
+             * @description `netbox-version` learned from the last successful connection, so the screen can state the
+             *     supported range rather than guessing at it.
+             */
+            api_version?: string | null;
+            base_url: string;
+            ca_cert_pem?: string | null;
+            /** Format: uuid */
+            credential_id: string;
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            last_sync_at?: string | null;
+            last_sync_error?: string | null;
+            last_sync_ok?: boolean | null;
+            /**
+             * @description Folders this server owns that NetBox no longer lists. **Never auto-deleted** (ADR-100
+             *     decision 5) — surfaced so the operator can decide.
+             */
+            missing_folders: number;
+            name: string;
+            /** Format: int32 */
+            sync_interval_secs: number;
+        };
+        /**
          * @description `GET /api/v1/nodes/:id/assignment` — the node's effective pool, where that pool came from, and
          *     which poller currently holds it.
          */
@@ -9256,6 +9371,15 @@ export interface components {
          * @enum {string}
          */
         SubjectKind: "node" | "pool";
+        SyncNetboxResult: {
+            /**
+             * @description Folders this server owns that NetBox no longer lists (ADR-100 decision 5 — marked, not
+             *     deleted).
+             */
+            missing_folders: number;
+            regions: number;
+            sites: number;
+        };
         /** @description Yagra's own health: the reachability of its backing services. */
         SystemHealth: {
             /** @description NATS — **inferred** from a recent scheduler sweep, not a direct ping. */
@@ -9333,6 +9457,30 @@ export interface components {
             description: string;
             /** @description The name to write between `{{ }}`. */
             name: string;
+        };
+        TestNetboxReq: {
+            base_url: string;
+            ca_cert_pem?: string | null;
+            token: string;
+        };
+        /**
+         * @description What a connection test found.
+         *
+         *     🚨 The two booleans are separate **because a single 403 cannot tell them apart**, and that is
+         *     the whole value of this endpoint. NetBox requires authentication on `/api/status/`, but it sends
+         *     its `API-Version` header on every response *including* the unauthenticated refusal — so
+         *     `reachable && !authenticated` means "right address, wrong token", while `!reachable` means "not
+         *     a NetBox, or not that address". Collapsing them sends the operator to check the wrong field.
+         */
+        TestNetboxResult: {
+            /** @description The `API-Version` header (e.g. `4.6`), present even when the token was refused. */
+            api_version?: string | null;
+            /** @description …and it accepted the token. */
+            authenticated: boolean;
+            /** @description The full `netbox-version` (e.g. `4.6.9`), available only once authenticated. */
+            netbox_version?: string | null;
+            /** @description Something at that URL answered as a NetBox API. */
+            reachable: boolean;
         };
         /**
          * @description The outcome of a one-shot delivery test.
@@ -9811,6 +9959,24 @@ export interface components {
             name: string;
             /** Format: uuid */
             node_id?: string | null;
+        };
+        UpdateNetboxServerReq: {
+            base_url: string;
+            /**
+             * @description Three-state, and it has to be: absent leaves the stored CA alone, `null` clears it, a string
+             *     replaces it. Without the middle state there is no way to remove a certificate short of
+             *     deleting the server.
+             */
+            ca_cert_pem?: string | null;
+            enabled: boolean;
+            name: string;
+            /** Format: int32 */
+            sync_interval_secs?: number;
+            /**
+             * @description A replacement token. Omitted (or null) leaves the sealed one alone — which is what lets the
+             *     settings form round-trip without the browser ever holding the token.
+             */
+            token?: string | null;
         };
         UpdatePoolRequest: {
             /** @description Replacement description. Omit to leave it unchanged; send `null` or `""` to clear it. */
@@ -17036,6 +17202,368 @@ export interface operations {
             };
             /** @description This core has no write side (skeleton mode) */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_netbox_servers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every configured NetBox server. The API token is never included; the CA certificate is, because it is not a secret */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetboxServerView"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    create_netbox_server: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateNetboxServerReq"];
+            };
+        };
+        responses: {
+            /** @description The server was registered and its token sealed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedNetboxServer"];
+                };
+            };
+            /** @description Empty name or token, a base_url that is malformed or refused by the SSRF policy, an invalid CA certificate, or an out-of-range interval */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_netbox_server: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateNetboxServerReq"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A field failed validation (see the create route) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such server */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_netbox_server: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. The folders it created are kept — disconnecting an integration never restructures the monitoring tree */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such server */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    sync_netbox_server: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sync ran; the counts say what was mirrored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncNetboxResult"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such server */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The NetBox call failed; the reason is stored on the server row and shown on the integration screen */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    test_netbox_connection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestNetboxReq"];
+            };
+        };
+        responses: {
+            /** @description The probe ran. Check `reachable` and `authenticated` — a refused token is a 200 here, not an error, because the operator needs to see which of the two fields is wrong */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestNetboxResult"];
+                };
+            };
+            /** @description base_url is malformed or refused by the SSRF policy, or the CA certificate is invalid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The NetBox call failed; the detail is logged, never returned */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

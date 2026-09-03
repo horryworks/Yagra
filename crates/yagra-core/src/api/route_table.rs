@@ -808,6 +808,29 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("DELETE", "/api/v1/mutes/:id", NodeScoped, NO_MCP_WRITE),
     (
         "GET",
+        "/api/v1/netbox/servers",
+        // Deployment-wide integration configuration, exactly like `meraki/orgs`: a NetBox server
+        // is not node data, so there is no per-node slice to filter to.
+        ADMIN_CFG,
+        Tool("get_config"),
+    ),
+    ("POST", "/api/v1/netbox/servers", ADMIN_CFG, NO_MCP_WRITE),
+    ("PUT", "/api/v1/netbox/servers/:id", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "DELETE",
+        "/api/v1/netbox/servers/:id",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/netbox/servers/:id/sync",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    ("POST", "/api/v1/netbox/test", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "GET",
         "/api/v1/node-groups",
         GroupFiltered,
         Tool("list_node_groups"),

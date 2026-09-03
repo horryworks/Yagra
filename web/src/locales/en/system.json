@@ -455,9 +455,8 @@
     "meraki": {
       "desc": "Read-only Dashboard API monitoring — availability, uplinks, and traffic across your Meraki organizations."
     },
-    "more": {
-      "name": "More integrations",
-      "desc": "Additional vendor and notification integrations will appear here in a future release."
+    "netbox": {
+      "desc": "Read-only import of your NetBox site hierarchy — Regions and Sites become the folder tree, with map pins."
     }
   },
   "meraki": {
@@ -608,6 +607,63 @@
       "secret_dropped_imported_disabled": "A secret cannot be carried between deployments, so this arrives disabled unless one is already stored here — re-enter it, then enable",
       "webhook_token_reset": "A webhook ingest token cannot be carried, so the source arrives disabled with an unusable token — rotate it to get a working one",
       "schedule_next_run_recomputed": "The next run was recomputed from the cadence on this clock"
+    }
+  },
+  "netbox": {
+    "name": "NetBox",
+    "note": "Read-only import of the site hierarchy from NetBox. Yagra never writes to NetBox.",
+    "status": {
+      "connected_one": "Connected · {{count}} server",
+      "connected_other": "Connected · {{count}} servers",
+      "syncFailed": "Last sync failed"
+    },
+    "servers": {
+      "title": "NetBox deployments",
+      "add": "+ Add NetBox",
+      "empty": "No NetBox deployment is configured. Add one to build the folder tree from its Regions and Sites.",
+      "ownership": "A sync owns each folder’s name, parent and map position. The poller pool you set on a folder is yours and is never overwritten, and a Site removed in NetBox is flagged here rather than deleted."
+    },
+    "form": {
+      "addTitle": "Add a NetBox deployment",
+      "editTitle": "Edit NetBox deployment",
+      "name": "Name",
+      "baseUrl": "Base URL",
+      "baseUrlHint": "Including the port if it is not the default, e.g. http://netbox.example.com:8000. Loopback and link-local addresses are refused; private addresses are fine.",
+      "token": "API token",
+      "tokenHint": "Stored encrypted. It is never shown again and never returned by the API.",
+      "tokenKeepHint": "Leave empty to keep the stored token.",
+      "caCert": "CA certificate (optional)",
+      "caCertHint": "Paste the PEM certificate of the private CA that signed this NetBox. Only this connection trusts it. Never paste a private key.",
+      "interval": "Sync every (seconds)",
+      "test": "Test connection"
+    },
+    "test": {
+      "unreachable": "Nothing at that address answered as a NetBox API. Check the URL and the port.",
+      "badToken": "NetBox answered, but refused the token. Check the API token.",
+      "ok": "Connected to NetBox {{version}}."
+    },
+    "row": {
+      "version": "NetBox {{version}}",
+      "enabled": "Enabled",
+      "paused": "Paused",
+      "syncNow": "Sync now"
+    },
+    "sync": {
+      "never": "Never synced",
+      "ok": "Last sync {{at}}",
+      "missing_one": "{{count}} folder no longer in NetBox",
+      "missing_other": "{{count}} folders no longer in NetBox",
+      "failed": "Last sync failed"
+    },
+    "delete": {
+      "title": "Remove NetBox deployment",
+      "body": "Remove “{{name}}”? The folders it created are kept and become ordinary folders — no node loses its place."
+    },
+    "err": {
+      "test": "Could not test the connection",
+      "save": "Could not save the NetBox deployment",
+      "sync": "Sync failed",
+      "delete": "Could not remove the NetBox deployment"
     }
   }
 }

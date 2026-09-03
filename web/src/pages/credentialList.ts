@@ -100,6 +100,7 @@ export const CREDENTIAL_KIND_LABEL_KEYS: Record<string, string> = {
   http_auth: 'cred.kind.http_auth',
   api_token: 'cred.kind.api_token',
   meraki_api: 'cred.kind.meraki_api',
+  netbox_token: 'cred.kind.netbox_token',
 };
 
 export const kindLabel = (kind: string, t: TFunction) => {

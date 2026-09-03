@@ -73,6 +73,7 @@ mod mib;
 #[cfg(test)]
 mod module_source;
 mod neighbors;
+mod netbox;
 mod notifications;
 mod notify_facts;
 mod notify_render;
@@ -424,6 +425,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // (shared by the Meraki scheduler and the result consumer, which clears an org's flight on the
     // collect's first result). Read-only integration.
     let meraki_orgs = Arc::new(meraki::MerakiOrgRepo::new(repo.pool()));
+    let netbox = Arc::new(netbox::NetboxRepo::new(repo.pool()));
     let meraki_devices = Arc::new(meraki::MerakiDeviceRepo::new(repo.pool()));
     let meraki_inflight = Arc::new(meraki::MerakiInflight::new());
 
@@ -734,6 +736,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         meraki_inflight: meraki_inflight.clone(),
         meraki_devices: meraki_devices.clone(),
         meraki_orgs: meraki_orgs.clone(),
+        netbox: netbox.clone(),
         meraki_pool,
         flow_system_log_days: cfg.flow_system_log_days,
         creds: creds.clone(),
@@ -817,6 +820,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
         meraki_orgs,
+        netbox: netbox.clone(),
         meraki_devices,
         events: events_repo,
         coordinator: coordinator.clone(),
@@ -974,6 +978,9 @@ struct LeaderTasks {
     meraki_inflight: Arc<meraki::MerakiInflight>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
+    /// Configured NetBox deployments (ADR-100). Leader-only: two cores syncing one server would
+    /// write the same folders twice — idempotent, but twice the load on someone else's NetBox.
+    netbox: Arc<netbox::NetboxRepo>,
     /// Which poller pool Meraki collection jobs are published to (moved: read once at startup).
     meraki_pool: String,
     /// Retention for ClickHouse's own system logs (ADR-031 Inc.4); `0` leaves `system.*` alone.
@@ -1267,6 +1274,12 @@ impl LeaderTasks {
                 self.repo.clone(),
                 std::mem::take(&mut self.meraki_pool),
             ),
+        );
+        // NetBox's folder-tree pull (ADR-100 Inc.1). Leader-only for the reason the field's doc
+        // gives; the loop itself decides which servers are due.
+        spawn_cancellable(
+            &self.shutdown,
+            netbox::run_sync_loop(self.netbox.clone(), self.creds.clone()),
         );
     }
 
