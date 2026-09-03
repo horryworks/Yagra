@@ -1,0 +1,31 @@
+-- 0103_netbox_site_id_field — a Site's folder name may carry the operator's site code
+-- (ADR-100 decision 9).
+--
+-- reversible: additive only — one nullable column on a table introduced by 0102, nothing dropped
+-- or narrowed. An older core projects `netbox_servers` through an explicit column list
+-- (`NetboxServer::COLUMNS`), so it never selects this column and a binary rollback simply stops
+-- prefixing: the folder names revert to NetBox's own `name` on the next sync, because a sync
+-- overwrites `node_groups.name` every cycle (decision 2). No `schema_compat` floor, for the reason
+-- 0089 / 0099 / 0100 / 0102 record: every release from 0.2.2 on tolerates a database carrying
+-- migrations it does not embed, and the floor 0080 recorded covers this one.
+--
+-- WHY THIS IS A SETTING RATHER THAN A FIXED FIELD
+-- Measured on the first real NetBox this integration met (4.6.9, 2026-09-03): the site code
+-- `JPMYJ01` lived in the custom field `site_id`, while `facility` — NetBox's own field for exactly
+-- this — was empty. An implementation that read `facility` would already be wrong on deployment
+-- number one, so the source has to be chosen by whoever knows the NetBox.
+--
+-- ENCODING (one column, not two: `SiteIdField::parse` in `netbox.rs` is the only reader)
+--     NULL            -> no prefix. THE DEFAULT, so an existing deployment does not change.
+--     'slug'          -> the Site's slug
+--     'facility'      -> the Site's facility field
+--     'description'   -> the Site's description
+--     'cf:<key>'      -> custom_fields[<key>]
+-- Two columns (a kind plus a key) would admit "kind = custom, key = NULL", a state that must not
+-- exist; one string cannot express it. A NetBox field name never contains ':', so the 'cf:' prefix
+-- cannot collide with a built-in.
+--
+-- ⚠️ Changing this value renames every Site folder on the next sync. That is the same
+-- `name = EXCLUDED.name` that makes the sync idempotent (decision 2), not a defect — there is no
+-- migration of existing rows to perform, and none is wanted.
+ALTER TABLE netbox_servers ADD COLUMN site_id_field TEXT;

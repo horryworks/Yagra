@@ -782,8 +782,37 @@ export type NetboxServer = components['schemas']['NetboxServerView'];
  *  fields are what let the screen say "wrong token" rather than "cannot connect". */
 export type NetboxTestResult = components['schemas']['TestNetboxResult'];
 
-/** What one sync mirrored (`POST /api/v1/netbox/servers/{id}/sync`). */
+/** What one sync mirrored (`POST /api/v1/netbox/servers/{id}/sync`).
+ *
+ *  ⚠️ `sites_without_site_id` is not decoration: choosing the wrong Site ID field produces no
+ *  error and no visible change, so this count is the only thing that separates "I picked the wrong
+ *  field" from "this feature does not work". */
 export type NetboxSyncResult = components['schemas']['SyncNetboxResult'];
+
+/** The site-code sources one NetBox offers
+ *  (`GET /api/v1/netbox/servers/{id}/site-fields`, and inside `NetboxTestResult`).
+ *
+ *  🚨 Read `custom_fields_readable` before reading `custom_fields` as "there are none": a token
+ *  without `extras.view_customfield` gets `false` and an empty list, and the form has to offer a
+ *  type-it-in box in that case rather than an empty picker. */
+export type NetboxSiteIdFields = components['schemas']['SiteIdFieldChoices'];
+
+/** The built-in Site fields that can supply a code, as `site_id_field` stores them.
+ *
+ *  `satisfies` against the generated schema on purpose: the picker has to render these without
+ *  waiting for a network call, so the list exists here — and the `satisfies` is what stops it from
+ *  becoming the duplicated constant list `extensibility.md` §3 is about. Add a variant in Rust and
+ *  this fails to compile until it is added here too. The fourth form, `cf:<key>`, is not in the
+ *  set: its key belongs to the NetBox being read.
+ *
+ *  `as const` as well, for the reason in `LINK_SOURCES`: the form builds its label key at runtime
+ *  (`` t(`netbox.siteIdField.${v}`) ``), so `i18nEnumKeys.test.ts` has to be able to iterate it. */
+export const SITE_ID_BUILT_INS = [
+  'slug',
+  'facility',
+  'description',
+] as const satisfies readonly components['schemas']['SiteIdBuiltIn'][];
+export type SiteIdBuiltIn = (typeof SITE_ID_BUILT_INS)[number];
 
 /** A network within an org, with its monitored (watch/skip) flag. */
 export type MerakiNetwork = components['schemas']['MerakiNetworkView'];

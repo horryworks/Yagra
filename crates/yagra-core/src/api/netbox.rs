@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! NetBox — read-only site-hierarchy import (ADR-100 Inc.1).
 //!
-//! Six routes: list / create / update / delete a configured server, test a connection before it is
-//! saved, and run a sync now. Reads are `View`, writes are `ManageConfig` — the same split as
-//! `api/meraki.rs`, because this is the same kind of thing: an external system Yagra reads to
-//! decide what it monitors.
+//! Seven routes: list / create / update / delete a configured server, test a connection before it
+//! is saved, run a sync now, and list the NetBox fields that could supply a site code. Reads are
+//! `View`, writes are `ManageConfig` — the same split as `api/meraki.rs`, because this is the same
+//! kind of thing: an external system Yagra reads to decide what it monitors.
+//!
+//! # Why the field list is served twice
+//!
+//! Decision 9 lets an operator choose which NetBox field prefixes a Site's folder name, and the
+//! choices come from that NetBox. **The two surfaces exist because the two moments have different
+//! inputs, not because one was forgotten**: while a server is being *added* the base URL and token
+//! are in the request, so [`test_netbox_connection`] can answer alongside the probe; once it is
+//! *saved* the token is gone from the browser for good, so only
+//! [`netbox_site_fields`] — which opens the sealed credential — can answer. Folding them into one
+//! endpoint would mean a body that is valid two ways, which is worse than two endpoints that are
+//! each valid one way.
 //!
 //! # Three guards protect the operator, and each one has a different failure it prevents
 //!
@@ -52,7 +63,8 @@ const MAX_INTERVAL_SECS: i32 = 86_400;
     update_netbox_server,
     delete_netbox_server,
     test_netbox_connection,
-    sync_netbox_server
+    sync_netbox_server,
+    netbox_site_fields
 ))]
 pub(super) struct Doc;
 
@@ -68,6 +80,10 @@ pub(super) fn routes() -> Router<ApiState> {
             axum::routing::put(update_netbox_server).delete(delete_netbox_server),
         )
         .route("/api/v1/netbox/servers/:id/sync", post(sync_netbox_server))
+        .route(
+            "/api/v1/netbox/servers/:id/site-fields",
+            get(netbox_site_fields),
+        )
         .route("/api/v1/netbox/test", post(test_netbox_connection))
 }
 
@@ -103,6 +119,27 @@ fn validated_token(raw: &str) -> Result<&str, ApiError> {
         ));
     }
     Ok(token)
+}
+
+/// The prefix-source setting as it will be stored, or a 400.
+///
+/// Empty and absent both mean **no prefix**, so a form that clears the box clears the setting.
+/// Anything [`netbox::SiteIdField::parse`] cannot read is refused **here**, at the edge — a bad
+/// value that only surfaced during the next hourly sync would fail an hour later, in a log, far
+/// from the person who typed it. That is decision 8's rule about the pasted CA, applied to the
+/// one other operator-supplied string this integration takes.
+fn validated_site_id_field(raw: Option<&str>) -> Result<Option<String>, ApiError> {
+    let Some(v) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    netbox::SiteIdField::parse(v)
+        .map(|f| Some(f.as_stored()))
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "invalid_site_id_field",
+                "site_id_field must be slug, facility, description, or cf:<custom field name>",
+            )
+        })
 }
 
 /// Validate the fields a create and an update share, so the two cannot drift apart.
@@ -149,6 +186,9 @@ pub(crate) struct NetboxServerView {
     ca_cert_pem: Option<String>,
     enabled: bool,
     sync_interval_secs: i32,
+    /// Which NetBox field prefixes a Site's folder name, or `null` for none. Encoded as stored:
+    /// a built-in name, or `cf:` and a custom field's key.
+    site_id_field: Option<String>,
     /// `netbox-version` learned from the last successful connection, so the screen can state the
     /// supported range rather than guessing at it.
     api_version: Option<String>,
@@ -169,6 +209,7 @@ fn view(s: &NetboxServer, missing: usize) -> NetboxServerView {
         ca_cert_pem: s.ca_cert_pem.clone(),
         enabled: s.enabled,
         sync_interval_secs: s.sync_interval_secs,
+        site_id_field: s.site_id_field.clone(),
         api_version: s.api_version.clone(),
         last_sync_at: s.last_sync_at.map(|t| t.to_rfc3339()),
         last_sync_ok: s.last_sync_ok,
@@ -230,6 +271,10 @@ pub(crate) struct CreateNetboxServerReq {
     ca_cert_pem: Option<String>,
     #[serde(default = "default_interval")]
     sync_interval_secs: i32,
+    /// Which NetBox field prefixes a Site's folder name: `slug`, `facility`, `description`, or
+    /// `cf:<custom field name>`. Absent or empty means no prefix, which is the default.
+    #[serde(default)]
+    site_id_field: Option<String>,
 }
 
 const fn default_interval() -> i32 {
@@ -264,6 +309,7 @@ async fn create_netbox_server(
         body.ca_cert_pem.as_deref(),
         body.sync_interval_secs,
     )?;
+    let site_id_field = validated_site_id_field(body.site_id_field.as_deref())?;
 
     // Sealed through the production writer, so the envelope-encryption columns have one author
     // (ADR-018). The plaintext exists only in this frame.
@@ -292,6 +338,7 @@ async fn create_netbox_server(
             credential_id,
             body.ca_cert_pem.as_deref(),
             body.sync_interval_secs,
+            site_id_field.as_deref(),
         )
         .await
         .map_err(|e| {
@@ -320,6 +367,11 @@ pub(crate) struct UpdateNetboxServerReq {
     enabled: bool,
     #[serde(default = "default_interval")]
     sync_interval_secs: i32,
+    /// ⚠️ **Two-state, and this is a full-document `PUT`**: omitting it clears the setting, the
+    /// same way omitting `enabled` would. `ca_cert_pem` above is three-state only because the
+    /// browser never holds the certificate it needs to preserve; this value it does hold.
+    #[serde(default)]
+    site_id_field: Option<String>,
 }
 
 #[utoipa::path(
@@ -343,6 +395,7 @@ async fn update_netbox_server(
 ) -> ApiResult<StatusCode> {
     let ca = body.ca_cert_pem.as_ref().and_then(|o| o.as_deref());
     let base = validated_common(&body.name, &body.base_url, ca, body.sync_interval_secs)?;
+    let site_id_field = validated_site_id_field(body.site_id_field.as_deref())?;
 
     let existing = admin
         .netbox
@@ -399,6 +452,7 @@ async fn update_netbox_server(
                 ca_cert_pem: ca_arg,
                 enabled: body.enabled,
                 sync_interval_secs: body.sync_interval_secs,
+                site_id_field: site_id_field.as_deref(),
             },
         )
         .await
@@ -440,6 +494,103 @@ async fn delete_netbox_server(
     }
 }
 
+/// A built-in Site field that can supply a code — the closed half of `site_id_field`'s values.
+///
+/// 🚨 **This type exists so the set reaches TypeScript.** `web/src/types/api.ts` pins its own
+/// picker list to `components['schemas']['SiteIdBuiltIn']` with `satisfies`, which turns "the
+/// form offers exactly what the parser accepts" into a compile error instead of a convention. The
+/// established pattern next door (`LINK_SOURCES` and friends) is a bare `as const` with no link
+/// back to Rust; that is a duplicated constant list of the kind `extensibility.md` §3 warns about,
+/// and one line of `satisfies` avoids inheriting it.
+///
+/// The fourth form, `cf:<key>`, is not a member: its key belongs to the NetBox being read, so it
+/// cannot be a compile-time set anywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SiteIdBuiltIn {
+    Slug,
+    Facility,
+    Description,
+}
+
+impl SiteIdBuiltIn {
+    /// The wire form of one built-in field, or `None` for a custom field.
+    ///
+    /// ⚠️ Built from [`netbox::SiteIdField::BUILT_INS`] rather than from a second list here, and
+    /// the count is asserted by `every_built_in_field_reaches_the_wire`: a variant added to the
+    /// parser and not to this match would otherwise be **silently filtered out** by the
+    /// `filter_map` below, leaving a field the API accepts but the form never offers.
+    fn of(f: &netbox::SiteIdField) -> Option<Self> {
+        match f {
+            netbox::SiteIdField::Slug => Some(Self::Slug),
+            netbox::SiteIdField::Facility => Some(Self::Facility),
+            netbox::SiteIdField::Description => Some(Self::Description),
+            netbox::SiteIdField::Custom(_) => None,
+        }
+    }
+}
+
+/// One NetBox custom field that could supply a site code.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct SiteIdCustomField {
+    /// Store this verbatim in `site_id_field`.
+    value: String,
+    /// NetBox's own label for the field, or its key when NetBox has no label. **Not
+    /// translatable** — it is this deployment's own wording.
+    label: String,
+}
+
+/// What an operator may choose as the source of a Site's code.
+///
+/// 🚨 **Only the custom fields are listed here, deliberately.** The built-in Site fields are a
+/// closed set the WebUI already knows, so it can label them in the viewer's language; returning
+/// English labels from the API would put untranslatable words in a Japanese form. The API's job is
+/// the half that is unknowable from the code — what this particular NetBox has been given.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct SiteIdFieldChoices {
+    /// 🚨 `false` means the token **may not read** `/api/extras/custom-fields/` — not that this
+    /// NetBox has none. The form offers a type-it-in box in that case, and collapsing the two
+    /// would leave the operator reading "there are no custom fields here" and never finding it.
+    /// This is the same distinction, for the same reason, that [`TestNetboxResult`] draws between
+    /// `reachable` and `authenticated`.
+    custom_fields_readable: bool,
+    custom_fields: Vec<SiteIdCustomField>,
+    /// The built-in Site fields, so the set has exactly one author. The WebUI labels these itself
+    /// (they are a closed set, so the labels are translatable) and renders them without waiting
+    /// for this call; what it takes from here is the guarantee that its list is the whole list.
+    built_ins: Vec<SiteIdBuiltIn>,
+}
+
+/// Fold NetBox's answer into the form's choices. `None` = we were refused the listing.
+fn site_id_choices(defs: Option<Vec<netbox::CustomFieldDef>>) -> SiteIdFieldChoices {
+    let built_ins = netbox::SiteIdField::BUILT_INS
+        .iter()
+        .filter_map(SiteIdBuiltIn::of)
+        .collect();
+    match defs {
+        None => SiteIdFieldChoices {
+            custom_fields_readable: false,
+            custom_fields: Vec::new(),
+            built_ins,
+        },
+        Some(list) => SiteIdFieldChoices {
+            custom_fields_readable: true,
+            custom_fields: list
+                .into_iter()
+                .map(|d| SiteIdCustomField {
+                    value: netbox::SiteIdField::Custom(d.name.clone()).as_stored(),
+                    label: if d.label.trim().is_empty() {
+                        d.name
+                    } else {
+                        d.label
+                    },
+                })
+                .collect(),
+            built_ins,
+        },
+    }
+}
+
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub(crate) struct TestNetboxReq {
     base_url: String,
@@ -465,6 +616,10 @@ pub(crate) struct TestNetboxResult {
     api_version: Option<String>,
     /// The full `netbox-version` (e.g. `4.6.9`), available only once authenticated.
     netbox_version: Option<String>,
+    /// The site-code sources this NetBox offers, or `null` when the token was refused — there is
+    /// nothing to list if we never got in. This rides along with the probe because pressing "test
+    /// connection" is the only moment an *unsaved* server's token exists on the server side.
+    site_id_fields: Option<SiteIdFieldChoices>,
 }
 
 #[utoipa::path(
@@ -496,11 +651,25 @@ async fn test_netbox_connection(
         .probe()
         .await
         .map_err(|e| upstream_error("status", &e))?;
+    // Only asked once the token is known good: a 403 on the definitions listing has two meanings
+    // (no permission for it, or no permission at all), and asking after a refused token would make
+    // "not readable" the answer for a server whose real problem is the token.
+    let site_id_fields = if probe.authenticated {
+        Some(site_id_choices(
+            client
+                .site_custom_fields()
+                .await
+                .map_err(|e| upstream_error("custom fields", &e))?,
+        ))
+    } else {
+        None
+    };
     Ok(Json(TestNetboxResult {
         reachable: probe.api_version.is_some(),
         authenticated: probe.authenticated,
         api_version: probe.api_version,
         netbox_version: probe.netbox_version,
+        site_id_fields,
     }))
 }
 
@@ -511,6 +680,12 @@ pub(crate) struct SyncNetboxResult {
     /// Folders this server owns that NetBox no longer lists (ADR-100 decision 5 — marked, not
     /// deleted).
     missing_folders: usize,
+    /// Sites whose configured Site ID field held nothing, so their folder kept NetBox's bare name.
+    ///
+    /// 🚨 The reason this number is returned at all: picking the wrong field produces **no error
+    /// and no visible change**, so without it "the feature does not work" and "that field is empty
+    /// on every site" look identical. Zero when no field is configured.
+    sites_without_site_id: usize,
 }
 
 #[utoipa::path(
@@ -553,7 +728,58 @@ async fn sync_netbox_server(
         regions: report.regions,
         sites: report.sites,
         missing_folders: report.missing,
+        sites_without_site_id: report.sites_without_site_id,
     }))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/netbox/servers/{id}/site-fields", tag = "netbox",
+    params(("id" = Uuid, Path, description = "The server id")),
+    responses(
+        (status = 200, description = "The site-code sources this NetBox offers. Check `custom_fields_readable` before reading `custom_fields` as \"there are none\" — a token without `extras.view_customfield` gets `false` and an empty list", body = SiteIdFieldChoices),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such server", body = super::error::ErrorBody),
+        (status = 502, description = "The NetBox call failed; the detail is logged, never returned", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn netbox_site_fields(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<SiteIdFieldChoices>> {
+    let server = admin
+        .netbox
+        .get(id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "read netbox server",
+                "failed to read the server",
+            )
+        })?
+        .ok_or_else(|| no_server(id))?;
+
+    // The sealed token, opened here and nowhere else in this handler's frame. This is the whole
+    // reason the route exists: the edit form cannot re-send a token it was never given, so the
+    // only way to re-ask NetBox what fields it has is from the credential store.
+    let token = netbox::resolve_netbox_token(&admin.creds, server.credential_id)
+        .await
+        .ok_or_else(|| {
+            ApiError::bad_gateway(
+                "netbox_credential_unusable",
+                "the stored NetBox token could not be opened",
+            )
+        })?;
+    let client = NetboxClient::new(&server.base_url, &token, server.ca_cert_pem.as_deref())
+        .map_err(|e| upstream_error("client setup", &e))?;
+    let defs = client
+        .site_custom_fields()
+        .await
+        .map_err(|e| upstream_error("custom fields", &e))?;
+    Ok(Json(site_id_choices(defs)))
 }
 
 #[cfg(test)]
@@ -769,5 +995,172 @@ mod tests {
             res.1.to_string().contains("credential_id"),
             "…only its reference"
         );
+    }
+
+    /// Every built-in the parser accepts must reach the wire, or the form cannot offer it.
+    ///
+    /// 🚨 [`SiteIdBuiltIn::of`] is a `filter_map`, so a variant added to
+    /// [`crate::netbox::SiteIdField`] and not to that match is **silently dropped** — the API would
+    /// accept a field the picker never shows. The assertion counts what was mapped against what
+    /// exists, which is the only form of this check that cannot pass by inspecting nothing.
+    #[test]
+    fn every_built_in_field_reaches_the_wire() {
+        let choices = super::site_id_choices(Some(Vec::new()));
+        assert_eq!(
+            choices.built_ins.len(),
+            crate::netbox::SiteIdField::BUILT_INS.len(),
+            "a built-in the parser accepts is missing from SiteIdBuiltIn::of"
+        );
+        assert!(
+            choices.custom_fields_readable,
+            "an empty list is still a list"
+        );
+    }
+
+    /// 🚨 The distinction this pins is the one that makes the feature discoverable at all: a token
+    /// without `extras.view_customfield` cannot list the definitions, and reporting that as "there
+    /// are no custom fields" would leave the operator with an empty picker, no explanation, and no
+    /// reason to look for the type-it-in box. Same split, same reason, as `reachable` /
+    /// `authenticated` one screen earlier.
+    #[test]
+    fn being_refused_the_definitions_is_not_the_same_answer_as_there_being_none() {
+        let refused = super::site_id_choices(None);
+        assert!(!refused.custom_fields_readable);
+        assert!(refused.custom_fields.is_empty());
+        // Built-ins survive a refusal: they are known from the code, so the picker is never empty.
+        assert_eq!(
+            refused.built_ins.len(),
+            crate::netbox::SiteIdField::BUILT_INS.len()
+        );
+
+        let none = super::site_id_choices(Some(Vec::new()));
+        assert!(none.custom_fields_readable);
+        assert!(none.custom_fields.is_empty());
+        assert_ne!(
+            refused.custom_fields_readable, none.custom_fields_readable,
+            "the two must be distinguishable from the response alone"
+        );
+    }
+
+    /// A custom field with no label is offered under its key rather than as a blank row.
+    #[test]
+    fn a_custom_field_is_labelled_by_netbox_or_by_its_own_key() {
+        let def = |name: &str, label: &str| crate::netbox::CustomFieldDef {
+            name: name.to_owned(),
+            label: label.to_owned(),
+            data_type: "string".to_owned(),
+            object_types: vec!["dcim.site".to_owned()],
+            content_types: vec![],
+        };
+        let c = super::site_id_choices(Some(vec![def("site_id", "Site ID"), def("code", "  ")]));
+        let rendered: Vec<_> = c
+            .custom_fields
+            .iter()
+            .map(|f| (f.value.as_str(), f.label.as_str()))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![("cf:site_id", "Site ID"), ("cf:code", "code")],
+            "the stored value carries the cf: prefix; the label is NetBox's, or the key"
+        );
+    }
+
+    /// The prefix source is stored on create, replaced on update, and refused when unreadable.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_site_id_field_is_stored_replaced_and_validated_at_the_edge(pool: sqlx::PgPool) {
+        let st = live_state(pool.clone()).await;
+        let hdr = token(&st, yagra_common::Role::Admin);
+        let body = |field: serde_json::Value| {
+            serde_json::json!({
+                "name": "lab",
+                "base_url": "http://192.168.1.214:8000/",
+                "token": "0123456789abcdef",
+                "sync_interval_secs": 3600,
+                "site_id_field": field
+            })
+        };
+
+        // 🚨 Refused before anything is written. A value that only failed during the next hourly
+        // sync would fail in a log, an hour later, nowhere near the person who typed it.
+        for bad in ["cf:", "cf:site id", "name", "custom_fields.site_id"] {
+            let res = send(
+                &st,
+                "POST",
+                "/api/v1/netbox/servers",
+                &hdr,
+                Some(body(serde_json::json!(bad))),
+            )
+            .await;
+            assert_eq!(res.0, StatusCode::BAD_REQUEST, "{bad} :: {}", res.1);
+        }
+        assert_eq!(
+            crate::pgtest::rows(&pool, "netbox_servers").await,
+            0,
+            "a refused field must not leave a server row behind"
+        );
+
+        let res = send(
+            &st,
+            "POST",
+            "/api/v1/netbox/servers",
+            &hdr,
+            Some(body(serde_json::json!("cf:site_id"))),
+        )
+        .await;
+        assert_eq!(res.0, StatusCode::CREATED, "body: {}", res.1);
+        let stored: Option<String> = sqlx::query_scalar("SELECT site_id_field FROM netbox_servers")
+            .fetch_one(&pool)
+            .await
+            .expect("read back");
+        assert_eq!(stored.as_deref(), Some("cf:site_id"));
+
+        // An update replaces it outright — the form holds this value, so there is no third state.
+        let id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM netbox_servers")
+            .fetch_one(&pool)
+            .await
+            .expect("id");
+        let res = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/netbox/servers/{id}"),
+            &hdr,
+            Some(serde_json::json!({
+                "name": "lab",
+                "base_url": "http://192.168.1.214:8000/",
+                "enabled": true,
+                "sync_interval_secs": 3600,
+                "site_id_field": "facility"
+            })),
+        )
+        .await;
+        assert_eq!(res.0, StatusCode::NO_CONTENT, "body: {}", res.1);
+        let stored: Option<String> = sqlx::query_scalar("SELECT site_id_field FROM netbox_servers")
+            .fetch_one(&pool)
+            .await
+            .expect("read back");
+        assert_eq!(stored.as_deref(), Some("facility"));
+
+        // Omitting it clears it, which is what a full-document PUT means here. Stated as a test
+        // because it is the one behaviour of this field a REST client could be surprised by.
+        let res = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/netbox/servers/{id}"),
+            &hdr,
+            Some(serde_json::json!({
+                "name": "lab",
+                "base_url": "http://192.168.1.214:8000/",
+                "enabled": true,
+                "sync_interval_secs": 3600
+            })),
+        )
+        .await;
+        assert_eq!(res.0, StatusCode::NO_CONTENT, "body: {}", res.1);
+        let stored: Option<String> = sqlx::query_scalar("SELECT site_id_field FROM netbox_servers")
+            .fetch_one(&pool)
+            .await
+            .expect("read back");
+        assert_eq!(stored, None, "an omitted field clears the setting");
     }
 }

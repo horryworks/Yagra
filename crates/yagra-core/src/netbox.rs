@@ -46,6 +46,10 @@
 //!   NetBox" mark is derived by comparing it against `netbox_groups.last_seen_at`, so recording a
 //!   half-finished sync as a success marks the whole tree as deleted. Same shape as ADR-080's rule
 //!   that a failed read must never become an empty one.
+//! - 🚨 **Which NetBox field holds a site code cannot be guessed, so it is a setting.** On the
+//!   first real NetBox this met, the code was in the custom field `site_id` and `facility` — the
+//!   field NetBox provides for exactly that — was empty. See [`SiteIdField`], and note that
+//!   "cannot read the custom-field definitions" is a third answer beside "there are none".
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -108,6 +112,123 @@ pub fn site_group_id(server_id: Uuid, netbox_id: i64) -> Uuid {
         &NETBOX_GROUP_NS,
         format!("{server_id}:site:{netbox_id}").as_bytes(),
     )
+}
+
+/// Which NetBox field supplies the code a Site's folder name is prefixed with (decision 9).
+///
+/// # Why this is a setting and not a constant
+///
+/// 🚨 **Measured on the first real NetBox this integration ever met** (4.6.9, 2026-09-03): the site
+/// code `JPMYJ01` lived in the custom field `site_id`, while `facility` — NetBox's own field for
+/// exactly this — was **empty**. An implementation that read `facility` would have been wrong on
+/// deployment number one. So the source is chosen by whoever knows that NetBox, and "pick a
+/// sensible default field" is not an option this integration has.
+///
+/// # Encoding
+///
+/// One column, `netbox_servers.site_id_field`, and this is its only reader:
+///
+/// | stored | meaning |
+/// |---|---|
+/// | `NULL` | no prefix — **the default**, so an existing deployment does not change |
+/// | `slug` / `facility` / `description` | that built-in Site field |
+/// | `cf:<key>` | `custom_fields[<key>]` |
+///
+/// ⚠️ **Not two columns.** A kind beside a key admits "kind = custom, key = NULL" — a state that
+/// must not exist; one string cannot express it. A NetBox field name never contains `:`, so the
+/// `cf:` prefix cannot collide with a built-in spelling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SiteIdField {
+    Slug,
+    Facility,
+    Description,
+    /// A custom field, by its NetBox `name` — the map key, not the human label.
+    Custom(String),
+}
+
+/// The marker separating a custom field's key from the built-in spellings.
+const CUSTOM_PREFIX: &str = "cf:";
+
+/// Longest custom-field key accepted. NetBox's own limit is 50; the extra room costs nothing, and
+/// the point of a bound is to refuse something pathological rather than to mirror a schema.
+const MAX_FIELD_KEY: usize = 64;
+
+impl SiteIdField {
+    /// Every built-in spelling, so a picker and the parser cannot come to offer different sets.
+    pub const BUILT_INS: [Self; 3] = [Self::Slug, Self::Facility, Self::Description];
+
+    /// Read a stored — or operator-typed — value.
+    ///
+    /// This is the **validator** as much as the parser: the API edge refuses whatever this cannot
+    /// read, so a bad value never reaches a sync. Checking at the edge rather than at sync time is
+    /// decision 8's rule applied again — a value that only fails an hour later fails in a place
+    /// the operator is not looking.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if let Some(key) = raw.strip_prefix(CUSTOM_PREFIX) {
+            let ok = !key.is_empty()
+                && key.len() <= MAX_FIELD_KEY
+                && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            return ok.then(|| Self::Custom(key.to_owned()));
+        }
+        match raw {
+            "slug" => Some(Self::Slug),
+            "facility" => Some(Self::Facility),
+            "description" => Some(Self::Description),
+            _ => None,
+        }
+    }
+
+    /// The stored spelling. Round-trips through [`Self::parse`].
+    #[must_use]
+    pub fn as_stored(&self) -> String {
+        match self {
+            Self::Slug => "slug".to_owned(),
+            Self::Facility => "facility".to_owned(),
+            Self::Description => "description".to_owned(),
+            Self::Custom(k) => format!("{CUSTOM_PREFIX}{k}"),
+        }
+    }
+
+    /// The code this field holds for one Site, or `None` when there is nothing usable there.
+    ///
+    /// 🚨 **A custom field's value is not necessarily a string.** A `select` is, but a
+    /// `multiselect` is an array and an object-typed field is an object; rendering either into a
+    /// folder name would put `[object Object]`-shaped text in the monitoring tree. So the shape is
+    /// checked here *as well as* when the picker is built — the picker limits what an operator can
+    /// **choose**, this limits what NetBox actually **sent**, and only the second is a guarantee.
+    ///
+    /// An empty or whitespace-only value is `None` rather than an empty prefix: the caller counts
+    /// those (see [`SyncReport::sites_without_site_id`]), and a name beginning with a space is not
+    /// a name anyone asked for.
+    #[must_use]
+    pub fn value_of(&self, site: &NetboxSite) -> Option<String> {
+        let raw = match self {
+            Self::Slug => site.slug.clone(),
+            Self::Facility => site.facility.clone(),
+            Self::Description => site.description.clone(),
+            Self::Custom(key) => match site.custom_fields.get(key) {
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+                // null / bool / array / object: nothing a folder name should carry.
+                _ => None,
+            },
+        };
+        raw.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    }
+}
+
+/// The folder name for one Site: the code, one space, then NetBox's own name.
+///
+/// The separator is deliberately **not** configurable. One format was asked for (`JPMYJ01
+/// Matsuyama Home`), and a setting nobody uses is a thing to carry forever.
+#[must_use]
+pub fn site_folder_name(field: Option<&SiteIdField>, site: &NetboxSite) -> String {
+    match field.and_then(|f| f.value_of(site)) {
+        Some(code) => format!("{code} {}", site.name),
+        None => site.name.clone(),
+    }
 }
 
 /// Which NetBox object a `netbox_groups` row mirrors.
@@ -346,6 +467,10 @@ pub struct NetboxRegion {
 }
 
 /// A `dcim.Site`.
+///
+/// The four fields after the geo pair exist only to feed [`SiteIdField`]. They are all
+/// `#[serde(default)]` because an older NetBox — or a caller whose permissions hide a field —
+/// simply omits them, and a folder tree must not fail to sync over a naming preference.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetboxSite {
     pub id: i64,
@@ -356,6 +481,72 @@ pub struct NetboxSite {
     pub latitude: Option<f64>,
     #[serde(default)]
     pub longitude: Option<f64>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// NetBox's own field for a facility code. **Empty on the first deployment this integration
+    /// met**, which is why it is one candidate rather than the answer.
+    #[serde(default)]
+    pub facility: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// 🚨 Present because the listing is fetched **without** `brief=1`. The brief serializer drops
+    /// this map, so a prefix would silently stop appearing while every other check stayed green —
+    /// the same trap `parent` sets on [`NetboxRegion`].
+    #[serde(default)]
+    pub custom_fields: BTreeMap<String, serde_json::Value>,
+}
+
+/// One custom-field **definition**, from `/api/extras/custom-fields/`.
+///
+/// ⚠️ **The listing is fetched with no filter argument, on purpose.** NetBox 4.x narrows these by
+/// `?object_type=dcim.site` and 3.x by `?content_types=…`; passing the wrong one is not an error,
+/// it is silently *no filter at all*. So everything is fetched and narrowed here, where both
+/// spellings can be read. Definition counts are single digits in practice, so the whole list is
+/// cheap — and being cheap is what lets the version question be answered by reading rather than by
+/// guessing which parameter this server wants.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CustomFieldDef {
+    /// The key in a Site's `custom_fields` map.
+    pub name: String,
+    /// The label NetBox shows a human. Can be empty, in which case the name is the label.
+    #[serde(default)]
+    pub label: String,
+    /// What the value deserialises as — `string`, `integer`, `decimal`, … Decides whether this
+    /// field can supply a code at all.
+    #[serde(default)]
+    pub data_type: String,
+    /// 4.x spelling of "which models this applies to" (`["dcim.site"]`).
+    #[serde(default)]
+    pub object_types: Vec<String>,
+    /// 3.x spelling of the same thing.
+    #[serde(default)]
+    pub content_types: Vec<String>,
+}
+
+impl CustomFieldDef {
+    /// The `data_type`s whose value can become a folder-name prefix.
+    ///
+    /// ⚠️ **Only `string` has been seen on real hardware** — the lab defines exactly one custom
+    /// field. The other two come from NetBox's documented set. That is precisely why this is an
+    /// allow-list and not a deny-list: an unseen spelling is simply not offered, so the failure
+    /// mode is "my field is missing from the list" — visible, and a question someone can ask —
+    /// rather than a folder named after a serialised object.
+    const SCALAR_TYPES: [&'static str; 3] = ["string", "integer", "decimal"];
+
+    /// Does this definition apply to `dcim.site`, in either NetBox's spelling?
+    #[must_use]
+    pub fn applies_to_site(&self) -> bool {
+        self.object_types
+            .iter()
+            .chain(self.content_types.iter())
+            .any(|t| t == "dcim.site")
+    }
+
+    /// Can its value be a code?
+    #[must_use]
+    pub fn is_scalar(&self) -> bool {
+        Self::SCALAR_TYPES.contains(&self.data_type.as_str())
+    }
 }
 
 /// NetBox's nested representation of a foreign key — always at least `{id, name}`.
@@ -383,6 +574,24 @@ pub struct ProbeResult {
     pub api_version: Option<String>,
     /// `false` when the endpoint answered as NetBox but refused the token.
     pub authenticated: bool,
+}
+
+/// The path-and-query of a paginator's `next`, ready to be re-joined to the base we validated.
+///
+/// 🚨 NetBox builds `next` from **its own configured host**, which need not be the address we
+/// reached it on (a reverse proxy, a container hostname, a split-horizon name). Following it
+/// verbatim would send the next request — carrying `Authorization: Token …` — to a host
+/// [`validate_base_url`] never saw. So only the path and query survive the trip.
+fn relative_target(target: &str) -> anyhow::Result<String> {
+    if target.starts_with('/') {
+        return Ok(target.to_owned());
+    }
+    let parsed = reqwest::Url::parse(target)
+        .map_err(|_| anyhow::anyhow!("netbox returned an unparseable next page"))?;
+    Ok(match parsed.query() {
+        Some(q) => format!("{}?{}", parsed.path(), q),
+        None => parsed.path().to_owned(),
+    })
 }
 
 impl NetboxClient {
@@ -467,20 +676,7 @@ impl NetboxClient {
             if pages > MAX_PAGES {
                 anyhow::bail!("netbox listing {path} exceeded {MAX_PAGES} pages");
             }
-            // `next` comes back as an absolute URL built from NetBox's own configured host, which
-            // may not be the address we reached it on (a reverse proxy, a container hostname). So
-            // only the path+query is taken from it and re-joined to the base we validated —
-            // otherwise a misconfigured NetBox redirects the sync onto an unvalidated host.
-            let rel = if target.starts_with('/') {
-                target
-            } else {
-                let parsed = reqwest::Url::parse(&target)
-                    .map_err(|_| anyhow::anyhow!("netbox returned an unparseable next page"))?;
-                match parsed.query() {
-                    Some(q) => format!("{}?{}", parsed.path(), q),
-                    None => parsed.path().to_owned(),
-                }
-            };
+            let rel = relative_target(&target)?;
             let page: Page<T> = self
                 .get(&rel)
                 .send()
@@ -505,6 +701,72 @@ impl NetboxClient {
     pub async fn sites(&self) -> anyhow::Result<Vec<NetboxSite>> {
         self.fetch_all("/api/dcim/sites/").await
     }
+
+    /// [`Self::fetch_all`], except that a **refusal is an answer** rather than an error.
+    ///
+    /// A `403` on a listing means "this token may not read this collection"; a `404` means the
+    /// collection is not exposed at all. For an *optional* listing both are information the caller
+    /// wants, not a failure that should abort what it was doing. Every other status still goes
+    /// through `error_for_status`.
+    async fn fetch_all_optional<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> anyhow::Result<Option<Vec<T>>> {
+        let first = self
+            .get(&format!("{path}?limit={PAGE_LIMIT}"))
+            .send()
+            .await?;
+        if matches!(
+            first.status(),
+            reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
+        ) {
+            return Ok(None);
+        }
+        let page: Page<T> = first.error_for_status()?.json().await?;
+        let mut out = page.results;
+        let mut next = page.next;
+        let mut pages = 1u32;
+        while let Some(target) = next {
+            pages += 1;
+            if pages > MAX_PAGES {
+                anyhow::bail!("netbox listing {path} exceeded {MAX_PAGES} pages");
+            }
+            let page: Page<T> = self
+                .get(&relative_target(&target)?)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            out.extend(page.results);
+            next = page.next;
+        }
+        Ok(Some(out))
+    }
+
+    /// The custom-field definitions that apply to `dcim.site` and could supply a site code.
+    ///
+    /// 🚨 **`Ok(None)` and `Ok(Some(vec![]))` mean different things, and collapsing them is the
+    /// defect this signature exists to prevent.** `/api/extras/custom-fields/` needs the
+    /// `extras.view_customfield` object permission, so a perfectly good token can be refused it.
+    /// If both cases came back as an empty list, an operator would read *"this NetBox has no
+    /// custom fields"* and never look for the type-it-in box. `None` = we were not allowed to
+    /// look; `Some(empty)` = we looked, and there are none. **This is the same split, for the same
+    /// reason, as [`ProbeResult`]'s `reachable` / `authenticated`** — the second time in one ADR
+    /// that one status code had to be taken apart before it could be shown to a person.
+    pub async fn site_custom_fields(&self) -> anyhow::Result<Option<Vec<CustomFieldDef>>> {
+        let Some(all) = self
+            .fetch_all_optional::<CustomFieldDef>("/api/extras/custom-fields/")
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            all.into_iter()
+                .filter(|d| d.applies_to_site() && d.is_scalar())
+                .collect(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -521,6 +783,9 @@ pub struct NetboxServer {
     pub ca_cert_pem: Option<String>,
     pub enabled: bool,
     pub sync_interval_secs: i32,
+    /// Which NetBox field prefixes a Site's folder name, encoded as [`SiteIdField`] stores it.
+    /// `None` — the default — means no prefix.
+    pub site_id_field: Option<String>,
     pub api_version: Option<String>,
     pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_sync_ok: Option<bool>,
@@ -532,8 +797,8 @@ impl NetboxServer {
     /// different sets — the `alert_history` shape, where a dropped column compiles and then fails
     /// at `try_get` in production.
     const COLUMNS: &'static str = "id, name, base_url, credential_id, ca_cert_pem, enabled, \
-                                   sync_interval_secs, api_version, last_sync_at, last_sync_ok, \
-                                   last_sync_error";
+                                   sync_interval_secs, site_id_field, api_version, last_sync_at, \
+                                   last_sync_ok, last_sync_error";
 
     fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
@@ -544,6 +809,7 @@ impl NetboxServer {
             ca_cert_pem: row.try_get("ca_cert_pem")?,
             enabled: row.try_get("enabled")?,
             sync_interval_secs: row.try_get("sync_interval_secs")?,
+            site_id_field: row.try_get("site_id_field")?,
             api_version: row.try_get("api_version")?,
             last_sync_at: row.try_get("last_sync_at")?,
             last_sync_ok: row.try_get("last_sync_ok")?,
@@ -570,6 +836,16 @@ impl NetboxServer {
         };
         Duration::from_secs(secs).max(MIN_SYNC_INTERVAL)
     }
+
+    /// The configured prefix source, when the stored value is one this binary understands.
+    ///
+    /// A value it cannot read degrades to **no prefix** rather than failing the sync. The value is
+    /// validated at the API edge, so anything unreadable arrived from a newer version or a hand
+    /// edit — and refusing to mirror the whole tree over a naming preference is the wrong trade.
+    #[must_use]
+    pub fn site_id(&self) -> Option<SiteIdField> {
+        self.site_id_field.as_deref().and_then(SiteIdField::parse)
+    }
 }
 
 /// `netbox_servers` + `netbox_groups`, and the `node_groups` upsert a sync performs.
@@ -593,6 +869,10 @@ pub struct ServerUpdate<'a> {
     pub ca_cert_pem: Option<Option<&'a str>>,
     pub enabled: bool,
     pub sync_interval_secs: i32,
+    /// Two-state, unlike [`Self::ca_cert_pem`]: the form holds this value, so it round-trips and
+    /// `None` can simply mean "no prefix". `ca_cert_pem` needs a third state only because the
+    /// browser never holds the certificate it is preserving.
+    pub site_id_field: Option<&'a str>,
 }
 
 /// What one sync did, for the log line and the API response.
@@ -603,6 +883,16 @@ pub struct SyncReport {
     /// Folders whose `netbox_groups` row was not refreshed by this run — i.e. the object is gone
     /// from NetBox. **Counted, never deleted** (decision 5).
     pub missing: usize,
+    /// Sites whose configured [`SiteIdField`] held nothing usable, so the folder kept NetBox's
+    /// bare name. **Zero when no field is configured** — nothing was asked for, so nothing is
+    /// missing.
+    ///
+    /// 🚨 This exists because choosing the wrong field is otherwise indistinguishable from the
+    /// feature not working: every name simply stays as it was, and no error is raised anywhere.
+    /// The count is what turns "nothing happened" into "2 of 2 sites have no Site ID" — a sentence
+    /// an operator can act on. A feature that ships inert while every signal reads success is this
+    /// repository's most repeated failure shape.
+    pub sites_without_site_id: usize,
     /// The database's clock **at the moment the run began**, before a single row was written.
     ///
     /// 🚨 This has to be the *start* and not the finish, and getting it wrong is not subtle — it
@@ -656,12 +946,13 @@ impl NetboxRepo {
         credential_id: Uuid,
         ca_cert_pem: Option<&str>,
         sync_interval_secs: i32,
+        site_id_field: Option<&str>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO netbox_servers \
-             (id, name, base_url, credential_id, ca_cert_pem, sync_interval_secs) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             (id, name, base_url, credential_id, ca_cert_pem, sync_interval_secs, site_id_field) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(id)
         .bind(name)
@@ -669,6 +960,7 @@ impl NetboxRepo {
         .bind(credential_id)
         .bind(ca_cert_pem)
         .bind(sync_interval_secs)
+        .bind(site_id_field)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -687,11 +979,12 @@ impl NetboxRepo {
             ca_cert_pem,
             enabled,
             sync_interval_secs,
+            site_id_field,
         } = u;
         let res = sqlx::query(
             "UPDATE netbox_servers SET name = $2, base_url = $3, credential_id = $4, \
                     ca_cert_pem = CASE WHEN $5 THEN $6 ELSE ca_cert_pem END, \
-                    enabled = $7, sync_interval_secs = $8 \
+                    enabled = $7, sync_interval_secs = $8, site_id_field = $9 \
              WHERE id = $1",
         )
         .bind(id)
@@ -702,6 +995,7 @@ impl NetboxRepo {
         .bind(ca_cert_pem.flatten())
         .bind(enabled)
         .bind(sync_interval_secs)
+        .bind(site_id_field)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -882,10 +1176,11 @@ pub async fn sync_once(
     repo: &NetboxRepo,
     client: &NetboxClient,
     server_id: Uuid,
+    site_id: Option<&SiteIdField>,
 ) -> anyhow::Result<SyncReport> {
     let regions = client.regions().await?;
     let sites = client.sites().await?;
-    apply(repo, server_id, &regions, &sites).await
+    apply(repo, server_id, &regions, &sites, site_id).await
 }
 
 /// Write a fetched region tree and site list into `node_groups`.
@@ -903,6 +1198,7 @@ pub async fn apply(
     server_id: Uuid,
     regions: &[NetboxRegion],
     sites: &[NetboxSite],
+    site_id: Option<&SiteIdField>,
 ) -> anyhow::Result<SyncReport> {
     // 🚨 Before the first write. See `SyncReport::started_at` for what goes wrong otherwise.
     let started_at = repo.db_now().await?;
@@ -951,18 +1247,32 @@ pub async fn apply(
         .await?;
     }
 
+    // The name each Site's folder gets, computed once. It is needed twice — to order siblings and
+    // to write the row — and computing it in both places is how the order and the name would
+    // eventually come to disagree.
+    let site_names: Vec<String> = sites.iter().map(|s| site_folder_name(site_id, s)).collect();
+    // Counted from the same values the names were built from, rather than re-derived afterwards.
+    let sites_without_site_id = match site_id {
+        Some(f) => sites.iter().filter(|s| f.value_of(s).is_none()).count(),
+        None => 0,
+    };
+
+    // Siblings are ordered by the name that will actually be **displayed**, prefix included: once
+    // a code means something, code order is the order a person is looking for. `sort_order` is
+    // Yagra's own column (decision 2), so deciding it from the rendered name is not an ownership
+    // violation.
     let mut site_order: BTreeMap<Option<i64>, Vec<(String, i64)>> = BTreeMap::new();
-    for s in sites {
+    for (s, name) in sites.iter().zip(&site_names) {
         site_order
             .entry(s.region.as_ref().map(|r| r.id))
             .or_default()
-            .push((s.name.clone(), s.id));
+            .push((name.clone(), s.id));
     }
     for v in site_order.values_mut() {
         v.sort();
     }
 
-    for s in sites {
+    for (s, name) in sites.iter().zip(&site_names) {
         let region_netbox = s.region.as_ref().map(|r| r.id);
         let parent = region_netbox
             .filter(|r| known.contains(r))
@@ -971,7 +1281,7 @@ pub async fn apply(
             server_id,
             ObjectKind::Site,
             s.id,
-            &s.name,
+            name,
             parent,
             s.latitude,
             s.longitude,
@@ -987,6 +1297,7 @@ pub async fn apply(
         regions: regions.len(),
         sites: sites.len(),
         missing: 0,
+        sites_without_site_id,
         started_at,
     })
 }
@@ -1009,7 +1320,7 @@ pub async fn sync_server(
         if !probe.authenticated {
             anyhow::bail!("NetBox refused the API token");
         }
-        let report = sync_once(repo, &client, server.id).await?;
+        let report = sync_once(repo, &client, server.id, server.site_id().as_ref()).await?;
         Ok::<_, anyhow::Error>((report, probe.netbox_version))
     }
     .await;
@@ -1026,6 +1337,7 @@ pub async fn sync_server(
                 regions = report.regions,
                 sites = report.sites,
                 missing = report.missing,
+                without_site_id = report.sites_without_site_id,
                 "netbox sync completed"
             );
             Ok(report)
@@ -1198,7 +1510,32 @@ mod tests {
             region: region.map(|id| NestedRef { id }),
             latitude: geo.map(|g| g.0),
             longitude: geo.map(|g| g.1),
+            slug: Some(name.to_lowercase().replace(' ', "-")),
+            // Empty, exactly as the lab's two sites are: NetBox's own field for a facility code is
+            // the one place the code was NOT. That is why the source is a setting (decision 9).
+            facility: Some(String::new()),
+            description: Some(String::new()),
+            custom_fields: BTreeMap::new(),
         }
+    }
+
+    /// The same site with one custom field set, which is where the lab keeps its site code.
+    fn with_cf(mut s: NetboxSite, key: &str, value: serde_json::Value) -> NetboxSite {
+        s.custom_fields.insert(key.to_owned(), value);
+        s
+    }
+
+    /// The lab's real payload: `site_id` carries `JPMYJ01` / `JPYOK01`.
+    ///
+    /// ⚠️ Taken from the live NetBox rather than invented. A fixture built from what the
+    /// implementation expects cannot demonstrate that the implementation matched reality — and
+    /// this integration has already been wrong once about a field's shape.
+    fn lab_sites_with_codes() -> Vec<NetboxSite> {
+        lab_sites()
+            .into_iter()
+            .zip(["JPMYJ01", "JPYOK01"])
+            .map(|(s, code)| with_cf(s, "site_id", serde_json::Value::String(code.into())))
+            .collect()
     }
 
     fn lab_regions() -> Vec<NetboxRegion> {
@@ -1221,7 +1558,7 @@ mod tests {
         let cred = crate::pgtest::credential(pool, "netbox-token", KIND_NETBOX_TOKEN).await;
         let repo = NetboxRepo::new(pool.clone());
         let id = repo
-            .create("lab", "http://192.168.1.214:8000", cred, None, 3600)
+            .create("lab", "http://192.168.1.214:8000", cred, None, 3600, None)
             .await
             .expect("create server");
         (repo, id)
@@ -1254,7 +1591,7 @@ mod tests {
     ) {
         let (repo, server) = lab_server(&pool).await;
 
-        let report = apply(&repo, server, &lab_regions(), &lab_sites())
+        let report = apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("first sync");
         assert_eq!((report.regions, report.sites), (3, 2));
@@ -1280,7 +1617,7 @@ mod tests {
 
         // Idempotence — the property every derived id exists for. A second run must not duplicate
         // the tree, and `create` is not called again.
-        apply(&repo, server, &lab_regions(), &lab_sites())
+        apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("second sync");
         assert_eq!(
@@ -1296,7 +1633,7 @@ mod tests {
     async fn a_sync_owns_the_name_and_the_operator_owns_the_pool(pool: sqlx::PgPool) {
         // ADR-100 decision 2, both directions, which is the whole design in one test.
         let (repo, server) = lab_server(&pool).await;
-        apply(&repo, server, &lab_regions(), &lab_sites())
+        apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("sync");
 
@@ -1308,7 +1645,7 @@ mod tests {
             .await
             .expect("operator edit");
 
-        apply(&repo, server, &lab_regions(), &lab_sites())
+        apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("re-sync");
 
@@ -1329,7 +1666,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn an_object_that_disappears_from_netbox_is_marked_and_never_deleted(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
-        let first = apply(&repo, server, &lab_regions(), &lab_sites())
+        let first = apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("sync");
         repo.record_success(server, first.started_at, Some("4.6.9"))
@@ -1346,7 +1683,7 @@ mod tests {
 
         // Yokohama is decommissioned in NetBox. Every other object is still returned.
         let sites: Vec<NetboxSite> = lab_sites().into_iter().filter(|s| s.id != 7).collect();
-        let second = apply(&repo, server, &lab_regions(), &sites)
+        let second = apply(&repo, server, &lab_regions(), &sites, None)
             .await
             .expect("re-sync");
         repo.record_success(server, second.started_at, Some("4.6.9"))
@@ -1386,7 +1723,7 @@ mod tests {
         // failed sync marks the entire tree as deleted, because nothing was seen this run. Same
         // shape as ADR-080's "a failed read must never become an empty read".
         let (repo, server) = lab_server(&pool).await;
-        let report = apply(&repo, server, &lab_regions(), &lab_sites())
+        let report = apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("sync");
         repo.record_success(server, report.started_at, Some("4.6.9"))
@@ -1433,7 +1770,7 @@ mod tests {
         // object, so the site is re-homed instead.
         let (repo, server) = lab_server(&pool).await;
         let sites = vec![site(9, "Orphan", Some(999), None)];
-        apply(&repo, server, &lab_regions(), &sites)
+        apply(&repo, server, &lab_regions(), &sites, None)
             .await
             .expect("sync must not fail on an invisible parent");
         assert_eq!(
@@ -1446,7 +1783,7 @@ mod tests {
 
         // The accept side: a site whose region *is* visible must still be parented, or "put
         // everything at the root" would pass the assertion above.
-        apply(&repo, server, &lab_regions(), &lab_sites())
+        apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("sync");
         assert_eq!(
@@ -1464,7 +1801,7 @@ mod tests {
         // Same reasoning as decision 5: disconnecting an integration must not restructure the
         // monitoring tree. The folders simply become hand-maintained.
         let (repo, server) = lab_server(&pool).await;
-        apply(&repo, server, &lab_regions(), &lab_sites())
+        apply(&repo, server, &lab_regions(), &lab_sites(), None)
             .await
             .expect("sync");
         assert!(repo.delete(server).await.expect("delete"));
@@ -1482,7 +1819,14 @@ mod tests {
         let cred = crate::pgtest::credential(&pool, "netbox-token", KIND_NETBOX_TOKEN).await;
         let repo = NetboxRepo::new(pool.clone());
         let id = repo
-            .create("lab", "http://192.168.1.214:8000", cred, Some("PEM"), 900)
+            .create(
+                "lab",
+                "http://192.168.1.214:8000",
+                cred,
+                Some("PEM"),
+                900,
+                Some("cf:site_id"),
+            )
             .await
             .expect("create");
 
@@ -1491,6 +1835,12 @@ mod tests {
         assert_eq!(got.ca_cert_pem.as_deref(), Some("PEM"));
         assert_eq!(got.sync_interval_secs, 900);
         assert!(got.enabled, "a new server starts enabled");
+        assert_eq!(got.site_id_field.as_deref(), Some("cf:site_id"));
+        assert_eq!(
+            got.site_id(),
+            Some(SiteIdField::Custom("site_id".to_owned())),
+            "the stored spelling parses back to the field it named"
+        );
         assert_eq!(repo.list().await.expect("list").len(), 1);
 
         let edit = |ca| ServerUpdate {
@@ -1500,6 +1850,7 @@ mod tests {
             ca_cert_pem: ca,
             enabled: false,
             sync_interval_secs: 1800,
+            site_id_field: Some("facility"),
         };
 
         // Outer `None` leaves the CA alone — otherwise every settings save would silently drop a
@@ -1509,6 +1860,8 @@ mod tests {
         assert_eq!(got.name, "lab2");
         assert!(!got.enabled);
         assert_eq!(got.ca_cert_pem.as_deref(), Some("PEM"), "untouched");
+        // Two-state, unlike the CA: an edit replaces it outright, because the form holds it.
+        assert_eq!(got.site_id_field.as_deref(), Some("facility"));
 
         // `Some(None)` is the only way to remove one without deleting the server.
         repo.update(
@@ -1652,6 +2005,7 @@ mod tests {
             ca_cert_pem: None,
             enabled: true,
             sync_interval_secs: 3600,
+            site_id_field: None,
             api_version: None,
             last_sync_at: None,
             last_sync_ok: None,
@@ -1737,5 +2091,303 @@ mod tests {
         ] {
             assert!(stmt.contains(owned), "{owned} must be synced");
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // decision 9 — the site-code prefix
+    // ---------------------------------------------------------------------------------------
+
+    #[test]
+    fn the_stored_spelling_round_trips_and_refuses_what_it_cannot_read() {
+        for f in SiteIdField::BUILT_INS {
+            let stored = f.as_stored();
+            assert_eq!(
+                SiteIdField::parse(&stored),
+                Some(f.clone()),
+                "{stored} must survive the trip through the column"
+            );
+        }
+        let custom = SiteIdField::Custom("site_id".to_owned());
+        assert_eq!(custom.as_stored(), "cf:site_id");
+        assert_eq!(SiteIdField::parse("cf:site_id"), Some(custom));
+        // Surrounding whitespace is an operator's paste, not a different field.
+        assert_eq!(SiteIdField::parse("  slug\n"), Some(SiteIdField::Slug));
+
+        // Refused, and this is the API edge's 400: a value that cannot be read must never reach a
+        // sync, where it would fail an hour later in a log.
+        for bad in [
+            "",
+            "cf:",
+            "name",
+            "Slug",
+            "cf:site id",
+            "cf:site-id",
+            "cf:../etc/passwd",
+            "custom_fields.site_id",
+        ] {
+            assert_eq!(SiteIdField::parse(bad), None, "{bad:?} must be refused");
+        }
+        // Bounded, so a pathological key cannot be stored.
+        assert!(SiteIdField::parse(&format!("cf:{}", "a".repeat(MAX_FIELD_KEY))).is_some());
+        assert!(SiteIdField::parse(&format!("cf:{}", "a".repeat(MAX_FIELD_KEY + 1))).is_none());
+    }
+
+    #[test]
+    fn a_custom_fields_value_is_only_used_when_it_is_a_scalar() {
+        let base = site(6, "Matsuyama Home", Some(6), None);
+        let cf = SiteIdField::Custom("site_id".to_owned());
+
+        // The lab's actual shape.
+        let s = with_cf(base.clone(), "site_id", serde_json::json!("JPMYJ01"));
+        assert_eq!(cf.value_of(&s).as_deref(), Some("JPMYJ01"));
+        // A number is a usable code; NetBox returns integer custom fields unquoted.
+        let s = with_cf(base.clone(), "site_id", serde_json::json!(17));
+        assert_eq!(cf.value_of(&s).as_deref(), Some("17"));
+
+        // 🚨 The shapes that must NOT become part of a folder name. Each of these is a real NetBox
+        // custom-field type (boolean, multiselect, object), and rendering any of them would put
+        // serialised JSON in the monitoring tree.
+        for junk in [
+            serde_json::json!(true),
+            serde_json::json!(null),
+            serde_json::json!(["a", "b"]),
+            serde_json::json!({"id": 1}),
+            serde_json::json!(""),
+            serde_json::json!("   "),
+        ] {
+            let s = with_cf(base.clone(), "site_id", junk.clone());
+            assert_eq!(cf.value_of(&s), None, "{junk} must not become a prefix");
+        }
+        // A key NetBox did not send at all.
+        assert_eq!(cf.value_of(&base), None);
+
+        // Whitespace around a real value is trimmed rather than carried into the name.
+        let s = with_cf(base, "site_id", serde_json::json!("  JPMYJ01 "));
+        assert_eq!(cf.value_of(&s).as_deref(), Some("JPMYJ01"));
+    }
+
+    #[test]
+    fn the_folder_name_is_the_code_a_space_and_the_netbox_name() {
+        let plain = site(6, "Matsuyama Home", Some(6), None);
+        let coded = with_cf(plain.clone(), "site_id", serde_json::json!("JPMYJ01"));
+        let cf = SiteIdField::Custom("site_id".to_owned());
+
+        assert_eq!(
+            site_folder_name(Some(&cf), &coded),
+            "JPMYJ01 Matsuyama Home",
+            "the exact format that was asked for"
+        );
+        // No field configured, and a configured field with nothing in it, are the same output —
+        // the difference between them is the count, not the name.
+        assert_eq!(site_folder_name(None, &coded), "Matsuyama Home");
+        assert_eq!(site_folder_name(Some(&cf), &plain), "Matsuyama Home");
+        // `facility` is the field NetBox provides for this and the lab leaves empty, which is the
+        // whole reason the source is a setting.
+        assert_eq!(
+            site_folder_name(Some(&SiteIdField::Facility), &coded),
+            "Matsuyama Home"
+        );
+        assert_eq!(
+            site_folder_name(Some(&SiteIdField::Slug), &coded),
+            "matsuyama-home Matsuyama Home"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_site_code_prefixes_the_site_folders_and_leaves_the_regions_alone(
+        pool: sqlx::PgPool,
+    ) {
+        let (repo, server) = lab_server(&pool).await;
+        let cf = SiteIdField::Custom("site_id".to_owned());
+
+        let report = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites_with_codes(),
+            Some(&cf),
+        )
+        .await
+        .expect("sync");
+        assert_eq!(report.sites_without_site_id, 0);
+
+        // The two Sites carry their code; the three Regions do not, because decision 9 is
+        // Site-only (the lab's regions have no custom fields at all).
+        assert_eq!(
+            folder(&pool, site_group_id(server, 6)).await.expect("6").0,
+            "JPMYJ01 Matsuyama Home"
+        );
+        assert_eq!(
+            folder(&pool, site_group_id(server, 7)).await.expect("7").0,
+            "JPYOK01 Yokohama Home"
+        );
+        for (id, name) in [(2, "Japan"), (6, "Ehime"), (7, "Kanagawa")] {
+            assert_eq!(
+                folder(&pool, region_group_id(server, id))
+                    .await
+                    .expect(name)
+                    .0,
+                name,
+                "a region's name is untouched"
+            );
+        }
+        assert_eq!(
+            crate::pgtest::rows(&pool, "node_groups").await,
+            5,
+            "no new folders"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn choosing_an_empty_field_keeps_the_bare_name_and_says_how_many(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+
+        // 🚨 The failure this test is about: `facility` is empty on every lab site, so choosing it
+        // changes nothing at all. Without the count, "I picked the wrong field" and "this feature
+        // does not work" produce identical output — no error, no diff, nothing.
+        let report = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites_with_codes(),
+            Some(&SiteIdField::Facility),
+        )
+        .await
+        .expect("sync");
+        assert_eq!(report.sites, 2);
+        assert_eq!(
+            report.sites_without_site_id, 2,
+            "both sites have an empty facility, and the operator has to be able to see that"
+        );
+        assert_eq!(
+            folder(&pool, site_group_id(server, 6)).await.expect("6").0,
+            "Matsuyama Home"
+        );
+
+        // Nothing configured is not the same question: nothing was asked for, so nothing is
+        // missing. A non-zero count here would cry wolf on every deployment that never wanted a
+        // prefix — which is all of them by default.
+        let report = apply(&repo, server, &lab_regions(), &lab_sites_with_codes(), None)
+            .await
+            .expect("sync");
+        assert_eq!(report.sites_without_site_id, 0);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn changing_the_field_renames_the_folders_and_keeps_the_operators_pool(
+        pool: sqlx::PgPool,
+    ) {
+        let (repo, server) = lab_server(&pool).await;
+        let sites = lab_sites_with_codes();
+        let matsuyama = site_group_id(server, 6);
+        let cf = SiteIdField::Custom("site_id".to_owned());
+
+        apply(&repo, server, &lab_regions(), &sites, None)
+            .await
+            .expect("sync 1");
+        assert_eq!(
+            folder(&pool, matsuyama).await.expect("6").0,
+            "Matsuyama Home"
+        );
+
+        // The operator sets a pool on the folder, which is theirs (decision 2).
+        sqlx::query("UPDATE node_groups SET pool = 'site-a' WHERE id = $1")
+            .bind(matsuyama)
+            .execute(&pool)
+            .await
+            .expect("set pool");
+
+        // Turning the setting on renames in place: `name = EXCLUDED.name` every cycle, so there is
+        // no migration of existing rows to perform — and none is wanted.
+        apply(&repo, server, &lab_regions(), &sites, Some(&cf))
+            .await
+            .expect("sync 2");
+        let (name, _, _, _, pool_col) = folder(&pool, matsuyama).await.expect("6");
+        assert_eq!(name, "JPMYJ01 Matsuyama Home");
+        assert_eq!(
+            pool_col.as_deref(),
+            Some("site-a"),
+            "renaming a folder must not touch the column the operator owns"
+        );
+
+        // And off again, which is what makes the setting reversible without a data fix.
+        apply(&repo, server, &lab_regions(), &sites, None)
+            .await
+            .expect("sync 3");
+        assert_eq!(
+            folder(&pool, matsuyama).await.expect("6").0,
+            "Matsuyama Home"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 5);
+    }
+
+    #[test]
+    fn a_custom_field_definition_is_narrowed_on_both_netbox_spellings() {
+        let def = |data_type: &str, four: bool, three: bool| CustomFieldDef {
+            name: "site_id".to_owned(),
+            label: "Site ID".to_owned(),
+            data_type: data_type.to_owned(),
+            object_types: if four {
+                vec!["dcim.site".to_owned()]
+            } else {
+                vec![]
+            },
+            content_types: if three {
+                vec!["dcim.site".to_owned()]
+            } else {
+                vec![]
+            },
+        };
+
+        // 4.x says `object_types`, 3.x says `content_types`. Both must be accepted, because the
+        // listing is fetched unfiltered precisely so this decision is made here.
+        assert!(def("string", true, false).applies_to_site());
+        assert!(def("string", false, true).applies_to_site());
+        assert!(!def("string", false, false).applies_to_site());
+
+        // ⚠️ Allow-list, not deny-list: only shapes that can become a code are offered. An unknown
+        // spelling is left out, so the visible failure is "my field is missing from the list"
+        // rather than a folder named after a serialised object.
+        assert!(def("string", true, false).is_scalar());
+        assert!(def("integer", true, false).is_scalar());
+        assert!(def("decimal", true, false).is_scalar());
+        for junk in ["boolean", "object", "array", "json", "datetime", ""] {
+            assert!(!def(junk, true, false).is_scalar(), "{junk} is not a code");
+        }
+    }
+
+    #[test]
+    fn the_site_payload_deserialises_every_field_a_prefix_can_come_from() {
+        // The lab's real response, trimmed to the fields this module reads. Verbatim rather than
+        // hand-shaped: this integration has already been wrong once about a NetBox field's form.
+        let body = r#"{"count":1,"next":null,"results":[
+            {"id":6,"name":"Matsuyama Home","slug":"matsuyama-home",
+             "region":{"id":6,"name":"Ehime","slug":"ehime","_depth":1},
+             "facility":"","description":"",
+             "latitude":33.850422,"longitude":132.775909,
+             "custom_fields":{"site_id":"JPMYJ01"}}]}"#;
+        let page: Page<NetboxSite> = serde_json::from_str(body).expect("parse sites");
+        let s = &page.results[0];
+        assert_eq!(s.slug.as_deref(), Some("matsuyama-home"));
+        assert_eq!(s.facility.as_deref(), Some(""), "empty, not absent");
+        assert_eq!(
+            SiteIdField::Custom("site_id".to_owned())
+                .value_of(s)
+                .as_deref(),
+            Some("JPMYJ01")
+        );
+
+        // An older NetBox, or a caller whose permissions hide these, simply omits them — and a
+        // folder tree must not fail to sync over a naming preference.
+        let bare = r#"{"count":1,"next":null,"results":[{"id":9,"name":"No Region"}]}"#;
+        let page: Page<NetboxSite> = serde_json::from_str(bare).expect("parse bare site");
+        assert!(page.results[0].custom_fields.is_empty());
+        assert_eq!(
+            site_folder_name(Some(&SiteIdField::Slug), &page.results[0]),
+            "No Region"
+        );
     }
 }

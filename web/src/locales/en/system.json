@@ -634,8 +634,20 @@
       "tokenKeepHint": "Leave empty to keep the stored token.",
       "caCert": "CA certificate (optional)",
       "caCertHint": "Paste the PEM certificate of the private CA that signed this NetBox. Only this connection trusts it. Never paste a private key.",
+      "siteIdField": "Site ID field",
+      "siteIdFieldHint": "Which NetBox field holds your site code. It is put in front of the Site's folder name, e.g. “JPMYJ01 Matsuyama Home”. Custom fields defined in this NetBox are listed here.",
+      "siteIdFieldKeyHint": "The custom field's name in NetBox — its key, not its label. Letters, digits and underscores.",
+      "siteIdFieldKeyInvalid": "A custom field name can only contain letters, digits and underscores.",
+      "siteIdFieldUnreadable": "This token cannot read this NetBox's custom field definitions, so they are not listed. Choose “Other” and type the field's name to use one.",
       "interval": "Sync every (seconds)",
       "test": "Test connection"
+    },
+    "siteIdField": {
+      "none": "Do not add a Site ID",
+      "slug": "Slug",
+      "facility": "Facility",
+      "description": "Description",
+      "other": "Other (type the field name)…"
     },
     "test": {
       "unreachable": "Nothing at that address answered as a NetBox API. Check the URL and the port.",
@@ -653,7 +665,11 @@
       "ok": "Last sync {{at}}",
       "missing_one": "{{count}} folder no longer in NetBox",
       "missing_other": "{{count}} folders no longer in NetBox",
-      "failed": "Last sync failed"
+      "failed": "Last sync failed",
+      "siteId": {
+        "none": "No Site ID on any of the {{sites}} sites — check the Site ID field",
+        "partial": "{{without}} of {{sites}} sites have no Site ID"
+      }
     },
     "delete": {
       "title": "Remove NetBox deployment",

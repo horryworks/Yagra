@@ -103,6 +103,13 @@
   font-size: calc(var(--font-size-base) * 0.8);
 }
 
+/* A hint the operator has to act on rather than one that merely explains — "your token cannot
+   read the custom field definitions" is the difference between an empty picker and a broken
+   feature, so it does not read as tertiary text. */
+.netbox-hint-warn {
+  color: var(--status-warning);
+}
+
 .netbox-probe {
   margin: 0;
   font-size: calc(var(--font-size-base) * 0.9);

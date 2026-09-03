@@ -828,6 +828,21 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
+    (
+        "GET",
+        "/api/v1/netbox/servers/:id/site-fields",
+        ADMIN_CFG,
+        // No tool, and the reason is falsifiable: this returns NetBox's own schema, which Yagra
+        // stores nowhere. It exists to fill one picker on the settings form, and the choice it
+        // informs — `site_id_field` — is already returned by `get_config(kind=netbox_servers)`.
+        // A tool here would let a model enumerate a third party's custom fields and learn nothing
+        // about the fleet.
+        Exempt(
+            "a live read of NetBox's own schema, held nowhere in Yagra; it fills one picker on \
+             the settings form, and the choice it informs is returned by \
+             get_config(kind=netbox_servers)",
+        ),
+    ),
     ("POST", "/api/v1/netbox/test", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",

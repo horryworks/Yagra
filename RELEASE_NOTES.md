@@ -27,6 +27,17 @@
   connection trusts it, and certificate verification is never disabled. Verified against NetBox
   4.6; 3.x is untested. `GET /api/v1/netbox/servers` is also readable over MCP as
   `get_config(kind=netbox_servers)`, and the API token appears in neither.
+- **A Site's folder can carry your own site code.** Set "Site ID field" on a NetBox deployment and
+  each Site's folder is named `JPMYJ01 Matsuyama Home` instead of `Matsuyama Home`. **Which field
+  holds the code is chosen rather than assumed**, because it has to be: on the first NetBox this
+  was tried against, the code was in a custom field and `facility` — NetBox's own field for a
+  facility code — was empty. The picker lists the custom fields that NetBox actually defines,
+  alongside `slug`, `facility` and `description`; a token that may not read the custom-field
+  definitions is **told so** and offered a box to type the field's name into, rather than shown an
+  empty list. Regions are not prefixed. A Site whose chosen field is empty keeps its plain name and
+  is counted in the sync result, so choosing the wrong field says `2 of 2 sites have no Site ID`
+  rather than silently doing nothing. Off by default, and changing it renames the folders on the
+  next sync — the poller pool set on a folder is still never touched.
 
 ### Improvements
 

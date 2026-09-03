@@ -52,6 +52,7 @@ import {
   METRIC_DIMENSIONS,
   NODE_KINDS,
   UPGRADE_PROGRESS_COMMANDS,
+  SITE_ID_BUILT_INS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -805,6 +806,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // had strings, so an org with `inventory` enabled showed the operator the raw key. The cadence
     // dialog's checkboxes are a deliberate subset (`SELECTABLE_MERAKI_TIERS`); the *labels* are not.
     expectKeys('meraki tier', { en: enSystem, ja: jaSystem }, 'meraki.tier.', MERAKI_TIERS);
+  });
+
+  it('every built-in Site ID field has a label (system:netbox.siteIdField.*)', () => {
+    // The NetBox form renders `t(`netbox.siteIdField.${v}`)` for each built-in. A fourth built-in
+    // added in Rust would reach both locales missing — parity passes, and the picker offers a row
+    // spelling out its own key to an operator who has to guess what it means.
+    expectKeys(
+      'site id field',
+      { en: enSystem, ja: jaSystem },
+      'netbox.siteIdField.',
+      SITE_ID_BUILT_INS,
+    );
   });
 
   it('every neighbor protocol and capability has strings (nodes:neighbors.*)', () => {

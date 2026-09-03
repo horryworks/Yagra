@@ -75,6 +75,7 @@ import type {
   MetricRange,
   MetricReading,
   NetboxServer,
+  NetboxSiteIdFields,
   NetboxSyncResult,
   NetboxTestResult,
   NodeMetricEntry,
@@ -961,6 +962,7 @@ export const api = {
     token: string;
     ca_cert_pem?: string | null;
     sync_interval_secs?: number;
+    site_id_field?: string | null;
   }): Promise<{ id: string }> => apiPost('/api/v1/netbox/servers', { body }),
 
   /** Update one. `token` omitted keeps the sealed one; `ca_cert_pem` omitted keeps the stored CA
@@ -975,6 +977,8 @@ export const api = {
       ca_cert_pem?: string | null;
       enabled: boolean;
       sync_interval_secs?: number;
+      // ⚠️ Two-state, and this is a full-document PUT: omit it and the setting is cleared.
+      site_id_field?: string | null;
     },
   ): Promise<void> => apiPut('/api/v1/netbox/servers/{id}', { path: { id }, body }),
 
@@ -993,6 +997,14 @@ export const api = {
   /** Sync one server now, rather than waiting for its cadence. */
   syncNetboxServer: (id: string): Promise<NetboxSyncResult> =>
     apiPost('/api/v1/netbox/servers/{id}/sync', { path: { id } }),
+
+  /** The site-code sources a **saved** server's NetBox offers.
+   *
+   *  Separate from `testNetboxConnection` — which answers the same question — because the two
+   *  moments have different inputs: the add form holds a token, the edit form never does (it is
+   *  sealed and never returned), so only this route can ask on its behalf. */
+  netboxSiteFields: (id: string): Promise<NetboxSiteIdFields> =>
+    apiGet('/api/v1/netbox/servers/{id}/site-fields', { path: { id } }),
 
   /** One node's live status: rolled-up display state + active alerts attributed to it. */
   getNodeStatus: (id: string): Promise<NodeStatus> =>

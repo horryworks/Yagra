@@ -620,8 +620,20 @@
       "tokenKeepHint": "空のままにすると、保存済みのトークンを使い続けます。",
       "caCert": "CA 証明書 (任意)",
       "caCertHint": "この NetBox に証明書を発行したプライベート CA の PEM を貼り付けてください。信頼するのはこの接続だけです。秘密鍵は貼り付けないでください。",
+      "siteIdField": "サイト ID の取得元",
+      "siteIdFieldHint": "拠点コードが入っている NetBox のフィールドを選びます。Site のフォルダー名の頭に付きます（例:「JPMYJ01 Matsuyama Home」）。この NetBox に定義されているカスタムフィールドが一覧に出ます。",
+      "siteIdFieldKeyHint": "NetBox でのカスタムフィールドの名前（ラベルではなくキー）。英数字とアンダースコアが使えます。",
+      "siteIdFieldKeyInvalid": "カスタムフィールドの名前に使えるのは英数字とアンダースコアだけです。",
+      "siteIdFieldUnreadable": "このトークンではこの NetBox のカスタムフィールドの定義を読めないため、一覧に出ていません。使うには「その他」を選び、フィールド名を入力してください。",
       "interval": "同期の間隔 (秒)",
       "test": "接続テスト"
+    },
+    "siteIdField": {
+      "none": "サイト ID を付けない",
+      "slug": "Slug",
+      "facility": "Facility",
+      "description": "Description",
+      "other": "その他（フィールド名を入力）…"
     },
     "test": {
       "unreachable": "そのアドレスから NetBox の API としての応答がありません。URL とポートを確認してください。",
@@ -639,7 +651,11 @@
       "ok": "前回の同期 {{at}}",
       "missing_one": "NetBox に無いフォルダー {{count}} 件",
       "missing_other": "NetBox に無いフォルダー {{count}} 件",
-      "failed": "前回の同期に失敗"
+      "failed": "前回の同期に失敗",
+      "siteId": {
+        "none": "{{sites}} 件の Site すべてでサイト ID が空でした。取得元のフィールドを確認してください",
+        "partial": "{{sites}} 件のうち {{without}} 件の Site でサイト ID が空でした"
+      }
     },
     "delete": {
       "title": "NetBox の登録を削除",

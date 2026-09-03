@@ -9242,6 +9242,88 @@
         }
       }
     },
+    "/api/v1/netbox/servers/{id}/site-fields": {
+      "get": {
+        "tags": [
+          "netbox"
+        ],
+        "operationId": "netbox_site_fields",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The server id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The site-code sources this NetBox offers. Check `custom_fields_readable` before reading `custom_fields` as \"there are none\" — a token without `extras.view_customfield` gets `false` and an empty list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteIdFieldChoices"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The NetBox call failed; the detail is logged, never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/netbox/servers/{id}/sync": {
       "post": {
         "tags": [
@@ -23337,6 +23419,13 @@
           "name": {
             "type": "string"
           },
+          "site_id_field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which NetBox field prefixes a Site's folder name: `slug`, `facility`, `description`, or\n`cf:<custom field name>`. Absent or empty means no prefix, which is the default."
+          },
           "sync_interval_secs": {
             "type": "integer",
             "format": "int32"
@@ -28522,6 +28611,13 @@
           "name": {
             "type": "string"
           },
+          "site_id_field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which NetBox field prefixes a Site's folder name, or `null` for none. Encoded as stored:\na built-in name, or `cf:` and a custom field's key."
+          },
           "sync_interval_secs": {
             "type": "integer",
             "format": "int32"
@@ -31893,6 +31989,61 @@
           }
         }
       },
+      "SiteIdBuiltIn": {
+        "type": "string",
+        "description": "A built-in Site field that can supply a code — the closed half of `site_id_field`'s values.\n\n🚨 **This type exists so the set reaches TypeScript.** `web/src/types/api.ts` pins its own\npicker list to `components['schemas']['SiteIdBuiltIn']` with `satisfies`, which turns \"the\nform offers exactly what the parser accepts\" into a compile error instead of a convention. The\nestablished pattern next door (`LINK_SOURCES` and friends) is a bare `as const` with no link\nback to Rust; that is a duplicated constant list of the kind `extensibility.md` §3 warns about,\nand one line of `satisfies` avoids inheriting it.\n\nThe fourth form, `cf:<key>`, is not a member: its key belongs to the NetBox being read, so it\ncannot be a compile-time set anywhere.",
+        "enum": [
+          "slug",
+          "facility",
+          "description"
+        ]
+      },
+      "SiteIdCustomField": {
+        "type": "object",
+        "description": "One NetBox custom field that could supply a site code.",
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "NetBox's own label for the field, or its key when NetBox has no label. **Not\ntranslatable** — it is this deployment's own wording."
+          },
+          "value": {
+            "type": "string",
+            "description": "Store this verbatim in `site_id_field`."
+          }
+        }
+      },
+      "SiteIdFieldChoices": {
+        "type": "object",
+        "description": "What an operator may choose as the source of a Site's code.\n\n🚨 **Only the custom fields are listed here, deliberately.** The built-in Site fields are a\nclosed set the WebUI already knows, so it can label them in the viewer's language; returning\nEnglish labels from the API would put untranslatable words in a Japanese form. The API's job is\nthe half that is unknowable from the code — what this particular NetBox has been given.",
+        "required": [
+          "custom_fields_readable",
+          "custom_fields",
+          "built_ins"
+        ],
+        "properties": {
+          "built_ins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteIdBuiltIn"
+            },
+            "description": "The built-in Site fields, so the set has exactly one author. The WebUI labels these itself\n(they are a closed set, so the labels are translatable) and renders them without waiting\nfor this call; what it takes from here is the guarantee that its list is the whole list."
+          },
+          "custom_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteIdCustomField"
+            }
+          },
+          "custom_fields_readable": {
+            "type": "boolean",
+            "description": "🚨 `false` means the token **may not read** `/api/extras/custom-fields/` — not that this\nNetBox has none. The form offers a type-it-in box in that case, and collapsing the two\nwould leave the operator reading \"there are no custom fields here\" and never finding it.\nThis is the same distinction, for the same reason, that [`TestNetboxResult`] draws between\n`reachable` and `authenticated`."
+          }
+        }
+      },
       "SourceKind": {
         "type": "string",
         "description": "Which received stream a destination tees. Kept here (rather than in core) so the DB `CHECK`\nstrings, the API validation and the WebUI all agree on one spelling.",
@@ -32264,7 +32415,8 @@
         "required": [
           "regions",
           "sites",
-          "missing_folders"
+          "missing_folders",
+          "sites_without_site_id"
         ],
         "properties": {
           "missing_folders": {
@@ -32278,6 +32430,11 @@
           },
           "sites": {
             "type": "integer",
+            "minimum": 0
+          },
+          "sites_without_site_id": {
+            "type": "integer",
+            "description": "Sites whose configured Site ID field held nothing, so their folder kept NetBox's bare name.\n\n🚨 The reason this number is returned at all: picking the wrong field produces **no error\nand no visible change**, so without it \"the feature does not work\" and \"that field is empty\non every site\" look identical. Zero when no field is configured.",
             "minimum": 0
           }
         }
@@ -32518,6 +32675,17 @@
           "reachable": {
             "type": "boolean",
             "description": "Something at that URL answered as a NetBox API."
+          },
+          "site_id_fields": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SiteIdFieldChoices",
+                "description": "The site-code sources this NetBox offers, or `null` when the token was refused — there is\nnothing to list if we never got in. This rides along with the probe because pressing \"test\nconnection\" is the only moment an *unsaved* server's token exists on the server side."
+              }
+            ]
           }
         }
       },
@@ -33412,6 +33580,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "site_id_field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "⚠️ **Two-state, and this is a full-document `PUT`**: omitting it clears the setting, the\nsame way omitting `enabled` would. `ca_cert_pem` above is three-state only because the\nbrowser never holds the certificate it needs to preserve; this value it does hold."
           },
           "sync_interval_secs": {
             "type": "integer",

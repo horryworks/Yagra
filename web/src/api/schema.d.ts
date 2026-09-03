@@ -1801,6 +1801,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/netbox/servers/{id}/site-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["netbox_site_fields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/netbox/servers/{id}/sync": {
         parameters: {
             query?: never;
@@ -5458,6 +5474,11 @@ export interface components {
             /** @description PEM for a private CA, when NetBox is not signed by a publicly trusted one. */
             ca_cert_pem?: string | null;
             name: string;
+            /**
+             * @description Which NetBox field prefixes a Site's folder name: `slug`, `facility`, `description`, or
+             *     `cf:<custom field name>`. Absent or empty means no prefix, which is the default.
+             */
+            site_id_field?: string | null;
             /** Format: int32 */
             sync_interval_secs?: number;
             /** @description The API token. **Sealed on arrival and never returned by any endpoint.** */
@@ -7700,6 +7721,11 @@ export interface components {
              */
             missing_folders: number;
             name: string;
+            /**
+             * @description Which NetBox field prefixes a Site's folder name, or `null` for none. Encoded as stored:
+             *     a built-in name, or `cf:` and a custom field's key.
+             */
+            site_id_field?: string | null;
             /** Format: int32 */
             sync_interval_secs: number;
         };
@@ -9230,6 +9256,56 @@ export interface components {
             parent: string;
         };
         /**
+         * @description A built-in Site field that can supply a code — the closed half of `site_id_field`'s values.
+         *
+         *     🚨 **This type exists so the set reaches TypeScript.** `web/src/types/api.ts` pins its own
+         *     picker list to `components['schemas']['SiteIdBuiltIn']` with `satisfies`, which turns "the
+         *     form offers exactly what the parser accepts" into a compile error instead of a convention. The
+         *     established pattern next door (`LINK_SOURCES` and friends) is a bare `as const` with no link
+         *     back to Rust; that is a duplicated constant list of the kind `extensibility.md` §3 warns about,
+         *     and one line of `satisfies` avoids inheriting it.
+         *
+         *     The fourth form, `cf:<key>`, is not a member: its key belongs to the NetBox being read, so it
+         *     cannot be a compile-time set anywhere.
+         * @enum {string}
+         */
+        SiteIdBuiltIn: "slug" | "facility" | "description";
+        /** @description One NetBox custom field that could supply a site code. */
+        SiteIdCustomField: {
+            /**
+             * @description NetBox's own label for the field, or its key when NetBox has no label. **Not
+             *     translatable** — it is this deployment's own wording.
+             */
+            label: string;
+            /** @description Store this verbatim in `site_id_field`. */
+            value: string;
+        };
+        /**
+         * @description What an operator may choose as the source of a Site's code.
+         *
+         *     🚨 **Only the custom fields are listed here, deliberately.** The built-in Site fields are a
+         *     closed set the WebUI already knows, so it can label them in the viewer's language; returning
+         *     English labels from the API would put untranslatable words in a Japanese form. The API's job is
+         *     the half that is unknowable from the code — what this particular NetBox has been given.
+         */
+        SiteIdFieldChoices: {
+            /**
+             * @description The built-in Site fields, so the set has exactly one author. The WebUI labels these itself
+             *     (they are a closed set, so the labels are translatable) and renders them without waiting
+             *     for this call; what it takes from here is the guarantee that its list is the whole list.
+             */
+            built_ins: components["schemas"]["SiteIdBuiltIn"][];
+            custom_fields: components["schemas"]["SiteIdCustomField"][];
+            /**
+             * @description 🚨 `false` means the token **may not read** `/api/extras/custom-fields/` — not that this
+             *     NetBox has none. The form offers a type-it-in box in that case, and collapsing the two
+             *     would leave the operator reading "there are no custom fields here" and never finding it.
+             *     This is the same distinction, for the same reason, that [`TestNetboxResult`] draws between
+             *     `reachable` and `authenticated`.
+             */
+            custom_fields_readable: boolean;
+        };
+        /**
          * @description Which received stream a destination tees. Kept here (rather than in core) so the DB `CHECK`
          *     strings, the API validation and the WebUI all agree on one spelling.
          * @enum {string}
@@ -9379,6 +9455,14 @@ export interface components {
             missing_folders: number;
             regions: number;
             sites: number;
+            /**
+             * @description Sites whose configured Site ID field held nothing, so their folder kept NetBox's bare name.
+             *
+             *     🚨 The reason this number is returned at all: picking the wrong field produces **no error
+             *     and no visible change**, so without it "the feature does not work" and "that field is empty
+             *     on every site" look identical. Zero when no field is configured.
+             */
+            sites_without_site_id: number;
         };
         /** @description Yagra's own health: the reachability of its backing services. */
         SystemHealth: {
@@ -9481,6 +9565,7 @@ export interface components {
             netbox_version?: string | null;
             /** @description Something at that URL answered as a NetBox API. */
             reachable: boolean;
+            site_id_fields?: null | components["schemas"]["SiteIdFieldChoices"];
         };
         /**
          * @description The outcome of a one-shot delivery test.
@@ -9970,6 +10055,12 @@ export interface components {
             ca_cert_pem?: string | null;
             enabled: boolean;
             name: string;
+            /**
+             * @description ⚠️ **Two-state, and this is a full-document `PUT`**: omitting it clears the setting, the
+             *     same way omitting `enabled` would. `ca_cert_pem` above is three-state only because the
+             *     browser never holds the certificate it needs to preserve; this value it does hold.
+             */
+            site_id_field?: string | null;
             /** Format: int32 */
             sync_interval_secs?: number;
             /**
@@ -17427,6 +17518,74 @@ export interface operations {
             };
             /** @description No such server */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    netbox_site_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The server id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site-code sources this NetBox offers. Check `custom_fields_readable` before reading `custom_fields` as "there are none" — a token without `extras.view_customfield` gets `false` and an empty list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteIdFieldChoices"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such server */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The NetBox call failed; the detail is logged, never returned */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
