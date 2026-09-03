@@ -21,6 +21,20 @@
   within five minutes of its rule being removed, writes the resolution to the alert history, and
   delivers the recovery to the channels the original alert was routed to.
 
+- **An alert about a metric that has stopped arriving now closes instead of staying red forever.**
+  Detaching a node's SNMP profile or credential stops `snmp_up` being produced at all, so any alert
+  it had raised could never be re-evaluated and never closed — the node showed critical while its
+  ping was perfectly healthy, through restarts and upgrades. Measured on a lab deployment: four
+  nodes stuck on a metric whose last sample was 4.33 days old. The same sweep now closes an alert
+  when the node is demonstrably still reporting but the series behind the alert has had no sample
+  for six hours. **This also closes an alert whose metric is still configured but has stopped
+  arriving** — a device that quietly stopped answering one OID, say. Read the closure as "Yagra can
+  no longer measure this", not as "the condition cleared": nothing has been measured for six hours,
+  so the old value is not something to keep asserting. Two deliberate exemptions: per-interface
+  alerts are out of scope for now, and Meraki-collected metrics are excluded because their
+  collection tiers can legitimately be a week apart. A node that has simply gone quiet — an offline
+  site, a stopped poller, a bus outage — never has an alert closed by this, at any duration.
+
 ## v0.3.6 — the time-range selector moves the chart it sits above, and an ICMP-only node finally has one
 
 ### Bug Fixes

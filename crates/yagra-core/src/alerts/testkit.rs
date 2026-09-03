@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
+use yagra_alert::{Alert, Subject};
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
     resolve_effective, Direction, EffectiveThreshold, IfIndex, NodeId, ScopeLevel, ScopedThreshold,
@@ -160,6 +161,23 @@ pub(crate) fn meta_for(node: NodeId) -> HashMap<NodeId, NodeMeta> {
     let mut m = HashMap::new();
     m.insert(node, NodeMeta::default());
     m
+}
+
+/// One open critical alert about `node`'s `metric`, shaped the way `restore` reads one back out of
+/// `alert_history` — which is the only way a test can start from "this was already open".
+pub(crate) fn open_alert(node: NodeId, metric: &str, state: yagra_common::NodeState) -> Alert {
+    Alert {
+        subject: Subject::Node(node),
+        check: super::check_id(node, metric),
+        severity: yagra_common::Severity::Critical,
+        state,
+        at_unix_ms: 1_000,
+        root_cause: None,
+        flapping: false,
+        metric: metric.to_owned(),
+        breach: None,
+        ifindex: None,
+    }
 }
 
 /// A port-scoped `if_in_util_pct above <warning>` rule, dwell 1.

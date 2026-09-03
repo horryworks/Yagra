@@ -1373,6 +1373,8 @@ impl LeaderTasks {
             &self.shutdown,
             alerts::stale::run_stale_check_watch(
                 self.alerts.clone(),
+                self.store.clone(),
+                self.meraki_devices.clone(),
                 self.alert_sink("a stale-check resolution"),
             ),
         );

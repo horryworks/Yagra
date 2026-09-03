@@ -60,6 +60,25 @@ pub struct AlertManager {
     config: RwLock<AlertConfig>,
 }
 
+/// One open alert a store can still be asked about, and the series that would answer.
+///
+/// Produced by [`AlertManager::freshness_candidates`] and consumed by `alerts::stale`, which is
+/// where the windows and the safety canary live. The split is what makes the judgement testable
+/// without a TSDB: choosing *what to ask* is pure, and asking is not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreshnessCandidate {
+    pub check: CheckId,
+    pub node: NodeId,
+    /// The alert's own metric — for logging and for tests to name a candidate by.
+    pub metric: String,
+    /// The series whose presence proves something is still measuring this check.
+    ///
+    /// 🚨 **Not always `metric`.** A derived metric is computed and never stored (ADR-105), so it
+    /// answers with `Formula::inputs` instead; asking for its own name would report every healthy
+    /// derived alert as stranded. One entry when the formula repeats its input, two otherwise.
+    pub inputs: Vec<String>,
+}
+
 impl AlertManager {
     /// New manager with an empty config (no thresholds until [`Self::set_config`]).
     #[must_use]
@@ -1349,15 +1368,14 @@ impl AlertManager {
         self.resolve_orphans(orphans)
     }
 
-    /// Whether this alert is about a metric a **poller collects** and a threshold rule evaluates.
+    /// Whether this alert is one a **threshold rule** raised, rather than one some other part of
+    /// the system owns end to end.
     ///
-    /// The shared admission test for the two sweeps ADR-097 Increment 6 adds. Each rejection names
-    /// the closer that owns what it drops, and the table in
-    /// [`Self::resolve_orphaned_collected_alerts`] is the whole of it — one function so the two
-    /// sweeps cannot come to disagree about what they are for.
-    ///
-    /// The caller has already established that the subject is a node.
-    fn is_collected_threshold_alert(a: &Alert) -> bool {
+    /// The two rejections both sweeps of ADR-097 Increment 6 share, in one function so they cannot
+    /// come to disagree. Each names the closer that owns what it drops; the full table is in
+    /// [`Self::resolve_orphaned_collected_alerts`]. The caller has already established that the
+    /// subject is a node.
+    fn is_threshold_alert(a: &Alert) -> bool {
         // Liveness is `process_check`'s, and it is the one check that actually reaches the
         // `!alerting` branch.
         if a.metric == LIVENESS {
@@ -1368,13 +1386,104 @@ impl AlertManager {
         if a.metric.starts_with(crate::events::EVENT_METRIC_PREFIX) {
             return false;
         }
-        // Derived metrics belong to the two sweeps that already own them.
-        if crate::derived::derived_node_metric(&a.metric).is_some()
-            || crate::interface_util::derived_metric_name(&a.metric).is_some()
-        {
-            return false;
-        }
         true
+    }
+
+    /// Whether this alert is about a metric a **poller collects**, as opposed to one Yagra computes.
+    ///
+    /// The extra rejection the *rule-gone* sweep needs and the freshness sweep must not copy: the
+    /// two derived dimensions already have a rule-gone closer each, while for **freshness** a
+    /// derived metric is very much in scope — it is simply asked about by its inputs, because it is
+    /// never stored (see [`Self::freshness_candidates`]).
+    fn is_collected_threshold_alert(a: &Alert) -> bool {
+        Self::is_threshold_alert(a)
+            && crate::derived::derived_node_metric(&a.metric).is_none()
+            && crate::interface_util::derived_metric_name(&a.metric).is_none()
+    }
+
+    /// Every open alert whose metric a store could still be asked about, and the series that would
+    /// answer (ADR-097 Increment 6).
+    ///
+    /// The engine cannot decide this on its own — "is anything still measuring this?" is a fact
+    /// about the data, and the engine's own memory of what it has observed is exactly what a
+    /// restart destroys. So this half only says *which* alerts are worth asking about and *what to
+    /// ask*; `alerts::stale` asks, and the two windows and the safety canary live there.
+    ///
+    /// # What is dropped, and who owns it instead
+    ///
+    /// | dropped | closer that owns it |
+    /// |---|---|
+    /// | [`Subject::Pool`] | `pool_coverage` — a pool has no series and no inventory row |
+    /// | a node absent from `node_meta` | [`Self::forget_deleted_nodes`] |
+    /// | `__liveness__` | `process_check` |
+    /// | `event:*` | `events::engine`, whose runtime set must not diverge |
+    /// | anything carrying an `ifindex` | nobody, deliberately — ADR-097 decision 16 |
+    ///
+    /// The port dimension is out of scope because the store answers about **nodes**: a node-level
+    /// freshness query cannot tell "port 7's `if_oper_status` stopped" from "port 8's did not". A
+    /// per-port answer needs a new `MetricStore` method and a new query shape, which is its own
+    /// increment. Both boxes were measured before this shipped and every stranded alert on them was
+    /// node-dimension.
+    ///
+    /// # 🚨 A derived metric is asked about by its **inputs**
+    ///
+    /// A derived metric is computed and never stored (ADR-105), so asking the store for
+    /// `cisco_cemp_mem_used_pct` returns nothing on a **perfectly healthy** node. Keying freshness
+    /// on the alert's own name would therefore close the entire derived dimension on the first
+    /// tick. `Formula::inputs` names the two series that really do arrive, and either one going
+    /// missing is enough to say the evaluator has nothing left to work from.
+    ///
+    /// ⚠️ The same trap caught the *investigation*: "no samples in 30 days" was written down as
+    /// evidence that a derived alert was stranded, and it is equally true of one that is fine.
+    ///
+    /// 🚨 **An engine with no config installed answers nothing**, for ADR-097 decision 7's reason,
+    /// and the guard is inside this method so no caller can skip it.
+    pub fn freshness_candidates(&self) -> Vec<FreshnessCandidate> {
+        let config = self.config.read().expect("config rwlock poisoned");
+        if config.node_meta.is_empty() {
+            return Vec::new();
+        }
+        let active = self.active.lock().expect("alerts mutex poisoned");
+        active
+            .values()
+            .filter_map(|a| {
+                let node = a.node()?;
+                if !config.node_meta.contains_key(&node) {
+                    return None;
+                }
+                if !Self::is_threshold_alert(a) || a.ifindex.is_some() {
+                    return None;
+                }
+                let inputs = match crate::derived::derived_node_metric(&a.metric) {
+                    Some(d) => {
+                        let [x, y] = d.formula.inputs();
+                        // `Formula::Complement` repeats its one input; the array is fixed-width so
+                        // no caller has to branch on which shape it got.
+                        match x == y {
+                            true => vec![x.to_owned()],
+                            false => vec![x.to_owned(), y.to_owned()],
+                        }
+                    }
+                    None => vec![a.metric.clone()],
+                };
+                Some(FreshnessCandidate {
+                    check: a.check,
+                    node,
+                    metric: a.metric.clone(),
+                    inputs,
+                })
+            })
+            .collect()
+    }
+
+    /// Close the checks a freshness sweep found nothing measuring.
+    ///
+    /// Separate from [`Self::freshness_candidates`] because the decision is made outside, against a
+    /// store, with `.await`s in between — which is why [`Self::resolve_orphans`] resolves before it
+    /// drops a dwell window, and why `resolve_event_alert`'s `remove(&check)?` returning `None`
+    /// makes a check that recovered over that gap a no-op rather than a wrong close.
+    pub fn resolve_stale_alerts(&self, checks: Vec<CheckId>) -> Vec<NotifyAction> {
+        self.resolve_orphans(checks)
     }
 
     /// Close every alert about a node the inventory no longer holds, and forget what the engine
@@ -1833,22 +1942,6 @@ mod tests {
             [NotifyAction::Fire(_)]
         ));
         assert_eq!(mgr.active_alerts().len(), 1);
-    }
-
-    /// One alert as `alerts::restore` hands it over: no `root_cause` (not stored) and not flapping.
-    fn open_alert(node: NodeId, metric: &str, state: NodeState) -> Alert {
-        Alert {
-            subject: Subject::Node(node),
-            check: check_id(node, metric),
-            severity: yagra_common::Severity::Critical,
-            state,
-            at_unix_ms: 1_000,
-            root_cause: None,
-            flapping: false,
-            metric: metric.to_owned(),
-            breach: None,
-            ifindex: None,
-        }
     }
 
     /// 🚨 **The point of ADR-097 decision 2.** A device that recovers while core is down used to be
