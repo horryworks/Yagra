@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.7 — an alert nothing is measuring any more finally closes, whether its rule was deleted or its data stopped arriving
+
 ### Bug Fixes
 
 - **Deleting a threshold rule now closes the alert it had raised.** For a *collected* metric —

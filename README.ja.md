@@ -26,7 +26,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 > アラートも上がりません。規模が小さいほど症状は重く、初めて導入した環境ほど強く踏みます。v0.2.6 で
 > 修正済みです。詳細は [RELEASE_NOTES.ja.md](RELEASE_NOTES.ja.md) を参照してください。
 
-> ステータス: **v0.3.6 — 期間選択がその下のグラフに効くようになり、ICMP だけのノードにも期間ボタンが出るようになりました。**
+> ステータス: **v0.3.7 — ルールを消しても値が来なくなっても、もう測っていないアラートがようやく閉じる**
 > ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、受動イベント監視、探索・分類、アラート、ダッシュボード、レポートを備えたスタックが、
 > PostgreSQL / Redis / NATS / VictoriaMetrics 上で Docker Compose により動作します。既定は単一
