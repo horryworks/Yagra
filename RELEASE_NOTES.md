@@ -10,6 +10,30 @@
 
 ## Unreleased
 
+### Improvements
+
+- **An upgrade now refuses to start on a host with no room, instead of filling it further.** The
+  pre-upgrade backup — a full PostgreSQL dump plus a VictoriaMetrics snapshot — runs *before* the
+  release images are fetched, so a host that was already full got several hundred MB written onto
+  it and *then* failed to pull. Free space is now checked before anything is written, on both the
+  Docker storage and the deployment directory, and the run stops with the two numbers in the
+  message and the deployment untouched. The floor is `YAGRA_UPGRADE_MIN_FREE_BYTES` (3 GiB by
+  default; `0` switches the check off). A host where free space cannot be measured proceeds and
+  records that nothing was checked.
+- **When fetching an image fails, the upgrade now says why.** Docker's own message is carried into
+  Settings ▸ Upgrade, so "no space left on device", "i/o timeout" and "denied" are told apart
+  rather than all appearing as `cannot pull yagra-core:vX`. The reason used to be unrecoverable
+  afterwards as well — the step runs in a container that is deleted when it exits.
+- **A successful upgrade now clears up after itself.** Nothing was ever removed before: replaced
+  release images keep their tags, so they are not dangling and `docker image prune` walks past
+  them, and one backup directory accumulated per attempt, failed attempts included. Roughly 130 MiB
+  of compressed layers per release, sharing almost nothing between releases. The release you came
+  from is kept — so the WebUI's one-hop "go back" still needs no download — and anything older is
+  removed, along with the older backups. Only this repository's three images are ever touched, only
+  after the new version has been seen healthy, and a tidy-up that fails never turns a succeeded
+  upgrade into a failed one. `YAGRA_UPGRADE_KEEP_RELEASES` (default `1`) changes how many are kept;
+  at least one backup is always kept.
+
 ## v0.3.8 — NetBox builds the folder tree, names each site by its own code, and hands its subnets to discovery
 
 ### New Features

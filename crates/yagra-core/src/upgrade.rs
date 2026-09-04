@@ -2039,10 +2039,30 @@ mod tests {
         assert!(checked_tag(Command::Apply, None).is_err());
     }
 
+    /// The script with its comment lines removed.
+    ///
+    /// 🚨 **Prose about the mechanism is not the mechanism, and every source-text check here has
+    /// to say so.** Two of these were caught by their own comments on 2026-09-04: the launch scan
+    /// below read the sentence "the procedure runs in a `docker run --rm` container" as a launch
+    /// with no mount, and the tidy-up check read its own "Never `docker image prune -a`" as a
+    /// prune. In both cases the reported defect was, word for word, the note explaining why the
+    /// defect had been avoided — a failure mode `api/guards.rs` hit first and for the same reason.
+    ///
+    /// Line-based, so offsets shrink but their **order** is unchanged: a check that compares two
+    /// positions gets the same answer here as in the original.
+    fn without_comments(script: &str) -> String {
+        script
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Every `docker run …` in the updater's script, each folded back into one string across its
     /// backslash-continued lines. A launch is only as safe as its whole argument list, so a scan
     /// that stopped at the first line would read every one of them as mountless.
     fn docker_run_invocations(compose: &str) -> Vec<String> {
+        let compose = without_comments(compose);
         let mut out = Vec::new();
         let mut lines = compose.lines();
         while let Some(line) = lines.next() {
@@ -3029,6 +3049,249 @@ mod tests {
             .write_poller_selection("run-a", &["edge-1".to_owned()])
             .is_ok());
         assert_eq!(repo.take_poller_selection("run-a"), None);
+    }
+
+    /// The apply procedure on its own — the half that runs in the throwaway privileged container.
+    ///
+    /// [`updater_body_without_its_procedures`] returns both procedures concatenated, which is the
+    /// wrong shape for a rule about *order inside* one of them: `BUS` would contribute positions
+    /// too, and an assertion about "before" would then be comparing offsets in two different
+    /// programs.
+    fn apply_procedure(compose: &str) -> String {
+        let start = compose
+            .find("APPLY=$$(cat <<'APPLY'")
+            .expect("the apply procedure is still a heredoc in this file");
+        let rest = &compose[start..];
+        let end = rest
+            .find("\n        APPLY\n")
+            .expect("the apply heredoc is terminated");
+        without_comments(&rest[..end])
+    }
+
+    /// One shell statement starting at `at`, folded across its backslash-continued lines.
+    ///
+    /// A fixed-size window is the wrong unit here and was wrong the first time: 600 characters from
+    /// `docker create` ran past its own failure branch into the next statement's
+    /// `docker rm … >/dev/null`, which legitimately discards output, and reported the step it had
+    /// already read as correct.
+    fn statement_at(script: &str, at: usize) -> String {
+        let mut out = String::new();
+        for line in script[at..].lines() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(line);
+            if !line.trim_end().ends_with('\\') {
+                break;
+            }
+        }
+        out
+    }
+
+    /// The free-space check has to come **before** the backup, and the order is the whole point.
+    ///
+    /// Step 1 writes a full PostgreSQL dump and a VictoriaMetrics snapshot onto the host, and step
+    /// 2 unpacks three images beside them. Measured 2026-09-04 on a GCP test deployment: v0.2.17 →
+    /// v0.3.0 failed at `pull` with the disk at 100%, having first written several hundred MB of
+    /// backup onto the disk it was about to find full. A check placed after either of those is not
+    /// a weaker version of this one — it is the bug (ADR-050 decision 15).
+    #[test]
+    fn the_disk_check_runs_before_anything_is_written() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        // 🚨 Anchored on the code that measures and the code that compares, never on the setting's
+        // NAME. The name also appears in the refusal's own text ("Set YAGRA_UPGRADE_MIN_FREE_BYTES
+        // in .env…"), and a first version of this test looked for the name: deleting the entire
+        // check left the message behind and the test went green. A needle that the failure message
+        // contains is a needle that survives the failure.
+        let measures = apply
+            .find("df -P -k")
+            .expect("the apply procedure no longer measures free space");
+        let compares = apply
+            .find(r#""$$FREE_KB" -ge"#)
+            .expect("the apply procedure measures free space but never compares it to the floor");
+        let check = measures.max(compares);
+        for (what, needle) in [
+            ("the pre-upgrade backup", "sh /tmp/backup.sh"),
+            ("the image pull", "docker pull "),
+            ("the archive load", "docker load -i"),
+        ] {
+            let writes = apply
+                .find(needle)
+                .unwrap_or_else(|| panic!("{what} is gone from the apply procedure"));
+            assert!(
+                check < writes,
+                "the free-space check is placed after {what}, so a full host is written to before \
+                 it is refused — which is the failure this check exists to prevent"
+            );
+        }
+    }
+
+    /// A floor that is not a number must not reach the arithmetic that divides it.
+    ///
+    /// 🚨 The failure this pins is worse than "the check is weakened". `$$(( ))` resolves a bare
+    /// word as a variable name, so under the apply procedure's `set -u` a `.env` carrying `3g`, or
+    /// a typo, **aborts the script at that line — before any `fail` call**. `status.json` is left
+    /// saying `running`, and Settings ▸ Upgrade waits forever on a run that has already exited.
+    /// `cleanup`'s `YAGRA_UPGRADE_KEEP_RELEASES` carries exactly this guard; the floor shipped
+    /// without one.
+    ///
+    /// Anchored on the guard and on the arithmetic, never on the setting's name — for the reason
+    /// the test above gives: the name is in the refusal's own text, so a needle that names it
+    /// survives the check being deleted.
+    #[test]
+    fn a_non_numeric_disk_floor_cannot_reach_the_arithmetic() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let arithmetic = apply
+            .find("$$((MINFREE / 1024))")
+            .expect("the apply procedure no longer derives the floor in kibibytes");
+        let guard = apply.find(r#"case "$$MINFREE" in"#).expect(
+            "the floor reaches the arithmetic with no numeric guard in front of it: a \
+                 non-numeric YAGRA_UPGRADE_MIN_FREE_BYTES aborts the apply before it can report \
+                 anything, leaving the Upgrade page waiting on a run that has exited",
+        );
+        assert!(
+            guard < arithmetic,
+            "the numeric guard is placed after the arithmetic it exists to protect"
+        );
+    }
+
+    /// Every step that can fail because of the host must put **Docker's own words** in the status.
+    ///
+    /// These used to end in `>/dev/null 2>&1`, so the single line an operator ever saw was "cannot
+    /// pull yagra-core:vX" — identical for a full disk, no route to the registry, refused
+    /// credentials and an unpublished architecture. The reason was unrecoverable afterwards too:
+    /// the procedure runs in a `docker run --rm` container whose log is deleted when it exits, and
+    /// `log.ndjson` held the same terse line (ADR-050 decision 16).
+    #[test]
+    fn image_failures_carry_the_reason_docker_gave() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        assert!(
+            apply.contains("sanitize()"),
+            "the apply procedure has no way to put captured output into its one-line JSON status"
+        );
+        // A quote or a newline from Docker would not make `status.json` ugly — `say` builds it with
+        // a bare `printf` and no encoder, so it would make the file unparseable, and the Upgrade
+        // page reads that file to show what went wrong.
+        let sanitizer = apply
+            .split("sanitize()")
+            .nth(1)
+            .and_then(|s| s.split('\n').next())
+            .unwrap_or_default()
+            .to_owned();
+        for stripped in [r#"tr -d '"\\'"#, r"tr '\n\r\t'"] {
+            assert!(
+                sanitizer.contains(stripped),
+                "`sanitize` does not strip {stripped}, so captured output could break the JSON \
+                 status file the Upgrade page reads:\n{sanitizer}"
+            );
+        }
+        for (step, line) in [
+            ("the registry pull", "docker pull "),
+            ("staging the target image", "CID=$$(docker create"),
+            (
+                "the compose recreate",
+                "docker compose -p \"$$PROJ\" -f docker-compose.deploy.yml up -d )",
+            ),
+        ] {
+            let at = apply
+                .find(line)
+                .unwrap_or_else(|| panic!("{step} is gone from the apply procedure"));
+            // The command plus its failure branch — one statement, not a fixed window.
+            let stmt = statement_at(&apply, at);
+            assert!(
+                !stmt.contains(">/dev/null 2>&1"),
+                "{step} discards Docker's output, so its failure cannot be told apart from any \
+                 other failure of the same step:\n{stmt}"
+            );
+            assert!(
+                stmt.contains("sanitize"),
+                "{step} does not put the captured reason into the message an operator sees:\n\
+                 {stmt}"
+            );
+        }
+    }
+
+    /// Nothing is deleted until the new core has been *seen running*.
+    ///
+    /// A failed upgrade is precisely when the release it came from is needed, so tidying up on any
+    /// path but the verified-success one would remove the rollback at the moment it is wanted. And
+    /// tidying up must never turn a succeeded run into a failed one — an upgrade that worked did
+    /// work, whatever the housekeeping does afterwards (ADR-050 decision 17).
+    #[test]
+    fn the_tidy_up_runs_only_after_a_verified_success() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let definition = apply
+            .find("cleanup() {")
+            .expect("the apply procedure defines the tidy-up");
+        let call = apply
+            .rfind("\n            cleanup\n")
+            .expect("the tidy-up is called on the success path, indented inside the verify loop");
+        let success = apply
+            .find("say succeeded verify")
+            .expect("the verify step still reports success");
+        assert!(
+            definition < call,
+            "the tidy-up is called before it is defined"
+        );
+        assert!(
+            success < call,
+            "the tidy-up runs before the new core has been confirmed healthy, so a failed upgrade \
+             would delete the release it needs to go back to"
+        );
+        let body = &apply[definition..];
+        let body = &body[..body
+            .find("\n        }")
+            .expect("the cleanup function is terminated")];
+        assert!(
+            !body.contains("fail "),
+            "the tidy-up can fail the run, so an upgrade that already succeeded would be reported \
+             as failed because housekeeping did not work:\n{body}"
+        );
+        assert!(
+            !body.contains("prune"),
+            "the tidy-up reaches for a prune, which decides things about images this deployment \
+             does not own:\n{body}"
+        );
+    }
+
+    /// A value the sidecar is configured with reaches the container that acts on it.
+    ///
+    /// The throwaway apply container inherits **nothing** — this is the same trap `REPO` was
+    /// written to avoid, and it fails in the quietest possible way: the variable keeps its default
+    /// inside the container, so an operator who raised the floor or the keep count in `.env` gets
+    /// the stock behaviour and no message anywhere says so.
+    #[test]
+    fn the_apply_container_is_handed_every_setting_it_reads() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let (body, _) = updater_body_without_its_procedures(&compose);
+        for key in [
+            "YAGRA_UPGRADE_MIN_FREE_BYTES",
+            "YAGRA_UPGRADE_KEEP_RELEASES",
+        ] {
+            assert!(
+                apply.contains(key),
+                "{key} is declared but the apply procedure never reads it"
+            );
+            assert!(
+                body.contains(&format!("{key}: ${{{key}:-")),
+                "{key} is read by the apply procedure but the service declares no default for it"
+            );
+            assert!(
+                body.contains(&format!("-e \"{key}=")),
+                "{key} is never handed to the throwaway container, so it silently keeps its \
+                 in-container default however the host is configured"
+            );
+        }
     }
 
     /// Release tags carry a `v`; the column holds bare semver. Both must read.

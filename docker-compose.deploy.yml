@@ -760,6 +760,29 @@ services:
       # Everything after the load is unchanged: same backup, same composition swap, same
       # provenance check, and the archive must contain the tag the operator claimed.
       YAGRA_UPGRADE_ALLOW_BUNDLE: ${YAGRA_UPGRADE_ALLOW_BUNDLE:-0}
+      # Free space an apply demands before it writes anything (ADR-050 decision 15). 3 GiB by
+      # default: a release is roughly 133 MiB of compressed layers that unpack larger, the
+      # pre-upgrade backup is a full PostgreSQL dump plus a VictoriaMetrics snapshot beside it, and
+      # both land on this host.
+      #
+      # 🚨 The order is what this fixes, not the arithmetic. The backup runs FIRST, so without this
+      # check a host that is already full gets several hundred MB written onto it and *then* fails
+      # the pull — Yagra's own recovery step making the condition worse. Measured 2026-09-04 on a
+      # GCP test deployment: v0.2.17 → v0.3.0 died at `pull` with a 100% full disk.
+      YAGRA_UPGRADE_MIN_FREE_BYTES: ${YAGRA_UPGRADE_MIN_FREE_BYTES:-3221225472}
+      # How many releases to keep behind the one being installed (ADR-050 decision 17). Applies to
+      # this repository's three images and to the pre-upgrade backup directories; nothing else on
+      # the host is touched.
+      #
+      # 1 is the default because 1 is what the WebUI offers: the Upgrade page's "go back" is a
+      # single hop to the release you came from, and that hop must not need a re-download. Going
+      # back further is already a manual operation (decision 10) and may re-pull. Raise it on a
+      # closed network where a re-pull is impossible; `0` keeps only the release now installed.
+      #
+      # ⚠️ Never fewer than one backup is kept whatever this says — the newest one is the one this
+      # very upgrade just took, and deleting that would remove the only rollback aid for the
+      # version now running.
+      YAGRA_UPGRADE_KEEP_RELEASES: ${YAGRA_UPGRADE_KEEP_RELEASES:-1}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - upgradedata:/data/upgrade
@@ -776,6 +799,11 @@ services:
         REPO="$${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}"
         IVL="$${YAGRA_UPGRADE_CHECK_SECS:-86400}"
         ALLOW="$${YAGRA_UPGRADE_ALLOW_BUNDLE:-0}"
+        # Read here and handed to the apply container explicitly (ADR-050 Inc.4). Same reason
+        # `REPO` is: the throwaway container inherits nothing, so a value this service was
+        # configured with has to travel as an argument or it silently becomes the default.
+        MINFREE_CFG="$${YAGRA_UPGRADE_MIN_FREE_BYTES:-3221225472}"
+        KEEP_CFG="$${YAGRA_UPGRADE_KEEP_RELEASES:-1}"
         SELF="$$(hostname)"
         label() { docker inspect -f "{{index .Config.Labels \"$$1\"}}" "$$SELF" 2>/dev/null || true; }
         PROJ="$$(label com.docker.compose.project)"
@@ -804,6 +832,70 @@ services:
           printf '{"at":%s,"step":"%s","message":"%s"}\n' "$$(date +%s)" "$$2" "$$3" >> "$$D/log.ndjson"
         }
         fail() { FIN=$$(date +%s); say failed "$$1" "$$2"; exit 1; }
+        # Make a captured command's output safe to put inside `say`'s one-line JSON (decision 16).
+        # `status.json` is written by a single `printf` with no encoder behind it, so a stray quote
+        # or newline from Docker would not make the message ugly — it would make the file
+        # unparseable, and the Upgrade page reads that file to show what went wrong. Backslashes go
+        # for the same reason. The tail is what carries the diagnosis (`no space left on device`,
+        # `i/o timeout`, `denied`), so this keeps the END of the output, not the beginning.
+        sanitize() { tr -d '"\\' | tr '\n\r\t' '   ' | tail -c 240; }
+
+        # What a SUCCEEDED apply leaves behind, and what it takes away (ADR-050 decision 17).
+        #
+        # 🚨 Before this, nothing on this host was ever removed. The replaced images keep their
+        # `:vX.Y.Z` tags, so they are not dangling and `docker image prune` walks straight past
+        # them; the pre-upgrade backup directories accumulate one per attempt, failed attempts
+        # included. Measured 2026-09-04 from the published manifests: one release is ~133 MiB of
+        # compressed layers and a second release adds ~114 MiB of them, because core and poller
+        # share **no** layers between releases (CI moved to per-run hosts and `SOURCE_REF`
+        # deliberately busts the cache). That is a monotonically growing disk on a machine whose
+        # upgrade path stops working when it fills.
+        #
+        # Called only after step 5 has confirmed the new core is healthy, and only ever
+        # best-effort: an upgrade that has already succeeded must not be reported as failed
+        # because tidying up did not.
+        #
+        # ⚠️ **The history file lives in the volume core can write to, and that is safe only
+        # because of how it is used.** It is a KEEP list — the tags actually passed to `docker rmi`
+        # come from `docker image ls`, never from this file. So the worst a tampered history can
+        # do is preserve an image, never delete one. It is still validated line by line, because
+        # a keep list of garbage would preserve nothing.
+        cleanup() {
+          KEEP=$${YAGRA_UPGRADE_KEEP_RELEASES:-1}
+          case "$$KEEP" in ''|*[!0-9]*) KEEP=1 ;; esac
+          REL='^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$'
+          H="$$D/installed_releases"
+          # Most recent first. `$$PREV` is included because a host that has never written this file
+          # still knows the one release it is entitled to keep — the one it just came from.
+          { echo "$$TAG"; [ -n "$$PREV" ] && echo "$$PREV"; cat "$$H" 2>/dev/null; } \
+            | grep -E "$$REL" | awk '!seen[$$0]++' | head -40 > "$$H.tmp" \
+            && mv "$$H.tmp" "$$H"
+          KEEPLIST=$$(head -n $$((KEEP + 1)) "$$H")
+          # Only this repository's three images, only release-shaped tags. Never
+          # `docker image prune -a`: a verification box or a test host runs other stacks, and
+          # this is not the place to decide anything about them. `latest` is left alone for the
+          # same reason — it is the composition's own default tag, and it costs nothing anyway
+          # (it names an image some release tag already keeps).
+          for i in core poller web; do
+            docker image ls --format '{{.Tag}}' "$$REPO/yagra-$$i" 2>/dev/null | grep -E "$$REL" | while read -r t; do
+              echo "$$KEEPLIST" | grep -qx "$$t" || docker rmi "$$REPO/yagra-$$i:$$t" >/dev/null 2>&1 || true
+            done
+          done
+          # Backups, newest first. At least one is always kept whatever KEEP says: the newest is
+          # the one this very run just took, and it is the only rollback aid for the version now
+          # installed. The `case` re-anchors each path to the directory this is allowed to touch —
+          # `ls` output is not evidence of where a file is.
+          #
+          # ⚠️ Sorted by NAME, not by `ls -dt`. `yagra-backup.sh` stamps a fixed-width UTC time
+          # into the directory name, so lexical order *is* chronological order — and unlike a
+          # modification time it cannot be rewritten by a `cp -r`, a restore rehearsal or a
+          # filesystem move, any of which would otherwise make the newest backup look oldest and
+          # delete it.
+          BK=$$KEEP; [ "$$BK" -lt 1 ] && BK=1
+          ls -d "$$WORKDIR"/yagra-backup-* 2>/dev/null | sort -r | tail -n +$$((BK + 1)) | while read -r d; do
+            case "$$d" in "$$WORKDIR"/yagra-backup-*) rm -rf "$$d" ;; esac
+          done
+        }
         START=$$(date +%s); FIN=
         say running start "requested by $$BY"
 
@@ -839,6 +931,66 @@ services:
         [ -n "$${WORKDIR:-}" ] && [ -f "$$WORKDIR/docker-compose.deploy.yml" ] \
           || fail start "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this deployment's docker-compose.deploy.yml. On the host, from the directory that does, run: docker compose -p $$PROJ -f docker-compose.deploy.yml up -d --force-recreate yagra-updater — a plain 'up -d' will NOT repair it, because this container's definition is unchanged and compose leaves it running with the stale label"
 
+        # 0b. Enough room to do all of this, checked BEFORE anything is written (ADR-050 decision
+        #     15). The order is the whole point: step 1 writes a full PostgreSQL dump and a
+        #     VictoriaMetrics snapshot onto this host, and step 2 unpacks three images onto it. A
+        #     host that is already full therefore gets several hundred MB written to it and *then*
+        #     fails — Yagra's own safety step making the situation worse. Measured 2026-09-04 on a
+        #     GCP test deployment: v0.2.17 → v0.3.0 died at `pull` with the disk at 100%.
+        #
+        #     🚨 **Two filesystems, and they are usually but not always the same one.** The backup
+        #     lands in $$WORKDIR — a host directory bind-mounted here, so `df` on it reports the
+        #     HOST's filesystem. The images land in Docker's storage, which this container cannot
+        #     address by host path; but its own writable layer lives there, so `df /` reports it.
+        #     Taking the smaller of the two is what makes this true on a host that separates them.
+        #
+        #     Deliberately a fixed floor rather than a computed requirement: the size of a release
+        #     is not knowable until it has been pulled, which is the thing being protected. The
+        #     bundle path solves the same problem the other way (`bundle_space_needed`, twice the
+        #     declared archive) because there the size arrives with the request.
+        MINFREE=$${YAGRA_UPGRADE_MIN_FREE_BYTES:-3221225472}
+        # 🚨 A non-numeric value falls back to the floor rather than reaching the arithmetic below,
+        # the same guard `cleanup`'s KEEP carries and for a worse reason. `$$(( ))` resolves a bare
+        # word as a variable name, so under `set -u` a `.env` carrying `3g` or a typo does not
+        # weaken this check — it aborts the apply script here, BEFORE any `fail`, which leaves
+        # `status.json` saying `running` and the Upgrade page waiting on a run that is already gone.
+        # Falling back to the default keeps the check ON, which is the safe direction: an operator
+        # who meant 3 GiB and wrote `3g` gets what they meant.
+        case "$$MINFREE" in ''|*[!0-9]*) MINFREE=3221225472 ;; esac
+        # The numeric guard in the awk is what makes "could not measure" distinguishable from
+        # "zero free" — a `df` that prints nothing, prints a header only, or wraps a long device
+        # name yields no value rather than a 0 that would look like a full disk.
+        free_kb() { df -P -k "$$1" 2>/dev/null | awk 'NR==2 && $$4 ~ /^[0-9]+$$/ {print $$4}'; }
+        FREE_KB=
+        for p in / "$$WORKDIR"; do
+          V=$$(free_kb "$$p")
+          [ -n "$$V" ] || continue
+          { [ -z "$$FREE_KB" ] || [ "$$V" -lt "$$FREE_KB" ]; } && FREE_KB=$$V
+        done
+        # `0` switches the check off for an operator who knows their host better than this floor
+        # does. Anything else is compared in kibibytes, because that is what `df -k` speaks.
+        #
+        # ⚠️ **An unmeasurable host proceeds.** `df` answering nothing is not evidence of a full
+        # disk, and a check that cannot measure must not become the thing that stops every upgrade
+        # on that host — that would be a worse failure than the one this exists to prevent. It is
+        # said out loud instead, so the run's log carries the fact that nothing was checked.
+        if [ -z "$$FREE_KB" ]; then
+          say running start "could not measure free disk space on this host; continuing without the check"
+        elif [ "$$MINFREE" != "0" ]; then
+          NEED_KB=$$((MINFREE / 1024))
+          [ "$$FREE_KB" -ge "$$NEED_KB" ] \
+            || fail start "not enough free disk space to upgrade safely: $$((FREE_KB / 1024)) MB free, $$((NEED_KB / 1024)) MB needed. Nothing has been written and this deployment is untouched. Free space on the host, then try again — old release images and old yagra-backup-* directories in the deployment directory are the usual candidates. Set YAGRA_UPGRADE_MIN_FREE_BYTES in .env to change the floor, or 0 to skip this check"
+        fi
+
+        # The release this host is on right now, read off the running core rather than assumed. It
+        # is what decision 17's cleanup keeps, and it has to be captured HERE: after step 4 the
+        # container it comes from no longer exists. A tag that does not look like a release (a
+        # development build, a digest pin) is dropped rather than trusted — the cleanup would
+        # otherwise protect a name it cannot reason about, or worse, pass it to `docker rmi`.
+        PREV=$$(docker inspect -f '{{.Config.Image}}' "$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)" 2>/dev/null || true)
+        PREV=$${PREV##*:}
+        echo "$$PREV" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' || PREV=
+
         # 1. Back up first, using the procedure of record (ADR-040) rather than a second copy of
         #    it. The script ships inside the RUNNING core image at a root-owned path, so core
         #    cannot alter it and the backup matches the version being replaced. NOTE: this is a
@@ -857,7 +1009,7 @@ services:
           [ -f "$$BUNDLE" ] || fail pull "the uploaded archive is gone"
           # Deleted either way, and immediately: it is a gigabyte, the load has just written its
           # contents a second time, and there is no way to inspect a bad archive from the WebUI.
-          docker load -i "$$BUNDLE" >/dev/null 2>&1 || { rm -f "$$BUNDLE"; fail pull "the uploaded archive could not be read as a docker save file"; }
+          docker load -i "$$BUNDLE" >/tmp/err 2>&1 || { rm -f "$$BUNDLE"; fail pull "the uploaded archive could not be read as a docker save file: $$(sanitize < /tmp/err)"; }
           rm -f "$$BUNDLE"
           # The operator NAMED a version, and this is what makes the name true. `docker load`
           # restores whatever tags the archive happens to carry, so without this an archive of a
@@ -869,15 +1021,24 @@ services:
           done
         else
           say running pull "pulling $$TAG"
+          # 🚨 **The output is kept, and that is decision 16.** This used to end in
+          # `>/dev/null 2>&1`, so the one line an operator ever saw was "cannot pull
+          # yagra-core:vX" — identical whether the disk was full, the daemon had no route to the
+          # registry, the credentials were refused or the host's architecture was not published.
+          # And the reason was unrecoverable afterwards as well: this procedure runs in a
+          # `docker run --rm` container, so its own log is deleted the moment it exits, and
+          # `log.ndjson` only ever held the same terse line. Measured 2026-09-04 on a GCP test
+          # deployment — diagnosing a full disk needed the operator to reproduce the pull by hand.
           for i in core poller web; do
-            docker pull "$$REPO/yagra-$$i:$$TAG" >/dev/null 2>&1 || fail pull "cannot pull yagra-$$i:$$TAG"
+            docker pull "$$REPO/yagra-$$i:$$TAG" >/tmp/err 2>&1 \
+              || fail pull "cannot pull yagra-$$i:$$TAG — $$(sanitize < /tmp/err)"
           done
         fi
 
         # 3. Take the compose file OUT OF THE TARGET IMAGE (ADR-050 decision 5) so the composition
         #    and the images are always the same version. The host's .env is never touched.
         say running compose "installing the $$TAG composition"
-        CID=$$(docker create "$$REPO/yagra-core:$$TAG") || fail compose "cannot stage the target image"
+        CID=$$(docker create "$$REPO/yagra-core:$$TAG" 2>/tmp/err) || fail compose "cannot stage the target image: $$(sanitize < /tmp/err)"
         docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" "$$WORKDIR/docker-compose.deploy.yml" \
           || { docker rm "$$CID" >/dev/null 2>&1; fail compose "the target image ships no compose file"; }
         docker rm "$$CID" >/dev/null 2>&1 || true
@@ -888,8 +1049,8 @@ services:
         #    otherwise resolve it from the host's .env, which can name a different registry from
         #    the one these images were just fetched from.
         say running compose "recreating containers"
-        ( cd "$$WORKDIR" && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) \
-          || fail compose "docker compose up failed; the previous images are still on this host"
+        ( cd "$$WORKDIR" && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) >/tmp/err 2>&1 \
+          || fail compose "docker compose up failed; the previous images are still on this host — $$(sanitize < /tmp/err)"
 
         # 5. Verify the thing that is actually running — not that a command returned 0. A green
         #    pipeline has shipped a stale binary in this project before (ADR-036), so the check is
@@ -901,7 +1062,12 @@ services:
           if [ -n "$$NEW" ] && docker exec "$$NEW" yagra-core healthcheck >/dev/null 2>&1; then
             REF=$$(docker exec "$$NEW" cat /etc/yagra-source-ref 2>/dev/null || echo unknown)
             PROF=$$(docker exec "$$NEW" cat /etc/yagra-build-profile 2>/dev/null || echo unknown)
-            FIN=$$(date +%s); say succeeded verify "now running $$TAG ($$PROF, $$REF)"; exit 0
+            # Reported BEFORE the tidy-up, so the Upgrade page stops saying "working" the moment
+            # the upgrade is actually done. Step 6 changes nothing an operator is waiting on.
+            FIN=$$(date +%s); say succeeded verify "now running $$TAG ($$PROF, $$REF)"
+            # 6. Make room for the next one (decision 17). Best effort, after success only.
+            cleanup
+            exit 0
           fi
           i=$$((i+1)); sleep 5
         done
@@ -1173,6 +1339,7 @@ services:
             -v "$${PROJ}_upgradedata:/data/upgrade" \
             -v "$$WORKDIR:$$WORKDIR" \
             -e "REPO=$$REPO" -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" \
+            -e "YAGRA_UPGRADE_MIN_FREE_BYTES=$$MINFREE_CFG" -e "YAGRA_UPGRADE_KEEP_RELEASES=$$KEEP_CFG" \
             docker:28-cli sh -c "$$APPLY" yagra-upgrade "$$TAG" "$$ID" "$$BY" "$$BUNDLE" >/dev/null \
             || reject "$$ID" "could not start the upgrade container"
         }
