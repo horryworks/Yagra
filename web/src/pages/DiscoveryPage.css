@@ -386,3 +386,68 @@ html[data-viewport='mobile'] .disco-scan {
 .disco-site .form-label > .field {
   width: 100%;
 }
+
+/* ── The chosen site's ranges, one tickable row each (ADR-100 decision 10) ───────────────────
+   It occupies the same column the free-text Addresses field does — they are one control in two
+   shapes and are never drawn together — so it inherits `.disco-f-targets`'s flex basis and only
+   needs its own internal rhythm. */
+.disco-prefixes {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+}
+
+.disco-prefix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-h);
+  padding: 2px 0;
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+}
+
+.disco-prefix:first-child {
+  border-top: none;
+}
+
+/* The label is the hit area: a 44px row that only responds on the 13px box is a control that
+   works with a mouse and not with a thumb (ui-conventions, touch targets). */
+.disco-prefix:not(.is-off) {
+  cursor: pointer;
+}
+
+.disco-prefix-cidr {
+  font-weight: var(--weight-medium);
+}
+
+/* NetBox's own words for the range. Pushed away from the CIDR but kept left of the count, so the
+   eye reads "what it is" before "how big it is". */
+.disco-prefix-desc {
+  color: var(--text-secondary);
+}
+
+.disco-prefix-hosts,
+.disco-prefix-why {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+/* A range that cannot be swept keeps its place in the list — the operator recorded it in NetBox
+   and its absence would be the mystery — but reads as inert, with the reason in the row rather
+   than on hover (ADR-055 R4: a title= attribute is unreadable on a touch device). */
+.disco-prefix.is-off .disco-prefix-cidr,
+.disco-prefix.is-off .disco-prefix-desc {
+  color: var(--text-tertiary);
+}
+
+/* On a touch device the row is the tap target, so it grows to the 44px floor. Keyed on
+   `(hover: none)` and not on the layout mode, exactly as `tokens.css` says: a tablet forced to
+   the desktop shell still has fingers. */
+@media (hover: none) {
+  .disco-prefix {
+    min-height: var(--touch-target);
+  }
+}

@@ -35,7 +35,15 @@ import {
   statusFor,
 } from './discoveryScans';
 import { expandTargets } from '../lib/cidr';
-import { hostCount, prefixesToSpec, siteTargetOptions } from './siteTargets';
+import {
+  defaultChecked,
+  hostCount,
+  prefixRows,
+  siteTargetOptions,
+  specFor,
+  sumHosts,
+  SWEEP_LIMIT,
+} from './siteTargets';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
@@ -91,12 +99,17 @@ export function DiscoveryPage() {
    *  (ADR-100 decision 10). Empty on a deployment with no NetBox, which is why the whole control
    *  disappears rather than showing an empty dropdown. */
   const [siteOptions, setSiteOptions] = useState<ReturnType<typeof siteTargetOptions>>([]);
-  /** The folder whose prefixes were last poured into the target field, so the select shows what
-   *  the field holds. The field stays authoritative: editing it is expected, and this only goes
-   *  stale in the direction of "the operator changed their mind", which is visible in the text. */
+  /** The folder whose ranges are being swept, or `''` for the free-text field.
+   *
+   *  🚨 **This is a mode, not a convenience.** With a site chosen the ticked ranges *are* the
+   *  target and the text field is not drawn; with none, the text field is. Two controls editing
+   *  one target is the coexistence `ui-conventions.md` removes wherever it finds it, and here it
+   *  would be worse than usual: the operator would have no way to tell which one the Scan button
+   *  was about to read. */
   const [siteId, setSiteId] = useState<string>('');
-  /** How many prefixes the chosen site has that the sweep cannot expand (IPv6). */
-  const [siteSkippedV6, setSiteSkippedV6] = useState(0);
+  /** Which of the chosen site's ranges are ticked. Keyed by the CIDR itself, so a folder whose
+   *  prefixes change under us drops the stale ticks rather than sweeping them (`specFor`). */
+  const [checkedPrefixes, setCheckedPrefixes] = useState<Set<string>>(() => new Set());
   /** Try SNMP on addresses that did not answer ping (ADR-068 Inc.3). Off by default: on a /24 the
    *  unassigned addresses are the overwhelming majority, and asking each of them for its identity
    *  is where a sweep's minutes went. Kept as a choice because a firewall that filters ICMP and
@@ -201,10 +214,8 @@ export function DiscoveryPage() {
         const wanted = arrivedWithGroup.current;
         const picked = wanted ? options.find((o) => o.id === wanted) : undefined;
         if (!picked) return;
-        const { spec, skippedV6 } = prefixesToSpec(picked.prefixes);
         setSiteId(picked.id);
-        setSiteSkippedV6(skippedV6);
-        if (spec) setTargetSpec(spec);
+        setCheckedPrefixes(defaultChecked(prefixRows(picked.prefixes)));
       })
       .catch(() => undefined);
   }, []);
@@ -238,25 +249,46 @@ export function DiscoveryPage() {
 
   const snmpCreds = creds.filter((c) => isSnmpCredentialKind(c.kind));
 
-  /** How many addresses the current spec covers, or `null` when it will not run.
-   *
-   *  🚨 On screen at all times, not only after a failure. Three sites' prefixes come to 1016
-   *  addresses against a 1024 cap (measured on the lab), so the ceiling is reached by ordinary use
-   *  — and past it `expandTargets` returns an empty list, which makes pressing Scan look like it
-   *  did nothing. A number that stops being shown is the warning. */
-  const targetCount = useMemo(() => hostCount(targetSpec), [targetSpec]);
+  /** The chosen site's ranges, as rows with their address counts and their reasons. */
+  const siteRows = useMemo(
+    () => prefixRows(siteOptions.find((o) => o.id === siteId)?.prefixes ?? []),
+    [siteOptions, siteId],
+  );
 
-  /** Fill the target field from a folder's prefixes. */
+  /** What the Scan button will actually send — the ticked ranges, or the typed spec. One
+   *  expression, so the button, the count and the request cannot read different things. */
+  const effectiveSpec = siteId ? specFor(siteRows, checkedPrefixes) : targetSpec;
+
+  /** How many addresses that covers, or `null` when it will not run as it stands.
+   *
+   *  🚨 On screen at all times, not only after a failure. Three ordinary /24s come to 762
+   *  addresses against a 1024 limit (measured on the lab), so the ceiling is reached by ordinary
+   *  use — and past it `expandTargets` returns an empty list, which makes pressing Scan look like
+   *  it did nothing. */
+  const exactCount = useMemo(() => hostCount(effectiveSpec), [effectiveSpec]);
+
+  /** The ticked total, which unlike `exactCount` still answers past the limit. Shown when the
+   *  exact count cannot answer, so an over-large selection reads as "1,524 — too many" rather than
+   *  as nothing at all. It does not de-duplicate; `exactCount` does, and wins whenever it can. */
+  const tickedTotal = sumHosts(siteRows, checkedPrefixes);
+  const shownCount = exactCount ?? (siteId ? tickedTotal : null);
+  const overLimit = exactCount === null && tickedTotal > SWEEP_LIMIT;
+
+  /** Choose a site — or leave it, which brings the free-text field back. */
   const pickSite = (id: string) => {
     setSiteId(id);
     const picked = siteOptions.find((o) => o.id === id);
-    if (!picked) {
-      setSiteSkippedV6(0);
-      return;
-    }
-    const { spec, skippedV6 } = prefixesToSpec(picked.prefixes);
-    setSiteSkippedV6(skippedV6);
-    setTargetSpec(spec);
+    // Everything sweepable, ticked. The alternative — nothing ticked — makes the common case
+    // ("sweep this site") three clicks and reads as though the site had no ranges.
+    setCheckedPrefixes(picked ? defaultChecked(prefixRows(picked.prefixes)) : new Set());
+  };
+
+  const togglePrefix = (prefix: string) => {
+    setCheckedPrefixes((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(prefix)) next.add(prefix);
+      return next;
+    });
   };
 
   // Seed per-row form state when new candidates arrive. The suggested profile is resolved
@@ -314,9 +346,12 @@ export function DiscoveryPage() {
     // Validate before clearing anything. A range that does not parse started nothing, so nothing
     // that describes the previous sweep should disappear — the operator gets an error line above
     // results that are still theirs.
-    const targets = expandTargets(targetSpec);
+    const targets = expandTargets(effectiveSpec);
     if (targets.length === 0) {
-      setError(t('discovery.err.badTargets'));
+      // Two ways to get here and they need different sentences: a site with nothing usable ticked,
+      // and a typed spec that does not parse. The typed one's message names the syntax; saying
+      // that to someone who just unticked three checkboxes would be nonsense.
+      setError(t(siteId ? 'discovery.site.err.nothingTicked' : 'discovery.err.badTargets'));
       return;
     }
     // 🚨 Selecting *nothing* is load-bearing, not tidiness. The new scan has no id until the
@@ -512,13 +547,7 @@ export function DiscoveryPage() {
                 the pool select in particular read as an unexplained dropdown. */}
             {/* The site picker (ADR-100 decision 10). Drawn only when some folder actually
                 carries a prefix, which on a deployment with no NetBox is never — an empty
-                dropdown would be a control that explains nothing.
-
-                🚨 It writes into the target field rather than holding a selection of its own.
-                What will be swept is then visible as text and editable in place, which matters
-                because the 1024-address cap is reached by three ordinary /24s and the way past it
-                is to delete a token. A separate "selected prefixes" model would have had to grow
-                its own list UI to say the same thing. */}
+                dropdown would be a control that explains nothing. */}
             {siteOptions.length > 0 && (
               <div className="disco-site">
                 <label className="form-label">
@@ -537,34 +566,92 @@ export function DiscoveryPage() {
             )}
 
             <div className="disco-form form-row">
-              <label className="form-label disco-f-targets">
-                {t('discovery.targetsLabel')}
-                <TextInput
-                  className="mono"
-                  placeholder={t('discovery.targetPlaceholder')}
-                  value={targetSpec}
-                  onChange={(e) => setTargetSpec(e.target.value)}
-                />
-                {/* The count first, because it is the thing that changes as the field is edited.
-                    When it is `null` the spec will not run, and the examples hint below already
-                    names all three reasons — so this line simply goes away rather than repeating
-                    them in a second wording. */}
-                {targetCount !== null && (
-                  <FieldHint>
-                    {t('discovery.site.addresses', { count: targetCount, max: 1024 })}
+              {/* 🚨 **The site's ranges and the free-text field are one control, in two shapes.**
+                  Whichever is drawn is what Scan reads (`effectiveSpec`); they are never both on
+                  screen, because two inputs editing one target leaves nothing on the page saying
+                  which one the button is about to use — the coexistence `ui-conventions.md`
+                  removes wherever it finds it.
+
+                  Ticks rather than a comma-separated string, because the limit is reached by
+                  ordinary use: three /24s at one site come to 762 addresses against 1024, so
+                  "take that one out" is a routine operation and it should not be a text edit. */}
+              {siteId ? (
+                <div className="form-label disco-f-targets">
+                  {t('discovery.site.rangesLabel')}
+                  <div className="disco-prefixes">
+                    {siteRows.map((r) =>
+                      r.unsweepable ? (
+                        // No checkbox, and the reason in the row rather than on hover. A disabled
+                        // box explains itself only to a mouse (ADR-055 R4/R6), and these two are
+                        // different problems: IPv6 will never be sweepable, while a range that is
+                        // merely too large is one someone could narrow in NetBox.
+                        <div className="disco-prefix is-off" key={r.prefix}>
+                          <span className="disco-prefix-cidr mono">{r.prefix}</span>
+                          {r.description && (
+                            <span className="disco-prefix-desc">{r.description}</span>
+                          )}
+                          <span className="disco-prefix-why">
+                            {t(`discovery.site.cannot.${r.unsweepable}`, { max: SWEEP_LIMIT })}
+                          </span>
+                        </div>
+                      ) : (
+                        <label className="disco-prefix" key={r.prefix}>
+                          <input
+                            type="checkbox"
+                            checked={checkedPrefixes.has(r.prefix)}
+                            disabled={inFlight}
+                            onChange={() => togglePrefix(r.prefix)}
+                          />
+                          <span className="disco-prefix-cidr mono">{r.prefix}</span>
+                          {r.description && (
+                            <span className="disco-prefix-desc">{r.description}</span>
+                          )}
+                          <span className="disco-prefix-hosts">
+                            {t('discovery.site.hosts', { count: r.hosts })}
+                          </span>
+                        </label>
+                      ),
+                    )}
+                  </div>
+                  {/* The total, always — including when it is too big. `exactCount` de-duplicates
+                      but answers `null` past the limit, so the ticked sum stands in there: a
+                      number that simply disappeared would make an over-large selection look like
+                      an empty one. */}
+                  <FieldHint error={overLimit}>
+                    {shownCount === null
+                      ? t('discovery.site.noneTicked')
+                      : overLimit
+                        ? t('discovery.site.overLimit', { count: shownCount, max: SWEEP_LIMIT })
+                        : t('discovery.site.addresses', { count: shownCount, max: SWEEP_LIMIT })}
                   </FieldHint>
-                )}
-                {siteSkippedV6 > 0 && (
-                  <FieldHint>{t('discovery.site.skippedV6', { count: siteSkippedV6 })}</FieldHint>
-                )}
-                <FieldHint>
-                  <Trans
-                    t={t}
-                    i18nKey="discovery.examplesHint"
-                    components={{ c: <span className="mono" /> }}
+                </div>
+              ) : (
+                <label className="form-label disco-f-targets">
+                  {t('discovery.targetsLabel')}
+                  <TextInput
+                    className="mono"
+                    placeholder={t('discovery.targetPlaceholder')}
+                    value={targetSpec}
+                    onChange={(e) => setTargetSpec(e.target.value)}
                   />
-                </FieldHint>
-              </label>
+                  {/* The count first, because it is the thing that changes as the field is edited.
+                      When it is `null` the spec will not run, and the examples hint below already
+                      names all three reasons — so this line simply goes away rather than repeating
+                      them in a second wording. */}
+                  {shownCount !== null && (
+                    <FieldHint>
+                      {t('discovery.site.addresses', { count: shownCount, max: SWEEP_LIMIT })}
+                    </FieldHint>
+                  )}
+                  <FieldHint>
+                    <Trans
+                      t={t}
+                      i18nKey="discovery.examplesHint"
+                      components={{ c: <span className="mono" /> }}
+                    />
+                  </FieldHint>
+                </label>
+              )}
 
               <label className="form-label disco-f-creds">
                 {t('discovery.credsLabel')}

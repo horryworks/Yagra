@@ -272,13 +272,23 @@
       "stopErr": "Failed to request the stop"
     },
     "site": {
-      "label": "Fill from site",
-      "none": "None — type a range below",
-      "hint": "Puts that site's recorded prefixes in the addresses box, and files anything you import into its folder. Edit them freely: what is in the box is what gets swept.",
+      "label": "Sweep a site",
+      "none": "None — type a range instead",
+      "hint": "Lists the ranges recorded for that site so you can pick which to sweep, and files anything you import into its folder.",
+      "rangesLabel": "Ranges at this site",
+      "hosts_one": "{{count}} address",
+      "hosts_other": "{{count}} addresses",
       "addresses_one": "{{count}} address (limit {{max}} per sweep)",
       "addresses_other": "{{count}} addresses (limit {{max}} per sweep)",
-      "skippedV6_one": "{{count}} IPv6 prefix left out — a sweep tries every address in a range, and an IPv6 subnet has far too many.",
-      "skippedV6_other": "{{count}} IPv6 prefixes left out — a sweep tries every address in a range, and an IPv6 subnet has far too many."
+      "noneTicked": "No range selected.",
+      "overLimit": "{{count}} addresses — more than the {{max}} one sweep can carry. Clear a range or two.",
+      "cannot": {
+        "v6": "IPv6 — a sweep tries every address in a range, and this one has far too many",
+        "tooLarge": "too wide for one sweep (limit {{max}} addresses)"
+      },
+      "err": {
+        "nothingTicked": "Select at least one range to sweep."
+      }
     },
     "pool": {
       "label": "Sweep from",

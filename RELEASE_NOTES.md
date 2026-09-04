@@ -41,12 +41,14 @@
 - **A site's subnets come across from NetBox, and discovery can be aimed at them.** A sync now also
   reads NetBox's IP prefixes and attaches each one to the folder of the Site (or Region) it is
   scoped to, so selecting a folder shows the ranges in use there. Right-click a folder that has
-  some and **Run discovery here…** opens Discovery with those ranges already in the address box;
-  the same sites are offered from a picker on the Discovery screen itself. Devices imported from
-  that sweep are **filed into the folder** instead of landing at the tree root. The address box
-  keeps a live count beside it, because three ordinary /24s come to 762 addresses against a limit
-  of 1024 per sweep — and past the limit the sweep would simply refuse to start with nothing on
-  screen saying why. A prefix scoped to something Yagra does not model (a Location, a Site Group)
+  some and **Run discovery here…** opens Discovery with that site chosen; the same sites are
+  offered from a picker on the Discovery screen itself. Its ranges then appear as **a checkbox
+  each**, with the address count on every row and a running total underneath — because three
+  ordinary /24s come to 762 addresses against a limit of 1024 per sweep, so taking one out is a
+  routine thing to do and should not be a text edit. A range that cannot be swept keeps its place
+  in the list without a checkbox, saying why in the row rather than on hover. Devices imported
+  from that sweep are **filed into the folder** instead of landing at the tree root. With no site
+  chosen the addresses box works exactly as before. A prefix scoped to something Yagra does not model (a Location, a Site Group)
   is counted in the sync result rather than dropped in silence, and a prefix that vanishes from
   NetBox is removed on the next sync — unlike a folder, a prefix row has nothing underneath it to
   break. IPv6 prefixes are stored and shown but left out of a sweep, which enumerates every address

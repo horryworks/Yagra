@@ -85,6 +85,7 @@ import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { MERAKI_TIERS } from './pages/merakiTiers';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
 import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
+import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
@@ -503,6 +504,19 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // now. A kind added without strings would put a raw key in the dropdown an operator picks from.
     const keys = MONITOR_KINDS.flatMap((k) => [k.optionKey, k.titleKey, k.errorKey]);
     expectKeys('monitor kind', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every reason a site range cannot be swept has a sentence (monitoring:discovery.site.cannot.*)', () => {
+    // The picker builds this key at runtime from the row's reason, and `t()` is not typed against
+    // a key union — so a third reason added to `prefixRows` without strings would render the raw
+    // key in the one place that explains why a range has no checkbox. EN/JA parity cannot catch
+    // it: a key missing from both locales is "in parity".
+    expectKeys(
+      'unsweepable reason',
+      { en: enMonitoring, ja: jaMonitoring },
+      'discovery.site.cannot.',
+      [...UNSWEEPABLE_REASONS],
+    );
   });
 
   it('every ＋-menu label resolves (nodes:tree.*/addMenu.*)', () => {
