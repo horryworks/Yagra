@@ -11,7 +11,7 @@
 // It lived in `NodeTree.tsx`, so no test could reach it. It can now.
 
 import type { SuppressionIndex, SuppressionTarget } from '../../lib/suppression';
-import type { NodeSummary } from '../../types/api';
+import type { NodeGroup, NodeSummary } from '../../types/api';
 
 /** What the caller may do, as the tree sees it. Each field is one permission's answer, already
  *  resolved by the page — this module never looks a role up. */
@@ -32,6 +32,29 @@ export interface MenuCapabilities {
  */
 export function groupMenuHasItems(c: MenuCapabilities): boolean {
   return c.canEdit || c.canSuppress || c.canAddNode;
+}
+
+/**
+ * Whether this folder can offer "run a discovery sweep here" (ADR-100 decision 10).
+ *
+ * Two conditions, and neither is negotiable. The folder must carry at least one IP prefix — the
+ * item's whole content is "sweep these ranges", and without one there is nothing to sweep. And the
+ * caller must hold `ManageConfig`, which is what `POST /api/v1/discovery/scan` demands; an item
+ * that navigates to a screen the caller is then refused on is worse than no item.
+ *
+ * ⚠️ **A folder's own prefixes only — never its descendants'.** A Region with twenty sites under it
+ * would offer sixty ranges against a 1024-address ceiling, so "run discovery on Japan" could only
+ * ever be a spec that refuses to run. In every NetBox seen so far a Region carries none, so this
+ * simply does not appear on one.
+ *
+ * ⚠️ **This does not need a `MenuCapabilities` field**, and that is a deliberate reading of the
+ * rule this module exists for rather than an omission. The regression that created this file was a
+ * *mixed* menu closed on its strictest member; this item's permission is `canEdit`, which is also
+ * "Add subgroup"'s, so a menu containing only this one cannot exist. Adding a field would make
+ * `groupMenuHasItems` true in a case where the menu would render empty.
+ */
+export function canRunDiscovery(group: NodeGroup, c: MenuCapabilities): boolean {
+  return c.canEdit && group.prefixes.length > 0;
 }
 
 /**

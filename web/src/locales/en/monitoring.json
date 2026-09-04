@@ -271,6 +271,15 @@
       "finishedAnyway": "The sweep finished before the stop reached the poller.",
       "stopErr": "Failed to request the stop"
     },
+    "site": {
+      "label": "Fill from site",
+      "none": "None — type a range below",
+      "hint": "Puts that site's recorded prefixes in the addresses box, and files anything you import into its folder. Edit them freely: what is in the box is what gets swept.",
+      "addresses_one": "{{count}} address (limit {{max}} per sweep)",
+      "addresses_other": "{{count}} addresses (limit {{max}} per sweep)",
+      "skippedV6_one": "{{count}} IPv6 prefix left out — a sweep tries every address in a range, and an IPv6 subnet has far too many.",
+      "skippedV6_other": "{{count}} IPv6 prefixes left out — a sweep tries every address in a range, and an IPv6 subnet has far too many."
+    },
     "pool": {
       "label": "Sweep from",
       "any": "Any poller",
@@ -348,7 +357,9 @@
       "scanningProgress": "Scanning… {{probed}}/{{total}} addresses probed",
       "nowAt": " — now at {{addr}}",
       "imported_one": "Imported {{count}} node — they will start polling shortly.",
-      "imported_other": "Imported {{count}} nodes — they will start polling shortly."
+      "imported_other": "Imported {{count}} nodes — they will start polling shortly.",
+      "importedInto_one": "Imported {{count}} node into {{site}} — it will start polling shortly.",
+      "importedInto_other": "Imported {{count}} nodes into {{site}} — they will start polling shortly."
     },
     "err": {
       "badTargets": "Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.",

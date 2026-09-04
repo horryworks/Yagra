@@ -3,6 +3,7 @@
 // can run it. The regression case is the first one below.
 import { describe, expect, it } from 'vitest';
 import {
+  canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
   nodeMenuHasItems,
@@ -10,7 +11,7 @@ import {
   type MenuCapabilities,
 } from './nodeTreeMenu';
 import type { SuppressionIndex, SuppressionTarget } from '../../lib/suppression';
-import type { NodeSummary } from '../../types/api';
+import type { NodeGroup, NodeSummary } from '../../types/api';
 
 const caps = (over: Partial<MenuCapabilities> = {}): MenuCapabilities => ({
   canEdit: false,
@@ -97,5 +98,45 @@ describe('hasSuppression', () => {
     // Both sets are keyed by uuid and the two id spaces are different tables.
     expect(hasSuppression(idx({ maintenanceGroups: new Set(['n1']) }), node)).toBe(false);
     expect(hasSuppression(idx({ maintenanceNodes: new Set(['g1']) }), group)).toBe(false);
+  });
+});
+
+describe('canRunDiscovery', () => {
+  const folder = (prefixes: string[]): NodeGroup =>
+    ({
+      id: 'g1',
+      name: 'JPMYJ01 Matsuyama Home',
+      group_type: 'site',
+      parent_id: null,
+      sort_order: 0,
+      prefixes: prefixes.map((prefix) => ({ prefix, description: '' })),
+    }) as NodeGroup;
+
+  it('offers the sweep on a folder that has prefixes, to a caller who may start one', () => {
+    expect(canRunDiscovery(folder(['192.168.1.0/24']), caps({ canEdit: true }))).toBe(true);
+  });
+
+  // A Region — and every folder on a deployment with no NetBox. The item's whole content is
+  // "sweep these ranges", so with none there is nothing for it to say.
+  it('is hidden on a folder with no prefixes', () => {
+    expect(canRunDiscovery(folder([]), caps({ canEdit: true }))).toBe(false);
+  });
+
+  // `POST /api/v1/discovery/scan` needs ManageConfig. An item that navigates to a screen the
+  // caller is then refused on is worse than no item (ui-conventions, ADR-056).
+  it('is hidden without ManageConfig, however many prefixes the folder has', () => {
+    expect(canRunDiscovery(folder(['192.168.1.0/24']), caps())).toBe(false);
+    expect(canRunDiscovery(folder(['192.168.1.0/24']), caps({ canSuppress: true }))).toBe(false);
+    expect(canRunDiscovery(folder(['192.168.1.0/24']), caps({ canAddNode: true }))).toBe(false);
+  });
+
+  // 🚨 The reason this item needs no `MenuCapabilities` field of its own. It shares `canEdit`
+  // with "Add subgroup", so a menu whose *only* item is this one cannot exist — adding a field
+  // would make `groupMenuHasItems` true in a case that renders empty, which is the mirror image
+  // of the regression this whole module was created for.
+  it('never survives a capability set that closes the group menu', () => {
+    const closed = caps();
+    expect(groupMenuHasItems(closed)).toBe(false);
+    expect(canRunDiscovery(folder(['192.168.1.0/24']), closed)).toBe(false);
   });
 });

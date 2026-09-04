@@ -830,6 +830,11 @@ export function NodesPage() {
             onSetMute={canAck ? setMute : undefined}
             pools={pools}
             onSetPool={canConfig ? setPool : undefined}
+            onRunDiscovery={
+              canConfig
+                ? (g) => navigate(`/nodes/discovery?group=${encodeURIComponent(g.id)}`)
+                : undefined
+            }
           />
           </div>
         )}

@@ -181,9 +181,16 @@ impl NodeRepo {
     pub async fn import_nodes(&self, nodes: &[NewNode<'_>]) -> anyhow::Result<u32> {
         let mut tx = self.pool.begin().await?;
         for n in nodes {
+            // `sort_order` is computed the same way `set_node_group` does, rather than left at
+            // the column default: every imported node would otherwise share one value and sort
+            // ahead of whatever the operator had already placed in that folder. Inside the
+            // transaction each row sees the previous one, so a batch lands in order.
             sqlx::query(
-                "INSERT INTO nodes (id, name, address, profile_id, credential_id, vendor, model) \
-                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7)",
+                "INSERT INTO nodes \
+                   (id, name, address, profile_id, credential_id, vendor, model, group_id, sort_order) \
+                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, \
+                   (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM nodes \
+                     WHERE group_id IS NOT DISTINCT FROM $8::uuid))",
             )
             .bind(Uuid::new_v4())
             .bind(n.name)
@@ -192,6 +199,7 @@ impl NodeRepo {
             .bind(n.credential)
             .bind(n.vendor)
             .bind(n.model)
+            .bind(n.group)
             .execute(&mut *tx)
             .await?;
         }
@@ -726,6 +734,7 @@ mod tests {
                 credential: None,
                 vendor: None,
                 model: None,
+                group: None,
             },
             NewNode {
                 name: "imported-2",
@@ -734,6 +743,7 @@ mod tests {
                 credential: None,
                 vendor: None,
                 model: None,
+                group: None,
             },
         ];
         assert_eq!(repo.import_nodes(&rows).await.expect("first"), 2);

@@ -421,6 +421,14 @@ pub(super) struct ImportNode {
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct ImportDiscovered {
     nodes: Vec<ImportNode>,
+    /// Inventory folder to file every imported node under (ADR-100 decision 10), or absent for
+    /// the tree root — which is what every import did before this existed.
+    ///
+    /// ⚠️ **One folder for the whole request, not one per node.** A sweep is aimed at a site, so
+    /// the folder is a property of the sweep; per-row would invite a UI that lets fifty rows
+    /// disagree and then have to explain itself.
+    #[serde(default)]
+    group_id: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -428,7 +436,7 @@ pub(super) struct ImportDiscovered {
     request_body = ImportDiscovered,
     responses(
         (status = 201, description = "Nodes created, in one transaction", body = ImportResult),
-        (status = 400, description = "An unparseable address, an empty name, or a binding id that is not a UUID", body = super::error::ErrorBody),
+        (status = 400, description = "An unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -445,6 +453,19 @@ async fn import_discovered(
             Some(v) => v.parse::<Uuid>().map(Some).map_err(|_| ()),
         }
     };
+    // Checked before anything is prepared: `nodes.group_id` is a foreign key, so an id that is
+    // not there would abort the transaction and surface as a 500 that names nothing.
+    if let Some(group) = body.group_id {
+        let known = admin.groups.exists(group).await.map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "check node group", "failed to read node groups")
+        })?;
+        if !known {
+            return Err(ApiError::bad_request(
+                "invalid_group",
+                format!("no node group {group}"),
+            ));
+        }
+    }
     // Every node is validated up front and the batch is then inserted in one transaction, so a
     // failure partway cannot leave half an import behind (NodeRepo::import_nodes).
     let mut prepared: Vec<crate::repo::NewNode<'_>> = Vec::with_capacity(body.nodes.len());
@@ -477,6 +498,7 @@ async fn import_discovered(
             credential,
             vendor: n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
             model: n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            group: body.group_id,
         });
     }
     let created = admin.repo.import_nodes(&prepared).await.map_err(|e| {
@@ -835,6 +857,10 @@ async fn import_discovered_endpoint(
             // wrong pre-fill would outlive the guess by being an operator-set value.
             vendor: None,
             model: None,
+            // No folder, on purpose. This is the *passive* path (ADR-043 Inc.3): the row is an
+            // address a router mentioned, with no site behind it. The scan import files into a
+            // folder because the operator aimed the sweep at one; here there is nothing to aim.
+            group: None,
         }])
         .await
         .map_err(|e| {
@@ -1141,5 +1167,82 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{scan}");
+    }
+
+    /// An import filed into a folder is accepted, and the node really lands there (ADR-100
+    /// decision 10).
+    ///
+    /// 🚨 The assertion is on the **row**, not on the status. Before `group_id` existed this
+    /// endpoint already answered 201 while writing `group_id = NULL` for every node, so a status
+    /// check alone would pass against the code this test exists to prove changed.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn importing_into_a_folder_files_the_node_there(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+
+        let (status, created) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "Matsuyama Home", "group_type": "site" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+        let group = created["id"].as_str().expect("group id").to_owned();
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(serde_json::json!({
+                "group_id": group,
+                "nodes": [{ "address": "192.168.1.50", "name": "found-1" }],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(body["created"], 1);
+
+        let filed: Option<uuid::Uuid> =
+            sqlx::query_scalar("SELECT group_id FROM nodes WHERE name = 'found-1'")
+                .fetch_one(&pool)
+                .await
+                .expect("the imported node");
+        assert_eq!(
+            filed.map(|g| g.to_string()),
+            Some(group),
+            "the node is in the folder the sweep was aimed at"
+        );
+    }
+
+    /// A folder id nothing has is a 400 that names the problem, not a foreign-key 500.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn importing_into_a_folder_that_does_not_exist_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(serde_json::json!({
+                "group_id": uuid::Uuid::new_v4(),
+                "nodes": [{ "address": "192.168.1.51", "name": "found-2" }],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_group");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "nodes").await,
+            0,
+            "the batch is refused before anything is written"
+        );
     }
 }

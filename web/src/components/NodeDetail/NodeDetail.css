@@ -1529,3 +1529,35 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   white-space: nowrap;
   cursor: pointer;
 }
+
+/* ── A folder's IP prefixes (ADR-100 decision 10) ────────────────────────────────────────────
+   Same row rhythm as `.nd-member` above, deliberately: both are "one line per thing this folder
+   contains", and giving them different metrics would make one section look like a different kind
+   of list. The CIDR is monospace because it is an address (ui-conventions, "two font families"). */
+.nd-prefixes {
+  display: flex;
+  flex-direction: column;
+}
+
+.nd-prefix {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+}
+
+.nd-prefix:first-child {
+  border-top: none;
+}
+
+.nd-prefix-cidr {
+  font-weight: var(--weight-medium);
+}
+
+.nd-prefix-desc {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}

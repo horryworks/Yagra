@@ -99,6 +99,29 @@ pub struct GroupSummary {
     /// from the nearest ancestor that sets one, else the default pool. A node's own `pool` still
     /// wins — see [`crate::poolres`].
     pub pool: Option<String>,
+    /// The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a
+    /// folder nothing has attached one to, which is every folder in a deployment with no NetBox.
+    ///
+    /// 🚨 **Empty also means "you may not see them".** [`crate::api::groups::visible_groups`]
+    /// clears this on a row a scoped caller receives only as a breadcrumb ancestor: such a row is
+    /// listed so the tree has a spine, and handing over the subnet layout of a site whose
+    /// membership the caller cannot see would be a leak the folder's *name* does not constitute.
+    pub prefixes: Vec<GroupPrefix>,
+}
+
+/// One IP prefix attached to a folder.
+///
+/// Two fields and no more, on purpose. NetBox's prefix rows also carry `status`, `vrf`,
+/// `is_pool`, `role` and a tenant, and none of them has a reader here: what a person needs in
+/// order to choose a sweep target is the range and what it is called. Storing the rest would be a
+/// second copy of NetBox's inventory that nothing consults.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct GroupPrefix {
+    /// Canonical CIDR, e.g. `"192.168.1.0/24"`. PostgreSQL's `cidr` type rendered as text, so the
+    /// mask is always present — unlike `inet`, where a host address would print bare.
+    pub prefix: String,
+    /// NetBox's description of the range ("Matsuyama LAN"), or empty.
+    pub description: String,
 }
 
 /// A fractional sort_order that places an item between `prev` and `next` — the order values of
@@ -383,11 +406,62 @@ impl GroupRepo {
                     geo_source: GeoSource::Unset,
                     geo_group: None,
                     pool: row.try_get("pool")?,
+                    // Filled from the second query below: one round trip for the whole tree
+                    // rather than a lateral join, because most deployments have no rows here at
+                    // all and the empty answer is then a single index-less scan of nothing.
+                    prefixes: Vec::new(),
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         resolve_group_geo(&mut groups);
+        self.attach_prefixes(&mut groups).await?;
         Ok(groups)
+    }
+
+    /// Fold `node_group_prefixes` into an already-built group list.
+    ///
+    /// ⚠️ `prefix::TEXT` — the column is `cidr`, and sqlx has no mapping for it without the
+    /// `ipnetwork` feature. Casting in the query keeps that feature (and a crate) out of the
+    /// build, and for `cidr` the text form is exactly what was stored: the mask is always
+    /// rendered, so `192.168.1.0/24` round-trips. (`inet` would **add** a `/32` to a host
+    /// address, which is the trap `dns_check.rs` records.)
+    async fn attach_prefixes(&self, groups: &mut [GroupSummary]) -> anyhow::Result<()> {
+        let rows = sqlx::query(
+            "SELECT group_id, prefix::TEXT AS prefix, description \
+             FROM node_group_prefixes ORDER BY prefix",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut by_group: std::collections::HashMap<Uuid, Vec<GroupPrefix>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let group_id: Uuid = row.try_get("group_id")?;
+            by_group.entry(group_id).or_default().push(GroupPrefix {
+                prefix: row.try_get("prefix")?,
+                description: row.try_get("description")?,
+            });
+        }
+        for g in groups.iter_mut() {
+            if let Some(v) = by_group.remove(&g.id) {
+                g.prefixes = v;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a folder with this id exists.
+    ///
+    /// Exists so a write path can refuse an unknown folder with a 400 that names the problem,
+    /// instead of letting the foreign key turn it into a 500 that names nothing.
+    pub async fn exists(&self, id: Uuid) -> anyhow::Result<bool> {
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM node_groups WHERE id = $1")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n > 0)
     }
 
     /// The `(id, sort_order)` of the groups directly under `parent` (NULL ⇒ top level), ordered.
@@ -613,6 +687,7 @@ mod tests {
             geo_source: GeoSource::Unset,
             geo_group: None,
             pool: None,
+            prefixes: Vec::new(),
         }
     }
 

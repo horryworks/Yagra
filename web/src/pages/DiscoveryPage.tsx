@@ -35,6 +35,7 @@ import {
   statusFor,
 } from './discoveryScans';
 import { expandTargets } from '../lib/cidr';
+import { hostCount, prefixesToSpec, siteTargetOptions } from './siteTargets';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
@@ -86,6 +87,16 @@ export function DiscoveryPage() {
   const [scans, setScans] = useState<DiscoveryScanSummary[]>([]);
   const [pools, setPools] = useState<PoolOption[]>([]);
   const [pool, setPool] = useState<string | null>(null);
+  /** Folders that carry IP prefixes, offered as a one-click way to fill the target field
+   *  (ADR-100 decision 10). Empty on a deployment with no NetBox, which is why the whole control
+   *  disappears rather than showing an empty dropdown. */
+  const [siteOptions, setSiteOptions] = useState<ReturnType<typeof siteTargetOptions>>([]);
+  /** The folder whose prefixes were last poured into the target field, so the select shows what
+   *  the field holds. The field stays authoritative: editing it is expected, and this only goes
+   *  stale in the direction of "the operator changed their mind", which is visible in the text. */
+  const [siteId, setSiteId] = useState<string>('');
+  /** How many prefixes the chosen site has that the sweep cannot expand (IPv6). */
+  const [siteSkippedV6, setSiteSkippedV6] = useState(0);
   /** Try SNMP on addresses that did not answer ping (ADR-068 Inc.3). Off by default: on a /24 the
    *  unassigned addresses are the overwhelming majority, and asking each of them for its identity
    *  is where a sweep's minutes went. Kept as a choice because a firewall that filters ICMP and
@@ -118,6 +129,9 @@ export function DiscoveryPage() {
   /** The `?scan=` present when the page was opened. Held in a ref because the URL is rewritten from
    *  `scanId` below, so reading the live value during the reattach would race with our own write. */
   const arrivedWith = useRef(searchParams.get('scan'));
+  /** The `?group=` the node tree's "Run discovery" sent us here with, read once for the same
+   *  reason `arrivedWith` is: the URL is rewritten below and reading it live would race. */
+  const arrivedWithGroup = useRef(searchParams.get('group'));
 
   /** The status the page may act on, and the candidates that come with it.
    *
@@ -174,6 +188,25 @@ export function DiscoveryPage() {
         setPool(pickDefaultPool(r.pools));
       })
       .catch(() => undefined);
+    // The site picker's options, and the deep link the node tree's context menu uses.
+    //
+    // ⚠️ `?group=` is read **once, here, and never written back**. The URL is owned by the
+    // `?scan=` effect below, and a second writer acting on the params it captured at render would
+    // silently undo the first — the comment on that effect is about exactly this.
+    api
+      .listNodeGroups()
+      .then((groups) => {
+        const options = siteTargetOptions(groups);
+        setSiteOptions(options);
+        const wanted = arrivedWithGroup.current;
+        const picked = wanted ? options.find((o) => o.id === wanted) : undefined;
+        if (!picked) return;
+        const { spec, skippedV6 } = prefixesToSpec(picked.prefixes);
+        setSiteId(picked.id);
+        setSiteSkippedV6(skippedV6);
+        if (spec) setTargetSpec(spec);
+      })
+      .catch(() => undefined);
   }, []);
 
   // Reattach on arrival (ADR-068). This is the whole point of the increment: the scan id used to
@@ -204,6 +237,27 @@ export function DiscoveryPage() {
   }, [scanId, searchParams, setSearchParams]);
 
   const snmpCreds = creds.filter((c) => isSnmpCredentialKind(c.kind));
+
+  /** How many addresses the current spec covers, or `null` when it will not run.
+   *
+   *  🚨 On screen at all times, not only after a failure. Three sites' prefixes come to 1016
+   *  addresses against a 1024 cap (measured on the lab), so the ceiling is reached by ordinary use
+   *  — and past it `expandTargets` returns an empty list, which makes pressing Scan look like it
+   *  did nothing. A number that stops being shown is the warning. */
+  const targetCount = useMemo(() => hostCount(targetSpec), [targetSpec]);
+
+  /** Fill the target field from a folder's prefixes. */
+  const pickSite = (id: string) => {
+    setSiteId(id);
+    const picked = siteOptions.find((o) => o.id === id);
+    if (!picked) {
+      setSiteSkippedV6(0);
+      return;
+    }
+    const { spec, skippedV6 } = prefixesToSpec(picked.prefixes);
+    setSiteSkippedV6(skippedV6);
+    setTargetSpec(spec);
+  };
 
   // Seed per-row form state when new candidates arrive. The suggested profile is resolved
   // server-side (by sysObjectID/sysDescr → classification rules) and arrives as an id, so we
@@ -409,9 +463,16 @@ export function DiscoveryPage() {
       return;
     }
     api
-      .importDiscovered(nodes)
+      // The folder the sweep was aimed at, so a site's devices arrive filed rather than in a heap
+      // at the tree root. Empty when the operator typed a range instead of picking a site, which
+      // is the pre-ADR-100 behaviour and still the right answer for an ad-hoc sweep.
+      .importDiscovered(nodes, siteId || undefined)
       .then(({ created }) => {
-        setImportNote(t('discovery.msg.imported', { count: created }));
+        setImportNote(
+          siteLabel
+            ? t('discovery.msg.importedInto', { count: created, site: siteLabel })
+            : t('discovery.msg.imported', { count: created }),
+        );
         // Mark the imported rows and clear their selection (no double-import).
         setImported((cur) => {
           const next = { ...cur };
@@ -431,6 +492,9 @@ export function DiscoveryPage() {
     (c) => rowState[c.address]?.selected && !imported[c.address],
   ).length;
 
+  /** The chosen site's path, for the sentence that says where an import lands. */
+  const siteLabel = siteOptions.find((o) => o.id === siteId)?.label ?? '';
+
   return (
     <div>
       <PageHeader
@@ -446,6 +510,32 @@ export function DiscoveryPage() {
                 (ADR-055 R1/R2). They were an unlabelled row with all three explanations stacked
                 below it, so nothing on screen said which sentence belonged to which control — and
                 the pool select in particular read as an unexplained dropdown. */}
+            {/* The site picker (ADR-100 decision 10). Drawn only when some folder actually
+                carries a prefix, which on a deployment with no NetBox is never — an empty
+                dropdown would be a control that explains nothing.
+
+                🚨 It writes into the target field rather than holding a selection of its own.
+                What will be swept is then visible as text and editable in place, which matters
+                because the 1024-address cap is reached by three ordinary /24s and the way past it
+                is to delete a token. A separate "selected prefixes" model would have had to grow
+                its own list UI to say the same thing. */}
+            {siteOptions.length > 0 && (
+              <div className="disco-site">
+                <label className="form-label">
+                  {t('discovery.site.label')}
+                  <Select value={siteId} disabled={inFlight} onChange={(e) => pickSite(e.target.value)}>
+                    <option value="">{t('discovery.site.none')}</option>
+                    {siteOptions.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <FieldHint>{t('discovery.site.hint')}</FieldHint>
+                </label>
+              </div>
+            )}
+
             <div className="disco-form form-row">
               <label className="form-label disco-f-targets">
                 {t('discovery.targetsLabel')}
@@ -455,6 +545,18 @@ export function DiscoveryPage() {
                   value={targetSpec}
                   onChange={(e) => setTargetSpec(e.target.value)}
                 />
+                {/* The count first, because it is the thing that changes as the field is edited.
+                    When it is `null` the spec will not run, and the examples hint below already
+                    names all three reasons — so this line simply goes away rather than repeating
+                    them in a second wording. */}
+                {targetCount !== null && (
+                  <FieldHint>
+                    {t('discovery.site.addresses', { count: targetCount, max: 1024 })}
+                  </FieldHint>
+                )}
+                {siteSkippedV6 > 0 && (
+                  <FieldHint>{t('discovery.site.skippedV6', { count: siteSkippedV6 })}</FieldHint>
+                )}
                 <FieldHint>
                   <Trans
                     t={t}

@@ -455,6 +455,14 @@ pub struct NodeGroupDto {
     /// counts cost a second query, so they are opt-in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_counts: Option<crate::api::fleet::GroupStateCounts>,
+    /// The IP prefixes in use at this site (ADR-100 decision 10). Kept, for the reason geo is
+    /// kept: "which subnets are at this site" is a question asked during an incident, and read
+    /// parity (ADR-042) is about which questions can be answered.
+    ///
+    /// Not a new exposure — the addresses of the nodes in those ranges are already returned by
+    /// `list_nodes`. And the scope filter that clears this for a breadcrumb ancestor runs before
+    /// the projection, so a scoped caller sees here exactly what the WebUI shows them.
+    pub prefixes: Vec<crate::groups::GroupPrefix>,
 }
 
 impl NodeGroupDto {
@@ -473,6 +481,7 @@ impl NodeGroupDto {
             effective_longitude: g.effective_longitude,
             geo_source: g.geo_source,
             geo_group: g.geo_group,
+            prefixes: g.prefixes.clone(),
             state_counts: None,
         }
     }
@@ -1078,6 +1087,10 @@ mod tests {
             geo_source: crate::groups::GeoSource::Own,
             geo_group: None,
             pool: Some("tokyo".to_owned()),
+            prefixes: vec![crate::groups::GroupPrefix {
+                prefix: "192.168.1.0/24".to_owned(),
+                description: "Tokyo LAN".to_owned(),
+            }],
         };
         let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();
         assert!(

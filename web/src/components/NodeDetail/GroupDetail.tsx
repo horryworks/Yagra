@@ -95,6 +95,24 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
           </div>
         </section>
 
+        {/* The site's IP prefixes (ADR-100 decision 10). Drawn only when the folder has some,
+            which for a Region — and for every folder on a deployment with no NetBox — is never.
+            An empty section here would read as "this site has no subnets", a claim nothing has
+            made. */}
+        {group.prefixes.length > 0 && (
+          <section>
+            <div className="nd-section-t">{t('groupDetail.prefixes')}</div>
+            <div className="nd-prefixes">
+              {group.prefixes.map((p) => (
+                <div className="nd-prefix" key={p.prefix}>
+                  <span className="nd-prefix-cidr mono">{p.prefix}</span>
+                  {p.description && <span className="nd-prefix-desc">{p.description}</span>}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section>
           <div className="nd-section-t">{t('groupDetail.members')}</div>
           {directMembers.length > 0 ? (

@@ -159,6 +159,12 @@ pub struct NewNode<'a> {
     pub credential: Option<Uuid>,
     pub vendor: Option<&'a str>,
     pub model: Option<&'a str>,
+    /// Inventory folder to file the node under, or `None` for the tree root (ADR-100 decision 10).
+    ///
+    /// ⚠️ **The caller must have checked the folder exists.** This is a foreign key, so a stale id
+    /// aborts the whole import transaction — which is why `api/discovery.rs` answers 400 rather
+    /// than letting the insert answer 500.
+    pub group: Option<Uuid>,
 }
 
 /// The folder groups a query is restricted to, or `None` for no restriction at all (ADR-014).

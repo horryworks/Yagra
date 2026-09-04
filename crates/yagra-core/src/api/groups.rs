@@ -82,6 +82,13 @@ async fn list_node_groups(
 ///
 /// Extracted so that choice is made once. ADR-042's `list_node_groups` tool returns `parent_id`
 /// too, so a second filter written with `allows_group` would be subtly wrong in exactly this way.
+///
+/// 🚨 **`prefixes` uses the other predicate, and that asymmetry is the point** (ADR-100 decision
+/// 10). A breadcrumb ancestor is admitted here as a *name*, so the tree has a spine. Its IP
+/// prefixes are not a name — they are the subnet layout of a site whose membership this caller was
+/// refused — so they are cleared on exactly the rows `allows_group` rejects. That is the same
+/// split `scope::require_visible_group` makes, for the same reason: a folder may be named without
+/// being reachable.
 pub(crate) async fn visible_groups(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
@@ -92,6 +99,12 @@ pub(crate) async fn visible_groups(
     Ok(list
         .into_iter()
         .filter(|g| scope.allows_group_row(g.id))
+        .map(|mut g| {
+            if !g.prefixes.is_empty() && !scope.allows_group(Some(g.id)) {
+                g.prefixes.clear();
+            }
+            g
+        })
         .collect())
 }
 
@@ -546,5 +559,99 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/node-groups", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("tokyo"), "{list}");
+    }
+
+    /// 🚨 A breadcrumb ancestor is listed by name and **without its prefixes** (ADR-100 decision
+    /// 10).
+    ///
+    /// The tree needs the ancestor row or every visible root renders as an orphan, so the row
+    /// itself cannot be dropped. But the ancestor here is a site the caller was refused, and its
+    /// subnet layout is not part of "a name" — a scoped operator who can see one rack must not
+    /// learn the addressing of the building it sits in. `allows_group_row` admits the row;
+    /// `allows_group` is what decides the prefixes, and this test is the only thing that would
+    /// notice if the two were unified.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_breadcrumb_ancestor_is_named_without_its_prefixes(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+
+        let (_, parent) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({ "name": "Matsuyama Home", "group_type": "site" })),
+        )
+        .await;
+        let parent_id: uuid::Uuid = parent["id"]
+            .as_str()
+            .expect("parent id")
+            .parse()
+            .expect("uuid");
+        let (_, child) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({
+                "name": "Rack 1", "group_type": "generic", "parent_id": parent_id,
+            })),
+        )
+        .await;
+        let child_id: uuid::Uuid = child["id"]
+            .as_str()
+            .expect("child id")
+            .parse()
+            .expect("uuid");
+
+        // Both folders carry a prefix, so "the ancestor's is missing" cannot be confused with
+        // "nothing has any".
+        for (group, prefix) in [(parent_id, "192.168.1.0/24"), (child_id, "192.168.9.0/24")] {
+            sqlx::query(
+                "INSERT INTO node_group_prefixes (group_id, prefix, description) \
+                 VALUES ($1, $2::cidr, 'lab')",
+            )
+            .bind(group)
+            .bind(prefix)
+            .execute(&pool)
+            .await
+            .expect("seed prefix");
+        }
+
+        // Scoped to the child only: the parent arrives as a breadcrumb.
+        let scoped = scoped_token(&st, &[child_id]);
+        let (status, list) = send(&st, "GET", "/api/v1/node-groups", &scoped, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        let rows = list.as_array().expect("a list");
+        let of = |id: uuid::Uuid| {
+            rows.iter()
+                .find(|g| g["id"] == id.to_string())
+                .unwrap_or_else(|| panic!("row {id} present"))
+        };
+        assert_eq!(
+            of(child_id)["prefixes"],
+            serde_json::json!([{ "prefix": "192.168.9.0/24", "description": "lab" }]),
+            "the folder in scope keeps its prefixes"
+        );
+        assert_eq!(
+            of(parent_id)["prefixes"],
+            serde_json::json!([]),
+            "the breadcrumb ancestor is named, and says nothing about its addressing"
+        );
+
+        // The same read as an unscoped Admin still shows both, so the test above is measuring the
+        // scope filter and not a write that never happened.
+        let (_, all) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        let all_rows = all.as_array().expect("a list");
+        let parent_row = all_rows
+            .iter()
+            .find(|g| g["id"] == parent_id.to_string())
+            .expect("parent row");
+        assert_eq!(
+            parent_row["prefixes"][0]["prefix"], "192.168.1.0/24",
+            "unscoped, the ancestor's prefixes are there"
+        );
     }
 }

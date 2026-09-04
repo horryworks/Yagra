@@ -49,6 +49,7 @@ const group = (id: string, parent_id: string | null = null, pin?: string): NodeG
   id,
   name: id,
   group_type: 'site',
+  prefixes: [],
   parent_id,
   sort_order: 0,
   latitude: pin === id ? 35 : null,

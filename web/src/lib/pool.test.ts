@@ -20,6 +20,7 @@ const group = (over: Partial<NodeGroup> = {}): NodeGroup => ({
   id: 'g1',
   name: 'Tokyo',
   group_type: 'site',
+  prefixes: [],
   parent_id: null,
   sort_order: 0,
   latitude: null,

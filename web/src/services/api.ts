@@ -1522,7 +1522,11 @@ export const api = {
       onProgress,
     ),
 
-  /** Import selected discovered devices as nodes. */
+  /** Import selected discovered devices as nodes.
+   *
+   *  `group_id` files every node in the batch under one folder (ADR-100 decision 10) — the site
+   *  the sweep was aimed at. Omitted, they land at the tree root, which is what every import did
+   *  before folders could be swept. */
   importDiscovered: (
     nodes: {
       address: string;
@@ -1532,7 +1536,11 @@ export const api = {
       vendor?: string;
       model?: string;
     }[],
-  ): Promise<{ created: number }> => apiPost('/api/v1/discovery/import', { body: { nodes } }),
+    groupId?: string,
+  ): Promise<{ created: number }> =>
+    apiPost('/api/v1/discovery/import', {
+      body: { nodes, ...(groupId ? { group_id: groupId } : {}) },
+    }),
 
   /** Device-classification rules (discovery → suggested profile), ascending by priority. */
   listClassificationRules: (): Promise<ClassificationRule[]> =>

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! NetBox integration: pull the site hierarchy out of the network's source of truth and mirror it
-//! into `node_groups` as a folder tree (ADR-100 Inc.1).
+//! into `node_groups` as a folder tree (ADR-100 Inc.1), together with the IP prefixes in use at
+//! each site so a discovery sweep can be aimed at one (Inc.4).
 //!
 //! # What this module is for
 //!
 //! The site master already exists in NetBox; Yagra was making operators rebuild it by hand. Because
 //! Yagra's folders carry threshold inheritance (ADR-013), dependency suppression, group scope
 //! (ADR-014), folder pool (mig 0054) and the Geo-map pins (mig 0025), a tree that drifts is
-//! *monitoring* that drifts. So this module reads NetBox and writes folders — and nothing else.
+//! *monitoring* that drifts. So this module reads NetBox and writes folders — and, since Inc.4,
+//! the prefixes attached to them. It writes nothing else: no node, no node placement.
 //!
 //! # The one idea worth carrying out of here: ownership is split per column
 //!
@@ -17,6 +19,13 @@
 //! | `node_groups.pool` | the operator | **never touched** |
 //! | `node_groups.sort_order` | Yagra | kept name-ordered so the tree does not shuffle |
 //! | a row that vanished from NetBox | nobody | **marked, never deleted** |
+//! | `node_group_prefixes` (mig 0104) | NetBox | overwritten, and **swept when it vanishes** |
+//!
+//! ⚠️ **The last row is the one exception, and it is not an inconsistency.** Deleting a *folder*
+//! re-parents everything under it (mig 0014), so one mistake in an external system reshapes the
+//! tree — hence "marked". A prefix row has nothing under it and nothing pointing at it, so leaving
+//! a stale one in place would aim a sweep at a subnet the source of truth has stopped claiming.
+//! Migration 0104's header carries the full argument.
 //!
 //! Splitting it that way is what makes the sync a plain idempotent upsert: there is no conflict, so
 //! there is no conflict-resolution policy to design, tune or get wrong. The inverse — letting the
@@ -243,15 +252,18 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
-    /// Every kind, so the round-trip below can be asserted over the set rather than over two
-    /// literals.
+    /// Every kind, so a mapping over the set is written once rather than as two literals.
     ///
-    /// ⚠️ Test-only, and so is [`Self::from_str`], because **nothing reads `object_kind` back yet**
-    /// — Inc.1 writes it as half of `netbox_groups`' primary key (region 6 and site 6 are different
-    /// objects) and never selects on it. The pair is kept rather than deleted because the token is
-    /// already in a shipped table: what it must round-trip to is a fact about stored data, not
-    /// about a caller, and the first reader arrives with Inc.2's folder list.
-    #[cfg(test)]
+    /// **Production since Inc.4**: [`NetboxPrefix::scope`] turns NetBox's `scope_type` string into
+    /// a kind by searching this, so adding a third `ObjectKind` cannot leave the prefix reader
+    /// silently unable to recognise it — the compiler demands an arm in
+    /// [`Self::netbox_scope_type`] and this array carries it to the reader.
+    ///
+    /// ⚠️ [`Self::from_str`] is still test-only, because **nothing reads `object_kind` back out of
+    /// `netbox_groups` yet** — Inc.1 writes it as half of that table's primary key (region 6 and
+    /// site 6 are different objects) and never selects on it. It is kept rather than deleted
+    /// because the token is already in a shipped table: what it must round-trip to is a fact about
+    /// stored data, and the first reader arrives with Inc.2's folder list.
     pub const ALL: [ObjectKind; 2] = [ObjectKind::Region, ObjectKind::Site];
 
     #[must_use]
@@ -283,6 +295,21 @@ impl ObjectKind {
         match self {
             ObjectKind::Region => GroupType::Region,
             ObjectKind::Site => GroupType::Site,
+        }
+    }
+
+    /// How NetBox spells this kind in a **generic foreign key** — `Prefix.scope_type`, and every
+    /// other 4.x `scope_type`/`*_type` field.
+    ///
+    /// ⚠️ Not the same vocabulary as [`Self::as_str`], and they must not be merged: that one is the
+    /// token stored in `netbox_groups.object_kind` (Yagra's own spelling, in a shipped table),
+    /// this one is NetBox's app-label form. Making one derive from the other would tie a stored
+    /// value to a third party's naming.
+    #[must_use]
+    pub const fn netbox_scope_type(self) -> &'static str {
+        match self {
+            ObjectKind::Region => "dcim.region",
+            ObjectKind::Site => "dcim.site",
         }
     }
 
@@ -549,6 +576,71 @@ impl CustomFieldDef {
     }
 }
 
+/// An `ipam.Prefix` — one subnet, and what it is attached to (ADR-100 decision 10).
+///
+/// 🚨 **NetBox 4.x has no `site` field here.** A prefix is attached through a *generic* foreign
+/// key, `scope_type` + `scope_id`, which can point at a Site, a Region, a SiteGroup or a Location.
+/// NetBox 3.x had a plain `site`. Both spellings are read, because the same version split already
+/// bit this ADR once — `CustomFieldDef`'s `object_types` / `content_types` — and reading only the
+/// modern one would return **zero prefixes with no error** on a 3.x server, which is
+/// indistinguishable from a NetBox that has none.
+///
+/// 🚨 Every field here is `#[serde(default)]` for the same reason [`NetboxSite`]'s naming fields
+/// are: a prefix a token may only partly see must cost that prefix, never the sync.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NetboxPrefix {
+    #[allow(dead_code)] // Part of the documented wire shape; see the PK note in migration 0104.
+    pub id: i64,
+    /// The CIDR as NetBox renders it, e.g. `"192.168.1.0/24"`. Validated by PostgreSQL on write,
+    /// not here — there is no CIDR parser in this workspace, and adding one to check a value the
+    /// store is about to check again would be a second implementation of the same rule.
+    pub prefix: String,
+    /// NetBox's free-text description. `Option` rather than `#[serde(default)] String` because a
+    /// `null` here is a deserialisation error for the latter, and NetBox's own serializer has
+    /// emitted `null` for blank text fields in the past.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// 4.x: which *model* this prefix is attached to (`"dcim.site"`).
+    #[serde(default)]
+    pub scope_type: Option<String>,
+    /// 4.x: which object of that model.
+    #[serde(default)]
+    pub scope_id: Option<i64>,
+    /// 3.x: the only attachment a prefix had.
+    #[serde(default)]
+    pub site: Option<NestedRef>,
+}
+
+impl NetboxPrefix {
+    /// Which Yagra folder this prefix belongs to, as (kind, NetBox id) — or `None` when it belongs
+    /// to nothing Yagra models.
+    ///
+    /// `None` covers three real cases and they are deliberately not distinguished here: a global
+    /// prefix with no scope at all, a scope Yagra has no folder for (`dcim.location`,
+    /// `dcim.sitegroup`), and a 4.x row whose `scope_id` is missing. The caller counts them and
+    /// logs the reason per row — see `SyncReport::prefixes_skipped`.
+    #[must_use]
+    pub fn scope(&self) -> Option<(ObjectKind, i64)> {
+        if let (Some(t), Some(id)) = (self.scope_type.as_deref(), self.scope_id) {
+            // Derived from `ObjectKind::ALL` rather than matched on literals, so a third kind
+            // reaches this reader by way of the exhaustive match in `netbox_scope_type`.
+            return ObjectKind::ALL
+                .into_iter()
+                .find(|k| k.netbox_scope_type() == t)
+                .map(|k| (k, id));
+        }
+        // 3.x. Reached only when `scope_type` is absent, so a 4.x row scoped to something Yagra
+        // does not model can never fall through to a stale `site` field.
+        self.site.as_ref().map(|s| (ObjectKind::Site, s.id))
+    }
+
+    /// The description, with an absent one flattened to the empty string the column stores.
+    #[must_use]
+    pub fn description(&self) -> &str {
+        self.description.as_deref().unwrap_or_default()
+    }
+}
+
 /// NetBox's nested representation of a foreign key — always at least `{id, name}`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NestedRef {
@@ -700,6 +792,21 @@ impl NetboxClient {
     /// Every site.
     pub async fn sites(&self) -> anyhow::Result<Vec<NetboxSite>> {
         self.fetch_all("/api/dcim/sites/").await
+    }
+
+    /// Every IP prefix, or `None` when this token may not read them.
+    ///
+    /// 🚨 **Optional on purpose, and this is the load-bearing half.** `ipam.view_prefix` is a
+    /// separate object permission from `dcim.view_site`, so a token that has synced the folder
+    /// tree for months may be refused here. Fetched with `fetch_all`, a `403` would abort the
+    /// whole sync and **the folder tree would stop updating over a feature the operator never
+    /// asked for**. `None` instead means "left alone": no prefix is written, and — critically —
+    /// no stored prefix is swept away either, so losing the permission does not silently empty
+    /// every site's target list.
+    ///
+    /// ⚠️ No `brief=1`: the brief serializer drops `scope`, which is the whole attachment.
+    pub async fn prefixes(&self) -> anyhow::Result<Option<Vec<NetboxPrefix>>> {
+        self.fetch_all_optional("/api/ipam/prefixes/").await
     }
 
     /// [`Self::fetch_all`], except that a **refusal is an answer** rather than an error.
@@ -893,6 +1000,29 @@ pub struct SyncReport {
     /// an operator can act on. A feature that ships inert while every signal reads success is this
     /// repository's most repeated failure shape.
     pub sites_without_site_id: usize,
+    /// Whether this token was allowed to read `/api/ipam/prefixes/` at all.
+    ///
+    /// 🚨 `false` means **refused**, not "there are none" — and no prefix was written *or swept*
+    /// on this run. Collapsing the two would tell an operator whose token lacks `ipam.view_prefix`
+    /// that their NetBox has no prefixes, which is a sentence they cannot act on. This is the
+    /// third time in this one ADR that a single status code had to be taken apart before it could
+    /// be shown to a person (`ProbeResult`'s reachable/authenticated, `site_custom_fields`'
+    /// `Option`, and now this).
+    pub prefixes_readable: bool,
+    /// NetBox prefix rows accepted and written against a folder.
+    ///
+    /// ⚠️ Counts *rows from NetBox*, not rows in the table: two prefixes with the same CIDR at one
+    /// site (NetBox permits it when the VRFs differ) collapse into a single stored row, by the
+    /// primary key migration 0104 chose.
+    pub prefixes: usize,
+    /// Prefix rows that reached no folder: scoped to something Yagra has no folder for
+    /// (`dcim.location`, `dcim.sitegroup`), scoped to an object this run did not see, or refused
+    /// by PostgreSQL as not an address.
+    ///
+    /// 🚨 Same reason as `sites_without_site_id`: without a count, "this site has no prefixes"
+    /// reads identically whether NetBox has none or whether every one of them was dropped. The
+    /// per-row reason goes to `tracing::warn!`; the number is what makes someone go and read it.
+    pub prefixes_skipped: usize,
     /// The database's clock **at the moment the run began**, before a single row was written.
     ///
     /// 🚨 This has to be the *start* and not the finish, and getting it wrong is not subtle — it
@@ -1124,6 +1254,63 @@ impl NetboxRepo {
         Ok(())
     }
 
+    /// Attach one prefix to one folder.
+    ///
+    /// ⚠️ **`network($2::inet)::cidr`, never `$2::cidr`.** A direct cast to `cidr` *rejects* a
+    /// value with host bits set (`192.168.1.5/24` is an error), while `network()` canonicalises
+    /// it to `192.168.1.0/24`. What is left refused is a string that is not an address at all —
+    /// which is the check this column exists to perform, since the workspace has no Rust CIDR
+    /// parser to perform it earlier.
+    ///
+    /// ⚠️ **One statement, no transaction, and the caller does not `?` on the error.** A single
+    /// unparseable prefix must cost that prefix and nothing else; wrapped in the sync's own
+    /// transaction it would abort every write after it.
+    async fn upsert_prefix(
+        &self,
+        server_id: Uuid,
+        group_id: Uuid,
+        prefix: &str,
+        description: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO node_group_prefixes \
+               (group_id, prefix, description, netbox_server_id, last_seen_at) \
+             VALUES ($1, network($2::inet)::cidr, $3, $4, now()) \
+             ON CONFLICT (group_id, prefix) DO UPDATE SET \
+               description = EXCLUDED.description, \
+               netbox_server_id = EXCLUDED.netbox_server_id, \
+               last_seen_at = now()",
+        )
+        .bind(group_id)
+        .bind(prefix)
+        .bind(description)
+        .bind(server_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop this server's prefixes that the run beginning at `started` did not refresh.
+    ///
+    /// **Deletion is synchronized here, and decision 5 does not apply** — see migration 0104's
+    /// header. Scoped by `netbox_server_id` so two configured NetBox deployments cannot sweep
+    /// each other's rows, and never called at all when the prefix listing was refused.
+    async fn delete_stale_prefixes(
+        &self,
+        server_id: Uuid,
+        started: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<u64> {
+        let r = sqlx::query(
+            "DELETE FROM node_group_prefixes \
+             WHERE netbox_server_id = $1 AND last_seen_at < $2",
+        )
+        .bind(server_id)
+        .bind(started)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     /// How many of this server's folders were not refreshed by the run that just finished.
     ///
     /// Derived by comparing against `last_sync_at`, which is why that column may only advance on a
@@ -1180,7 +1367,18 @@ pub async fn sync_once(
 ) -> anyhow::Result<SyncReport> {
     let regions = client.regions().await?;
     let sites = client.sites().await?;
-    apply(repo, server_id, &regions, &sites, site_id).await
+    // `Option`, not `Vec`: see `NetboxClient::prefixes`. A token refused `ipam.view_prefix` must
+    // still sync the folder tree.
+    let prefixes = client.prefixes().await?;
+    apply(
+        repo,
+        server_id,
+        &regions,
+        &sites,
+        prefixes.as_deref(),
+        site_id,
+    )
+    .await
 }
 
 /// Write a fetched region tree and site list into `node_groups`.
@@ -1193,11 +1391,16 @@ pub async fn sync_once(
 /// arbitrary order it will fail on the foreign key rather than silently mis-parent, which is the
 /// preferable failure — but it is not resorted here, because doing so in two places is how the two
 /// would eventually disagree.
+///
+/// `prefixes` is `None` when the listing was refused, which is **not** the same as an empty slice:
+/// `None` writes nothing and sweeps nothing, `Some(&[])` sweeps every stored prefix away because
+/// NetBox now claims none.
 pub async fn apply(
     repo: &NetboxRepo,
     server_id: Uuid,
     regions: &[NetboxRegion],
     sites: &[NetboxSite],
+    prefixes: Option<&[NetboxPrefix]>,
     site_id: Option<&SiteIdField>,
 ) -> anyhow::Result<SyncReport> {
     // 🚨 Before the first write. See `SyncReport::started_at` for what goes wrong otherwise.
@@ -1293,11 +1496,66 @@ pub async fn apply(
         .await?;
     }
 
+    // Prefixes last: every folder they can attach to has now been written, so the foreign key
+    // resolves. Which sites this run actually saw — the site half of the `known` guard above, and
+    // needed for the same reason: a prefix pointing at a site NetBox hid from us would otherwise
+    // fail the whole sync on a foreign key.
+    let known_sites: std::collections::HashSet<i64> = sites.iter().map(|s| s.id).collect();
+    let mut prefixes_stored = 0usize;
+    let mut prefixes_skipped = 0usize;
+    for prefix in prefixes.unwrap_or_default() {
+        let Some((kind, object_id)) = prefix.scope() else {
+            tracing::warn!(
+                prefix = %prefix.prefix,
+                scope_type = prefix.scope_type.as_deref().unwrap_or("(none)"),
+                "netbox prefix is not scoped to a region or a site; not attached to any folder"
+            );
+            prefixes_skipped += 1;
+            continue;
+        };
+        let seen = match kind {
+            ObjectKind::Region => known.contains(&object_id),
+            ObjectKind::Site => known_sites.contains(&object_id),
+        };
+        if !seen {
+            tracing::warn!(
+                prefix = %prefix.prefix,
+                kind = kind.as_str(),
+                object_id,
+                "netbox prefix is scoped to an object this sync did not see; skipped"
+            );
+            prefixes_skipped += 1;
+            continue;
+        }
+        let group_id = kind.group_id(server_id, object_id);
+        // Not `?`: one prefix PostgreSQL refuses costs that prefix, not the sync.
+        match repo
+            .upsert_prefix(server_id, group_id, &prefix.prefix, prefix.description())
+            .await
+        {
+            Ok(()) => prefixes_stored += 1,
+            Err(e) => {
+                tracing::warn!(error = %e, prefix = %prefix.prefix, "netbox prefix refused by the store");
+                prefixes_skipped += 1;
+            }
+        }
+    }
+    if prefixes.is_some() {
+        // Only when the listing was readable — see `NetboxClient::prefixes`.
+        let dropped = repo.delete_stale_prefixes(server_id, started_at).await?;
+        if dropped > 0 {
+            tracing::info!(server_id = %server_id, dropped, "netbox prefixes no longer in netbox");
+        }
+    }
+
     Ok(SyncReport {
         regions: regions.len(),
         sites: sites.len(),
         missing: 0,
         sites_without_site_id,
+        prefixes_readable: prefixes.is_some(),
+        prefixes: prefixes_stored,
+        prefixes_skipped,
         started_at,
     })
 }
@@ -1591,7 +1849,7 @@ mod tests {
     ) {
         let (repo, server) = lab_server(&pool).await;
 
-        let report = apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        let report = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("first sync");
         assert_eq!((report.regions, report.sites), (3, 2));
@@ -1617,7 +1875,7 @@ mod tests {
 
         // Idempotence — the property every derived id exists for. A second run must not duplicate
         // the tree, and `create` is not called again.
-        apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("second sync");
         assert_eq!(
@@ -1633,7 +1891,7 @@ mod tests {
     async fn a_sync_owns_the_name_and_the_operator_owns_the_pool(pool: sqlx::PgPool) {
         // ADR-100 decision 2, both directions, which is the whole design in one test.
         let (repo, server) = lab_server(&pool).await;
-        apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("sync");
 
@@ -1645,7 +1903,7 @@ mod tests {
             .await
             .expect("operator edit");
 
-        apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("re-sync");
 
@@ -1666,7 +1924,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn an_object_that_disappears_from_netbox_is_marked_and_never_deleted(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
-        let first = apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        let first = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("sync");
         repo.record_success(server, first.started_at, Some("4.6.9"))
@@ -1683,7 +1941,7 @@ mod tests {
 
         // Yokohama is decommissioned in NetBox. Every other object is still returned.
         let sites: Vec<NetboxSite> = lab_sites().into_iter().filter(|s| s.id != 7).collect();
-        let second = apply(&repo, server, &lab_regions(), &sites, None)
+        let second = apply(&repo, server, &lab_regions(), &sites, None, None)
             .await
             .expect("re-sync");
         repo.record_success(server, second.started_at, Some("4.6.9"))
@@ -1723,7 +1981,7 @@ mod tests {
         // failed sync marks the entire tree as deleted, because nothing was seen this run. Same
         // shape as ADR-080's "a failed read must never become an empty read".
         let (repo, server) = lab_server(&pool).await;
-        let report = apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        let report = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("sync");
         repo.record_success(server, report.started_at, Some("4.6.9"))
@@ -1770,7 +2028,7 @@ mod tests {
         // object, so the site is re-homed instead.
         let (repo, server) = lab_server(&pool).await;
         let sites = vec![site(9, "Orphan", Some(999), None)];
-        apply(&repo, server, &lab_regions(), &sites, None)
+        apply(&repo, server, &lab_regions(), &sites, None, None)
             .await
             .expect("sync must not fail on an invisible parent");
         assert_eq!(
@@ -1783,7 +2041,7 @@ mod tests {
 
         // The accept side: a site whose region *is* visible must still be parented, or "put
         // everything at the root" would pass the assertion above.
-        apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("sync");
         assert_eq!(
@@ -1801,7 +2059,7 @@ mod tests {
         // Same reasoning as decision 5: disconnecting an integration must not restructure the
         // monitoring tree. The folders simply become hand-maintained.
         let (repo, server) = lab_server(&pool).await;
-        apply(&repo, server, &lab_regions(), &lab_sites(), None)
+        apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("sync");
         assert!(repo.delete(server).await.expect("delete"));
@@ -2206,6 +2464,7 @@ mod tests {
             server,
             &lab_regions(),
             &lab_sites_with_codes(),
+            None,
             Some(&cf),
         )
         .await
@@ -2252,6 +2511,7 @@ mod tests {
             server,
             &lab_regions(),
             &lab_sites_with_codes(),
+            None,
             Some(&SiteIdField::Facility),
         )
         .await
@@ -2269,9 +2529,16 @@ mod tests {
         // Nothing configured is not the same question: nothing was asked for, so nothing is
         // missing. A non-zero count here would cry wolf on every deployment that never wanted a
         // prefix — which is all of them by default.
-        let report = apply(&repo, server, &lab_regions(), &lab_sites_with_codes(), None)
-            .await
-            .expect("sync");
+        let report = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites_with_codes(),
+            None,
+            None,
+        )
+        .await
+        .expect("sync");
         assert_eq!(report.sites_without_site_id, 0);
     }
 
@@ -2285,7 +2552,7 @@ mod tests {
         let matsuyama = site_group_id(server, 6);
         let cf = SiteIdField::Custom("site_id".to_owned());
 
-        apply(&repo, server, &lab_regions(), &sites, None)
+        apply(&repo, server, &lab_regions(), &sites, None, None)
             .await
             .expect("sync 1");
         assert_eq!(
@@ -2302,7 +2569,7 @@ mod tests {
 
         // Turning the setting on renames in place: `name = EXCLUDED.name` every cycle, so there is
         // no migration of existing rows to perform — and none is wanted.
-        apply(&repo, server, &lab_regions(), &sites, Some(&cf))
+        apply(&repo, server, &lab_regions(), &sites, None, Some(&cf))
             .await
             .expect("sync 2");
         let (name, _, _, _, pool_col) = folder(&pool, matsuyama).await.expect("6");
@@ -2314,7 +2581,7 @@ mod tests {
         );
 
         // And off again, which is what makes the setting reversible without a data fix.
-        apply(&repo, server, &lab_regions(), &sites, None)
+        apply(&repo, server, &lab_regions(), &sites, None, None)
             .await
             .expect("sync 3");
         assert_eq!(
@@ -2389,5 +2656,367 @@ mod tests {
             site_folder_name(Some(&SiteIdField::Slug), &page.results[0]),
             "No Region"
         );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // prefixes (ADR-100 decision 10 / Inc.4)
+    // ---------------------------------------------------------------------------------------
+
+    /// The lab's four prefixes, verbatim from `GET /api/ipam/prefixes/` on 2026-09-04.
+    ///
+    /// ⚠️ Every one is `scope_type: "dcim.site"` — there is no `site` field on this NetBox at all.
+    /// Copying the live payload rather than inventing one is what made that visible; a fixture
+    /// built from what the reader expects would have agreed with a reader that only knew 3.x.
+    fn lab_prefixes() -> Vec<NetboxPrefix> {
+        vec![
+            scoped_prefix(1, "192.168.1.0/24", "Matsuyama LAN", "dcim.site", 6),
+            scoped_prefix(2, "192.168.2.0/24", "Matsuyama NAS", "dcim.site", 6),
+            scoped_prefix(3, "192.168.255.0/24", "Matsuyama VPN pool", "dcim.site", 6),
+            scoped_prefix(4, "192.168.0.0/24", "Yokohama LAN", "dcim.site", 7),
+        ]
+    }
+
+    fn scoped_prefix(
+        id: i64,
+        prefix: &str,
+        description: &str,
+        scope_type: &str,
+        scope_id: i64,
+    ) -> NetboxPrefix {
+        NetboxPrefix {
+            id,
+            prefix: prefix.to_owned(),
+            description: Some(description.to_owned()),
+            scope_type: Some(scope_type.to_owned()),
+            scope_id: Some(scope_id),
+            site: None,
+        }
+    }
+
+    /// Every prefix stored against one folder, ordered as the API returns them.
+    async fn folder_prefixes(pool: &sqlx::PgPool, group: Uuid) -> Vec<(String, String)> {
+        sqlx::query_as(
+            "SELECT prefix::TEXT, description FROM node_group_prefixes \
+             WHERE group_id = $1 ORDER BY prefix",
+        )
+        .bind(group)
+        .fetch_all(pool)
+        .await
+        .expect("read prefixes")
+    }
+
+    #[test]
+    fn a_prefix_scope_is_read_in_both_netbox_dialects() {
+        // 4.x, the shape the lab actually sends.
+        assert_eq!(
+            scoped_prefix(1, "10.0.0.0/24", "", "dcim.site", 6).scope(),
+            Some((ObjectKind::Site, 6))
+        );
+        assert_eq!(
+            scoped_prefix(2, "10.0.1.0/24", "", "dcim.region", 2).scope(),
+            Some((ObjectKind::Region, 2))
+        );
+        // A scope Yagra has no folder for. Not an error and not a guess — simply unattached.
+        assert_eq!(
+            scoped_prefix(3, "10.0.2.0/24", "", "dcim.location", 9).scope(),
+            None
+        );
+        assert_eq!(
+            scoped_prefix(4, "10.0.3.0/24", "", "tenancy.tenant", 1).scope(),
+            None
+        );
+
+        // 3.x: no scope pair at all, a plain `site`.
+        let legacy = NetboxPrefix {
+            id: 5,
+            prefix: "10.0.4.0/24".to_owned(),
+            description: None,
+            scope_type: None,
+            scope_id: None,
+            site: Some(NestedRef { id: 6 }),
+        };
+        assert_eq!(legacy.scope(), Some((ObjectKind::Site, 6)));
+
+        // A global prefix: attached to nothing in either dialect.
+        let global = NetboxPrefix {
+            id: 6,
+            prefix: "10.0.5.0/24".to_owned(),
+            description: None,
+            scope_type: None,
+            scope_id: None,
+            site: None,
+        };
+        assert_eq!(global.scope(), None);
+    }
+
+    /// 🚨 A 4.x row scoped to something Yagra does not model must not fall through to `site`.
+    ///
+    /// The fallback exists for 3.x, where `scope_type` is absent. If it were reached whenever the
+    /// scope lookup failed, a prefix moved from a Site to a Location in NetBox would keep the old
+    /// attachment — the stale field is still populated on some 4.x deployments mid-upgrade.
+    #[test]
+    fn a_modern_row_with_an_unmodelled_scope_does_not_fall_back_to_site() {
+        let mut p = scoped_prefix(1, "10.0.0.0/24", "", "dcim.location", 9);
+        p.site = Some(NestedRef { id: 6 });
+        assert_eq!(p.scope(), None);
+    }
+
+    /// Every `ObjectKind` has a NetBox scope spelling, and no two share one.
+    #[test]
+    fn every_object_kind_has_a_distinct_netbox_scope_type() {
+        let tokens: Vec<&str> = ObjectKind::ALL
+            .into_iter()
+            .map(ObjectKind::netbox_scope_type)
+            .collect();
+        assert_eq!(tokens.len(), ObjectKind::ALL.len());
+        for t in &tokens {
+            assert!(
+                t.starts_with("dcim."),
+                "{t} is not an app-labelled model name"
+            );
+            assert_eq!(
+                tokens.iter().filter(|o| *o == t).count(),
+                1,
+                "{t} is claimed by two kinds"
+            );
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_labs_prefixes_land_on_the_sites_they_name(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        let report = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("apply");
+
+        assert_eq!(report.prefixes, 4);
+        assert_eq!(report.prefixes_skipped, 0);
+        assert!(report.prefixes_readable);
+
+        assert_eq!(
+            folder_prefixes(&pool, site_group_id(server, 6)).await,
+            vec![
+                ("192.168.1.0/24".to_owned(), "Matsuyama LAN".to_owned()),
+                ("192.168.2.0/24".to_owned(), "Matsuyama NAS".to_owned()),
+                (
+                    "192.168.255.0/24".to_owned(),
+                    "Matsuyama VPN pool".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            folder_prefixes(&pool, site_group_id(server, 7)).await,
+            vec![("192.168.0.0/24".to_owned(), "Yokohama LAN".to_owned())]
+        );
+        // Regions carry none — the lab has no region-scoped prefix, which is the measurement the
+        // "a Region folder offers only its own" decision rests on.
+        assert!(folder_prefixes(&pool, region_group_id(server, 6))
+            .await
+            .is_empty());
+    }
+
+    /// A prefix NetBox has stopped listing is **deleted**, and its neighbours are not disturbed.
+    ///
+    /// This is where decision 10 departs from decision 5, so it is worth a test of its own: for a
+    /// folder the answer is "mark it", for a prefix it is "drop it", and the reason is that
+    /// dropping one destroys nothing (migration 0104's header).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_prefix_netbox_stopped_listing_is_removed(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("first");
+
+        // The VPN pool is decommissioned in NetBox.
+        let remaining: Vec<NetboxPrefix> =
+            lab_prefixes().into_iter().filter(|p| p.id != 3).collect();
+        let second = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&remaining),
+            None,
+        )
+        .await
+        .expect("second");
+
+        assert_eq!(second.prefixes, 3);
+        assert_eq!(
+            folder_prefixes(&pool, site_group_id(server, 6))
+                .await
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect::<Vec<_>>(),
+            vec!["192.168.1.0/24".to_owned(), "192.168.2.0/24".to_owned()],
+            "the removed one is gone and the other two are untouched"
+        );
+    }
+
+    /// 🚨 A listing the token may not read leaves the stored prefixes **alone**.
+    ///
+    /// The failure this exists for: losing `ipam.view_prefix` would otherwise sweep every site's
+    /// target list away on the next sync and report success, because "NetBox listed none" and "we
+    /// were not allowed to ask" would have been the same value.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_refused_prefix_listing_neither_writes_nor_sweeps(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("first");
+
+        let refused = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
+            .await
+            .expect("second");
+        assert!(!refused.prefixes_readable);
+        assert_eq!(refused.prefixes, 0);
+        assert_eq!(
+            folder_prefixes(&pool, site_group_id(server, 6)).await.len(),
+            3,
+            "a refusal must not be read as 'netbox has none'"
+        );
+
+        // …whereas an empty *readable* listing does sweep, because NetBox now claims none.
+        let empty = apply(&repo, server, &lab_regions(), &lab_sites(), Some(&[]), None)
+            .await
+            .expect("third");
+        assert!(empty.prefixes_readable);
+        assert!(folder_prefixes(&pool, site_group_id(server, 6))
+            .await
+            .is_empty());
+    }
+
+    /// A prefix that reaches no folder is counted, and does not take the sync down with it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn prefixes_that_reach_no_folder_are_counted_not_fatal(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        let mut prefixes = lab_prefixes();
+        // A Location — Yagra models no such folder (decision 4 declined Location deliberately).
+        prefixes.push(scoped_prefix(
+            10,
+            "10.1.0.0/24",
+            "Rack row A",
+            "dcim.location",
+            3,
+        ));
+        // A site this run never saw: the foreign key would abort the whole sync.
+        prefixes.push(scoped_prefix(
+            11,
+            "10.2.0.0/24",
+            "Elsewhere",
+            "dcim.site",
+            999,
+        ));
+        // Not an address at all: PostgreSQL refuses the row, and only that row.
+        prefixes.push(scoped_prefix(12, "not-a-prefix", "Broken", "dcim.site", 6));
+
+        let report = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&prefixes),
+            None,
+        )
+        .await
+        .expect("apply must survive all three");
+
+        assert_eq!(report.prefixes, 4, "the four real ones still landed");
+        assert_eq!(report.prefixes_skipped, 3);
+    }
+
+    /// Host bits are canonicalised rather than refused — `192.168.1.5/24` becomes the network.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_prefix_with_host_bits_is_stored_as_its_network(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        let prefixes = vec![scoped_prefix(1, "192.168.1.5/24", "Sloppy", "dcim.site", 6)];
+        let report = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&prefixes),
+            None,
+        )
+        .await
+        .expect("apply");
+        assert_eq!(report.prefixes_skipped, 0);
+        assert_eq!(
+            folder_prefixes(&pool, site_group_id(server, 6)).await,
+            vec![("192.168.1.0/24".to_owned(), "Sloppy".to_owned())],
+            "a plain ::cidr cast would have refused this row"
+        );
+    }
+
+    /// Two NetBox servers do not sweep each other's prefixes away.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn one_servers_sync_leaves_another_servers_prefixes_alone(pool: sqlx::PgPool) {
+        let (repo, first) = lab_server(&pool).await;
+        let cred = crate::pgtest::credential(&pool, "netbox-token-2", KIND_NETBOX_TOKEN).await;
+        let second = repo
+            .create("lab2", "http://192.168.1.214:8001", cred, None, 3600, None)
+            .await
+            .expect("second server");
+
+        apply(
+            &repo,
+            first,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("first server");
+        apply(
+            &repo,
+            second,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("second server");
+
+        // The second server now lists nothing. Only its own rows go.
+        apply(&repo, second, &lab_regions(), &lab_sites(), Some(&[]), None)
+            .await
+            .expect("second server, empty");
+
+        assert_eq!(
+            folder_prefixes(&pool, site_group_id(first, 6)).await.len(),
+            3
+        );
+        assert!(folder_prefixes(&pool, site_group_id(second, 6))
+            .await
+            .is_empty());
     }
 }

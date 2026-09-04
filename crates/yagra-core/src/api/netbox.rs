@@ -686,6 +686,21 @@ pub(crate) struct SyncNetboxResult {
     /// and no visible change**, so without it "the feature does not work" and "that field is empty
     /// on every site" look identical. Zero when no field is configured.
     sites_without_site_id: usize,
+    /// Whether this token may read `/api/ipam/prefixes/` (ADR-100 decision 10).
+    ///
+    /// 🚨 `false` means **refused**, not "there are none". When it is false nothing was written
+    /// and — deliberately — nothing was swept, so the site prefixes stored by earlier runs are
+    /// still there. Reading a zero `prefixes` without checking this flag turns a permission
+    /// problem into "our NetBox has no subnets", which is not a sentence anyone can act on.
+    prefixes_readable: bool,
+    /// Prefix rows attached to a folder by this run.
+    prefixes: usize,
+    /// Prefix rows that reached no folder — scoped to a Location or a SiteGroup (which Yagra does
+    /// not model), scoped to an object this run did not see, or refused as not an address.
+    ///
+    /// 🚨 Same reason as `sites_without_site_id`: a dropped prefix is otherwise indistinguishable
+    /// from a NetBox that never had one.
+    prefixes_skipped: usize,
 }
 
 #[utoipa::path(
@@ -729,6 +744,9 @@ async fn sync_netbox_server(
         sites: report.sites,
         missing_folders: report.missing,
         sites_without_site_id: report.sites_without_site_id,
+        prefixes_readable: report.prefixes_readable,
+        prefixes: report.prefixes,
+        prefixes_skipped: report.prefixes_skipped,
     }))
 }
 

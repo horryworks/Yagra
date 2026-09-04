@@ -3691,7 +3691,7 @@
             }
           },
           "400": {
-            "description": "An unparseable address, an empty name, or a binding id that is not a UUID",
+            "description": "An unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has",
             "content": {
               "application/json": {
                 "schema": {
@@ -26046,6 +26046,24 @@
           }
         }
       },
+      "GroupPrefix": {
+        "type": "object",
+        "description": "One IP prefix attached to a folder.\n\nTwo fields and no more, on purpose. NetBox's prefix rows also carry `status`, `vrf`,\n`is_pool`, `role` and a tenant, and none of them has a reader here: what a person needs in\norder to choose a sweep target is the range and what it is called. Storing the rest would be a\nsecond copy of NetBox's inventory that nothing consults.",
+        "required": [
+          "prefix",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "NetBox's description of the range (\"Matsuyama LAN\"), or empty."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Canonical CIDR, e.g. `\"192.168.1.0/24\"`. PostgreSQL's `cidr` type rendered as text, so the\nmask is always present — unlike `inet`, where a host address would print bare."
+          }
+        }
+      },
       "GroupStateCounts": {
         "type": "object",
         "description": "Per-group direct-member state tally. All six keys are always present (a missing state is `0`)\nand they sum to the group's direct-member count.",
@@ -26092,7 +26110,8 @@
           "name",
           "group_type",
           "sort_order",
-          "geo_source"
+          "geo_source",
+          "prefixes"
         ],
         "properties": {
           "effective_latitude": {
@@ -26160,6 +26179,13 @@
               "null"
             ],
             "description": "Poll-pool this folder assigns to its nodes (ADR-009/020, migration 0054). `null` ⇒ inherit\nfrom the nearest ancestor that sets one, else the default pool. A node's own `pool` still\nwins — see [`crate::poolres`]."
+          },
+          "prefixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupPrefix"
+            },
+            "description": "The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a\nfolder nothing has attached one to, which is every folder in a deployment with no NetBox.\n\n🚨 **Empty also means \"you may not see them\".** [`crate::api::groups::visible_groups`]\nclears this on a row a scoped caller receives only as a breadcrumb ancestor: such a row is\nlisted so the tree has a spine, and handing over the subnet layout of a site whose\nmembership the caller cannot see would be a leak the folder's *name* does not constitute."
           },
           "sort_order": {
             "type": "number",
@@ -26365,6 +26391,14 @@
           "nodes"
         ],
         "properties": {
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Inventory folder to file every imported node under (ADR-100 decision 10), or absent for\nthe tree root — which is what every import did before this existed.\n\n⚠️ **One folder for the whole request, not one per node.** A sweep is aimed at a site, so\nthe folder is a property of the sweep; per-row would invite a UI that lets fifty rows\ndisagree and then have to explain itself."
+          },
           "nodes": {
             "type": "array",
             "items": {
@@ -32416,12 +32450,29 @@
           "regions",
           "sites",
           "missing_folders",
-          "sites_without_site_id"
+          "sites_without_site_id",
+          "prefixes_readable",
+          "prefixes",
+          "prefixes_skipped"
         ],
         "properties": {
           "missing_folders": {
             "type": "integer",
             "description": "Folders this server owns that NetBox no longer lists (ADR-100 decision 5 — marked, not\ndeleted).",
+            "minimum": 0
+          },
+          "prefixes": {
+            "type": "integer",
+            "description": "Prefix rows attached to a folder by this run.",
+            "minimum": 0
+          },
+          "prefixes_readable": {
+            "type": "boolean",
+            "description": "Whether this token may read `/api/ipam/prefixes/` (ADR-100 decision 10).\n\n🚨 `false` means **refused**, not \"there are none\". When it is false nothing was written\nand — deliberately — nothing was swept, so the site prefixes stored by earlier runs are\nstill there. Reading a zero `prefixes` without checking this flag turns a permission\nproblem into \"our NetBox has no subnets\", which is not a sentence anyone can act on."
+          },
+          "prefixes_skipped": {
+            "type": "integer",
+            "description": "Prefix rows that reached no folder — scoped to a Location or a SiteGroup (which Yagra does\nnot model), scoped to an object this run did not see, or refused as not an address.\n\n🚨 Same reason as `sites_without_site_id`: a dropped prefix is otherwise indistinguishable\nfrom a NetBox that never had one.",
             "minimum": 0
           },
           "regions": {

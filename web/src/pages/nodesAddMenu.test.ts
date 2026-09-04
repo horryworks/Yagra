@@ -7,6 +7,7 @@ const group = (id: string, name: string, parent: string | null = null): NodeGrou
   id,
   name,
   group_type: 'generic',
+  prefixes: [],
   parent_id: parent,
   sort_order: 0,
   latitude: null,

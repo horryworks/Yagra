@@ -6598,6 +6598,23 @@ export interface components {
             parent_id?: string | null;
         };
         /**
+         * @description One IP prefix attached to a folder.
+         *
+         *     Two fields and no more, on purpose. NetBox's prefix rows also carry `status`, `vrf`,
+         *     `is_pool`, `role` and a tenant, and none of them has a reader here: what a person needs in
+         *     order to choose a sweep target is the range and what it is called. Storing the rest would be a
+         *     second copy of NetBox's inventory that nothing consults.
+         */
+        GroupPrefix: {
+            /** @description NetBox's description of the range ("Matsuyama LAN"), or empty. */
+            description: string;
+            /**
+             * @description Canonical CIDR, e.g. `"192.168.1.0/24"`. PostgreSQL's `cidr` type rendered as text, so the
+             *     mask is always present — unlike `inet`, where a host address would print bare.
+             */
+            prefix: string;
+        };
+        /**
          * @description Per-group direct-member state tally. All six keys are always present (a missing state is `0`)
          *     and they sum to the group's direct-member count.
          */
@@ -6657,6 +6674,16 @@ export interface components {
              *     wins — see [`crate::poolres`].
              */
             pool?: string | null;
+            /**
+             * @description The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a
+             *     folder nothing has attached one to, which is every folder in a deployment with no NetBox.
+             *
+             *     🚨 **Empty also means "you may not see them".** [`crate::api::groups::visible_groups`]
+             *     clears this on a row a scoped caller receives only as a breadcrumb ancestor: such a row is
+             *     listed so the tree has a spine, and handing over the subnet layout of a site whose
+             *     membership the caller cannot see would be a leak the folder's *name* does not constitute.
+             */
+            prefixes: components["schemas"]["GroupPrefix"][];
             /**
              * Format: double
              * @description Manual order within the parent scope (the UI sorts siblings by this, then by name).
@@ -6757,6 +6784,16 @@ export interface components {
         IfIndex: number;
         /** @description Import body: the selected devices to create as nodes. */
         ImportDiscovered: {
+            /**
+             * Format: uuid
+             * @description Inventory folder to file every imported node under (ADR-100 decision 10), or absent for
+             *     the tree root — which is what every import did before this existed.
+             *
+             *     ⚠️ **One folder for the whole request, not one per node.** A sweep is aimed at a site, so
+             *     the folder is a property of the sweep; per-row would invite a UI that lets fifty rows
+             *     disagree and then have to explain itself.
+             */
+            group_id?: string | null;
             nodes: components["schemas"]["ImportNode"][];
         };
         /** @description What to call the endpoint, and what to bind it to, when promoting it to a node. */
@@ -9453,6 +9490,25 @@ export interface components {
              *     deleted).
              */
             missing_folders: number;
+            /** @description Prefix rows attached to a folder by this run. */
+            prefixes: number;
+            /**
+             * @description Whether this token may read `/api/ipam/prefixes/` (ADR-100 decision 10).
+             *
+             *     🚨 `false` means **refused**, not "there are none". When it is false nothing was written
+             *     and — deliberately — nothing was swept, so the site prefixes stored by earlier runs are
+             *     still there. Reading a zero `prefixes` without checking this flag turns a permission
+             *     problem into "our NetBox has no subnets", which is not a sentence anyone can act on.
+             */
+            prefixes_readable: boolean;
+            /**
+             * @description Prefix rows that reached no folder — scoped to a Location or a SiteGroup (which Yagra does
+             *     not model), scoped to an object this run did not see, or refused as not an address.
+             *
+             *     🚨 Same reason as `sites_without_site_id`: a dropped prefix is otherwise indistinguishable
+             *     from a NetBox that never had one.
+             */
+            prefixes_skipped: number;
             regions: number;
             sites: number;
             /**
@@ -13283,7 +13339,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportResult"];
                 };
             };
-            /** @description An unparseable address, an empty name, or a binding id that is not a UUID */
+            /** @description An unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has */
             400: {
                 headers: {
                     [name: string]: unknown;

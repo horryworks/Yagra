@@ -466,7 +466,8 @@
     "health": "Health",
     "members": "Members",
     "noNodes": "No nodes in this group.",
-    "noDirectMembers": "No direct member nodes — see subgroups."
+    "noDirectMembers": "No direct member nodes — see subgroups.",
+    "prefixes": "IP prefixes"
   },
   "tree": {
     "suppression": {
@@ -509,6 +510,7 @@
     "emptyInventory": "No nodes in inventory. Add one to start monitoring.",
     "addNodeHere": "Add node here…",
     "editMove": "Edit / move…",
+    "runDiscovery": "Run discovery here…",
     "open": "Open",
     "editNodeEllipsis": "Edit node…",
     "addNodeEllipsis": "Add node…",

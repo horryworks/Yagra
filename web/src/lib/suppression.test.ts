@@ -24,9 +24,9 @@ import { LIVENESS_METRIC } from './format';
 
 // Tree: tokyo ⊃ edge ⊃ (n2); tokyo also holds n1. osaka is a separate top-level group with n3.
 const groups: NodeGroup[] = [
-  { id: 'tokyo', name: 'Tokyo', group_type: 'site', parent_id: null, sort_order: 0, latitude: null, longitude: null, geo_source: 'unset', pool: null },
-  { id: 'edge', name: 'Edge', group_type: 'generic', parent_id: 'tokyo', sort_order: 0, latitude: null, longitude: null, geo_source: 'unset', pool: null },
-  { id: 'osaka', name: 'Osaka', group_type: 'site', parent_id: null, sort_order: 1, latitude: null, longitude: null, geo_source: 'unset', pool: null },
+  { id: 'tokyo', name: 'Tokyo', group_type: 'site', parent_id: null, sort_order: 0, latitude: null, longitude: null, geo_source: 'unset', pool: null, prefixes: [] },
+  { id: 'edge', name: 'Edge', group_type: 'generic', parent_id: 'tokyo', sort_order: 0, latitude: null, longitude: null, geo_source: 'unset', pool: null, prefixes: [] },
+  { id: 'osaka', name: 'Osaka', group_type: 'site', parent_id: null, sort_order: 1, latitude: null, longitude: null, geo_source: 'unset', pool: null, prefixes: [] },
 ];
 
 const node = (id: string, group_id: string | null): NodeSummary => ({

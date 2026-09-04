@@ -368,3 +368,21 @@ html[data-viewport='mobile'] .disco-scan {
   min-height: var(--touch-target);
   flex-wrap: wrap;
 }
+
+/* ── The Site picker (ADR-100 decision 10) ───────────────────────────────────────────────────
+   Its own band above the three-field row rather than a fourth field in it, because it does not
+   describe the sweep — it *fills in* the field below. Sitting inside the row it would have read as
+   a fourth independent choice, and the operator would have no way to tell that picking one rewrites
+   another. Above it, the reading order is the causal order: choose a site, see the ranges appear.
+
+   🚨 Compound selector, as with `.disco-form.form-row` — the page's CSS is emitted before
+   `index.css`, so a bare class name loses to any shared rule of equal specificity regardless of
+   what this file says. */
+.disco-site {
+  margin-bottom: 12px;
+  max-width: 420px;
+}
+
+.disco-site .form-label > .field {
+  width: 100%;
+}

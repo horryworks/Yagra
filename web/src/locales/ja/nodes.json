@@ -466,7 +466,8 @@
     "health": "ヘルス",
     "members": "メンバー",
     "noNodes": "このグループにはノードがありません。",
-    "noDirectMembers": "直接のメンバーノードはありません — サブグループを参照してください。"
+    "noDirectMembers": "直接のメンバーノードはありません — サブグループを参照してください。",
+    "prefixes": "IP プレフィックス"
   },
   "tree": {
     "suppression": {
@@ -509,6 +510,7 @@
     "emptyInventory": "インベントリにノードがありません。監視を開始するにはノードを追加してください。",
     "addNodeHere": "ここにノードを追加…",
     "editMove": "編集 / 移動…",
+    "runDiscovery": "ここで機器探索を実行…",
     "open": "開く",
     "editNodeEllipsis": "ノードを編集…",
     "addNodeEllipsis": "ノードを追加…",

@@ -56,6 +56,7 @@ import {
   type Target,
 } from './nodeTreeDnd';
 import {
+  canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
   rootMenuHasItems,
@@ -169,6 +170,9 @@ interface Props {
    *  to inherited, and `null` opens the Custom… dialog — the same convention as the suppression
    *  chips above. */
   onSetPool?: (target: SuppressionTarget, pool: string | null) => void;
+  /** Right-click → aim a discovery sweep at this folder's IP prefixes (ADR-100 decision 10).
+   *  Shown only for a folder that carries some — see `canRunDiscovery`. Omit to hide the item. */
+  onRunDiscovery?: (group: NodeGroup) => void;
 }
 
 export function NodeTree({
@@ -205,6 +209,7 @@ export function NodeTree({
   onSetMute,
   pools,
   onSetPool,
+  onRunDiscovery,
 }: Props) {
   const { t } = useTranslation('nodes');
   const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
@@ -919,6 +924,21 @@ export function NodeTree({
               {canEdit && (
                 <button type="button" onClick={() => { onEditGroup(menu.group); setMenu(null); }}>
                   {t('tree.editMove')}
+                </button>
+              )}
+              {/* Aim a sweep at this site's subnets (ADR-100 decision 10). It navigates rather
+                  than acting: a sweep needs credentials and a poll-pool, and the Discovery screen
+                  is where those are chosen — so the folder's prefixes arrive in the target field
+                  and a person presses Start with the ranges in front of them. */}
+              {onRunDiscovery && canRunDiscovery(menu.group, caps) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRunDiscovery(menu.group);
+                    setMenu(null);
+                  }}
+                >
+                  {t('tree.runDiscovery')}
                 </button>
               )}
               {poolMenu(

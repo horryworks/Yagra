@@ -34,6 +34,7 @@ const group = (
   id,
   name,
   group_type: 'generic',
+  prefixes: [],
   parent_id: parent,
   sort_order,
   latitude: null,
