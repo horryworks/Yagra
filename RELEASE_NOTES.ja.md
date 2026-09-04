@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.8 — NetBox がフォルダーツリーを作り、拠点コードで名前を付け、そのサブネットへ探索を向けられる
+
 ### New Features
 
 - **NetBox からフォルダーツリーを作れるようになりました。** Settings ▸ Integrations ▸ NetBox で

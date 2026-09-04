@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.8 — NetBox builds the folder tree, names each site by its own code, and hands its subnets to discovery
+
 ### New Features
 
 - **NetBox can now build the folder tree.** Settings ▸ Integrations ▸ NetBox registers a NetBox
