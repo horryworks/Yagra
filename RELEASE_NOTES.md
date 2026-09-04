@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.9 — An upgrade checks for room before it writes, says why a pull failed, and clears up after itself
+
 ### Improvements
 
 - **An upgrade now refuses to start on a host with no room, instead of filling it further.** The
