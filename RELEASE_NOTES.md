@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+## v0.3.10 — A ping-only node no longer shows the tabs an SNMP walk fills, and the environment community counts
+
+### New Features
+
+- `GET /api/v1/nodes/{node_id}` now returns **`snmp_configured`** (boolean): whether SNMP polling
+  is configured for the node — a bound credential, or the deployment-wide `YAGRA_SNMP_COMMUNITY`
+  fallback. It says nothing about whether the device is answering. Additive; no existing field
+  changed.
+- The MCP tool **`get_node_status`** returns `snmp_configured` too, with the same value. Read
+  parity is the rule — whatever the WebUI can see, an MCP client can see — and the route ledger
+  already declared that this tool answers for `GET /nodes/{node_id}`. `false` means no ifTable or
+  CDP/LLDP walk ever runs for that node, so an empty interface list is the design rather than a
+  fault; `list_node_metrics` remains the way to ask whether data is actually arriving.
+
 ### Improvements
 
 - **A node monitored only by ping no longer shows the two tabs it can never fill.** Interfaces and
@@ -21,13 +35,6 @@
   `YAGRA_SNMP_COMMUNITY`.** It was derived from whether a credential was bound to the node, which
   misses that fallback: a node with no bound credential is still polled over SNMP when the
   deployment-wide community is set, and the panel said otherwise.
-
-### New Features
-
-- `GET /api/v1/nodes/{node_id}` now returns **`snmp_configured`** (boolean): whether SNMP polling
-  is configured for the node — a bound credential, or the deployment-wide `YAGRA_SNMP_COMMUNITY`
-  fallback. It says nothing about whether the device is answering. Additive; no existing field
-  changed.
 
 ## v0.3.9 — An upgrade checks for room before it writes, says why a pull failed, and clears up after itself
 

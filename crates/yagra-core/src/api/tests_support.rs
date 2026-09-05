@@ -104,6 +104,22 @@ pub(crate) fn private_state() -> ApiState {
 /// sweeps — are still asynchronous: assert the accepted `202` and the row that records it, not the
 /// outcome.
 pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
+    live_state_with_env_community(pool, None).await
+}
+
+/// [`live_state`], with the deployment-wide SNMP community the scheduler falls back to.
+///
+/// Its own entry point rather than a parameter on `live_state` so no existing call site changes,
+/// and because there is exactly one question it answers: **`YAGRA_SNMP_COMMUNITY` is read from the
+/// process environment in production**, so a test cannot set it without setting it for every test
+/// running beside it. Threading it through the fixture is what makes the fallback branch reachable
+/// from a test at all — before this, `env_community` was hardcoded `None` here, and every
+/// API- and MCP-level test of "is SNMP configured for this node?" was silently answering the
+/// credential-only half of the rule (ADR-119).
+pub(crate) async fn live_state_with_env_community(
+    pool: sqlx::PgPool,
+    env_community: Option<String>,
+) -> ApiState {
     use crate::alerts::Notifier;
     use crate::secrets::CredentialStore;
     use crate::volatile::VolatileStore;
@@ -220,7 +236,7 @@ pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
                 meraki_devices: meraki_devices.clone(),
                 settings: repo.clone(),
                 l3: l3_repo.clone(),
-                env_community: None,
+                env_community,
                 interval_secs: crate::config::DEFAULT_POLL_INTERVAL_SECS,
             },
         )),

@@ -366,6 +366,19 @@ pub struct NodeStatusDto {
     pub node: NodeSummaryDto,
     pub alerts: Vec<AlertDto>,
     pub interfaces: Vec<InterfaceDto>,
+    /// Whether SNMP polling is **configured** for this node — not whether it is answering.
+    ///
+    /// Mirrors `NodeDetail.snmp_configured` on `GET /api/v1/nodes/{node_id}`, which is the question
+    /// the WebUI asks to decide whether the Interfaces and Neighbors tabs can ever hold anything
+    /// (ADR-119). Without it here, the tool the ledger says folds that route could not answer a
+    /// question the UI can — and "no metrics have arrived" is a different fact, which is what
+    /// `list_node_metrics` reports.
+    ///
+    /// 🚨 **Do not re-derive it from anything in `node`.** The scheduler falls back to the
+    /// deployment-wide `YAGRA_SNMP_COMMUNITY` for nodes with no bound credential, and this DTO
+    /// carries no credential field at all. `PollDispatcher::snmp_configured_for` is the one place
+    /// the rule lives; it over-reports rather than under-reports.
+    pub snmp_configured: bool,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -896,6 +909,7 @@ mod tests {
         let status = NodeStatusDto {
             node: summary.clone(),
             alerts: vec![],
+            snmp_configured: true,
             interfaces: vec![InterfaceDto {
                 ifindex: 1,
                 name: Some("Gig0/1".to_owned()),

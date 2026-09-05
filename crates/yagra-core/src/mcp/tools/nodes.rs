@@ -370,7 +370,14 @@ impl YagraMcp {
                        -7 dBm is comfortable on one module and failing on another. All four are \
                        null on a copper port and on optical ports whose vendor publishes no \
                        thresholds. Nothing alerts on them: they are the module's own published \
-                       figures, not a threshold configured in Yagra. Use this to \
+                       figures, not a threshold configured in Yagra. \
+                       `snmp_configured` says whether SNMP polling is CONFIGURED for this node — a \
+                       credential bound to it, or the deployment-wide fallback community — and NOT \
+                       whether the device is answering. False means no ifTable or CDP/LLDP walk \
+                       ever runs, so an empty `interfaces` is the design and there are no \
+                       neighbours to ask get_neighbors for; do not report either as a fault. True \
+                       with nothing arriving is the case worth investigating, and \
+                       list_node_metrics is what tells the two apart. Use this to \
                        find which port is down or busy; use get_interface_series for one port's \
                        history. Requires live mode (returns an availability note in skeleton mode)."
     )]
@@ -433,6 +440,9 @@ impl YagraMcp {
             .unwrap_or(NodeKind::Device);
         let dto = NodeStatusDto {
             node: NodeSummaryDto::from_node(&node, Some(state), kind),
+            // The same one rule the REST detail view reads, from the same holder — never
+            // `node.credential`, which misses the deployment-wide community fallback (ADR-119).
+            snmp_configured: admin.dispatcher.snmp_configured_for(&node),
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()
@@ -848,6 +858,96 @@ mod tests {
             .await
             .expect("ok result");
         assert_eq!(json_of(&r)["available"], serde_json::json!(false));
+    }
+
+    /// Both surfaces answer "is SNMP configured for this node?", and answer it the same way —
+    /// **including on the branch a credential cannot see**.
+    ///
+    /// `snmp_configured` is the second axis the node detail hides its SNMP-fed tabs on (ADR-119).
+    /// It shipped on `GET /nodes/{node_id}` alone, so `get_node_status` — the tool the route ledger
+    /// says folds that route — could not answer a question the WebUI could, which is the
+    /// read-parity rule in `api-conventions.md`. That failure is silent by construction: the
+    /// ledger's `Mcp::Tool` column asserts the tool *exists*, never that it gives the same answer.
+    ///
+    /// 🚨 **The whole test is the second half.** A node with no bound credential on a deployment
+    /// with no fallback community answers `false` under *either* implementation — the correct one
+    /// and a re-derivation from `node.credential` — so a version of this test with only that case
+    /// passes with the bug in place. It was written that way first and **verified to pass while
+    /// the tool derived the value from `node.credential`**, which is exactly the shape of a check
+    /// that looks like coverage and is not. The community case is what separates them: the same
+    /// node, no credential, and the answer must flip to `true` on both surfaces.
+    ///
+    /// It also drives real HTTP and the real tool body over one live database rather than
+    /// comparing source text, because the offence is a value and not a spelling.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_surfaces_agree_on_whether_snmp_is_configured(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state_with_env_community, send, token};
+
+        // One node, no bound credential, asked of two deployments that differ in one thing.
+        for (community, expected) in [(None, false), (Some("public".to_owned()), true)] {
+            let st = live_state_with_env_community(pool.clone(), community.clone()).await;
+            let tok = token(&st, yagra_common::Role::Admin);
+            let label = format!("env community {community:?}");
+
+            let (status, created) = send(
+                &st,
+                "POST",
+                "/api/v1/nodes",
+                &tok,
+                Some(serde_json::json!({ "name": "ping-only-01", "address": "10.0.0.9" })),
+            )
+            .await;
+            assert_eq!(
+                status,
+                axum::http::StatusCode::CREATED,
+                "{label}: {created}"
+            );
+            let node_id: Uuid = serde_json::from_value(created["id"].clone())
+                .unwrap_or_else(|e| panic!("{label}: the create response carries an id: {e}"));
+
+            let (status, detail) =
+                send(&st, "GET", &format!("/api/v1/nodes/{node_id}"), &tok, None).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{label}: {detail}");
+            let rest = detail
+                .get("snmp_configured")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or_else(|| panic!("{label}: REST still carries snmp_configured: {detail}"));
+
+            let r = YagraMcp::new(st.clone())
+                .node_status_in(NodeIdParams { node_id }, &unrestricted())
+                .await
+                .expect("ok result");
+            let tool = json_of(&r);
+            let mcp = tool
+                .get("snmp_configured")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or_else(|| {
+                    panic!("{label}: the tool still carries snmp_configured: {tool}")
+                });
+
+            // Both directions, so neither surface can pass by being hardcoded: they must agree
+            // with each other AND both must follow the deployment's community.
+            assert_eq!(
+                rest, expected,
+                "{label}: REST must follow the fallback community, not the node's credential"
+            );
+            assert_eq!(
+                mcp, expected,
+                "{label}: get_node_status folds GET /nodes/:node_id and must answer the same"
+            );
+
+            // The row is per-iteration state; the next deployment starts from an empty inventory.
+            let (status, body) = send(
+                &st,
+                "DELETE",
+                &format!("/api/v1/nodes/{node_id}"),
+                &tok,
+                None,
+            )
+            .await;
+            assert!(status.is_success(), "{label}: cleanup delete: {body}");
+        }
     }
 
     /// A half-specified keyset cursor is a protocol error on this surface as it is over REST.
