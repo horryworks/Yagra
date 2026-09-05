@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### Improvements
+
+- **An upgrade now keeps a deployment's own compose changes.** The composition is installed out of
+  the target image, so any edit made to `docker-compose.deploy.yml` — an extra network for the
+  poller, a resource limit, the `network_mode: host` the file itself suggests — was replaced by the
+  next upgrade, silently. Put those in **`docker-compose.local.yml`** beside it instead: an upgrade
+  never replaces that file, and both the WebUI upgrade and the "accept remote pollers" switch now
+  pass it to Compose as a second `-f` whenever it exists. Deployments without one are unaffected —
+  no file, no argument. Switching the poller to `network_mode: host` needs `ports: !reset []` in
+  the overlay as well, which requires Compose v2.24+; an overlay that only adds works on any 2.x.
+
 ## v0.3.10 — A ping-only node no longer shows the tabs an SNMP walk fills, and the environment community counts
 
 ### New Features

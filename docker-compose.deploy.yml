@@ -7,6 +7,17 @@
 #   docker compose -p yagra -f docker-compose.deploy.yml pull
 #   docker compose -p yagra -f docker-compose.deploy.yml up -d
 #
+# ── Local changes go in a SECOND file, never in this one ──────────────────────────────────────
+# An upgrade installs this composition out of the target image (ADR-050 decision 5), so every edit
+# made here is lost the next time Settings ▸ Upgrade is pressed. `docker-compose.local.yml` beside
+# this file is never replaced — like `.env` — so that is where a deployment's own shape belongs:
+# an extra network, a resource limit, an extra volume, `network_mode: host`. Create it and add a
+# second `-f` to the commands above; the WebUI upgrade picks it up on its own (decision 19):
+#
+#   docker compose -p yagra -f docker-compose.deploy.yml -f docker-compose.local.yml up -d
+#
+# Compose merges later `-f` files over earlier ones, so the overlay only needs the keys it changes.
+#
 # Two variables select the image:
 #
 #   YAGRA_IMAGE_TAG    v<version> (a release), :latest (the latest stable release), or a git SHA.
@@ -468,7 +479,22 @@ services:
       - "${YAGRA_FLOW_PORT:-2055}:2055/udp"    # NetFlow v5/v9 / IPFIX flow intake (ADR-031)
       - "${YAGRA_SFLOW_PORT:-6343}:6343/udp"   # sFlow intake (ADR-031 Increment 2; bind via YAGRA_SFLOW_BIND)
     # NOTE: event→node correlation keys on the datagram source IP. If Docker's bridge
-    # networking rewrites it on this host, switch the poller to `network_mode: host`.
+    # networking rewrites it on this host, switch the poller to `network_mode: host` —
+    # **in `docker-compose.local.yml`, not here.**
+    # 🚨 An upgrade installs this composition out of the target
+    # image (ADR-050 decision 5), so anything written in this file is gone the next time Settings ▸
+    # Upgrade is pressed — this note asked for a change that erased itself, from the day the
+    # updater shipped. Put it in `docker-compose.local.yml` beside this file instead, which an
+    # upgrade never replaces (decision 19):
+    #
+    #     services:
+    #       poller:
+    #         network_mode: host
+    #         ports: !reset []
+    #
+    # `ports` and `network_mode: host` are mutually exclusive, hence the reset — and `!reset` needs
+    # Compose v2.24+ (2024-02). An overlay that only *adds* (an extra network, a resource limit, a
+    # volume) needs no such thing and works on any 2.x.
     volumes:
       # Store-and-forward disk spill (Phase 3). Without it the buffer is memory-only, so a bus
       # outage longer than the in-memory ring drops the oldest results, and a poller restart
@@ -1048,8 +1074,24 @@ services:
         #    stack and orphans the real volumes; YAGRA_IMAGE_REPO because the composition would
         #    otherwise resolve it from the host's .env, which can name a different registry from
         #    the one these images were just fetched from.
+        #
+        #    A third argument is passed *conditionally*, and it is what makes an upgrade keep this
+        #    deployment's own SHAPE (ADR-050 decision 19). Step 3 has just replaced
+        #    `docker-compose.deploy.yml` wholesale, so every edit an operator made to it is already
+        #    gone — including the `network_mode: host` that this very file tells them to make, and
+        #    any `networks:` entry putting the poller on a second network. `docker-compose.local.yml`
+        #    beside it is never replaced, for the same reason `.env` is not, so that is where a
+        #    deployment's own shape lives: extra networks, resource limits, extra volumes. Compose
+        #    merges later `-f` files over earlier ones.
+        #    ⚠️ `$$LOCAL` is deliberately unquoted. It must contribute NO argument when empty and
+        #    two words when set; quoting it would pass one empty argument and compose would refuse.
         say running compose "recreating containers"
-        ( cd "$$WORKDIR" && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) >/tmp/err 2>&1 \
+        LOCAL=
+        if [ -f "$$WORKDIR/docker-compose.local.yml" ]; then
+          LOCAL="-f docker-compose.local.yml"
+          say running compose "recreating containers, with this deployment's docker-compose.local.yml"
+        fi
+        ( cd "$$WORKDIR" && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml $$LOCAL up -d ) >/tmp/err 2>&1 \
           || fail compose "docker compose up failed; the previous images are still on this host — $$(sanitize < /tmp/err)"
 
         # 5. Verify the thing that is actually running — not that a command returned 0. A green
@@ -1162,7 +1204,14 @@ services:
         #
         # A bare `up -d` is survivable now that this runs outside the compose project, but it would
         # still restart every store for a change none of them read.
-        ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d bus-init bus-cert-init nats core poller web ) \
+        #
+        # The operator's overlay is passed here as well (ADR-050 decision 19), and the reason is
+        # sharper than in an apply: this list recreates `poller` by name. Without the overlay,
+        # turning remote pollers on — or off — would silently take the poller off any extra network
+        # the deployment had put it on, and the operator would read that as a bus problem.
+        LOCAL=
+        if [ -f "$$WORKDIR/docker-compose.local.yml" ]; then LOCAL="-f docker-compose.local.yml"; fi
+        ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml $$LOCAL up -d bus-init bus-cert-init nats core poller web ) \
           || { settle failed "docker compose up failed; the previous bus settings are still in .env"; exit 1; }
         if [ "$$MODE" = "on" ]; then WHAT=accepted; else WHAT=refused; fi
         settle succeeded "remote pollers are now $$WHAT"

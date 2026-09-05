@@ -3196,7 +3196,9 @@ mod tests {
             ("staging the target image", "CID=$$(docker create"),
             (
                 "the compose recreate",
-                "docker compose -p \"$$PROJ\" -f docker-compose.deploy.yml up -d )",
+                // Stops at the composition's own name: what follows it is `$$LOCAL up -d`, and
+                // the overlay argument between the two is decision 19's, not this test's.
+                "docker compose -p \"$$PROJ\" -f docker-compose.deploy.yml",
             ),
         ] {
             let at = apply
@@ -3215,6 +3217,93 @@ mod tests {
                  {stmt}"
             );
         }
+    }
+
+    /// Every `up -d` the updater runs, folded onto one line each.
+    ///
+    /// Selected by `cd "$WORKDIR" &&`, which is what separates a command this script *runs* from
+    /// the identical-looking one it *prints* in a repair message — and the repair messages
+    /// deliberately do not name `$WORKDIR` (it is the poisoned path, see step 0).
+    fn recreate_invocations(compose: &str) -> Vec<String> {
+        without_comments(compose)
+            .lines()
+            .filter(|l| {
+                l.contains("cd \"$$WORKDIR\"")
+                    && l.contains("docker compose")
+                    && l.contains(" up -d")
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Every recreate passes the operator's own overlay (ADR-050 decision 19).
+    ///
+    /// An upgrade installs `docker-compose.deploy.yml` out of the target image (decision 5), so an
+    /// edit made in that file does not survive one — and this composition *asks* for such an edit,
+    /// at the poller's `ports:`, where it tells the operator to switch to `network_mode: host`.
+    /// `docker-compose.local.yml` beside it is never replaced, so that is where a deployment's own
+    /// shape lives, and passing it as a second `-f` is what carries that shape across an upgrade.
+    ///
+    /// Both call sites are here and they fail differently. The apply recreates everything; the bus
+    /// switch recreates `poller` **by name**, so without the overlay, turning remote pollers on
+    /// takes the poller off its extra network and reads to the operator as a bus fault.
+    #[test]
+    fn every_recreate_passes_the_operators_overlay() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let recreates = recreate_invocations(&compose);
+        // A floor on what was *inspected*. This assertion's healthy answer is "found nothing
+        // wrong", so it has to be able to tell that apart from "matched nothing".
+        assert!(
+            recreates.len() >= 2,
+            "expected at least the apply's recreate and the bus switch's; found {}:\n{}",
+            recreates.len(),
+            recreates.join("\n")
+        );
+        for line in &recreates {
+            assert!(
+                line.contains("$$LOCAL"),
+                "this `up -d` does not pass the operator's overlay, so an upgrade through it \
+                 silently drops whatever docker-compose.local.yml adds:\n{line}"
+            );
+        }
+    }
+
+    /// …and names no overlay of its own when the deployment has none.
+    ///
+    /// This is the half that carries the weight. A procedure passing
+    /// `-f docker-compose.local.yml` unconditionally satisfies the test above perfectly, and then
+    /// fails **every** upgrade on **every** deployment that has no overlay — compose refuses a
+    /// `-f` naming a file that is not there. So the argument has to arrive through a variable that
+    /// starts empty and is set only by a file test.
+    #[test]
+    fn the_overlay_is_passed_only_when_the_deployment_has_one() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let script = without_comments(&compose);
+        for line in recreate_invocations(&compose) {
+            assert!(
+                !line.contains("-f docker-compose.local.yml"),
+                "this `up -d` names the overlay as a literal, so it is passed even on a deployment \
+                 that has none — and compose refuses a -f naming a file that is not there:\n{line}"
+            );
+        }
+        let guards = script
+            .matches("if [ -f \"$$WORKDIR/docker-compose.local.yml\" ]")
+            .count();
+        assert!(
+            guards >= 2,
+            "the overlay argument is built without a file test in front of it ({guards} found), \
+             so it is either always passed or never"
+        );
+        // `set -u` is on in both procedures: an unset LOCAL would abort the run rather than
+        // contribute nothing.
+        let empty_starts = script.matches("\n        LOCAL=\n").count();
+        assert!(
+            empty_starts >= 2,
+            "LOCAL does not start empty in both procedures ({empty_starts} found); under `set -u` \
+             an unset one aborts the upgrade instead of passing no argument"
+        );
     }
 
     /// Nothing is deleted until the new core has been *seen running*.

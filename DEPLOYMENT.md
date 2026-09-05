@@ -590,6 +590,27 @@ Upgrades are designed to be low-effort and **never** lose or corrupt data:
 - **Settings ▸ Upgrade does it for you — the ordinary way to upgrade (v0.2.2+, deployment **A**).** Every other way of installing Yagra — from source, natively, or from a composition without the `yagra-updater` sidecar — has no such mechanism, and the page says so plainly instead of offering controls that would fail. The page lists the releases this deployment can move to and runs backup → pull → install the composition carried inside the target image → recreate → verify. The work is done by a `yagra-updater` sidecar, which is the only container holding the Docker socket — core never has it. Requesting an upgrade needs **manage-the-deployment**, which only an Admin holds; it is audited, and it is not on the MCP surface. A switch on the same page turns the mechanism off; the setting lives in PostgreSQL, so it survives the upgrades it governs.
   - **A release older than the running one is a downgrade, and it is offered only when it can actually boot.** A migration may declare a *compatibility floor* — the oldest version that can still run once it has been applied — and anything below the current floor is shown greyed out with the reason rather than hidden. Nothing is deleted by going back: columns the newer version added stay in place, unread.
   - **No registry reachable?** Run `docker save` on the three release images where you can reach them, and upload the archive at the same page. It needs `YAGRA_UPGRADE_ALLOW_BUNDLE=1` on the host as a second, deliberate opt-in, because `docker load` installs whatever the archive contains — see the variable reference below before turning it on.
+- **Local changes to the composition go in `docker-compose.local.yml` — never in `docker-compose.deploy.yml`.** An upgrade installs the composition out of the target image, which is what keeps the two from ever drifting apart in version; the cost is that every edit made in that file is replaced by it. A second file beside it is never touched, and both the WebUI upgrade and the "accept remote pollers" switch pass it as a further `-f` whenever it exists — so what it adds outlives every upgrade, the same way `.env` does. Compose merges later files over earlier ones, so the overlay carries only the keys it changes:
+
+  ```yaml
+  services:
+    poller:
+      networks: [default, lab]
+  networks:
+    lab:
+      external: true
+  ```
+
+  By hand, add the same `-f`:
+
+  ```bash
+  docker compose -p yagra -f docker-compose.deploy.yml -f docker-compose.local.yml up -d
+  ```
+
+  ⚠️ Switching the poller to `network_mode: host` — which the composition suggests where event→node
+  correlation needs the real source IP — also needs `ports: !reset []` in the overlay, because the
+  two are mutually exclusive. `!reset` is **Compose v2.24+** (2024-02); an overlay that only *adds*
+  works on any 2.x.
 - **DB migrations are expand-contract and run automatically** on core startup. N→N+1 is always supported; `yagra-core migrations` prints the set a binary embeds as JSON with no database and no configuration, so an upgrade can be planned by running it inside the target image first.
 - **The bus is version-tolerant (N/N-1).** A new core works with old pollers during a rollout, so you can upgrade core first and pollers after.
 - **Rolling upgrades.** Pollers are stateless — replace them in any order. For Docker, pull the new tag and `up -d` (see **A**). Remote pollers: pull and `up -d` per site; a pool briefly down falls back to legacy publish, so no node goes dark.
