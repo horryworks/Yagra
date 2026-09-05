@@ -16,8 +16,8 @@
 // from the wrong query is the bug, not the absence of a card.
 
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
-import { defaultBodyFor, type Json } from '../support/openapi';
+import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
+import { type Json } from '../support/openapi';
 
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 
@@ -29,12 +29,6 @@ const CURATED_COUNTER = 'huawei_usg_session_total';
 const GENERIC_EXPLAINED = 'huawei_temp';
 /** Left over, and deliberately a name nothing explains — an operator's own collection item. */
 const GENERIC_UNEXPLAINED = 'ymock_overview_widget';
-
-function deviceNode(): Json {
-  const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as { kind: string };
-  body.kind = 'device';
-  return body as unknown as Json;
-}
 
 /** A four-metric inventory spanning every case the two sections divide on.
  *
@@ -78,7 +72,7 @@ test.use({
   mockConfig: {
     overrides: {
       ...BOOTSTRAP_OVERRIDES,
-      '/api/v1/nodes/{node_id}': () => deviceNode(),
+      '/api/v1/nodes/{node_id}': () => deviceNode(NODE_ID),
       '/api/v1/nodes/{node_id}/metrics': () => inventory(),
       '/api/v1/nodes/{node_id}/metrics/{metric}': () => readingBody(),
       '/api/v1/nodes/{node_id}/metrics/{metric}/range': (url: URL) => rangeBody(url),

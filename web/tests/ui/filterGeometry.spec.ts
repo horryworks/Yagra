@@ -19,8 +19,7 @@
 //      being filterable on a phone, silently.
 
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
-import { defaultBodyFor, type Json } from '../support/openapi';
+import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
 import { FILTER_SURFACE, inspectFilterSurface, MUST_FILTER } from './filterSurface';
 
 const SCREENS = Object.keys(MUST_FILTER);
@@ -29,12 +28,6 @@ const SCREENS = Object.keys(MUST_FILTER);
  *  walk's screen list cannot reach them — and both were drawing their row on a phone. */
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 const TABS_WITH_A_FILTER_ROW = ['interfaces', 'collection'];
-
-function deviceNode(): Json {
-  const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as { kind: string };
-  body.kind = 'device';
-  return body as unknown as Json;
-}
 
 /** Widths an operator actually has. 1280 is Playwright's Desktop Chrome and the walk's default, so
  *  it is deliberately not repeated here; these are the two that bracket it.
@@ -193,7 +186,7 @@ test.describe('on a phone', () => {
   test.describe('a node detail tab', () => {
     test.use({
       mockConfig: {
-        overrides: { ...BOOTSTRAP_OVERRIDES, '/api/v1/nodes/{node_id}': () => deviceNode() },
+        overrides: { ...BOOTSTRAP_OVERRIDES, '/api/v1/nodes/{node_id}': () => deviceNode(NODE_ID) },
       },
     });
 

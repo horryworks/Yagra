@@ -12,7 +12,7 @@
 // identical to a correct feature from the unit tests alone.
 
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
+import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
 
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
@@ -23,12 +23,6 @@ const OPTICAL_IF = 1;
 const COPPER_IF = 2;
 
 /** Only a `device` node shows the Interfaces tab at all. */
-function deviceNode(): Json {
-  const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as { kind: string };
-  body.kind = 'device';
-  return body as unknown as Json;
-}
-
 /** Two interfaces, so the presence *and* the absence of the chart are both observable in one run.
  *
  *  The generator emits a single row with placeholder values; a one-port fixture could only ever
@@ -101,7 +95,7 @@ test.use({
   mockConfig: {
     overrides: {
       ...BOOTSTRAP_OVERRIDES,
-      '/api/v1/nodes/{node_id}': () => deviceNode(),
+      '/api/v1/nodes/{node_id}': () => deviceNode(NODE_ID),
       '/api/v1/nodes/{node_id}/interfaces': () => interfaceRows(),
       '/api/v1/nodes/{node_id}/interfaces/{ifindex}/series': (url: URL) => seriesBody(url),
     },

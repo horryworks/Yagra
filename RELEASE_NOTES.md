@@ -10,6 +10,25 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A node monitored only by ping no longer shows the two tabs it can never fill.** Interfaces and
+  Neighbors are built from SNMP walks, so on a device with no SNMP configured they were always
+  empty; the node detail now offers Overview, Collection, Events and Flow instead. Events and Flow
+  stay because syslog, SNMP traps and NetFlow are attributed by the device's own address — a
+  ping-only host can genuinely have both.
+- **The Collection tab's "ICMP-only node" verdict is now correct on deployments that set
+  `YAGRA_SNMP_COMMUNITY`.** It was derived from whether a credential was bound to the node, which
+  misses that fallback: a node with no bound credential is still polled over SNMP when the
+  deployment-wide community is set, and the panel said otherwise.
+
+### New Features
+
+- `GET /api/v1/nodes/{node_id}` now returns **`snmp_configured`** (boolean): whether SNMP polling
+  is configured for the node — a bound credential, or the deployment-wide `YAGRA_SNMP_COMMUNITY`
+  fallback. It says nothing about whether the device is answering. Additive; no existing field
+  changed.
+
 ## v0.3.9 — An upgrade checks for room before it writes, says why a pull failed, and clears up after itself
 
 ### Improvements

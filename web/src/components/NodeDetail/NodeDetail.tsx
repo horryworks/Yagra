@@ -6,7 +6,7 @@
 // pills + warning dots), and the Edit/Delete modals. Live data (status, RTT, interfaces) refreshes
 // on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
 
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
@@ -35,6 +35,7 @@ import {
   normalizeNodeDetailTab,
   resolveNodeDetailTab,
   visibleNodeDetailTabs,
+  type NodeDetailSubject,
   type NodeDetailTab,
   type NodeDetailTabStats,
 } from './tabs';
@@ -78,10 +79,17 @@ export function NodeDetail({
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
   const [node, setNode] = useState<NodeDetailData | null>(null);
-  // Kind-aware: a tab this node's kind does not show falls back to Overview. `node` is null until
-  // the config load resolves, and the render below returns a loading pane until then, so the bar is
-  // never painted from an unresolved kind.
-  const activeTab = resolveNodeDetailTab(tab, node?.kind ?? null);
+  // What the tab rules are asked about. `null` until the config load resolves — the render below
+  // returns a loading pane until then, so the bar is never painted from an unresolved node. Both
+  // fields come off the same fetch, so there is no window where one is known and the other is not.
+  // Memoized so it is referentially stable: the tab-correction effect below depends on it, and a
+  // fresh object every render would re-run that effect — which writes the URL — on every render.
+  const subject: NodeDetailSubject | null = useMemo(
+    () => (node ? { kind: node.kind, snmpConfigured: node.snmp_configured } : null),
+    [node],
+  );
+  // A tab this node does not show falls back to Overview.
+  const activeTab = resolveNodeDetailTab(tab, subject);
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
@@ -121,9 +129,10 @@ export function NodeDetail({
   }, [nodeId, refreshNonce]);
 
   // Whether this node can have interfaces at all. Gates the eager fetch below: a URL/DNS/Meraki
-  // node never gets an ifTable walk, so asking every refresh tick is a request that can only ever
-  // come back empty. Undecided while the config is still loading — the pane is not rendered yet.
-  const hasInterfaces = node != null && visibleNodeDetailTabs(node.kind).includes('interfaces');
+  // node never gets an ifTable walk, and neither does a ping-only device, so asking every refresh
+  // tick is a request that can only ever come back empty. Undecided while the config is still
+  // loading — the pane is not rendered yet.
+  const hasInterfaces = subject != null && visibleNodeDetailTabs(subject).includes('interfaces');
 
   // The series that says "we heard from this node". Kind-driven: only an ordinary device is pinged,
   // so asking every kind for `icmp_rtt_ms` meant a URL monitor, a DNS monitor and a Meraki device
@@ -178,13 +187,13 @@ export function NodeDetail({
   // what is drawn instead of quietly diverging. Comparing the *normalized* value is deliberate:
   // `?tab=bogus` keeps today's behaviour of rendering Overview and leaving the param alone, and
   // only a real-but-inapplicable tab is rewritten. It cannot loop — after the correction the two
-  // sides agree, and 'overview' is visible to every kind (pinned in tabs.test.ts).
+  // sides agree, and 'overview' is visible to every node (pinned in tabs.test.ts).
   useEffect(() => {
-    if (!node) return;
+    if (!subject) return;
     const requested = normalizeNodeDetailTab(tab);
-    const allowed = resolveNodeDetailTab(tab, node.kind);
+    const allowed = resolveNodeDetailTab(tab, subject);
     if (requested !== allowed) onTabChange(allowed);
-  }, [node, tab, onTabChange]);
+  }, [subject, tab, onTabChange]);
 
   // Collection-set count for the Collection tab badge (the profile's attached templates).
   useEffect(() => {
@@ -220,7 +229,10 @@ export function NodeDetail({
       .finally(() => setPolling(false));
   };
 
-  if (!node) {
+  // Both, though the memo makes them resolve together: naming `subject` here is what lets the
+  // render below pass it straight to the tab rules instead of carrying a fallback that can
+  // never run.
+  if (!node || !subject) {
     return (
       <div className="nd">
         <div className="nd-body nd-tabpad">
@@ -238,7 +250,7 @@ export function NodeDetail({
   const tabStats: NodeDetailTabStats = {
     interfaces,
     collCount,
-    hasCredential: !!node.credential_id,
+    hasSnmp: node.snmp_configured,
     state,
   };
   // Keyed by NodeDetailTab, so adding a tab to NODE_DETAIL_TABS without a body fails to compile.
@@ -342,7 +354,7 @@ export function NodeDetail({
       )}
 
       <div className="nd-tabs" role="tablist">
-        {visibleNodeDetailTabs(node.kind).map((key) => {
+        {visibleNodeDetailTabs(subject).map((key) => {
           const meta = NODE_DETAIL_TAB_META[key];
           const n = meta.badge?.(tabStats) ?? null;
           return (

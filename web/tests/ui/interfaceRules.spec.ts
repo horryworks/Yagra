@@ -15,19 +15,13 @@
 //     `thresholdQuery.test.ts` pins the request, this pins that the operator is told.
 
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
+import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
 
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 const IFINDEX = 1;
 
 /** Only a `device` shows the Interfaces tab, and the dock only exists once a port is selected. */
-function deviceNode(): Json {
-  const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as { kind: string };
-  body.kind = 'device';
-  return body as unknown as Json;
-}
-
 /** One rule on this port and one inherited from the node, both built from the generated shape so a
  *  change to the Rust type reaches this fixture. The inherited one is deliberately a *different*
  *  metric: two rules on one metric would make "in force" ambiguous, and the property under test is
@@ -73,7 +67,7 @@ test.use({
   mockConfig: {
     overrides: {
       ...BOOTSTRAP_OVERRIDES,
-      '/api/v1/nodes/{node_id}': () => deviceNode(),
+      '/api/v1/nodes/{node_id}': () => deviceNode(NODE_ID),
       '/api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds': () => portRules(),
     },
   },

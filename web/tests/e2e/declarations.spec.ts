@@ -15,7 +15,11 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NODE_DETAIL_TABS, visibleNodeDetailTabs } from '../../src/components/NodeDetail/tabs';
+import {
+  NODE_DETAIL_TABS,
+  visibleNodeDetailTabs,
+  type NodeDetailSubject,
+} from '../../src/components/NodeDetail/tabs';
 import { NODE_KINDS, type NodeKind } from '../../src/types/api';
 import { expect, test } from './support/live';
 
@@ -27,6 +31,17 @@ interface NodeRow {
   id: string;
   name: string;
   kind: NodeKind;
+}
+
+/** The half of the tab rules the *list* cannot answer.
+ *
+ *  `snmp_configured` is on the detail DTO only (ADR-119), and deliberately: it is the server's own
+ *  reading of whether SNMP resolves for the node, which is not derivable from anything
+ *  `GET /nodes` returns. So the representative's detail is fetched — the same endpoint the page
+ *  itself calls, which makes this a stronger question rather than a more expensive one. */
+interface NodeDetailRow {
+  kind: NodeKind;
+  snmp_configured: boolean;
 }
 
 interface RoleMatrix {
@@ -53,20 +68,30 @@ test('every node kind the deployment actually holds is one the tab rules know', 
   const perKind = [...new Map(nodes.map((n) => [n.kind, n])).values()];
 
   for (const node of perKind) {
+    const detail = await api<NodeDetailRow>(`/api/v1/nodes/${node.id}`);
+    // Asked of the detail, not assumed from the list: the two must agree about the kind as well,
+    // and a disagreement here is the same seam this test is about.
+    expect(detail.kind, `${node.name}: the list and the detail disagree about the kind`).toBe(
+      node.kind,
+    );
+    const subject: NodeDetailSubject = {
+      kind: detail.kind,
+      snmpConfigured: detail.snmp_configured,
+    };
+    const who = `${node.name} is a ${node.kind}${subject.snmpConfigured ? '' : ' with no SNMP'}`;
+
     await page.goto(`/nodes/${node.id}`);
     const tabs = page.getByRole('tab');
     await expect(tabs.first(), `${node.name} showed no tabs at all`).toBeVisible();
 
-    const expected = visibleNodeDetailTabs(node.kind).map((t) => TAB_LABELS[t]);
-    await expect(tabs, `${node.name} is a ${node.kind}`).toHaveText(
-      expected.map((label) => new RegExp(`^${label}`)),
-    );
+    const expected = visibleNodeDetailTabs(subject).map((t) => TAB_LABELS[t]);
+    await expect(tabs, who).toHaveText(expected.map((label) => new RegExp(`^${label}`)));
 
     // 🚨 Rendering the button was never the bug. ADR-031 shipped a Flow tab whose button appeared
     // and whose click bounced back to Overview, because the tab bar and the body switch were two
     // lists. So each offered tab is opened, on a real node, against real data.
     for (const tab of NODE_DETAIL_TABS) {
-      if (!visibleNodeDetailTabs(node.kind).includes(tab)) continue;
+      if (!visibleNodeDetailTabs(subject).includes(tab)) continue;
       await page.getByRole('tab', { name: new RegExp(`^${TAB_LABELS[tab]}`) }).click();
       await expect(
         page.getByRole('tab', { name: new RegExp(`^${TAB_LABELS[tab]}`) }),

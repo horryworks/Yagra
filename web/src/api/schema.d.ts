@@ -7848,6 +7848,20 @@ export interface components {
             pool?: string | null;
             /** Format: uuid */
             profile_id?: string | null;
+            /**
+             * @description Whether SNMP polling is **configured** for this node — not whether it is answering.
+             *
+             *     🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the
+             *     deployment-wide `YAGRA_SNMP_COMMUNITY` for every node with no bound credential, so on such a
+             *     deployment a `credential_id` of `null` still means a device that is walked, has interface
+             *     rows and has neighbours. The WebUI uses this to hide the tabs whose only data source is an
+             *     SNMP walk (Interfaces, Neighbors — ADR-119); deriving it client-side would hide them on
+             *     exactly the nodes that have the data.
+             *
+             *     ⚠️ Over-reports rather than under-reports — see
+             *     `PollDispatcher::snmp_configured_for`, which is the one place the rule lives.
+             */
+            snmp_configured: boolean;
             url_check?: null | components["schemas"]["UrlCheckConfig"];
             /** @description Descriptive maker/model, editable from the node detail. */
             vendor?: string | null;

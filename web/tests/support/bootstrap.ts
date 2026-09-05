@@ -9,6 +9,28 @@ import type { Override } from './mockApi';
 
 type Schemas = components['schemas'];
 
+/**
+ * An ordinary SNMP-polled device, for the specs that open a tab only such a node has.
+ *
+ * One copy: this was five byte-identical local helpers, and ADR-119 gave every one of them the
+ * same second line to grow. `snmp_configured` is the reason it cannot stay generated — the
+ * generator answers a boolean with `false`, which is a **ping-only** device, and a ping-only
+ * device has no Interfaces tab to open. Seventeen tests failed on exactly that.
+ *
+ * Takes the id rather than owning one: each spec already declares its own `NODE_ID` for the URLs
+ * it visits, and a fixture that hardcoded a different one would answer for a node the spec never
+ * asks about.
+ */
+export function deviceNode(nodeId: string): Json {
+  const body = defaultBodyFor(`/api/v1/nodes/${nodeId}`) as {
+    kind: string;
+    snmp_configured: boolean;
+  };
+  body.kind = 'device';
+  body.snmp_configured = true;
+  return body as unknown as Json;
+}
+
 /** The Troubleshoot tool whose report the walk opens. Exported so `screens.ts` builds the URL from
  *  the same constant the mocked job carries — the report shell redirects a job whose `tool` does
  *  not match the route, so these two disagreeing is a silent redirect, not an error. */
@@ -29,6 +51,21 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     flow_enabled: true,
     default_poll_interval_secs: 30,
   } satisfies Schemas['ClientConfig'] as unknown as Json,
+
+  // 🚨 The generator answers a boolean with `false`, and since ADR-119 one of this body's booleans
+  // decides how many tabs the node-detail screen has: `snmp_configured: false` is a ping-only
+  // device, which is offered four tabs instead of six. Left generated, the route walk would visit
+  // the *narrowest* node page in the app and never render Interfaces or Neighbors — passing, while
+  // silently no longer covering the screens it was written for.
+  //
+  // So the walk's node is SNMP-polled. `nodeTabs.spec.ts` overrides this back to `false` for the
+  // ping-only half of its matrix, which is where that case belongs: there it is the subject, here
+  // it would be an accident. Patch the generated body rather than hand-writing one.
+  '/api/v1/nodes/{node_id}': (() => {
+    const body = defaultBodyFor('/api/v1/nodes/{node_id}') as { snmp_configured: boolean };
+    body.snmp_configured = true;
+    return body as unknown as Json;
+  })(),
 
   // 🚨 `Role`'s enum is ordered least → most privileged (`["viewer","operator","admin"]`), so the
   // generator's "take the first member" rule hands the walk a **viewer** — and roughly fifteen

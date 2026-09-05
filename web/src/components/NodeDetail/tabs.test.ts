@@ -6,6 +6,7 @@ import {
   normalizeNodeDetailTab,
   resolveNodeDetailTab,
   visibleNodeDetailTabs,
+  type NodeDetailSubject,
   type NodeDetailTabStats,
 } from './tabs';
 import { NODE_KINDS, type InterfaceRow } from '../../types/api';
@@ -49,11 +50,24 @@ describe('node-detail tabs', () => {
   });
 });
 
-// Which kinds see which tabs. A URL or DNS monitor produces one HTTP/DNS job and nothing else
+// Which nodes see which tabs. A URL or DNS monitor produces one HTTP/DNS job and nothing else
 // (scheduler/assemble.rs::assemble_node_jobs returns before the ICMP and SNMP branches), and a Meraki node
 // emits no per-node job at all — so Interfaces / Neighbors / Flow are structurally unreachable for
-// them, not merely empty today.
-describe('node-detail tab visibility by kind', () => {
+// them, not merely empty today. A ping-only device is the same argument on the other axis: it is a
+// device, but with no SNMP auth resolved it gets an ICMP job and nothing else (ADR-119).
+
+/** Every node the rules can be asked about: each kind, with SNMP configured and without.
+ *
+ *  🚨 Iterating `NODE_KINDS` alone is what these structural tests used to do, and it leaves the
+ *  ping-only device — the whole case ADR-119 exists for — unexercised while every one of them
+ *  still passes. Cross the two axes here, once, so no test below can forget the second. */
+const SUBJECTS: NodeDetailSubject[] = NODE_KINDS.flatMap((kind) => [
+  { kind, snmpConfigured: true },
+  { kind, snmpConfigured: false },
+]);
+const label = (n: NodeDetailSubject) => `${n.kind}/${n.snmpConfigured ? 'snmp' : 'ping-only'}`;
+
+describe('node-detail tab visibility', () => {
   it('gives every whitelisted tab a non-empty list of real node kinds', () => {
     for (const tab of NODE_DETAIL_TABS) {
       const kinds = NODE_DETAIL_TAB_META[tab].kinds;
@@ -63,71 +77,105 @@ describe('node-detail tab visibility by kind', () => {
     }
   });
 
+  // The recognition test for the second axis. Without it every assertion here is satisfiable by a
+  // `needsSnmp` nothing reads — which is exactly what an under-reporting check looks like.
+  it('actually narrows a device when SNMP is not configured', () => {
+    const withSnmp = visibleNodeDetailTabs({ kind: 'device', snmpConfigured: true });
+    const without = visibleNodeDetailTabs({ kind: 'device', snmpConfigured: false });
+    expect(without.length).toBeLessThan(withSnmp.length);
+    for (const tab of without) expect(withSnmp, tab).toContain(tab);
+    expect(NODE_DETAIL_TABS.filter((t) => NODE_DETAIL_TAB_META[t].needsSnmp).length).toBeGreaterThan(
+      0,
+    );
+  });
+
   // Load-bearing: 'overview' being visible everywhere is what makes resolveNodeDetailTab's
   // fallback terminate, and what makes NodesPage's "a fresh selection starts on Overview" path
-  // (it deletes the ?tab= param) valid for every kind. Do not narrow it.
-  it('shows every kind at least the overview tab', () => {
-    for (const kind of NODE_KINDS) {
-      expect(visibleNodeDetailTabs(kind), kind).toContain('overview');
+  // (it deletes the ?tab= param) valid for every node. Do not narrow it.
+  it('shows every node at least the overview tab', () => {
+    for (const n of SUBJECTS) {
+      expect(visibleNodeDetailTabs(n), label(n)).toContain('overview');
     }
   });
 
   // An orphan tab would be a dead body element and a dead locale key that i18n parity still passes.
-  it('shows every tab to at least one kind', () => {
-    const shown = new Set(NODE_KINDS.flatMap((k) => visibleNodeDetailTabs(k)));
+  it('shows every tab to at least one node', () => {
+    const shown = new Set(SUBJECTS.flatMap((n) => visibleNodeDetailTabs(n)));
     expect([...shown].sort()).toEqual([...NODE_DETAIL_TABS].sort());
   });
 
-  it('pins the kind → tab matrix', () => {
-    expect([...visibleNodeDetailTabs('device')]).toEqual([...NODE_DETAIL_TABS]);
-    expect([...visibleNodeDetailTabs('url')]).toEqual(['overview', 'collection']);
-    expect([...visibleNodeDetailTabs('dns')]).toEqual(['overview', 'collection']);
-    expect([...visibleNodeDetailTabs('meraki')]).toEqual(['overview', 'collection', 'events']);
+  it('pins the node → tab matrix', () => {
+    const tabs = (kind: NodeDetailSubject['kind'], snmpConfigured: boolean) => [
+      ...visibleNodeDetailTabs({ kind, snmpConfigured }),
+    ];
+    expect(tabs('device', true)).toEqual([...NODE_DETAIL_TABS]);
+    // The ADR-119 case: Interfaces and Neighbors go, Events and Flow stay — they are attributed by
+    // the device's address, so a ping-only node can have rows in either.
+    expect(tabs('device', false)).toEqual(['overview', 'collection', 'events', 'flow']);
+    expect(tabs('url', true)).toEqual(['overview', 'collection']);
+    expect(tabs('url', false)).toEqual(['overview', 'collection']);
+    expect(tabs('dns', false)).toEqual(['overview', 'collection']);
+    expect(tabs('meraki', false)).toEqual(['overview', 'collection', 'events']);
   });
 
-  // The bar's order comes from NODE_DETAIL_TABS, never from a per-kind list, so no kind can
-  // reshuffle the tabs relative to another.
-  it('keeps the registry order for every kind', () => {
-    for (const kind of NODE_KINDS) {
-      const visible = visibleNodeDetailTabs(kind);
+  // The bar's order comes from NODE_DETAIL_TABS, never from a per-node list, so nothing can
+  // reshuffle the tabs relative to anything else.
+  it('keeps the registry order for every node', () => {
+    for (const n of SUBJECTS) {
+      const visible = visibleNodeDetailTabs(n);
       const positions = visible.map((tab) => NODE_DETAIL_TABS.indexOf(tab));
-      expect(positions, kind).toEqual([...positions].sort((a, b) => a - b));
+      expect(positions, label(n)).toEqual([...positions].sort((a, b) => a - b));
     }
   });
 });
 
 describe('resolveNodeDetailTab', () => {
-  it('is kind-blind while the kind is still unknown', () => {
+  it('is node-blind while the node is still unknown', () => {
     for (const tab of NODE_DETAIL_TABS) expect(resolveNodeDetailTab(tab, null)).toBe(tab);
     expect(resolveNodeDetailTab('bogus', null)).toBe('overview');
   });
 
-  it('resolves every tab a kind does show to itself', () => {
-    for (const kind of NODE_KINDS) {
-      for (const tab of visibleNodeDetailTabs(kind)) {
-        expect(resolveNodeDetailTab(tab, kind), `${kind}/${tab}`).toBe(tab);
+  it('resolves every tab a node does show to itself', () => {
+    for (const n of SUBJECTS) {
+      for (const tab of visibleNodeDetailTabs(n)) {
+        expect(resolveNodeDetailTab(tab, n), `${label(n)}/${tab}`).toBe(tab);
       }
     }
   });
 
-  // The bookmarked-URL case: without this, `?tab=flow` on a DNS node would paint a body whose
-  // button is not in the bar — the mirror image of the ADR-031 Flow-tab bug.
-  it('falls back to overview for a tab this kind cannot show', () => {
-    expect(resolveNodeDetailTab('flow', 'dns')).toBe('overview');
-    expect(resolveNodeDetailTab('interfaces', 'url')).toBe('overview');
-    expect(resolveNodeDetailTab('events', 'url')).toBe('overview');
-    expect(resolveNodeDetailTab('neighbors', 'dns')).toBe('overview');
-    expect(resolveNodeDetailTab('flow', 'meraki')).toBe('overview');
+  // The bookmarked-URL case: without this, `?tab=flow` on a DNS node — or `?tab=interfaces` on a
+  // ping-only device — would paint a body whose button is not in the bar, the mirror image of the
+  // ADR-031 Flow-tab bug.
+  it('falls back to overview for a tab this node cannot show', () => {
+    const snmpDevice: NodeDetailSubject = { kind: 'device', snmpConfigured: true };
+    const pingOnly: NodeDetailSubject = { kind: 'device', snmpConfigured: false };
+    expect(resolveNodeDetailTab('flow', { kind: 'dns', snmpConfigured: false })).toBe('overview');
+    expect(resolveNodeDetailTab('interfaces', { kind: 'url', snmpConfigured: true })).toBe(
+      'overview',
+    );
+    expect(resolveNodeDetailTab('events', { kind: 'url', snmpConfigured: false })).toBe('overview');
+    expect(resolveNodeDetailTab('neighbors', { kind: 'dns', snmpConfigured: false })).toBe(
+      'overview',
+    );
+    expect(resolveNodeDetailTab('flow', { kind: 'meraki', snmpConfigured: false })).toBe('overview');
     // Meraki appliances do export syslog, so Events is not hidden for them.
-    expect(resolveNodeDetailTab('events', 'meraki')).toBe('events');
-    expect(resolveNodeDetailTab('flow', 'device')).toBe('flow');
+    expect(resolveNodeDetailTab('events', { kind: 'meraki', snmpConfigured: false })).toBe('events');
+    expect(resolveNodeDetailTab('flow', snmpDevice)).toBe('flow');
+
+    // ADR-119: the two SNMP-fed tabs bounce on a ping-only device, and the two address-attributed
+    // ones do not. Both halves asserted — a rule that hid all four would satisfy only the first.
+    expect(resolveNodeDetailTab('interfaces', pingOnly)).toBe('overview');
+    expect(resolveNodeDetailTab('neighbors', pingOnly)).toBe('overview');
+    expect(resolveNodeDetailTab('events', pingOnly)).toBe('events');
+    expect(resolveNodeDetailTab('flow', pingOnly)).toBe('flow');
+    expect(resolveNodeDetailTab('interfaces', snmpDevice)).toBe('interfaces');
   });
 
-  it('rejects an unknown tab for every kind', () => {
-    for (const kind of NODE_KINDS) {
-      expect(resolveNodeDetailTab('bogus', kind), kind).toBe('overview');
-      expect(resolveNodeDetailTab('', kind), kind).toBe('overview');
-      expect(resolveNodeDetailTab('FLOW', kind), kind).toBe('overview');
+  it('rejects an unknown tab for every node', () => {
+    for (const n of SUBJECTS) {
+      expect(resolveNodeDetailTab('bogus', n), label(n)).toBe('overview');
+      expect(resolveNodeDetailTab('', n), label(n)).toBe('overview');
+      expect(resolveNodeDetailTab('FLOW', n), label(n)).toBe('overview');
     }
   });
 });
@@ -149,7 +197,7 @@ const iface = (oper: number | null): InterfaceRow => ({
 const stats = (over: Partial<NodeDetailTabStats> = {}): NodeDetailTabStats => ({
   interfaces: [],
   collCount: null,
-  hasCredential: false,
+  hasSnmp: false,
   state: 'ok',
   ...over,
 });
@@ -181,13 +229,13 @@ describe('node-detail tab badges and warnings', () => {
     expect(NODE_DETAIL_TAB_META.collection.badge?.(stats({ collCount: 0 }))).toBeNull();
   });
 
-  it('warns on collection only for an SNMP-bound node we cannot currently reach', () => {
+  it('warns on collection only for an SNMP-polled node we cannot currently reach', () => {
     const meta = NODE_DETAIL_TAB_META.collection;
-    expect(meta.warn?.(stats({ hasCredential: true, state: 'unreachable' }))).toBe(true);
-    expect(meta.warn?.(stats({ hasCredential: true, state: 'unknown' }))).toBe(true);
-    expect(meta.warn?.(stats({ hasCredential: true, state: 'ok' }))).toBe(false);
-    // No credential bound ⇒ nothing is expected to collect, so it is not "needs attention".
-    expect(meta.warn?.(stats({ hasCredential: false, state: 'unreachable' }))).toBe(false);
+    expect(meta.warn?.(stats({ hasSnmp: true, state: 'unreachable' }))).toBe(true);
+    expect(meta.warn?.(stats({ hasSnmp: true, state: 'unknown' }))).toBe(true);
+    expect(meta.warn?.(stats({ hasSnmp: true, state: 'ok' }))).toBe(false);
+    // No SNMP ⇒ nothing is expected to collect, so it is not "needs attention".
+    expect(meta.warn?.(stats({ hasSnmp: false, state: 'unreachable' }))).toBe(false);
   });
 
   it('leaves the plain tabs undecorated', () => {

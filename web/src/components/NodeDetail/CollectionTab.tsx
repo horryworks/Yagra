@@ -214,7 +214,10 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
     };
   }, [node.id, node.profile_id, node.credential_id]);
 
-  const hasSnmp = !!node.credential_id;
+  // 🚨 The server's answer, not `!!node.credential_id`. That derivation shipped and was wrong on
+  // any deployment setting `YAGRA_SNMP_COMMUNITY`: the scheduler falls back to it for nodes with no
+  // bound credential, so this panel told a node that was being walked it was `ICMP-only` (ADR-119).
+  const hasSnmp = node.snmp_configured;
   const flowing = data?.metrics.filter((m) => m.status !== 'no_data') ?? [];
   const state: CollState = !hasSnmp ? 'none' : flowing.length > 0 ? 'ok' : 'failing';
 

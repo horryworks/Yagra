@@ -160,6 +160,26 @@ impl PollDispatcher {
         }
     }
 
+    /// Whether SNMP polling is **configured** for this node — a bound credential, or the
+    /// deployment-wide `YAGRA_SNMP_COMMUNITY` fallback that [`resolve_snmp_auth`] applies to every
+    /// node without one. Says nothing about whether the device answers.
+    ///
+    /// Here, and not in the API layer, because this type is the only holder of `env_community`:
+    /// deriving the answer from `nodes.credential_id` alone is wrong on any deployment that sets
+    /// that variable, and it is wrong **silently** — the node really does have interface rows.
+    /// The WebUI reads it as `NodeDetail.snmp_configured` to decide whether the tabs fed only by
+    /// an SNMP walk have anything to show (ADR-119).
+    ///
+    /// ⚠️ **Deliberately over-reports.** A bound credential that fails to open makes
+    /// [`resolve_snmp_auth`] return `None` while this still answers `true`. That direction is the
+    /// safe one: an empty tab is visible and recoverable, a hidden tab holding real rows is
+    /// neither. `snmp_configured_for_agrees_with_resolve_snmp_auth` pins the four ordinary cases
+    /// and names this one as the intended difference.
+    #[must_use]
+    pub fn snmp_configured_for(&self, node: &Node) -> bool {
+        node.credential.is_some() || self.env_community.is_some()
+    }
+
     /// The deployment's adjacency policy, degrading to the compiled default on a read failure —
     /// resolved once per sweep, and once per action on the on-demand path.
     pub async fn adjacency_policy(&self) -> AdjacencyPolicy {
@@ -863,6 +883,64 @@ mod tests {
         );
     }
 
+    /// [`PollDispatcher::snmp_configured_for`] is a **second implementation** of the question
+    /// [`resolve_snmp_auth`] answers, so this runs both over the four ordinary combinations
+    /// (credential bound or not × env community set or not) and demands they agree.
+    ///
+    /// ⚠️ **It cannot pin the whole rule, and the gap is named rather than hidden.** A bound
+    /// credential that fails to open is the one input where the two are meant to disagree —
+    /// `resolve_snmp_auth` gives up and this still says `true`. That case is asserted here as the
+    /// intended difference (ADR-119 決定 3): showing an empty tab is recoverable, hiding a tab that
+    /// holds rows is not. A **third** entrance into `resolve_snmp_auth` would drift past both.
+    #[tokio::test]
+    async fn snmp_configured_for_agrees_with_resolve_snmp_auth() {
+        let cred = Uuid::from_u128(0xc0ffee);
+        let bound = |name: &str| {
+            let mut n = node(name);
+            n.credential = Some(CredentialId::from(cred));
+            n
+        };
+        let good = || FakeCreds::new().with(cred, "snmp_v2c", b"s3cret-community");
+
+        for (label, n, env) in [
+            ("no credential, no env", node("bare"), None),
+            ("no credential, env set", node("bare"), Some("public")),
+            ("credential, no env", bound("v2c"), None),
+            ("credential, env set", bound("v2c"), Some("public")),
+        ] {
+            let mut b = Harness::builder().creds(good());
+            if let Some(c) = env {
+                b = b.env_community(c);
+            }
+            let h = b.build();
+            let resolved =
+                resolve_snmp_auth(h.creds.as_ref(), &n, h.dispatcher.env_community.as_deref())
+                    .await
+                    .is_some();
+            assert_eq!(
+                h.dispatcher.snmp_configured_for(&n),
+                resolved,
+                "{label}: the API answer and the scheduler answer disagree"
+            );
+        }
+
+        // The named exception. Keep it asserted: if the two ever converge here, one of them
+        // changed behaviour and the doc on `snmp_configured_for` stopped being true.
+        let n = bound("v3-broken");
+        let h = Harness::builder()
+            .creds(FakeCreds::new().with(cred, KIND_SNMP_V3, b"{not-a-usm-document"))
+            .build();
+        assert!(
+            resolve_snmp_auth(h.creds.as_ref(), &n, None)
+                .await
+                .is_none(),
+            "an unopenable credential with no env community resolves to no auth"
+        );
+        assert!(
+            h.dispatcher.snmp_configured_for(&n),
+            "and `snmp_configured_for` deliberately still says yes — see its doc"
+        );
+    }
     /// 🚨 **Current behaviour, recorded rather than endorsed** (ADR-111 決定 6): a bound `snmp_v3`
     /// credential that does not parse falls through to the environment's **v2c** community, so a
     /// device that was configured for USM is then polled with a community string.

@@ -14,19 +14,13 @@
 // enlarge. Silent, and the exact inverse of the fix.
 
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
-import { defaultBodyFor, type Json } from '../support/openapi';
+import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
+import { type Json } from '../support/openapi';
 import { DOCK_MIN_PX } from '../../src/components/NodeDetail/interfaceDockHeight';
 
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 
 /** The dock only exists on a node that has interfaces, and only a `device` shows the tab. */
-function deviceNode(): Json {
-  const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as { kind: string };
-  body.kind = 'device';
-  return body as unknown as Json;
-}
-
 /** A series covering the window the client actually asked for.
  *
  *  ⚠️ The generated mock gives every array exactly one element, and numbers come out as `1` — so
@@ -67,7 +61,7 @@ test.use({
   mockConfig: {
     overrides: {
       ...BOOTSTRAP_OVERRIDES,
-      '/api/v1/nodes/{node_id}': () => deviceNode(),
+      '/api/v1/nodes/{node_id}': () => deviceNode(NODE_ID),
       '/api/v1/nodes/{node_id}/interfaces/{ifindex}/series': (url: URL) => seriesBody(url),
     },
   },

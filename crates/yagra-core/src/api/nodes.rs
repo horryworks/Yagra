@@ -882,6 +882,18 @@ pub(crate) struct NodeDetail {
     dns_check: Option<DnsCheckConfig>,
     /// Cisco Meraki binding when this node carries a `meraki_devices` row; `null` otherwise.
     meraki_device: Option<yagra_common::MerakiDeviceConfig>,
+    /// Whether SNMP polling is **configured** for this node — not whether it is answering.
+    ///
+    /// 🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the
+    /// deployment-wide `YAGRA_SNMP_COMMUNITY` for every node with no bound credential, so on such a
+    /// deployment a `credential_id` of `null` still means a device that is walked, has interface
+    /// rows and has neighbours. The WebUI uses this to hide the tabs whose only data source is an
+    /// SNMP walk (Interfaces, Neighbors — ADR-119); deriving it client-side would hide them on
+    /// exactly the nodes that have the data.
+    ///
+    /// ⚠️ Over-reports rather than under-reports — see
+    /// `PollDispatcher::snmp_configured_for`, which is the one place the rule lives.
+    snmp_configured: bool,
 }
 
 #[utoipa::path(
@@ -916,6 +928,9 @@ async fn get_node(
     let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
     let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
     let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
+    // Asked of the dispatcher, which is the only holder of the environment community — before the
+    // struct literal below moves `node`'s fields out.
+    let snmp_configured = admin.dispatcher.snmp_configured_for(&node);
     Ok(Json(NodeDetail {
         kind: NodeKind::resolve(NodeRows {
             meraki: meraki_device.is_some(),
@@ -935,6 +950,7 @@ async fn get_node(
         model: node.model,
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
+        snmp_configured,
     }))
 }
 
