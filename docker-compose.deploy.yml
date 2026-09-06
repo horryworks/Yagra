@@ -1085,11 +1085,18 @@ services:
         #    merges later `-f` files over earlier ones.
         #    ⚠️ `$$LOCAL` is deliberately unquoted. It must contribute NO argument when empty and
         #    two words when set; quoting it would pass one empty argument and compose would refuse.
-        say running compose "recreating containers"
+        #    ⚠️ **Both branches say which one happened, and that is not decoration.** An updater
+        #    from before decision 19 prints the bare "recreating containers" too, so a message that
+        #    only spoke up when an overlay was found would leave "looked, found none" and "never
+        #    looked" spelled identically — the shape ADR-045 paid for with an empty `logs/remote/`
+        #    that meant both "worked" and "dead". The message an operator sees also answers, on its
+        #    own, whether this deployment's own compose changes were carried across.
         LOCAL=
         if [ -f "$$WORKDIR/docker-compose.local.yml" ]; then
           LOCAL="-f docker-compose.local.yml"
           say running compose "recreating containers, with this deployment's docker-compose.local.yml"
+        else
+          say running compose "recreating containers (no docker-compose.local.yml here)"
         fi
         ( cd "$$WORKDIR" && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml $$LOCAL up -d ) >/tmp/err 2>&1 \
           || fail compose "docker compose up failed; the previous images are still on this host — $$(sanitize < /tmp/err)"

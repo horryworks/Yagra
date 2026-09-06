@@ -3306,6 +3306,52 @@ mod tests {
         );
     }
 
+    /// The apply says which branch it took — both ways (ADR-050 decision 19).
+    ///
+    /// An updater from before this increment prints the bare "recreating containers" as well, so a
+    /// message that only spoke up when an overlay was **found** would spell "looked, found none"
+    /// and "never looked" identically. The second is the one an operator needs, because it means
+    /// this deployment's own compose changes were dropped on the way past. Same shape as ADR-045's
+    /// empty `logs/remote/`, which meant both "worked" and "dead" until the count grew a reason
+    /// beside it.
+    #[test]
+    fn the_apply_says_whether_it_found_an_overlay() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let says: Vec<&str> = apply
+            .lines()
+            .filter(|l| l.contains("say running compose") && l.contains("recreating containers"))
+            .collect();
+        assert_eq!(
+            says.len(),
+            2,
+            "the recreate should announce both outcomes, found {}:\n{}",
+            says.len(),
+            says.join("\n")
+        );
+        // Named by their wording rather than by "mentions the file or not": both branches mention
+        // it, and that is the point — the one with no overlay has to say *that it looked*, or it
+        // is indistinguishable from an updater too old to look at all.
+        assert!(
+            says.iter().any(|l| l.contains("with this deployment's")),
+            "no branch says the overlay was used, so an operator cannot tell whether their own \
+             compose changes were carried across:\n{}",
+            says.join("\n")
+        );
+        assert!(
+            says.iter()
+                .any(|l| l.contains("no docker-compose.local.yml")),
+            "no branch says the overlay was absent, so a deployment that has none is silent — \
+             which reads exactly like an updater from before this increment:\n{}",
+            says.join("\n")
+        );
+        assert_ne!(
+            says[0], says[1],
+            "both branches say the same thing, so the message distinguishes nothing"
+        );
+    }
+
     /// Nothing is deleted until the new core has been *seen running*.
     ///
     /// A failed upgrade is precisely when the release it came from is needed, so tidying up on any
