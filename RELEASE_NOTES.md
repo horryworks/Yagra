@@ -20,6 +20,9 @@
   pass it to Compose as a second `-f` whenever it exists. Deployments without one are unaffected —
   no file, no argument. Switching the poller to `network_mode: host` needs `ports: !reset []` in
   the overlay as well, which requires Compose v2.24+; an overlay that only adds works on any 2.x.
+  The upgrade says which of the two happened — "with this deployment's docker-compose.local.yml"
+  or "no docker-compose.local.yml here" — so a deployment whose compose changes were *not* carried
+  across can be told apart from one that has none to carry.
 
 ## v0.3.10 — A ping-only node no longer shows the tabs an SNMP walk fills, and the environment community counts
 
