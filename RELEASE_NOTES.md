@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.11 — An upgrade keeps a deployment's own compose changes, and says whether it found them
+
 ### Improvements
 
 - **An upgrade now keeps a deployment's own compose changes.** The composition is installed out of
