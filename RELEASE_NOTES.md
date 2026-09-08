@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A fresh install no longer fails at `bus-cert-init` on a slow host.** `postgres` now carries a
+  healthcheck, and the two services that open a database connection with a bounded budget —
+  `bus-cert-init` and `core` — wait for `service_healthy` instead of `service_started`. The old
+  condition was satisfied the moment the PostgreSQL container started, which on a fresh deployment
+  is while `initdb` is still running; `bus-cert-init` then spent its whole 60-second connect budget
+  (30 attempts, 2 s apart) waiting for a server that had not finished coming up, and exited 1. The
+  install stopped there, before core ever started. It read as a pull failure and was not one: every
+  image reported `Pulled` and every store reported `Running`. Measured on a GCE PoC instance.
+
 ## v0.3.11 — An upgrade keeps a deployment's own compose changes, and says whether it found them
 
 ### Improvements

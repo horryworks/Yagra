@@ -151,7 +151,10 @@ services:
     pull_policy: always
     command: ["bus-cert"]
     depends_on:
-      postgres: { condition: service_started }
+      # `service_healthy`, not `service_started`: this container applies the migrations, so it is
+      # usually the FIRST thing to open a connection on a fresh deployment — and it gives up after
+      # 60 s. See the healthcheck on `postgres`.
+      postgres: { condition: service_healthy }
       kek-init: { condition: service_completed_successfully }
       bus-init: { condition: service_completed_successfully }
     environment:
@@ -182,7 +185,10 @@ services:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
     depends_on:
-      postgres: { condition: service_started }
+      # Same bounded connect budget as `bus-cert-init`. Core reaches the database well after that
+      # one-shot has completed, so this is the cheaper belt rather than the brace — but a
+      # deployment that removes the bus one-shot would otherwise inherit the original race.
+      postgres: { condition: service_healthy }
       redis: { condition: service_started }
       nats: { condition: service_started }
       victoriametrics: { condition: service_started }
@@ -562,6 +568,22 @@ services:
       POSTGRES_DB: yagra
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # ⚠️ **The healthcheck is load-bearing, not hygiene.** `bus-cert-init` below reaches this
+    # server with a BOUNDED budget — `NodeRepo::connect` retries 30 times, 2 s apart, and then the
+    # one-shot exits 1. `condition: service_started` is satisfied the instant this container starts,
+    # which on a fresh deployment is while `initdb` is still running, so on a slow or contended host
+    # the whole 60 s can be spent waiting for a server that had not finished coming up. The failure
+    # is unusually hard to read from the outside: every image says `Pulled`, every store says
+    # `Running`, and the install dies at `bus-cert-init ... exit 1` after 60.8 s with nothing naming
+    # the database. Measured on a GCE PoC instance, 2026-09-08.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yagra -d yagra"]
+      interval: 2s
+      timeout: 3s
+      # 45 × 2 s = 90 s, deliberately LONGER than the 60 s budget the client gives up after. A
+      # healthcheck that expired first would only move the same race one container to the left.
+      retries: 45
+      start_period: 10s
     restart: unless-stopped
 
   redis:
