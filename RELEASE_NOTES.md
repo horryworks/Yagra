@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.12 — A broken database URL says so at once instead of blaming PostgreSQL for a minute
+
 ### Bug Fixes
 
 - **A malformed database URL now fails immediately and says so, instead of spending a minute

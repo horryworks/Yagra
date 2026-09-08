@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.12 — 壊れたデータベース URL は即座にそう言う。1 分かけて PostgreSQL のせいにしない
+
 ### Bug Fixes
 
 - **壊れたデータベース URL が、1 分かけて PostgreSQL のせいにするのをやめ、即座に理由を言うように
