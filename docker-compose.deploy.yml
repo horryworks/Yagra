@@ -1303,6 +1303,16 @@ services:
         # (ADR-121 decision 6). Restoring forward is the operator's next step, from the new box.
         REPO_RUN="$${CORE_IMG%/*}"; TAG_RUN="$${CORE_IMG##*:}"
         case "$$TAG_RUN" in *"/"*) TAG_RUN=latest ;; esac
+        # 🚨 Refuse a combination that cannot work, BEFORE doing any of the work. `localhost:5000`
+        # names a registry on THIS host, so the new host resolves it to itself and finds nothing --
+        # there is no reading of it under which the pull succeeds. Learned the expensive way
+        # (2026-09-09): without this the run took the tier-1 backup, STOPPED the event and flow
+        # stores to copy them, built a 730 MB archive and pushed it, and only then failed on the
+        # target's first pull. Everything after this line costs minutes and interrupts ingest.
+        case "$$REPO_RUN" in
+          localhost:*|127.0.0.1:*|::1:*|localhost|127.0.0.1)
+            [ "$$IMAGES" = 1 ] || rfail start "this deployment runs its images from $$REPO_RUN, which names a registry on this host — the new server would look for it on itself and find nothing. Tick \"Carry the Yagra images\" and try again; nothing has been copied." ;;
+        esac
         dc() { ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml "$$@" ); }
 
         # ── 1. Reach the new host, and find out what is on it ──────────────────────────────────
@@ -1437,7 +1447,18 @@ services:
         docker cp "$$CORE_CID:/usr/share/yagra/RELOCATION-README.md" "$$WORK/RELOCATION-README.md" 2>/dev/null || true
         # Pin the version rather than inherit a floating one: the new host must come up on exactly
         # what this one is running, whatever `:latest` happens to mean by the time it pulls.
-        pin_env() { grep -q "^$$1=" "$$WORK/.env" || printf '%s=%s\n' "$$1" "$$2" >> "$$WORK/.env"; }
+        # 🚨 It REPLACES, it does not defer to what is there. A deployment's .env routinely carries a
+        # stale pin -- /flashdeploy passes YAGRA_IMAGE_TAG on the command line and never writes it
+        # back -- and a pin_env that skipped an existing key sent the new host after a version this
+        # one has not run for weeks. Measured 2026-09-09: the archive said 7da517f8 while core was
+        # 139e279f, in the same run, and the two disagreed in one log line.
+        # Rewritten via grep -v rather than `sed -i s|…|` so a value holding a delimiter cannot
+        # corrupt the file, and `|| true` because grep exits 1 when it filters everything away.
+        pin_env() {
+          { grep -v "^$$1=" "$$WORK/.env" || true; } > "$$WORK/.env.pin"
+          printf '%s=%s\n' "$$1" "$$2" >> "$$WORK/.env.pin"
+          mv "$$WORK/.env.pin" "$$WORK/.env"; chmod 600 "$$WORK/.env"
+        }
         pin_env YAGRA_IMAGE_TAG "$$TAG_RUN"
         if [ "$$REPO_RUN" != ghcr.io/horryworks ]; then pin_env YAGRA_IMAGE_REPO "$$REPO_RUN"; fi
 

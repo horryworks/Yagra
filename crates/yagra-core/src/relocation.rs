@@ -911,6 +911,79 @@ mod tests {
         );
     }
 
+    /// The version pin must overwrite what `.env` already says, never defer to it.
+    ///
+    /// 🚨 A deployment's `.env` routinely carries a stale pin — `/flashdeploy` passes
+    /// `YAGRA_IMAGE_TAG` on the command line and never writes it back — so a `pin_env` that skipped
+    /// an existing key sent the new host after a version this one has not run for weeks. Measured
+    /// 2026-09-09: the archive named `7da517f8` while core was `139e279f`, and the target's pull
+    /// printed both in one line. Decision 6 says the new host runs exactly what this one runs, and
+    /// "unless .env disagrees" is not a reading of that.
+    #[test]
+    fn the_version_pin_replaces_what_the_env_already_says() {
+        let body = relocate_procedure(&compose());
+        let start = body
+            .find("pin_env()")
+            .expect("the procedure pins the version");
+        let end = start
+            + body[start..]
+                .find("\n        }")
+                .expect("pin_env is a closed function");
+        let f = &body[start..end];
+        assert!(
+            f.contains(r#"grep -v "^$$1=""#),
+            "pin_env does not remove the existing line, so a stale pin in .env survives into the \
+             archive and the new host comes up on the wrong version:\n{f}"
+        );
+        assert!(
+            !f.contains(r#"grep -q "^$$1=""#),
+            "pin_env still defers to an existing key; that is the defect, not the guard:\n{f}"
+        );
+        assert!(
+            f.contains(r#"chmod 600 "$$WORK/.env""#),
+            ".env holds POSTGRES_PASSWORD; rewriting it must not widen its mode:\n{f}"
+        );
+    }
+
+    /// A private registry named `localhost:*` cannot be reached from anywhere but this host, so
+    /// carrying no images is a combination with no successful outcome — and it must be refused
+    /// before the work, not after it.
+    ///
+    /// 🚨 Measured 2026-09-09: without this the run took the tier-1 backup, **stopped the event and
+    /// flow stores** to copy them, built a 730 MB archive, pushed it over SSH, and failed on the
+    /// target's first pull. Every one of those steps is minutes and the stop is a real gap in
+    /// ingest, all spent on a request that could not have succeeded.
+    #[test]
+    fn a_registry_only_this_host_can_reach_is_refused_before_any_work() {
+        let body = relocate_procedure(&compose());
+        let refusal = body
+            .find("localhost:*|127.0.0.1:*")
+            .expect("the procedure refuses a host-local registry when images are not carried");
+        for (needle, what) in [
+            (r#"sshx true"#, "the first SSH"),
+            (r#"yagra-backup.sh"#, "the backup"),
+            (
+                r#"dc stop victorialogs"#,
+                "stopping the event and flow stores",
+            ),
+            (r#"-czf "$$R/$$FILE.tmp""#, "building the archive"),
+        ] {
+            let at = body
+                .find(needle)
+                .unwrap_or_else(|| panic!("the procedure still performs {what}"));
+            assert!(
+                refusal < at,
+                "the host-local-registry refusal comes after {what}; a request that cannot succeed \
+                 would pay for it first"
+            );
+        }
+        assert!(
+            body[refusal..refusal + 400].contains(r#"[ "$$IMAGES" = 1 ] ||"#),
+            "the refusal does not depend on the images option, so it would also refuse the \
+             combination that works"
+        );
+    }
+
     /// The disk check runs before the first byte is written, which is the whole point of it: a host
     /// that is already short of space must not be given several GB and then told it failed.
     #[test]
