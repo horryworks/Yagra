@@ -129,6 +129,14 @@ The `main` copy is the *next* release's composition and may reference images nob
 
 **Set `POSTGRES_PASSWORD` before the first start**, as the snippet does. It is baked into the database volume on initialization; changing it later needs an `ALTER ROLE` as well as an `.env` edit.
 
+> 🚨 **The password must be URL-safe.** The composition interpolates it into
+> `postgres://yagra:<password>@postgres:5432/yagra` and cannot percent-encode it — a string
+> template has no way to. A password holding **`/`, `@`, `:`, `?` or `#`** ends the URL early and
+> core refuses to start, naming the URL. `openssl rand -hex 16`, as the snippet above uses,
+> produces none of them. **`openssl rand -base64` does** — base64's alphabet includes `/`, and a
+> 24-byte value contains one most of the time. If you must use a password with those characters,
+> percent-encode it (`/` → `%2F`, `@` → `%40`, `:` → `%3A`, `?` → `%3F`, `#` → `%23`).
+
 `YAGRA_IMAGE_TAG` selects the image tag and defaults to `latest`: `latest` is the latest **stable** release (pre-releases never move it); a `v<version>` tag pins one release; the `<git-sha>` of a release is an immutable reference to exactly that build (rollback = re-run with an older tag). Only releases are published — development builds never reach the registry, so every tag you can pull is a release.
 
 Want to know what a running container was built from? `docker exec yagra-core-1 cat /etc/yagra-source-ref` prints the commit, and `/etc/yagra-build-profile` prints the compile profile.

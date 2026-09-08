@@ -181,6 +181,10 @@ pub type GroupFilter<'a> = Option<&'a [Uuid]>;
 
 impl NodeRepo {
     /// Connect (with retry, so Postgres may start after core) and return the repo.
+    ///
+    /// ⚠️ **The retry covers "not up yet", not "not addressable".** A `sqlx::Error::Configuration`
+    /// — a URL that does not parse — is fatal on the first attempt, because waiting cannot repair
+    /// a string. See the arm below for what that cost when it was not distinguished.
     pub async fn connect(url: &str) -> anyhow::Result<Self> {
         const MAX_ATTEMPTS: u32 = 30;
         // One pool is shared by every core store (scheduler sweep, result ingest, API, coordinator
@@ -205,6 +209,20 @@ impl NodeRepo {
                     tracing::info!(max_connections = max_conns, "connected to PostgreSQL");
                     return Ok(Self { pool });
                 }
+                // 🚨 A malformed URL is NOT a readiness problem, and retrying one is worse than
+                // useless: it spends the whole 60-second budget and then reports "PostgreSQL not
+                // ready" — which sends the operator to look at a server that was healthy the whole
+                // time. Measured on a GCE deployment (2026-09-08): `POSTGRES_PASSWORD` held a `/`,
+                // so the URL's authority ended at it, `yagra:<prefix>` was read as host:port, and
+                // sqlx said "invalid port number" 30 times, 2 s apart, while `postgres` reported
+                // healthy throughout. The composition interpolates the password into a URL without
+                // percent-encoding it — a string template cannot — so a password alone reaches this.
+                Err(sqlx::Error::Configuration(e)) => anyhow::bail!(
+                    "the database URL is not a usable connection string: {e}. Waiting cannot \
+                     repair a string — check YAGRA_DATABASE_URL. A password holding `/`, `@`, \
+                     `:`, `?` or `#` ends the URL early unless it is percent-encoded; \
+                     `openssl rand -hex 16` produces none of them"
+                ),
                 Err(e) if attempt < MAX_ATTEMPTS => {
                     attempt += 1;
                     tracing::warn!(error = %e, attempt, "PostgreSQL not ready; retrying in 2s");
@@ -272,5 +290,38 @@ impl NodeRepo {
     /// The value to bind for [`Self::SCOPE_PREDICATE`]. `None` ⇒ SQL `NULL` ⇒ no restriction.
     fn scope_bind(groups: GroupFilter<'_>) -> Option<Vec<Uuid>> {
         groups.map(<[Uuid]>::to_vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A URL that cannot parse must fail at once, not after the full retry budget.
+    ///
+    /// 🚨 This is the defect that made a GCE install unreadable (2026-09-08). A `/` in
+    /// `POSTGRES_PASSWORD` ended the URL's authority early, so sqlx reported `invalid port
+    /// number` — and this loop retried that 30 times over 60 seconds before blaming
+    /// "PostgreSQL not ready" for a server that was healthy throughout.
+    ///
+    /// ⚠️ **The assertion that matters is the ELAPSED TIME.** A version that only improves the
+    /// wording still burns the minute, and still points at the wrong component while it does.
+    #[tokio::test]
+    async fn a_malformed_database_url_fails_at_once_instead_of_retrying_for_a_minute() {
+        let started = std::time::Instant::now();
+        let err = match NodeRepo::connect("postgres://yagra:pa/ss@postgres:5432/yagra").await {
+            Ok(_) => panic!("a URL whose authority ends early must not connect"),
+            Err(e) => e,
+        };
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "it retried instead of failing fast: {:?}",
+            started.elapsed()
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains("not a usable connection string"),
+            "the message must name the URL, not the server: {text}"
+        );
     }
 }

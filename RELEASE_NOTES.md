@@ -12,14 +12,26 @@
 
 ### Bug Fixes
 
-- **A fresh install no longer fails at `bus-cert-init` on a slow host.** `postgres` now carries a
+- **A malformed database URL now fails immediately and says so, instead of spending a minute
+  blaming PostgreSQL.** `NodeRepo::connect` retries a failed connection 30 times, 2 s apart. It
+  applied that to *every* error, including `sqlx::Error::Configuration` — a URL that does not
+  parse. A string cannot become valid by waiting, so the retry only bought 60 seconds of delay and
+  then reported `PostgreSQL not ready` about a server that was healthy throughout. A configuration
+  error is now fatal on the first attempt, with a message that names the URL and the most likely
+  cause. **Reachable from a password alone:** the composition interpolates `POSTGRES_PASSWORD` into
+  `postgres://yagra:<password>@postgres:5432/yagra` without percent-encoding it, so a password
+  holding `/`, `@`, `:`, `?` or `#` ends the URL early — a `/` makes the parser read
+  `yagra:<prefix>` as host:port and report `invalid port number`. Measured on a GCE deployment,
+  where it stopped a fresh install at `bus-cert-init` with nothing to say the problem was the URL.
+  The documented `openssl rand -hex 16` produces none of those characters; `openssl rand -base64`
+  produces `/` most of the time.
+
+- **A fresh install no longer races `initdb` on a slow host.** `postgres` now carries a
   healthcheck, and the two services that open a database connection with a bounded budget —
-  `bus-cert-init` and `core` — wait for `service_healthy` instead of `service_started`. The old
+  `bus-cert-init` and `core` — wait for `service_healthy` rather than `service_started`. The old
   condition was satisfied the moment the PostgreSQL container started, which on a fresh deployment
-  is while `initdb` is still running; `bus-cert-init` then spent its whole 60-second connect budget
-  (30 attempts, 2 s apart) waiting for a server that had not finished coming up, and exited 1. The
-  install stopped there, before core ever started. It read as a pull failure and was not one: every
-  image reported `Pulled` and every store reported `Running`. Measured on a GCE PoC instance.
+  is while `initdb` is still running. This is a separate defect from the one above, found while
+  investigating it, and it was **not** the cause of the GCE failure.
 
 ## v0.3.11 — An upgrade keeps a deployment's own compose changes, and says whether it found them
 
