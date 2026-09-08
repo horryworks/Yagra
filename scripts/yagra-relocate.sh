@@ -114,6 +114,41 @@ COMPOSE_FILE=docker-compose.deploy.yml
 LOCAL=""
 [ -f docker-compose.local.yml ] && LOCAL="-f docker-compose.local.yml"
 
+# 🚨 The local overlay travels with the deployment, and it is the one file in the archive that can
+# name things that exist only on the machine it came from -- an external network, a bind mount, a
+# device. Carrying it active to a different host is how a restore that has already put back the
+# key, the database, the metrics and both tier-2 stores fails on its very last command.
+#
+# Measured 2026-09-08: the source declared `yagra-sim` (an snmpsim bridge that exists on one lab
+# box), and `docker compose up` refused with "network yagra-sim declared as external, but could not
+# be found" -- after every irreversible step had already succeeded.
+#
+# So the overlay is checked before it is used, and set aside rather than obeyed. Set aside, not
+# deleted: it is the operator's own configuration and the parts of it that do not name this host
+# are still what they wanted. External networks are the class that was measured; a bind mount to a
+# path that does not exist here would fail later and differently, which is why the file is kept
+# where a person can read it.
+if [ -n "$LOCAL" ]; then
+  missing_nets=""
+  # Only networks under a `networks:` block marked external, which is the shape compose refuses.
+  for n in $(awk '
+      /^networks:/        { inblock = 1; next }
+      /^[a-zA-Z]/         { inblock = 0 }
+      inblock && /^  [a-zA-Z0-9._-]+:/ { gsub(/[ :]/, "", $0); name = $0; next }
+      inblock && /external:[[:space:]]*true/ { if (name != "") print name }
+    ' docker-compose.local.yml); do
+    docker network inspect "$n" >/dev/null 2>&1 || missing_nets="$missing_nets $n"
+  done
+  if [ -n "$missing_nets" ]; then
+    mv docker-compose.local.yml docker-compose.local.yml.needs-review
+    LOCAL=""
+    say "  ⚠ docker-compose.local.yml names external network(s)$missing_nets, which do not exist on"
+    say "    this host. It has been set aside as docker-compose.local.yml.needs-review so the"
+    say "    deployment can start. Re-create those networks here, or edit the file, then rename it"
+    say "    back and run: docker compose -f $COMPOSE_FILE -f docker-compose.local.yml up -d"
+  fi
+fi
+
 # ⚠️ No `-p`: `docker-compose.deploy.yml` carries `name: yagra`, and the four commands in the README
 # do not pass one either. Adding it here would be a second answer to what this project is called.
 # shellcheck disable=SC2086  # $LOCAL is an intentional two-word option pair
@@ -198,6 +233,21 @@ step "images"
 if [ -f images.tar ]; then
   docker load -i images.tar || result_bad image_load_failed "docker load could not read images.tar."
   PULL=missing
+  # 🚨 And make that stick, because otherwise this host can start exactly once -- by us, with the
+  # flag. `docker-compose.deploy.yml` asks for `pull_policy: always`, and the images we just loaded
+  # are named for a registry that answered on the OLD host: a deployment moved off `localhost:5000`
+  # carries image references no `docker compose up -d` here can ever resolve. The operator's next
+  # restart, the next upgrade, and any compose command they type by hand would all fail on a
+  # deployment that is otherwise complete and running.
+  #
+  # `missing` is the honest policy for images that arrived in the archive: they are present, they
+  # are pinned to an immutable tag, and a later upgrade pulls its own target before it starts
+  # anything. Written by removing the line first -- a .env that already carried a policy would
+  # otherwise keep it, which is the defect this is fixing one level up.
+  { grep -v '^YAGRA_PULL_POLICY=' .env || true; } > .env.pull
+  printf 'YAGRA_PULL_POLICY=missing\n' >> .env.pull
+  mv .env.pull .env; chmod 600 .env
+  say "  pinned YAGRA_PULL_POLICY=missing (the images came in the archive, not from a registry)"
 else
   PULL=always
   dc pull || result_bad pull_failed \

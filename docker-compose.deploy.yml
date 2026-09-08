@@ -148,7 +148,7 @@ services:
   # consequence: on a fresh deployment a migration failure surfaces here rather than in core.
   bus-cert-init:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
-    pull_policy: always
+    pull_policy: ${YAGRA_PULL_POLICY:-always}
     command: ["bus-cert"]
     depends_on:
       # `service_healthy`, not `service_started`: this container applies the migrations, so it is
@@ -183,7 +183,7 @@ services:
   # ── Yagra-core (crates/core) — orchestration, scheduling, northbound API ──
   core:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
-    pull_policy: always
+    pull_policy: ${YAGRA_PULL_POLICY:-always}
     depends_on:
       # Same bounded connect budget as `bus-cert-init`. Core reaches the database well after that
       # one-shot has completed, so this is the cheaper belt rather than the brace — but a
@@ -396,7 +396,7 @@ services:
   # ── Yagra-poller (crates/poller) — stateless poller worker ──
   poller:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-poller:${YAGRA_IMAGE_TAG:-latest}
-    pull_policy: always
+    pull_policy: ${YAGRA_PULL_POLICY:-always}
     depends_on:
       nats: { condition: service_started }
       # The shared log volume has to be arranged before this poller tries to write into it.
@@ -529,7 +529,7 @@ services:
   # external reverse proxy or a cloud LB). Then, and only then, this port is plain HTTP again.
   web:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-web:${YAGRA_IMAGE_TAG:-latest}
-    pull_policy: always
+    pull_policy: ${YAGRA_PULL_POLICY:-always}
     # Wait for core to actually serve (its image HEALTHCHECK probes /healthz), not just to start —
     # nginx proxies /api to it, so starting before core is ready would 502 the first requests. Since
     # ADR-044 this also carries the certificate: core materializes server.pem *before* it binds its

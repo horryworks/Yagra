@@ -41,6 +41,11 @@
 
 ### Improvements
 
+- **`YAGRA_PULL_POLICY` chooses whether Compose re-pulls the images on every start.** The default
+  is unchanged (`always`), so nothing about an existing deployment moves. It exists because images
+  can now arrive without a registry behind them: a relocation that carries the three images loads
+  them onto the new host, and that host is then pinned to `missing` so it can start itself again
+  without reaching for a registry that only ever answered on the machine it came from.
 - **`yagra-core verify-secrets`** — a new subcommand that prints, as one line of JSON, how many
   sealed secrets this deployment holds and how many the mounted KEK can open. It reads the database
   and the key directly, so it answers on a host where nothing is logged in yet. `decryptable` below

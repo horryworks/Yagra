@@ -608,6 +608,91 @@ mod tests {
             .expect("the deploy composition holds the updater's script")
     }
 
+    /// The restore that runs on the *other* host, comments stripped for the usual reason.
+    fn restore_script() -> String {
+        let raw = std::fs::read_to_string("../../scripts/yagra-relocate.sh")
+            .expect("the restore script ships beside the composition");
+        without_comments(&raw)
+    }
+
+    /// A local overlay may name things that exist only on the host it came from, so it is checked
+    /// before it is obeyed — and set aside, never deleted.
+    ///
+    /// 🚨 Measured 2026-09-08: the source declared the external network `yagra-sim`, and the
+    /// restore failed on `docker compose up` — its very last command — **after** the key, the
+    /// database, the metrics and both tier-2 stores were already in place. Everything irreversible
+    /// had succeeded and the deployment still would not start.
+    #[test]
+    fn an_overlay_naming_a_network_this_host_lacks_is_set_aside_before_anything_starts() {
+        let s = restore_script();
+        let check = s
+            .find("docker network inspect")
+            .expect("the restore checks the overlay's external networks against this host");
+        assert!(
+            s.contains("docker-compose.local.yml.needs-review"),
+            "the overlay must be renamed, not deleted — it is the operator's own configuration"
+        );
+        assert!(
+            !s.contains("rm -f docker-compose.local.yml")
+                && !s.contains("rm docker-compose.local.yml"),
+            "the overlay is set aside, never removed"
+        );
+        for (needle, what) in [
+            ("docker load -i images.tar", "loading the images"),
+            ("dc create", "creating the volumes"),
+            ("pg_restore", "restoring the database"),
+        ] {
+            let at = s
+                .find(needle)
+                .unwrap_or_else(|| panic!("the restore still performs {what}"));
+            assert!(
+                check < at,
+                "the overlay is checked after {what}; the point is to find this out before the \
+                 irreversible half, not after it"
+            );
+        }
+    }
+
+    /// Images that arrived in the archive must leave the new host able to start itself again.
+    ///
+    /// 🚨 `pull_policy: always` plus a `YAGRA_IMAGE_REPO` that answered only on the *old* host is a
+    /// deployment that runs exactly once — the restore's own `--pull missing` is the only command
+    /// that ever works. The operator's next restart, their next upgrade and any compose line they
+    /// type by hand all fail on a deployment that is complete, running and looks healthy.
+    /// Measured 2026-09-08 relocating off `localhost:5000`.
+    #[test]
+    fn carrying_the_images_leaves_a_host_that_can_start_itself() {
+        let c = compose();
+        let policies = c.matches("pull_policy:").count();
+        assert!(
+            policies >= 4,
+            "only {policies} pull_policy lines found; the scan is looking in the wrong place"
+        );
+        assert_eq!(
+            c.matches("pull_policy: ${YAGRA_PULL_POLICY:-always}").count(),
+            policies,
+            "a pull_policy is still hardcoded, so a relocated deployment cannot be told to use the \
+             images it already has"
+        );
+
+        let s = restore_script();
+        let load = s
+            .find("docker load -i images.tar")
+            .expect("the restore loads the archive's images");
+        let pin = s
+            .find("YAGRA_PULL_POLICY=missing")
+            .expect("loading images pins a pull policy this host can satisfy");
+        assert!(
+            load < pin,
+            "the policy is pinned before the images are loaded"
+        );
+        assert!(
+            s[load..].contains("grep -v '^YAGRA_PULL_POLICY='"),
+            "the pin appends without removing what is there, so a policy already in .env survives \
+             — which is the defect this exists to fix"
+        );
+    }
+
     /// The relocation procedure's body, with its comment lines removed.
     ///
     /// Cut the same way `updater_body_without_its_procedures` cuts, and for the same reason every
