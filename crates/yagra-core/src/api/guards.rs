@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 /// A ledger, not a wish list — the same contract as [`super::route_table`]. Adding a write route to
 /// a file not named here fails [`every_file_that_registers_a_write_is_declared`], and removing the
 /// last write from one that is named fails it too.
-const WRITE_DOMAINS: [&str; 37] = [
+const WRITE_DOMAINS: [&str; 38] = [
     "alerts.rs",
     "analysis.rs",
     "api_tokens.rs",
@@ -73,6 +73,7 @@ const WRITE_DOMAINS: [&str; 37] = [
     "preferences.rs",
     "profiles.rs",
     "rca.rs",
+    "relocation.rs",
     "reports.rs",
     "retention.rs",
     "session.rs",
@@ -163,8 +164,15 @@ fn registers_a_write(production: &str) -> bool {
 }
 
 /// Does this test text build a live-mode state — i.e. is there a write here that was *accepted*?
+///
+/// ⚠️ **The needle stops at the name, not at the opening bracket.** `tests_support` grew variants
+/// of the fixture — `live_state_with_env_community`, `live_state_with_upgrade_dir` — because
+/// production reads some of its inputs from the process environment, which a test cannot set for
+/// itself alone. Each one builds the same live `ApiState`, so each one is an accepted write; a
+/// needle spelled `live_state(` would report a domain that uses one as having no accepted-write
+/// test at all, which reads exactly like the failure this module exists to catch.
 fn has_an_accepted_write(tests: &str) -> bool {
-    code_only(tests).contains(&format!("{}_state(", "live"))
+    code_only(tests).contains(&format!("{}_state", "live"))
 }
 
 #[test]

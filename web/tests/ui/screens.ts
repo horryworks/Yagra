@@ -134,6 +134,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
     kind: 'none',
     why: 'A log-window select, a node picker and one button; the screen reads nothing until an operator presses it. The node picker does resolve names from the API, but only once opened.',
   },
+  '/settings/relocation': MARKER,
   '/settings/upgrade': MARKER,
   '/nodes/credentials': MARKER,
   '/settings/users': MARKER,

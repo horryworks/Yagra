@@ -18575,6 +18575,343 @@
         }
       }
     },
+    "/api/v1/system/relocation": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "What the relocation mechanism can do, and what it is doing.",
+        "operationId": "get_relocation",
+        "responses": {
+          "200": {
+            "description": "The mechanism's state and the current run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelocationStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No upgrade mechanism is installed (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Build a relocation archive, and — unless the mode says otherwise — send it and restore it.",
+        "description": "Hands the request to the privileged updater and returns immediately; the work outlives this\nrequest by minutes. Poll `GET` for the outcome.",
+        "operationId": "start_relocation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelocationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted; the updater will carry it out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelocationAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed target, or a push with no credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem, ManageCredentials or ViewAudit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A relocation or an upgrade is already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The mechanism is absent, switched off, or too old for this command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Not enough free disk space to build the archive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Delete the archive and any staged credentials.",
+        "operationId": "delete_relocation",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem, ManageCredentials or ViewAudit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There was nothing to delete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A relocation is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No upgrade mechanism is installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/relocation/archive": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Download the archive.",
+        "description": "🚨 This is the one endpoint in the API that returns secrets. See the module doc.",
+        "operationId": "download_archive",
+        "responses": {
+          "200": {
+            "description": "The relocation archive: a gzipped tar holding the KEK, a full PostgreSQL dump, the metrics, and this deployment's .env and composition. Treat it exactly as you would the KEK itself",
+            "content": {
+              "application/gzip": {}
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem, ManageCredentials or ViewAudit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no archive on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A relocation is running; the archive is not final yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No upgrade mechanism is installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/relocation/log": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "What the relocation has printed so far, including the restore on the other host.",
+        "operationId": "get_relocation_log",
+        "parameters": [
+          {
+            "name": "tail",
+            "in": "query",
+            "description": "Lines from the end. Clamped to 1..=2000.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tail of the run's log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelocationLog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No upgrade mechanism is installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/system/support-bundle": {
       "get": {
         "tags": [
@@ -21602,6 +21939,30 @@
           }
         }
       },
+      "ArchiveInfo": {
+        "type": "object",
+        "description": "The archive waiting on this host, when there is one.",
+        "required": [
+          "filename",
+          "size_bytes",
+          "modified_at"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "modified_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "AuditAction": {
         "type": "string",
         "description": "What an audit entry was, as the log's filterable vocabulary.",
@@ -21671,6 +22032,33 @@
           },
           "username": {
             "type": "string"
+          }
+        }
+      },
+      "AuthSpec": {
+        "type": "object",
+        "description": "How to authenticate to it. **Write-only**: nothing here is ever returned.",
+        "required": [
+          "kind",
+          "secret"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SshAuthKind",
+            "description": "`password` or `key`."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The password, or the OpenSSH private key, depending on `kind`.",
+            "writeOnly": true
+          },
+          "sudo_password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sudo password, when it differs from the login password. Only ever needed to install\nDocker on the target.",
+            "writeOnly": true
           }
         }
       },
@@ -30685,6 +31073,276 @@
           }
         }
       },
+      "RelocationAccepted": {
+        "type": "object",
+        "description": "The run id, so the page can tell its own request from one another admin started.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "RelocationLog": {
+        "type": "object",
+        "description": "The tail of the run's log.",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RelocationMode": {
+        "type": "string",
+        "description": "What a relocation request is asking for.",
+        "enum": [
+          "archive",
+          "preflight",
+          "push"
+        ]
+      },
+      "RelocationRequest": {
+        "type": "object",
+        "description": "What the operator asked for.",
+        "properties": {
+          "auth": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AuthSpec",
+                "description": "Required for `preflight` and `push`. Never stored, never logged, never returned."
+              }
+            ]
+          },
+          "include_images": {
+            "type": "boolean",
+            "description": "Carry the three Yagra images. Off by default — the new host usually pulls them. Needed when\nit cannot reach the registry, or when this deployment runs images from a private one."
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "description": "Carry the metrics (VictoriaMetrics). On by default — a monitoring system that arrives with\nno history is a new deployment, not a moved one."
+          },
+          "include_tier2": {
+            "type": "boolean",
+            "description": "Carry the events and flows (VictoriaLogs, ClickHouse). On by default, and the one option\nwith a running cost: both stores are stopped for the minutes the copy takes."
+          },
+          "install_docker": {
+            "type": "boolean",
+            "description": "Install Docker on the target if it has none. On by default; needs `sudo` and internet\nthere, and runs the official `get.docker.com` script as root."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/RelocationMode",
+            "description": "`archive` builds one and stops, `preflight` only checks the target, `push` does everything."
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TargetSpec",
+                "description": "Required for `preflight` and `push`."
+              }
+            ]
+          }
+        }
+      },
+      "RelocationRun": {
+        "type": "object",
+        "description": "`relocation.json` as the sidecar writes it.\n\nEvery field but the first four is `#[serde(default)]`, for the reason\n[`UpgradeRepo::read_json`](crate::upgrade) is lenient: a file written by a newer sidecar must\ndegrade to \"less detail\", never to a 500 on the one screen an operator has open while something\nis already going wrong. It holds **no secret** — see the module doc.",
+        "required": [
+          "id",
+          "mode",
+          "state",
+          "stage",
+          "started_at"
+        ],
+        "properties": {
+          "docker_installed": {
+            "type": "boolean",
+            "description": "Whether this run installed Docker on the target."
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The archive on this host, while there is one."
+          },
+          "finished_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds, once it has ended."
+          },
+          "host_key_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The target's SSH host-key fingerprint, once it has been seen."
+          },
+          "id": {
+            "type": "string",
+            "description": "The run id core minted."
+          },
+          "images": {
+            "type": "boolean",
+            "description": "Whether the three Yagra images were included."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to show the operator about this stage."
+          },
+          "metrics": {
+            "type": "boolean",
+            "description": "Whether metrics were included."
+          },
+          "mode": {
+            "type": "string",
+            "description": "The mode the request asked for, as its token."
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account that asked for it."
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its size in bytes.",
+            "minimum": 0
+          },
+          "stage": {
+            "type": "string",
+            "description": "Which part of the work this is: `start`, `preflight`, `docker`, `backup`, `files`,\n`images`, `tier2`, `archive`, `push`, or `validate` for a request refused before it began."
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "state": {
+            "type": "string",
+            "description": "`requested` · `running` · `done` · `failed`."
+          },
+          "target_host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host being moved to, absent for a plain archive."
+          },
+          "target_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the new deployment answers, once it does."
+          },
+          "tier2": {
+            "type": "boolean",
+            "description": "Whether the event and flow stores were included."
+          }
+        }
+      },
+      "RelocationStatusResponse": {
+        "type": "object",
+        "description": "Everything the relocation page needs in one read.",
+        "required": [
+          "supported",
+          "enabled",
+          "upgrade_enabled",
+          "updater"
+        ],
+        "properties": {
+          "archive": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArchiveInfo",
+                "description": "The archive on this host, if one is waiting to be downloaded."
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether a relocation can be started from here: the updater is deployed, alive, the\noperator's switch is on, **and** it supports the command."
+          },
+          "estimate_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Roughly how large the archive will be. ⚠️ **Partial** — the database plus the metrics.\nCore cannot see the event, flow or image volumes; only the sidecar can, and its check is\nthe one that can stop a run.",
+            "minimum": 0
+          },
+          "free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Free bytes on the filesystem holding the hand-off volume.",
+            "minimum": 0
+          },
+          "needed_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "[`estimate_bytes`](Self::estimate_bytes) doubled: the copy, and the tar of the copy.",
+            "minimum": 0
+          },
+          "run": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RelocationRun",
+                "description": "The current or most recent run."
+              }
+            ]
+          },
+          "supported": {
+            "type": "boolean",
+            "description": "Whether this deployment's updater declares the command at all. `false` on an updater that\npredates ADR-121 — the next upgrade recreates it."
+          },
+          "updater": {
+            "$ref": "#/components/schemas/UpdaterInfo",
+            "description": "The updater container's own state, from the same reading the Upgrade page uses."
+          },
+          "upgrade_enabled": {
+            "type": "boolean",
+            "description": "The operator's switch, as stored. Shared with the upgrade mechanism: one sidecar, one\nswitch — turning upgrades off turns this off too, which is deliberate."
+          }
+        }
+      },
       "ReportBody": {
         "type": "object",
         "description": "A report's contents: the answer, the evidence it was grounded in, and the language it was\nrequested in.",
@@ -32092,6 +32750,14 @@
           "flow"
         ]
       },
+      "SshAuthKind": {
+        "type": "string",
+        "description": "How the operator authenticates to the target host.",
+        "enum": [
+          "password",
+          "key"
+        ]
+      },
       "StaleNode": {
         "type": "object",
         "description": "A node returning no fresh data (silent failure / blind spot).",
@@ -32585,6 +33251,34 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "TargetSpec": {
+        "type": "object",
+        "description": "Where to send this deployment.",
+        "required": [
+          "host",
+          "user"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string",
+            "description": "A directory name — not a path — created under that account's home."
+          },
+          "host": {
+            "type": "string",
+            "description": "Host name or IP of the new server."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "SSH port. 22 unless the site moved it.",
+            "minimum": 0
+          },
+          "user": {
+            "type": "string",
+            "description": "The account to log in as. It needs `sudo` only when Docker has to be installed."
           }
         }
       },

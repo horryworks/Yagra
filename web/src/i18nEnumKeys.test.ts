@@ -117,6 +117,8 @@ import enSettingsTokens from './locales/en/settings-tokens.json';
 import jaSettingsTokens from './locales/ja/settings-tokens.json';
 import enSettingsTls from './locales/en/settings-tls.json';
 import jaSettingsTls from './locales/ja/settings-tls.json';
+import enSettingsRelocation from './locales/en/settings-relocation.json';
+import jaSettingsRelocation from './locales/ja/settings-relocation.json';
 import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import jaSettingsUpgrade from './locales/ja/settings-upgrade.json';
 import {
@@ -130,6 +132,11 @@ import {
   UPGRADE_RUN_STATES,
   UPGRADE_RUN_STEPS,
 } from './pages/upgradeStatus';
+import {
+  RELOCATION_AUTH_KINDS,
+  RELOCATION_READINESS,
+  RELOCATION_STAGES,
+} from './pages/relocationStatus';
 import enSettingsAuth from './locales/en/settings-auth.json';
 import jaSettingsAuth from './locales/ja/settings-auth.json';
 import enSettingsAi from './locales/en/settings-ai.json';
@@ -789,6 +796,26 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'mechanism.',
       MECHANISMS.map((m) => MECHANISM_KEYS[m]),
     );
+  });
+
+  it('every relocation token has a label (settings-relocation:*)', () => {
+    // The same exposure as the upgrade page's, on a screen an operator is watching while their
+    // whole deployment is being copied to another host. Every one of these keys is built from a
+    // value at runtime, so a stage or a state added to the sidecar without strings would render a
+    // raw shell token — `tier2`, `preflight` — in both locales, with EN/JA parity passing.
+    const locales = { en: enSettingsRelocation, ja: jaSettingsRelocation };
+    expectKeys('relocation stage', locales, 'stage.', RELOCATION_STAGES);
+    expectKeys('relocation readiness', locales, 'readiness.', RELOCATION_READINESS);
+    expectKeys('relocation auth kind', locales, 'authKind.', RELOCATION_AUTH_KINDS);
+    // The validation messages are keys for the same reason: `validateTarget` returns key stems so
+    // both locales are covered here rather than by whichever one the author happened to write.
+    expectKeys('relocation validation', locales, 'invalid.', [
+      'badHost',
+      'badPort',
+      'badUser',
+      'badDir',
+      'noSecret',
+    ]);
   });
 
   it('every account kind has a label (access:users.kind.*)', () => {

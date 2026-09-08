@@ -31,6 +31,9 @@
 #   COMPOSE_FILE compose file                   (default docker-compose.deploy.yml)
 #   PG_USER      postgres role                  (default yagra)
 #   PG_DB        database name                  (default yagra)
+#   YAGRA_BACKUP_SKIP_METRICS=1  leave the VictoriaMetrics snapshot out. The manifest records that
+#                as an omission exactly as an unreachable store would be — a backup that says what
+#                it does not hold. Set by a relocation whose operator unticked the metrics (ADR-121)
 #
 # VERIFY: a backup you have never restored is not a backup. Run ./scripts/yagra-restore-verify.sh
 # against the directory this produces — it restores into a throwaway stack and asserts the data came
@@ -122,7 +125,16 @@ log "nodes=$NODE_COUNT credentials=$CRED_COUNT audit_log=$AUDIT_COUNT"
 # metrics were fine.
 echo "[3/4] victoriametrics"
 SNAP_NAME=""
-VM_CID="$(dc ps -q victoriametrics || true)"
+# Asking for the metrics to be left out is a *choice*, and it is recorded like every other reason
+# they might be missing: `metrics_snapshot` goes null and the summary says so. It exists for one
+# caller — a relocation whose operator unticked "carry the metrics" (ADR-121) — and it deliberately
+# is not a "make the backup faster" switch: the pre-upgrade backup never sets it.
+if [ "${YAGRA_BACKUP_SKIP_METRICS:-0}" = 1 ]; then
+  log "metrics skipped by request (YAGRA_BACKUP_SKIP_METRICS=1)"
+  VM_CID=""
+else
+  VM_CID="$(dc ps -q victoriametrics || true)"
+fi
 if [ -z "$VM_CID" ]; then
   log "victoriametrics not running — skipping (metrics will be missing from this backup)"
 else

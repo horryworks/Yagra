@@ -1595,6 +1595,48 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/system/relocation",
+        Global(
+            "describes a one-off export of the deployment itself; it demands ManageSystem, whose \
+             holder is unscoped by construction (ADR-014)",
+        ),
+        Exempt(
+            "it reports the progress of a privileged export of this deployment's own secrets, not \
+             anything about the monitored network. The one question it shares with \
+             get_system_health(section=upgrade) — which build is running, and whether the updater \
+             is alive — is already answered there",
+        ),
+    ),
+    (
+        "GET",
+        "/api/v1/system/relocation/log",
+        Global("the progress text of that same export; the same holder, unscoped for the same reason"),
+        Exempt(
+            "free text written by a shell procedure here and by a restore script on another host; \
+             nothing in it is a question about the monitored network, and a model given it would \
+             be reading a transcript rather than an answer",
+        ),
+    ),
+    (
+        "POST",
+        "/api/v1/system/relocation",
+        Global("moves the whole deployment to another server; there is no narrower unit of it"),
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/system/relocation/archive",
+        Global("the response is the KEK and every stored credential in one file"),
+        NO_MCP_WRITE,
+    ),
+    (
+        "DELETE",
+        "/api/v1/system/relocation",
+        Global("removes the deployment-wide archive; there is no per-group slice of it"),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/system/support-bundle",
         Global(
             "a diagnostic snapshot of the deployment itself; it demands ManageSystem + \

@@ -102,6 +102,10 @@ import type {
   UpgradeStatus,
   AlignPollersAccepted,
   UpgradeRunAccepted,
+  RelocationStatus,
+  RelocationLog,
+  RelocationAccepted,
+  RelocationRequest,
   ProfileSummary,
   ProfileInput,
   ReportDefinition,
@@ -1507,6 +1511,40 @@ export const api = {
    *  database, so it survives the upgrades it governs; the updater picks it up within one beat. */
   setUpgradeEnabled: (enabled: boolean): Promise<void> =>
     apiPut('/api/v1/system/upgrade/enabled', { body: { enabled } }),
+
+  // ── Moving this whole deployment to another server (ADR-121) ─────────────────────────────────
+  //
+  // 🚨 `downloadRelocationArchive` returns the KEK and every stored credential in one file. It is
+  // the only call in this client that does, which is why it is a POST: `audit_mw` records mutating
+  // requests, and a GET would have left no audit row for the one download that most needs one.
+
+  /** What the relocation mechanism can do and what it is doing (Settings ▸ Move to another
+   *  server). Admin-only, plus ManageSystem. */
+  getRelocation: (): Promise<RelocationStatus> => apiGet('/api/v1/system/relocation'),
+
+  /** The tail of the current run's log, including the restore running on the *other* host. */
+  getRelocationLog: (tail = 200): Promise<RelocationLog> =>
+    apiGet('/api/v1/system/relocation/log', { query: { tail } }),
+
+  /** Build an archive, and — depending on `mode` — send it to another server and restore it there.
+   *
+   *  Returns as soon as the updater has the request; the work takes minutes and outlives this
+   *  call, so poll `getRelocation` for the outcome.
+   *
+   *  ⚠️ `req.auth` carries a password or a private key. It is sent once and never stored: core
+   *  writes it to a 0600 file the sidecar reads and deletes. Do not put it in the store, the URL
+   *  or `localStorage`. */
+  startRelocation: (req: RelocationRequest): Promise<RelocationAccepted> =>
+    apiPost('/api/v1/system/relocation', { body: req }),
+
+  /** Download the archive. See the warning above — treat the file exactly as the KEK itself. */
+  downloadRelocationArchive: (): Promise<Download> =>
+    fetchBlob('/api/v1/system/relocation/archive', 'relocation_download_failed', {
+      method: 'POST',
+    }),
+
+  /** Delete the archive and any staged SSH credentials. */
+  deleteRelocation: (): Promise<void> => apiDelete('/api/v1/system/relocation'),
 
   /** Install a release from a `docker save` archive, for a site with no reachable registry
    *  (ADR-050 Increment 3). The path is written out because the body is raw bytes, not JSON, so

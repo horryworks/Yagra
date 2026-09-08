@@ -1974,10 +1974,11 @@ mod tests {
              removed, so decide this number again rather than raising it to whatever was measured",
         );
         assert_eq!(
-            cds, 4,
-            "expected 4 directory changes: three in the central updater (backup, apply, bus) and \
-             one in the site updater's apply. A lower number means a pattern stopped matching and \
-             this check passed over the line it exists to read",
+            cds, 6,
+            "expected 6 directory changes: three in the central updater (backup, apply, bus), two \
+             in its relocation procedure (its own compose helper, and the backup of record it runs \
+             — ADR-121), and one in the site updater's apply. A lower number means a pattern \
+             stopped matching and this check passed over the line it exists to read",
         );
     }
 

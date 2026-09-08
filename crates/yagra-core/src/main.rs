@@ -93,6 +93,10 @@ mod poolres;
 mod preferences;
 mod ratelimit;
 mod rca;
+/// Moving this whole deployment to another host (ADR-121). Named apart from `config_bundle`,
+/// which moves a *configuration* between deployments and carries no secret; this one carries the
+/// KEK and every sealed row, which is why it is Admin-only and audited.
+mod relocation;
 mod repo;
 mod reports;
 mod result_ingest;
@@ -207,6 +211,18 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("bus-cert") {
         let _telemetry = yagra_telemetry::init("yagra-bus-cert");
         return run_bus_cert().await;
+    }
+
+    // `yagra-core verify-secrets` counts the sealed rows this deployment holds and how many of
+    // them the mounted KEK opens, prints one line of JSON, and exits (ADR-121 decision 6). It is
+    // the verdict a *restored* deployment needs — "did the key travel with the database" — and it
+    // answers it without HTTP, a token, or a running core, which is why it is a subcommand rather
+    // than an endpoint: the caller is a shell script on a host where nothing is logged in yet.
+    // `scripts/yagra-restore-verify.sh` reads it too, replacing a `wget` the runtime image has no
+    // client for. Read-only and side-effect-free: it never migrates.
+    if std::env::args().nth(1).as_deref() == Some("verify-secrets") {
+        let _telemetry = yagra_telemetry::init("yagra-verify-secrets");
+        std::process::exit(run_verify_secrets().await);
     }
 
     // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
@@ -324,6 +340,46 @@ async fn run_bus_cert() -> anyhow::Result<()> {
 
     tracing::info!("bus TLS material is ready");
     Ok(())
+}
+
+/// `yagra-core verify-secrets` — can this deployment's KEK still open what it has stored?
+///
+/// Prints one line of JSON on stdout and returns a process exit code: `0` when every sealed row
+/// opened, `1` when some did not, `2` when the question could not be asked at all (no database
+/// URL, unreadable KEK, a table that would not read). **The three are deliberately distinct**: a
+/// restore script that treats "could not ask" as "all good" is exactly the failure this exists to
+/// prevent, and `decryptable < total` is the shape a lost KEK takes — not an error.
+///
+/// It applies no migrations, unlike `bus-cert` above. The caller has just restored a dump, and the
+/// only honest answer about *that* database is one taken without changing it.
+async fn run_verify_secrets() -> i32 {
+    let Ok(db) = std::env::var("YAGRA_DATABASE_URL") else {
+        eprintln!("verify-secrets needs YAGRA_DATABASE_URL");
+        return 2;
+    };
+    let kek = match secrets::load_key_provider() {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("verify-secrets could not load the KEK: {e:#}");
+            return 2;
+        }
+    };
+    let repo = match repo::NodeRepo::connect(&db).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("verify-secrets could not reach the database: {e:#}");
+            return 2;
+        }
+    };
+    let report = match secrets::count_sealed(&repo.pool(), kek).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("verify-secrets could not read a sealed table: {e:#}");
+            return 2;
+        }
+    };
+    println!("{}", report.to_json());
+    i32::from(report.decryptable() < report.total())
 }
 
 /// Live mode: PostgreSQL + NATS + VictoriaMetrics, real ICMP polling end to end.
@@ -863,6 +919,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // ⚠️ Built before `repo` is erased to `Arc<dyn NodeListing>` below, which moves it.
     let upgrade = upgrade::open(repo.pool());
+    // Whatever SSH credentials a relocation staged on the hand-off volume, gone (ADR-121). The
+    // relocation container's own `trap` removes them on every path it can reach, but a core killed
+    // between writing them and the sidecar picking the request up reaches none of those paths —
+    // and what would be left behind is an operator's password to another server. This is a `remove`
+    // on a directory that is almost always absent, so it costs nothing to be sure.
+    relocation::clear_secrets(&upgrade);
     // Settle the run that replaced the previous process, sweep abandoned archives, republish the
     // switch. On every core; `upgrade::start` carries why, and why it is not awaited.
     upgrade::start(

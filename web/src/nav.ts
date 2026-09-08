@@ -374,6 +374,15 @@ export const NAV: NavSection[] = [
             path: '/settings/support-bundle',
             implemented: true,
           },
+          // Beside the support bundle rather than beside Upgrade: both are write-outs of this
+          // deployment's own state that leave the host, and both are Admin-only. Upgrade is about
+          // the version, which is a different question (ADR-121).
+          {
+            labelKey: 'settings.relocation',
+            descKey: 'descriptions.settingsRelocation',
+            path: '/settings/relocation',
+            implemented: true,
+          },
           {
             labelKey: 'settings.upgrade',
             descKey: 'descriptions.settingsUpgrade',

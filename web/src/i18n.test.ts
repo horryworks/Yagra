@@ -51,6 +51,8 @@ import enSettingsAi from './locales/en/settings-ai.json';
 import jaSettingsAi from './locales/ja/settings-ai.json';
 import enSettingsTls from './locales/en/settings-tls.json';
 import jaSettingsTls from './locales/ja/settings-tls.json';
+import enSettingsRelocation from './locales/en/settings-relocation.json';
+import jaSettingsRelocation from './locales/ja/settings-relocation.json';
 import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import jaSettingsUpgrade from './locales/ja/settings-upgrade.json';
 import enRca from './locales/en/rca.json';
@@ -97,6 +99,7 @@ const NAMESPACES: Record<string, { en: Json; ja: Json }> = {
   'settings-forwarding': { en: enSettingsForwarding, ja: jaSettingsForwarding },
   'settings-ai': { en: enSettingsAi, ja: jaSettingsAi },
   'settings-tls': { en: enSettingsTls, ja: jaSettingsTls },
+  'settings-relocation': { en: enSettingsRelocation, ja: jaSettingsRelocation },
   'settings-upgrade': { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
   rca: { en: enRca, ja: jaRca },
   metrics: { en: enMetrics, ja: jaMetrics },

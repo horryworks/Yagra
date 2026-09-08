@@ -1,0 +1,192 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Settings ▸ Move to another server (ADR-121). A form surface with a warning above it and a log
+   below it, so Card is the right container throughout — the same shape as Settings ▸ Support
+   bundle, which is the other write-out action on this shelf.
+
+   Every colour is a token. The warning card is the only place this screen deviates from the plain
+   Card surface, and it does so with `--status-critical`, the same colour the alert state machine uses for critical. */
+
+.reloc-warning {
+  border-left: 3px solid var(--status-critical);
+}
+
+.reloc-warning ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.reloc-warning li + li {
+  margin-top: 6px;
+}
+
+/* Three columns of short lists — carried / not carried / decide again. They wrap to one column on
+   a narrow screen rather than scrolling, because the third column is the one an operator reads
+   last and must not be pushed off the side. */
+.reloc-carried {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+}
+
+.reloc-carried h4 {
+  margin: 0 0 6px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.reloc-carried ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--font-sm);
+}
+
+.reloc-carried li + li {
+  margin-top: 4px;
+}
+
+/* The three size numbers, as a definition list so the labels stay aligned with their values. */
+.reloc-space {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  column-gap: 16px;
+  row-gap: 4px;
+  margin: 12px 0 8px;
+  font-size: var(--font-sm);
+}
+
+.reloc-space dt {
+  color: var(--text-secondary);
+}
+
+.reloc-space dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One checkbox per line with its consequence beneath it. The hint is part of the control, not a
+   tooltip: a tooltip is a thing a touch device never shows (ADR-055 R4), and each of these four
+   options has a cost the operator has to weigh before ticking it. */
+.reloc-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.reloc-opt {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px;
+  align-items: start;
+  cursor: pointer;
+}
+
+.reloc-opt span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reloc-opt em {
+  font-style: normal;
+  font-size: var(--font-sm);
+}
+
+.reloc-target {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.reloc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-sm);
+}
+
+.reloc-field em {
+  font-style: normal;
+}
+
+.reloc-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* A private key is a dozen lines of base64; a one-line input turns pasting one into a guess. */
+.reloc-key textarea {
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  resize: vertical;
+}
+
+.reloc-problems {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: var(--font-sm);
+}
+
+.reloc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.reloc-afterwards {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: var(--font-sm);
+}
+
+.reloc-afterwards li + li {
+  margin-top: 6px;
+}
+
+.reloc-done {
+  color: var(--text-primary);
+}
+
+/* The run's own output, and the restore's output from the other host. Scrolls inside itself: it is
+   machine text of unbounded width, and letting it widen the page would push the controls off. */
+.reloc-log,
+.reloc-cmds {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.reloc-log {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.reloc-archive {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* A plain text toggle rather than a Button: the manual path is the fallback, and giving it a
+   button of the same weight as "Move this deployment" would read as two equal choices. */
+.reloc-disclose {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--brand);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.reloc-disclose:hover {
+  text-decoration: underline;
+}

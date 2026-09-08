@@ -550,7 +550,7 @@
   },
   "bundle": {
     "pageNote": "Move a monitoring configuration from one deployment to another. Admin only, in both directions.",
-    "notBackup": "This is not a backup. A bundle carries no credentials, no notification-channel settings, no ingest tokens and no history — for disaster recovery take a database dump (see DEPLOYMENT.md, \"Backup & restore\").",
+    "notBackup": "This is not a backup. A bundle carries no credentials, no notification-channel settings, no ingest tokens and no history — for disaster recovery take a database dump (see DEPLOYMENT.md, \"Backup & restore\"). To move the whole deployment, keys included, use Settings ▸ Move to another server.",
     "empty": "This bundle carries no configuration.",
     "export": {
       "title": "Export",

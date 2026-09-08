@@ -651,7 +651,9 @@ Upgrades are designed to be low-effort and **never** lose or corrupt data:
 Yagra does not ship a backup product. PostgreSQL, VictoriaMetrics and ClickHouse each have mature
 mechanisms of their own, and layering Yagra-specific orchestration on top would make the *restore*
 procedure depend on the Yagra version that took the backup. What Yagra ships is the procedure, as a
-script, plus a second script that proves a backup can actually be restored.
+script, plus a second script that proves a backup can actually be restored. **For moving a whole
+server rather than protecting one, see [Moving to another server](#relocation)** — that carries the
+keys, the accounts and the history in one step (ADR-121).
 
 ### What to back up
 
@@ -692,14 +694,20 @@ complete.
 It restores into a **throwaway** compose project (`yagra-verify`, torn down with `down -v` on exit,
 and it refuses to run if you point it at the production project name) and asserts four things:
 
-1. `/readyz` returns 200 — core starts against the restored data,
+1. core reports itself healthy — it starts against the restored data,
 2. the node count matches the manifest — the configuration came back,
-3. **every credential still decrypts** — the KEK came back *and matches the ciphertext*,
+3. **every sealed secret still decrypts** — the KEK came back *and matches the ciphertext*,
 4. the `audit_log` row count matches — the "who changed what" trail survived.
 
 Assertion 3 is the one nothing else can infer: a restore can look perfect while the key is a
 different one, and nothing says so until the next poll fails. You can check it at any time with
-`GET /api/v1/credentials/health`. A backup containing no credentials reports **SKIPPED**, not PASS.
+`docker compose -p yagra -f docker-compose.deploy.yml exec -T core yagra-core verify-secrets`. A
+backup whose database holds no sealed secrets reports **SKIPPED**, not PASS.
+
+🚨 **Both assertion 1 and assertion 3 used to be asked over HTTP with `wget` inside the core
+container, and the runtime image has no HTTP client** — so this script could not pass, and ADR-040's
+"a backup can be restored" deliverable was red for its whole life. Both go through core subcommands
+now (ADR-121). If you have a copy of this script from before v0.3.13, take the new one.
 
 **Run the verification before a destructive migration** (the built-in-catalog reseeds, migrations
 `0020`–`0022`), which is what ADR-017 requires a rollback path for.
@@ -712,11 +720,104 @@ letting it corrupt data quietly.
 
 ---
 
+## Moving to another server<a id="relocation"></a>
+
+A backup restores *this* deployment; a configuration bundle carries a *configuration*. A
+**relocation** is the third job: putting this whole deployment — the same keys, the same accounts,
+the same history — onto a different server. **Settings ▸ Move to another server**, or
+`POST /api/v1/system/relocation`. Admin only, and gated on three permissions
+(`ManageSystem` + `ManageCredentials` + `ViewAudit`).
+
+### 🚨 What the archive is
+
+The KEK and the whole database, together, in one file. Anyone who has it can read every SNMP
+community, every device login, every API token and every notification secret this deployment
+stores. **Yagra returns secrets from exactly one endpoint and this is it** — treat the file exactly
+as you would the encryption key, and delete it from every machine it passes through once the move
+is done.
+
+### The two routes
+
+**Push (the main one).** Type the new server's address and an account to sign in as, and press
+*Move this deployment*. Yagra takes the backup, builds the archive, sends it over SSH, unpacks it
+there, restores it, and checks it — including that every sealed secret opens on the new host. If
+that server has no Docker, it installs it with the official `get.docker.com` script (a checkbox,
+on by default; it needs `sudo` and internet there).
+
+**Carry it yourself.** Press *Build the archive*, download it, and run three commands on the new
+server:
+
+```bash
+mkdir yagra && cd yagra
+tar -xzf ~/yagra-relocation-<stamp>.tar.gz
+./yagra-relocate.sh
+```
+
+Use this when Yagra should not be given SSH access to the new server. Docker has to be installed
+there already.
+
+### What the new server needs
+
+* Linux on x86-64, with `sh`, `tar`, and an SSH daemon (for the push route).
+* Docker with the `docker compose` v2 plugin — or `sudo` and internet, so Yagra can install it.
+* **Nothing of Yagra's on it already.** The restore refuses a host carrying `yagra_*` volumes or
+  containers of the `yagra` compose project. It never replaces, merges with or upgrades an existing
+  deployment; removing one is your decision, and it prints the command rather than running it.
+
+### What travels
+
+Carried: the KEK (and the session and bus keys), the **whole** PostgreSQL database — nodes, groups,
+thresholds, users, alert history, the audit log — the metrics, this deployment's `.env` and
+composition including any `docker-compose.local.yml`, and, if you tick them, the event and flow
+stores and the three Yagra images. **The version is pinned to what this server is running**;
+upgrade afterwards from the new server's own Settings ▸ Upgrade.
+
+Not carried: Redis (a mirror of the database), the materialized certificate files (rebuilt from
+their database rows on the first start), core's rotated logs, and the poller's send buffer.
+
+⚠️ **Ticking "carry events and flows" stops the event and flow stores for the minutes the copy
+takes** — syslog, traps and flow records are not recorded during that window. Polling, alerting and
+notifications keep running.
+
+### After it succeeds — five things it cannot decide for you
+
+1. **Stop the old server.** Both are polling, and both will notify:
+   `docker compose -p yagra -f docker-compose.deploy.yml stop`.
+2. **The bus certificate names the old host's addresses.** With remote-site pollers and a new
+   address, reissue it in Settings ▸ Pollers and hand out the site bundles again.
+3. **OIDC redirect URIs** (Settings ▸ Authentication) point at the old host.
+4. **Devices** sending syslog, traps or flow records to the old address need repointing.
+5. **The firewall** on the new server, if it runs one: open the WebUI port.
+
+The WebUI certificate is still the old host's self-signed one, so a browser warns until it is
+replaced in Settings ▸ TLS certificate.
+
+### If it refuses or fails
+
+It has no rollback and needs none: a relocation either produced a working deployment on the new
+host or produced nothing. A refusal writes nothing there. A failure after the database was restored
+is cleared with `docker compose -f docker-compose.deploy.yml down -v` on that host, and then it can
+be run again.
+
+### Checking the secrets came across, at any time
+
+```bash
+docker compose -p yagra -f docker-compose.deploy.yml exec -T core yagra-core verify-secrets
+```
+
+One line of JSON: how many sealed secrets this deployment holds, and how many the mounted KEK can
+open. `decryptable` below `total` means the key and the database do not match — which is the one
+failure a restore can otherwise hide, because everything else looks healthy until the next poll.
+
+---
+
 ## Configuration bundle (moving a configuration between deployments)<a id="config-bundle"></a>
 
-A backup restores *this* deployment. A **configuration bundle** is the other job: taking the
-monitoring configuration you built in one deployment and applying it to a different one — staging to
-production, or an old server to a new one. **Settings ▸ Configuration bundle**, or
+A backup restores *this* deployment. A **configuration bundle** is a third thing again: taking the
+monitoring configuration you built in one deployment and applying it to a *different, existing* one
+— staging to production, say. ⚠️ **It is not how you move a server.** A bundle moves a
+*configuration*; a relocation archive moves the *deployment*, keys and history included — see
+[Moving to another server](#relocation). **Settings ▸ Configuration bundle**, or
 `GET`/`POST /api/v1/config/bundle`. Admin only, in both directions.
 
 ```bash

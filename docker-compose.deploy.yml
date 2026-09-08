@@ -840,7 +840,7 @@ services:
       - |
         set -eu
         D=/data/upgrade
-        mkdir -p "$$D/bundle"
+        mkdir -p "$$D/bundle" "$$D/relocation"
         # core runs as uid 10001 and must be able to write the request file and, when archives are
         # allowed, stream one into $$D/bundle. Safe only because nothing here is ever executed.
         chown -R 10001:10001 "$$D" 2>/dev/null || true
@@ -1247,6 +1247,287 @@ services:
         BUS
         )
 
+        # Move this whole deployment to another host (ADR-121). Held in a VARIABLE and passed to a
+        # throwaway container as an argument, for the same two reasons APPLY and BUS are: nothing
+        # executable may live in the volume core can write to, and the deployment directory is a
+        # host path this updater cannot see.
+        #
+        # Arguments: <run id> <requested by> <mode> <metrics> <tier2> <images> <install docker>
+        #            <host> <port> <user> <dir> <auth kind>
+        #
+        # 🚨 **No secret is among them, and none is ever read into a variable.** The SSH password,
+        # the private key and the sudo password are 0600 files core wrote under relocation/secret/
+        # before the request appeared; they reach ssh through SSH_ASKPASS / `-i` and sudo through a
+        # stdin redirect, and the `trap` removes them however this exits. They appear in no
+        # argument, no status file, no log line and no audit row (security.md).
+        #
+        # ⚠️ It writes `relocation/relocation.json`, never `status.json`. That file means "an
+        # upgrade run", and core's `settle_finished_run` would claim a relocation as one — writing
+        # an `upgrade succeeded` audit row for an upgrade that never happened.
+        RELOCATE=$$(cat <<'RELOCATE'
+        set -u
+        RUN="$$1"; BY="$$2"; MODE="$$3"; METRICS="$$4"; TIER2="$$5"; IMAGES="$$6"; INSTALL_DOCKER="$$7"
+        HOST="$$8"; PORT="$$9"; USER_="$${10}"; TDIR="$${11}"; AUTH="$${12}"
+        D=/data/upgrade; R="$$D/relocation"; SEC="$$R/secret"; WORK="$$R/work.$$RUN"; LOG="$$R/relocation.log"
+        START=$$(date +%s); FIN=; FP=null; DOCKER_INSTALLED=false; URL=null; FILE_JSON=null; SIZE=null
+        b() { if [ "$$1" = 1 ]; then echo true; else echo false; fi; }
+        # One writer for every state this run can be in. Same single-printf shape as APPLY's `say`,
+        # and the same reason its inputs are sanitized: there is no JSON encoder behind it, so a
+        # stray quote from ssh would not make the message ugly, it would make the file unparseable.
+        rsay() { # <state> <stage> <message>
+          printf '{"id":"%s","mode":"%s","state":"%s","stage":"%s","message":"%s","target_host":"%s","host_key_fingerprint":%s,"docker_installed":%s,"target_url":%s,"filename":%s,"size_bytes":%s,"started_at":%s,"finished_at":%s,"requested_by":"%s","metrics":%s,"images":%s,"tier2":%s}\n' \
+            "$$RUN" "$$MODE" "$$1" "$$2" "$$3" "$$HOST" "$$FP" "$$DOCKER_INSTALLED" "$$URL" "$$FILE_JSON" "$$SIZE" "$$START" "$${FIN:-null}" "$$BY" "$$(b "$$METRICS")" "$$(b "$$IMAGES")" "$$(b "$$TIER2")" > "$$R/relocation.json.tmp"
+          mv "$$R/relocation.json.tmp" "$$R/relocation.json"; chown 10001:10001 "$$R/relocation.json"
+          printf '%s %s: %s\n' "$$(date -u +%H:%M:%S)" "$$2" "$$3" >> "$$LOG"
+        }
+        rfail() { FIN=$$(date +%s); rsay failed "$$1" "$$2"; exit 1; }
+        sanitize() { tr -d '"\\' | tr '\n\r\t' '   ' | tail -c 240; }
+        num() { case "$$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$$1" ;; esac; }
+        # However this exits — success, failure, or the container being killed — the secrets go.
+        # The work directory goes with them: it holds an unencrypted copy of the KEK.
+        cleanup() { rm -rf "$$SEC" "$$WORK" "$$R/askpass.sh"; }
+        trap cleanup EXIT
+        : > "$$LOG"; chown 10001:10001 "$$LOG"
+        rsay running start "requested by $$BY"
+
+        # Step 0 of APPLY, for the same reason and with the same repair.
+        [ -f "$$WORKDIR/docker-compose.deploy.yml" ] \
+          || rfail start "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this deployment's docker-compose.deploy.yml. On the host, from the directory that does, run: docker compose -p $$PROJ -f docker-compose.deploy.yml up -d --force-recreate yagra-updater — a plain 'up -d' will NOT repair it, because that container's definition is unchanged and compose leaves it running with the stale label"
+        cid_of() { docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=$$1" | head -1; }
+        img_of() { docker inspect -f '{{.Config.Image}}' "$$(cid_of "$$1")" 2>/dev/null; }
+        CORE_CID=$$(cid_of core)
+        [ -n "$$CORE_CID" ] || rfail start "cannot find the running core container"
+        CORE_IMG=$$(img_of core)
+        [ -n "$$CORE_IMG" ] || rfail start "cannot read the running core's image reference"
+        # The version the new host will run is the one this host is running — never a choice
+        # (ADR-121 decision 6). Restoring forward is the operator's next step, from the new box.
+        REPO_RUN="$${CORE_IMG%/*}"; TAG_RUN="$${CORE_IMG##*:}"
+        case "$$TAG_RUN" in *"/"*) TAG_RUN=latest ;; esac
+        dc() { ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml "$$@" ); }
+
+        # ── 1. Reach the new host, and find out what is on it ──────────────────────────────────
+        # `ssh` comes from the RUNNING core image, which is the one image this host is guaranteed
+        # to have (ADR-121 decision 13): this container is stock docker:28-cli and `apk add` fails
+        # on an air-gapped site. It runs as 10001 so it can read the key files core wrote, and with
+        # HOME=/tmp so it never looks for a ~/.ssh it does not have.
+        if [ "$$MODE" != archive ]; then
+          printf '#!/bin/sh\ncat %s/ssh_password\n' "$$SEC" > "$$R/askpass.sh"; chmod 0755 "$$R/askpass.sh"
+          KEYOPT=""; PWAUTH=yes; KEYAUTH=no
+          if [ "$$AUTH" = key ]; then KEYOPT="-i $$SEC/ssh_key"; PWAUTH=no; KEYAUTH=yes; fi
+          sshx() { # sshx <remote command> ; stdin passes through to the remote command
+            docker run --rm -i --user 10001:10001 \
+              -v "$${PROJ}_upgradedata:/data/upgrade" \
+              -v "$$WORKDIR:$$WORKDIR" \
+              -e "SSH_ASKPASS=$$R/askpass.sh" -e SSH_ASKPASS_REQUIRE=force -e HOME=/tmp \
+              --entrypoint /usr/bin/ssh "$$CORE_IMG" \
+              -p "$$PORT" -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              -o "UserKnownHostsFile=$$R/known_hosts" -o "PasswordAuthentication=$$PWAUTH" \
+              -o "PubkeyAuthentication=$$KEYAUTH" $$KEYOPT "$$USER_@$$HOST" "$$1"
+          }
+          ssh_fp() {
+            docker run --rm --user 10001:10001 \
+              -v "$${PROJ}_upgradedata:/data/upgrade" \
+              -v "$$WORKDIR:$$WORKDIR" \
+              --entrypoint /usr/bin/ssh-keygen "$$CORE_IMG" -lf "$$R/known_hosts" 2>/dev/null \
+              | awk '{print $$2}' | head -1
+          }
+          # The sudo password is its own file when the operator gave one, and otherwise the SSH
+          # password — which is what a password login on a stock Ubuntu box actually needs. With
+          # neither, sudo is tried non-interactively and fails cleanly if it wants a password.
+          SUDOPW="$$SEC/sudo_password"; [ -f "$$SUDOPW" ] || SUDOPW="$$SEC/ssh_password"
+          sudox() { # sudox <remote command, run as root>
+            if [ -f "$$SUDOPW" ]; then sshx "sudo -S -k -p '' sh -c '$$1'" < "$$SUDOPW"
+            else sshx "sudo -n sh -c '$$1'" < /dev/null; fi
+          }
+          rsay running preflight "connecting to $$USER_@$$HOST:$$PORT"
+          sshx true < /dev/null > /tmp/err 2>&1 || rfail preflight "could not log in to $$HOST — $$(sanitize < /tmp/err)"
+          FP="\"$$(ssh_fp)\""
+          docker cp "$$CORE_CID:/usr/share/yagra/yagra-relocate.sh" /tmp/relocate.sh 2>/dev/null \
+            || rfail preflight "this core image ships no relocation script, so there is nothing to run on the new host"
+          # The checks run THERE, from the script that will do the restore — one answer, not two.
+          sshx 'sh -s -- --preflight' < /tmp/relocate.sh > /tmp/pf 2>&1 \
+            || rfail preflight "the host checks could not run on $$HOST — $$(sanitize < /tmp/pf)"
+          pf() { sed -n "s/^$$1=//p" /tmp/pf | head -1; }
+          [ "$$(pf bare)" = yes ] \
+            || rfail preflight "$$HOST is not bare: $$(pf bare_reason). This never replaces a deployment — remove that one first, on that host, with: docker compose -f docker-compose.deploy.yml down -v"
+          [ "$$(pf arch)" = x86_64 ] || rfail preflight "$$HOST reports $$(pf arch); the images are amd64 only"
+          [ "$$(pf tar)" = ok ] || rfail preflight "$$HOST has no tar, so the archive could not be unpacked there"
+          if [ "$$(pf docker)" != ok ]; then
+            [ "$$INSTALL_DOCKER" = 1 ] \
+              || rfail preflight "$$HOST has no usable Docker and installing it was not allowed. Tick that option, or install Docker there yourself"
+            [ "$$(pf os_supported)" = yes ] \
+              || rfail preflight "$$HOST runs $$(pf os), which the official get.docker.com script does not support. Install Docker there yourself and try again"
+            sudox true > /tmp/err 2>&1 \
+              || rfail preflight "$$USER_ cannot use sudo on $$HOST, so Docker cannot be installed — $$(sanitize < /tmp/err)"
+          fi
+          PF_FREE=$$(num "$$(pf free_kb)")
+          rsay running preflight "$$HOST is bare (os $$(pf os), docker $$(pf docker), $$((PF_FREE / 1024)) MB free)"
+          if [ "$$MODE" = preflight ]; then FIN=$$(date +%s); rsay done preflight "the connection and the host checks passed"; exit 0; fi
+
+          # ── 2. Docker, if it is missing and the operator allowed it ─────────────────────────
+          # The official script, downloaded here and run there as root. Yagra does not vendor it
+          # and cannot vouch for it; that is said in the UI, and the checkbox is how it is refused.
+          if [ "$$(pf docker)" != ok ]; then
+            rsay running docker "installing Docker on $$HOST from get.docker.com, as root"
+            wget -qO /tmp/get-docker.sh https://get.docker.com \
+              || rfail docker "could not download get.docker.com from this host; install Docker on $$HOST yourself and try again"
+            sshx 'cat > /tmp/get-docker.sh' < /tmp/get-docker.sh \
+              || rfail docker "could not copy the Docker installer to $$HOST"
+            sudox 'sh /tmp/get-docker.sh' >> "$$LOG" 2>&1 \
+              || rfail docker "get.docker.com failed on $$HOST; this run's log holds its output"
+            sudox "usermod -aG docker $$USER_" > /tmp/err 2>&1 \
+              || rfail docker "Docker installed, but $$USER_ could not be added to the docker group — $$(sanitize < /tmp/err)"
+            sshx 'docker info >/dev/null' < /dev/null > /tmp/err 2>&1 \
+              || rfail docker "Docker is installed on $$HOST but $$USER_ still cannot use it — $$(sanitize < /tmp/err)"
+            DOCKER_INSTALLED=true
+            rsay running docker "Docker is installed on $$HOST"
+          fi
+        fi
+
+        # ── 3. Room for the archive, BEFORE anything is written ────────────────────────────────
+        # Same order and same reasoning as APPLY's check (decision 15): a host that is already
+        # short of space must not have several GB written onto it and then be told it failed. The
+        # estimate is the volumes this run will copy, doubled — the copy and the tar of the copy.
+        vol_kb() { docker run --rm -v "$${PROJ}_$$1:/v:ro" -v "$$WORKDIR:$$WORKDIR" docker:28-cli du -sk /v 2>/dev/null | awk '{print $$1}'; }
+        NEED_KB=$$(num "$$(vol_kb pgdata)")
+        if [ "$$METRICS" = 1 ]; then NEED_KB=$$((NEED_KB + $$(num "$$(vol_kb vmdata)"))); fi
+        if [ "$$TIER2" = 1 ]; then NEED_KB=$$((NEED_KB + $$(num "$$(vol_kb vldata)") + $$(num "$$(vol_kb chdata)"))); fi
+        if [ "$$IMAGES" = 1 ]; then
+          IMG_KB=$$(docker image inspect -f '{{.Size}}' "$$CORE_IMG" "$$(img_of poller)" "$$(img_of web)" 2>/dev/null | awk '{s+=$$1} END {print int(s/1024)}')
+          NEED_KB=$$((NEED_KB + $$(num "$$IMG_KB")))
+        fi
+        NEED_KB=$$((NEED_KB * 2))
+        MINFREE=$${YAGRA_UPGRADE_MIN_FREE_BYTES:-3221225472}
+        case "$$MINFREE" in ''|*[!0-9]*) MINFREE=3221225472 ;; esac
+        FREE_KB=$$(df -P -k "$$D" 2>/dev/null | awk 'NR==2 && $$4 ~ /^[0-9]+$$/ {print $$4}')
+        if [ -z "$$FREE_KB" ]; then
+          rsay running start "could not measure free disk space on this host; continuing without the check"
+        elif [ "$$MINFREE" != "0" ]; then
+          [ "$$FREE_KB" -ge "$$NEED_KB" ] \
+            || rfail start "not enough free space on the Docker volume filesystem to build the archive: $$((FREE_KB / 1024)) MB free, $$((NEED_KB / 1024)) MB needed (the data, twice). Nothing has been written and this deployment is untouched"
+        fi
+
+        # ── 4. The backup of record, then the deployment's own files ───────────────────────────
+        # `yagra-backup.sh` out of the RUNNING core image (ADR-050 decision 9): the KEK, a full
+        # `pg_dump -Fc`, and a VictoriaMetrics snapshot. Not a second copy of that procedure.
+        rsay running backup "taking the tier-1 backup with the procedure of record"
+        mkdir -p "$$WORK"; chmod 700 "$$WORK"
+        docker cp "$$CORE_CID:/usr/share/yagra/yagra-backup.sh" /tmp/backup.sh 2>/dev/null \
+          || rfail backup "this core image ships no backup script"
+        SKIPM=0; if [ "$$METRICS" != 1 ]; then SKIPM=1; fi
+        ( cd "$$WORKDIR" && YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh "$$WORK/backup" ) > /tmp/err 2>&1 \
+          || rfail backup "the backup failed — $$(sanitize < /tmp/err)"
+        # Without the key the new host has a database of secrets nobody can ever open again. That
+        # is not a degraded relocation, it is a trap, so it is the one thing refused outright.
+        [ -f "$$WORK/backup/kek/kek" ] \
+          || rfail backup "the backup holds no KEK, so the new server could not open a single stored credential; refusing to build an archive without it"
+        rsay running files "collecting the composition and this deployment's own settings"
+        cp -p "$$WORKDIR/.env" "$$WORK/.env" 2>/dev/null || rfail files "this deployment has no .env to carry"
+        chmod 600 "$$WORK/.env"
+        cp "$$WORKDIR/docker-compose.deploy.yml" "$$WORK/" || rfail files "could not read this deployment's composition"
+        if [ -f "$$WORKDIR/docker-compose.local.yml" ]; then cp "$$WORKDIR/docker-compose.local.yml" "$$WORK/"; fi
+        # The two optional host directories the composition can bind-mount keys from. Absent on a
+        # default install, and the backup has already taken the key files themselves.
+        for d in session callout; do
+          if [ -d "$$WORKDIR/$$d" ]; then cp -a "$$WORKDIR/$$d" "$$WORK/$$d"; fi
+        done
+        docker cp "$$CORE_CID:/usr/share/yagra/yagra-relocate.sh" "$$WORK/yagra-relocate.sh" 2>/dev/null \
+          || rfail files "this core image ships no relocation script"
+        chmod 0755 "$$WORK/yagra-relocate.sh"
+        docker cp "$$CORE_CID:/usr/share/yagra/RELOCATION-README.md" "$$WORK/RELOCATION-README.md" 2>/dev/null || true
+        # Pin the version rather than inherit a floating one: the new host must come up on exactly
+        # what this one is running, whatever `:latest` happens to mean by the time it pulls.
+        pin_env() { grep -q "^$$1=" "$$WORK/.env" || printf '%s=%s\n' "$$1" "$$2" >> "$$WORK/.env"; }
+        pin_env YAGRA_IMAGE_TAG "$$TAG_RUN"
+        if [ "$$REPO_RUN" != ghcr.io/horryworks ]; then pin_env YAGRA_IMAGE_REPO "$$REPO_RUN"; fi
+
+        # ── 5. The three Yagra images, when the new host cannot pull them ──────────────────────
+        # Only ours: postgres, VictoriaMetrics, nats and the rest come from Docker Hub, and
+        # carrying them too is the fully air-gapped variant this increment does not build.
+        if [ "$$IMAGES" = 1 ]; then
+          rsay running images "saving the three Yagra images into the archive"
+          docker tag "$$CORE_IMG" "$$REPO_RUN/yagra-core:$$TAG_RUN" 2>/dev/null || true
+          POLLER_IMG=$$(img_of poller); WEB_IMG=$$(img_of web)
+          if [ -n "$$POLLER_IMG" ]; then docker tag "$$POLLER_IMG" "$$REPO_RUN/yagra-poller:$$TAG_RUN" 2>/dev/null || true; fi
+          if [ -n "$$WEB_IMG" ]; then docker tag "$$WEB_IMG" "$$REPO_RUN/yagra-web:$$TAG_RUN" 2>/dev/null || true; fi
+          docker save "$$REPO_RUN/yagra-core:$$TAG_RUN" "$$REPO_RUN/yagra-poller:$$TAG_RUN" "$$REPO_RUN/yagra-web:$$TAG_RUN" > "$$WORK/images.tar" 2>/tmp/err \
+            || rfail images "docker save failed — $$(sanitize < /tmp/err)"
+        fi
+
+        # ── 6. Events and flows (tier 2) ───────────────────────────────────────────────────────
+        # Both stores are stopped for the copy, so this is the one stage with a visible cost: for
+        # the minutes it takes, syslog, traps and flow records are not being written. Everything
+        # else keeps running — polling, alerting and notifications are untouched.
+        if [ "$$TIER2" = 1 ]; then
+          rsay running tier2 "stopping the event and flow stores to copy them"
+          mkdir -p "$$WORK/tier2"
+          dc stop victorialogs clickhouse > /tmp/err 2>&1 \
+            || rfail tier2 "could not stop the event and flow stores — $$(sanitize < /tmp/err)"
+          for v in vldata chdata; do
+            docker run --rm -v "$${PROJ}_$$v:/v:ro" -v "$$WORKDIR:$$WORKDIR" docker:28-cli tar -C /v -czf - . > "$$WORK/tier2/$$v.tar.gz" 2>/tmp/err \
+              || { dc start victorialogs clickhouse > /dev/null 2>&1; rfail tier2 "copying $$v failed — $$(sanitize < /tmp/err)"; }
+          done
+          dc start victorialogs clickhouse > /tmp/err 2>&1 \
+            || rfail tier2 "the event and flow stores did not come back after the copy — $$(sanitize < /tmp/err)"
+          rsay running tier2 "the event and flow stores are copied and running again"
+        fi
+
+        # ── 7. What this archive is, and then the archive ──────────────────────────────────────
+        # RELOCATION.json is what the restore checks itself against on the other side: the version
+        # to install, the schema version to expect back, and the counts the dump must produce.
+        psql1() { dc exec -T postgres psql -U yagra -d yagra -tAc "$$1" 2>/dev/null | tr -d '\n'; }
+        POLLER_ID=$$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "YAGRA_POLLER_ID"}}{{index (split . "=") 1}}{{end}}{{end}}' "$$(cid_of poller)" 2>/dev/null)
+        if [ -z "$$POLLER_ID" ]; then POLLER_ID=$$(docker inspect -f '{{.Config.Hostname}}' "$$(cid_of poller)" 2>/dev/null); fi
+        SRC_REF=$$(docker exec "$$CORE_CID" cat /etc/yagra-source-ref 2>/dev/null | tr -d '[:space:]')
+        SCHEMA_MAX=$$(num "$$(psql1 'SELECT COALESCE(max(version),0) FROM _sqlx_migrations')")
+        SANS=$$(psql1 "SELECT COALESCE(sans::text, '[]') FROM bus_tls_config WHERE id = 1")
+        case "$$SANS" in '['*) ;; *) SANS='[]' ;; esac
+        { printf '{"format":"yagra.relocation","version":1,"run_id":"%s","taken_at":"%s","image_repo":"%s","image_tag":"%s","source_ref":"%s",' \
+            "$$RUN" "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$REPO_RUN" "$$TAG_RUN" "$$SRC_REF"
+          printf '"schema_latest_version":%s,"bus_tls_sans":%s,"local_poller_id":"%s","metrics":%s,"tier2":%s,"images":%s,' \
+            "$$SCHEMA_MAX" "$$SANS" "$$POLLER_ID" "$$(b "$$METRICS")" "$$(b "$$TIER2")" "$$(b "$$IMAGES")"
+          printf '"carried":["kek","postgres","env","compose","local_overlay","session_and_callout_keys"'
+          if [ "$$METRICS" = 1 ]; then printf ',"victoriametrics"'; fi
+          if [ "$$TIER2" = 1 ]; then printf ',"victorialogs","clickhouse"'; fi
+          if [ "$$IMAGES" = 1 ]; then printf ',"images"'; fi
+          printf '],"not_carried":["redis","buscerts","tlsdata","logdata","pollerbuf","ipasndata","upgradedata"]}\n'
+        } > "$$WORK/RELOCATION.json"
+        rsay running archive "compressing"
+        STAMP=$$(date -u +%Y%m%dT%H%M%SZ); FILE="yagra-relocation-$$STAMP.tar.gz"
+        # Exactly one archive exists at a time (decision 9): it holds every secret this deployment
+        # has, so a directory quietly accumulating them is the worst artefact this feature could
+        # leave behind.
+        rm -f "$$R"/yagra-relocation-*.tar.gz
+        tar -C "$$WORK" -czf "$$R/$$FILE.tmp" . > /tmp/err 2>&1 || rfail archive "tar failed — $$(sanitize < /tmp/err)"
+        chmod 0600 "$$R/$$FILE.tmp"
+        chown 10001:10001 "$$R/$$FILE.tmp"
+        mv "$$R/$$FILE.tmp" "$$R/$$FILE"
+        rm -rf "$$WORK"
+        SIZE=$$(stat -c %s "$$R/$$FILE" 2>/dev/null)
+        case "$$SIZE" in ''|*[!0-9]*) SIZE=null ;; esac
+        FILE_JSON="\"$$FILE\""
+        if [ "$$MODE" = archive ]; then FIN=$$(date +%s); rsay done archive "the archive is ready to download"; exit 0; fi
+
+        # ── 8. Send it, and let the other side do the restore ──────────────────────────────────
+        # One stream: the archive goes in on stdin, is unpacked there, and the script that came
+        # with it runs. Its output is this run's log, and its last line is the verdict.
+        rsay running push "sending the archive to $$HOST and restoring it there"
+        sshx "mkdir -p ~/$$TDIR && tar -C ~/$$TDIR -xzf - && YAGRA_RELOCATE_YES=1 ~/$$TDIR/yagra-relocate.sh" < "$$R/$$FILE" >> "$$LOG" 2>&1
+        VERDICT=$$(grep -E '^RESULT ' "$$LOG" | tail -1)
+        case "$$VERDICT" in
+          "RESULT ok"*)
+            URL="\"$$(printf '%s' "$$VERDICT" | sed -n 's/.*url=\([^ ]*\).*/\1/p')\""
+            # The archive is every secret this deployment holds, and it has now been delivered.
+            rm -f "$$R/$$FILE"; FILE_JSON=null; SIZE=null
+            FIN=$$(date +%s); rsay done push "the new server is up"
+            ;;
+          *)
+            rfail push "the restore on $$HOST did not report success — $$(tail -c 240 "$$LOG" | sanitize)"
+            ;;
+        esac
+        RELOCATE
+        )
+
         # Poller ids in this updater's own compose project — the ones an apply recreates on its way
         # past, because they are in the same `up -d` (ADR-051). Core cannot work this out for itself:
         # nothing on the bus says which compose project a poller belongs to, so without this it must
@@ -1266,11 +1547,17 @@ services:
         # are reported, never assumed, so the capability is declared by the container that holds
         # the socket rather than inferred by the one that does not. It keeps beating while paused —
         # "switched off" and "died" must not look the same on the page.
+        #
+        # `relocate` is the same declaration for ADR-121, and it is a hard *literal* here: this
+        # updater has the `relocate)` arm, so it says so. An updater too old to know the command
+        # writes no such key, `#[serde(default)]` reads that as false, and core answers 503 rather
+        # than asking — because an old sidecar does not ignore an unknown command, it writes a
+        # rejection into `status.json`, which is the *upgrade* screen's file.
         heartbeat() {
           if [ "$$ALLOW" = "1" ]; then AB=true; else AB=false; fi
           if paused; then PS=true; else PS=false; fi
           LP=$$(local_pollers)
-          printf '{"written_at":%s,"repo":"%s","check_interval_secs":%s,"allow_bundle":%s,"paused":%s,"local_pollers":[%s]}\n' "$$(date +%s)" "$$REPO" "$$IVL" "$$AB" "$$PS" "$$LP" > "$$D/current.json.tmp"
+          printf '{"written_at":%s,"repo":"%s","check_interval_secs":%s,"allow_bundle":%s,"paused":%s,"local_pollers":[%s],"relocate":true}\n' "$$(date +%s)" "$$REPO" "$$IVL" "$$AB" "$$PS" "$$LP" > "$$D/current.json.tmp"
           mv "$$D/current.json.tmp" "$$D/current.json"
         }
 
@@ -1307,6 +1594,19 @@ services:
           printf '{"id":"%s","command":"%s","target":null,"state":"rejected","step":"validate","message":"%s","started_at":%s,"finished_at":%s,"requested_by":null}\n' \
             "$${1:-unknown}" "$${CMDSAFE:-unknown}" "$$2" "$$(date +%s)" "$$(date +%s)" > "$$D/status.json.tmp"
           mv "$$D/status.json.tmp" "$$D/status.json"
+        }
+
+        # The same thing for a relocation, and it writes a DIFFERENT file on purpose (ADR-121).
+        # `status.json` means "an upgrade run" to three readers — the Upgrade page, the 409 that
+        # stops a second apply, and core's `settle_finished_run`, which would turn a refused
+        # relocation into an `upgrade failed` audit row. It also removes the secrets core staged,
+        # because a request that never reaches the relocation container never reaches its `trap`.
+        reject_relocation() {
+          rm -rf "$$D/relocation/secret"
+          printf '{"id":"%s","mode":"%s","state":"failed","stage":"validate","message":"%s","target_host":"%s","host_key_fingerprint":null,"docker_installed":false,"target_url":null,"filename":null,"size_bytes":null,"started_at":%s,"finished_at":%s,"requested_by":null,"metrics":false,"images":false,"tier2":false}\n' \
+            "$${1:-unknown}" "$${RMODE:-unknown}" "$$2" "$${RHOST:-}" "$$(date +%s)" "$$(date +%s)" > "$$D/relocation/relocation.json.tmp"
+          mv "$$D/relocation/relocation.json.tmp" "$$D/relocation/relocation.json"
+          chown 10001:10001 "$$D/relocation/relocation.json" 2>/dev/null || true
         }
 
         handle() {
@@ -1384,6 +1684,55 @@ services:
                 -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" \
                 docker:28-cli sh -c "$$BUS" yagra-bus "$$BUSMODE" "$$ID" "$$BY" "$$BUSCPW" "$$BUSPPW" >/dev/null \
                 || reject "$$ID" "could not start the bus-change container"
+              return
+              ;;
+            # Move this whole deployment to another host (ADR-121). Like `bus` it installs no image
+            # and names no release, so it skips the tag check below and returns from here — and
+            # unlike every other command it writes `relocation/relocation.json` rather than
+            # `status.json`, so a relocation can never be claimed as an upgrade.
+            #
+            # Every field is re-checked here and not only in core: this container reads the request
+            # as root, and the request file is the one thing core can write into the shared volume.
+            # The SSH secrets are NOT in it — they are files core wrote under relocation/secret/,
+            # and they are never read here, only mounted through to the container below.
+            relocate)
+              CMDSAFE=relocate
+              R="$$D/relocation"; mkdir -p "$$R"; chown 10001:10001 "$$R" 2>/dev/null || true
+              RMODE=$$(field mode); RM=$$(field include_metrics); RT=$$(field include_tier2)
+              RI=$$(field include_images); RD=$$(field install_docker)
+              RHOST=$$(field target_host); RPORT=$$(field target_port); RUSER=$$(field target_user)
+              RDIR=$$(field target_dir); RAUTH=$$(field auth)
+              if paused; then reject_relocation "$$ID" "the upgrade mechanism is switched off in Settings ▸ Upgrade"; return; fi
+              [ -n "$$WORKDIR" ] || { reject_relocation "$$ID" "cannot locate the compose project directory"; return; }
+              case "$$RMODE" in archive|preflight|push) ;; *) reject_relocation "$$ID" "unsupported relocation mode"; return ;; esac
+              for f in "$$RM" "$$RT" "$$RI" "$$RD"; do
+                echo "$$f" | grep -Eq '^[01]$$' || { reject_relocation "$$ID" "malformed option"; return; }
+              done
+              if [ "$$RMODE" != archive ]; then
+                echo "$$RHOST" | grep -Eq '^[A-Za-z0-9.:-]{1,253}$$' || { reject_relocation "$$ID" "malformed target host"; return; }
+                echo "$$RPORT" | grep -Eq '^[0-9]{1,5}$$' || { reject_relocation "$$ID" "malformed target port"; return; }
+                echo "$$RUSER" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$$' || { reject_relocation "$$ID" "malformed target user"; return; }
+                echo "$$RDIR" | grep -Eq '^[A-Za-z0-9._-]{1,64}$$' || { reject_relocation "$$ID" "malformed target directory"; return; }
+                case "$$RAUTH" in password|key) ;; *) reject_relocation "$$ID" "unsupported authentication kind"; return ;; esac
+              fi
+              echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
+              # Written here rather than in RELOCATE so a container that never starts still leaves
+              # a run behind — which `reject_relocation` then overwrites with the reason.
+              printf '{"id":"%s","mode":"%s","state":"requested","stage":"start","message":"waiting for the relocation container","target_host":"%s","host_key_fingerprint":null,"docker_installed":false,"target_url":null,"filename":null,"size_bytes":null,"started_at":%s,"finished_at":null,"requested_by":"%s","metrics":%s,"images":%s,"tier2":%s}\n' \
+                "$$ID" "$$RMODE" "$$RHOST" "$$(date +%s)" "$$BY" \
+                "$$(if [ "$$RM" = 1 ]; then echo true; else echo false; fi)" \
+                "$$(if [ "$$RI" = 1 ]; then echo true; else echo false; fi)" \
+                "$$(if [ "$$RT" = 1 ]; then echo true; else echo false; fi)" > "$$R/relocation.json.tmp"
+              mv "$$R/relocation.json.tmp" "$$R/relocation.json"
+              chown 10001:10001 "$$R/relocation.json" 2>/dev/null || true
+              # The same three mounts every other launch needs, for the same reasons.
+              docker run --rm -d --name "yagra-relocate-$$ID" \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                -v "$${PROJ}_upgradedata:/data/upgrade" \
+                -v "$$WORKDIR:$$WORKDIR" \
+                -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" -e "YAGRA_UPGRADE_MIN_FREE_BYTES=$$MINFREE_CFG" \
+                docker:28-cli sh -c "$$RELOCATE" yagra-relocate "$$ID" "$$BY" "$$RMODE" "$$RM" "$$RT" "$$RI" "$$RD" "$$RHOST" "$$RPORT" "$$RUSER" "$$RDIR" "$$RAUTH" >/dev/null \
+                || reject_relocation "$$ID" "could not start the relocation container"
               return
               ;;
             refresh)

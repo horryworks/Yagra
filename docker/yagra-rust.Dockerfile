@@ -132,7 +132,13 @@ RUN --mount=type=cache,target=/app/target \
 # so a deployment installed from published images had nothing at that path — Docker created an empty
 # DIRECTORY there, nats got a directory as its `-c` argument, and the bus never started. `yagra-core
 # bus-cert` copies it out of the image onto the bus volume, so there is nothing to fetch.
+#
+# `yagra-relocate.sh` and its README travel the same way for the same reason again (ADR-121): the
+# relocation container copies them out of the *running* core image into the archive it builds, so
+# the restore procedure on the new host is the one that shipped with the deployment being moved.
 RUN cp scripts/yagra-backup.sh /app/yagra-backup.sh \
+ && cp scripts/yagra-relocate.sh /app/yagra-relocate.sh \
+ && cp scripts/RELOCATION-README.md /app/RELOCATION-README.md \
  && cp docker/nats/nats-server.conf /app/nats-server.conf
 
 # ── prebuilt — take binaries compiled outside by scripts/flash-build.sh (BIN_SRC=prebuilt) ──
@@ -160,7 +166,7 @@ COPY --chmod=0755 yagra-core yagra-poller /app/
 # stages must offer them at the same path: the runtime stage below copies from whichever won, and
 # must not know which that was. Getting this wrong breaks ONLY the flash path, because BuildKit
 # never evaluates the stage it did not select.
-COPY docker-compose.deploy.yml docker-compose.poller.yml yagra-backup.sh nats-server.conf /app/
+COPY docker-compose.deploy.yml docker-compose.poller.yml yagra-backup.sh nats-server.conf yagra-relocate.sh RELOCATION-README.md /app/
 
 # ── The selector. BuildKit builds only the stage this resolves to. ──
 FROM ${BIN_SRC} AS bins
@@ -177,8 +183,14 @@ ARG TARGETARCH=amd64
 # Best-effort: the report PDF path degrades to a 503 at runtime if wkhtmltopdf is missing, so a
 # transient download/install failure must NOT fail the image build (and block the gated deploy). The
 # fetch+install is wrapped so only ca-certificates is a hard requirement; the rest logs and continues.
+#
+# ⚠️ `openssh-client` is here for a reason that has nothing to do with core (ADR-121 decision 13):
+# the relocation container runs `ssh` from THIS image. The updater sidecar is stock `docker:28-cli`
+# and `apk add` fails on an air-gapped host, so the one image a deployment is guaranteed to already
+# have is the one that must carry the client. It is deliberately NOT purged with wget below — and
+# core itself never executes it. The poller stage does not install it and must not.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && apt-get install -y --no-install-recommends ca-certificates wget openssh-client \
     && ( wget -q "https://github.com/wkhtmltopdf/packaging/releases/download/${WKHTMLTOPDF_VERSION}/wkhtmltox_${WKHTMLTOPDF_VERSION}.bookworm_${TARGETARCH}.deb" -O /tmp/wkhtmltox.deb \
          && apt-get install -y --no-install-recommends /tmp/wkhtmltox.deb \
          || echo "WARN: wkhtmltopdf install skipped — report PDF export will return 503 at runtime" ) \
@@ -225,7 +237,7 @@ COPY --from=bins /app/yagra-core /usr/local/bin/yagra-core
 # `docker-compose.poller.yml` is here too, and not by symmetry: the site bundle core builds for a
 # remote poller (ADR-065 Inc.4) puts this exact file in the archive, so the composition a site runs
 # is the one that shipped with the core it will talk to.
-COPY --from=bins /app/docker-compose.deploy.yml /app/docker-compose.poller.yml /app/yagra-backup.sh /app/nats-server.conf /usr/share/yagra/
+COPY --from=bins /app/docker-compose.deploy.yml /app/docker-compose.poller.yml /app/yagra-backup.sh /app/nats-server.conf /app/yagra-relocate.sh /app/RELOCATION-README.md /usr/share/yagra/
 USER yagra
 EXPOSE 8080
 # Liveness: the binary probes its own /healthz (dependency-free — the slim runtime has no curl/wget).

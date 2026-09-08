@@ -5,15 +5,26 @@
 # rollback procedure for any destructive migration; a procedure nobody has executed end to end is
 # an assumption. This restores a backup into a THROWAWAY stack and asserts four things:
 #
-#   1. /readyz returns 200                      — the core starts against the restored data
+#   1. core reports itself healthy               — the core starts against the restored data
 #   2. the node count matches the manifest       — the configuration came back
-#   3. every credential still DECRYPTS           — the KEK came back, and matches the ciphertext
+#   3. every sealed secret still DECRYPTS        — the KEK came back, and matches the ciphertext
 #   4. the audit_log row count matches           — the "who changed what" trail survived
 #
 # Assertion 3 is the one that cannot be inferred. A database restore can look perfect — right row
 # counts, healthy API, no errors — while the key-encryption key is a different one, in which case
 # every stored credential is permanently unreadable and nothing says so until the next poll fails.
-# `GET /api/v1/credentials/health` exists for this check.
+#
+# 🚨 THIS SCRIPT DID NOT RUN AT ALL BETWEEN ITS FIRST RELEASE AND 2026-09-08. Assertions 1 and 3
+# were asked over HTTP with `wget` **inside the core container**, and the runtime image ships no
+# HTTP client — so `/readyz` never answered and the credential check could never authenticate.
+# ADR-040's deliverable "a backup can be restored" was red for its whole life, and this file was
+# the only thing that could have said so. Both now go through core's own subcommands
+# (`yagra-core healthcheck`, `yagra-core verify-secrets`), which need no client, no port, no
+# account and no token — that is why they are subcommands (ADR-121 decision 6).
+#
+# Assertion 3 also got WIDER in the repair: `verify-secrets` opens every sealed row in all nine
+# tables — credentials, notification channels, OIDC, LDAP, forwarding, LLM, both TLS configs and
+# the callout key — where the old check saw only `credentials`.
 #
 # A backup with zero credentials reports SKIPPED for assertion 3, not PASS. A verification script
 # that has only ever printed PASS on a vacuous case has verified nothing.
@@ -38,6 +49,10 @@ PROD_PROJECT="${PROD_PROJECT:-yagra}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.deploy.yml}"
 PG_USER="${PG_USER:-yagra}"
 PG_DB="${PG_DB:-yagra}"
+# The bootstrap admin password this throwaway stack is seeded with. Nothing logs in any more —
+# both HTTP assertions became core subcommands — but it is still set rather than left to the
+# image default, because a verify stack that comes up with a guessable admin account is one more
+# thing to be careless about on a host that also has the production one.
 VERIFY_ADMIN_PW="verify-$(date -u +%s)-$RANDOM"
 
 PASS=0; FAIL=0; SKIP=0
@@ -135,6 +150,12 @@ KEK_CID="$(dc ps -aq core)"
 [ -n "$KEK_CID" ] || die "could not create the core container to seed the KEK volume"
 docker cp "$BACKUP_DIR/kek/kek" "$KEK_CID:/kek/key" 2>/dev/null \
   || die "could not write the KEK into the verify stack's kek volume"
+# `docker cp` carries the source file's mode, and `yagra-backup.sh` writes it 0400 owned by
+# whoever ran the backup. `kek-init` leaves 0444, which is what core (uid 10001) reads it as — so
+# without this the restored stack starts and cannot open a single credential, which is exactly the
+# failure assertion 3 exists to catch and would have blamed on the key rather than on this line.
+docker run --rm -v "${PROJECT}_kekdata:/kek" busybox:stable chmod 0444 /kek/key >/dev/null 2>&1 \
+  || log "could not normalise the KEK's mode (non-fatal; assertion 3 will say if it mattered)"
 log "KEK restored"
 
 dc exec -T postgres psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS $PG_DB WITH (FORCE);" >/dev/null
@@ -162,24 +183,16 @@ echo "[4/7] starting core at $TARGET_TAG (migrations run forward)"
 dc up -d core >/dev/null
 API=""
 for _ in $(seq 1 60); do
-  if dc exec -T core sh -c 'wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1'; then API=up; break; fi
+  # `yagra-core healthcheck` is the container's own HEALTHCHECK: it probes /healthz from inside and
+  # exits 0 or 1. No client, no port to publish, no token. (This used to shell out to `wget`, which
+  # the runtime image does not have — see the note at the top of this file.)
+  if dc exec -T core yagra-core healthcheck >/dev/null 2>&1; then API=up; break; fi
   sleep 2
 done
 
 # ── 5-7. Assertions ─────────────────────────────────────────────────────────────────────────────
 echo "[5/7] asserting"
-if [ "$API" = up ]; then ok "/readyz returned 200"; else bad "/readyz never returned 200 within 120s"; fi
-
-api_get() { dc exec -T core sh -c "wget -qO- --header='Authorization: Bearer $1' http://127.0.0.1:8080$2" 2>/dev/null || true; }
-
-TOKEN=""
-if [ "$API" = up ]; then
-  LOGIN="$(dc exec -T core sh -c \
-    "wget -qO- --header='Content-Type: application/json' \
-     --post-data='{\"username\":\"admin\",\"password\":\"$VERIFY_ADMIN_PW\"}' \
-     http://127.0.0.1:8080/api/v1/auth/login" 2>/dev/null || true)"
-  TOKEN="$(printf '%s' "$LOGIN" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
-fi
+if [ "$API" = up ]; then ok "core reports itself healthy"; else bad "core never became healthy within 120s"; fi
 
 # Node count straight from the database: it is the restored artefact, and this avoids a failed
 # login turning a real data check into an inconclusive one.
@@ -197,25 +210,29 @@ else
   bad "audit_log has ${GOT_AUDIT:-unreadable} rows, manifest says $WANT_AUDIT"
 fi
 
-echo "[6/7] asserting credentials decrypt"
-if [ "${WANT_CREDS:-0}" = "0" ]; then
+echo "[6/7] asserting secrets decrypt"
+# `yagra-core verify-secrets` reads the KEK and the nine sealed tables directly and prints one line
+# of JSON: {"total":N,"decryptable":M,...}. It needs no account and no HTTP, which is what makes
+# this assertion runnable at all.
+SEC="$(dc exec -T core yagra-core verify-secrets 2>/dev/null || true)"
+TOTAL="$(printf '%s' "$SEC" | sed -n 's/.*"total":\([0-9]*\).*/\1/p' | head -1)"
+DECRYPTABLE="$(printf '%s' "$SEC" | sed -n 's/.*"decryptable":\([0-9]*\).*/\1/p' | head -1)"
+if [ -z "$TOTAL" ]; then
+  bad "'yagra-core verify-secrets' returned nothing usable: ${SEC:-empty}"
+elif [ "$TOTAL" = "0" ]; then
   # Deliberately not a PASS. Nothing was proved about the KEK, and reporting green here is how a
   # verification script comes to be trusted for something it never checked.
-  skip "the backup contains no credentials — the KEK was NOT exercised"
-elif [ -z "$TOKEN" ]; then
-  bad "could not authenticate to check credential health (admin password not the one this script set?)"
+  skip "the restored database holds no sealed secrets — the KEK was NOT exercised"
+elif [ "$DECRYPTABLE" != "$TOTAL" ]; then
+  bad "only $DECRYPTABLE of $TOTAL sealed secrets decrypt — the restored KEK does not match the ciphertext"
 else
-  HEALTH="$(api_get "$TOKEN" /api/v1/credentials/health)"
-  TOTAL="$(printf '%s' "$HEALTH" | sed -n 's/.*"total":\([0-9]*\).*/\1/p')"
-  DECRYPTABLE="$(printf '%s' "$HEALTH" | sed -n 's/.*"decryptable":\([0-9]*\).*/\1/p')"
-  if [ -z "$TOTAL" ]; then
-    bad "credential health endpoint returned nothing usable: ${HEALTH:-empty}"
-  elif [ "$TOTAL" != "$WANT_CREDS" ]; then
-    bad "credential count is $TOTAL, manifest says $WANT_CREDS"
-  elif [ "$DECRYPTABLE" != "$TOTAL" ]; then
-    bad "only $DECRYPTABLE of $TOTAL credentials decrypt — the restored KEK does not match the ciphertext"
+  # The count from the manifest is checked separately and is a *narrower* number: it counted the
+  # `credentials` table only, while `total` spans all nine sealed tables. So it is a floor here,
+  # not an equality — an equality would fail on every deployment that has a notification channel.
+  if [ -n "${WANT_CREDS:-}" ] && [ "$TOTAL" -lt "$WANT_CREDS" ] 2>/dev/null; then
+    bad "$TOTAL sealed secrets came back but the manifest recorded $WANT_CREDS credentials alone"
   else
-    ok "all $TOTAL credentials decrypt with the restored KEK"
+    ok "all $TOTAL sealed secrets decrypt with the restored KEK"
   fi
 fi
 

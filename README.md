@@ -338,6 +338,12 @@ Read the release notes for the version you are moving to before you press it. A 
 withdraw the guarantee for itself and ask you to install fresh instead; when one does, its notes
 say so under **Breaking changes**, along with what a fresh install costs.
 
+**Moving to a new server is one click too.** **Settings ▸ Move to another server** copies the whole
+deployment — encryption key, accounts, alert history and all — onto a fresh Linux host over SSH,
+installing Docker there if it is missing. Or build the archive, download it, and run one command on
+the new box. See [DEPLOYMENT.md](DEPLOYMENT.md#relocation); the archive holds every secret this
+deployment stores, so treat it as you would the key itself.
+
 The WebUI is HTTPS by default. Core generates a self-signed certificate on first start, so your
 browser will warn once — import a real one at **Settings ▸ TLS** and it takes effect in seconds
 without a restart.

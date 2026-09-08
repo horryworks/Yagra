@@ -494,6 +494,117 @@ impl CredentialStore {
     }
 }
 
+/// Every table that stores an envelope-sealed secret, in migration order.
+///
+/// Written down here rather than derived at runtime because `yagra-core verify-secrets` runs
+/// against a *restored* database and has to be able to say "nine tables, N rows, all of them
+/// opened" — a scan that discovered its own subject could report success over a table it never
+/// looked at, which is the one answer a relocation must not accept (ADR-121 decision 6). It is
+/// pinned to `migrations/` by `sealed_tables_match_the_migrations`, so it cannot fall behind.
+///
+/// The five sealed columns are spelled identically in all nine (`key_id`, `wrapped_dek`,
+/// `dek_nonce`, `ciphertext`, `ct_nonce`); only `credentials.key_id` is `BIGINT`, and two tables
+/// (`forward_destinations`, `llm_config`) allow the whole set to be NULL, meaning "no secret".
+pub(crate) const SEALED_TABLES: [&str; 9] = [
+    "credentials",
+    "notification_channels",
+    "oidc_providers",
+    "forward_destinations",
+    "llm_config",
+    "ldap_config",
+    "web_tls_config",
+    "bus_tls_config",
+    "bus_callout_config",
+];
+
+/// How many sealed rows one table holds, and how many of them this KEK opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SealedCount {
+    pub total: u64,
+    pub decryptable: u64,
+}
+
+/// The whole answer `yagra-core verify-secrets` prints: per table and in total.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SealedReport {
+    pub tables: Vec<(&'static str, SealedCount)>,
+}
+
+impl SealedReport {
+    pub fn total(&self) -> u64 {
+        self.tables.iter().map(|(_, c)| c.total).sum()
+    }
+
+    pub fn decryptable(&self) -> u64 {
+        self.tables.iter().map(|(_, c)| c.decryptable).sum()
+    }
+
+    /// One line of JSON on stdout — the shape `yagra-relocate.sh` and
+    /// `yagra-restore-verify.sh` both read with `sed`, so keep the two top-level keys first.
+    pub fn to_json(&self) -> String {
+        let per: Vec<String> = self
+            .tables
+            .iter()
+            .map(|(name, c)| {
+                format!(
+                    "\"{name}\":{{\"total\":{},\"decryptable\":{}}}",
+                    c.total, c.decryptable
+                )
+            })
+            .collect();
+        format!(
+            "{{\"total\":{},\"decryptable\":{},\"tables\":{{{}}}}}",
+            self.total(),
+            self.decryptable(),
+            per.join(",")
+        )
+    }
+}
+
+/// Count the sealed rows in every table of [`SEALED_TABLES`] and how many of them `kek` opens.
+///
+/// Reads only — it never migrates and never writes, because its caller is pointed at a database
+/// that has just been restored on another host and the question is whether the key travelled with
+/// it. A row whose sealed columns are NULL (the two all-or-none tables) is not counted at all: it
+/// holds no secret, so it can neither be opened nor be evidence that the key is wrong.
+pub(crate) async fn count_sealed(pool: &PgPool, kek: Kek) -> anyhow::Result<SealedReport> {
+    let cipher = EnvelopeCipher::new(kek);
+    let mut report = SealedReport::default();
+    for table in SEALED_TABLES {
+        // The table name is a compile-time literal from the constant above, never input.
+        let sql = format!(
+            "SELECT key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce \
+             FROM {table} WHERE wrapped_dek IS NOT NULL"
+        );
+        let rows = sqlx::query(&sql)
+            .fetch_all(pool)
+            .await
+            .with_context(|| format!("read sealed rows from {table}"))?;
+        let mut count = SealedCount::default();
+        for row in rows {
+            count.total += 1;
+            // `credentials.key_id` is BIGINT and the other eight are INTEGER; ask for the wide one
+            // first and fall back rather than branching on the table name.
+            let key_id = match row.try_get::<i64, _>("key_id") {
+                Ok(v) => v,
+                Err(_) => i64::from(row.try_get::<i32, _>("key_id")?),
+            };
+            let sealed = SealedSecret {
+                key_id: u32::try_from(key_id).unwrap_or(0),
+                wrapped_dek: row.try_get("wrapped_dek")?,
+                dek_nonce: row.try_get("dek_nonce")?,
+                ciphertext: row.try_get("ciphertext")?,
+                ct_nonce: row.try_get("ct_nonce")?,
+            };
+            if cipher.open(&sealed).is_ok() {
+                count.decryptable += 1;
+            }
+        }
+        report.tables.push((table, count));
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +788,94 @@ mod tests {
             "these decode an INTEGER key_id as i64, which fails the whole row at runtime and \
              degrades to an empty read:\n  {}",
             offenders.join("\n  ")
+        );
+    }
+
+    /// The list must be the schema's, not a memory of it: a table that gains sealed columns and is
+    /// missing here is a table `verify-secrets` never looks at, and its silence would read as
+    /// "every secret travelled" (ADR-121 decision 6).
+    #[test]
+    fn sealed_tables_match_the_migrations() {
+        use std::collections::BTreeSet;
+        use std::path::Path;
+
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+        let mut declared: BTreeSet<String> = BTreeSet::new();
+        for entry in std::fs::read_dir(&dir).expect("migrations/ is readable") {
+            let path = entry.expect("a readable directory entry").path();
+            if path.extension().is_none_or(|x| x != "sql") {
+                continue;
+            }
+            let sql = std::fs::read_to_string(&path).expect("migration is readable");
+            // Whitespace is collapsed for the same reason `sql_tables::vocabulary` collapses it:
+            // `CREATE TABLE` and `IF NOT EXISTS` are split across lines in several migrations.
+            let flat = sql
+                .to_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            for tail in flat.split("create table ").skip(1) {
+                let tail = tail.strip_prefix("if not exists ").unwrap_or(tail);
+                let name: String = tail
+                    .chars()
+                    .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+                    .collect();
+                // Only this statement's own body counts — the next `create table` starts another.
+                if !name.is_empty() && tail[name.len()..].contains("wrapped_dek") {
+                    declared.insert(name);
+                }
+            }
+        }
+        assert!(
+            declared.len() >= 9,
+            "only {} tables with sealed columns found in migrations/ — the scan stopped matching, \
+             and a scan that sees nothing is indistinguishable from a schema that is fine",
+            declared.len()
+        );
+        let listed: BTreeSet<String> = SEALED_TABLES.iter().map(|t| (*t).to_owned()).collect();
+        assert_eq!(
+            declared, listed,
+            "SEALED_TABLES and migrations/ disagree about which tables hold sealed secrets"
+        );
+    }
+
+    /// What `yagra-core verify-secrets` answers, against a real database: the right KEK opens what
+    /// it sealed, and a substituted one opens nothing while counting the same rows. The second half
+    /// is the point — a relocation that lost the KEK must report `decryptable < total`, not an
+    /// error and not an empty read.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn count_sealed_separates_the_right_kek_from_a_substituted_one(pool: PgPool) {
+        let right: Kek = Arc::new(StaticKeyProvider::single([7u8; 32]));
+        let wrong: Kek = Arc::new(StaticKeyProvider::single([8u8; 32]));
+
+        let empty = count_sealed(&pool, right.clone()).await.unwrap();
+        assert_eq!(empty.total(), 0, "a migrated database holds no sealed rows");
+        assert_eq!(
+            empty.tables.len(),
+            SEALED_TABLES.len(),
+            "every table is reported even when it is empty"
+        );
+
+        let store = CredentialStore::new(pool.clone(), right.clone());
+        store
+            .create("lab-v2c", "snmp_v2c", b"public")
+            .await
+            .unwrap();
+
+        let ok = count_sealed(&pool, right).await.unwrap();
+        assert_eq!((ok.total(), ok.decryptable()), (1, 1));
+        assert!(
+            ok.to_json().starts_with("{\"total\":1,\"decryptable\":1,"),
+            "the two top-level keys come first, because two shell scripts read them with sed: {}",
+            ok.to_json()
+        );
+
+        let bad = count_sealed(&pool, wrong).await.unwrap();
+        assert_eq!(
+            (bad.total(), bad.decryptable()),
+            (1, 0),
+            "the row is still counted; only the opening fails"
         );
     }
 }

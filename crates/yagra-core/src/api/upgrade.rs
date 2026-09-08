@@ -360,6 +360,31 @@ pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::Po
         .collect()
 }
 
+/// The updater sidecar's own state, from its heartbeat.
+///
+/// Split out of [`upgrade_status`] because the relocation page asks exactly the same question
+/// about exactly the same container (ADR-121): it is one sidecar, and two screens describing its
+/// health from two hand-written copies would eventually describe it differently.
+pub(crate) fn updater_info(
+    upgrade: &crate::upgrade::UpgradeRepo,
+    beat: Option<&crate::upgrade::UpdaterHeartbeat>,
+    fresh: bool,
+) -> UpdaterInfo {
+    UpdaterInfo {
+        installed: upgrade.installed(),
+        present: beat.is_some(),
+        fresh,
+        repo: beat.map(|h| h.repo.clone()),
+        last_seen: beat.map(|h| h.written_at),
+        check_interval_secs: beat.map(|h| h.check_interval_secs),
+        allow_bundle: beat.is_some_and(|h| h.allow_bundle),
+        bundle_max_bytes: beat
+            .filter(|h| h.allow_bundle)
+            .map(|_| upgrade.bundle_max_bytes()),
+        paused: beat.is_some_and(|h| h.paused),
+    }
+}
+
 /// The body of [`get_upgrade`], shared with `get_system_health(section="upgrade")`.
 ///
 /// Split out rather than duplicated so the MCP surface answers with the REST route's own type —
@@ -393,20 +418,7 @@ pub(crate) async fn upgrade_status(
     Ok(UpgradeStatusResponse {
         enabled: mechanism_ready,
         upgrade_enabled: switched_on,
-        updater: UpdaterInfo {
-            installed: upgrade.installed(),
-            present: beat.is_some(),
-            fresh,
-            repo: beat.as_ref().map(|h| h.repo.clone()),
-            last_seen: beat.as_ref().map(|h| h.written_at),
-            check_interval_secs: beat.as_ref().map(|h| h.check_interval_secs),
-            allow_bundle: beat.as_ref().is_some_and(|h| h.allow_bundle),
-            bundle_max_bytes: beat
-                .as_ref()
-                .filter(|h| h.allow_bundle)
-                .map(|_| upgrade.bundle_max_bytes()),
-            paused: beat.as_ref().is_some_and(|h| h.paused),
-        },
+        updater: updater_info(upgrade, beat.as_ref(), fresh),
         current: RunningBuild {
             core_version: p.core_version.to_owned(),
             source_ref: p.source_ref,
@@ -1035,6 +1047,16 @@ pub(super) async fn reachable(
         return Err(ApiError::conflict(
             "upgrade_in_progress",
             "an upgrade is already running",
+        ));
+    }
+    // The other direction of the same rule (ADR-121). A relocation drives `docker compose` on this
+    // deployment too — it stops the event and flow stores to copy them — and it runs in a
+    // container an `up -d --remove-orphans` would kill. The relocation edge refuses the mirror
+    // case, so neither can start on top of the other.
+    if crate::relocation::is_running(upgrade) {
+        return Err(ApiError::conflict(
+            "relocation_in_progress",
+            "a relocation is running; wait for it to finish",
         ));
     }
     Ok(())

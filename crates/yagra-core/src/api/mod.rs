@@ -69,6 +69,9 @@ pub(crate) mod pools;
 mod preferences;
 mod profiles;
 pub(crate) mod rca;
+/// Moving this whole deployment to another server (ADR-121). Named apart from `config_bundle`,
+/// which moves a configuration and carries no secret.
+pub(crate) mod relocation;
 pub(crate) mod reports;
 pub(crate) mod retention;
 #[cfg(test)]
@@ -419,6 +422,9 @@ pub fn router(state: ApiState) -> Router {
         // The bus certificate and the remote-poller switch (ADR-065), in `api/bus.rs`.
         .merge(bus::routes())
         .merge(upgrade::routes())
+        // Moving the whole deployment to another server (ADR-121). Beside the upgrade routes
+        // because it is the same sidecar and the same hand-off volume.
+        .merge(relocation::routes())
         .merge(oidc::routes())
         .merge(system::routes())
         // The support-bundle download (ADR-045). Its own module because its guard is the union of
@@ -588,7 +594,16 @@ fn changes_monitoring_config(path: &str) -> bool {
         || path == "/api/v1/event-rules/test"
         || path == "/api/v1/llm/test"
         || path == "/api/v1/settings/ldap/test"
-        || path == "/api/v1/meraki/orgs/discover")
+        || path == "/api/v1/meraki/orgs/discover"
+        // Relocation (ADR-121). All three are real writes, and none of them changes what this
+        // deployment monitors: the request builds an archive of the current configuration, the
+        // download reads that file back, and the delete removes it. Nothing a rebuild reads moves
+        // — which is exactly the judgement this doc comment asks for, rather than the verb.
+        //
+        // They stay audited, and here that is the whole point: the download is the one API
+        // response in this product that carries secrets.
+        || path == "/api/v1/system/relocation"
+        || path == "/api/v1/system/relocation/archive")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA

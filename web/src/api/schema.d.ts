@@ -3672,6 +3672,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/relocation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the relocation mechanism can do, and what it is doing. */
+        get: operations["get_relocation"];
+        put?: never;
+        /**
+         * Build a relocation archive, and — unless the mode says otherwise — send it and restore it.
+         * @description Hands the request to the privileged updater and returns immediately; the work outlives this
+         *     request by minutes. Poll `GET` for the outcome.
+         */
+        post: operations["start_relocation"];
+        /** Delete the archive and any staged credentials. */
+        delete: operations["delete_relocation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/relocation/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Download the archive.
+         * @description 🚨 This is the one endpoint in the API that returns secrets. See the module doc.
+         */
+        post: operations["download_archive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/relocation/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the relocation has printed so far, including the restore on the other host. */
+        get: operations["get_relocation_log"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/support-bundle": {
         parameters: {
             query?: never;
@@ -4650,6 +4710,17 @@ export interface components {
              */
             target_tag: string;
         };
+        /** @description The archive waiting on this host, when there is one. */
+        ArchiveInfo: {
+            filename: string;
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            modified_at: number;
+            /** Format: int64 */
+            size_bytes: number;
+        };
         /**
          * @description What an audit entry was, as the log's filterable vocabulary.
          * @enum {string}
@@ -4680,6 +4751,18 @@ export interface components {
              */
             scope: components["schemas"]["Scope"];
             username: string;
+        };
+        /** @description How to authenticate to it. **Write-only**: nothing here is ever returned. */
+        AuthSpec: {
+            /** @description `password` or `key`. */
+            kind: components["schemas"]["SshAuthKind"];
+            /** @description The password, or the OpenSSH private key, depending on `kind`. */
+            secret: string;
+            /**
+             * @description The sudo password, when it differs from the login password. Only ever needed to install
+             *     Docker on the target.
+             */
+            sudo_password?: string | null;
         };
         /** @description Where to send the browser to start the SSO handshake. */
         AuthorizeUrl: {
@@ -8742,6 +8825,141 @@ export interface components {
             /** @description The release tag. */
             tag: string;
         };
+        /** @description The run id, so the page can tell its own request from one another admin started. */
+        RelocationAccepted: {
+            id: string;
+        };
+        /** @description The tail of the run's log. */
+        RelocationLog: {
+            lines: string[];
+        };
+        /**
+         * @description What a relocation request is asking for.
+         * @enum {string}
+         */
+        RelocationMode: "archive" | "preflight" | "push";
+        /** @description What the operator asked for. */
+        RelocationRequest: {
+            auth?: null | components["schemas"]["AuthSpec"];
+            /**
+             * @description Carry the three Yagra images. Off by default — the new host usually pulls them. Needed when
+             *     it cannot reach the registry, or when this deployment runs images from a private one.
+             */
+            include_images?: boolean;
+            /**
+             * @description Carry the metrics (VictoriaMetrics). On by default — a monitoring system that arrives with
+             *     no history is a new deployment, not a moved one.
+             */
+            include_metrics?: boolean;
+            /**
+             * @description Carry the events and flows (VictoriaLogs, ClickHouse). On by default, and the one option
+             *     with a running cost: both stores are stopped for the minutes the copy takes.
+             */
+            include_tier2?: boolean;
+            /**
+             * @description Install Docker on the target if it has none. On by default; needs `sudo` and internet
+             *     there, and runs the official `get.docker.com` script as root.
+             */
+            install_docker?: boolean;
+            /** @description `archive` builds one and stops, `preflight` only checks the target, `push` does everything. */
+            mode?: components["schemas"]["RelocationMode"];
+            target?: null | components["schemas"]["TargetSpec"];
+        };
+        /**
+         * @description `relocation.json` as the sidecar writes it.
+         *
+         *     Every field but the first four is `#[serde(default)]`, for the reason
+         *     [`UpgradeRepo::read_json`](crate::upgrade) is lenient: a file written by a newer sidecar must
+         *     degrade to "less detail", never to a 500 on the one screen an operator has open while something
+         *     is already going wrong. It holds **no secret** — see the module doc.
+         */
+        RelocationRun: {
+            /** @description Whether this run installed Docker on the target. */
+            docker_installed?: boolean;
+            /** @description The archive on this host, while there is one. */
+            filename?: string | null;
+            /**
+             * Format: int64
+             * @description Unix seconds, once it has ended.
+             */
+            finished_at?: number | null;
+            /** @description The target's SSH host-key fingerprint, once it has been seen. */
+            host_key_fingerprint?: string | null;
+            /** @description The run id core minted. */
+            id: string;
+            /** @description Whether the three Yagra images were included. */
+            images?: boolean;
+            /** @description What to show the operator about this stage. */
+            message?: string | null;
+            /** @description Whether metrics were included. */
+            metrics?: boolean;
+            /** @description The mode the request asked for, as its token. */
+            mode: string;
+            /** @description The account that asked for it. */
+            requested_by?: string | null;
+            /**
+             * Format: int64
+             * @description Its size in bytes.
+             */
+            size_bytes?: number | null;
+            /**
+             * @description Which part of the work this is: `start`, `preflight`, `docker`, `backup`, `files`,
+             *     `images`, `tier2`, `archive`, `push`, or `validate` for a request refused before it began.
+             */
+            stage: string;
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            started_at: number;
+            /** @description `requested` · `running` · `done` · `failed`. */
+            state: string;
+            /** @description The host being moved to, absent for a plain archive. */
+            target_host?: string | null;
+            /** @description Where the new deployment answers, once it does. */
+            target_url?: string | null;
+            /** @description Whether the event and flow stores were included. */
+            tier2?: boolean;
+        };
+        /** @description Everything the relocation page needs in one read. */
+        RelocationStatusResponse: {
+            archive?: null | components["schemas"]["ArchiveInfo"];
+            /**
+             * @description Whether a relocation can be started from here: the updater is deployed, alive, the
+             *     operator's switch is on, **and** it supports the command.
+             */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description Roughly how large the archive will be. ⚠️ **Partial** — the database plus the metrics.
+             *     Core cannot see the event, flow or image volumes; only the sidecar can, and its check is
+             *     the one that can stop a run.
+             */
+            estimate_bytes?: number | null;
+            /**
+             * Format: int64
+             * @description Free bytes on the filesystem holding the hand-off volume.
+             */
+            free_bytes?: number | null;
+            /**
+             * Format: int64
+             * @description [`estimate_bytes`](Self::estimate_bytes) doubled: the copy, and the tar of the copy.
+             */
+            needed_bytes?: number | null;
+            run?: null | components["schemas"]["RelocationRun"];
+            /**
+             * @description Whether this deployment's updater declares the command at all. `false` on an updater that
+             *     predates ADR-121 — the next upgrade recreates it.
+             */
+            supported: boolean;
+            /** @description The updater container's own state, from the same reading the Upgrade page uses. */
+            updater: components["schemas"]["UpdaterInfo"];
+            /**
+             * @description The operator's switch, as stored. Shared with the upgrade mechanism: one sidecar, one
+             *     switch — turning upgrades off turns this off too, which is deliberate.
+             */
+            upgrade_enabled: boolean;
+        };
         /**
          * @description A report's contents: the answer, the evidence it was grounded in, and the language it was
          *     requested in.
@@ -9362,6 +9580,11 @@ export interface components {
          * @enum {string}
          */
         SourceKind: "syslog" | "trap" | "flow";
+        /**
+         * @description How the operator authenticates to the target host.
+         * @enum {string}
+         */
+        SshAuthKind: "password" | "key";
         /** @description A node returning no fresh data (silent failure / blind spot). */
         StaleNode: {
             name: string;
@@ -9576,6 +9799,20 @@ export interface components {
             table: string;
             /** Format: int32 */
             updated: number;
+        };
+        /** @description Where to send this deployment. */
+        TargetSpec: {
+            /** @description A directory name — not a path — created under that account's home. */
+            dir?: string;
+            /** @description Host name or IP of the new server. */
+            host: string;
+            /**
+             * Format: int32
+             * @description SSH port. 22 unless the site moved it.
+             */
+            port?: number;
+            /** @description The account to log in as. It needs `sudo` only when Docker has to be installed. */
+            user: string;
         };
         /**
          * @description A channel's notification-template override. Both fields are replaced together; `null` or blank
@@ -25074,6 +25311,309 @@ export interface operations {
             };
             /** @description No such instance — resolved against the known set before any selector is built */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_relocation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The mechanism's state and the current run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelocationStatusResponse"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No upgrade mechanism is installed (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    start_relocation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RelocationRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted; the updater will carry it out */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelocationAccepted"];
+                };
+            };
+            /** @description A malformed target, or a push with no credentials */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem, ManageCredentials or ViewAudit */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A relocation or an upgrade is already running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The mechanism is absent, switched off, or too old for this command */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not enough free disk space to build the archive */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_relocation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem, ManageCredentials or ViewAudit */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description There was nothing to delete */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A relocation is running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No upgrade mechanism is installed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    download_archive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The relocation archive: a gzipped tar holding the KEK, a full PostgreSQL dump, the metrics, and this deployment's .env and composition. Treat it exactly as you would the KEK itself */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": unknown;
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem, ManageCredentials or ViewAudit */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description There is no archive on this host */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A relocation is running; the archive is not final yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No upgrade mechanism is installed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_relocation_log: {
+        parameters: {
+            query?: {
+                /** @description Lines from the end. Clamped to 1..=2000. */
+                tail?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tail of the run's log */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelocationLog"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No upgrade mechanism is installed */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

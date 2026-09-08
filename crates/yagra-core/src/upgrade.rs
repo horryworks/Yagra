@@ -129,6 +129,16 @@ pub struct UpdaterHeartbeat {
     /// block its upgrades on a version skew that resolves itself inside the same run.
     #[serde(default)]
     pub local_pollers: Option<Vec<String>>,
+    /// Whether this sidecar understands [`Command::Relocate`] (ADR-121 decision 5).
+    ///
+    /// Declared rather than assumed, and `#[serde(default)]` so an updater too old to know the
+    /// field reads as `false` — the safe direction, and the *only* safe direction here. An older
+    /// sidecar does not ignore a command it has never heard of: it writes a rejection into
+    /// `status.json`, which is the upgrade screen's file. So a core that asked anyway would dirty
+    /// the upgrade page with a failure about a different feature and then wait forever for a
+    /// `relocation.json` nothing is going to write.
+    #[serde(default)]
+    pub relocate: bool,
 }
 
 /// What core is asking the updater to do.
@@ -163,6 +173,20 @@ pub enum Command {
     /// an updater too old to know this command refuses it by name before reading anything else, so
     /// no old updater ever sees the extra lines. See [`REQUEST_SCHEMA`].
     Bus,
+    /// Build a relocation archive of this whole deployment, and — unless the mode says otherwise —
+    /// SSH it to a bare Linux host and restore it there (ADR-121).
+    ///
+    /// Here for the same reason as [`Command::Bus`]: the capability it needs is the socket, the
+    /// deployment directory and the volumes, which is exactly what this sidecar already holds and
+    /// what core deliberately does not. It is the only command whose report is **not**
+    /// `status.json` — it writes `relocation/relocation.json`, so a relocation can never be
+    /// mistaken for an upgrade by the screen watching either one.
+    ///
+    /// ⚠️ It carries the most extra fields of any command (mode, four option flags, and the SSH
+    /// target), and it carries **no secret at all**: the SSH password, key and sudo password are
+    /// written by core as 0600 files under `relocation/secret/` before the request appears, and
+    /// the sidecar passes them on as files. See [`crate::relocation`].
+    Relocate,
 }
 
 impl Command {
@@ -178,6 +202,7 @@ impl Command {
             Self::Bundle => "bundle",
             Self::Refresh => "refresh",
             Self::Bus => "bus",
+            Self::Relocate => "relocate",
         }
     }
 
@@ -190,10 +215,12 @@ impl Command {
     pub fn needs_tag(self) -> bool {
         match self {
             Self::Apply | Self::Bundle => true,
-            // Neither names a release: `refresh` re-reads the registry's tag list, and `bus`
+            // None of the three names a release: `refresh` re-reads the registry's tag list, `bus`
             // rewrites this deployment's own bus variables and recreates it at the version it is
-            // already running.
-            Self::Refresh | Self::Bus => false,
+            // already running, and `relocate` copies this deployment to another host at the
+            // version it is already running (ADR-121 decision 6 — the archive pins the tag it
+            // found, it never chooses one).
+            Self::Refresh | Self::Bus | Self::Relocate => false,
         }
     }
 }
@@ -870,6 +897,18 @@ impl UpgradeRepo {
     #[must_use]
     pub fn installed(&self) -> bool {
         self.dir.is_some()
+    }
+
+    /// The hand-off directory itself, for the one other feature that shares this volume.
+    ///
+    /// [`crate::relocation`] keeps its state in a `relocation/` subdirectory of the same volume,
+    /// because the sidecar that writes it is this one and it mounts nothing else. The accessor is
+    /// `pub(crate)` and returns a borrowed path rather than making the field public: a second
+    /// module reading files here is a deliberate arrangement between two named modules, not an
+    /// open door.
+    #[must_use]
+    pub(crate) fn hand_off_dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
     }
 
     /// Free space on the filesystem holding the hand-off volume, when it can be measured.
@@ -1677,7 +1716,7 @@ fn audit_action(run: &RunStatus) -> String {
 }
 
 /// A field name [`UpgradeRepo::request_with`] will write. Lowercase and underscores only.
-fn is_request_key(key: &str) -> bool {
+pub(crate) fn is_request_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 32
         && key
@@ -1690,7 +1729,7 @@ fn is_request_key(key: &str) -> bool {
 /// Alphanumerics and a handful of separators — enough for a mode word, a password and a host name,
 /// and short of anything a shell would treat specially. Empty is allowed: "this field is not
 /// applicable to this request" has to be expressible, and the sidecar tests for it.
-fn is_request_value(value: &str) -> bool {
+pub(crate) fn is_request_value(value: &str) -> bool {
     value.len() <= 128
         && value
             .bytes()
@@ -1729,7 +1768,7 @@ pub fn heartbeat_is_fresh(written_at: i64, check_interval_secs: u64, now: i64) -
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Every command core can write. Hand-written because Rust cannot enumerate variants; it is
@@ -1739,6 +1778,7 @@ mod tests {
         Command::Bundle,
         Command::Refresh,
         Command::Bus,
+        Command::Relocate,
     ];
 
     fn run_in_state(state: &str) -> RunStatus {
@@ -2050,7 +2090,7 @@ mod tests {
     ///
     /// Line-based, so offsets shrink but their **order** is unchanged: a check that compares two
     /// positions gets the same answer here as in the original.
-    fn without_comments(script: &str) -> String {
+    pub(crate) fn without_comments(script: &str) -> String {
         script
             .lines()
             .filter(|l| !l.trim_start().starts_with('#'))
@@ -2061,7 +2101,7 @@ mod tests {
     /// Every `docker run …` in the updater's script, each folded back into one string across its
     /// backslash-continued lines. A launch is only as safe as its whole argument list, so a scan
     /// that stopped at the first line would read every one of them as mountless.
-    fn docker_run_invocations(compose: &str) -> Vec<String> {
+    pub(crate) fn docker_run_invocations(compose: &str) -> Vec<String> {
         let compose = without_comments(compose);
         let mut out = Vec::new();
         let mut lines = compose.lines();
@@ -2093,7 +2133,7 @@ mod tests {
             .expect("the file ends with its configs");
         let mut body = compose[from..to].to_owned();
         let mut removed = String::new();
-        for name in ["APPLY", "BUS"] {
+        for name in ["APPLY", "BUS", "RELOCATE"] {
             let open = format!("<<'{name}'");
             let close = format!("\n        {name}\n");
             let start = body.find(&open).unwrap_or_else(|| {
@@ -2137,9 +2177,9 @@ mod tests {
             .expect("the deploy composition holds the updater's script");
         let launches = docker_run_invocations(&compose);
         assert!(
-            launches.len() >= 2,
-            "expected at least the apply and the bus launch, found {} — a scan that has stopped \
-             matching reports the same 'nothing wrong' as a healthy script",
+            launches.len() >= 3,
+            "expected at least the apply, the bus and the relocation launch, found {} — a scan \
+             that has stopped matching reports the same 'nothing wrong' as a healthy script",
             launches.len()
         );
         for launch in &launches {
@@ -2152,7 +2192,7 @@ mod tests {
         }
         // Named, so a launch deleted rather than fixed cannot satisfy the floor on its own.
         let all = launches.concat();
-        for path in ["yagra-upgrade-", "yagra-bus-"] {
+        for path in ["yagra-upgrade-", "yagra-bus-", "yagra-relocate-"] {
             assert!(
                 all.contains(path),
                 "no container the updater launches is `{path}…`"

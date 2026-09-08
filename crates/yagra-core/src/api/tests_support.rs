@@ -104,7 +104,21 @@ pub(crate) fn private_state() -> ApiState {
 /// sweeps — are still asynchronous: assert the accepted `202` and the row that records it, not the
 /// outcome.
 pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
-    live_state_with_env_community(pool, None).await
+    live_state_with(pool, None, None).await
+}
+
+/// [`live_state`], with a hand-off directory the upgrade and relocation mechanisms can use.
+///
+/// Its own entry point for the same reason [`live_state_with_env_community`] is: production reads
+/// `YAGRA_UPGRADE_DIR` from the **process** environment, so a test cannot set it without setting
+/// it for every test running beside it. Without this, `live_state`'s `UpgradeRepo` has no
+/// directory, every write to those two mechanisms answers 503 `upgrade_unsupported`, and a suite
+/// made only of refusals is exactly what `guards.rs` exists to stop (ADR-115/ADR-121).
+pub(crate) async fn live_state_with_upgrade_dir(
+    pool: sqlx::PgPool,
+    dir: std::path::PathBuf,
+) -> ApiState {
+    live_state_with(pool, None, Some(dir)).await
 }
 
 /// [`live_state`], with the deployment-wide SNMP community the scheduler falls back to.
@@ -119,6 +133,18 @@ pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
 pub(crate) async fn live_state_with_env_community(
     pool: sqlx::PgPool,
     env_community: Option<String>,
+) -> ApiState {
+    live_state_with(pool, env_community, None).await
+}
+
+/// The one live-mode builder the three entry points above are shells over.
+///
+/// Each of the two options exists because production reads it from the **process** environment,
+/// which a test cannot set for itself alone — see the two doc comments above.
+async fn live_state_with(
+    pool: sqlx::PgPool,
+    env_community: Option<String>,
+    upgrade_dir: Option<std::path::PathBuf>,
 ) -> ApiState {
     use crate::alerts::Notifier;
     use crate::secrets::CredentialStore;
@@ -312,7 +338,16 @@ pub(crate) async fn live_state_with_env_community(
         ))),
         webtls: Some(crate::webtls::open(pool.clone(), kek.clone())),
         bus_tls: Some(crate::bus_cert::open(pool.clone(), kek)),
-        upgrade: Some(crate::upgrade::open(pool)),
+        // With a directory this is a real hand-off volume a write can be accepted into; without
+        // one it is `open`'s environment read, which in the test binary means no mechanism at all.
+        upgrade: Some(match upgrade_dir {
+            Some(dir) => Arc::new(crate::upgrade::UpgradeRepo::new(
+                pool,
+                Some(dir),
+                crate::upgrade::DEFAULT_BUNDLE_MAX_BYTES,
+            )),
+            None => crate::upgrade::open(pool),
+        }),
         upgrade_bus: Some(upgrade_bus),
         // No Prometheus recorder in the test binary, and no bus collector: both are recorded as
         // omissions by the support bundle rather than faked into looking present.

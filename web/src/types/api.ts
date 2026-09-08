@@ -953,6 +953,19 @@ export type UpgradeRunAccepted = components['schemas']['RunAccepted'];
 /** What a press of "bring the pollers up to this build" set in motion (ADR-051 Inc.4). */
 export type AlignPollersAccepted = components['schemas']['AlignAccepted'];
 
+/** Moving this whole deployment to another server (`GET /api/v1/system/relocation`, ADR-121).
+ *  Admin-only: the artefact it describes carries the KEK and every stored credential. */
+export type RelocationStatus = components['schemas']['RelocationStatusResponse'];
+/** One relocation, as the updater sidecar reports it. */
+export type RelocationRun = components['schemas']['RelocationRun'];
+/** The tail of a relocation's log, including the restore on the other host. */
+export type RelocationLog = components['schemas']['RelocationLog'];
+/** The accepted relocation (`POST /api/v1/system/relocation`). */
+export type RelocationAccepted = components['schemas']['RelocationAccepted'];
+/** What to ask for. ⚠️ Its `auth` field carries a password or a private key — never store it, and
+ *  never put it anywhere the app persists (`store.ts`, the URL, `localStorage`). */
+export type RelocationRequest = components['schemas']['RelocationRequest'];
+
 // ── Host self-observability (Yagra monitoring its own core + pollers) ──────────
 
 /** Usage of one watched filesystem (or a store-size proxy). `size_bytes === 0` ⇒ capacity unknown

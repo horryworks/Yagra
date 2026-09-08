@@ -35,6 +35,7 @@ import enSettingsTokens from './locales/en/settings-tokens.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
 import enSettingsAi from './locales/en/settings-ai.json';
 import enSettingsTls from './locales/en/settings-tls.json';
+import enSettingsRelocation from './locales/en/settings-relocation.json';
 import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import enRca from './locales/en/rca.json';
 import enMetrics from './locales/en/metrics.json';
@@ -66,6 +67,7 @@ export const NAMESPACES = [
   'settings-forwarding',
   'settings-ai',
   'settings-tls',
+  'settings-relocation',
   'settings-upgrade',
   'rca',
   'metrics',
@@ -112,6 +114,7 @@ void i18n
         'settings-forwarding': enSettingsForwarding,
         'settings-ai': enSettingsAi,
         'settings-tls': enSettingsTls,
+        'settings-relocation': enSettingsRelocation,
         'settings-upgrade': enSettingsUpgrade,
         rca: enRca,
         metrics: enMetrics,

@@ -10,6 +10,46 @@
 
 ## Unreleased
 
+### New Features
+
+- **Move a whole deployment to another server, from the WebUI** (ADR-121). **Settings ▸ Move to
+  another server** copies this deployment — the encryption key, every account, every threshold and
+  the whole alert and audit history — onto a fresh Linux host over SSH, and starts it there on the
+  same version. If that host has no Docker, Yagra installs it with the official `get.docker.com`
+  script (a checkbox, on by default; it needs `sudo` and internet there). The fallback is the same
+  archive downloaded and carried by hand: unpack it on the new host and run `./yagra-relocate.sh`.
+  Either way the restore checks itself — the one-shot containers exited cleanly, core is healthy,
+  the build matches, the audit rows are all there, and **every sealed secret opens on the new
+  host**, which is the failure a restore can otherwise hide.
+  🚨 **The archive holds the key and the database together, so it is every secret this deployment
+  stores in one file.** It is the only endpoint in the API that returns secrets, it needs
+  ManageSystem + ManageCredentials + ViewAudit + Admin, and both the request and the download are
+  audited. Treat the file exactly as you would the encryption key.
+  ⚠️ It refuses a host that already has a Yagra deployment on it — it never replaces, merges with or
+  upgrades one. Ticking "carry events and flows" stops those two stores for the minutes the copy
+  takes; polling, alerting and notifications keep running throughout.
+
+### Bug Fixes
+
+- **`scripts/yagra-restore-verify.sh` works.** It asked two of its four questions over HTTP with
+  `wget` *inside the core container*, and the runtime image ships no HTTP client — so the script
+  could never pass, and ADR-040's "a backup can be restored" deliverable had been red since it was
+  written. Both now go through core's own subcommands: `yagra-core healthcheck` for liveness and
+  the new `yagra-core verify-secrets` for the credential check, neither of which needs a port, an
+  account or a token. The credential check also got **wider**: it opens every sealed row in all
+  nine tables that hold one, where it used to see `credentials` alone.
+
+### Improvements
+
+- **`yagra-core verify-secrets`** — a new subcommand that prints, as one line of JSON, how many
+  sealed secrets this deployment holds and how many the mounted KEK can open. It reads the database
+  and the key directly, so it answers on a host where nothing is logged in yet. `decryptable` below
+  `total` means the key and the database do not match, which is the one restore failure that
+  otherwise looks healthy until the next poll.
+- **The pre-upgrade backup can be told to leave the metrics out** (`YAGRA_BACKUP_SKIP_METRICS=1`),
+  and records that as an omission in its manifest exactly as an unreachable store would be. Set by
+  a relocation whose operator unticked the metrics; the upgrade path never sets it.
+
 ## v0.3.12 — A broken database URL says so at once instead of blaming PostgreSQL for a minute
 
 ### Bug Fixes
