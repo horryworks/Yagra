@@ -615,6 +615,54 @@ mod tests {
         without_comments(&raw)
     }
 
+    /// The restore's strongest verdict has to read the number it claims to read.
+    ///
+    /// 🚨 `verify-secrets` answers
+    /// `{"total":9,"decryptable":9,"tables":{…,"bus_callout_config":{"total":1,…}}}`, and
+    /// `sed 's/.*"total":\(…\).*/\1/'` is greedy — over the whole line it returns the **last**
+    /// match, which is a one-row table. Measured 2026-09-09: a relocation that had opened all nine
+    /// reported `1/1 sealed secrets open` and **passed**, because 1 equals 1.
+    ///
+    /// Two things stop it, and the second is the one that generalises. Read the summary, which is
+    /// everything before `"tables"`. And floor the total against the credential count the archive
+    /// already recorded, so a misread fails loudly instead of approving itself.
+    /// `yagra-restore-verify.sh` carried that floor from the day it was written and would have
+    /// failed on the same JSON; `yagra-relocate.sh` had the identical `sed` and no floor. Two
+    /// implementations of one check, and only the one with the floor was honest.
+    #[test]
+    fn the_secret_verdict_reads_the_summary_and_floors_what_it_counted() {
+        for (name, script) in [
+            ("yagra-relocate.sh", restore_script()),
+            (
+                "yagra-restore-verify.sh",
+                without_comments(
+                    &std::fs::read_to_string("../../scripts/yagra-restore-verify.sh")
+                        .expect("the restore verifier ships beside the relocation script"),
+                ),
+            ),
+        ] {
+            assert!(
+                script.contains(r#"SUMMARY="${SEC%%\"tables\"*}""#),
+                "{name} reads the verify-secrets line whole; `.*\"total\":` is greedy, so it takes \
+                 the last per-table count instead of the deployment's"
+            );
+            let bad = script
+                .lines()
+                .filter(|l| l.contains(r#""$SEC" | sed -n 's/.*"total""#))
+                .count();
+            assert_eq!(
+                bad, 0,
+                "{name} still greps the whole answer for a total rather than the summary"
+            );
+        }
+        let s = restore_script();
+        assert!(
+            s.contains(r#""$TOTAL" -lt "$CRED_COUNT""#),
+            "the relocation restore has no floor on what it counted, so a misread total approves \
+             itself exactly as it did on 2026-09-09"
+        );
+    }
+
     /// A local overlay may name things that exist only on the host it came from, so it is checked
     /// before it is obeyed — and set aside, never deleted.
     ///

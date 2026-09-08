@@ -376,10 +376,28 @@ say "  $GOT_AUDIT audit rows"
 # 🚨 The verdict that matters: are the secrets *openable* on this host? A database full of
 # credentials nobody can decrypt looks exactly like a healthy one until the first poll.
 SEC="$(dc exec -T core yagra-core verify-secrets 2>/dev/null || true)"
-TOTAL="$(printf '%s' "$SEC" | sed -n 's/.*"total":\([0-9]*\).*/\1/p' | head -1)"
-OPENED="$(printf '%s' "$SEC" | sed -n 's/.*"decryptable":\([0-9]*\).*/\1/p' | head -1)"
+# 🚨 Read the SUMMARY, not the last table. The answer is
+#   {"total":9,"decryptable":9,"tables":{"credentials":{"total":6,...},"bus_callout_config":{"total":1,...}}}
+# and `sed 's/.*"total":\(...\).*/\1/'` is greedy, so it returns the LAST match -- the trailing
+# one-row table. Measured 2026-09-09: a relocation that had in fact opened all nine reported
+# "1/1 sealed secrets open" and passed, because 1 equals 1. An under-reading check is the
+# dangerous kind -- it is indistinguishable from one that looked at everything and approved it.
+SUMMARY="${SEC%%\"tables\"*}"
+TOTAL="$(printf '%s' "$SUMMARY" | sed -n 's/.*"total":\([0-9]*\).*/\1/p' | head -1)"
+OPENED="$(printf '%s' "$SUMMARY" | sed -n 's/.*"decryptable":\([0-9]*\).*/\1/p' | head -1)"
 [ -n "$TOTAL" ] || result_bad verify_failed \
 "'yagra-core verify-secrets' produced no answer, so it is unknown whether the key travelled."
+# The floor, and it is the half that would have caught the misread above. `verify-secrets` spans
+# nine tables while the manifest counts one of them, so this can only ever be `-lt` — but a total
+# below the credentials alone means the NUMBER is wrong, not that secrets went missing, and a
+# verdict computed from a wrong number is not a verdict. `yagra-restore-verify.sh` has carried this
+# floor since it was written and would have failed loudly on the same JSON; this script did not,
+# and passed. Two implementations of one check, and only the one with the floor was honest.
+if [ -n "${CRED_COUNT:-}" ] && [ "$TOTAL" -lt "$CRED_COUNT" ] 2>/dev/null; then
+  result_bad verify_misread \
+"Only $TOTAL sealed secrets were counted, but the archive holds $CRED_COUNT credentials by itself.
+The check is reading the wrong number, so its verdict about the key means nothing."
+fi
 [ "$OPENED" = "$TOTAL" ] || result_bad secrets_unreadable \
 "$OPENED of $TOTAL sealed secrets could be opened on this host — the KEK does not match the database."
 say "  $OPENED/$TOTAL sealed secrets open"

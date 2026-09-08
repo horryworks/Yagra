@@ -215,8 +215,13 @@ echo "[6/7] asserting secrets decrypt"
 # of JSON: {"total":N,"decryptable":M,...}. It needs no account and no HTTP, which is what makes
 # this assertion runnable at all.
 SEC="$(dc exec -T core yagra-core verify-secrets 2>/dev/null || true)"
-TOTAL="$(printf '%s' "$SEC" | sed -n 's/.*"total":\([0-9]*\).*/\1/p' | head -1)"
-DECRYPTABLE="$(printf '%s' "$SEC" | sed -n 's/.*"decryptable":\([0-9]*\).*/\1/p' | head -1)"
+# 🚨 The summary, not the last table. `.*"total":` is greedy, so run against the whole line it
+# returns the trailing per-table count instead of the deployment's. The floor below would have
+# caught that here — it did not in `yagra-relocate.sh`, which had the identical sed and no floor,
+# and shipped a "1/1 sealed secrets open" verdict over nine (2026-09-09).
+SUMMARY="${SEC%%\"tables\"*}"
+TOTAL="$(printf '%s' "$SUMMARY" | sed -n 's/.*"total":\([0-9]*\).*/\1/p' | head -1)"
+DECRYPTABLE="$(printf '%s' "$SUMMARY" | sed -n 's/.*"decryptable":\([0-9]*\).*/\1/p' | head -1)"
 if [ -z "$TOTAL" ]; then
   bad "'yagra-core verify-secrets' returned nothing usable: ${SEC:-empty}"
 elif [ "$TOTAL" = "0" ]; then
