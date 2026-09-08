@@ -178,9 +178,14 @@ echo "  postgres reached Healthy after              : ${PG_WAIT:-not reported}"
 echo "  bus-cert-init retry lines                   : ${RETRIES:-unknown}"
 if [ "${HAS_HC:-0}" -gt 0 ] 2>/dev/null; then
   if [ "${RETRIES:-1}" = "0" ]; then
-    echo "  ⇒ healthcheck present and zero retries: the wait covered initdb (ADR-065 Inc.10 decision 2)"
+    echo "  ⇒ healthcheck present, zero retries. ⚠️ On a host this fast that is NOT evidence the"
+    echo "    healthcheck did anything: measured on this same box, the retry count was 0 with the"
+    echo "    healthcheck (v0.3.12) AND without it (v0.3.11), because initdb finished in ~12 s —"
+    echo "    well inside the client's own 60 s budget. The number only becomes evidence on a host"
+    echo "    where initdb outlasts that budget (ADR-065 Inc.10 decision 2 is still unproven)."
   else
-    echo "  ⇒ healthcheck present but ${RETRIES} retries: the wait did NOT fully cover initdb on this host"
+    echo "  ⇒ healthcheck present but ${RETRIES} retries: the wait did NOT fully cover initdb here."
+    echo "    THIS is the informative case — it means initdb outlasted the healthcheck's own budget."
   fi
 else
   echo "  ⇒ no healthcheck in this composition, so the retry count says nothing about ADR-065 Inc.10."
