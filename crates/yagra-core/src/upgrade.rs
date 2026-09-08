@@ -2335,6 +2335,69 @@ pub(crate) mod tests {
         );
     }
 
+    /// `handle()` removes the request file partway down, and `field` reads that same file. So a
+    /// value read below the removal is silently the empty string — not an error, not a warning, an
+    /// arm that refuses its own valid input.
+    ///
+    /// 🚨 This is not hypothetical and it is not cheap. Relocation shipped this way (2026-09-09):
+    /// the `relocate)` arm read all ten of its fields inside the arm, every one came back empty,
+    /// and the WebUI reported "unsupported relocation mode" for a request whose mode was `push`.
+    /// The `bus)` arm is the reason it looked right — its fields ARE hoisted, and copying the arm's
+    /// shape without copying that is the whole mistake.
+    ///
+    /// Reading a field early costs one `sed` per command. Reading it late costs a feature.
+    #[test]
+    fn no_field_is_read_after_the_request_file_is_removed() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let (body, _) = updater_body_without_its_procedures(&compose);
+        let body = without_comments(&body);
+
+        let start = body
+            .find("handle() {")
+            .expect("the updater defines handle()");
+        // The closing brace sits at handle()'s own indentation, so that is where the body ends.
+        let indent: String = body[..start]
+            .rsplit('\n')
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .collect();
+        let rest = &body[start..];
+        let end = rest
+            .find(&format!("\n{indent}}}"))
+            .expect("handle() is closed at its own indentation");
+        let handle = &rest[..end];
+
+        let cut = handle
+            .find(r#"rm -f "$$D/request""#)
+            .expect("handle() removes the request file it read");
+        let (before, after) = handle.split_at(cut);
+
+        let late: Vec<&str> = after
+            .lines()
+            .filter(|l| l.contains("$$(field "))
+            .map(str::trim)
+            .collect();
+        assert!(
+            late.is_empty(),
+            "these lines call `field` after handle() removed the request file, so each reads an \
+             empty string and the arm refuses valid input without saying why:\n  {}",
+            late.join("\n  ")
+        );
+
+        // Count what was inspected. A detector that found nothing to check would otherwise pass
+        // exactly like one that checked everything and approved it.
+        let hoisted = before.matches("$$(field ").count();
+        assert!(
+            hoisted >= 15,
+            "only {hoisted} `field` reads were found above the removal; the scan is looking in the \
+             wrong place, because handle() hoists at least the request's own six plus bus's three \
+             plus relocation's ten"
+        );
+    }
+
     /// `refresh` must not write a status file, and only the shell can be asked whether it does.
     ///
     /// `status.json` means "a run", and three things read it: the Upgrade page's last-run card, the

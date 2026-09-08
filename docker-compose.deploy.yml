@@ -1614,6 +1614,14 @@ services:
           TAG=$$(field tag); BY=$$(field requested_by)
           BUSMODE=$$(field bus_mode)
           BUSCPW=$$(field bus_core_password); BUSPPW=$$(field bus_poller_password)
+          RMODE=$$(field mode); RM=$$(field include_metrics); RT=$$(field include_tier2)
+          RI=$$(field include_images); RD=$$(field install_docker)
+          RHOST=$$(field target_host); RPORT=$$(field target_port); RUSER=$$(field target_user)
+          RDIR=$$(field target_dir); RAUTH=$$(field auth)
+          # EVERY `field` call has to be above this line: the arms run after it, and `field` reads
+          # the file it removes. Read late and the value is silently empty, which is how relocation
+          # shipped refusing itself with "unsupported relocation mode" (2026-09-09).
+          # `no_field_is_read_after_the_request_file_is_removed` is what now says so.
           rm -f "$$D/request"
           CMDSAFE=unknown; BUNDLE=
           # An upgrade replaces core but NOT this container, so a new core paired with an old
@@ -1698,10 +1706,8 @@ services:
             relocate)
               CMDSAFE=relocate
               R="$$D/relocation"; mkdir -p "$$R"; chown 10001:10001 "$$R" 2>/dev/null || true
-              RMODE=$$(field mode); RM=$$(field include_metrics); RT=$$(field include_tier2)
-              RI=$$(field include_images); RD=$$(field install_docker)
-              RHOST=$$(field target_host); RPORT=$$(field target_port); RUSER=$$(field target_user)
-              RDIR=$$(field target_dir); RAUTH=$$(field auth)
+              # RMODE/RM/RT/RI/RD/RHOST/RPORT/RUSER/RDIR/RAUTH were read at the top of handle(),
+              # because by the time this arm runs the request file is gone.
               if paused; then reject_relocation "$$ID" "the upgrade mechanism is switched off in Settings ▸ Upgrade"; return; fi
               [ -n "$$WORKDIR" ] || { reject_relocation "$$ID" "cannot locate the compose project directory"; return; }
               case "$$RMODE" in archive|preflight|push) ;; *) reject_relocation "$$ID" "unsupported relocation mode"; return ;; esac
