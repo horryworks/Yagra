@@ -883,6 +883,9 @@ export type PollerInfo = components['schemas']['PollerInfo'];
  *  go unmonitored. */
 export type PoolSummary = components['schemas']['PoolSummary'];
 
+/** How many nodes and folders one takeover or restore re-pointed (ADR-107 増分 4). */
+export type PoolTakeoverResult = components['schemas']['PoolTakeoverResult'];
+
 /** The `GET /api/v1/pollers` body: the registered poller fleet + the per-pool summary. */
 export type PollersResponse = components['schemas']['PollersResponse'];
 

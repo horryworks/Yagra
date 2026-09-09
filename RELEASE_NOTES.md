@@ -41,6 +41,15 @@
 
 ### Improvements
 
+- **A pool that has lost its poller can be covered from another one, and put back** (ADR-107).
+  Settings ▸ Pollers offers it on a pool whose nodes have nothing to poll them — most obviously
+  after moving a deployment to a new server, where the sites do not follow until their bundles are
+  reissued. Every node and folder is recorded before it moves, so "Put them back" returns each one
+  to exactly the assignment it had, including the ones that were inheriting rather than assigned.
+  ⚠️ **It is never the default and nothing does it automatically.** A site has its own poller
+  because this deployment usually cannot reach its network; standing in from here makes every
+  unreachable device report as down, which replaces one accurate "this pool is unmonitored" alert
+  with a false outage per node. The dialog says so and makes you choose the destination.
 - **`YAGRA_PULL_POLICY` chooses whether Compose re-pulls the images on every start.** The default
   is unchanged (`always`), so nothing about an existing deployment moves. It exists because images
   can now arrive without a registry behind them: a relocation that carries the three images loads

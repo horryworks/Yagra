@@ -14969,6 +14969,116 @@
         }
       }
     },
+    "/api/v1/pools/{name}/restore": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "`POST /api/v1/pools/{name}/restore` — put a covered pool's members back.",
+        "description": "Each member returns to **its own** recorded assignment, which for an inheriting node means no\nassignment at all. Restoring them all to the pool's name would pin rows that were never pinned,\nleaving a deployment the takeover never promised to be reversible about.\n\nA member whose pool a person has since changed by hand keeps that change — a later human\ndecision outranks this bookkeeping — but its record is dropped either way, so a pool cannot stay\nmarked as covered forever.\n\nRestoring is deliberately **not** automatic when the site's poller returns: 22 nodes moving on\ntheir own the moment a link comes back is its own surprise (ADR-107 増分 4 やらないこと).",
+        "operationId": "restore_pool",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "the pool that was being covered for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "how many nodes and folders went back",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolTakeoverResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "not a usable pool name"
+          },
+          "401": {
+            "description": "not signed in"
+          },
+          "403": {
+            "description": "ManageSystem required"
+          },
+          "503": {
+            "description": "no admin state"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/pools/{name}/takeover": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "`POST /api/v1/pools/{name}/takeover` — point this pool's members at one that can poll them.",
+        "description": "The second of the two things an operator can do about a pool with no live poller. The first —\nbring the site back — no endpoint can do for them: the site's own box has to be handed a new\nbundle, and this deployment cannot reach it. This one is reversible; `restore_pool` puts every\nmember back where this found it, **including the ones that were inheriting rather than\nassigned**, which is why the record is a table and not a column.\n\n🚨 **This is never the right thing to do merely because a pool is uncovered.** A site poller\nusually exists because core cannot reach those devices; covering them from a host that cannot\nsee them turns one accurate pool alert into N false `unreachable` ones — worse than the silence\nit replaces, and indistinguishable from a real outage. It is offered to a person looking at the\nalert, who can test reachability from this host first (ADR-107 増分 4 決定 4). Nothing calls it\nautomatically and nothing defaults to it.",
+        "operationId": "take_over_pool",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "the pool that has no live poller",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeOverPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "how many nodes and folders were re-pointed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolTakeoverResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "the destination is not a usable pool name, or is this pool"
+          },
+          "401": {
+            "description": "not signed in"
+          },
+          "403": {
+            "description": "ManageSystem required"
+          },
+          "503": {
+            "description": "no admin state"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/preferences": {
       "get": {
         "tags": [
@@ -30398,6 +30508,13 @@
           "live"
         ],
         "properties": {
+          "covered_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool currently polling this one's members on its behalf, if an operator asked for that\n(ADR-107 増分 4). `None` is the ordinary case.\n\n⚠️ Its members are **already** in that pool — this says the move is recorded and can be\nundone, not that it is pending. A UI that reads it as \"will be\" would offer a takeover that\nhas already happened."
+          },
           "description": {
             "type": [
               "string",
@@ -30449,6 +30566,13 @@
           "mode"
         ],
         "properties": {
+          "covered_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool currently polling this one's members on its behalf (ADR-107 増分 4), if an operator\nasked for that. `null` is the ordinary case.\n\n⚠️ A covered pool will usually **also** read `nodes: 0` with no warning — its members are\nsomewhere else, which is the point. The two fields answer different questions: `warning` is\n\"is anything here unmonitored\", this is \"is somebody standing in for it\"."
+          },
           "description": {
             "type": [
               "string",
@@ -30480,6 +30604,28 @@
               "null"
             ],
             "description": "`\"nodes_without_live_poller\"` when the pool has nodes but no live poller, else `null`."
+          }
+        }
+      },
+      "PoolTakeoverResult": {
+        "type": "object",
+        "description": "What one call re-pointed.",
+        "required": [
+          "nodes",
+          "folders"
+        ],
+        "properties": {
+          "folders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Folders re-pointed.",
+            "minimum": 0
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes re-pointed.",
+            "minimum": 0
           }
         }
       },
@@ -33251,6 +33397,19 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "TakeOverPoolRequest": {
+        "type": "object",
+        "description": "Where a covered pool's members should be pointed.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The pool to point them at — one that has a live poller, usually the co-located one."
           }
         }
       },

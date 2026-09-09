@@ -1223,6 +1223,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("POST", "/api/v1/pools", INFRA, NO_MCP_WRITE),
     ("PUT", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
     ("DELETE", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
+    // Cover a pool that has lost its poller, and stop covering it (ADR-107 増分 4). Both move
+    // every node and folder the pool holds, which is the same blast radius as the poller move
+    // below and takes the same ManageSystem + global scope: there is no narrower unit of "this
+    // pool's members". Writes, so MCP stays out by decision.
+    ("POST", "/api/v1/pools/:name/takeover", INFRA, NO_MCP_WRITE),
+    ("POST", "/api/v1/pools/:name/restore", INFRA, NO_MCP_WRITE),
     // Move a poller to another pool (ADR-107 Inc.2). Core owns `pollers.pool`, so this takes
     // effect immediately and nothing at the site is touched. Refuses a build that cannot follow a
     // pool change, and refuses to strand the source pool's nodes unless the caller says so.

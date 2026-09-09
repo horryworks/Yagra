@@ -131,7 +131,14 @@ function PoolCard({
             {t('pollers.noLivePoller')}
           </span>
         )}
-        {idle && <span className="pool-idle">{t('pollers.pool.idle')}</span>}
+        {idle && !pool.covered_by && <span className="pool-idle">{t('pollers.pool.idle')}</span>}
+        {/* ADR-107 増分 4. This has to be said on the card, because a covered pool otherwise looks
+            like a brand-new one: its members are all somewhere else, so it reads 0 nodes, 0 live
+            pollers and no warning. "Just created" and "being stood in for" are the same picture
+            without this — which is why `idle` gives way to it above rather than sitting beside it. */}
+        {pool.covered_by && (
+          <span className="pool-idle">{t('pollers.pool.coveredBadge', { pool: pool.covered_by })}</span>
+        )}
       </button>
       {actions.length > 0 && (
         <ActionMenu
@@ -270,6 +277,134 @@ function EditPoolModal({
   );
 }
 
+
+/** Point a pool's members at one that still has a poller, or put them back (ADR-107 増分 4).
+ *
+ *  🚨 **The confirmation is the feature, not politeness.** A site poller usually exists because this
+ *  deployment cannot reach those devices; covering them from here replaces one accurate "pool has no
+ *  poller" alert with a false `unreachable` for every node in it — worse than the silence, and
+ *  indistinguishable from a real outage. So the destination is chosen explicitly, there is no
+ *  default, and the text says what the operator is asserting. */
+function CoverPoolModal({
+  pool,
+  pools,
+  onClose,
+  onDone,
+}: {
+  pool: PoolSummary;
+  pools: PoolSummary[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const [to, setTo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Only pools that can actually poll, and never the one being covered for. Offering a pool with no
+  // live poller would move the nodes from one silence to another.
+  const targets = pools.filter((p) => p.pool !== pool.pool && p.live_pollers > 0);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .takeOverPool(pool.pool, to)
+      .then(() => {
+        onDone();
+        onClose();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.pool.coverFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal
+      title={t('pollers.pool.coverTitle', { pool: pool.pool })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={busy || !to}>
+            {t('pollers.pool.coverConfirm')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <p>{t('pollers.pool.coverBody', { pool: pool.pool, count: pool.nodes })}</p>
+        <p className="form-warning">{t('pollers.pool.coverWarning')}</p>
+        <label className="form-label">
+          {t('pollers.pool.coverToLabel')}
+          <select className="field mono" value={to} onChange={(e) => setTo(e.target.value)}>
+            <option value="">{t('pollers.pool.coverToPlaceholder')}</option>
+            {targets.map((p) => (
+              <option key={p.pool} value={p.pool}>
+                {p.pool}
+              </option>
+            ))}
+          </select>
+        </label>
+        {targets.length === 0 && <FieldHint>{t('pollers.pool.coverNoTarget')}</FieldHint>}
+        <FieldHint>{t('pollers.pool.coverReversible')}</FieldHint>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/** Put a covered pool's members back where the takeover found them. */
+function RestorePoolModal({
+  pool,
+  onClose,
+  onDone,
+}: {
+  pool: PoolSummary;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .restorePool(pool.pool)
+      .then(() => {
+        onDone();
+        onClose();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.pool.restoreFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal
+      title={t('pollers.pool.restoreTitle', { pool: pool.pool })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={busy}>
+            {t('pollers.pool.restoreConfirm')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <p>{t('pollers.pool.restoreBody', { pool: pool.pool, to: pool.covered_by ?? '' })}</p>
+        <FieldHint>{t('pollers.pool.restoreHint')}</FieldHint>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
 /** Rename a pool — refused while any poller reports the old name (ADR-107 決定 6).
  *
  *  🚨 **This used to refuse while any poller reported the name, and no longer does.** A rename moves
@@ -1133,7 +1268,7 @@ export function PollersPage() {
   const [creatingPool, setCreatingPool] = useState(false);
   /** The pool a ⋮ action is open for, and which action. One state rather than three booleans so
    *  two dialogs can never be open at once. */
-  const [poolAction, setPoolAction] = useState<{ pool: PoolSummary; kind: 'edit' | 'rename' | 'delete' } | null>(null);
+  const [poolAction, setPoolAction] = useState<{ pool: PoolSummary; kind: 'edit' | 'rename' | 'delete' | 'cover' | 'restore' } | null>(null);
   const { nodeName } = useEntityNames();
   /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
   const [drillId, setDrillId] = useState<string | null>(null);
@@ -1598,6 +1733,16 @@ export function PollersPage() {
                     ? [
                         { label: t('pollers.pool.editAction'), onSelect: () => setPoolAction({ pool: p, kind: 'edit' }) },
                         { label: t('pollers.pool.renameAction'), onSelect: () => setPoolAction({ pool: p, kind: 'rename' }) },
+                        // ADR-107 増分 4. Offered only in the state each one answers: cover a pool
+                        // that has members and nothing to poll them, restore one already covered.
+                        // Showing both always would put "stop covering" on 20 pools nobody is
+                        // covering, which reads as a feature that does nothing.
+                        ...(p.warning && !p.covered_by
+                          ? [{ label: t('pollers.pool.coverAction'), onSelect: () => setPoolAction({ pool: p, kind: 'cover' as const }) }]
+                          : []),
+                        ...(p.covered_by
+                          ? [{ label: t('pollers.pool.restoreAction'), onSelect: () => setPoolAction({ pool: p, kind: 'restore' as const }) }]
+                          : []),
                         { label: t('common:actions.delete'), onSelect: () => setPoolAction({ pool: p, kind: 'delete' }), danger: true },
                       ]
                     : []
@@ -1663,6 +1808,21 @@ export function PollersPage() {
             <RenamePoolModal
               pool={poolAction.pool}
               pollers={pollers}
+              onClose={() => setPoolAction(null)}
+              onDone={load}
+            />
+          )}
+          {poolAction?.kind === 'cover' && (
+            <CoverPoolModal
+              pool={poolAction.pool}
+              pools={pools}
+              onClose={() => setPoolAction(null)}
+              onDone={load}
+            />
+          )}
+          {poolAction?.kind === 'restore' && (
+            <RestorePoolModal
+              pool={poolAction.pool}
               onClose={() => setPoolAction(null)}
               onDone={load}
             />

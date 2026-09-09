@@ -76,6 +76,15 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     // name. Counting what still points at a pool is part of that refusal, not a second answer to
     // "who is in this pool": those live in nodes.rs and crate::pollers and stay there.
     ("pools.rs", &["pools", "nodes", "node_groups", "pollers"]),
+    // Covering a pool that lost its poller, reversibly (ADR-107 増分 4). It names the two member
+    // tables for the same reason `pools.rs` does — the move is the operation — and its own table
+    // because the record of where each member belongs is the only thing that makes it reversible.
+    // Deliberately NOT folded into `pools.rs`: that file answers "what is a pool and who is in
+    // it", this one answers "where did these come from and how do they get back".
+    (
+        "pool_takeover.rs",
+        &["pool_takeover", "nodes", "node_groups"],
+    ),
     ("interfaces.rs", &["interfaces"]),
     ("profiles.rs", &["profiles"]),
     ("settings.rs", &["app_settings"]),

@@ -189,6 +189,14 @@ pub(crate) struct PoolSummary {
     /// described — which is every pool that predates the `pools` table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+    /// The pool currently polling this one's members on its behalf (ADR-107 増分 4), if an operator
+    /// asked for that. `null` is the ordinary case.
+    ///
+    /// ⚠️ A covered pool will usually **also** read `nodes: 0` with no warning — its members are
+    /// somewhere else, which is the point. The two fields answer different questions: `warning` is
+    /// "is anything here unmonitored", this is "is somebody standing in for it".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    covered_by: Option<String>,
 }
 
 /// The `GET /api/v1/pollers` body: the fleet of pollers + the per-pool summary.
@@ -213,6 +221,7 @@ fn build_pollers_response(
     live: Vec<PollerView>,
     node_pools: std::collections::HashMap<String, usize>,
     described: Vec<crate::repo::PoolRow>,
+    covered: std::collections::BTreeMap<String, String>,
 ) -> PollersResponse {
     use std::collections::HashMap;
 
@@ -313,6 +322,7 @@ fn build_pollers_response(
             },
             warning: c.is_uncovered().then_some("nodes_without_live_poller"),
             description: desc_by_name.get(c.pool.as_str()).map(|d| (*d).to_owned()),
+            covered_by: covered.get(&c.pool).cloned(),
             pool: c.pool,
             nodes: c.nodes,
             live_pollers: c.live_pollers,
@@ -367,7 +377,20 @@ pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
         tracing::warn!(error = %e, "described pools list failed; showing counts only");
         Vec::new()
     });
-    build_pollers_response(inventory, live, node_pools, described)
+    // ADR-107 増分 4. Same degradation as the descriptions above and for the same reason: a page an
+    // operator opens because something is already wrong must not fail on a cosmetic read.
+    let covered = admin
+        .repo
+        .pool_takeovers()
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "pool takeover list failed; showing coverage only");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|t| (t.from_pool, t.to_pool))
+        .collect();
+    build_pollers_response(inventory, live, node_pools, described, covered)
 }
 
 /// Which poller currently polls a node — the node detail's "Polled by" fact.
@@ -1337,7 +1360,8 @@ mod tests {
         let inventory = vec![inv_row("p1", "default"), inv_row("p2", "default")];
         let mut node_pools = std::collections::HashMap::new();
         node_pools.insert("default".to_owned(), 10usize);
-        let resp = build_pollers_response(inventory, live, node_pools, Vec::new());
+        let resp =
+            build_pollers_response(inventory, live, node_pools, Vec::new(), Default::default());
 
         assert_eq!(
             resp.pollers
@@ -1395,6 +1419,7 @@ mod tests {
             vec![online],
             std::collections::HashMap::new(),
             Vec::new(),
+            Default::default(),
         );
         let p1 = &resp.pollers[0];
         assert_eq!(p1.cpu_pct, Some(40.0));
@@ -1407,6 +1432,7 @@ mod tests {
             vec![live_view("p2", "default", true)],
             std::collections::HashMap::new(),
             Vec::new(),
+            Default::default(),
         );
         assert_eq!(resp.pollers[0].cpu_pct, None);
         assert_eq!(resp.pollers[0].disk_used_pct, None);
@@ -1425,7 +1451,8 @@ mod tests {
         let mut node_pools = std::collections::HashMap::new();
         node_pools.insert("default".to_owned(), 10usize);
         node_pools.insert("legacy-pool".to_owned(), 4usize);
-        let resp = build_pollers_response(Vec::new(), live, node_pools, Vec::new());
+        let resp =
+            build_pollers_response(Vec::new(), live, node_pools, Vec::new(), Default::default());
 
         assert_eq!(
             resp.pools
@@ -1474,7 +1501,13 @@ mod tests {
         node_pools.insert("empty-and-unserved".to_owned(), 0usize);
 
         let coverage = crate::pool_coverage::coverage(&live, &node_pools, &[]);
-        let resp = build_pollers_response(Vec::new(), live.clone(), node_pools, Vec::new());
+        let resp = build_pollers_response(
+            Vec::new(),
+            live.clone(),
+            node_pools,
+            Vec::new(),
+            Default::default(),
+        );
 
         assert_eq!(
             resp.pools.len(),

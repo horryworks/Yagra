@@ -62,6 +62,7 @@ mod interfaces;
 mod listing;
 mod migrate;
 mod nodes;
+mod pool_takeover;
 mod pools;
 mod profiles;
 mod seed;
@@ -95,7 +96,8 @@ pub use nodes::TopologyRow;
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping
 // them would make `list_pools` and `pool_references` unnameable from outside `repo`.
 #[allow(unused_imports)]
-pub use pools::{PoolCarry, PoolReferences, PoolRow};
+pub use pool_takeover::{PoolTakeoverCounts, PoolTakeoverSummary};
+pub use pools::{PoolCarry, PoolRow};
 pub use profiles::ProfileSummary;
 
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].

@@ -4,12 +4,18 @@
 //!
 //! ## A pool is not one row, and this module is where that is reconciled
 //!
-//! Four things can say a pool exists, and the option list is their **union**:
+//! Five things can say a pool exists, and the option list is their **union**:
 //!
-//! 1. a row in `pools` — somebody described it deliberately (ADR-107, the newest of the four);
+//! 1. a row in `pools` — somebody described it deliberately (ADR-107);
 //! 2. a node assigned to it (`nodes.pool`);
 //! 3. a folder assigning it (`node_groups.pool`);
-//! 4. a live poller reporting it.
+//! 4. a live poller reporting it;
+//! 5. an outstanding takeover naming it as the pool being covered for (ADR-107 増分 4, the newest).
+//!
+//! ⚠️ **(5) is not decoration and it was added because the round-trip test failed without it.**
+//! Covering a pool moves every row that named it, so at that instant (2)–(4) all fall silent and
+//! the pool would drop out of this list — taking the "restore" affordance with it, since that hangs
+//! off the row. It is the same failure as `55816c6` below, one increment later.
 //!
 //! 🚨 **Reading only (1) would be the tempting simplification and it is wrong.** A deployment that
 //! has been running since before this table existed has pools of kinds 2–4 and no rows at all, and
@@ -29,7 +35,7 @@ use std::time::Instant;
 
 use axum::{
     extract::Path,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -39,7 +45,14 @@ use super::extract::{Admin, Caller, RequireManageSystem, RequireView};
 use super::ApiState;
 
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(list_pools, create_pool, update_pool, delete_pool))]
+#[openapi(paths(
+    list_pools,
+    create_pool,
+    update_pool,
+    delete_pool,
+    take_over_pool,
+    restore_pool
+))]
 pub(super) struct Doc;
 
 /// The pool routes, merged into `/api/v1` by [`super::router`].
@@ -50,6 +63,12 @@ pub(crate) fn routes() -> Router<ApiState> {
             "/api/v1/pools/:name",
             put(update_pool).delete(delete_pool_route),
         )
+        // ADR-107 増分 4. Two verbs on one pool rather than a `PUT :name` field, because these are
+        // events rather than state: "cover for this" and "stop covering" each move rows and record
+        // or forget why, and expressing them as a property of the pool would make an idempotent
+        // re-`PUT` re-take-over a pool a person had already restored.
+        .route("/api/v1/pools/:name/takeover", post(take_over_pool))
+        .route("/api/v1/pools/:name/restore", post(restore_pool))
 }
 
 // ── The option list ──────────────────────────────────────────────────────────
@@ -68,6 +87,14 @@ pub(crate) struct PoolOption {
     /// deployment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+    /// The pool currently polling this one's members on its behalf, if an operator asked for that
+    /// (ADR-107 増分 4). `None` is the ordinary case.
+    ///
+    /// ⚠️ Its members are **already** in that pool — this says the move is recorded and can be
+    /// undone, not that it is pending. A UI that reads it as "will be" would offer a takeover that
+    /// has already happened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    covered_by: Option<String>,
 }
 
 /// The pools that exist, for the assignment picker.
@@ -87,6 +114,7 @@ fn build_pool_options(
     node_pools: Vec<String>,
     group_pools: Vec<String>,
     live: &HashSet<String>,
+    covered: &std::collections::BTreeMap<String, String>,
 ) -> Vec<PoolOption> {
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut desc: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
@@ -107,11 +135,20 @@ fn build_pool_options(
         }
     }
     names.extend(live.iter().cloned());
+    // 🚨 The fifth source, and it is not decoration. Taking a pool over moves every node and folder
+    // that named it, so the moment the takeover succeeds none of sources 2–4 mention the pool any
+    // more and it **vanishes from this list** — taking the "restore" button with it, because the
+    // button hangs off the row. The pool exists precisely because something is being covered for
+    // it. Found by the round-trip test, which is the shape of the failure the module doc already
+    // warns about from ADR-009's `55816c6`: a pool assembled from members alone stops being
+    // reconciled the moment its last member moves away.
+    names.extend(covered.keys().cloned());
     names.remove(yagra_bus::DEFAULT_POOL);
 
     let option = |name: String| PoolOption {
         live: live.contains(&name),
         description: desc.get(&name).cloned(),
+        covered_by: covered.get(&name).cloned(),
         name,
     };
     std::iter::once(option(yagra_bus::DEFAULT_POOL.to_owned()))
@@ -162,8 +199,23 @@ pub(crate) async fn pool_options(admin: &super::AdminState) -> PoolOptions {
         Vec::new()
     });
     let live = admin.coordinator.live_pools(Instant::now());
+    // ADR-107 増分 4. Normally empty, and a small `GROUP BY` when it is not — this stays within the
+    // "one small table plus two indexed DISTINCTs" the doc above promises. It degrades to "no pool
+    // is marked covered" on a read error, the same way the other three do: a picker that refuses to
+    // render is worse than one that omits a badge.
+    let covered = admin
+        .repo
+        .pool_takeovers()
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "listing pool takeovers failed");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|t| (t.from_pool, t.to_pool))
+        .collect();
     PoolOptions {
-        pools: build_pool_options(described, node_pools, group_pools, &live),
+        pools: build_pool_options(described, node_pools, group_pools, &live, &covered),
     }
 }
 
@@ -463,6 +515,158 @@ async fn delete_pool_route(
     delete_pool(perm, admin, path).await
 }
 
+// ── Covering a pool that lost its poller (ADR-107 増分 4) ────────────────────
+
+/// Where a covered pool's members should be pointed.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct TakeOverPoolRequest {
+    /// The pool to point them at — one that has a live poller, usually the co-located one.
+    to: String,
+}
+
+/// What one call re-pointed.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct PoolTakeoverResult {
+    /// Nodes re-pointed.
+    nodes: u64,
+    /// Folders re-pointed.
+    folders: u64,
+}
+
+/// `POST /api/v1/pools/{name}/takeover` — point this pool's members at one that can poll them.
+///
+/// The second of the two things an operator can do about a pool with no live poller. The first —
+/// bring the site back — no endpoint can do for them: the site's own box has to be handed a new
+/// bundle, and this deployment cannot reach it. This one is reversible; `restore_pool` puts every
+/// member back where this found it, **including the ones that were inheriting rather than
+/// assigned**, which is why the record is a table and not a column.
+///
+/// 🚨 **This is never the right thing to do merely because a pool is uncovered.** A site poller
+/// usually exists because core cannot reach those devices; covering them from a host that cannot
+/// see them turns one accurate pool alert into N false `unreachable` ones — worse than the silence
+/// it replaces, and indistinguishable from a real outage. It is offered to a person looking at the
+/// alert, who can test reachability from this host first (ADR-107 増分 4 決定 4). Nothing calls it
+/// automatically and nothing defaults to it.
+#[utoipa::path(
+    post, path = "/api/v1/pools/{name}/takeover", tag = "system",
+    params(("name" = String, Path, description = "the pool that has no live poller")),
+    request_body = TakeOverPoolRequest,
+    responses(
+        (status = 200, description = "how many nodes and folders were re-pointed", body = PoolTakeoverResult),
+        (status = 400, description = "the destination is not a usable pool name, or is this pool"),
+        (status = 401, description = "not signed in"),
+        (status = 403, description = "ManageSystem required"),
+        (status = 503, description = "no admin state"),
+    ),
+    security(("bearer" = []))
+)]
+async fn take_over_pool(
+    _perm: RequireManageSystem,
+    caller: Caller,
+    admin: Admin,
+    Path(name): Path<String>,
+    Json(req): Json<TakeOverPoolRequest>,
+) -> ApiResult<Json<PoolTakeoverResult>> {
+    let from = validate_pool_name(&name)?;
+    let to = validate_pool_name(&req.to)?;
+    if from == to {
+        return Err(ApiError::bad_request(
+            "same_pool",
+            "the destination is the pool being covered for",
+        ));
+    }
+
+    // Who is in `from` — by *effective* pool, not by the column. ADR-107 増分 3: a node is in a
+    // pool three ways and the two no column records are the majority, so counting rows here would
+    // move a fraction of what the operator was shown and report success.
+    let resolver = super::util::pool_resolver(&admin).await;
+    let inventory =
+        crate::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices).await;
+    let members = resolver.members(&inventory, &from);
+
+    let counts = admin
+        .repo
+        .take_over_pool(
+            &to,
+            &caller.0.username,
+            crate::repo::PoolCarry {
+                from: &from,
+                fall_through: &members.fall_through,
+            },
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "take over pool", "failed to re-point the pool")
+        })?;
+
+    // 🚨 `warn`, not `info`. This is a person deliberately monitoring devices from somewhere that
+    // may not be able to see them, during an incident, and the audit row alone does not say how
+    // much moved.
+    tracing::warn!(
+        from = %from,
+        to = %to,
+        nodes = counts.nodes,
+        folders = counts.folders,
+        by = %caller.0.username,
+        "pool members covered from another pool"
+    );
+    Ok(Json(PoolTakeoverResult {
+        nodes: counts.nodes,
+        folders: counts.folders,
+    }))
+}
+
+/// `POST /api/v1/pools/{name}/restore` — put a covered pool's members back.
+///
+/// Each member returns to **its own** recorded assignment, which for an inheriting node means no
+/// assignment at all. Restoring them all to the pool's name would pin rows that were never pinned,
+/// leaving a deployment the takeover never promised to be reversible about.
+///
+/// A member whose pool a person has since changed by hand keeps that change — a later human
+/// decision outranks this bookkeeping — but its record is dropped either way, so a pool cannot stay
+/// marked as covered forever.
+///
+/// Restoring is deliberately **not** automatic when the site's poller returns: 22 nodes moving on
+/// their own the moment a link comes back is its own surprise (ADR-107 増分 4 やらないこと).
+#[utoipa::path(
+    post, path = "/api/v1/pools/{name}/restore", tag = "system",
+    params(("name" = String, Path, description = "the pool that was being covered for")),
+    responses(
+        (status = 200, description = "how many nodes and folders went back", body = PoolTakeoverResult),
+        (status = 400, description = "not a usable pool name"),
+        (status = 401, description = "not signed in"),
+        (status = 403, description = "ManageSystem required"),
+        (status = 503, description = "no admin state"),
+    ),
+    security(("bearer" = []))
+)]
+async fn restore_pool(
+    _perm: RequireManageSystem,
+    caller: Caller,
+    admin: Admin,
+    Path(name): Path<String>,
+) -> ApiResult<Json<PoolTakeoverResult>> {
+    let from = validate_pool_name(&name)?;
+    let counts = admin
+        .repo
+        .restore_taken_over_pool(&from)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "restore pool", "failed to put the members back")
+        })?;
+    tracing::info!(
+        pool = %from,
+        nodes = counts.nodes,
+        folders = counts.folders,
+        by = %caller.0.username,
+        "pool members restored to their own assignments"
+    );
+    Ok(Json(PoolTakeoverResult {
+        nodes: counts.nodes,
+        folders: counts.folders,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +675,66 @@ mod tests {
         rows.iter()
             .map(|(n, d)| ((*n).to_owned(), d.map(str::to_owned)))
             .collect()
+    }
+
+    /// The ordinary case: no pool is being covered for another. Named rather than inlined so the
+    /// one test that DOES pass a cover reads as the exception it is.
+    fn no_cover() -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+
+    #[test]
+    fn a_covered_pool_says_who_is_covering_it_and_the_others_stay_silent() {
+        let covered: std::collections::BTreeMap<String, String> =
+            [("tokyo".to_owned(), "default".to_owned())]
+                .into_iter()
+                .collect();
+        let opts = build_pool_options(
+            Vec::new(),
+            vec!["tokyo".to_owned(), "osaka".to_owned()],
+            Vec::new(),
+            &HashSet::new(),
+            &covered,
+        );
+        let by = |name: &str| {
+            opts.iter()
+                .find(|o| o.name == name)
+                .unwrap_or_else(|| panic!("{name} is in the option list"))
+                .covered_by
+                .clone()
+        };
+        assert_eq!(by("tokyo").as_deref(), Some("default"));
+        // The other half, and the one that matters: a badge on every pool would say nothing.
+        assert_eq!(by("osaka"), None);
+        assert_eq!(by(yagra_bus::DEFAULT_POOL), None);
+    }
+
+    /// A pool that is covered stays in the list **even though nothing names it any more**.
+    ///
+    /// 🚨 This is the regression the fifth source exists for, and it is not hypothetical: a
+    /// successful takeover moves every node and folder that named the pool, so sources 2–4 all fall
+    /// silent at once and the row disappears — with the "restore" affordance on it. The deployment
+    /// would then be covering a pool nobody can stop covering.
+    #[test]
+    fn a_pool_nothing_else_names_survives_because_it_is_being_covered() {
+        let covered: std::collections::BTreeMap<String, String> =
+            [("tokyo".to_owned(), "default".to_owned())]
+                .into_iter()
+                .collect();
+        // No described row, no node, no folder, no live poller — exactly the state a takeover
+        // leaves behind.
+        let opts = build_pool_options(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &HashSet::new(),
+            &covered,
+        );
+        let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
+        assert!(
+            names.contains(&"tokyo"),
+            "a covered pool fell out of the list, taking its restore button with it: {names:?}"
+        );
     }
 
     #[test]
@@ -490,6 +754,7 @@ mod tests {
             ],
             vec!["osaka".to_owned(), "  edge  ".to_owned()],
             &live,
+            &no_cover(),
         );
         let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
         // Default always offered and always first (it is where an unassigned node lands, whether
@@ -508,7 +773,13 @@ mod tests {
 
     #[test]
     fn pool_options_are_offered_even_with_nothing_configured() {
-        let opts = build_pool_options(Vec::new(), Vec::new(), Vec::new(), &HashSet::new());
+        let opts = build_pool_options(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &HashSet::new(),
+            &no_cover(),
+        );
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].name, yagra_bus::DEFAULT_POOL);
         assert!(!opts[0].live);
@@ -525,6 +796,7 @@ mod tests {
             vec!["from-a-node".to_owned()],
             vec!["from-a-folder".to_owned()],
             &live,
+            &no_cover(),
         );
         let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(
@@ -556,6 +828,7 @@ mod tests {
             vec!["tokyo".to_owned()],
             Vec::new(),
             &HashSet::new(),
+            &no_cover(),
         );
         let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(names, vec!["default", "tokyo"]);
@@ -571,6 +844,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             &HashSet::new(),
+            &no_cover(),
         );
         assert!(opts.iter().all(|o| o.description.is_none()));
     }
@@ -622,5 +896,69 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/pools", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("edge"), "{list}");
+    }
+
+    /// Covering a pool moves its members and putting them back is exact (ADR-107 増分 4).
+    ///
+    /// 🚨 The assertion that carries the increment is the **second** node's. A node that named the
+    /// pool goes back to naming it, which a `pool_before_takeover` column could also have managed.
+    /// A node that was *inheriting* has to go back to naming **nothing**, and a column cannot
+    /// distinguish "was inheriting" from "was never taken over" — both are NULL. If the restore
+    /// leaves an explicit pool on it, the deployment is not the one the takeover promised to be
+    /// reversible about, and nothing else in the suite would notice.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn covering_a_pool_moves_its_members_and_restoring_puts_each_one_back(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+
+        // One node that names the pool, one that names nothing at all. Through the production
+        // writer: `nodes.address` is `inet`, and a hand-rolled INSERT gets that wrong first.
+        let named = crate::pgtest::node(&pool, "named", 1, None).await;
+        let bare = crate::pgtest::node(&pool, "bare", 2, None).await;
+        crate::pgtest::repo(pool.clone())
+            .set_node_pool(named, Some("tokyo"))
+            .await
+            .expect("pin the first node to the pool");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/pools/tokyo/takeover",
+            &tok,
+            Some(serde_json::json!({ "to": "default" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+
+        let pool_of = |id: uuid::Uuid| {
+            let pg = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<String>>("SELECT pool FROM nodes WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pg)
+                    .await
+                    .expect("read node pool")
+            }
+        };
+        assert_eq!(pool_of(named).await.as_deref(), Some("default"));
+        // The pool is now flagged as covered, which is what the UI offers "restore" from.
+        let (_, list) = send(&st, "GET", "/api/v1/pools", &tok, None).await;
+        assert!(list.to_string().contains("covered_by"), "{list}");
+
+        let (status, body) = send(&st, "POST", "/api/v1/pools/tokyo/restore", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(pool_of(named).await.as_deref(), Some("tokyo"));
+        // ⚠️ `bare` names no pool, so it falls through to the DEFAULT one and was never a member of
+        // `tokyo`. Covering `tokyo` must not have touched it — an over-broad takeover that swept up
+        // every unassigned node would look identical on the covered pool's own row. The
+        // *inheriting* half of the round trip is tested where it can actually happen, in
+        // `repo::pool_takeover` against the default pool: `PoolCarry::fall_through` is empty for
+        // any other source, which this test learned by asserting the opposite and failing.
+        assert_eq!(pool_of(bare).await, None, "a non-member was moved");
+        assert_eq!(crate::pgtest::rows(&pool, "pool_takeover").await, 0);
     }
 }

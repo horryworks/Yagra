@@ -2935,6 +2935,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pools/{name}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/pools/{name}/restore` — put a covered pool's members back.
+         * @description Each member returns to **its own** recorded assignment, which for an inheriting node means no
+         *     assignment at all. Restoring them all to the pool's name would pin rows that were never pinned,
+         *     leaving a deployment the takeover never promised to be reversible about.
+         *
+         *     A member whose pool a person has since changed by hand keeps that change — a later human
+         *     decision outranks this bookkeeping — but its record is dropped either way, so a pool cannot stay
+         *     marked as covered forever.
+         *
+         *     Restoring is deliberately **not** automatic when the site's poller returns: 22 nodes moving on
+         *     their own the moment a link comes back is its own surprise (ADR-107 増分 4 やらないこと).
+         */
+        post: operations["restore_pool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pools/{name}/takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/pools/{name}/takeover` — point this pool's members at one that can poll them.
+         * @description The second of the two things an operator can do about a pool with no live poller. The first —
+         *     bring the site back — no endpoint can do for them: the site's own box has to be handed a new
+         *     bundle, and this deployment cannot reach it. This one is reversible; `restore_pool` puts every
+         *     member back where this found it, **including the ones that were inheriting rather than
+         *     assigned**, which is why the record is a table and not a column.
+         *
+         *     🚨 **This is never the right thing to do merely because a pool is uncovered.** A site poller
+         *     usually exists because core cannot reach those devices; covering them from a host that cannot
+         *     see them turns one accurate pool alert into N false `unreachable` ones — worse than the silence
+         *     it replaces, and indistinguishable from a real outage. It is offered to a person looking at the
+         *     alert, who can test reachability from this host first (ADR-107 増分 4 決定 4). Nothing calls it
+         *     automatically and nothing defaults to it.
+         */
+        post: operations["take_over_pool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/preferences": {
         parameters: {
             query?: never;
@@ -8516,6 +8576,15 @@ export interface components {
         /** @description One pool offered by the pool picker. */
         PoolOption: {
             /**
+             * @description The pool currently polling this one's members on its behalf, if an operator asked for that
+             *     (ADR-107 増分 4). `None` is the ordinary case.
+             *
+             *     ⚠️ Its members are **already** in that pool — this says the move is recorded and can be
+             *     undone, not that it is pending. A UI that reads it as "will be" would offer a takeover that
+             *     has already happened.
+             */
+            covered_by?: string | null;
+            /**
              * @description Why this pool exists, in the operator's words. `None` for a pool nobody has described —
              *     including every pool that predates the `pools` table, which is most of them on an existing
              *     deployment.
@@ -8546,6 +8615,15 @@ export interface components {
          */
         PoolSummary: {
             /**
+             * @description The pool currently polling this one's members on its behalf (ADR-107 増分 4), if an operator
+             *     asked for that. `null` is the ordinary case.
+             *
+             *     ⚠️ A covered pool will usually **also** read `nodes: 0` with no warning — its members are
+             *     somewhere else, which is the point. The two fields answer different questions: `warning` is
+             *     "is anything here unmonitored", this is "is somebody standing in for it".
+             */
+            covered_by?: string | null;
+            /**
              * @description Why this pool exists, in the operator's words (ADR-107). `null` for a pool nobody has
              *     described — which is every pool that predates the `pools` table.
              */
@@ -8560,6 +8638,19 @@ export interface components {
             pool: string;
             /** @description `"nodes_without_live_poller"` when the pool has nodes but no live poller, else `null`. */
             warning?: string | null;
+        };
+        /** @description What one call re-pointed. */
+        PoolTakeoverResult: {
+            /**
+             * Format: int64
+             * @description Folders re-pointed.
+             */
+            folders: number;
+            /**
+             * Format: int64
+             * @description Nodes re-pointed.
+             */
+            nodes: number;
         };
         /** @description A save's acknowledgement. The document is not echoed back — the client already has it. */
         PreferencesSaved: {
@@ -9799,6 +9890,11 @@ export interface components {
             table: string;
             /** Format: int32 */
             updated: number;
+        };
+        /** @description Where a covered pool's members should be pointed. */
+        TakeOverPoolRequest: {
+            /** @description The pool to point them at — one that has a live poller, usually the co-located one. */
+            to: string;
         };
         /** @description Where to send this deployment. */
         TargetSpec: {
@@ -22218,6 +22314,112 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
+            };
+        };
+    };
+    restore_pool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description the pool that was being covered for */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description how many nodes and folders went back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolTakeoverResult"];
+                };
+            };
+            /** @description not a usable pool name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description ManageSystem required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description no admin state */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    take_over_pool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description the pool that has no live poller */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TakeOverPoolRequest"];
+            };
+        };
+        responses: {
+            /** @description how many nodes and folders were re-pointed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolTakeoverResult"];
+                };
+            };
+            /** @description the destination is not a usable pool name, or is this pool */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description ManageSystem required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description no admin state */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

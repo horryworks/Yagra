@@ -95,6 +95,7 @@ import type {
   PollerNodesResponse,
   PollersResponse,
   PoolsResponse,
+  PoolTakeoverResult,
   SystemHealth,
   SystemHostsResponse,
   HostMetricRange,
@@ -1107,6 +1108,20 @@ export const api = {
    *  the name is derived from those too, so the delete would appear to work and change nothing. */
   deletePool: (name: string): Promise<void> =>
     apiDelete('/api/v1/pools/{name}', { path: { name } }),
+
+  /** Point a pool's members at one that still has a poller, until its own site is back
+   *  (ADR-107 増分 4). Reversible — `restorePool` puts each member back where this found it.
+   *
+   *  🚨 Only worth doing when THIS deployment can reach those devices. A site poller usually exists
+   *  because it cannot, and covering them from here turns one accurate pool alert into a false
+   *  `unreachable` for every node. The UI must make the operator assert that, never default to it. */
+  takeOverPool: (name: string, to: string): Promise<PoolTakeoverResult> =>
+    apiPost('/api/v1/pools/{name}/takeover', { path: { name }, body: { to } }),
+
+  /** Put a covered pool's members back where they were — each to its own recorded assignment, which
+   *  for a node that was inheriting means no assignment at all. */
+  restorePool: (name: string): Promise<PoolTakeoverResult> =>
+    apiPost('/api/v1/pools/{name}/restore', { path: { name } }),
 
   /** Move a node to a poll-pool. `''` clears it back to inherited (folder, else default pool).
    *
