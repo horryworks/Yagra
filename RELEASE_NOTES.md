@@ -52,6 +52,22 @@
 
 ### Bug Fixes
 
+- **The backup verification script could never have passed, and now does** (`scripts/yagra-restore-verify.sh`,
+  ADR-040 / ADR-121). It restores a backup into a throwaway stack and asserts that core comes up on
+  the restored data, that the node and audit counts match the manifest, and that **every sealed
+  secret still decrypts** — the one failure a restore can otherwise hide. Repaired in the previous
+  release and then run for the first time, it turned out to hold three faults: it handed the
+  manifest's whole image reference over as an image *tag* (so every deployment produced
+  `…/yagra-core:…/yagra-core:v0.3.12` and died before the first assertion); it seeded the
+  encryption key with `docker cp` into a container that mounts that volume read-only; and it
+  started the bus **before** restoring the database, so the bus served a certificate generated from
+  an empty database and core then refused the restored one. 🚨 **That last one reported
+  `core never became healthy` on a stack whose data had restored perfectly** — a verification
+  failure that reads as a broken backup. Two host preconditions that are not enforced anywhere are
+  now written down in `DEPLOYMENT.md`: nothing else of Yagra's may be running on the machine (the
+  throwaway stack publishes the same ports, and the guard only checks the project name), and images
+  that cannot be pulled need `YAGRA_PULL_POLICY=missing`.
+
 - **A "this pool has no live poller" alert can no longer stay open forever.** Raising one writes a
   durable row that core restores on every start; clearing one was decided by an in-memory watch that
   began each start empty and therefore had nothing to clear. So a pool that got its poller back
