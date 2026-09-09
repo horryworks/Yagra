@@ -862,6 +862,28 @@ One line of JSON: how many sealed secrets this deployment holds, and how many th
 open. `decryptable` below `total` means the key and the database do not match — which is the one
 failure a restore can otherwise hide, because everything else looks healthy until the next poll.
 
+### Proving a backup restores, before you need it
+
+```bash
+bash scripts/yagra-backup.sh ~/verify-backup          # bash, not sh — dash has no `set -o pipefail`
+YAGRA_PULL_POLICY=missing bash scripts/yagra-restore-verify.sh ~/verify-backup
+```
+
+It restores the backup into a throwaway compose project and asserts four things: core comes up
+healthy on the restored data, the node count matches the manifest, the audit trail matches, and
+**every sealed secret still decrypts**. Expect `4 passed, 0 failed, 0 skipped`. A backup holding no
+credentials reports the third as SKIPPED, not PASS — and a verification that has only ever passed
+on such a backup has proved nothing about the key.
+
+Two things about the host it runs on:
+
+* **Nothing else of Yagra's may be running there.** The throwaway stack publishes the same ports as
+  the real one, and the guard only checks the *project name*. On a machine that also runs the
+  deployment, stop it first — otherwise the first assertion fails for a reason that has nothing to
+  do with the backup.
+* **`YAGRA_PULL_POLICY=missing`** where the images are not pullable: a private registry, or images
+  put there with `docker load`. Without it the throwaway stack tries to pull and never starts.
+
 ---
 
 ## Configuration bundle (moving a configuration between deployments)<a id="config-bundle"></a>

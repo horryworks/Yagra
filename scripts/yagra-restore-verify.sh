@@ -84,11 +84,31 @@ MANIFEST_TAG="$(json_field image_tag)"
 WANT_NODES="$(json_field node_count)"
 WANT_CREDS="$(json_field credential_count)"
 WANT_AUDIT="$(json_field audit_row_count)"
-TARGET_TAG="${YAGRA_IMAGE_TAG:-$MANIFEST_TAG}"
+# 🚨 The manifest records the WHOLE image reference — `yagra-backup.sh` writes
+# `docker inspect {{.Config.Image}}` — while the composition wants the two halves separately:
+# it builds `${YAGRA_IMAGE_REPO}/yagra-<name>:${YAGRA_IMAGE_TAG}`. Handing the reference over as
+# the tag produced `ghcr.io/horryworks/yagra-core:ghcr.io/horryworks/yagra-core:v0.3.12`, which
+# Docker rejects as an invalid reference — on EVERY deployment, at step 2, before a single
+# assertion ran. Found on 2026-09-09, the first time this script was ever executed end to end
+# (ADR-121); it is exactly the class of failure the header above warns this file was hiding.
+# The split is on the LAST colon for the tag (a registry may carry a port, as `localhost:5000`
+# does) and on the last slash for the namespace (dropping the image name compose adds back).
+case "$MANIFEST_TAG" in
+  */*:*) MANIFEST_REPO="${MANIFEST_TAG%/*}"; MANIFEST_TAG_ONLY="${MANIFEST_TAG##*:}" ;;
+  *)     MANIFEST_REPO=""; MANIFEST_TAG_ONLY="$MANIFEST_TAG" ;;
+esac
+TARGET_TAG="${YAGRA_IMAGE_TAG:-$MANIFEST_TAG_ONLY}"
+# The registry too: a backup taken from a private-registry deployment names images only that
+# registry has, and a `.env` in the working directory can disagree with the backup in hand. An
+# explicitly exported value still wins, which is how a restore into a mirror is driven.
+TARGET_REPO="${YAGRA_IMAGE_REPO:-$MANIFEST_REPO}"
+# An `if`, not `[ … ] && export`: under `set -e` that idiom exits the whole script when the
+# test is false, which here is the ordinary case of a manifest without a registry.
+if [ -n "$TARGET_REPO" ]; then export YAGRA_IMAGE_REPO="$TARGET_REPO"; fi
 
 echo "Restore verification"
 log "backup:  $BACKUP_DIR (yagra $SRC_VERSION, nodes=$WANT_NODES creds=$WANT_CREDS audit=$WANT_AUDIT)"
-log "target:  project '$PROJECT', image tag '$TARGET_TAG'"
+log "target:  project '$PROJECT', image ${TARGET_REPO:-ghcr.io/horryworks}/yagra-core:$TARGET_TAG"
 
 # ADR-040: migrations only move forward, so a restore into an OLDER build is unsupported. Enforced
 # by the tool and not merely written down, because this is the mistake that corrupts data quietly.
@@ -134,7 +154,15 @@ echo "[2/7] starting an empty stack"
 export YAGRA_IMAGE_TAG="$TARGET_TAG"
 export YAGRA_ADMIN_PASSWORD="$VERIFY_ADMIN_PW"
 dc down -v --remove-orphans >/dev/null 2>&1 || true
-dc up -d postgres redis nats victoriametrics >/dev/null
+# 🚨 The bus is deliberately NOT among these. It takes its identity from the database:
+# `bus-cert-init` materialises whatever certificate row it finds, and on the empty database this
+# stack starts with, that is a brand-new self-signed one. The restore then brings the real row
+# in underneath it, and core refuses the connection with
+# `invalid peer certificate: BadSignature` until something recreates the bus — which nothing did,
+# so assertion 1 failed on a stack whose data was perfectly restored (measured 2026-09-09,
+# ADR-121, the first end-to-end run of this script). Core depends on nats, so step 4 starts it
+# after the restore, which is the same order `yagra-relocate.sh` uses on a new host.
+dc up -d postgres redis victoriametrics >/dev/null
 for _ in $(seq 1 60); do
   dc exec -T postgres pg_isready -U "$PG_USER" >/dev/null 2>&1 && break
   sleep 2
@@ -145,17 +173,22 @@ log "stores up on fresh volumes"
 # ── 3. Restore, KEK first ───────────────────────────────────────────────────────────────────────
 echo "[3/7] restoring"
 [ -f "$BACKUP_DIR/kek/kek" ] || die "no KEK in the backup — this is the failure the whole exercise exists to catch"
+# Creating core (without starting it) is what makes compose declare the kek volume with this
+# project's labels; the write itself goes through a throwaway container, not through this one.
 dc up -d --no-start core >/dev/null 2>&1 || true
-KEK_CID="$(dc ps -aq core)"
-[ -n "$KEK_CID" ] || die "could not create the core container to seed the KEK volume"
-docker cp "$BACKUP_DIR/kek/kek" "$KEK_CID:/kek/key" 2>/dev/null \
+[ -n "$(dc ps -aq core)" ] || die "could not create the core container to seed the KEK volume"
+# 🚨 NOT `docker cp` into core: the composition mounts kekdata into core READ-ONLY
+# (`kek-init` is its only writer), and the daemon refuses with "mounted volume is marked
+# read-only" whatever the container's state. That refusal is what this script died on the first
+# time it was ever run (2026-09-09, ADR-121) — and the message it printed blamed the volume, not
+# the mount flag. A throwaway container mounting it read-write is how `yagra-relocate.sh` seeds a
+# KEK too, so both restore paths now write it the same way.
+# The mode is set here rather than inherited: `yagra-backup.sh` writes the file 0400 owned by
+# whoever took the backup, and core (uid 10001) needs the 0444 that `kek-init` leaves — without
+# it the stack starts and opens nothing, which assertion 3 would have blamed on the key itself.
+docker run --rm -i -v "${PROJECT}_kekdata:/kek" busybox:stable \
+  sh -c 'cat > /kek/key && chmod 0444 /kek/key' < "$BACKUP_DIR/kek/kek" \
   || die "could not write the KEK into the verify stack's kek volume"
-# `docker cp` carries the source file's mode, and `yagra-backup.sh` writes it 0400 owned by
-# whoever ran the backup. `kek-init` leaves 0444, which is what core (uid 10001) reads it as — so
-# without this the restored stack starts and cannot open a single credential, which is exactly the
-# failure assertion 3 exists to catch and would have blamed on the key rather than on this line.
-docker run --rm -v "${PROJECT}_kekdata:/kek" busybox:stable chmod 0444 /kek/key >/dev/null 2>&1 \
-  || log "could not normalise the KEK's mode (non-fatal; assertion 3 will say if it mattered)"
 log "KEK restored"
 
 dc exec -T postgres psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS $PG_DB WITH (FORCE);" >/dev/null
