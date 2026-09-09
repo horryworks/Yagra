@@ -783,14 +783,67 @@ notifications keep running.
 
 1. **Stop the old server.** Both are polling, and both will notify:
    `docker compose -p yagra -f docker-compose.deploy.yml stop`.
-2. **The bus certificate names the old host's addresses.** With remote-site pollers and a new
-   address, reissue it in Settings ▸ Pollers and hand out the site bundles again.
+2. **Remote-site pollers do not follow.** The bus certificate still names the old host, and each
+   site dials an address written in its own `.env`. See
+   [Reconnecting remote-site pollers](#reconnecting-remote-site-pollers) — it is four steps and one
+   trap, and until it is done those sites poll nothing.
 3. **OIDC redirect URIs** (Settings ▸ Authentication) point at the old host.
 4. **Devices** sending syslog, traps or flow records to the old address need repointing.
 5. **The firewall** on the new server, if it runs one: open the WebUI port.
 
 The WebUI certificate is still the old host's self-signed one, so a browser warns until it is
 replaced in Settings ▸ TLS certificate.
+
+### Reconnecting remote-site pollers
+
+Sites do not travel with the deployment. A site poller dials the address written in its own `.env`
+and pins the certificate in its own `certs/` directory, and the new server can change neither: the
+only channel it has to a site is the bus, which is exactly what stops working. So this is manual,
+and it is the longest part of a move with remote sites.
+
+Everything below happens in the **new** server's WebUI, in this order — step 3 is only correct once
+steps 1 and 2 have happened.
+
+1. **Settings ▸ Pollers ▸ Reissue certificate…**, with the new server's address. This stores a new
+   certificate but **the bus keeps serving the old one** — `nats-server` reads its certificate at
+   startup — and the panel says so: *"A newer certificate is stored than the bus is serving."*
+
+2. **Make it take effect.** 🚨 No button restarts only the bus, and a relocated deployment always
+   arrives with remote acceptance already **on**, so the way through is **Stop accepting** followed
+   by **Accept remote pollers** with the new address. Monitoring stops twice, about a minute each,
+   and the second press reissues the certificate again — which is why the bundles come after.
+   Skipping this hands the sites a certificate the bus is not serving: they fail the handshake and
+   never appear.
+
+   > Pressing the switch does step 1 as well. Reissuing separately is only worth it when the bus is
+   > going to be restarted for some other reason anyway.
+
+3. **Issue each site's bundle again**, from the Token column on that poller's row, naming the new
+   address. The bundle carries the certificate now being served, a fresh token (the previous one
+   stops working) and the pool that poller already serves.
+
+4. **Install it at the site**, over the directory that is already there:
+
+   ```bash
+   cd ~/yagra-poller
+   tar -czf ~/yagra-poller-before-relocate-$(date +%Y%m%d-%H%M%S).tar.gz .   # a way back
+   tar -xzf ~/yagra-poller-<id>.tar.gz -C ~/yagra-poller
+   docker compose -p yagra-poller -f docker-compose.poller.yml up -d --force-recreate
+   ```
+
+   The poller registers within about ten seconds and its pool returns to `working_set`.
+   **Online is not polling:** watch the *Working set* and *Results* columns on Settings ▸ Pollers
+   until both move.
+
+What the bus is actually serving can be read on the new server, which is the one check that does
+not depend on the WebUI agreeing with itself:
+
+```bash
+docker run --rm -v yagra_buscerts:/c:ro alpine/openssl   x509 -in /c/certs/server-cert.pem -noout -fingerprint -sha256 -ext subjectAltName
+```
+
+Its fingerprint must match the one on Settings ▸ Pollers, and its SAN list must contain the address
+each site dials.
 
 ### If it refuses or fails
 

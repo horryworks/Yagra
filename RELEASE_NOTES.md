@@ -41,6 +41,14 @@
   ⚠️ It refuses a host that already has a Yagra deployment on it — it never replaces, merges with or
   upgrades one. Ticking "carry events and flows" stops those two stores for the minutes the copy
   takes; polling, alerting and notifications keep running throughout.
+  ⚠️ **Remote-site pollers do not follow the move.** Each one dials an address written in its own
+  `.env` and pins its own copy of the bus certificate, and the new deployment can change neither —
+  the only channel it has to a site is the bus that the new address breaks. Reconnecting them is
+  manual, and `DEPLOYMENT.md` now carries the four steps in the order that works. One of them is
+  easy to miss: reissuing the bus certificate does **not** make the bus serve it (`nats-server`
+  reads its certificate at startup), so the certificate only takes effect when remote acceptance is
+  switched off and on again. Until the sites are back, their pool reports that it has no live
+  poller and its nodes are not polled.
 
 ### Bug Fixes
 

@@ -82,15 +82,45 @@ produced a working deployment or produced nothing.
 
 1. **Stop the old server.** Both are polling now, and both will notify.
    `docker compose -p yagra -f docker-compose.deploy.yml stop` on the old host.
-2. **The bus certificate still names the old host's addresses.** If you run remote-site pollers and
-   this host's IP is different, reissue it in Settings ▸ Pollers and hand out the site bundles
-   again. If the IP moved with the server, there is nothing to do.
+2. **Remote-site pollers do not follow.** They dial an address written in their own `.env` and pin
+   a certificate in their own `certs/`, and this host can change neither — the only channel to a
+   site is the bus, which is the thing that stops working. Nothing to do if the IP moved with the
+   server; otherwise see "Reconnecting remote-site pollers" below.
 3. **OIDC redirect URIs** (Settings ▸ Authentication) still point at the old host.
 4. **Devices** sending syslog, SNMP traps or flow records to the old IP need repointing.
 5. **The firewall**, if `ufw` or `firewalld` is running: open the WebUI port.
 
 The WebUI's certificate is still the old host's self-signed one, so a browser will warn until you
 replace it in Settings ▸ TLS certificate.
+
+## Reconnecting remote-site pollers
+
+In this order, in this deployment's WebUI. Step 3 is only correct once 1 and 2 have happened.
+
+1. **Settings ▸ Pollers ▸ Reissue certificate…** with this host's address. The row is written, but
+   the bus keeps serving the old certificate — `nats-server` reads its own at startup — and the
+   panel says so.
+
+2. **Make it take effect.** There is no button that restarts only the bus, and a relocated
+   deployment arrives with remote acceptance already on, so: **Stop accepting**, then **Accept
+   remote pollers** with this host's address. Monitoring stops twice, about a minute each, and the
+   second press reissues the certificate again. Skip it and every site fails its handshake against
+   a certificate the bus is not serving, with nothing visible here.
+
+3. **Issue each site's bundle again** from the Token column of its row, naming this host's address.
+   A fresh token comes with it; the old one stops working.
+
+4. **At the site**, over the directory that is already there:
+
+   ```sh
+   cd ~/yagra-poller
+   tar -czf ~/yagra-poller-before-relocate-$(date +%Y%m%d-%H%M%S).tar.gz .
+   tar -xzf ~/yagra-poller-<id>.tar.gz -C ~/yagra-poller
+   docker compose -p yagra-poller -f docker-compose.poller.yml up -d --force-recreate
+   ```
+
+   It registers within about ten seconds. Online is not polling: watch the Working set and Results
+   columns move before calling it done.
 
 ## Upgrading afterwards
 
