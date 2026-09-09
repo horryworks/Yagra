@@ -100,6 +100,11 @@
 
 ### Bug Fixes
 
+- **Ctrl-click keeps the node you clicked first.** Selecting a node and then Ctrl-clicking two
+  more collected only the two: the plain click emptied the working set, so the Ctrl clicks
+  started from nothing while the tree went on marking all three rows. Shift-click had counted
+  that first click since the previous fix; Ctrl-click now does too, so what is marked is what
+  moves. Ctrl-clicking the row whose detail is open takes it back out of the set.
 - **The inventory tree's right-click menu stays on the screen.** Opened near the bottom, it used
   to run off the edge with its last items out of reach — on a node in a multi-selection those
   were the items that move the whole selection. It now opens upward when there is no room below,

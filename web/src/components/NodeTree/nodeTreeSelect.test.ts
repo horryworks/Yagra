@@ -3,6 +3,7 @@
 // three of them are the ones that would move nodes nobody picked.
 import { describe, expect, it } from 'vitest';
 import { clickGesture, clickOutcome, rangeChecked, rowNode, toggleChecked } from './nodeTreeSelect';
+import type { ClickContext } from './nodeTreeSelect';
 import type { FlatRow } from '../../lib/nodeTree';
 import type { NodeSummary } from '../../types/api';
 
@@ -95,28 +96,124 @@ describe('rowNode', () => {
 });
 
 describe('clickOutcome', () => {
-  // 🚨 The block that did not exist when the feature shipped, and the reason the bug did.
-  // `rangeChecked` above is exercised with an anchor the test supplies; nothing asked who
-  // supplies it in the running tree, and the answer — until 増分 1 — was "nobody, until a Ctrl
-  // or Shift click has already happened".
+  // 🚨 The block that did not exist when the feature shipped, and the reason two bugs did.
+  // `rangeChecked` above is exercised with an anchor the test supplies; nothing asked who supplies
+  // it in the running tree, and the answer — until 増分 1 — was "nobody, until a Ctrl or Shift
+  // click has already happened". 増分 3 is the other half of the same omission: the batch a Ctrl
+  // click adds to.
   const flat = [groupRow('g1'), nodeRow('a'), nodeRow('b'), nodeRow('c'), nodeRow('d')];
   const plain = { ctrlKey: false, metaKey: false, shiftKey: false };
   const ctrl = { ...plain, ctrlKey: true };
   const shift = { ...plain, shiftKey: true };
 
+  /** A context over the tree's rows with nothing else set, so each test names only its own case. */
+  const ctx = (over: Partial<ClickContext> = {}): ClickContext => ({
+    flat,
+    anchorId: null,
+    selection: null,
+    checked: new Map(),
+    ...over,
+  });
+
+  /** The state a plain click on `id` leaves behind: the pane on that row, the anchor there, and
+   *  an empty batch. Written once because every two-click test starts from it. */
+  const afterPlainClick = (id: string): Partial<ClickContext> => ({
+    anchorId: id,
+    selection: { kind: 'node', id },
+    checked: new Map(),
+  });
+
   it('takes the whole run when a plain click is followed by a Shift click', () => {
-    // 🚨 THE REGRESSION. Reported from the running box: select `sim-arista-eos`, Shift-click
+    // 🚨 THE 増分 1 REGRESSION. Reported from the running box: select `sim-arista-eos`, Shift-click
     // `sim-cisco-2960x-mau`, and the row between them stayed unselected — because the range had
     // never started. Both clicks, in order, through the same function the tree calls.
-    const first = clickOutcome(plain, flat, null, node('a'), new Map());
+    const first = clickOutcome(plain, node('a'), ctx());
     expect(first.anchorId, 'a plain click left no anchor for Shift to measure from').toBe('a');
 
-    const second = clickOutcome(shift, flat, first.anchorId, node('d'), first.checked!);
+    const second = clickOutcome(
+      shift,
+      node('d'),
+      ctx({ anchorId: first.anchorId, checked: first.checked! }),
+    );
     expect([...second.checked!.keys()]).toEqual(['a', 'b', 'c', 'd']);
   });
 
+  it('keeps the first row when a plain click is followed by Ctrl clicks', () => {
+    // 🚨 THE 増分 3 REGRESSION, reported with a screenshot: `sim-comware` clicked, then
+    // `sim-huawei-vrp` and `sim-junos-vmx` Ctrl-clicked. Three rows painted as marked — one
+    // accent bar, two tints — and two of them would move.
+    const first = clickOutcome(plain, node('a'), ctx());
+    const second = clickOutcome(
+      ctrl,
+      node('b'),
+      ctx({ ...afterPlainClick('a'), checked: first.checked! }),
+    );
+    expect([...second.checked!.keys()]).toEqual(['a', 'b']);
+
+    const third = clickOutcome(
+      ctrl,
+      node('d'),
+      ctx({ ...afterPlainClick('a'), checked: second.checked! }),
+    );
+    expect([...third.checked!.keys()]).toEqual(['a', 'b', 'd']);
+  });
+
+  it('counts the same first click for Ctrl as for Shift', () => {
+    // The property, stated once: whichever modifier the operator reaches for second, the row they
+    // clicked first is in the batch. Shift had it from 増分 1 and Ctrl did not, so one screen
+    // marked three rows and moved two.
+    const start = ctx(afterPlainClick('a'));
+    expect(clickOutcome(ctrl, node('c'), start).checked!.has('a')).toBe(true);
+    expect(clickOutcome(shift, node('c'), start).checked!.has('a')).toBe(true);
+  });
+
+  it('starts no batch from a folder the pane is showing', () => {
+    const r = clickOutcome(ctrl, node('c'), ctx({ selection: { kind: 'group', id: 'g1' } }));
+    expect([...r.checked!.keys()]).toEqual(['c']);
+  });
+
+  it('starts no batch from a row that is no longer on screen', () => {
+    // Its folder was collapsed, a filter hid it, or the lazily-loaded page it came from was
+    // replaced. Seeding a row the operator cannot see is the failure 決定 4 refuses for the anchor.
+    const r = clickOutcome(ctrl, node('c'), ctx({ selection: { kind: 'node', id: 'gone' } }));
+    expect([...r.checked!.keys()]).toEqual(['c']);
+  });
+
+  it('leaves a batch that already has members alone', () => {
+    // Otherwise a row would come back the moment after it was Ctrl-clicked out of the batch, for
+    // no reason the operator could see beyond the pane happening to show it.
+    const r = clickOutcome(
+      ctrl,
+      node('d'),
+      ctx({ selection: { kind: 'node', id: 'a' }, checked: checked('b') }),
+    );
+    expect([...r.checked!.keys()]).toEqual(['b', 'd']);
+  });
+
+  it('takes the pane row out again when it is the one Ctrl-clicked', () => {
+    // Start the batch there, then toggle it — the answer a file manager gives for Ctrl-clicking
+    // the row that is already selected.
+    const r = clickOutcome(ctrl, node('a'), ctx(afterPlainClick('a')));
+    expect([...r.checked!.keys()]).toEqual([]);
+  });
+
+  it('brings the pane row back on the next Ctrl click, deliberately', () => {
+    // ⚠️ The one corner where this differs from a file manager, pinned so it reads as a decision
+    // rather than an accident: plain-click a, Ctrl-click a to take it out, Ctrl-click b. Explorer
+    // answers {b}; this answers {a, b}, because a still carries the pane's accent bar and the rule
+    // is "the batch starts at the row the pane is showing". Avoiding it needs a "has the batch
+    // been touched" flag — a state nothing else would read.
+    const out = clickOutcome(ctrl, node('a'), ctx(afterPlainClick('a')));
+    const back = clickOutcome(
+      ctrl,
+      node('b'),
+      ctx({ ...afterPlainClick('a'), checked: out.checked! }),
+    );
+    expect([...back.checked!.keys()]).toEqual(['a', 'b']);
+  });
+
   it('anchors a plain click even though it checks nothing', () => {
-    const r = clickOutcome(plain, flat, null, node('c'), new Map());
+    const r = clickOutcome(plain, node('c'), ctx());
     expect([...r.checked!.keys()]).toEqual([]);
     expect(r.anchorId).toBe('c');
     expect(r.select).toBe(true);
@@ -124,7 +221,7 @@ describe('clickOutcome', () => {
 
   it('abandons the batch on a plain click', () => {
     // "Never mind those" — the set goes, and the pane moves to the row that was clicked.
-    const r = clickOutcome(plain, flat, 'a', node('c'), checked('a', 'b'));
+    const r = clickOutcome(plain, node('c'), ctx({ anchorId: 'a', checked: checked('a', 'b') }));
     expect([...r.checked!.keys()]).toEqual([]);
     expect(r.select).toBe(true);
   });
@@ -132,12 +229,12 @@ describe('clickOutcome', () => {
   it('leaves the pane alone for Ctrl and Shift', () => {
     // The pane keeps showing whatever was open while a batch is assembled — Ctrl / Shift never
     // write `?sel=`, which is what keeps ADR-073's three clear gestures untouched.
-    expect(clickOutcome(ctrl, flat, null, node('b'), new Map()).select).toBe(false);
-    expect(clickOutcome(shift, flat, 'a', node('b'), new Map()).select).toBe(false);
+    expect(clickOutcome(ctrl, node('b'), ctx()).select).toBe(false);
+    expect(clickOutcome(shift, node('b'), ctx({ anchorId: 'a' })).select).toBe(false);
   });
 
   it('moves the anchor to the row a Ctrl click landed on', () => {
-    const r = clickOutcome(ctrl, flat, 'a', node('c'), new Map());
+    const r = clickOutcome(ctrl, node('c'), ctx({ anchorId: 'a' }));
     expect([...r.checked!.keys()]).toEqual(['c']);
     expect(r.anchorId).toBe('c');
   });
@@ -145,7 +242,7 @@ describe('clickOutcome', () => {
   it('writes nothing when a Shift click lands on a node that is not among the rows', () => {
     // `checked: null` means "leave the working set exactly as it is" — distinct from an empty
     // map, which would clear it. The anchor survives so the next Shift click still has a run.
-    const r = clickOutcome(shift, flat, 'a', node('elsewhere'), checked('a'));
+    const r = clickOutcome(shift, node('elsewhere'), ctx({ anchorId: 'a', checked: checked('a') }));
     expect(r.checked).toBeNull();
     expect(r.anchorId).toBe('a');
     expect(r.select).toBe(false);

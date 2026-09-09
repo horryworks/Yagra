@@ -90,8 +90,58 @@ test('Ctrl click adds a row to the batch without moving the pane', async ({ page
   expect(selected).toMatch(/^node:/);
 
   await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
-  await expect(page.locator('.ntree-row.checked')).toHaveCount(1);
+  // Two: the row the pane is showing and the row just Ctrl-clicked. This assertion said ONE until
+  // 増分 3 — it was pinning the defect, which is what a test written from the implementation does.
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(2);
   expect(new URL(page.url()).searchParams.get('sel'), 'Ctrl click moved the pane').toBe(selected);
+});
+
+test('a plain click then Ctrl clicks keep the first row in the batch', async ({ page }) => {
+  // 🚨 THE REGRESSION (Inc.3), in the gesture the report used: click sim-comware, then Ctrl-click
+  // sim-huawei-vrp and sim-junos-vmx. The screenshot showed three marked rows — one accent bar,
+  // two tints — and only the two Ctrl-clicked ones would have moved, because the plain click
+  // emptied the batch and the Ctrl clicks started from nothing.
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
+
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(3);
+  // Name the row that was dropped, so a future failure says "the first row again" rather than
+  // "expected 3, got 2".
+  await expect(rows.nth(0), 'the row the plain click landed on is not in the batch').toHaveClass(
+    /checked/,
+  );
+
+  // And the batch is what actually moves: the modal lists all three, not the two Ctrl-clicked.
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await menu.getByRole('button', { name: 'Move 3 selected…', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.movenode-list li')).toHaveCount(3);
+});
+
+test('Ctrl-clicking the row the pane shows takes it out of the batch', async ({ page }) => {
+  // The other half of the rule: the pane's row STARTS the batch, so Ctrl-clicking it is how the
+  // operator says "not that one" — and the pane keeps showing it either way.
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+
+  await rows.nth(0).click();
+  const selected = new URL(page.url()).searchParams.get('sel');
+  await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(2);
+
+  await rows.nth(0).click({ modifiers: ['ControlOrMeta'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(1);
+  await expect(rows.nth(2)).toHaveClass(/checked/);
+  expect(new URL(page.url()).searchParams.get('sel'), 'the pane moved').toBe(selected);
 });
 
 test('a plain click abandons the batch', async ({ page }) => {

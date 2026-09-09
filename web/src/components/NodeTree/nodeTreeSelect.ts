@@ -12,12 +12,21 @@
 // changes nothing the operator can see on its own, and without it a range can never start from
 // an ordinary click (see `clickOutcome`).
 //
+// 🚨 **Two states, one selection — the operator reads the marked rows as one set, and they are
+// right.** The pane's row carries an accent bar and the batch's rows carry a tint, so a plain
+// click followed by Ctrl clicks paints every row involved. Both modified gestures therefore have
+// to count that first click: Shift does it through the anchor (増分 1) and Ctrl through
+// `batchStart` (増分 3). Before 増分 3 only Shift did, so the same screen showed three marked rows
+// and moved two.
+//
 // ⚠️ **The working set holds whole nodes, not ids.** Filtering the tree changes which nodes are
 // loaded, and a set of ids resolved against the current rows would silently shrink under the
 // operator: they would check twelve nodes, type in the search box, and move nine.
 
 import type { FlatRow } from '../../lib/nodeTree';
 import type { NodeSummary } from '../../types/api';
+// Type-only, so nothing here loads a `.tsx` — the same shape `lib/treeSelection.ts` imports.
+import type { TreeSelection } from './NodeTree';
 
 /** The checked nodes, keyed by id. Insertion order is the order they were checked. */
 export type CheckedNodes = ReadonlyMap<string, NodeSummary>;
@@ -104,6 +113,62 @@ export function clickGesture(e: {
   return e.ctrlKey || e.metaKey ? 'toggle' : 'plain';
 }
 
+/**
+ * Everything a click on a node row is decided from.
+ *
+ * One object rather than five positional arguments (増分 3): `anchorId` and the pane selection's
+ * id are both nullable strings, and two adjacent positional parameters of the same type are a
+ * swap that compiles, runs, and picks the wrong row to start a batch at.
+ */
+export interface ClickContext {
+  /** The rows on screen, in display order — the flattened tree with collapse and filter applied. */
+  flat: readonly FlatRow[];
+  /** The row the next Shift click measures its range from. */
+  anchorId: string | null;
+  /** What the pane is showing, exactly as the tree holds it. Passed whole rather than as an id, so
+   *  "a folder does not start a batch" is decided here and not in the component. */
+  selection: TreeSelection;
+  /** The working set as it stands. */
+  checked: CheckedNodes;
+}
+
+/** The node behind a row id, when that row is on screen. Null for a folder, for a row inside a
+ *  collapsed one, for a row a filter is hiding, and for one a lazily-loaded folder has not
+ *  delivered — every case in which the operator cannot see it. */
+function nodeOnScreen(flat: readonly FlatRow[], id: string): NodeSummary | null {
+  for (const row of flat) {
+    const node = rowNode(row);
+    if (node?.id === id) return node;
+  }
+  return null;
+}
+
+/**
+ * The set a Ctrl click adds to (ADR-124 増分 3).
+ *
+ * 🚨 **An empty working set starts at the row the pane is showing.** Without this, a plain click
+ * followed by Ctrl clicks loses the first node: the plain click empties the batch, so the Ctrl
+ * clicks start from nothing and only they are collected. Reported from the running box with a
+ * screenshot of three marked rows, two of which would move.
+ *
+ * The rule is what Shift has done since 増分 1 — a plain click sets the anchor and `rangeChecked`
+ * includes both ends — so this is the same first click being counted by the other modifier, not a
+ * new idea. It is also what every file manager does.
+ *
+ * **The pane's row, not the anchor.** They are the same row immediately after a plain click, but a
+ * Ctrl click moves the anchor and leaves the pane where it is. What the operator can see is the
+ * pane's row, which carries the accent bar — so that is what may be seeded.
+ *
+ * ⚠️ **Only while the batch is empty.** Adding the pane's row to a batch that already has members
+ * would bring a row back the moment after it was Ctrl-clicked out of the batch, for no reason the
+ * operator could see other than that the pane happens to be showing it.
+ */
+function batchStart(ctx: ClickContext): CheckedNodes {
+  if (ctx.checked.size > 0 || ctx.selection?.kind !== 'node') return ctx.checked;
+  const node = nodeOnScreen(ctx.flat, ctx.selection.id);
+  return node ? new Map([[node.id, node]]) : ctx.checked;
+}
+
 /** Everything a click on a node row decides. The component applies it and decides nothing. */
 export interface ClickOutcome {
   /** The working set after the click, or null to leave it exactly as it is (no state write). */
@@ -129,28 +194,38 @@ export interface ClickOutcome {
  *
  * Every file manager anchors on a plain click. Nothing else in the tree reads `anchorId`, so
  * setting it costs one number and buys the gesture people already know.
+ *
+ * 🚨 **And the Ctrl click counts that same first click** (増分 3, `batchStart`). Shift had counted
+ * it since 増分 1 and Ctrl had not, so one gesture kept the row the operator started from and the
+ * other silently dropped it — while the tree painted both rows as marked.
  */
 export function clickOutcome(
   e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
-  flat: readonly FlatRow[],
-  anchorId: string | null,
   target: NodeSummary,
-  current: CheckedNodes,
+  ctx: ClickContext,
 ): ClickOutcome {
   switch (clickGesture(e)) {
     case 'toggle':
-      return { checked: toggleChecked(current, target), anchorId: target.id, select: false };
+      return {
+        checked: toggleChecked(batchStart(ctx), target),
+        anchorId: target.id,
+        select: false,
+      };
     case 'range': {
-      const next = rangeChecked(flat, anchorId, target, current);
+      // Deliberately `ctx.checked`, never `batchStart`: the anchor already carries the first
+      // click, and seeding the new-run branch (the anchor's row has gone) would quietly add a row
+      // the range does not cover — the failure 決定 4 exists to refuse.
+      const next = rangeChecked(ctx.flat, ctx.anchorId, target, ctx.checked);
       // Null ⇒ the clicked node is not among the visible rows at all. Leave the set alone rather
       // than guessing; the click still selects nothing, because Shift never drives the pane.
       return next
         ? { checked: next.checked, anchorId: next.anchorId, select: false }
-        : { checked: null, anchorId, select: false };
+        : { checked: null, anchorId: ctx.anchorId, select: false };
     }
     case 'plain':
       // Abandoning the batch is deliberate: a plain click means "never mind those". The anchor
-      // moves here even though nothing is checked — that is the state a Shift click reads next.
+      // moves here even though nothing is checked — that, and the pane selection this click is
+      // about to write, are what the next Shift or Ctrl click starts the batch from.
       return { checked: new Map(), anchorId: target.id, select: true };
   }
 }

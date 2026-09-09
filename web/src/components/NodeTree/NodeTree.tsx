@@ -311,7 +311,13 @@ export function NodeTree({
    *  is assembled. */
   const clickNode = (e: React.MouseEvent, node: NodeSummary) => {
     if (!onCheckedChange) return selectNode(node);
-    const outcome = clickOutcome(e, flat, anchorId ?? null, node, checkedNodes);
+    const outcome = clickOutcome(e, node, {
+      flat,
+      anchorId: anchorId ?? null,
+      // Passed whole: whether a folder selection may start a batch is decided in the `.ts`.
+      selection: selected ?? null,
+      checked: checkedNodes,
+    });
     if (outcome.checked) onCheckedChange(outcome.checked, outcome.anchorId);
     if (outcome.select) selectNode(node);
   };
