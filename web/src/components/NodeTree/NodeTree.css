@@ -57,23 +57,24 @@
    `tests/ui/treeDeselect.spec.ts` proves it by counting `.ntree-row.sel`; reusing that class for
    a set would make the count meaningless and the test red. The two can be on the same row at
    once — reading a node's detail while it is part of a batch is ordinary — so the marks have to
-   read together: the accent bar is the pane's, the tint and the left dot are the batch's. */
+   read together: the accent BAR is the pane's, the accent TINT is the batch's. Different
+   channels, so a row wearing both is still legible as both.
+
+   🚨 **This was `--bg-secondary` plus a 4px dot, and that is the same value as `:hover`.** In the
+   dark theme it sits one step off `--bg-primary` (#1f2630 on #161a21), so a checked row was
+   distinguishable from an idle one only by the dot, and from a hovered one not at all. A mark
+   drawn in the hover colour is a mark that says nothing — the operator reported it as "I cannot
+   see which rows are selected", which is exactly what it was. Tint on the accent channel instead,
+   which no other row state uses. */
 .ntree-row.checked {
-  background: var(--bg-secondary);
+  background: color-mix(in srgb, var(--accent-color) 18%, var(--bg-secondary));
 }
 
-.ntree-row.checked::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent-color);
-}
-
+/* Hover must still answer, and must never read as *less* selected than the resting state. Same
+   rule for a checked row the pane is also showing — it is the strongest thing on screen. */
+.ntree-row.checked:hover,
 .ntree-row.checked.sel {
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--accent-color) 27%, var(--bg-secondary));
 }
 
 /* The dragged row dims so the drop indicators read clearly. */

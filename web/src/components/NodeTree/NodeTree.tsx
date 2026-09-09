@@ -64,12 +64,7 @@ import {
   rootMenuHasItems,
   type MenuCapabilities,
 } from './nodeTreeMenu';
-import {
-  clickGesture,
-  rangeChecked,
-  toggleChecked,
-  type CheckedNodes,
-} from './nodeTreeSelect';
+import { clickOutcome, toggleChecked, type CheckedNodes } from './nodeTreeSelect';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
 
@@ -305,28 +300,20 @@ export function NodeTree({
 
   const checkedNodes: CheckedNodes = checked ?? EMPTY_CHECKED;
 
-  /** What a click on a node row does, once the modifier keys are read (ADR-124 決定 2/4).
+  /** Apply what a click on a node row decided (ADR-124 決定 2/4 + 増分 1).
    *
-   *  ⚠️ **The plain branch is byte-for-byte what it was**, including ADR-073's clear-on-re-click,
-   *  because that gesture is the one an operator uses a hundred times a day and the working set is
-   *  new. What it gains is abandoning the batch: a plain click means "never mind those".
+   *  🚨 **The decision itself is in `nodeTreeSelect.ts` and must stay there.** This function held
+   *  it once, and that is exactly how the two-click Shift range shipped broken: Vitest never loads
+   *  a `.tsx`, so the branch that failed to set the anchor was the one branch no test could run,
+   *  while `rangeChecked` — handed an anchor by the test itself — passed every case.
    *
    *  Ctrl / Shift never touch `?sel=`, so the pane keeps showing whatever was open while a batch
    *  is assembled. */
   const clickNode = (e: React.MouseEvent, node: NodeSummary) => {
     if (!onCheckedChange) return selectNode(node);
-    const gesture = clickGesture(e);
-    if (gesture === 'toggle') {
-      onCheckedChange(toggleChecked(checkedNodes, node), node.id);
-      return;
-    }
-    if (gesture === 'range') {
-      const next = rangeChecked(flat, anchorId ?? null, node, checkedNodes);
-      if (next) onCheckedChange(next.checked, next.anchorId);
-      return;
-    }
-    if (checkedNodes.size > 0) onCheckedChange(new Map(), null);
-    selectNode(node);
+    const outcome = clickOutcome(e, flat, anchorId ?? null, node, checkedNodes);
+    if (outcome.checked) onCheckedChange(outcome.checked, outcome.anchorId);
+    if (outcome.select) selectNode(node);
   };
 
   // Whether a right-click on each row kind would produce a menu with anything in it.

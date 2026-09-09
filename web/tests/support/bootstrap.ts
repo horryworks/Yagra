@@ -222,6 +222,29 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     return body as unknown as Json;
   })(),
 
+  // The generator answers a list with **one** item, which is enough for every screen that renders
+  // rows and not enough for the one that operates on a *range* of them. Ctrl / Shift assemble a
+  // working set across the inventory tree (ADR-124), and a Shift range cannot go wrong without a
+  // row between its two ends — with one node, `treeMultiSelect.spec.ts` would have had two clicks
+  // and nowhere to spend them.
+  //
+  // ⚠️ **The tree does not read `/api/v1/nodes`.** It fetches per container through
+  // `/nodes/by-group` (`useLazyGroupMembers`), one call per open folder plus one for the ungrouped
+  // bucket — and every one of them lands on the same mock. So the answer has to depend on the
+  // query: three ungrouped siblings, and nothing for a folder. Returning the same three to both
+  // would put the same node id in the flat row list twice, which is a broken tree, not a bigger one.
+  '/api/v1/nodes/by-group': (url) => {
+    const body = defaultBodyFor('/api/v1/nodes/by-group') as Schemas['GroupNodes'];
+    if (url.searchParams.get('group')) return { ...body, nodes: [] } as unknown as Json;
+    const first = { ...body.nodes[0], group_id: null, sort_order: 1 };
+    body.nodes = [
+      first,
+      { ...first, id: '00000000-0000-4000-8000-0000000000b2', name: `${first.name}-b`, sort_order: 2 },
+      { ...first, id: '00000000-0000-4000-8000-0000000000b3', name: `${first.name}-c`, sort_order: 3 },
+    ];
+    return body as unknown as Json;
+  },
+
   // Two things at once, both invisible to the schema:
   //
   //  - **Lifecycle enums are declared in lifecycle order**, so "the first member" is always the

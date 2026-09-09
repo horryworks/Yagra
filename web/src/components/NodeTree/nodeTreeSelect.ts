@@ -5,9 +5,12 @@
 //   - the primary selection drives the right-hand pane, lives in `?sel=` and is single;
 //   - the working set drives the move controls, lives only in the page's state, and is a set.
 //
-// A plain click still does exactly what it did before this file existed, including ADR-073's
-// "click the selected row again to clear it". Ctrl / Shift never touch `?sel=`, so the two cannot
-// fight — which is the whole reason they are two things rather than one widened selection type.
+// A plain click still drives the pane exactly as it did before this file existed, including
+// ADR-073's "click the selected row again to clear it". Ctrl / Shift never touch `?sel=`, so the
+// two cannot fight — which is the whole reason they are two things rather than one widened
+// selection type. What a plain click *also* does, since 増分 1, is set the Shift anchor: it
+// changes nothing the operator can see on its own, and without it a range can never start from
+// an ordinary click (see `clickOutcome`).
 //
 // ⚠️ **The working set holds whole nodes, not ids.** Filtering the tree changes which nodes are
 // loaded, and a set of ids resolved against the current rows would silently shrink under the
@@ -99,4 +102,55 @@ export function clickGesture(e: {
 }): 'plain' | 'toggle' | 'range' {
   if (e.shiftKey) return 'range';
   return e.ctrlKey || e.metaKey ? 'toggle' : 'plain';
+}
+
+/** Everything a click on a node row decides. The component applies it and decides nothing. */
+export interface ClickOutcome {
+  /** The working set after the click, or null to leave it exactly as it is (no state write). */
+  checked: Map<string, NodeSummary> | null;
+  /** The row the *next* Shift click measures its range from. Read only when `checked` is set. */
+  anchorId: string | null;
+  /** Move the pane's own selection to this row — a plain click, and only a plain click. Carries
+   *  ADR-073's clear-on-re-click with it, because the caller's `selectNode` is unchanged. */
+  select: boolean;
+}
+
+/**
+ * What a click on a node row does, once the modifier keys are read (ADR-124 決定 2/4 + 増分 1).
+ *
+ * 🚨 **A plain click sets the anchor.** ADR-124 shipped with "a plain click changes not one byte",
+ * which left `anchorId` null until a Ctrl or Shift click had already happened — so the ordinary
+ * two-click range (click a row, Shift-click a row further down) reached `rangeChecked` with no
+ * anchor, fell to its new-run branch, and checked **only the row that was Shift-clicked**. The
+ * intermediate rows were not missed; the range never started. This is the whole of the fix, and
+ * it lives here rather than in the component because that is what makes it testable: the first
+ * version's judgement sat in `NodeTree.tsx`, where Vitest cannot reach it, and the unit tests
+ * covered `rangeChecked` with an anchor already supplied — never who supplies it.
+ *
+ * Every file manager anchors on a plain click. Nothing else in the tree reads `anchorId`, so
+ * setting it costs one number and buys the gesture people already know.
+ */
+export function clickOutcome(
+  e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
+  flat: readonly FlatRow[],
+  anchorId: string | null,
+  target: NodeSummary,
+  current: CheckedNodes,
+): ClickOutcome {
+  switch (clickGesture(e)) {
+    case 'toggle':
+      return { checked: toggleChecked(current, target), anchorId: target.id, select: false };
+    case 'range': {
+      const next = rangeChecked(flat, anchorId, target, current);
+      // Null ⇒ the clicked node is not among the visible rows at all. Leave the set alone rather
+      // than guessing; the click still selects nothing, because Shift never drives the pane.
+      return next
+        ? { checked: next.checked, anchorId: next.anchorId, select: false }
+        : { checked: null, anchorId, select: false };
+    }
+    case 'plain':
+      // Abandoning the batch is deliberate: a plain click means "never mind those". The anchor
+      // moves here even though nothing is checked — that is the state a Shift click reads next.
+      return { checked: new Map(), anchorId: target.id, select: true };
+  }
 }

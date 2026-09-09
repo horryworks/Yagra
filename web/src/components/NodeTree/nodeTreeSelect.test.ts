@@ -2,7 +2,7 @@
 // The working-set rules (ADR-124). Every case here is one the tree can reach with two clicks, and
 // three of them are the ones that would move nodes nobody picked.
 import { describe, expect, it } from 'vitest';
-import { clickGesture, rangeChecked, rowNode, toggleChecked } from './nodeTreeSelect';
+import { clickGesture, clickOutcome, rangeChecked, rowNode, toggleChecked } from './nodeTreeSelect';
 import type { FlatRow } from '../../lib/nodeTree';
 import type { NodeSummary } from '../../types/api';
 
@@ -91,6 +91,64 @@ describe('rowNode', () => {
     expect(rowNode(groupRow('g1'))).toBeNull();
     expect(rowNode(loadingRow())).toBeNull();
     expect(rowNode({ kind: 'ungrouped-head', count: 3 })).toBeNull();
+  });
+});
+
+describe('clickOutcome', () => {
+  // 🚨 The block that did not exist when the feature shipped, and the reason the bug did.
+  // `rangeChecked` above is exercised with an anchor the test supplies; nothing asked who
+  // supplies it in the running tree, and the answer — until 増分 1 — was "nobody, until a Ctrl
+  // or Shift click has already happened".
+  const flat = [groupRow('g1'), nodeRow('a'), nodeRow('b'), nodeRow('c'), nodeRow('d')];
+  const plain = { ctrlKey: false, metaKey: false, shiftKey: false };
+  const ctrl = { ...plain, ctrlKey: true };
+  const shift = { ...plain, shiftKey: true };
+
+  it('takes the whole run when a plain click is followed by a Shift click', () => {
+    // 🚨 THE REGRESSION. Reported from the running box: select `sim-arista-eos`, Shift-click
+    // `sim-cisco-2960x-mau`, and the row between them stayed unselected — because the range had
+    // never started. Both clicks, in order, through the same function the tree calls.
+    const first = clickOutcome(plain, flat, null, node('a'), new Map());
+    expect(first.anchorId, 'a plain click left no anchor for Shift to measure from').toBe('a');
+
+    const second = clickOutcome(shift, flat, first.anchorId, node('d'), first.checked!);
+    expect([...second.checked!.keys()]).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('anchors a plain click even though it checks nothing', () => {
+    const r = clickOutcome(plain, flat, null, node('c'), new Map());
+    expect([...r.checked!.keys()]).toEqual([]);
+    expect(r.anchorId).toBe('c');
+    expect(r.select).toBe(true);
+  });
+
+  it('abandons the batch on a plain click', () => {
+    // "Never mind those" — the set goes, and the pane moves to the row that was clicked.
+    const r = clickOutcome(plain, flat, 'a', node('c'), checked('a', 'b'));
+    expect([...r.checked!.keys()]).toEqual([]);
+    expect(r.select).toBe(true);
+  });
+
+  it('leaves the pane alone for Ctrl and Shift', () => {
+    // The pane keeps showing whatever was open while a batch is assembled — Ctrl / Shift never
+    // write `?sel=`, which is what keeps ADR-073's three clear gestures untouched.
+    expect(clickOutcome(ctrl, flat, null, node('b'), new Map()).select).toBe(false);
+    expect(clickOutcome(shift, flat, 'a', node('b'), new Map()).select).toBe(false);
+  });
+
+  it('moves the anchor to the row a Ctrl click landed on', () => {
+    const r = clickOutcome(ctrl, flat, 'a', node('c'), new Map());
+    expect([...r.checked!.keys()]).toEqual(['c']);
+    expect(r.anchorId).toBe('c');
+  });
+
+  it('writes nothing when a Shift click lands on a node that is not among the rows', () => {
+    // `checked: null` means "leave the working set exactly as it is" — distinct from an empty
+    // map, which would clear it. The anchor survives so the next Shift click still has a run.
+    const r = clickOutcome(shift, flat, 'a', node('elsewhere'), checked('a'));
+    expect(r.checked).toBeNull();
+    expect(r.anchorId).toBe('a');
+    expect(r.select).toBe(false);
   });
 });
 
