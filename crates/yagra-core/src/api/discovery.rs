@@ -455,17 +455,7 @@ async fn import_discovered(
     };
     // Checked before anything is prepared: `nodes.group_id` is a foreign key, so an id that is
     // not there would abort the transaction and surface as a 500 that names nothing.
-    if let Some(group) = body.group_id {
-        let known = admin.groups.exists(group).await.map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "check node group", "failed to read node groups")
-        })?;
-        if !known {
-            return Err(ApiError::bad_request(
-                "invalid_group",
-                format!("no node group {group}"),
-            ));
-        }
-    }
+    super::groups::require_group_exists(&admin, body.group_id).await?;
     // Every node is validated up front and the batch is then inserted in one transaction, so a
     // failure partway cannot leave half an import behind (NodeRepo::import_nodes).
     let mut prepared: Vec<crate::repo::NewNode<'_>> = Vec::with_capacity(body.nodes.len());

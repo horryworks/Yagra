@@ -149,7 +149,8 @@
     "deleteNode": "ノードの削除に失敗しました",
     "saveNode": "ノードの保存に失敗しました",
     "setDependency": "依存関係の設定に失敗しました",
-    "addDnsMonitor": "DNS 監視の追加に失敗しました"
+    "addDnsMonitor": "DNS 監視の追加に失敗しました",
+    "movePreview": "アドレスとフォルダの IP レンジの照合に失敗しました"
   },
   "maintenanceWindowName": "メンテナンス — {{name}}",
   "detail": {
@@ -518,12 +519,19 @@
     "deleteEllipsis": "削除…",
     "pool": "ポーラープール",
     "poolInherit": "継承",
-    "poolNoLivePoller": "このプールには稼働中のポーラーがありません — 割り当てたノードはポーリングされません。"
+    "poolNoLivePoller": "このプールには稼働中のポーラーがありません — 割り当てたノードはポーリングされません。",
+    "moveByPrefix": "IP レンジで移動…",
+    "addToSelection": "選択に追加",
+    "removeFromSelection": "選択から外す",
+    "moveSelected": "選択した {{count}} 件を移動…",
+    "moveSelectedByPrefix": "選択した {{count}} 件を IP レンジで移動…"
   },
   "moveNode": {
     "title": "{{name}} を移動",
     "move": "移動",
-    "ungroupedOption": "— 未分類 —"
+    "ungroupedOption": "— 未分類 —",
+    "titleMany": "{{count}} 件のノードを移動",
+    "partial": "{{requested}} 件のうち {{moved}} 件を移動しました。残りは見つかりませんでした。"
   },
   "setPool": {
     "title": "{{name}} のポーラープール",
@@ -668,6 +676,36 @@
       "searchAria": "隣接ノードを検索",
       "allProtos": "LLDP・CDP の両方",
       "protoAria": "プロトコルで絞り込む"
+    }
+  },
+  "select": {
+    "count": "{{count}} 件選択中",
+    "move": "移動…",
+    "moveByPrefix": "IP レンジで移動…",
+    "clear": "解除",
+    "hint": "Ctrl クリックで 1 件ずつ、Shift クリックでまとめて追加"
+  },
+  "groupPicker": {
+    "none": "フォルダなし",
+    "noMatch": "一致するフォルダなし",
+    "listAria": "フォルダ",
+    "searchPlaceholder": "フォルダを絞り込む",
+    "searchAria": "フォルダ名で絞り込む"
+  },
+  "moveByPrefix": {
+    "title": "{{count}} 件を IP レンジで移動",
+    "loading": "アドレスをフォルダの IP レンジと照合しています…",
+    "willMove": "移動する（{{count}} 件）",
+    "ambiguous": "複数のフォルダが該当（{{count}} 件）",
+    "ambiguousHint": "2 つのフォルダが同じだけ該当するため、これらは動かしません。",
+    "unmatched": "どのレンジにも入らない（{{count}} 件）",
+    "apply": "{{count}} 件を移動",
+    "result": "{{requested}} 件のうち {{moved}} 件を移動しました。",
+    "failedGroups": "失敗したフォルダ: {{groups}}",
+    "empty": {
+      "noPrefixes": "IP レンジを持つフォルダが 1 つもありません。照合する相手がありません。",
+      "noMatch": "どのアドレスもフォルダの IP レンジに入りません。",
+      "allAmbiguous": "該当したものはすべて、複数のフォルダが同じだけ該当しました。"
     }
   }
 }

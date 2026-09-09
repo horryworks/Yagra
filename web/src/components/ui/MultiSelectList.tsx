@@ -42,7 +42,10 @@ interface Props {
   takeFocus?: boolean;
 }
 
-const SEARCH_THRESHOLD = 8;
+/** Show the option-search box once a list is at least this long — the shared answer to "when is
+ *  a list of choices too long to scan". `GroupPicker` reads it rather than writing an 8 of its
+ *  own, so the two controls cannot disagree about what counts as long. */
+export const SEARCH_THRESHOLD = 8;
 
 export function MultiSelectList({
   options,

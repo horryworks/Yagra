@@ -1,0 +1,19 @@
+/* The list of nodes a multi-node move is about. Bounded height so a batch of two hundred does not
+   push the folder picker off the bottom of the dialog — the picker is the control, the list is
+   confirmation of what was picked. */
+
+.movenode-list {
+  max-height: 140px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px 8px 6px 22px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.movenode-list li {
+  padding: 1px 0;
+}

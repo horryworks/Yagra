@@ -878,6 +878,28 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("GET", "/api/v1/nodes", GroupFiltered, Tool("list_nodes")),
     ("POST", "/api/v1/nodes", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "POST",
+        "/api/v1/nodes/move",
+        // Scoped, unlike the single-node `PUT /nodes/:id/group` beside it, which claims
+        // `ADMIN_CFG`. `manage_config` is held by Operator too and an Operator can be group-scoped,
+        // so the claim is wrong there — a defect this route deliberately does not inherit
+        // (ADR-124 決定 8). Fixing the older one changes drag-and-drop, so it is filed separately.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/nodes/move-preview",
+        GroupFiltered,
+        Exempt(
+            "a proposal for a write, not an answer about the fleet: it tells the operator which \
+             folder's IP range each selected node falls into, so the only thing to do with it is \
+             press Move. MCP is read-only, so a tool here would end at a wall — and the two facts \
+             it folds (a folder's prefixes, a node's address) are already served by \
+             list_node_groups and list_nodes",
+        ),
+    ),
     ("DELETE", "/api/v1/nodes/:node_id", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",

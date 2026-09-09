@@ -10346,6 +10346,156 @@
         }
       }
     },
+    "/api/v1/nodes/move": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "move_nodes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkNodeMove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many of the named nodes moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkMoveResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown destination folder, or more ids than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the caller cannot see ungrouped nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The destination folder is not one this caller may act on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/move-preview": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "preview_move_by_prefix",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeIdBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Which folder's IP range contains each node's address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovePreviewResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More ids than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/search": {
       "get": {
         "tags": [
@@ -12128,6 +12278,16 @@
         "responses": {
           "204": {
             "description": "Node moved in the folder tree"
+          },
+          "400": {
+            "description": "The destination folder does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           },
           "401": {
             "description": "No valid bearer token",
@@ -22622,6 +22782,50 @@
           }
         }
       },
+      "BulkMoveResult": {
+        "type": "object",
+        "description": "What a bulk move actually did.",
+        "required": [
+          "requested",
+          "moved"
+        ],
+        "properties": {
+          "moved": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows that actually moved. **Lower than `requested` is normal**: an id can name a node that\nhas since been deleted, or one outside the caller's scope. The two are not distinguished.",
+            "minimum": 0
+          },
+          "requested": {
+            "type": "integer",
+            "description": "Distinct ids the request named, after de-duplication.",
+            "minimum": 0
+          }
+        }
+      },
+      "BulkNodeMove": {
+        "type": "object",
+        "description": "Move many nodes into one folder (or `null` to ungroup them all).",
+        "required": [
+          "node_ids"
+        ],
+        "properties": {
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
       "BundleNote": {
         "type": "object",
         "description": "One note, with the table it concerns and how many rows it covers.",
@@ -29113,6 +29317,42 @@
           }
         }
       },
+      "MovePreviewResult": {
+        "type": "object",
+        "description": "What the IP-range match proposes. **A proposal, not an action** — nothing is written by the\nendpoint that returns this (ADR-124 決定 6).",
+        "required": [
+          "matched",
+          "ambiguous",
+          "unmatched",
+          "any_prefixes"
+        ],
+        "properties": {
+          "ambiguous": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrefixAmbiguity"
+            }
+          },
+          "any_prefixes": {
+            "type": "boolean",
+            "description": "Whether **any** folder this caller can see carries a range at all.\n\nWithout this, a deployment with no NetBox reports every node as unmatched and the operator\ncannot tell \"these addresses are not covered\" from \"there was never anything to match\nagainst\" — one message for two situations is how an inert feature looks like a working one."
+          },
+          "matched": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrefixProposal"
+            }
+          },
+          "unmatched": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Ids whose address falls inside no visible folder's range."
+          }
+        }
+      },
       "MuteScope": {
         "type": "string",
         "description": "Whether a mute targets a single node or a whole folder group (recursive).",
@@ -29810,6 +30050,22 @@
         "type": "string",
         "format": "uuid",
         "description": "Stable identifier for a monitored node.\n\nA UUID, not a name or address — both of which can change over a node's life."
+      },
+      "NodeIdBatch": {
+        "type": "object",
+        "description": "The nodes to examine.",
+        "required": [
+          "node_ids"
+        ],
+        "properties": {
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
       },
       "NodeKind": {
         "type": "string",
@@ -30971,6 +31227,50 @@
         "properties": {
           "ok": {
             "type": "boolean"
+          }
+        }
+      },
+      "PrefixAmbiguity": {
+        "type": "object",
+        "description": "One node claimed equally well by two or more folders. Never moved automatically.",
+        "required": [
+          "node_id",
+          "group_ids"
+        ],
+        "properties": {
+          "group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "PrefixProposal": {
+        "type": "object",
+        "description": "One node, and the single folder whose IP range contains its address.",
+        "required": [
+          "node_id",
+          "group_id",
+          "prefix"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The range that matched — shown so the operator can see *why* this folder is proposed."
           }
         }
       },

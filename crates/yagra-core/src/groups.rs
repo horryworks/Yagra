@@ -124,6 +124,19 @@ pub struct GroupPrefix {
     pub description: String,
 }
 
+/// One "this node's address falls inside this folder's range" hit (ADR-124).
+///
+/// Already narrowed to the longest prefix that contains the address, so two rows for the same
+/// node mean two *different folders* claim it equally well — the ambiguous case, which is
+/// reported and never resolved automatically.
+#[derive(Debug, Clone)]
+pub struct PrefixMatch {
+    pub node: Uuid,
+    pub group: Uuid,
+    /// The range that matched, for showing the operator *why* this folder was proposed.
+    pub prefix: String,
+}
+
 /// A fractional sort_order that places an item between `prev` and `next` — the order values of
 /// its new neighbours in the destination scope (either side absent at an edge). Midpoint inserts
 /// keep reordering to a single-row update; values are seeded with integer spacing (migration
@@ -450,6 +463,85 @@ impl GroupRepo {
             }
         }
         Ok(())
+    }
+
+    /// Which folder's IP range each of these nodes falls inside, narrowed to the **longest**
+    /// prefix that contains the address (ADR-124 決定 5). A node with no hit is simply absent
+    /// from the result; a node with two hits of the same length is **ambiguous** and appears
+    /// twice, because choosing between two sites on the caller's behalf is exactly the decision
+    /// this feature refuses to make.
+    ///
+    /// 🚨 **The containment test lives here, in PostgreSQL, and must not move into Rust.** Two
+    /// reasons, and the second is the one that bites: there is no CIDR parser in this workspace
+    /// (migration 0104 chose the `cidr` column type precisely so the *write* is the validation),
+    /// and [`crate::api::groups::visible_groups`] **clears `prefixes` on breadcrumb ancestors** —
+    /// so a client computing this from the group list it was served would silently miss every
+    /// range it was allowed to match against but not to read. `<<=` is the containment operator;
+    /// an IPv4 address against an IPv6 prefix is simply `false`, never an error.
+    ///
+    /// `scope` is the caller's visible group ids (`None` ⇒ unrestricted), and it narrows
+    /// **both sides**: the candidate folders, and the nodes themselves. Without the first, the
+    /// reply would describe the subnet layout of sites the caller may not see — the leak
+    /// `visible_groups` exists to prevent. Without the second, naming a node id would answer a
+    /// question about a node the caller cannot read.
+    ///
+    /// ⚠️ A node the scope refuses is **absent from the result, exactly like one that matched
+    /// nothing**. The caller reports it as unmatched. That is fail-closed and it is also the
+    /// honest limit of this shape: the UI can only name nodes the tree already showed, so the
+    /// case is unreachable from the product and unmeasured anywhere else.
+    pub async fn match_prefixes(
+        &self,
+        nodes: &[Uuid],
+        scope: Option<&[Uuid]>,
+    ) -> anyhow::Result<Vec<PrefixMatch>> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
+        let rows = sqlx::query(
+            "SELECT n.id AS node_id, p.group_id AS group_id, p.prefix::TEXT AS prefix \
+             FROM nodes n \
+             JOIN node_group_prefixes p ON n.address <<= p.prefix \
+             WHERE n.id = ANY($1) \
+               AND ($2::uuid[] IS NULL OR n.group_id = ANY($2)) \
+               AND ($2::uuid[] IS NULL OR p.group_id = ANY($2)) \
+               AND masklen(p.prefix) = ( \
+                     SELECT MAX(masklen(q.prefix)) FROM node_group_prefixes q \
+                     WHERE n.address <<= q.prefix \
+                       AND ($2::uuid[] IS NULL OR q.group_id = ANY($2))) \
+             ORDER BY n.id, p.group_id",
+        )
+        .bind(nodes)
+        .bind(&scope_bind)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PrefixMatch {
+                    node: row.try_get("node_id")?,
+                    group: row.try_get("group_id")?,
+                    prefix: row.try_get("prefix")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Whether any folder the caller may see carries an IP range at all.
+    ///
+    /// Exists so "nothing matched" can be told apart from "there was nothing to match against"
+    /// (ADR-124 決定 6). Folding the two into one message is the shape that ships an inert
+    /// feature looking like a working one: a deployment with no NetBox would report every node as
+    /// unmatched and give the operator no way to learn that the answer was never possible.
+    pub async fn any_prefixes(&self, scope: Option<&[Uuid]>) -> anyhow::Result<bool> {
+        let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
+        let found: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM node_group_prefixes \
+             WHERE ($1::uuid[] IS NULL OR group_id = ANY($1)))",
+        )
+        .bind(&scope_bind)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(found)
     }
 
     /// Whether a folder with this id exists.
@@ -981,5 +1073,159 @@ mod tests {
         for up in group_ancestors(&edges, b) {
             assert!(!sub.contains(&up), "{up} is both above and below b");
         }
+    }
+
+    /// The longest prefix containing the address wins.
+    ///
+    /// A site inside a region: both ranges contain the node, and the answer is the site.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_longest_matching_prefix_wins(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let region = crate::pgtest::group(&pool, "Japan").await;
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        crate::pgtest::prefix(&pool, region, "10.0.0.0/8").await;
+        crate::pgtest::prefix(&pool, site, "10.1.2.0/24").await;
+        let node =
+            crate::pgtest::node_at(&pool, "sw", "10.1.2.7".parse().expect("addr"), None).await;
+
+        let hits = repo.match_prefixes(&[node], None).await.expect("match");
+        assert_eq!(
+            hits.len(),
+            1,
+            "more than the longest match came back: {hits:?}"
+        );
+        assert_eq!(hits[0].group, site);
+        assert_eq!(hits[0].prefix, "10.1.2.0/24");
+    }
+
+    /// Two folders claiming the same address at the same length is ambiguous — both come back, so
+    /// the caller can show the choice rather than making it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn two_folders_at_the_same_length_both_come_back(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let a = crate::pgtest::group(&pool, "Site A").await;
+        let b = crate::pgtest::group(&pool, "Site B").await;
+        crate::pgtest::prefix(&pool, a, "10.1.2.0/24").await;
+        crate::pgtest::prefix(&pool, b, "10.1.2.0/24").await;
+        let node =
+            crate::pgtest::node_at(&pool, "sw", "10.1.2.7".parse().expect("addr"), None).await;
+
+        let hits = repo.match_prefixes(&[node], None).await.expect("match");
+        assert_eq!(hits.len(), 2, "the tie was resolved somewhere: {hits:?}");
+    }
+
+    /// An address inside no range is simply absent, and a v4 node never matches a v6 range.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_address_outside_every_range_matches_nothing(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        crate::pgtest::prefix(&pool, site, "10.1.2.0/24").await;
+        crate::pgtest::prefix(&pool, site, "2001:db8::/32").await;
+        let outside =
+            crate::pgtest::node_at(&pool, "far", "192.168.9.9".parse().expect("addr"), None).await;
+        let v6 =
+            crate::pgtest::node_at(&pool, "v6", "2001:db8::1".parse().expect("addr"), None).await;
+
+        let hits = repo
+            .match_prefixes(&[outside, v6], None)
+            .await
+            .expect("match");
+        // The v6 node matches its own family's range; the v4 one matches nothing. `<<=` across
+        // families is false rather than an error, which is what makes storing both safe.
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].node, v6);
+    }
+
+    /// 🚨 The scope narrows the candidate folders.
+    ///
+    /// Answering with a folder the caller may not see would hand over the subnet layout of a site
+    /// whose membership they were refused — the leak `api::groups::visible_groups` clears
+    /// `prefixes` to prevent, met again on a different route.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_is_not_told_about_a_folder_they_cannot_see(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let mine = crate::pgtest::group(&pool, "Mine").await;
+        let theirs = crate::pgtest::group(&pool, "Theirs").await;
+        crate::pgtest::prefix(&pool, theirs, "10.1.2.0/24").await;
+        let node =
+            crate::pgtest::node_at(&pool, "sw", "10.1.2.7".parse().expect("addr"), Some(mine))
+                .await;
+
+        assert_eq!(
+            repo.match_prefixes(&[node], None)
+                .await
+                .expect("match")
+                .len(),
+            1,
+            "unrestricted, the folder does claim this node"
+        );
+        assert!(
+            repo.match_prefixes(&[node], Some(&[mine]))
+                .await
+                .expect("match")
+                .is_empty(),
+            "a scoped caller was told about a folder outside their scope"
+        );
+    }
+
+    /// And it narrows the nodes: naming an id the caller cannot read answers nothing.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_learns_nothing_about_a_node_outside_their_scope(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let mine = crate::pgtest::group(&pool, "Mine").await;
+        let theirs = crate::pgtest::group(&pool, "Theirs").await;
+        crate::pgtest::prefix(&pool, mine, "10.1.2.0/24").await;
+        let hidden =
+            crate::pgtest::node_at(&pool, "sw", "10.1.2.7".parse().expect("addr"), Some(theirs))
+                .await;
+
+        assert!(
+            repo.match_prefixes(&[hidden], Some(&[mine]))
+                .await
+                .expect("match")
+                .is_empty(),
+            "a node outside the scope was answered for"
+        );
+    }
+
+    /// A prefix written with host bits set is stored as its network, so it still contains the
+    /// address someone typed it from.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_prefix_with_host_bits_still_matches_its_own_network(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        crate::pgtest::prefix(&pool, site, "10.1.2.5/24").await;
+        let node =
+            crate::pgtest::node_at(&pool, "sw", "10.1.2.9".parse().expect("addr"), None).await;
+
+        let hits = repo.match_prefixes(&[node], None).await.expect("match");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].prefix, "10.1.2.0/24", "the host bits were kept");
+    }
+
+    /// `any_prefixes` tells "nothing matched" apart from "there was nothing to match against".
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn any_prefixes_answers_for_the_callers_scope(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let mine = crate::pgtest::group(&pool, "Mine").await;
+        let theirs = crate::pgtest::group(&pool, "Theirs").await;
+        assert!(
+            !repo.any_prefixes(None).await.expect("read"),
+            "a fresh database has none"
+        );
+
+        crate::pgtest::prefix(&pool, theirs, "10.1.2.0/24").await;
+        assert!(repo.any_prefixes(None).await.expect("read"));
+        assert!(
+            !repo.any_prefixes(Some(&[mine])).await.expect("read"),
+            "a range outside the scope was counted"
+        );
     }
 }

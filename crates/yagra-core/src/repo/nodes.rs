@@ -260,6 +260,58 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Move MANY nodes into one group (or `None` to ungroup them) in a single statement, appending
+    /// them to the end of the destination scope **in the order given**. Returns
+    /// `(requested, moved)` — the de-duplicated id count, and how many rows actually moved.
+    ///
+    /// ⚠️ **The `sort_order` base excludes the nodes being moved**, exactly as the single-node
+    /// [`Self::set_node_group`] excludes the one node it moves (`id <> $1`). Without that, a node
+    /// already sitting in the destination raises the base with its own value and the batch lands
+    /// after itself — which reads as "the order jumped" and is invisible in any unit test that
+    /// starts from an empty destination.
+    ///
+    /// ⚠️ **Ids are de-duplicated keeping the first occurrence.** A repeated id becomes two rows
+    /// out of `WITH ORDINALITY` and gives that node a non-deterministic order. The order is
+    /// preserved rather than sorted: what arrives is the operator's tree order.
+    ///
+    /// `moved < requested` is normal and not an error — an id can be stale (the node was deleted
+    /// between the page load and the click). The caller reports **both** numbers rather than
+    /// claiming a count it did not achieve (ADR-124 決定 7).
+    ///
+    /// `scope` narrows which nodes may move: a caller restricted to some folders cannot pull a
+    /// node out of one they cannot see. ⚠️ **The predicate is written out rather than reusing
+    /// [`Self::SCOPE_PREDICATE`]**, which is bound to `$1` and this statement needs `$1` for the
+    /// id array. Same shape, same fail-closed reading of an empty slice (match nothing).
+    /// A node refused by the scope is indistinguishable from a deleted one in the count — both
+    /// simply do not move — which the endpoint's doc says out loud.
+    pub async fn set_node_group_batch(
+        &self,
+        ids: &[Uuid],
+        group: Option<Uuid>,
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+        if ids.is_empty() {
+            return Ok((0, 0));
+        }
+        let res = sqlx::query(
+            "UPDATE nodes SET group_id = $2, updated_at = now(), \
+             sort_order = (SELECT COALESCE(MAX(peer.sort_order), 0) FROM nodes AS peer \
+                           WHERE peer.group_id IS NOT DISTINCT FROM $2::uuid \
+                             AND NOT (peer.id = ANY($1))) + t.ord::double precision \
+             FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord) \
+             WHERE nodes.id = t.id \
+               AND ($3::uuid[] IS NULL OR nodes.group_id = ANY($3))",
+        )
+        .bind(&ids)
+        .bind(group)
+        .bind(Self::scope_bind(scope))
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
+    }
+
     /// Set (or clear with `None`) a node's own poll-pool (ADR-009/020). `None` ⇒ NULL, so the node
     /// falls back to its folder's pool, else the default pool. Returns whether the node exists.
     ///
@@ -865,6 +917,137 @@ mod tests {
         assert!(
             repo.suppression_opt_outs().await.is_empty(),
             "clearing the opt-out left the node on the list"
+        );
+    }
+
+    /// A batch lands in the order it was given, appended after what is already there.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_batch_move_appends_in_the_order_it_was_given(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let c = pgtest::node(&pool, "c", 3, None).await;
+
+        let (requested, moved) = repo
+            .set_node_group_batch(&[c, a, b], Some(dest), None)
+            .await
+            .expect("move");
+        assert_eq!((requested, moved), (3, 3));
+
+        let order = repo.node_sort_orders(&[a, b, c]).await.expect("orders");
+        let of = |id: uuid::Uuid| *order.get(&id).expect("an order");
+        assert!(
+            of(c) < of(a) && of(a) < of(b),
+            "input order was not preserved: {order:?}"
+        );
+    }
+
+    /// 🚨 The base excludes the nodes being moved.
+    ///
+    /// A node already sitting in the destination must not raise the base with its own value —
+    /// which is invisible in any test that starts from an empty destination, and is why the
+    /// single-node writer beside this one carries `AND id <> $1`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_node_already_in_the_destination_does_not_push_the_batch_past_itself(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        let sitting = pgtest::node(&pool, "sitting", 1, Some(dest)).await;
+        let a = pgtest::node(&pool, "a", 2, None).await;
+
+        // Move both — the one already there, and one from outside.
+        repo.set_node_group_batch(&[sitting, a], Some(dest), None)
+            .await
+            .expect("move");
+
+        let order = repo.node_sort_orders(&[sitting, a]).await.expect("orders");
+        let of = |id: uuid::Uuid| *order.get(&id).expect("an order");
+        assert!(
+            of(sitting) < of(a),
+            "the batch did not land in its own order: {order:?}"
+        );
+        assert!(
+            of(a) <= 2.0,
+            "the base counted a node that was itself moving, so the batch landed at {}",
+            of(a)
+        );
+    }
+
+    /// A stale id is not an error: it simply does not move, and both counts say so.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_batch_reports_how_many_of_the_named_nodes_it_actually_moved(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let gone = uuid::Uuid::new_v4();
+
+        let (requested, moved) = repo
+            .set_node_group_batch(&[a, gone], Some(dest), None)
+            .await
+            .expect("move");
+        assert_eq!(requested, 2, "both ids were asked for");
+        assert_eq!(moved, 1, "only one of them exists");
+    }
+
+    /// A repeated id is one node, not two rows out of `WITH ORDINALITY`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_repeated_id_is_moved_once(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        let a = pgtest::node(&pool, "a", 1, None).await;
+
+        let (requested, moved) = repo
+            .set_node_group_batch(&[a, a, a], Some(dest), None)
+            .await
+            .expect("move");
+        assert_eq!((requested, moved), (1, 1), "the id was counted three times");
+    }
+
+    /// The scope narrows which nodes may move, not which folder they may reach.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_batch_move_leaves_nodes_outside_the_scope_where_they_are(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let mine = pgtest::group(&pool, "Mine").await;
+        let theirs = pgtest::group(&pool, "Theirs").await;
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        let ours = pgtest::node(&pool, "ours", 1, Some(mine)).await;
+        let hidden = pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
+
+        let (requested, moved) = repo
+            .set_node_group_batch(&[ours, hidden], Some(dest), Some(&[mine, dest]))
+            .await
+            .expect("move");
+        assert_eq!((requested, moved), (2, 1), "the scope did not hold");
+        let still = repo
+            .get_node(hidden)
+            .await
+            .expect("read")
+            .expect("the node");
+        assert_eq!(
+            still.group.map(|g| g.0),
+            Some(theirs),
+            "an out-of-scope node was moved"
+        );
+    }
+
+    /// An empty batch is a no-op, and does not go near the database.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_empty_batch_moves_nothing(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        assert_eq!(
+            repo.set_node_group_batch(&[], Some(dest), None)
+                .await
+                .expect("move"),
+            (0, 0)
         );
     }
 }

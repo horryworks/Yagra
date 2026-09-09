@@ -56,12 +56,20 @@ import {
   type Target,
 } from './nodeTreeDnd';
 import {
+  bulkMenuItems,
+  canMoveByPrefix,
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
   rootMenuHasItems,
   type MenuCapabilities,
 } from './nodeTreeMenu';
+import {
+  clickGesture,
+  rangeChecked,
+  toggleChecked,
+  type CheckedNodes,
+} from './nodeTreeSelect';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
 
@@ -75,6 +83,10 @@ const BASE_PAD = 6;
 /** Fixed row height (matches `--row-h` in tokens.css) — every tree row is one line, so the
  *  flattened list virtualizes with a uniform estimate (S13). */
 const ROW_H = 30;
+
+/** One shared empty working set, so a tree rendered without `checked` reads from a stable value
+ *  rather than allocating a new `Map` on every render (which would defeat every memo below it). */
+const EMPTY_CHECKED: CheckedNodes = new Map();
 
 type DropTarget = { id: string | 'root'; position: DropPos; ok: boolean } | null;
 type Menu =
@@ -137,6 +149,21 @@ interface Props {
   onDeleteNode?: (node: NodeSummary) => void;
   /** Open the "move node" picker (context-menu / button path, keyboard-accessible). */
   onRequestMoveNode: (node: NodeSummary) => void;
+  /** The working set — nodes checked with Ctrl / Shift for a bulk action (ADR-124 決定 2).
+   *  Held by the page, never in the URL. */
+  checked?: CheckedNodes;
+  /** Row a Shift click measures its range from. An **id**: the flat row list is rebuilt on every
+   *  SSE frame and filter change, so an index would point at whatever sits there now. */
+  anchorId?: string | null;
+  /** The working set changed. **Omit to disable Ctrl / Shift entirely** — which is what a caller
+   *  without ManageConfig does, so a viewer cannot assemble a batch with nowhere to send it. */
+  onCheckedChange?: (next: Map<string, NodeSummary>, anchorId: string | null) => void;
+  /** Move every checked node (the menu's bulk item). Omit to hide it. */
+  onMoveChecked?: () => void;
+  /** Propose folders for every checked node by IP range. Omit to hide it. */
+  onMoveCheckedByPrefix?: () => void;
+  /** Propose a folder for this one node by IP range. Omit to hide it. */
+  onMoveNodeByPrefix?: (node: NodeSummary) => void;
   /** Move a node into a group (or null = ungroup), appending it — drop onto a group / picker. */
   onMoveNode: (nodeId: string, groupId: string | null) => void;
   /** Re-parent a group (or null = top level), appending it — drop into a group / onto Ungrouped. */
@@ -198,6 +225,12 @@ export function NodeTree({
   onAddNode,
   onDeleteNode,
   onRequestMoveNode,
+  checked,
+  anchorId,
+  onCheckedChange,
+  onMoveChecked,
+  onMoveCheckedByPrefix,
+  onMoveNodeByPrefix,
   onMoveNode,
   onMoveGroup,
   onReorderNode,
@@ -268,6 +301,32 @@ export function NodeTree({
   const selectGroup = (group: NodeGroup) => {
     if (onSelectNone && isSelected('group', group.id)) return onSelectNone();
     onSelectGroup?.(group);
+  };
+
+  const checkedNodes: CheckedNodes = checked ?? EMPTY_CHECKED;
+
+  /** What a click on a node row does, once the modifier keys are read (ADR-124 決定 2/4).
+   *
+   *  ⚠️ **The plain branch is byte-for-byte what it was**, including ADR-073's clear-on-re-click,
+   *  because that gesture is the one an operator uses a hundred times a day and the working set is
+   *  new. What it gains is abandoning the batch: a plain click means "never mind those".
+   *
+   *  Ctrl / Shift never touch `?sel=`, so the pane keeps showing whatever was open while a batch
+   *  is assembled. */
+  const clickNode = (e: React.MouseEvent, node: NodeSummary) => {
+    if (!onCheckedChange) return selectNode(node);
+    const gesture = clickGesture(e);
+    if (gesture === 'toggle') {
+      onCheckedChange(toggleChecked(checkedNodes, node), node.id);
+      return;
+    }
+    if (gesture === 'range') {
+      const next = rangeChecked(flat, anchorId ?? null, node, checkedNodes);
+      if (next) onCheckedChange(next.checked, next.anchorId);
+      return;
+    }
+    if (checkedNodes.size > 0) onCheckedChange(new Map(), null);
+    selectNode(node);
   };
 
   // Whether a right-click on each row kind would produce a menu with anything in it.
@@ -705,13 +764,16 @@ export function NodeTree({
   const renderNode = (node: NodeSummary, depth: number): React.ReactNode => {
     const target: Target = { kind: 'node', id: node.id, scope: node.group_id ?? null };
     const isSel = selected?.kind === 'node' && selected.id === node.id;
+    // 🚨 A class of its own, never `sel`. `tests/ui/treeDeselect.spec.ts` pins `.ntree-row.sel`
+    // at exactly one row, which is the property that proves the pane's selection is single.
+    const isChecked = checkedNodes.has(node.id);
     return (
       <div
-        className={`ntree-row ntree-node${isSel ? ' sel' : ''}${dropClass(node.id)}${drag?.id === node.id ? ' dragging' : ''}`}
+        className={`ntree-row ntree-node${isSel ? ' sel' : ''}${isChecked ? ' checked' : ''}${dropClass(node.id)}${drag?.id === node.id ? ' dragging' : ''}`}
         key={node.id}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
         draggable={canEdit}
-        onClick={() => selectNode(node)}
+        onClick={(e) => clickNode(e, node)}
         onDragStart={(e) => {
           e.stopPropagation();
           e.dataTransfer.effectAllowed = 'move';
@@ -735,7 +797,7 @@ export function NodeTree({
           className="ntree-node-name"
           onClick={(e) => {
             e.stopPropagation();
-            selectNode(node);
+            clickNode(e, node);
           }}
         >
           {node.name}
@@ -973,6 +1035,60 @@ export function NodeTree({
                 <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
                   {t('tree.moveToGroup')}
                 </button>
+              )}
+              {onMoveNodeByPrefix && canMoveByPrefix(groups, canEdit) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onMoveNodeByPrefix(menu.node);
+                    setMenu(null);
+                  }}
+                >
+                  {t('tree.moveByPrefix')}
+                </button>
+              )}
+              {/* The way in for someone who does not know the keyboard gesture (ADR-055 R6).
+                  Ctrl / Shift is written nowhere on screen until a batch exists, so without this
+                  item the feature is reachable only by people who were told about it. */}
+              {onCheckedChange && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCheckedChange(toggleChecked(checkedNodes, menu.node), menu.node.id);
+                    setMenu(null);
+                  }}
+                >
+                  {checkedNodes.has(menu.node.id)
+                    ? t('tree.removeFromSelection')
+                    : t('tree.addToSelection')}
+                </button>
+              )}
+              {bulkMenuItems(checkedNodes.size, caps) && (
+                <>
+                  <div className="ntree-menu-sep" />
+                  {onMoveChecked && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onMoveChecked();
+                        setMenu(null);
+                      }}
+                    >
+                      {t('tree.moveSelected', { count: checkedNodes.size })}
+                    </button>
+                  )}
+                  {onMoveCheckedByPrefix && canMoveByPrefix(groups, canEdit) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onMoveCheckedByPrefix();
+                        setMenu(null);
+                      }}
+                    >
+                      {t('tree.moveSelectedByPrefix', { count: checkedNodes.size })}
+                    </button>
+                  )}
+                </>
               )}
               {onAddNode && (
                 <button type="button" onClick={() => { onAddNode(menu.node.group_id ?? null); setMenu(null); }}>

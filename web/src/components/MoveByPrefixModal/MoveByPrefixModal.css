@@ -1,0 +1,104 @@
+/* The IP-range move proposal (ADR-124). Three sections in one wide dialog; each list scrolls on
+   its own so a long "does not match" section cannot push the "will move" one out of view. */
+
+.mbp {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mbp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mbp-head {
+  margin: 0;
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mbp-hint,
+.mbp-reason {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.mbp-dest {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.mbp-dest-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--bg-tertiary);
+}
+
+.mbp-dest-name {
+  flex: 1;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mbp-dest-count {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.mbp-list {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 8px;
+  list-style: none;
+  font-size: var(--font-sm);
+}
+
+.mbp-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.mbp-name {
+  flex: none;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mbp-addr,
+.mbp-cands {
+  flex: 1;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mbp-badge {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.mbp-done {
+  margin: 0;
+  color: var(--status-ok);
+  font-size: var(--font-sm);
+}

@@ -605,6 +605,17 @@ fn changes_monitoring_config(path: &str) -> bool {
         // spurious rebuilds in the product. Measured on the test server 2026-08-15: fourteen page
         // reloads, no other write in the window, and the next scheduler sweep lost its cache.
         || path == "/api/v1/node-names"
+        // Proposing which folder's IP range each selected node falls into (ADR-124 決定 5). It is
+        // a POST because the id list is too long for a query string, and it writes nothing — the
+        // move that may follow is `POST /nodes/move`, which is **not** listed here and does bump
+        // the signal.
+        //
+        // 🚨 `every_read_shaped_write_route_is_exempt_from_the_dirty_signal` cannot see this one:
+        // that check only looks at routes whose handler demands a *read* permission, and this one
+        // demands ManageConfig (the operator is deciding a move). So nothing but the test beside
+        // this function keeps the entry honest — and forgetting it makes every press of the
+        // preview button rebuild the poll specs for the whole fleet, silently.
+        || path == "/api/v1/nodes/move-preview"
         // The "test this before you save it" probes. Each compiles a pattern, opens an outbound
         // connection, or asks a vendor API a question, and writes nothing — the same shape as
         // `/notification-channels/preview` above, and pressed the same way: repeatedly, while
@@ -1611,6 +1622,25 @@ mod tests {
         // that has to argue for its own exemption rather than inheriting one.
         assert!(changes_monitoring_config("/api/v1/dashboards"));
         assert!(changes_monitoring_config("/api/v1/preferences/reset"));
+    }
+
+    /// 🚨 Proposing a move must not rebuild the fleet's poll specs; making one must.
+    ///
+    /// This pair is here because **no mechanical check covers it**. The one below only looks at
+    /// routes whose handler demands a *read* permission, and `/nodes/move-preview` demands
+    /// ManageConfig — the operator is deciding a move — so it is invisible there. Forgetting the
+    /// exemption costs a full-fleet re-resolution on every press of the preview button, silently
+    /// and with nothing in the log (ADR-124 決定 8).
+    #[test]
+    fn proposing_a_move_does_not_dirty_the_config_generation_but_making_one_does() {
+        assert!(
+            !changes_monitoring_config("/api/v1/nodes/move-preview"),
+            "the preview writes nothing and must not invalidate"
+        );
+        assert!(
+            changes_monitoring_config("/api/v1/nodes/move"),
+            "a move changes which folder a node's thresholds and pool come from"
+        );
     }
 
     /// A route registered with a mutating method whose handler asks only for a **read** permission

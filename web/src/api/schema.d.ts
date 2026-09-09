@@ -2020,6 +2020,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["move_nodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/move-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["preview_move_by_prefix"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/search": {
         parameters: {
             query?: never;
@@ -4971,6 +5003,23 @@ export interface components {
             /** Format: double */
             value: number;
         };
+        /** @description What a bulk move actually did. */
+        BulkMoveResult: {
+            /**
+             * Format: int64
+             * @description Rows that actually moved. **Lower than `requested` is normal**: an id can name a node that
+             *     has since been deleted, or one outside the caller's scope. The two are not distinguished.
+             */
+            moved: number;
+            /** @description Distinct ids the request named, after de-duplication. */
+            requested: number;
+        };
+        /** @description Move many nodes into one folder (or `null` to ungroup them all). */
+        BulkNodeMove: {
+            /** Format: uuid */
+            group_id?: string | null;
+            node_ids: string[];
+        };
         /** @description One note, with the table it concerns and how many rows it covers. */
         BundleNote: {
             /** @description What happened. */
@@ -7780,6 +7829,24 @@ export interface components {
             pool: string;
         };
         /**
+         * @description What the IP-range match proposes. **A proposal, not an action** — nothing is written by the
+         *     endpoint that returns this (ADR-124 決定 6).
+         */
+        MovePreviewResult: {
+            ambiguous: components["schemas"]["PrefixAmbiguity"][];
+            /**
+             * @description Whether **any** folder this caller can see carries a range at all.
+             *
+             *     Without this, a deployment with no NetBox reports every node as unmatched and the operator
+             *     cannot tell "these addresses are not covered" from "there was never anything to match
+             *     against" — one message for two situations is how an inert feature looks like a working one.
+             */
+            any_prefixes: boolean;
+            matched: components["schemas"]["PrefixProposal"][];
+            /** @description Ids whose address falls inside no visible folder's range. */
+            unmatched: string[];
+        };
+        /**
          * @description Whether a mute targets a single node or a whole folder group (recursive).
          * @enum {string}
          */
@@ -8140,6 +8207,10 @@ export interface components {
          *     A UUID, not a name or address — both of which can change over a node's life.
          */
         NodeId: string;
+        /** @description The nodes to examine. */
+        NodeIdBatch: {
+            node_ids: string[];
+        };
         /**
          * @description A node's monitoring kind: the thing that decides which poll jobs it produces.
          *
@@ -8744,6 +8815,21 @@ export interface components {
         /** @description A save's acknowledgement. The document is not echoed back — the client already has it. */
         PreferencesSaved: {
             ok: boolean;
+        };
+        /** @description One node claimed equally well by two or more folders. Never moved automatically. */
+        PrefixAmbiguity: {
+            group_ids: string[];
+            /** Format: uuid */
+            node_id: string;
+        };
+        /** @description One node, and the single folder whose IP range contains its address. */
+        PrefixProposal: {
+            /** Format: uuid */
+            group_id: string;
+            /** Format: uuid */
+            node_id: string;
+            /** @description The range that matched — shown so the operator can see *why* this folder is proposed. */
+            prefix: string;
         };
         /** @description One field that could not be used. */
         PreviewProblem: {
@@ -18965,6 +19051,135 @@ export interface operations {
             };
         };
     };
+    move_nodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNodeMove"];
+            };
+        };
+        responses: {
+            /** @description How many of the named nodes moved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkMoveResult"];
+                };
+            };
+            /** @description Unknown destination folder, or more ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the caller cannot see ungrouped nodes */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The destination folder is not one this caller may act on */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    preview_move_by_prefix: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeIdBatch"];
+            };
+        };
+        responses: {
+            /** @description Which folder's IP range contains each node's address */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MovePreviewResult"];
+                };
+            };
+            /** @description More ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     search_nodes: {
         parameters: {
             query?: {
@@ -20179,6 +20394,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The destination folder does not exist */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
             };
             /** @description No valid bearer token */
             401: {

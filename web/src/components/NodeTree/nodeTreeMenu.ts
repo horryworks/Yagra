@@ -106,3 +106,38 @@ export function hasSuppression(
     node?.state === 'maintenance'
   );
 }
+
+/**
+ * Whether a node's menu can offer "move to the folder whose IP range contains this address"
+ * (ADR-124 決定 6).
+ *
+ * ⚠️ **Unlike `canRunDiscovery`, this asks about every folder, not the row's own.** The question
+ * is "is there anywhere for this node to go", and the answer is spread across the tree: the folder
+ * that claims `192.168.1.7` is whichever one carries `192.168.1.0/24`, wherever it sits. The
+ * *matching* still happens on the server — this only decides whether the item is worth offering.
+ *
+ * 🚨 **An empty `prefixes` does not always mean "no ranges".** A scoped caller receives breadcrumb
+ * ancestors with their prefixes cleared (`api/groups.rs::visible_groups`), so this can read false
+ * for someone the server would in fact have matched. That is the conservative direction — the item
+ * stays hidden rather than opening a dialog that then finds nothing — and it is one of the two
+ * reasons the containment test is not computed in the browser.
+ *
+ * ⚠️ **Takes the permission, not the whole `MenuCapabilities`.** The two callers are the tree's
+ * own menu and the selection bar on the page above it, and the bar has no menu capabilities to
+ * hand over — building one there just to pass `canEdit` would put three `false`s at a call site
+ * as decoration.
+ */
+export function canMoveByPrefix(groups: readonly NodeGroup[], canEdit: boolean): boolean {
+  return canEdit && groups.some((g) => g.prefixes.length > 0);
+}
+
+/**
+ * Whether the node menu should talk about the **working set** rather than this one row.
+ *
+ * The bulk items appear once at least one node is checked; below that the menu keeps saying
+ * "this node", which is what a right-click on an unchecked row means. Gated on `canEdit` because
+ * every item it introduces is a move.
+ */
+export function bulkMenuItems(checkedCount: number, c: MenuCapabilities): boolean {
+  return c.canEdit && checkedCount > 0;
+}

@@ -35,6 +35,7 @@ import {
   statusFor,
 } from './discoveryScans';
 import { expandTargets } from '../lib/cidr';
+import { GroupPicker } from '../components/ui/GroupPicker';
 import {
   defaultChecked,
   hostCount,
@@ -552,14 +553,18 @@ export function DiscoveryPage() {
               <div className="disco-site">
                 <label className="form-label">
                   {t('discovery.site.label')}
-                  <Select value={siteId} disabled={inFlight} onChange={(e) => pickSite(e.target.value)}>
-                    <option value="">{t('discovery.site.none')}</option>
-                    {siteOptions.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </Select>
+                  <GroupPicker
+                    options={siteOptions.map((o) => ({
+                      id: o.id,
+                      label: o.label,
+                      depth: 0,
+                      path: o.label,
+                    }))}
+                    value={siteId}
+                    onChange={pickSite}
+                    emptyOption={t('discovery.site.none')}
+                    disabled={inFlight}
+                  />
                   <FieldHint>{t('discovery.site.hint')}</FieldHint>
                 </label>
               </div>

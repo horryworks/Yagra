@@ -222,6 +222,16 @@ export type Alert = components['schemas']['ActiveAlertView'];
 /** A node row for inventory listings. */
 export type NodeSummary = components['schemas']['NodeSummary'];
 
+/** What the IP-range match proposes for a set of nodes (`POST /api/v1/nodes/move-preview`).
+ *  A proposal — nothing has moved when this arrives (ADR-124 決定 6). */
+export type MovePreview = components['schemas']['MovePreviewResult'];
+
+/** One node and the single folder whose range contains its address. */
+export type PrefixProposal = components['schemas']['PrefixProposal'];
+
+/** One node two or more folders claim equally well. Never moved automatically. */
+export type PrefixAmbiguity = components['schemas']['PrefixAmbiguity'];
+
 /** One resolved node id → display name (`POST /api/v1/node-names`). Unresolved ids are omitted
  *  from the response, so the caller keeps the raw id as the fallback (S12). */
 export type NodeNameEntry = components['schemas']['NodeNameEntry'];

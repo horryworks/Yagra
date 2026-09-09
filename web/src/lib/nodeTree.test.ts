@@ -5,6 +5,7 @@ import {
   asGroupType,
   buildNodeTree,
   descendantNodes,
+  filterGroupOptions,
   filterTerm,
   findTreeGroup,
   flatRowKey,
@@ -557,19 +558,72 @@ describe('asGroupType', () => {
 });
 
 describe('groupOptions', () => {
-  it('flattens the hierarchy into depth-indented, name-sorted options', () => {
-    const groups = [
-      group('a', 'Tokyo'),
-      group('b', 'Osaka'),
-      group('a1', 'Edge', 'a'),
-      group('a2', 'Core', 'a'),
-    ];
-    const opts = groupOptions(groups);
-    // Top-level groups name-sorted, each parent's children following it, indented one level
-    // (the indent uses non-breaking spaces so HTML <option> leading space isn't collapsed).
-    expect(opts.map((o) => o.label.trim())).toEqual(['Osaka', 'Tokyo', 'Core', 'Edge']);
-    const indent = (s: string) => s.length - s.trimStart().length;
-    expect(opts.map((o) => indent(o.label))).toEqual([0, 0, 2, 2]);
+  const tree = [
+    group('a', 'Tokyo'),
+    group('b', 'Osaka'),
+    group('a1', 'Edge', 'a'),
+    group('a2', 'Core', 'a'),
+  ];
+
+  it('flattens the hierarchy into depth-carrying, name-sorted options', () => {
+    const opts = groupOptions(tree);
+    // Top-level groups name-sorted, each parent's children following it.
+    expect(opts.map((o) => o.label)).toEqual(['Osaka', 'Tokyo', 'Core', 'Edge']);
+    expect(opts.map((o) => o.depth)).toEqual([0, 0, 1, 1]);
+  });
+
+  it('carries the depth as data rather than as spaces in the label', () => {
+    // 🚨 It used to indent by prepending two full-width spaces per level (ADR-124 決定 9). That
+    // made the depth un-styleable and, worse, put invisible characters into the text a search
+    // term is matched against — so a picker filtering on the label would compare against padding.
+    for (const o of groupOptions(tree)) {
+      expect(o.label).toBe(o.label.trim());
+    }
+  });
+
+  it('gives every folder its full path from the root', () => {
+    // The path is what the picker shows once a filter has removed the parents the indent was
+    // measured from, and what the trigger shows for a chosen folder — two sites can both hold a
+    // rack called "R1".
+    expect(groupOptions(tree).map((o) => o.path)).toEqual([
+      'Osaka',
+      'Tokyo',
+      'Tokyo / Core',
+      'Tokyo / Edge',
+    ]);
+  });
+});
+
+describe('filterGroupOptions', () => {
+  const opts = groupOptions([
+    group('a', 'Tokyo'),
+    group('b', 'Osaka'),
+    group('a1', 'Edge', 'a'),
+    group('a2', 'Core', 'a'),
+  ]);
+
+  it('matches the whole path, so a site keeps the racks under it', () => {
+    // "show me Tokyo" means the site and everything in it, not the one row whose own name matches.
+    expect(filterGroupOptions(opts, 'tokyo').map((o) => o.label)).toEqual([
+      'Tokyo',
+      'Core',
+      'Edge',
+    ]);
+  });
+
+  it('ignores case', () => {
+    expect(filterGroupOptions(opts, 'EDGE').map((o) => o.label)).toEqual(['Edge']);
+  });
+
+  it('treats an empty or blank term as no filter', () => {
+    // A naive `includes('')` walk would be right by accident here; a naive `trim()` check that
+    // returned [] would empty the list the moment the operator pressed space.
+    expect(filterGroupOptions(opts, '')).toHaveLength(4);
+    expect(filterGroupOptions(opts, '   ')).toHaveLength(4);
+  });
+
+  it('answers with nothing when nothing matches', () => {
+    expect(filterGroupOptions(opts, 'nagoya')).toEqual([]);
   });
 });
 

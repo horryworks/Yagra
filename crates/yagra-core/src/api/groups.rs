@@ -108,6 +108,29 @@ pub(crate) async fn visible_groups(
         .collect())
 }
 
+/// Refuse a folder id that does not exist, with a 400 that names it.
+///
+/// `nodes.group_id` is a foreign key, so an unknown id otherwise aborts the statement and reaches
+/// the client as a 500 that names nothing. Every write path that accepts a destination folder owes
+/// this check, and it lives here because there are three of them (ADR-124 決定 1) — the import,
+/// the single move and the bulk move. `None` is always fine: it means "ungrouped".
+pub(super) async fn require_group_exists(
+    admin: &super::AdminState,
+    group: Option<Uuid>,
+) -> Result<(), ApiError> {
+    let Some(group) = group else { return Ok(()) };
+    let known = admin.groups.exists(group).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "check node group", "failed to read node groups")
+    })?;
+    if !known {
+        return Err(ApiError::bad_request(
+            "invalid_group",
+            format!("no node group {group}"),
+        ));
+    }
+    Ok(())
+}
+
 /// Create/update body for a group. `group_type` is a validated [`GroupType`] key.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct GroupBody {

@@ -102,10 +102,24 @@ pub async fn group(pool: &PgPool, name: &str) -> Uuid {
         .expect("create group")
 }
 
-/// A node with an address derived from `n`, optionally in `group`.
+/// A node with an address derived from `n` (`10.0.0.n`), optionally in `group`.
 pub async fn node(pool: &PgPool, name: &str, n: u8, group: Option<Uuid>) -> Uuid {
+    node_at(pool, name, std::net::IpAddr::from([10, 0, 0, n]), group).await
+}
+
+/// A node at a **given** address, optionally in `group`.
+///
+/// [`node`] delegates here rather than the other way round, so there is one writer. It exists
+/// because `10.0.0.n` can only ever be inside one /24 and cannot be v6 at all — which is exactly
+/// what the IP-range matching has to be tested against (ADR-124): a longer prefix winning over a
+/// shorter one, two folders claiming the same address, and a v4 node not matching a v6 range.
+pub async fn node_at(
+    pool: &PgPool,
+    name: &str,
+    addr: std::net::IpAddr,
+    group: Option<Uuid>,
+) -> Uuid {
     let repo = repo(pool.clone());
-    let addr = std::net::IpAddr::from([10, 0, 0, n]);
     let id = repo
         .create_node(name, addr, None, None, None, None, None, None)
         .await
@@ -114,6 +128,26 @@ pub async fn node(pool: &PgPool, name: &str, n: u8, group: Option<Uuid>) -> Uuid
         repo.set_node_group(id, Some(g)).await.expect("set group");
     }
     id
+}
+
+/// An IP range attached to a folder (ADR-100 decision 10, migration 0104).
+///
+/// ⚠️ **A raw INSERT, unlike every other fixture in this file**, and the exception is worth
+/// stating: the production writer is `netbox::NetboxRepo::upsert_prefix`, which takes a NetBox
+/// server id, while a hand-made row's `netbox_server_id` is NULL by design — so going through the
+/// writer would test a row shape no operator can create. The cast is `network($2::inet)::cidr`
+/// for the reason 0104's header gives: a plain `::cidr` REJECTS a value with host bits set, and
+/// a test that wants to write `192.168.1.5/24` should get the network, not an error.
+pub async fn prefix(pool: &PgPool, group: Uuid, cidr: &str) {
+    sqlx::query(
+        "INSERT INTO node_group_prefixes (group_id, prefix, description) \
+         VALUES ($1, network($2::inet)::cidr, 'fixture')",
+    )
+    .bind(group)
+    .bind(cidr)
+    .execute(pool)
+    .await
+    .expect("seed prefix");
 }
 
 /// A device profile, created through the production writer.

@@ -1,0 +1,90 @@
+/* Folder picker: a field-styled trigger opening a searchable list (ADR-124 決定 9).
+
+   Mirrors the NodePicker / ScopePicker look; theme variables only, no hardcoded colours. The
+   popover surface itself is `.apop` (AnchoredPopover), which owns position, elevation and border —
+   everything here is inside it. */
+
+.grouppick {
+  position: relative;
+  width: 100%;
+}
+
+.grouppick-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.grouppick-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.grouppick-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grouppick-caret {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.grouppick-pop {
+  min-width: 260px;
+  padding: 6px;
+}
+
+.grouppick-search {
+  margin-bottom: 6px;
+}
+
+.grouppick-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.grouppick-opt {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--font-md);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.grouppick-opt:hover,
+.grouppick-opt.active {
+  background: var(--bg-tertiary);
+}
+
+.grouppick-opt.selected {
+  color: var(--accent-color);
+}
+
+.grouppick-opt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grouppick-empty {
+  padding: 8px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}

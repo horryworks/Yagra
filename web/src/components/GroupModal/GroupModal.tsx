@@ -10,6 +10,7 @@ import { api, errMsg } from '../../services/api';
 import { GROUP_TYPES } from '../../types/api';
 import type { GroupType, NodeGroup } from '../../types/api';
 import { asGroupType, groupOptions, isSelfOrDescendant } from '../../lib/nodeTree';
+import { GroupPicker } from '../ui/GroupPicker';
 import { inheritedGroupPool, isValidPoolName } from '../../lib/pool';
 import { geoBodyFrom, geoChanged, geoDraftFrom, inheritedPin } from './geoFields';
 import { Modal } from '../ui/Modal';
@@ -131,14 +132,12 @@ export function GroupModal({
         </label>
         <label className="form-label">
           {t('group.parentGroup')}
-          <Select value={parent} onChange={(e) => setParent(e.target.value)}>
-            <option value="">{t('group.topLevelOption')}</option>
-            {parentChoices.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
+          <GroupPicker
+            options={parentChoices}
+            value={parent}
+            onChange={setParent}
+            emptyOption={t('group.topLevelOption')}
+          />
         </label>
         <label className="form-label">
           {t('group.pool')}

@@ -398,23 +398,61 @@ export function groupPath(groups: NodeGroup[], groupId: string | null): string[]
   return out;
 }
 
-/** Flatten the group hierarchy into depth-indented `{ id, label }` options for a `<select>`, so
- *  the tree shape reads in a flat list (used by the add/edit-group and move-node pickers). */
-export function groupOptions(groups: NodeGroup[]): { id: string; label: string }[] {
+/** One folder as a picker offers it.
+ *
+ *  ⚠️ **`label` is the folder's own name, with no indent baked in** (ADR-124 決定 9). It used to
+ *  carry two full-width spaces per level, which made the depth un-styleable, put invisible
+ *  characters into every search term the operator's text was compared against, and — the half
+ *  that actually misleads — kept drawing an indent after filtering had removed the parent the
+ *  indent was relative to. Depth is data now; the picker draws it, and shows `path` instead while
+ *  a search term is narrowing the list. */
+export interface GroupOption {
+  id: string;
+  /** The folder's own name. */
+  label: string;
+  /** How many folders sit above it, 0 at the root. */
+  depth: number;
+  /** Every name from the root down, joined — `Tokyo / Edge / FW`. */
+  path: string;
+}
+
+/** Flatten the group hierarchy into depth-ordered options, so the tree shape reads in a flat list
+ *  (used by every folder picker). Siblings are sorted by name; the walk is depth-first, so a
+ *  folder is immediately followed by its subtree. */
+export function groupOptions(groups: NodeGroup[]): GroupOption[] {
   const byParent = new Map<string | null, NodeGroup[]>();
   for (const g of groups) {
     const k = g.parent_id ?? null;
     byParent.set(k, [...(byParent.get(k) ?? []), g]);
   }
-  const out: { id: string; label: string }[] = [];
-  const walk = (parent: string | null, depth: number) => {
+  const out: GroupOption[] = [];
+  const walk = (parent: string | null, depth: number, trail: string[]) => {
     for (const g of (byParent.get(parent) ?? []).sort((a, b) => a.name.localeCompare(b.name))) {
-      out.push({ id: g.id, label: `${'  '.repeat(depth)}${g.name}` });
-      walk(g.id, depth + 1);
+      const path = [...trail, g.name];
+      out.push({ id: g.id, label: g.name, depth, path: path.join(' / ') });
+      walk(g.id, depth + 1, path);
     }
   };
-  walk(null, 0);
+  walk(null, 0, []);
   return out;
+}
+
+/** Narrow folder options by a typed term, case-insensitively.
+ *
+ *  Matches the **whole path**, so typing a site name keeps the racks under it — which is what an
+ *  operator means by "show me Tokyo". An empty or blank term is not a filter and returns the list
+ *  untouched, rather than the empty list a naive `includes('')` walk would suggest.
+ *
+ *  Client-side on purpose: folders are bounded by what an operator (or a NetBox sync) created, not
+ *  by fleet size, and the list is already in the browser — `ui-conventions.md` allows exactly this
+ *  case, and a server round trip per keystroke would be slower than the filter it replaced. */
+export function filterGroupOptions(
+  options: readonly GroupOption[],
+  term: string,
+): GroupOption[] {
+  const q = term.trim().toLowerCase();
+  if (!q) return [...options];
+  return options.filter((o) => o.path.toLowerCase().includes(q));
 }
 
 /** Sentinel key for the ungrouped bucket in the per-group member cache and the `/nodes/by-group`

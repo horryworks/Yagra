@@ -2,7 +2,7 @@
 // Pure-helper tests for the Nodes split selection ↔ URL-param round-trip.
 
 import { describe, expect, it } from 'vitest';
-import { parseSelection, selectionToParam } from './treeSelection';
+import { escapeTarget, parseSelection, selectionToParam } from './treeSelection';
 
 describe('selectionToParam', () => {
   it('encodes node and group selections', () => {
@@ -36,5 +36,27 @@ describe('parseSelection', () => {
     expect(parseSelection('node:')).toBeNull(); // empty id
     expect(parseSelection(':n1')).toBeNull(); // empty kind
     expect(parseSelection('widget:x')).toBeNull(); // unknown kind
+  });
+});
+
+describe('escapeTarget', () => {
+  it('unwinds the working set before the pane', () => {
+    // The batch is what the operator is assembling right now; the pane is what they were reading.
+    // Clearing the pane first would throw away work the press was not aimed at.
+    expect(escapeTarget(true, true)).toBe('checked');
+  });
+
+  it('falls through to the pane when nothing is checked', () => {
+    expect(escapeTarget(false, true)).toBe('selection');
+  });
+
+  it('clears the working set even with no pane open', () => {
+    expect(escapeTarget(true, false)).toBe('checked');
+  });
+
+  it('says so when there is nothing to clear', () => {
+    // The caller mounts no listener at all in this case, so answering null is the second line of
+    // defence rather than the first.
+    expect(escapeTarget(false, false)).toBeNull();
   });
 });

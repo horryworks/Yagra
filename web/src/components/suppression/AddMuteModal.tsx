@@ -14,6 +14,7 @@ import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
+import { GroupPicker } from '../ui/GroupPicker';
 import { localTimeZone, LIVENESS_METRIC } from '../../lib/format';
 import { type SuppressionTarget } from '../../lib/suppression';
 import { MetricPicker } from '../MetricPicker/MetricPicker';
@@ -141,14 +142,13 @@ export function AddMuteModal({
                 placeholder={t('muteForm.pickNode')}
               />
             ) : (
-              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)} autoFocus>
-                <option value="">{t('muteForm.pickGroup')}</option>
-                {groupItems.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.label}
-                  </option>
-                ))}
-              </Select>
+              <GroupPicker
+                options={groupItems}
+                value={scopeId}
+                onChange={setScopeId}
+                emptyOption={t('muteForm.pickGroup')}
+                autoFocus
+              />
             )}
             {scopeKind === 'group' && (
               <span className="modal-hint">{t('muteForm.groupHint')}</span>

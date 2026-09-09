@@ -92,6 +92,36 @@
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
+/* The working set's row (ADR-124 決定 3). A sibling of the filter row, never inside the 38px
+   `.nodes-pane-head` — a control put in there shipped squeezed to nothing once already.
+
+   `flex: none` for the same reason the filter row has it: the tree below is the part that scrolls,
+   and a bar that can be compressed disappears exactly when the batch is largest. */
+.nodes-selbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border-bottom: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.nodes-selbar-count {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* The gesture, in text a person can read. Not a `title=`: on a touch device there is no hover to
+   reveal it, and this is the only place Ctrl / Shift is written down (ADR-055 R4). */
+.nodes-selbar-hint {
+  flex-basis: 100%;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
 /* The pane is narrow, so the bar's triggers wrap rather than each taking a fixed floor. */
 .nodes-pane-filters .fbar {
   padding: 0;

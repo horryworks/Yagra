@@ -38,6 +38,7 @@
 
 .ntree-row {
   cursor: pointer;
+  position: relative;
 }
 
 .ntree-row:hover {
@@ -48,6 +49,31 @@
 .ntree-row.sel {
   background: var(--bg-tertiary);
   box-shadow: inset 2px 0 0 var(--accent-color);
+}
+
+/* A row in the working set — checked with Ctrl / Shift for a bulk move (ADR-124).
+
+   🚨 **A class of its own, deliberately not `.sel`.** The pane's selection is single and
+   `tests/ui/treeDeselect.spec.ts` proves it by counting `.ntree-row.sel`; reusing that class for
+   a set would make the count meaningless and the test red. The two can be on the same row at
+   once — reading a node's detail while it is part of a batch is ordinary — so the marks have to
+   read together: the accent bar is the pane's, the tint and the left dot are the batch's. */
+.ntree-row.checked {
+  background: var(--bg-secondary);
+}
+
+.ntree-row.checked::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent-color);
+}
+
+.ntree-row.checked.sel {
+  background: var(--bg-tertiary);
 }
 
 /* The dragged row dims so the drop indicators read clearly. */

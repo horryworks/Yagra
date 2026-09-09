@@ -149,7 +149,8 @@
     "deleteNode": "failed to delete node",
     "saveNode": "failed to save node",
     "setDependency": "failed to set dependency",
-    "addDnsMonitor": "failed to add DNS monitor"
+    "addDnsMonitor": "failed to add DNS monitor",
+    "movePreview": "failed to match addresses against folder ranges"
   },
   "maintenanceWindowName": "Maintenance — {{name}}",
   "detail": {
@@ -518,12 +519,19 @@
     "deleteEllipsis": "Delete…",
     "pool": "Poller pool",
     "poolInherit": "Inherit",
-    "poolNoLivePoller": "No live poller serves this pool — nodes assigned to it are not polled."
+    "poolNoLivePoller": "No live poller serves this pool — nodes assigned to it are not polled.",
+    "moveByPrefix": "Move by IP range…",
+    "addToSelection": "Add to selection",
+    "removeFromSelection": "Remove from selection",
+    "moveSelected": "Move {{count}} selected…",
+    "moveSelectedByPrefix": "Move {{count}} selected by IP range…"
   },
   "moveNode": {
     "title": "Move {{name}}",
     "move": "Move",
-    "ungroupedOption": "— Ungrouped —"
+    "ungroupedOption": "— Ungrouped —",
+    "titleMany": "Move {{count}} nodes",
+    "partial": "Moved {{moved}} of {{requested}}. The rest could not be found."
   },
   "setPool": {
     "title": "Poller pool for {{name}}",
@@ -669,6 +677,36 @@
       "searchAria": "Search neighbours",
       "allProtos": "LLDP and CDP",
       "protoAria": "Filter by protocol"
+    }
+  },
+  "select": {
+    "count": "{{count}} selected",
+    "move": "Move…",
+    "moveByPrefix": "Move by IP range…",
+    "clear": "Clear",
+    "hint": "Ctrl-click to add one, Shift-click to add a run."
+  },
+  "groupPicker": {
+    "none": "No folder",
+    "noMatch": "No folder matches",
+    "listAria": "Folders",
+    "searchPlaceholder": "Filter folders",
+    "searchAria": "Filter folders by name"
+  },
+  "moveByPrefix": {
+    "title": "Move {{count}} by IP range",
+    "loading": "Matching addresses against folder ranges…",
+    "willMove": "Will move ({{count}})",
+    "ambiguous": "Claimed by more than one folder ({{count}})",
+    "ambiguousHint": "These are left where they are — two folders cover the address equally well.",
+    "unmatched": "Inside no folder range ({{count}})",
+    "apply": "Move {{count}}",
+    "result": "Moved {{moved}} of {{requested}}.",
+    "failedGroups": "These folders failed: {{groups}}.",
+    "empty": {
+      "noPrefixes": "No folder carries an IP range, so there is nothing to match against.",
+      "noMatch": "No address falls inside a folder range.",
+      "allAmbiguous": "Every match was claimed by more than one folder."
     }
   }
 }

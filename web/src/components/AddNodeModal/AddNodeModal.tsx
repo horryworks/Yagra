@@ -13,6 +13,7 @@ import { api, errMsg } from '../../services/api';
 import { isValidPoolName } from '../../lib/pool';
 import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import { groupOptions } from '../../lib/nodeTree';
+import { GroupPicker } from '../ui/GroupPicker';
 import {
   isAddableKind,
   monitorKind,
@@ -267,14 +268,12 @@ export function AddNodeModal({
             (`setNodeGroup`), one widget. */}
         <label className="form-label">
           {t('field.group')}
-          <Select value={group} onChange={(e) => setGroup(e.target.value)}>
-            <option value="">{t('moveNode.ungroupedOption')}</option>
-            {groupOptions(groups).map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
+          <GroupPicker
+            options={groupOptions(groups)}
+            value={group}
+            onChange={setGroup}
+            emptyOption={t('moveNode.ungroupedOption')}
+          />
         </label>
         <label className="form-label">
           {t('add.monitoringType')}

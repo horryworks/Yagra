@@ -61,7 +61,7 @@ import {
   type SuppressionTarget,
 } from '../lib/suppression';
 import { inheritedGroupPool } from '../lib/pool';
-import { parseSelection, selectionToParam } from '../lib/treeSelection';
+import { escapeTarget, parseSelection, selectionToParam } from '../lib/treeSelection';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
 import {
   maxTreeWidth,
@@ -78,11 +78,13 @@ import { TextInput } from '../components/ui/Field';
 import { AddNodeModal } from '../components/AddNodeModal/AddNodeModal';
 import { GroupModal, type GroupModalState } from '../components/GroupModal/GroupModal';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
+import { canMoveByPrefix } from '../components/NodeTree/nodeTreeMenu';
 import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail';
 import { EditNodeModalById } from '../components/NodeDetail/EditNodeModal';
 import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
+import { MoveByPrefixModal } from '../components/MoveByPrefixModal/MoveByPrefixModal';
 import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
@@ -221,6 +223,20 @@ export function NodesPage() {
     [searchParams, setSearchParams],
   );
 
+  /** The working set: nodes checked with Ctrl / Shift, for a bulk action (ADR-124 決定 2).
+   *
+   *  ⚠️ **Whole nodes, not ids, and deliberately not in the URL.** Ids resolved against the
+   *  current rows would shrink the batch the moment a filter changed; and a set restored from a
+   *  link would name rows the reloaded tree has not fetched — which is the state ADR-073 removed. */
+  const [checked, setChecked] = useState<Map<string, NodeSummary>>(new Map());
+  /** Row a Shift click measures its range from. An id, never an index: the flat row list is
+   *  rebuilt on every SSE frame, filter change and lazy load. */
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+  const clearChecked = useCallback(() => {
+    setChecked(new Map());
+    setAnchorId(null);
+  }, []);
+
   // Escape clears the selection (ADR-073). Before this the split had no desktop way back to the
   // empty right pane at all: `select(null)` existed but its only caller was the mobile pane
   // switcher's back chevron, which `.nodes-detail-back { display: none }` hides on a desktop.
@@ -229,14 +245,22 @@ export function NodesPage() {
   // Interfaces dock ask the same question and three copies would drift. It answers false while a
   // modal, a popover or the tree's context menu is open — those own the press — and false while the
   // operator is typing, so Escape still belongs to the pane's search box.
+  //
+  // ⚠️ Since ADR-124 the page has **two** things Escape can clear, and this is deliberately still
+  // one listener. Two would each answer for themselves and both fire on the same press, clearing
+  // the working set and the pane at once — which reads as two separate bugs. The order lives in
+  // `escapeTarget`, where a test runs it.
   useEffect(() => {
-    if (!selected) return;
+    if (!selected && checked.size === 0) return;
     const onKey = (e: KeyboardEvent) => {
-      if (escapeClearsSelection(e)) select(null);
+      if (!escapeClearsSelection(e)) return;
+      const target = escapeTarget(checked.size > 0, !!selected);
+      if (target === 'checked') clearChecked();
+      else if (target === 'selection') select(null);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [selected, select]);
+  }, [selected, select, checked, clearChecked]);
 
   const setTab = useCallback(
     (next: string) => {
@@ -257,7 +281,11 @@ export function NodesPage() {
   const [groupModal, setGroupModal] = useState<GroupModalState | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
   const [deletingNode, setDeletingNode] = useState<NodeSummary | null>(null);
-  const [movingNode, setMovingNode] = useState<NodeSummary | null>(null);
+  /** Nodes the move dialog is about: one from the tree's own "Move…", or the whole working set
+   *  from the selection bar. `null` ⇒ closed. */
+  const [moving, setMoving] = useState<NodeSummary[] | null>(null);
+  /** Nodes the IP-range proposal is about. Same two entry points, same shape (ADR-124 決定 6). */
+  const [movingByPrefix, setMovingByPrefix] = useState<NodeSummary[] | null>(null);
   /** Node whose edit dialog is open, from the tree's right-click. The row is all this page has, so
    *  the dialog loads the detail itself (`EditNodeModalById`) — like Delete/Move above, editing does
    *  not move the selection, so the right pane keeps showing whatever the operator was looking at. */
@@ -794,6 +822,33 @@ export function NodesPage() {
               />
             )}
           </div>
+          {/* The working set's own row (ADR-124 決定 3). It appears only once something is
+              checked, so it costs nothing until it is needed — and it carries the gesture in
+              **visible text**, because Ctrl / Shift is written nowhere else on the screen and a
+              `title=` is unreadable on touch (ADR-055 R4).
+
+              ⚠️ A sibling of `.nodes-pane-filters`, exactly like that row is a sibling of
+              `.nodes-pane-head` — the head is a 38px single-line flex and has already squeezed
+              one control to nothing. */}
+          {canConfig && checked.size > 0 && (
+            <div className="nodes-selbar">
+              <span className="nodes-selbar-count">
+                {t('select.count', { count: checked.size })}
+              </span>
+              <Button variant="outline" onClick={() => setMoving([...checked.values()])}>
+                {t('select.move')}
+              </Button>
+              {canMoveByPrefix(groups, canConfig) && (
+                <Button variant="outline" onClick={() => setMovingByPrefix([...checked.values()])}>
+                  {t('select.moveByPrefix')}
+                </Button>
+              )}
+              <Button variant="outline" onClick={clearChecked}>
+                {t('select.clear')}
+              </Button>
+              <span className="nodes-selbar-hint">{t('select.hint')}</span>
+            </div>
+          )}
           <NodeTree
             groups={groups}
             nodes={liveTreeNodes}
@@ -818,7 +873,18 @@ export function NodesPage() {
             onEditNode={canConfig ? (n) => setEditingNode(n) : undefined}
             onAddNode={canConfig ? openAddNode : undefined}
             onDeleteNode={canConfig ? (n) => setDeletingNode(n) : undefined}
-            onRequestMoveNode={(n) => setMovingNode(n)}
+            checked={checked}
+            anchorId={anchorId}
+            onCheckedChange={(next, anchor) => {
+              setChecked(next);
+              setAnchorId(anchor);
+            }}
+            onRequestMoveNode={(n) => setMoving([n])}
+            onMoveChecked={canConfig ? () => setMoving([...checked.values()]) : undefined}
+            onMoveCheckedByPrefix={
+              canConfig ? () => setMovingByPrefix([...checked.values()]) : undefined
+            }
+            onMoveNodeByPrefix={canConfig ? (n) => setMovingByPrefix([n]) : undefined}
             onMoveNode={moveNode}
             onMoveGroup={moveGroup}
             onReorderNode={reorderNode}
@@ -892,7 +958,7 @@ export function NodesPage() {
               onTabChange={setTab}
               groups={groups}
               nodes={treeNodes}
-              onMove={() => selectedNode && setMovingNode(selectedNode)}
+              onMove={() => selectedNode && setMoving([selectedNode])}
               onOpenDetail={() => navigate(`/nodes/${selected.id}`)}
             />
           ) : selectedGroup ? (
@@ -988,13 +1054,26 @@ export function NodesPage() {
         />
       )}
 
-      {movingNode && (
+      {moving && (
         <MoveNodeModal
-          node={movingNode}
+          targets={moving}
           groups={groups}
-          onClose={() => setMovingNode(null)}
+          onClose={() => setMoving(null)}
+          // Refresh only — the dialog stays open on a partial result so the operator reads it.
           onMoved={() => {
-            setMovingNode(null);
+            clearChecked();
+            void reload();
+          }}
+        />
+      )}
+
+      {movingByPrefix && (
+        <MoveByPrefixModal
+          targets={movingByPrefix}
+          groups={groups}
+          onClose={() => setMovingByPrefix(null)}
+          onMoved={() => {
+            clearChecked();
             void reload();
           }}
         />

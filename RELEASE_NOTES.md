@@ -28,6 +28,23 @@
 
 ### New Features
 
+- **Move many nodes into a folder at once** (ADR-124). Ctrl-click (⌘ on macOS) picks nodes in the
+  inventory tree one at a time and Shift-click picks a run; a bar above the tree then says how many
+  are selected and offers **Move…**. The same items are on a node's right-click menu, so the feature
+  is reachable without knowing the keyboard gesture. The selection is separate from the row whose
+  detail is open — reading one node while collecting a batch works — and it is deliberately **not**
+  kept in the URL, so a reload never restores a selection of rows that are no longer on screen.
+- **Folder pickers can be typed into.** Every place that asks you to choose a folder — move, add
+  node, a group's parent, mute, maintenance window, the discovery site — now narrows as you type,
+  matching the whole path so a site's name keeps the racks under it. The search box appears once
+  there are at least eight folders.
+- **Move nodes to the folder whose IP range contains their address** (ADR-124, ADR-100 decision 10).
+  On a node's right-click menu and in the selection bar, wherever any folder carries an IP range —
+  which today means a NetBox sync attached one. It **proposes and never acts**: a dialog shows what
+  would move and where, what falls inside no range, and what two folders claim equally well, and
+  nothing is written until you press the button. A node two folders claim is never moved
+  automatically. New endpoints: `POST /api/v1/nodes/move` and `POST /api/v1/nodes/move-preview`.
+
 - **A public dashboard you compose, under Dashboard ▸ Public dashboard** (ADR-123). Separate from
   the shared board on purpose: the shared board is for colleagues and may carry widgets an anonymous
   visitor cannot load, and you can now see exactly what will go out before turning the switch on.
@@ -116,6 +133,10 @@
   nine tables that hold one, where it used to see `credentials` alone.
 
 ### Improvements
+
+- **Moving a node into a folder that does not exist answers 400 `invalid_group`** instead of 500
+  (ADR-124). It affects `PUT /api/v1/nodes/{id}/group` as well as the new bulk route — both go
+  through one check now, the one the discovery import already used.
 
 - **A pool that has lost its poller can be covered from another one, and put back** (ADR-107).
   Settings ▸ Pollers offers it on a pool whose nodes have nothing to poll them — most obviously

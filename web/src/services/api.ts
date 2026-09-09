@@ -84,6 +84,7 @@ import type {
   Mute,
   NodeDetail,
   NodeGroup,
+  MovePreview,
   NodeNameEntry,
   NodePage,
   NodeSearchResult,
@@ -1171,13 +1172,33 @@ export const api = {
   setNodeGroupPool: (id: string, pool: string): Promise<void> =>
     apiPut('/api/v1/node-groups/{id}/pool', { path: { id }, body: { pool } }),
 
-  /** Move a node into a group (or `null` to ungroup it), appending it to the end — used by the
-   *  "Move to…" picker and a drop directly onto a group. */
+  /** Move a node into a group (or `null` to ungroup it), appending it to the end — used by a drop
+   *  directly onto a group. The dialogs go through `moveNodes`, which takes one node just as well
+   *  and reports how many actually landed (ADR-124 決定 1). */
   setNodeGroup: (id: string, groupId: string | null): Promise<void> =>
     apiPut('/api/v1/nodes/{node_id}/group', {
       path: { node_id: id },
       body: { group_id: groupId },
     }),
+
+  /** Move MANY nodes into one folder (or `null` to ungroup them all) in one request.
+   *
+   *  ⚠️ `moved` can be lower than `requested`: an id may name a node deleted since the page
+   *  loaded, or one outside this token's scope. Show both numbers rather than the count that was
+   *  asked for — that is the whole reason the endpoint returns two. */
+  moveNodes: (
+    nodeIds: string[],
+    groupId: string | null,
+  ): Promise<{ requested: number; moved: number }> =>
+    apiPost('/api/v1/nodes/move', { body: { node_ids: nodeIds, group_id: groupId } }),
+
+  /** Which folder's IP range contains each of these nodes' addresses (ADR-124 決定 5/6).
+   *
+   *  **Writes nothing.** It proposes; the move that may follow is `moveNodes`. The containment
+   *  test runs in PostgreSQL because a scoped caller is served breadcrumb folders with their
+   *  prefixes cleared, so the same arithmetic done in the browser would quietly miss ranges. */
+  previewMoveByPrefix: (nodeIds: string[]): Promise<MovePreview> =>
+    apiPost('/api/v1/nodes/move-preview', { body: { node_ids: nodeIds } }),
 
   /** Set (or clear with `null`) a node's dependency parent (upstream) — the alert-suppression
    *  edge (parent down ⇒ suppress children, ADR-015). Distinct from `setNodeGroup` (the folder

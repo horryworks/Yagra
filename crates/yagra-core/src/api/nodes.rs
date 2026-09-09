@@ -53,6 +53,8 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     poll_node_now,
     set_node_bindings,
     set_node_group,
+    move_nodes,
+    preview_move_by_prefix,
     set_node_pool,
     set_node_parent,
     set_node_suppression_opt_out,
@@ -70,6 +72,8 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/search", get(search_nodes))
         .route("/api/v1/nodes/by-group", get(list_group_nodes))
         .route("/api/v1/node-names", post(node_names_batch))
+        .route("/api/v1/nodes/move", post(move_nodes))
+        .route("/api/v1/nodes/move-preview", post(preview_move_by_prefix))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
@@ -1165,6 +1169,7 @@ pub(super) struct NodeGroupAssignment {
     request_body = NodeGroupAssignment,
     responses(
         (status = 204, description = "Node moved in the folder tree"),
+        (status = 400, description = "The destination folder does not exist", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node", body = super::error::ErrorBody),
@@ -1177,6 +1182,9 @@ async fn set_node_group(
     Path(id): Path<Uuid>,
     Json(body): Json<NodeGroupAssignment>,
 ) -> ApiResult<StatusCode> {
+    // A folder that does not exist is a 400 that names it, rather than the foreign key turning
+    // into a 500 that names nothing. Shared with the import and the bulk move (ADR-124 決定 1).
+    super::groups::require_group_exists(&admin, body.group_id).await?;
     let found = admin
         .repo
         .set_node_group(id, body.group_id)
@@ -1185,6 +1193,224 @@ async fn set_node_group(
             ApiError::from_internal(e.as_ref(), "set node group", "failed to move node")
         })?;
     node_write_result(found, id)
+}
+
+// ── Moving MANY nodes at once (ADR-124) ─────────────────────────────────────
+
+/// Ceiling on one bulk move / preview.
+///
+/// 🚨 **Over the ceiling is a refusal, not a truncation** — deliberately unlike
+/// [`NODE_NAMES_BATCH_MAX`] beside it, which silently drops the tail because a name that does not
+/// come back falls back to the raw id and nothing is lost. Truncating a *write* would answer
+/// "moved" while leaving everything past the cut where it was, with no way for the operator to see
+/// which half (ADR-124 決定 7).
+const NODE_MOVE_BATCH_MAX: usize = 1000;
+
+/// Move many nodes into one folder (or `null` to ungroup them all).
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct BulkNodeMove {
+    node_ids: Vec<Uuid>,
+    #[serde(default)]
+    group_id: Option<Uuid>,
+}
+
+/// What a bulk move actually did.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct BulkMoveResult {
+    /// Distinct ids the request named, after de-duplication.
+    requested: usize,
+    /// Rows that actually moved. **Lower than `requested` is normal**: an id can name a node that
+    /// has since been deleted, or one outside the caller's scope. The two are not distinguished.
+    moved: u64,
+}
+
+/// The nodes to examine.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NodeIdBatch {
+    node_ids: Vec<Uuid>,
+}
+
+/// One node, and the single folder whose IP range contains its address.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct PrefixProposal {
+    node_id: Uuid,
+    group_id: Uuid,
+    /// The range that matched — shown so the operator can see *why* this folder is proposed.
+    prefix: String,
+}
+
+/// One node claimed equally well by two or more folders. Never moved automatically.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct PrefixAmbiguity {
+    node_id: Uuid,
+    group_ids: Vec<Uuid>,
+}
+
+/// What the IP-range match proposes. **A proposal, not an action** — nothing is written by the
+/// endpoint that returns this (ADR-124 決定 6).
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct MovePreviewResult {
+    matched: Vec<PrefixProposal>,
+    ambiguous: Vec<PrefixAmbiguity>,
+    /// Ids whose address falls inside no visible folder's range.
+    unmatched: Vec<Uuid>,
+    /// Whether **any** folder this caller can see carries a range at all.
+    ///
+    /// Without this, a deployment with no NetBox reports every node as unmatched and the operator
+    /// cannot tell "these addresses are not covered" from "there was never anything to match
+    /// against" — one message for two situations is how an inert feature looks like a working one.
+    any_prefixes: bool,
+}
+
+/// Fold the flat longest-prefix hits into the three answers the preview shows.
+///
+/// Pure, so the part that decides *meaning* is testable without a database. The SQL decides which
+/// rows come back; this decides whether one folder claims a node or two do, and that boundary is
+/// where a mistake would move nodes into a site nobody chose.
+///
+/// ⚠️ Rows arrive ordered by node then group, so a duplicate folder (one folder carrying two
+/// ranges that both contain the address at the same length — impossible for a canonical CIDR, but
+/// not worth trusting) collapses with `dedup` before the count is read.
+fn fold_prefix_matches(
+    requested: &[Uuid],
+    hits: Vec<crate::groups::PrefixMatch>,
+) -> (Vec<PrefixProposal>, Vec<PrefixAmbiguity>, Vec<Uuid>) {
+    let mut by_node: HashMap<Uuid, Vec<crate::groups::PrefixMatch>> = HashMap::new();
+    for h in hits {
+        by_node.entry(h.node).or_default().push(h);
+    }
+    let (mut matched, mut ambiguous, mut unmatched) = (Vec::new(), Vec::new(), Vec::new());
+    let mut seen = HashSet::new();
+    for id in requested {
+        if !seen.insert(*id) {
+            continue;
+        }
+        let Some(rows) = by_node.remove(id) else {
+            unmatched.push(*id);
+            continue;
+        };
+        let mut groups: Vec<Uuid> = rows.iter().map(|h| h.group).collect();
+        groups.dedup();
+        if groups.len() == 1 {
+            matched.push(PrefixProposal {
+                node_id: *id,
+                group_id: rows[0].group,
+                prefix: rows[0].prefix.clone(),
+            });
+        } else {
+            ambiguous.push(PrefixAmbiguity {
+                node_id: *id,
+                group_ids: groups,
+            });
+        }
+    }
+    (matched, ambiguous, unmatched)
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/nodes/move", tag = "nodes",
+    request_body = BulkNodeMove,
+    responses(
+        (status = 200, description = "How many of the named nodes moved", body = BulkMoveResult),
+        (status = 400, description = "Unknown destination folder, or more ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the caller cannot see ungrouped nodes", body = super::error::ErrorBody),
+        (status = 404, description = "The destination folder is not one this caller may act on", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn move_nodes(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<BulkNodeMove>,
+) -> ApiResult<Json<BulkMoveResult>> {
+    if body.node_ids.len() > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {NODE_MOVE_BATCH_MAX} nodes may be moved in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    // The destination is checked before the ids: moving nodes *into* a folder this caller may not
+    // act on would put them where that caller can no longer reach them.
+    match body.group_id {
+        Some(group) => super::scope::require_visible_group(&scope, group)?,
+        None if !scope.allows_group(None) => {
+            return Err(ApiError::forbidden_code(
+                "out_of_scope",
+                "this token cannot see ungrouped nodes",
+            ))
+        }
+        None => {}
+    }
+    super::groups::require_group_exists(&admin, body.group_id).await?;
+    let (requested, moved) = admin
+        .repo
+        .set_node_group_batch(&body.node_ids, body.group_id, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "bulk move nodes", "failed to move nodes")
+        })?;
+    // The audit middleware records method and path only, so without this the log says that someone
+    // moved something and never how much (`api/maintenance.rs` does the same for its bulk clear).
+    tracing::info!(requested, moved, group = ?body.group_id, "bulk node move");
+    Ok(Json(BulkMoveResult { requested, moved }))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/nodes/move-preview", tag = "nodes",
+    request_body = NodeIdBatch,
+    responses(
+        (status = 200, description = "Which folder's IP range contains each node's address", body = MovePreviewResult),
+        (status = 400, description = "More ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn preview_move_by_prefix(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<NodeIdBatch>,
+) -> ApiResult<Json<MovePreviewResult>> {
+    if body.node_ids.len() > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {NODE_MOVE_BATCH_MAX} nodes may be examined in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    let hits = admin
+        .groups
+        .match_prefixes(&body.node_ids, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match node prefixes",
+                "failed to match prefixes",
+            )
+        })?;
+    let any_prefixes = admin
+        .groups
+        .any_prefixes(scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "read group prefixes", "failed to read prefixes")
+        })?;
+    let (matched, ambiguous, unmatched) = fold_prefix_matches(&body.node_ids, hits);
+    Ok(Json(MovePreviewResult {
+        matched,
+        ambiguous,
+        unmatched,
+        any_prefixes,
+    }))
 }
 
 /// Whether this node is excluded from derived alert suppression.
@@ -2133,5 +2359,206 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/nodes", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("core-sw-01"), "{list}");
+    }
+
+    /// A bulk move is **accepted** and the rows actually move (ADR-115's shape, ADR-124's route).
+    ///
+    /// ⚠️ The status is named, not `is_success()`: this endpoint documents 200 with a body, and
+    /// nine of the write routes measured in ADR-115 are 204s — a check that cannot tell them apart
+    /// would pass on the wrong one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_move_is_accepted_and_the_nodes_land_in_the_folder(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let dest = crate::pgtest::group(&pool, "Tokyo").await;
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, b], "group_id": dest })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["moved"], 2, "{body}");
+
+        let repo = crate::pgtest::repo(pool);
+        for id in [a, b] {
+            let node = repo.get_node(id).await.expect("read").expect("the node");
+            assert_eq!(node.group.map(|g| g.0), Some(dest), "{id} did not move");
+        }
+    }
+
+    /// An unknown destination is a 400 that names it, not the foreign key's 500 that names nothing.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn moving_into_a_folder_that_does_not_exist_is_refused_by_name(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let ghost = uuid::Uuid::new_v4();
+
+        // Both paths share one helper, so both are checked here — the single-node route was the
+        // one that used to 500 (ADR-124 決定 1).
+        for (method, path) in [
+            ("POST", "/api/v1/nodes/move".to_string()),
+            ("PUT", format!("/api/v1/nodes/{a}/group")),
+        ] {
+            let body = if method == "POST" {
+                serde_json::json!({ "node_ids": [a], "group_id": ghost })
+            } else {
+                serde_json::json!({ "group_id": ghost })
+            };
+            let (status, out) = send(&st, method, &path, &tok, Some(body)).await;
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{path}: {out}");
+            assert_eq!(out["code"], "invalid_group", "{path}: {out}");
+        }
+    }
+
+    /// Over the ceiling is refused outright — a truncated *write* would report a move it did not
+    /// make for everything past the cut.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_batch_over_the_ceiling_is_refused_rather_than_truncated(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let ids: Vec<uuid::Uuid> = (0..=NODE_MOVE_BATCH_MAX)
+            .map(|_| uuid::Uuid::new_v4())
+            .collect();
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move",
+            &tok,
+            Some(serde_json::json!({ "node_ids": ids, "group_id": null })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "too_many_nodes", "{body}");
+    }
+
+    /// A viewer may read the inventory and may not rearrange it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_viewer_cannot_move_nodes(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let body = serde_json::json!({ "node_ids": [a], "group_id": null });
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        for path in ["/api/v1/nodes/move", "/api/v1/nodes/move-preview"] {
+            let (status, out) = send(&st, "POST", path, &viewer, Some(body.clone())).await;
+            assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{path}: {out}");
+        }
+    }
+
+    /// The preview proposes and **writes nothing** — the property the whole feature rests on.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_preview_proposes_a_folder_and_moves_nothing(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        crate::pgtest::prefix(&pool, site, "10.0.0.0/24").await;
+        let inside = crate::pgtest::node(&pool, "inside", 7, None).await;
+        let outside =
+            crate::pgtest::node_at(&pool, "outside", "192.168.9.9".parse().expect("addr"), None)
+                .await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move-preview",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [inside, outside] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["matched"][0]["node_id"], inside.to_string(), "{body}");
+        assert_eq!(body["matched"][0]["group_id"], site.to_string(), "{body}");
+        assert_eq!(body["unmatched"][0], outside.to_string(), "{body}");
+        assert_eq!(body["any_prefixes"], true, "{body}");
+
+        let repo = crate::pgtest::repo(pool);
+        let node = repo
+            .get_node(inside)
+            .await
+            .expect("read")
+            .expect("the node");
+        assert_eq!(node.group, None, "the preview moved a node");
+    }
+
+    /// `any_prefixes` is false where no folder carries a range — the difference between "your
+    /// addresses do not match" and "there was nothing to match against".
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_preview_says_when_there_were_no_ranges_at_all(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move-preview",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["any_prefixes"], false, "{body}");
+        assert_eq!(body["unmatched"][0], a.to_string(), "{body}");
+    }
+
+    /// The fold, without a database: which of the three answers each node lands in.
+    #[test]
+    fn folding_hits_separates_one_folder_from_two_and_from_none() {
+        let (a, b, c) = (
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let (g1, g2) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let hit = |node, group| crate::groups::PrefixMatch {
+            node,
+            group,
+            prefix: "10.0.0.0/24".into(),
+        };
+        // `a` is claimed once, `b` twice, `c` not at all — and `a` is named twice in the request.
+        let (matched, ambiguous, unmatched) =
+            fold_prefix_matches(&[a, b, c, a], vec![hit(a, g1), hit(b, g1), hit(b, g2)]);
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].node_id, a);
+        assert_eq!(ambiguous.len(), 1);
+        assert_eq!(ambiguous[0].group_ids, vec![g1, g2]);
+        assert_eq!(unmatched, vec![c], "a repeated id was answered twice");
+    }
+
+    /// One folder carrying two ranges that both contain the address is still one folder.
+    #[test]
+    fn folding_hits_does_not_call_one_folder_a_tie() {
+        let node = uuid::Uuid::new_v4();
+        let group = uuid::Uuid::new_v4();
+        let hit = |prefix: &str| crate::groups::PrefixMatch {
+            node,
+            group,
+            prefix: prefix.into(),
+        };
+        let (matched, ambiguous, _) =
+            fold_prefix_matches(&[node], vec![hit("10.0.0.0/24"), hit("10.0.0.0/24")]);
+        assert_eq!(matched.len(), 1, "one folder read as a tie");
+        assert!(ambiguous.is_empty());
     }
 }

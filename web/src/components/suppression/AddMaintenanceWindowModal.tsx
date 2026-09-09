@@ -15,6 +15,7 @@ import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
+import { GroupPicker } from '../ui/GroupPicker';
 import { localTimeZone } from '../../lib/format';
 import type { SuppressionTarget } from '../../lib/suppression';
 import { toRfc3339 } from '../../lib/format';
@@ -163,14 +164,12 @@ export function AddMaintenanceWindowModal({
                 ))}
               </Select>
             ) : (
-              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                <option value="">{t('maintenanceForm.pickGroup')}</option>
-                {groupItems.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.label}
-                  </option>
-                ))}
-              </Select>
+              <GroupPicker
+                options={groupItems}
+                value={scopeId}
+                onChange={setScopeId}
+                emptyOption={t('maintenanceForm.pickGroup')}
+              />
             )}
             {scope === 'group_id' && (
               <span className="modal-hint">{t('maintenanceForm.groupHint')}</span>

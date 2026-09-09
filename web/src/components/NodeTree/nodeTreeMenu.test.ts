@@ -3,6 +3,8 @@
 // can run it. The regression case is the first one below.
 import { describe, expect, it } from 'vitest';
 import {
+  bulkMenuItems,
+  canMoveByPrefix,
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
@@ -138,5 +140,44 @@ describe('canRunDiscovery', () => {
     const closed = caps();
     expect(groupMenuHasItems(closed)).toBe(false);
     expect(canRunDiscovery(folder(['192.168.1.0/24']), closed)).toBe(false);
+  });
+});
+
+describe('canMoveByPrefix', () => {
+  const folder = (id: string, prefixes: string[]): NodeGroup =>
+    ({ id, prefixes: prefixes.map((prefix) => ({ prefix, description: '' })) }) as NodeGroup;
+
+  it('offers the item when ANY folder carries a range', () => {
+    // ⚠️ Unlike `canRunDiscovery`, which asks about the row's own folder. The folder that claims
+    // 192.168.1.7 is whichever one carries 192.168.1.0/24 — it is not the one being right-clicked.
+    const groups = [folder('a', []), folder('b', ['192.168.1.0/24'])];
+    expect(canMoveByPrefix(groups, true)).toBe(true);
+  });
+
+  it('withholds it when no folder carries one', () => {
+    // A deployment with no NetBox. Opening a dialog that can only report "nothing to match
+    // against" is worse than not offering it.
+    expect(canMoveByPrefix([folder('a', []), folder('b', [])], true)).toBe(false);
+    expect(canMoveByPrefix([], true)).toBe(false);
+  });
+
+  it('withholds it without ManageConfig, whatever the folders carry', () => {
+    expect(canMoveByPrefix([folder('b', ['10.0.0.0/8'])], false)).toBe(false);
+  });
+});
+
+describe('bulkMenuItems', () => {
+  it('appears once something is checked', () => {
+    expect(bulkMenuItems(1, caps({ canEdit: true }))).toBe(true);
+    expect(bulkMenuItems(12, caps({ canEdit: true }))).toBe(true);
+  });
+
+  it('stays away with an empty working set', () => {
+    // Below this the menu keeps talking about the one row that was right-clicked.
+    expect(bulkMenuItems(0, caps({ canEdit: true }))).toBe(false);
+  });
+
+  it('needs ManageConfig, because every item it adds is a move', () => {
+    expect(bulkMenuItems(3, caps({ canSuppress: true }))).toBe(false);
   });
 });
