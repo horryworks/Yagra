@@ -8,3 +8,26 @@
   color: var(--text-primary);
   font-size: var(--font-sm);
 }
+
+/* The anonymous public shell (ADR-123). Deliberately minimal chrome: one bar carrying the way in
+   for the operator, and nothing else — a visitor has no other page to navigate to. */
+.public-shell {
+  padding: var(--space-4, 16px);
+}
+.public-shell-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-3, 12px);
+}
+.public-shell-signin {
+  color: var(--text-secondary);
+  font-size: calc(var(--font-size-base) * 0.9);
+  text-decoration: none;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+.public-shell-signin:hover {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+}

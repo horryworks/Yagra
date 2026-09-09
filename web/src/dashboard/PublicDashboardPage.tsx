@@ -266,6 +266,15 @@ export function PublicShell() {
 
   return (
     <div className="public-shell">
+      {/* 🚨 A way in, on the page. `appGate` makes `/login` always serve the form, but a URL nobody
+          is told about is not an affordance (ADR-055 R6) — an operator arriving at a public
+          deployment would have no reason to guess it. Deliberately small and out of the way: this
+          page is for visitors, and the link is for the one person who needs to get past it. */}
+      <div className="public-shell-bar">
+        <a className="public-shell-signin" href="/login">
+          {t('public.signIn')}
+        </a>
+      </div>
       {failed && (
         <p className="muted" role="status">
           {failed}

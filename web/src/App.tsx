@@ -146,7 +146,9 @@ export function App() {
     };
   }, [setConfig, setUnreachable]);
 
-  const view = appView(configStatus, config?.public_dashboard === true, authed);
+  // Read once, outside the router: this decides whether a router is mounted at all.
+  const path = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const view = appView(configStatus, config?.public_dashboard === true, authed, path);
   // The OIDC redirect lands here before a session exists — handle it regardless of the login gate
   // (otherwise the gate would swap in the login screen and drop the code/state).
   const isOidcCallback =

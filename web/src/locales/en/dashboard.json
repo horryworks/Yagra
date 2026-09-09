@@ -540,6 +540,7 @@
     "preview": "View as anonymous",
     "previewExit": "Stop previewing",
     "previewBanner": "Previewing as an anonymous visitor — requests are being sent without your session. A widget that shows nothing here shows nothing to them.",
-    "viewerUnavailable": "This dashboard is not available right now."
+    "viewerUnavailable": "This dashboard is not available right now.",
+    "signIn": "Sign in"
   }
 }
