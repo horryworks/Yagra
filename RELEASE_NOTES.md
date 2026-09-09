@@ -31,6 +31,16 @@
 
 ### Bug Fixes
 
+- **A "this pool has no live poller" alert can no longer stay open forever.** Raising one writes a
+  durable row that core restores on every start; clearing one was decided by an in-memory watch that
+  began each start empty and therefore had nothing to clear. So a pool that got its poller back
+  while core was down kept a `critical` for the life of the deployment — measured at **15 days** on
+  a verification box whose pool had been healthy that whole time. The watch is now seeded from the
+  alerts that are already open, so the first check after a restart closes anything that recovered
+  meanwhile. A stale alert of this kind closes itself within 30 seconds of the upgrade.
+  Related: a pool that is *still* uncovered no longer re-notifies on every restart — the alert was
+  never closed, so there is nothing new to announce.
+
 - **`scripts/yagra-restore-verify.sh` works.** It asked two of its four questions over HTTP with
   `wget` *inside the core container*, and the runtime image ships no HTTP client — so the script
   could never pass, and ADR-040's "a backup can be restored" deliverable had been red since it was
