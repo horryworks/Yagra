@@ -8,7 +8,7 @@ import { createJSONStorage, persist, type StateStorage } from 'zustand/middlewar
 import { severityRank } from './lib/format';
 import { grants, permissionLabel } from './lib/permissions';
 import { getToken } from './services/api';
-import type { Alert, Permission, RoleMatrix, Scope } from './types/api';
+import type { Alert, Permission, RoleMatrix, Scope, UserKind } from './types/api';
 import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
 
 // sessionStorage when available (browser), else a no-op — keeps the store working in the Vitest
@@ -31,6 +31,11 @@ interface AuthStore {
    *  account otherwise has no way to tell a filtered inventory from a small one — every list it
    *  sees is simply shorter, with nothing on screen saying why. */
   scope: Scope | null;
+  /** How the signed-in account authenticates, or null while it is resolving, when signed out,
+   *  or when this core has no user store to ask. **Read it through `hasLocalPassword` /
+   *  `passwordHomeKey` (`lib/password.ts`), never by comparing it here** — a second copy of
+   *  "which kinds have a password Yagra holds" is a second answer (ADR-122 決定 5). */
+  accountKind: UserKind | null;
   /** The server's role/privilege matrix (`GET /api/v1/roles`), or null while it is still
    *  resolving. Held whole rather than pre-reduced to this principal's permission list so that
    *  "may I?" and "what is this privilege called?" read the same single source — and so nothing
@@ -39,6 +44,7 @@ interface AuthStore {
   setAuthed: (authed: boolean) => void;
   setRole: (role: string | null) => void;
   setScope: (scope: Scope | null) => void;
+  setAccountKind: (kind: UserKind | null) => void;
   setRoleMatrix: (matrix: RoleMatrix | null) => void;
 }
 
@@ -46,10 +52,12 @@ export const useAuthStore = create<AuthStore>((set) => ({
   authed: getToken() != null,
   role: null,
   scope: null,
+  accountKind: null,
   roleMatrix: null,
   setAuthed: (authed) => set({ authed }),
   setRole: (role) => set({ role }),
   setScope: (scope) => set({ scope }),
+  setAccountKind: (accountKind) => set({ accountKind }),
   setRoleMatrix: (roleMatrix) => set({ roleMatrix }),
 }));
 

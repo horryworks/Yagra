@@ -45,10 +45,12 @@ import { userColumns, userFilterLabels } from './userFilters';
 import { Monogram } from '../components/ui/tableCells';
 import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+// The floor is shared with the account badge's own change-password dialog — one literal, not
+// three (ADR-122 決定 8).
+import { MIN_PW } from '../lib/password';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import './UsersPage.css';
 
-const MIN_PW = 8;
 // The role *filter* moved to `pages/userFilters.ts` (ADR-053 Inc.6). It used to be a segmented
 // radio group built from a `['all', ...ROLES.reverse()]` list here — one-of-four by construction, so
 // "operators and admins" could not be asked for. `ROLES` is still imported: the per-row role

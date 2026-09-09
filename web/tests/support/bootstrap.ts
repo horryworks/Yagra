@@ -72,10 +72,17 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // Settings screens then render a permission notice instead of their content. Every one of them
   // would still be green. This single line is the difference between walking the app and walking
   // its refusals.
+  //
+  // 🚨 `kind` is the second trap in the same object, and it fails the other way round. The account
+  // badge draws "Change my password" only for a `local` account (ADR-122), so leaving `kind` out
+  // makes that item silently absent — and the walk would then be asserting a two-item menu while
+  // the product ships a three-item one. It is not the RBAC-shaped failure above (nothing goes
+  // blank); it is a control the walk can never see.
   '/api/v1/auth/me': {
     username: `${'ymock-'}e2e`,
     role: 'admin',
     scope: 'All',
+    kind: 'local',
   } satisfies Schemas['AuthMe'] as unknown as Json,
 
   // 🚨 The same trap as `/auth/me`, one step further along. Since ADR-056 Inc.2 every write

@@ -449,6 +449,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change the password of the account the bearer token belongs to.
+         * @description **This ends the caller's own session, on purpose** (ADR-122 決定 3). `revoke_user` is the same
+         *     primitive an administrator's reset uses, so there is one answer to "a password changed — what
+         *     happens to the tokens", and signing in again is what proves the new password actually works.
+         *
+         *     The alternative (revoke everything, then mint a replacement) is not safe here: a signed session
+         *     is denied when its `iat` is **at or before** the revocation cutoff, both are second-granularity,
+         *     and `issue` reads the clock itself — so a replacement minted in the same second would be denied,
+         *     and the caller could not tell that from a broken password.
+         */
+        put: operations["change_own_password"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/classification-rules": {
         parameters: {
             query?: never;
@@ -4803,6 +4830,7 @@ export interface components {
         AuditStatusClass: "ok" | "client" | "server";
         /** @description The caller's own identity. */
         AuthMe: {
+            kind?: null | components["schemas"]["UserKind"];
             role: components["schemas"]["Role"];
             /**
              * @description Which slice of the inventory this account sees: `"All"`, or the node groups it is limited
@@ -5105,6 +5133,16 @@ export interface components {
             /** Format: int32 */
             status: number;
             username: string;
+        };
+        /** @description Change-your-own-password request body. Neither field is logged, echoed, or audited. */
+        ChangeOwnPassword: {
+            /**
+             * @description The password the caller signs in with today. Required even though the caller already holds a
+             *     valid session — without it, a stolen session is a stolen account.
+             */
+            current_password: string;
+            /** @description What to replace it with. Same minimum length as an administrator's reset. */
+            new_password: string;
         };
         /** @description The (secret) connection config for a channel — sealed at rest, never returned by the API. */
         ChannelConfig: {
@@ -12221,6 +12259,73 @@ export interface operations {
                 };
             };
             /** @description No OIDC provider store, no provider enabled, or skeleton mode */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    change_own_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeOwnPassword"];
+            };
+        };
+        responses: {
+            /** @description Password changed; every session of this account — the caller's own included — is revoked, so the client must sign in again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The new password is too short (`weak_password`), is the same as the current one (`password_unchanged`), or this account signs in through a directory or an identity provider and has no local password (`not_a_local_account`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token, or `current_password` is wrong — one code for both */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The session names an account that no longer exists */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Too many attempts; `Retry-After` carries the wait in seconds */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -21,9 +21,11 @@ async function openMenu(page: import('@playwright/test').Page): Promise<string[]
   return page.locator('.usermenu-item').allTextContents();
 }
 
-test('the menu lists Preferences above Log out', async ({ page }) => {
+test('the menu lists Preferences, then Change my password, then Log out', async ({ page }) => {
   await page.goto('/dashboard');
-  expect(await openMenu(page)).toEqual(['Preferences', 'Log out']);
+  // Order is the request, and it is not cosmetic: leaving is the last thing on every menu in this
+  // app, so a change-password item that lands under Log out is wrong even though both render.
+  expect(await openMenu(page)).toEqual(['Preferences', 'Change my password', 'Log out']);
 });
 
 test('Preferences opens a dialog over the current screen, and the screen stays', async ({
@@ -66,6 +68,49 @@ test('choosing a theme applies it, and Escape closes the dialog', async ({ page 
   await expect(dialog).toHaveCount(0);
   // Focus goes back to the badge, not to <body> — `Modal` would restore it to the menu item, which
   // unmounted with the menu.
+  await expect(page.locator('.usermenu-avatar')).toBeFocused();
+});
+
+test('Change my password opens a dialog that will not submit until the form is right', async ({
+  page,
+}) => {
+  // The validator itself is unit-tested (`src/lib/password.test.ts`). What only a browser can say
+  // is that the dialog is actually wired to it — a Save button that ignores the verdict looks
+  // identical in review, and the mistake it hides is signing the operator out for nothing.
+  await page.goto('/nodes');
+  await openMenu(page);
+  await page.getByRole('button', { name: 'Change my password', exact: true }).click();
+
+  const dialog = page.locator('[role="dialog"]');
+  await expect(dialog).toBeVisible();
+  // Current, new, confirm. Three, not two: the self-service change proves possession, which is what
+  // separates it from an administrator's reset.
+  await expect(dialog.locator('input[type="password"]')).toHaveCount(3);
+
+  const save = dialog.getByRole('button', { name: 'Change password', exact: true });
+  await expect(save).toBeDisabled();
+
+  const boxes = dialog.locator('input[type="password"]');
+  await boxes.nth(0).fill('the current one');
+  await boxes.nth(1).fill('a much better passphrase');
+  await boxes.nth(2).fill('a much better passphras');
+  await expect(save).toBeDisabled();
+  await expect(dialog.locator('.form-error')).toHaveText('passwords do not match');
+
+  await boxes.nth(2).fill('a much better passphrase');
+  await expect(dialog.locator('.form-error')).toHaveCount(0);
+  await expect(save).toBeEnabled();
+
+  // The menu closed behind it and the route did not move — same contract as Preferences.
+  await expect(page.locator('.usermenu-pop')).toHaveCount(0);
+  expect(new URL(page.url()).pathname).toBe('/nodes');
+
+  // 🚨 Deliberately not pressed. The mock would answer 204 and the app would sign itself out and
+  // navigate, which is the behaviour under test everywhere *except* here — a fixture cannot tell
+  // us the server really revoked anything, so asserting the sign-out against a mock would be a
+  // test of the mock. That half is the live check on the box (ADR-122).
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
   await expect(page.locator('.usermenu-avatar')).toBeFocused();
 });
 
@@ -141,7 +186,7 @@ test('the dialog reads as Japanese in Japanese, with no raw keys', async ({ page
 
   // The menu label is in the `nav` namespace, which is a separate bundle from the dialog's.
   await page.keyboard.press('Escape');
-  expect(await openMenu(page)).toEqual(['環境設定', 'ログアウト']);
+  expect(await openMenu(page)).toEqual(['環境設定', 'パスワードを変更', 'ログアウト']);
 });
 
 test.describe('on a phone', () => {
@@ -167,7 +212,7 @@ test.describe('on a phone', () => {
     await expect(page.locator('.mtopbar .usermenu-avatar')).toBeVisible();
 
     // And the round trip closes: from the mobile bar, back to Desktop.
-    expect(await openMenu(page)).toEqual(['Preferences', 'Log out']);
+    expect(await openMenu(page)).toEqual(['Preferences', 'Change my password', 'Log out']);
     await page.getByRole('button', { name: 'Preferences', exact: true }).click();
     await page.locator('[role="dialog"]').getByRole('radio', { name: 'Desktop' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-viewport', 'desktop');

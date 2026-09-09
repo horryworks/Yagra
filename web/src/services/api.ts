@@ -2171,6 +2171,17 @@ export const api = {
   setUserPassword: (id: string, password: string): Promise<void> =>
     apiPut('/api/v1/users/{id}/password', { path: { id }, body: { password } }),
 
+  /** Change the signed-in account's own password (ADR-122). Takes no id — the account is the
+   *  one in the bearer token, so this call cannot be aimed at anybody else.
+   *
+   *  🚨 **On success the caller is signed out**: every session of the account is revoked, this
+   *  one included, so the stored token is dead the moment this resolves. The caller must clear
+   *  the local session and send the operator to sign in again. */
+  changeMyPassword: (currentPassword: string, newPassword: string): Promise<void> =>
+    apiPut('/api/v1/auth/password', {
+      body: { current_password: currentPassword, new_password: newPassword },
+    }),
+
   /** Audit log page, newest first (admin-only).
    *
    *  `before` is the keyset cursor: pass the last row's `at` to fetch the next (older) page.

@@ -339,6 +339,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("POST", "/api/v1/auth/login", ACCOUNT, NO_MCP_WRITE),
     ("POST", "/api/v1/auth/logout", ACCOUNT, NO_MCP_WRITE),
+    ("PUT", "/api/v1/auth/password", ACCOUNT, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/auth/me",

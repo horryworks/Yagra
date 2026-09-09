@@ -147,6 +147,9 @@
     "scopedTo_other": "ノードグループ {{count}} 件に限定",
     "notSignedIn": "サインインしていません",
     "preferences": "環境設定",
+    "changePassword": "パスワードを変更",
+    "passwordAtIdp": "パスワードは ID プロバイダ側で管理",
+    "passwordAtDirectory": "パスワードはディレクトリ側で管理",
     "logOut": "ログアウト",
     "signIn": "サインイン"
   }

@@ -73,7 +73,11 @@ fn checked_role(role: &str) -> ApiResult<&str> {
 }
 
 /// Reject a password below the minimum length. The value itself is never echoed back.
-fn check_password(password: &str) -> ApiResult<()> {
+///
+/// `pub(super)` because the self-service change in `api/session.rs` applies the same floor. A
+/// second copy there would be a second answer to "how short is too short", and the two would only
+/// disagree on the day someone raises one of them.
+pub(super) fn check_password(password: &str) -> ApiResult<()> {
     if password.len() < MIN_PASSWORD_LEN {
         return Err(ApiError::bad_request(
             "weak_password",
@@ -86,7 +90,11 @@ fn check_password(password: &str) -> ApiResult<()> {
 /// Map a store mutation outcome to its response. The three outcomes are identical for every
 /// mutating endpoint here, so they resolve in one place: `409 last_admin` is the lock-out guard,
 /// and `404` names the missing account.
-fn mutation_result(outcome: UserMutation, id: Uuid) -> ApiResult<StatusCode> {
+///
+/// `pub(super)` for the same reason as [`check_password`] — `api/session.rs`'s self-service change
+/// ends in the same `UserMutation`, including `NotLocal`, whose message is the one an operator
+/// reads when their account signs in through a directory.
+pub(super) fn mutation_result(outcome: UserMutation, id: Uuid) -> ApiResult<StatusCode> {
     match outcome {
         UserMutation::Done => Ok(StatusCode::NO_CONTENT),
         UserMutation::NotFound => Err(ApiError::not_found(

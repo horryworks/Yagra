@@ -149,6 +149,9 @@
     "scopedTo_other": "Limited to {{count}} node groups",
     "notSignedIn": "Not signed in",
     "preferences": "Preferences",
+    "changePassword": "Change my password",
+    "passwordAtIdp": "Password managed by your identity provider",
+    "passwordAtDirectory": "Password managed by your directory",
     "logOut": "Log out",
     "signIn": "Sign in"
   }

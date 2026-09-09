@@ -12,6 +12,19 @@
 
 ### New Features
 
+- **Change your own password from the account badge** (ADR-122). The top-right badge now offers
+  **Change my password** between Preferences and Log out. It asks for the current password as well
+  as the new one, so a stolen session cannot take the account with it, and the new endpoint
+  (`PUT /api/v1/auth/password`) takes no account id — it can only ever act on the caller's own.
+  🚨 **A successful change signs you out everywhere, this browser included**, and you are sent to
+  the sign-in page to enter the new password. That is the same session revocation an
+  administrator's reset performs; signing in again is also what proves the new password works.
+  Wrong-password attempts spend the same rate-limit budget as the sign-in page, so repeated
+  mistakes here will also delay signing in.
+  The item is not drawn for an account that signs in through LDAP or an identity provider — those
+  have no password Yagra holds — and the badge says where the password lives instead. `GET
+  /api/v1/auth/me` gained a `kind` field carrying that fact.
+
 - **Move a whole deployment to another server, from the WebUI** (ADR-121). **Settings ▸ Move to
   another server** copies this deployment — the encryption key, every account, every threshold and
   the whole alert and audit history — onto a fresh Linux host over SSH, and starts it there on the

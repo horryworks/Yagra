@@ -17,6 +17,19 @@
       "desktop": "Desktop"
     }
   },
+  "password": {
+    "title": "Change my password",
+    "note": "Changing your password signs you out everywhere, including here. You will be asked to sign in again with the new one.",
+    "current": "Current password",
+    "next": "New password (min {{min}} chars)",
+    "confirm": "Confirm new password",
+    "submit": "Change password",
+    "err": {
+      "mismatch": "passwords do not match",
+      "unchanged": "the new password is the same as the current one",
+      "failed": "failed to change the password"
+    }
+  },
   "about": {
     "title": "About",
     "note": "Product identity and running versions.",

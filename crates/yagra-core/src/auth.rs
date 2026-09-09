@@ -1190,6 +1190,27 @@ impl UserStore {
         Ok(UserMutation::Done)
     }
 
+    /// How this account signs in, by id. `None` means there is no such row.
+    ///
+    /// Exists so a self-service password change can refuse an external account **with the reason**
+    /// rather than with the generic 401 `verify` would produce for it (it rejects a non-local
+    /// account before it looks at the hash, so "your current password is wrong" would be the
+    /// answer to "you have no local password" — undiagnosable from the outside). Keyed by id
+    /// rather than by username on purpose: the caller already holds an id, and `login_route`
+    /// mixes in enabled-ness, which is a different question.
+    pub async fn kind_of(&self, id: Uuid) -> anyhow::Result<Option<UserKind>> {
+        let Some(row) = sqlx::query("SELECT auth_source FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(UserKind::parse(
+            &row.try_get::<String, _>("auth_source")?,
+        )))
+    }
+
     /// Reset a **local** account's password (Argon2id-hashed; the plaintext is never stored or
     /// logged).
     ///

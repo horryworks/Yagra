@@ -1951,6 +1951,81 @@
         ]
       }
     },
+    "/api/v1/auth/password": {
+      "put": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Change the password of the account the bearer token belongs to.",
+        "description": "**This ends the caller's own session, on purpose** (ADR-122 決定 3). `revoke_user` is the same\nprimitive an administrator's reset uses, so there is one answer to \"a password changed — what\nhappens to the tokens\", and signing in again is what proves the new password actually works.\n\nThe alternative (revoke everything, then mint a replacement) is not safe here: a signed session\nis denied when its `iat` is **at or before** the revocation cutoff, both are second-granularity,\nand `issue` reads the clock itself — so a replacement minted in the same second would be denied,\nand the caller could not tell that from a broken password.",
+        "operationId": "change_own_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeOwnPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed; every session of this account — the caller's own included — is revoked, so the client must sign in again"
+          },
+          "400": {
+            "description": "The new password is too short (`weak_password`), is the same as the current one (`password_unchanged`), or this account signs in through a directory or an identity provider and has no local password (`not_a_local_account`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token, or `current_password` is wrong — one code for both",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The session names an account that no longer exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts; `Retry-After` carries the wait in seconds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/classification-rules": {
       "get": {
         "tags": [
@@ -22133,6 +22208,17 @@
           "scope"
         ],
         "properties": {
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UserKind",
+                "description": "How this account signs in. The WebUI draws \"Change my password\" only for `local`, and for\n`oidc`/`ldap` says where the password actually lives — one fact on the wire, so the UI holds\nno copy of the rule (ADR-122 決定 5).\n\n`null` means this core has no user store to ask (skeleton mode). **Read it as \"not local\"** —\nevery consumer fails closed, because the alternative is drawing a control whose write path\ndoes not exist here."
+              }
+            ]
+          },
           "role": {
             "$ref": "#/components/schemas/Role"
           },
@@ -22673,6 +22759,24 @@
           },
           "username": {
             "type": "string"
+          }
+        }
+      },
+      "ChangeOwnPassword": {
+        "type": "object",
+        "description": "Change-your-own-password request body. Neither field is logged, echoed, or audited.",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "description": "The password the caller signs in with today. Required even though the caller already holds a\nvalid session — without it, a stolen session is a stolen account."
+          },
+          "new_password": {
+            "type": "string",
+            "description": "What to replace it with. Same minimum length as an administrator's reset."
           }
         }
       },

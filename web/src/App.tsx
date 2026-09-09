@@ -24,6 +24,7 @@ export function App() {
   const setRole = useAuthStore((s) => s.setRole);
   const scope = useAuthStore((s) => s.scope);
   const setScope = useAuthStore((s) => s.setScope);
+  const setAccountKind = useAuthStore((s) => s.setAccountKind);
   const setRoleMatrix = useAuthStore((s) => s.setRoleMatrix);
   const theme = usePrefsStore((s) => s.theme);
   const language = usePrefsStore((s) => s.language);
@@ -47,6 +48,7 @@ export function App() {
     if (!authed || !getToken()) {
       setRole(null);
       setScope(null);
+      setAccountKind(null);
       setRoleMatrix(null);
       return;
     }
@@ -57,13 +59,14 @@ export function App() {
         if (cancelled) return;
         setRole(me.role);
         setScope(me.scope);
+        setAccountKind(me.kind ?? null);
         setRoleMatrix(matrix);
       })
       .catch(() => !cancelled && setRole(null));
     return () => {
       cancelled = true;
     };
-  }, [authed, role, scope, setRole, setScope, setRoleMatrix]);
+  }, [authed, role, scope, setRole, setScope, setAccountKind, setRoleMatrix]);
 
   // Pull this account's server-side preferences once per sign-in (ADR-058), so a setting made on
   // another machine is in place here. Deliberately not part of the effect above: that one is a
