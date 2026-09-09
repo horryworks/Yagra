@@ -524,7 +524,11 @@
     "addToSelection": "選択に追加",
     "removeFromSelection": "選択から外す",
     "moveSelected": "選択した {{count}} 件を移動…",
-    "moveSelectedByPrefix": "選択した {{count}} 件を IP レンジで移動…"
+    "moveSelectedByPrefix": "選択した {{count}} 件を IP レンジで移動…",
+    "moveNodeToGroup": "「{{name}}」をグループへ移動…",
+    "moveNodeByPrefix": "「{{name}}」を IP レンジで移動…",
+    "menuFor": "{{name}} の操作",
+    "menuRoot": "ツリーの操作"
   },
   "moveNode": {
     "title": "{{name}} を移動",

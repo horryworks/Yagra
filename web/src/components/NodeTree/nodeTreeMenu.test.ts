@@ -3,11 +3,11 @@
 // can run it. The regression case is the first one below.
 import { describe, expect, it } from 'vitest';
 import {
-  bulkMenuItems,
   canMoveByPrefix,
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  nodeMoveItems,
   nodeMenuHasItems,
   rootMenuHasItems,
   type MenuCapabilities,
@@ -166,18 +166,48 @@ describe('canMoveByPrefix', () => {
   });
 });
 
-describe('bulkMenuItems', () => {
-  it('appears once something is checked', () => {
-    expect(bulkMenuItems(1, caps({ canEdit: true }))).toBe(true);
-    expect(bulkMenuItems(12, caps({ canEdit: true }))).toBe(true);
+describe('nodeMoveItems', () => {
+  const set = (...ids: string[]) => new Map(ids.map((id) => [id, { id }]));
+
+  it('moves the working set when the right-clicked row is in it, and offers no single move', () => {
+    // 🚨 THE REGRESSION (ADR-124 Inc.2). Three rows Shift-selected, a right-click on one of them,
+    // and the menu offered "Move to group…" — this row — above "Move 3 selected…". On a menu that
+    // ran off the bottom of the screen only the first was visible; one node moved.
+    expect(nodeMoveItems(set('a', 'b', 'c'), 'b', true)).toEqual({
+      scope: 'selection',
+      count: 3,
+      nameTheRow: false,
+      alsoSelection: false,
+    });
   });
 
-  it('stays away with an empty working set', () => {
-    // Below this the menu keeps talking about the one row that was right-clicked.
-    expect(bulkMenuItems(0, caps({ canEdit: true }))).toBe(false);
+  it('moves the row alone when nothing is checked', () => {
+    expect(nodeMoveItems(set(), 'a', true)).toEqual({
+      scope: 'row',
+      count: 0,
+      nameTheRow: false,
+      alsoSelection: false,
+    });
   });
 
-  it('needs ManageConfig, because every item it adds is a move', () => {
-    expect(bulkMenuItems(3, caps({ canSuppress: true }))).toBe(false);
+  it('treats a working set of just this row as the row', () => {
+    // "Move 1 selected…" and "Move to group…" would be the same operation twice.
+    expect(nodeMoveItems(set('a'), 'a', true)).toMatchObject({ scope: 'row', alsoSelection: false });
+  });
+
+  it('names the row, and still offers the set, when the row is outside it', () => {
+    // The batch is not abandoned by a right-click elsewhere; but "Move to group…" next to
+    // "Move 2 selected…" must say which node it means.
+    expect(nodeMoveItems(set('a', 'b'), 'z', true)).toEqual({
+      scope: 'row',
+      count: 2,
+      nameTheRow: true,
+      alsoSelection: true,
+    });
+  });
+
+  it('offers nothing without ManageConfig', () => {
+    expect(nodeMoveItems(set('a', 'b'), 'a', false)).toBeNull();
+    expect(nodeMoveItems(set(), 'a', false)).toBeNull();
   });
 });

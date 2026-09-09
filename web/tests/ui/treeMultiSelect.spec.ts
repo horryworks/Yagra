@@ -106,3 +106,75 @@ test('a plain click abandons the batch', async ({ page }) => {
   await rows.nth(1).click();
   await expect(page.locator('.ntree-row.checked')).toHaveCount(0);
 });
+
+test('the menu on a checked row moves the whole batch, and offers nothing that moves one', async ({
+  page,
+}) => {
+  // 🚨 THE REGRESSION (Inc.2), in the gesture the report used: Shift-select three rows, right-click
+  // one of them, take the first "Move" you see. The menu used to put "Move to group…" — this one
+  // row — above "Move 3 selected…", and on a menu that ran off the bottom of the screen the single
+  // one was the only one visible. Ctrl and Shift were identical.
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(3);
+
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Move to group…', exact: true })).toHaveCount(0);
+  const bulk = menu.getByRole('button', { name: 'Move 3 selected…', exact: true });
+  await expect(bulk).toBeVisible();
+  // And it sits where the single item used to — the first move item in the menu, not below a
+  // separator at the end, which is the position that put it below the fold.
+  const labels = await menu.locator('button').allInnerTexts();
+  const first = labels.find((l) => l.startsWith('Move'));
+  expect(first, 'the first move item is not the batch one').toBe('Move 3 selected…');
+
+  await bulk.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.movenode-list li')).toHaveCount(3);
+});
+
+test('the menu on a row outside the batch names the row, and still offers the batch', async ({
+  page,
+}) => {
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click({ modifiers: ['ControlOrMeta'] });
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(2);
+
+  const name = await rows.nth(2).locator('.ntree-node-name').innerText();
+  await rows.nth(2).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  // ADR-055 R1: with a batch on screen, an unqualified "Move to group…" reads as the batch.
+  await expect(menu.getByRole('button', { name: 'Move to group…', exact: true })).toHaveCount(0);
+  await expect(
+    menu.getByRole('button', { name: `Move "${name}" to group…`, exact: true }),
+  ).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Move 2 selected…', exact: true })).toBeVisible();
+});
+
+test('the hover ↗ on a checked row moves the batch', async ({ page }) => {
+  // The same rule decides the row's own move button; a second copy of it would be the next bug.
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(3);
+
+  await rows.nth(1).hover();
+  const act = rows.nth(1).locator('.ntree-act');
+  await expect(act).toHaveAttribute('title', 'Move 3 selected…');
+  await act.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.movenode-list li')).toHaveCount(3);
+});

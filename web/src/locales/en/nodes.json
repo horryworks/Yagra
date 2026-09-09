@@ -524,7 +524,11 @@
     "addToSelection": "Add to selection",
     "removeFromSelection": "Remove from selection",
     "moveSelected": "Move {{count}} selected…",
-    "moveSelectedByPrefix": "Move {{count}} selected by IP range…"
+    "moveSelectedByPrefix": "Move {{count}} selected by IP range…",
+    "moveNodeToGroup": "Move \"{{name}}\" to group…",
+    "moveNodeByPrefix": "Move \"{{name}}\" by IP range…",
+    "menuFor": "Actions for {{name}}",
+    "menuRoot": "Tree actions"
   },
   "moveNode": {
     "title": "Move {{name}}",

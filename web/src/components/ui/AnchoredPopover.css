@@ -1,8 +1,10 @@
 /* Shared popover surface: `position: fixed` + measured coordinates, so the popover is not clipped
    by a scrolling / overflow-hidden ancestor, and not re-anchored by a virtualized row's transform.
-   Chrome matches the popovers that predate this primitive (`.ts-run-menu`, `.ntree-menu`); they
-   are follow-ups, not copies to grow. There were three — `.ovm-menu` migrated onto `ActionMenu`
-   in ADR-088 Inc.3, after a browser check found its unclamped placement broken on ten screens.
+   Chrome matches the popover that predates this primitive (`.ts-run-menu`); it is a follow-up, not
+   a copy to grow. There were three — `.ovm-menu` migrated onto `ActionMenu` in ADR-088 Inc.3,
+   after a browser check found its unclamped placement broken on ten screens, and `.ntree-menu` in
+   ADR-124 Inc.2, after a right-click at the bottom of the screen ran the tree's context menu off
+   it — with the items acting on the whole selection being the ones cut off.
 
    Per-caller padding and widths live on the caller's own class (`.amenu-menu`, `.msel`, `.tcond`) —
    this rule is only the surface. */

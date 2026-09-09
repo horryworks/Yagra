@@ -50,7 +50,7 @@ describe('shouldDismissOnEscape', () => {
 });
 
 describe('the two selectors', () => {
-  const floating = ['[role="dialog"]', '.apop', '.ntree-menu', '.ts-run-menu'];
+  const floating = ['[role="dialog"]', '.apop', '.ts-run-menu'];
 
   it('name every floating layer in both', () => {
     // Pinned by name because the list is hand-maintained: dropping one of these is how Escape
@@ -59,6 +59,13 @@ describe('the two selectors', () => {
       expect(FLOATING_SELECTOR).toContain(part);
       expect(OVERLAY_SELECTOR).toContain(part);
     }
+  });
+
+  it('name no surface that no longer exists', () => {
+    // `.ntree-menu` moved onto `AnchoredPopover` (ADR-124 Inc.2) and is `.apop` now; a selector
+    // for a class nothing renders is a line nobody can evaluate.
+    expect(FLOATING_SELECTOR).not.toContain('.ntree-menu');
+    expect(FLOATING_SELECTOR).not.toContain('.ovm-menu');
   });
 
   it('put the in-page surfaces in the outer selector only', () => {

@@ -34,6 +34,8 @@
   is reachable without knowing the keyboard gesture. The selection is separate from the row whose
   detail is open — reading one node while collecting a batch works — and it is deliberately **not**
   kept in the URL, so a reload never restores a selection of rows that are no longer on screen.
+  Right-click a node that is in the selection and the menu's move items act on the whole
+  selection; a node outside it keeps its own move, named, with the selection's items below.
 - **Folder pickers can be typed into.** Every place that asks you to choose a folder — move, add
   node, a group's parent, mute, maintenance window, the discovery site — now narrows as you type,
   matching the whole path so a site's name keeps the racks under it. The search box appears once
@@ -98,6 +100,10 @@
 
 ### Bug Fixes
 
+- **The inventory tree's right-click menu stays on the screen.** Opened near the bottom, it used
+  to run off the edge with its last items out of reach — on a node in a multi-selection those
+  were the items that move the whole selection. It now opens upward when there is no room below,
+  and scrolls when it is taller than the screen.
 - **The backup verification script could never have passed, and now does** (`scripts/yagra-restore-verify.sh`,
   ADR-040 / ADR-121). It restores a backup into a throwaway stack and asserts that core comes up on
   the restored data, that the node and audit counts match the manifest, and that **every sealed

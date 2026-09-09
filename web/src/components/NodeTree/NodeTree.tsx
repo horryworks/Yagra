@@ -15,7 +15,7 @@
 // group inside its own subtree are refused (cycle guard). This component is presentation +
 // interaction only; the page owns the data and turns the callbacks into API calls + a reload.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
@@ -43,6 +43,7 @@ import { formatScheduleTime } from '../../lib/format';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
 import { ActionMenu } from '../ui/ActionMenu';
+import { AnchoredPopover } from '../ui/AnchoredPopover';
 import { WrenchIcon, BellIcon, BellOffIcon } from '../ui/icons';
 import { HealthBar } from '../HealthBar/HealthBar';
 import {
@@ -56,11 +57,11 @@ import {
   type Target,
 } from './nodeTreeDnd';
 import {
-  bulkMenuItems,
   canMoveByPrefix,
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  nodeMoveItems,
   rootMenuHasItems,
   type MenuCapabilities,
 } from './nodeTreeMenu';
@@ -89,9 +90,8 @@ type Menu =
   | { x: number; y: number; kind: 'node'; node: NodeSummary }
   | { x: number; y: number; kind: 'root' }
   // Opened by clicking a suppression marker: what is silencing this row, and what can be done
-  // about it. A `Menu` variant rather than its own popover because `.ntree-menu` is already
-  // rendered at the component root — a `position: fixed` element placed inside a row would take
-  // that row's virtualization `transform` as its containing block and lay itself out off screen.
+  // about it. A `Menu` variant rather than its own popover so it shares the one context menu —
+  // its point, its dismissal and, since ADR-124 Inc.2, its portal and its clamping to the viewport.
   | { x: number; y: number; kind: 'suppress'; target: SuppressionTarget; node?: NodeSummary }
   | null;
 
@@ -543,18 +543,17 @@ export function NodeTree({
     );
   };
 
-  // Close the context menu on any outside click / Escape.
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenu(null);
-    document.addEventListener('click', close);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('click', close);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menu]);
+  /** Outside click and Escape both land here, from `AnchoredPopover` (ADR-124 Inc.2). Stable, so
+   *  the popover's document listeners are not re-subscribed on every SSE-driven render. */
+  const closeMenu = useCallback(() => setMenu(null), []);
+
+  /** Whether the context menu was open when the pointer went down on the tree body.
+   *
+   *  🚨 The popover dismisses on **mousedown**, so by the time the body's `click` fires `menu` is
+   *  already null — and a body that read it then would close the menu AND clear `?sel=` in one
+   *  press, which is the layering ADR-073 決定 4 forbids (transient first). The old menu closed on
+   *  `click`, after the body had already seen it open; this ref is that ordering, kept. */
+  const menuAtDown = useRef(false);
 
   const reset = () => {
     setDrag(null);
@@ -754,6 +753,7 @@ export function NodeTree({
     // 🚨 A class of its own, never `sel`. `tests/ui/treeDeselect.spec.ts` pins `.ntree-row.sel`
     // at exactly one row, which is the property that proves the pane's selection is single.
     const isChecked = checkedNodes.has(node.id);
+    const move = nodeMoveItems(checkedNodes, node.id, canEdit);
     return (
       <div
         className={`ntree-row ntree-node${isSel ? ' sel' : ''}${isChecked ? ' checked' : ''}${dropClass(node.id)}${drag?.id === node.id ? ' dragging' : ''}`}
@@ -797,16 +797,23 @@ export function NodeTree({
             {NODE_KIND_SPEC[node.kind].badge}
           </span>
         )}
-        {/* Before the markers — see `.ntree-actions` in the stylesheet. */}
-        {canEdit && (
+        {/* Before the markers — see `.ntree-actions` in the stylesheet. The ↗ acts on whatever the
+            menu's move items act on: this row, or the working set it belongs to (`nodeMoveItems`,
+            ADR-124 Inc.2) — one rule, not a second copy of it. */}
+        {move && (
           <span className="ntree-actions">
             <button
               type="button"
               className="ntree-act"
-              title={t('tree.moveToGroup')}
+              title={
+                move.scope === 'selection' && onMoveChecked
+                  ? t('tree.moveSelected', { count: move.count })
+                  : t('tree.moveToGroup')
+              }
               onClick={(e) => {
                 e.stopPropagation();
-                onRequestMoveNode(node);
+                if (move.scope === 'selection' && onMoveChecked) onMoveChecked();
+                else onRequestMoveNode(node);
               }}
             >
               ↗
@@ -887,6 +894,40 @@ export function NodeTree({
 
   const virtualRows = rowVirtualizer.getVirtualItems();
 
+  /** What the open node menu's move items act on (ADR-124 Inc.2). Decided in `nodeTreeMenu.ts`;
+   *  here it is only applied. */
+  const moveItems =
+    menu?.kind === 'node' ? nodeMoveItems(checkedNodes, menu.node.id, canEdit) : null;
+
+  /** The two items that act on the working set. Rendered in the single item's place when the
+   *  right-clicked row is in the set, and below a separator when it is not. */
+  const selectionMoveItems = (count: number): React.ReactNode => (
+    <>
+      {onMoveChecked && (
+        <button
+          type="button"
+          onClick={() => {
+            onMoveChecked();
+            setMenu(null);
+          }}
+        >
+          {t('tree.moveSelected', { count })}
+        </button>
+      )}
+      {onMoveCheckedByPrefix && canMoveByPrefix(groups, canEdit) && (
+        <button
+          type="button"
+          onClick={() => {
+            onMoveCheckedByPrefix();
+            setMenu(null);
+          }}
+        >
+          {t('tree.moveSelectedByPrefix', { count })}
+        </button>
+      )}
+    </>
+  );
+
   return (
     <div className="ntree">
       {showToolbar && canEdit && (
@@ -904,12 +945,18 @@ export function NodeTree({
           target. Deliberately a React `onClick` and not a `document` listener — the same-frame
           bug `rowMenu.spec.ts` pins (the click that opens a menu also reaching the handler that
           closes it) is specific to document-level dismissal, and this shape cannot have it.
-          While the context menu is open the click only dismisses that: transient first (decision 4). */}
+          While the context menu is open the click only dismisses that: transient first (decision 4)
+          — decided from what the body saw at mousedown, see `menuAtDown`. */}
       <div
         className="ntree-body"
         ref={scrollRef}
+        onMouseDown={() => {
+          menuAtDown.current = menu !== null;
+        }}
         onClick={(e) => {
-          if (menu || !onSelectNone) return;
+          const wasOpen = menuAtDown.current;
+          menuAtDown.current = false;
+          if (wasOpen || !onSelectNone) return;
           if (e.target === e.currentTarget) onSelectNone();
         }}
       >
@@ -951,8 +998,30 @@ export function NodeTree({
         )}
       </div>
 
+      {/* The context menu — `AnchoredPopover` at the right-click's point (ADR-124 Inc.2): portalled,
+          clamped and flipped to stay inside the viewport, scrolling when taller than it, closed by
+          Escape or an outside mousedown. Mounted only while open, so the same element carries every
+          variant and a switch between them at the same point re-places rather than re-opens. */}
       {menu && (
-        <div className="ntree-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <AnchoredPopover
+          open
+          at={{ x: menu.x, y: menu.y }}
+          role={menu.kind === 'suppress' ? 'dialog' : 'menu'}
+          label={
+            menu.kind === 'root'
+              ? t('tree.menuRoot')
+              : t('tree.menuFor', {
+                  name:
+                    menu.kind === 'group'
+                      ? menu.group.name
+                      : menu.kind === 'node'
+                        ? menu.node.name
+                        : menu.target.name,
+                })
+          }
+          className="ntree-menu"
+          onDismiss={closeMenu}
+        >
           {menu.kind === 'suppress' ? (
             suppressionPanel(menu)
           ) : menu.kind === 'group' ? (
@@ -1018,21 +1087,38 @@ export function NodeTree({
                   {t('tree.editNodeEllipsis')}
                 </button>
               )}
-              {canEdit && (
-                <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
-                  {t('tree.moveToGroup')}
-                </button>
-              )}
-              {onMoveNodeByPrefix && canMoveByPrefix(groups, canEdit) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onMoveNodeByPrefix(menu.node);
-                    setMenu(null);
-                  }}
-                >
-                  {t('tree.moveByPrefix')}
-                </button>
+              {/* The move items, and what they act on (ADR-124 Inc.2). A right-click on a row that
+                  is in the working set moves the working set and offers nothing that moves one —
+                  the single item used to sit here above the batch item, and on a menu that ran off
+                  the bottom of the screen it was the only one the operator could see. */}
+              {moveItems?.scope === 'selection' && selectionMoveItems(moveItems.count)}
+              {moveItems?.scope === 'row' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onRequestMoveNode(menu.node);
+                      setMenu(null);
+                    }}
+                  >
+                    {moveItems.nameTheRow
+                      ? t('tree.moveNodeToGroup', { name: menu.node.name })
+                      : t('tree.moveToGroup')}
+                  </button>
+                  {onMoveNodeByPrefix && canMoveByPrefix(groups, canEdit) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onMoveNodeByPrefix(menu.node);
+                        setMenu(null);
+                      }}
+                    >
+                      {moveItems.nameTheRow
+                        ? t('tree.moveNodeByPrefix', { name: menu.node.name })
+                        : t('tree.moveByPrefix')}
+                    </button>
+                  )}
+                </>
               )}
               {/* The way in for someone who does not know the keyboard gesture (ADR-055 R6).
                   Ctrl / Shift is written nowhere on screen until a batch exists, so without this
@@ -1050,31 +1136,12 @@ export function NodeTree({
                     : t('tree.addToSelection')}
                 </button>
               )}
-              {bulkMenuItems(checkedNodes.size, caps) && (
+              {/* A batch exists but this row is not in it: the batch is still offered, below the
+                  row's own (named) items, because the operator may well have meant it. */}
+              {moveItems?.alsoSelection && (
                 <>
                   <div className="ntree-menu-sep" />
-                  {onMoveChecked && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onMoveChecked();
-                        setMenu(null);
-                      }}
-                    >
-                      {t('tree.moveSelected', { count: checkedNodes.size })}
-                    </button>
-                  )}
-                  {onMoveCheckedByPrefix && canMoveByPrefix(groups, canEdit) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onMoveCheckedByPrefix();
-                        setMenu(null);
-                      }}
-                    >
-                      {t('tree.moveSelectedByPrefix', { count: checkedNodes.size })}
-                    </button>
-                  )}
+                  {selectionMoveItems(moveItems.count)}
                 </>
               )}
               {onAddNode && (
@@ -1105,7 +1172,7 @@ export function NodeTree({
               </button>
             )
           )}
-        </div>
+        </AnchoredPopover>
       )}
     </div>
   );

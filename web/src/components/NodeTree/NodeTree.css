@@ -267,17 +267,25 @@
 }
 
 /* Right-click context menu (HoTTY-style). */
+/* The context menu. Its SURFACE — fixed positioning, portal, clamping, background, border,
+   shadow — is `.apop` (AnchoredPopover.css) since ADR-124 Inc.2; this class carries only what is
+   about a context menu: the item layout, the sections and the chips. Deliberately no property is
+   declared in both (ActionMenu.css keeps the same rule).
+
+   🚨 `.apop` paints `--bg-secondary`, and every hover below used to paint `--bg-secondary` too —
+   which on the old `--bg-primary` surface was a hover and on this one is nothing. The hovers are
+   `--bg-tertiary` for that reason, and `treeContextMenu.spec.ts` reads the painted colour. */
 .ntree-menu {
-  position: fixed;
-  z-index: 1000;
   min-width: 160px;
-  background: var(--bg-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-  box-shadow: 0 4px 16px var(--overlay);
   padding: 4px 0;
   display: flex;
   flex-direction: column;
+}
+
+/* When the menu is taller than the screen it is given a max-height and scrolls; the items must
+   overflow rather than be squeezed to fit, or the last ones become unreadable slivers. */
+.ntree-menu > * {
+  flex-shrink: 0;
 }
 
 .ntree-menu button {
@@ -291,7 +299,7 @@
 }
 
 .ntree-menu button:hover {
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
 }
 
 .ntree-menu button.danger {
@@ -336,7 +344,7 @@
 }
 
 .ntree-menu .ntree-dur:hover {
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
   border-color: var(--accent-color);
 }
@@ -490,7 +498,7 @@ button.ntree-supp-icon:hover {
 }
 
 .ntree-menu .ntree-supp-act button:hover {
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
   border-color: var(--accent-color);
 }

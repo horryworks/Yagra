@@ -131,13 +131,51 @@ export function canMoveByPrefix(groups: readonly NodeGroup[], canEdit: boolean):
   return canEdit && groups.some((g) => g.prefixes.length > 0);
 }
 
+/** What the move items on a node row act on — this one row, or the working set it belongs to
+ *  (ADR-124 Inc.2). */
+export interface MoveItems {
+  /** `selection`: the items move every checked node. `row`: they move the right-clicked one. */
+  scope: 'row' | 'selection';
+  /** How many nodes are checked. Read for a `selection` label, and for `alsoSelection`. */
+  count: number;
+  /** Row scope while a working set exists *elsewhere*: the row items carry the node's name, so
+   *  "Move to group…" beside "Move 3 selected…" cannot be read as the batch (ADR-055 R1). */
+  nameTheRow: boolean;
+  /** Row scope while a working set exists elsewhere: the selection items are offered too, below a
+   *  separator — the batch is still there, and the operator may have meant it. */
+  alsoSelection: boolean;
+}
+
 /**
- * Whether the node menu should talk about the **working set** rather than this one row.
+ * Which move items a node row's menu — and its hover ↗ — should carry, and what they act on.
  *
- * The bulk items appear once at least one node is checked; below that the menu keeps saying
- * "this node", which is what a right-click on an unchecked row means. Gated on `canEdit` because
- * every item it introduces is a move.
+ * 🚨 **This is the rule that moved one node when the operator had selected three.** The menu used
+ * to offer "Move to group…" (this row) near the top and "Move N selected…" (the batch) below a
+ * separator near the bottom, on every node row alike — and a menu opened low on the screen ran off
+ * it, so the batch item was the one nobody saw. The operator pressed the item they could see, and
+ * the modal, titled with one node's name, did exactly what it said. Ctrl and Shift were identical.
+ *
+ * The rule is the file manager's: **a right-click on a row that is in the working set acts on the
+ * working set**, and the single-row move is not offered at all — two items for the same verb put
+ * the wrong one where it is easiest to reach. A row *outside* the set keeps its own move, named,
+ * with the set's items below a separator; a set of just this row is the row.
+ *
+ * ⚠️ Only the moves are batch-aware. Edit, Delete, pool and suppression stay about the row: none
+ * has a batch form to switch to, and Delete's confirmation names the node before anything happens.
+ *
+ * Takes the permission rather than `MenuCapabilities` for the reason `canMoveByPrefix` does: the
+ * row's ↗ is the second caller and has no capabilities object to hand over.
  */
-export function bulkMenuItems(checkedCount: number, c: MenuCapabilities): boolean {
-  return c.canEdit && checkedCount > 0;
+export function nodeMoveItems(
+  checked: ReadonlyMap<string, unknown>,
+  nodeId: string,
+  canEdit: boolean,
+): MoveItems | null {
+  if (!canEdit) return null;
+  const count = checked.size;
+  if (checked.has(nodeId) && count > 1) {
+    return { scope: 'selection', count, nameTheRow: false, alsoSelection: false };
+  }
+  const elsewhere = count > 0 && !checked.has(nodeId);
+  return { scope: 'row', count, nameTheRow: elsewhere, alsoSelection: elsewhere };
 }

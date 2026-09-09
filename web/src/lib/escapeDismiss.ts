@@ -13,7 +13,7 @@
 // four-clause condition in three components is also how the third copy ends up wrong
 // (`extensibility.md` §3), so the judgement lives here once and the components only supply facts.
 
-/** Surfaces that float above a page: dialogs, popovers, the two remaining legacy menus. Each is in
+/** Surfaces that float above a page: dialogs, popovers, the one remaining legacy menu. Each is in
  *  the DOM only while open, so "does one exist?" is the same question as "is one open?".
  *
  *  ⚠️ **Hand-maintained, and nothing checks it.** A fourth popover primitive that never gets added
@@ -23,11 +23,12 @@
  *  rule that new popovers use `AnchoredPopover` (`.apop`) instead of becoming a fourth entry here;
  *  the legacy classes are a closed set that predates it, and it is shrinking: `.ovm-menu` left when
  *  `OverflowMenu` moved onto `ActionMenu` (ADR-088 Inc.3), so its entry was removed with it — a
- *  selector kept here for a surface that no longer exists is a line nobody can evaluate. */
+ *  selector kept here for a surface that no longer exists is a line nobody can evaluate.
+ *  `.ntree-menu` followed in ADR-124 Inc.2, when the tree's context menu moved onto
+ *  `AnchoredPopover`. */
 const FLOATING_LAYERS = [
   '[role="dialog"]',
   '.apop',
-  '.ntree-menu',
   '.ts-run-menu',
 ] as const;
 
