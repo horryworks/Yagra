@@ -1131,17 +1131,33 @@ describe('api client', () => {
     });
   });
 
-  it('moves a node into a group (and can ungroup with null)', async () => {
-    const spy = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+  it('moves nodes into a group in one request (and can ungroup with null)', async () => {
+    // This asserted the single-node `PUT /nodes/{id}/group` until ADR-124 Inc.4, when the last
+    // two callers (the drop, the add dialog) moved to the bulk request and the client method
+    // went with them. The bulk one had no test of its own, which is why the swap is a gain:
+    // one request for one node is the property the whole increment rests on.
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ requested: 2, moved: 2 }),
+    } as Response);
     globalThis.fetch = spy;
-    await api.setNodeGroup('n1', 'g2');
-    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/n1/group');
-    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ group_id: 'g2' });
+    await expect(api.moveNodes(['n1', 'n2'], 'g2')).resolves.toEqual({
+      requested: 2,
+      moved: 2,
+    });
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/move');
+    expect(spy.mock.calls[0][1].method).toBe('POST');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({
+      node_ids: ['n1', 'n2'],
+      group_id: 'g2',
+    });
 
-    await api.setNodeGroup('n1', null);
-    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ group_id: null });
+    await api.moveNodes(['n1'], null);
+    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({
+      node_ids: ['n1'],
+      group_id: null,
+    });
   });
 
   it("sets a node's dependency upstream (and can clear it with null)", async () => {

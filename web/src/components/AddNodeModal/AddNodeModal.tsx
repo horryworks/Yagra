@@ -92,9 +92,18 @@ export function AddNodeModal({
     setError(null);
     sendCreate(createRequest(kind, form))
       // The create endpoints take no group_id, so a node lands Ungrouped; file it with the
-      // canonical op (same as drag-drop). A placement failure is soft — the node still exists,
-      // just ungrouped.
-      .then(({ id }) => (group ? api.setNodeGroup(id, group) : undefined))
+      // canonical op — which since ADR-124 Inc.4 is `moveNodes`, the one request every move on
+      // this screen sends, drag and dialog alike. A placement failure is soft in the sense that
+      // the node still exists, but it is **reported**: `moveNodes` answers 200 with `moved: 0`
+      // where the old single-node PUT answered 404, so a silent short move would leave the
+      // operator with a node they filed somewhere and cannot find.
+      .then(({ id }) =>
+        group
+          ? api.moveNodes([id], group).then((r) => {
+              if (r.moved < r.requested) throw new Error(t('err.moveNode'));
+            })
+          : undefined,
+      )
       // No `setBusy(false)` here: success unmounts the dialog, and re-enabling it first would open
       // a window where the button is live again with the node already created.
       .then(onCreated)

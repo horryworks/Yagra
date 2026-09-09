@@ -50,6 +50,7 @@ import {
   dropAction,
   dropAllowed,
   dropPosition,
+  nodeDragItem,
   rootDropAction,
   type DragItem,
   type DropAction,
@@ -159,8 +160,11 @@ interface Props {
   onMoveCheckedByPrefix?: () => void;
   /** Propose a folder for this one node by IP range. Omit to hide it. */
   onMoveNodeByPrefix?: (node: NodeSummary) => void;
-  /** Move a node into a group (or null = ungroup), appending it — drop onto a group / picker. */
-  onMoveNode: (nodeId: string, groupId: string | null) => void;
+  /** Move nodes into a group (or null = ungroup), appending them — a drop, of one row or of the
+   *  whole working set. **A list even for one** (ADR-124 Inc.4): the drag used to hand over a
+   *  single id and the page used to answer it with the single-node endpoint, which is how a
+   *  three-row selection moved one node. */
+  onMoveNodes: (nodeIds: readonly string[], groupId: string | null) => void;
   /** Re-parent a group (or null = top level), appending it — drop into a group / onto Ungrouped. */
   onMoveGroup: (groupId: string, parentId: string | null) => void;
   /** Drag-reorder a node next to a sibling node (before/after) within a group. */
@@ -226,7 +230,7 @@ export function NodeTree({
   onMoveChecked,
   onMoveCheckedByPrefix,
   onMoveNodeByPrefix,
-  onMoveNode,
+  onMoveNodes,
   onMoveGroup,
   onReorderNode,
   onReorderGroup,
@@ -566,10 +570,19 @@ export function NodeTree({
     setDropTarget(null);
   };
 
+  /** Every row this drag will move. 🚨 **`.dragging` used to name the grabbed row alone**, so a
+   *  three-row selection dimmed one row — which was the defect saying so on screen, a release
+   *  before anyone read it (ADR-124 Inc.4). A `Set` rather than `ids.includes` because the batch
+   *  runs to 1000 and this is asked once per visible row per render. */
+  const draggingIds = useMemo(
+    () => new Set(drag === null ? [] : drag.kind === 'node' ? drag.ids : [drag.id]),
+    [drag],
+  );
+
   /** The cursor's position inside the row, as the numbers `dropPosition` decides from. */
   const positionFor = (e: React.DragEvent, targetIsGroup: boolean): DropPos => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    return dropPosition(e.clientY - rect.top, rect.height, targetIsGroup, drag?.kind ?? null);
+    return dropPosition(e.clientY - rect.top, rect.height, targetIsGroup, drag);
   };
 
   const onRowDragOver = (e: React.DragEvent, target: Target, targetIsGroup: boolean) => {
@@ -598,8 +611,8 @@ export function NodeTree({
    *  `DropAction` shape a compile error here rather than a drop that does nothing. */
   const perform = (a: DropAction) => {
     switch (a.kind) {
-      case 'move-node':
-        return onMoveNode(a.nodeId, a.groupId);
+      case 'move-nodes':
+        return onMoveNodes(a.nodeIds, a.groupId);
       case 'move-group':
         return onMoveGroup(a.groupId, a.parentId);
       case 'reorder-node':
@@ -633,7 +646,7 @@ export function NodeTree({
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id ?? null };
     return (
       <div
-        className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${drag?.id === group.id ? ' dragging' : ''}`}
+        className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${draggingIds.has(group.id) ? ' dragging' : ''}`}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
         draggable={canEdit}
         onClick={() => selectGroup(group)}
@@ -762,7 +775,7 @@ export function NodeTree({
     const move = nodeMoveItems(checkedNodes, node.id, canEdit);
     return (
       <div
-        className={`ntree-row ntree-node${isSel ? ' sel' : ''}${isChecked ? ' checked' : ''}${dropClass(node.id)}${drag?.id === node.id ? ' dragging' : ''}`}
+        className={`ntree-row ntree-node${isSel ? ' sel' : ''}${isChecked ? ' checked' : ''}${dropClass(node.id)}${draggingIds.has(node.id) ? ' dragging' : ''}`}
         key={node.id}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
         draggable={canEdit}
@@ -770,7 +783,9 @@ export function NodeTree({
         onDragStart={(e) => {
           e.stopPropagation();
           e.dataTransfer.effectAllowed = 'move';
-          setDrag({ kind: 'node', id: node.id });
+          // What this carries is `nodeTreeDnd.ts`'s call, not a shape spelled out here — the
+          // same rule the ↗ two elements below reads through `nodeMoveItems`.
+          setDrag(nodeDragItem(checkedNodes, node.id));
         }}
         onDragEnd={reset}
         onDragOver={(e) => onRowDragOver(e, target, false)}

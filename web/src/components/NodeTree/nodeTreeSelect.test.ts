@@ -2,7 +2,14 @@
 // The working-set rules (ADR-124). Every case here is one the tree can reach with two clicks, and
 // three of them are the ones that would move nodes nobody picked.
 import { describe, expect, it } from 'vitest';
-import { clickGesture, clickOutcome, rangeChecked, rowNode, toggleChecked } from './nodeTreeSelect';
+import {
+  actsOnSelection,
+  clickGesture,
+  clickOutcome,
+  rangeChecked,
+  rowNode,
+  toggleChecked,
+} from './nodeTreeSelect';
 import type { ClickContext } from './nodeTreeSelect';
 import type { FlatRow } from '../../lib/nodeTree';
 import type { NodeSummary } from '../../types/api';
@@ -20,6 +27,29 @@ const groupRow = (id: string): FlatRow =>
 const loadingRow = (): FlatRow => ({ kind: 'group-loading', depth: 1, groupId: 'g9' });
 
 const checked = (...ids: string[]) => new Map(ids.map((id) => [id, node(id)]));
+
+describe('actsOnSelection', () => {
+  // 🚨 The rule the right-click menu, the hover ↗ and the drag all ask (Inc.4). It lived inside
+  // `nodeMoveItems` and the drag answered it by not asking, which is how a three-row selection
+  // moved one node twice — once through the menu (Inc.2) and once through the drag (Inc.4).
+  it('is true for a row inside a set of more than one', () => {
+    expect(actsOnSelection(checked('a', 'b', 'c'), 'b')).toBe(true);
+  });
+
+  it('is false for a set of just that row — there is nothing else to carry', () => {
+    expect(actsOnSelection(checked('a'), 'a')).toBe(false);
+  });
+
+  it('is false for a row outside the set, however big the set is', () => {
+    // The gesture belongs to the row the operator actually acted on. Reading this the other way
+    // would move a batch the pointer never touched.
+    expect(actsOnSelection(checked('a', 'b', 'c'), 'z')).toBe(false);
+  });
+
+  it('is false when nothing is checked', () => {
+    expect(actsOnSelection(new Map(), 'a')).toBe(false);
+  });
+});
 
 describe('toggleChecked', () => {
   it('adds a node that is not in the set and removes one that is', () => {

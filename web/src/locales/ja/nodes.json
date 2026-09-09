@@ -136,6 +136,7 @@
     "addUrlMonitor": "URL 監視の追加に失敗しました",
     "addNode": "ノードの追加に失敗しました",
     "moveNode": "ノードの移動に失敗しました",
+    "movePartial": "{{requested}} 台のうち {{moved}} 台を移動しました。残りは削除済みか、スコープの外です。",
     "moveGroup": "グループの移動に失敗しました",
     "reorderNode": "ノードの並べ替えに失敗しました",
     "reorderGroup": "グループの並べ替えに失敗しました",

@@ -11,6 +11,7 @@
 // It lived in `NodeTree.tsx`, so no test could reach it. It can now.
 
 import type { SuppressionIndex, SuppressionTarget } from '../../lib/suppression';
+import { actsOnSelection } from './nodeTreeSelect';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 
 /** What the caller may do, as the tree sees it. Each field is one permission's answer, already
@@ -165,6 +166,11 @@ export interface MoveItems {
  *
  * Takes the permission rather than `MenuCapabilities` for the reason `canMoveByPrefix` does: the
  * row's ↗ is the second caller and has no capabilities object to hand over.
+ *
+ * ⚠️ **The row-vs-selection question is `actsOnSelection`, not a line of its own** (Inc.4). It
+ * was written here first, and the drag path then answered it differently by not asking at all.
+ * This function is now about which *items* to draw and what to call them; which nodes they act
+ * on is one import away, shared with the drag.
  */
 export function nodeMoveItems(
   checked: ReadonlyMap<string, unknown>,
@@ -173,7 +179,7 @@ export function nodeMoveItems(
 ): MoveItems | null {
   if (!canEdit) return null;
   const count = checked.size;
-  if (checked.has(nodeId) && count > 1) {
+  if (actsOnSelection(checked, nodeId)) {
     return { scope: 'selection', count, nameTheRow: false, alsoSelection: false };
   }
   const elsewhere = count > 0 && !checked.has(nodeId);

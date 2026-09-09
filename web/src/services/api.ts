@@ -1172,14 +1172,11 @@ export const api = {
   setNodeGroupPool: (id: string, pool: string): Promise<void> =>
     apiPut('/api/v1/node-groups/{id}/pool', { path: { id }, body: { pool } }),
 
-  /** Move a node into a group (or `null` to ungroup it), appending it to the end — used by a drop
-   *  directly onto a group. The dialogs go through `moveNodes`, which takes one node just as well
-   *  and reports how many actually landed (ADR-124 決定 1). */
-  setNodeGroup: (id: string, groupId: string | null): Promise<void> =>
-    apiPut('/api/v1/nodes/{node_id}/group', {
-      path: { node_id: id },
-      body: { group_id: groupId },
-    }),
+  // `setNodeGroup` (`PUT /nodes/{node_id}/group`) was here until ADR-124 Inc.4 and is gone: the
+  // drop was its last caller, and it now sends `moveNodes` like every other move on the screen.
+  // **The endpoint stays** — it is published in the OpenAPI document and an external client may
+  // hold it — but nothing in the WebUI reaches it, which is also what takes 決定 8's unscoped
+  // write out of the operator's hands. Do not add a second client for it.
 
   /** Move MANY nodes into one folder (or `null` to ungroup them all) in one request.
    *

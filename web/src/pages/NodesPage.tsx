@@ -602,10 +602,29 @@ export function NodesPage() {
   };
 
   // Direct moves (drag-drop): assign immediately and refresh.
-  const moveNode = (nodeId: string, groupId: string | null) =>
-    api.setNodeGroup(nodeId, groupId).then(reload).catch((e: unknown) =>
-      setError(errMsg(e, t('err.moveNode'))),
-    );
+  //
+  // 🚨 **A list, and the same bulk request the dialogs send** (ADR-124 Inc.4). This took one id
+  // and called the single-node endpoint, so a drag of three checked nodes moved one — and the
+  // two paths out of this screen disagreed about what moving a node even is. One request now,
+  // whether the operator dragged one row or thirty.
+  //
+  // ⚠️ **A drop has no dialog to hold a partial result in.** `MoveNodeModal` stays open on
+  // `moved < requested` so the operator reads it; a drop has nothing open, so the page says it.
+  // Reporting a short move as success is the failure this endpoint returns two numbers for.
+  const moveNodes = (nodeIds: readonly string[], groupId: string | null) =>
+    api
+      .moveNodes([...nodeIds], groupId)
+      .then(async (r) => {
+        // Only when the drag actually took the batch. Grabbing a row outside it leaves it
+        // alone, which is what the right-click menu does with the same row (`nodeMoveItems`).
+        if (nodeIds.some((id) => checked.has(id))) clearChecked();
+        // 🚨 **After the refresh, never before.** `reload` opens with `setError(null)`, so a
+        // partial reported first is wiped in the same tick and the drop reads as a clean
+        // success — which is the exact failure the two numbers exist to prevent.
+        await reload();
+        if (r.moved < r.requested) setError(t('err.movePartial', { ...r }));
+      })
+      .catch((e: unknown) => setError(errMsg(e, t('err.moveNode'))));
 
   // Nest a group under another (or null = top level), appending it to the end of the destination —
   // the placement endpoint cycle-guards the move and assigns an append order in one call.
@@ -885,7 +904,7 @@ export function NodesPage() {
               canConfig ? () => setMovingByPrefix([...checked.values()]) : undefined
             }
             onMoveNodeByPrefix={canConfig ? (n) => setMovingByPrefix([n]) : undefined}
-            onMoveNode={moveNode}
+            onMoveNodes={moveNodes}
             onMoveGroup={moveGroup}
             onReorderNode={reorderNode}
             onReorderGroup={reorderGroup}

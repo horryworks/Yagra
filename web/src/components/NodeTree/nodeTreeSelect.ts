@@ -37,6 +37,27 @@ export function rowNode(row: FlatRow): NodeSummary | null {
   return row.kind === 'node' || row.kind === 'ungrouped-node' ? row.node : null;
 }
 
+/**
+ * Whether a gesture on this row acts on the **working set** rather than on the row alone
+ * (ADR-124 Inc.2, extracted in Inc.4).
+ *
+ * The file manager's rule, in one sentence: a row that is in the set carries the set. A set of just
+ * this row is the row — there is nothing else in it to carry.
+ *
+ * 🚨 **Three gestures ask this and they must not each answer it.** The right-click menu and the
+ * hover ↗ have read it since Inc.2 (through `nodeMoveItems`); the drag did not, and moved one node
+ * when the operator had selected three — the same defect Inc.2 fixed, reappearing in the one
+ * gesture that had its own copy of the decision. A fourth caller calls this; it does not spell
+ * `checked.has(id) && checked.size > 1` again.
+ *
+ * ⚠️ **Takes `unknown` values on purpose.** Callers hold `CheckedNodes`, but nothing here reads a
+ * node — widening the value type is what lets the menu module ask without importing this one's
+ * vocabulary.
+ */
+export function actsOnSelection(checked: ReadonlyMap<string, unknown>, nodeId: string): boolean {
+  return checked.has(nodeId) && checked.size > 1;
+}
+
 /** Ctrl / ⌘ click: add this node to the working set, or take it out if it is already in.
  *
  *  Returns a new map — the caller replaces its state with it, so React sees the change. */

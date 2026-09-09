@@ -100,6 +100,20 @@
 
 ### Bug Fixes
 
+- **Dragging a selection moves the selection.** Ctrl- or Shift-picking several nodes and then
+  dragging one of them into a folder moved only the row the pointer had grabbed — the tree
+  marked three rows, dimmed one, and filed one. The drag now carries whatever the row’s own
+  move affordance carries, which is the rule the right-click menu and the ↗ button already
+  followed. Dragging a row that is *not* in the selection still moves that row alone, and
+  leaves the selection intact.
+- **A drop that only half-worked says so.** A drag reports how many nodes actually moved when
+  that is fewer than were asked for — some may have been deleted since the page loaded, or lie
+  outside your visible folders. It used to report nothing at all.
+- ⚠️ **Dropping several nodes *between* two rows appends them to the end of the destination
+  folder** rather than inserting them at that point; a single node still lands exactly where
+  it was dropped. The indicator shows the difference — a row outline instead of an insertion
+  line. Placing many nodes at a chosen position needs a bulk ordering API that does not exist
+  yet, and doing it one request at a time can stop halfway with no way to see how far it got.
 - **Ctrl-click keeps the node you clicked first.** Selecting a node and then Ctrl-clicking two
   more collected only the two: the plain click emptied the working set, so the Ctrl clicks
   started from nothing while the tree went on marking all three rows. Shift-click had counted
@@ -148,6 +162,13 @@
 - **Moving a node into a folder that does not exist answers 400 `invalid_group`** instead of 500
   (ADR-124). It affects `PUT /api/v1/nodes/{id}/group` as well as the new bulk route — both go
   through one check now, the one the discovery import already used.
+
+- **Every node move on the Nodes screen is now one request** (ADR-124). Dragging a node, filing
+  a newly added one, and both move dialogs all send `POST /api/v1/nodes/move`, so there is one
+  answer to what moving a node does. `PUT /api/v1/nodes/{id}/group` still exists and still
+  works — the WebUI no longer calls it. **One consequence worth knowing**: the bulk route
+  honours a token’s group scope and the single-node one does not, so a group-scoped operator
+  dragging a node they cannot see now has that refused rather than silently applied.
 
 - **A pool that has lost its poller can be covered from another one, and put back** (ADR-107).
   Settings ▸ Pollers offers it on a pool whose nodes have nothing to poll them — most obviously
