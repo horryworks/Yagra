@@ -36,13 +36,6 @@ test.describe('signing in for real', () => {
 });
 
 test('a deep link is closed to a browser with no session', async ({ page }) => {
-  // Which screen replaces it depends on the deployment, so ask it rather than assuming (ADR-123).
-  // ⚠️ This is the shape Tier2a requires — assert *agreement with the deployment*, never a value.
-  // Written as a fixed expectation it passed on a private box and failed on a public one, and the
-  // failure said nothing about which of the two was wrong.
-  const config = await (await page.request.get('/api/v1/config')).json();
-  const isPublic = config.public_dashboard === true;
-
   await signedOut(page);
   await page.goto('/settings/users');
 
@@ -50,21 +43,47 @@ test('a deep link is closed to a browser with no session', async ({ page }) => {
   // habit rather than from anything this repo declares, which is the failure 決定 7 names. The
   // declaration is `App.tsx`: the requested screen is *replaced*, with the URL untouched. So the
   // property to assert is the replacement, not that the address bar moved.
-  if (isPublic) {
-    // A public deployment has exactly one page for a visitor with no session, and Settings ▸ Users
-    // is not it. The way in is a link rather than the form itself — `/login` still serves that.
-    await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
-  } else {
-    await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
-  }
+  //
+  // ⚠️ This assertion used to branch on `public_dashboard`, because a public deployment answered a
+  // deep link with the board. Since ADR-123 Inc.1 it does not: every anonymous path but the board's
+  // own is the sign-in form, on both kinds of deployment, so there is one answer to assert.
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
 
-  // 🚨 The half that must hold on **both**: whatever replaced the screen, it is not the app shell.
-  // This is the actual security property — the other branch above only names which door is shown.
+  // 🚨 The security half: whatever replaced the screen, it is not the app shell.
   await expect(page.getByRole('navigation'), 'the app shell rendered for a signed-out visitor')
     .toHaveCount(0);
   // Settings ▸ Users is the pick on purpose: a soft failure there — an empty table instead of the
   // gate — would read to an operator as "there are no users".
   await expect(page.getByRole('table')).toHaveCount(0);
+});
+
+test('the sign-in screen offers the public board exactly when there is one', async ({ page }) => {
+  // ⚠️ The Tier2a shape: assert *agreement with the deployment*, never a value. Whether this box
+  // publishes a board is an operator's setting, so both branches are real and both are checked —
+  // a test that only ran on the public side would pass on a box where the button never appears.
+  const config = await (await page.request.get('/api/v1/config')).json();
+  const isPublic = config.public_dashboard === true;
+
+  await signedOut(page);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+
+  const toBoard = page.getByRole('link', { name: 'Show public dashboard' });
+  if (!isPublic) {
+    // A link to a path that would answer with this same screen is an affordance that lies.
+    await expect(toBoard).toHaveCount(0);
+    return;
+  }
+
+  // 🚨 The whole journey, which no unit test can see: the gate reads the path from outside the
+  // router, so this only works because the link is a real navigation. A `navigate()` here would
+  // change the address bar and leave the sign-in form on screen, and `appGate.test.ts` would still
+  // be green — the defect would be the router again, exactly as it was the first time.
+  await toBoard.click();
+  await expect(page).toHaveURL(/\/dashboard\/public$/);
+  // The bare shell: its own way back is a link, and there is no app shell around it.
+  await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('navigation')).toHaveCount(0);
 });
 
 test('a public deployment still serves the sign-in form at /login', async ({ page }) => {

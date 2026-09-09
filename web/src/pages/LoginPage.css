@@ -136,3 +136,22 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* The way through to the public board (ADR-123 Inc.1). Deliberately quiet and below the form: the
+   sign-in path is the primary one on this screen, and this is the answer for the visitor who has
+   no account at all. Centred so it reads as a separate offer rather than a footnote on the form. */
+.login-public {
+  margin-top: 4px;
+  align-self: center;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-bottom: var(--border-width) solid var(--border-color);
+  padding-bottom: 2px;
+}
+
+.login-public:hover,
+.login-public:focus {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+}

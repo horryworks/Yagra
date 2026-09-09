@@ -36,6 +36,10 @@
   work without an account. A **View as anonymous** toggle sends requests without your session, which
   is the only way to see the board as a visitor will: your own session would answer every call.
   A shortcut to it sits beside the account badge.
+  **Anonymous visitors land on the sign-in screen**, not on the board: when a board is published,
+  that screen carries a **Show public dashboard** button through to it. The board is somewhere a
+  visitor is sent rather than the deployment's front door, so an operator arriving at a public
+  deployment still sees an obvious way to sign in.
 
 - **Change your own password from the account badge** (ADR-122). The top-right badge now offers
   **Change my password** between Preferences and Log out. It asks for the current password as well

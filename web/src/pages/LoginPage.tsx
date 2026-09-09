@@ -11,10 +11,11 @@ import type { ChangeEvent, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
-import { useAuthStore } from '../store';
+import { useAuthStore, useConfigStore } from '../store';
 import { Logo } from '../components/shell/Logo';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/Field';
+import { PUBLIC_PATH } from '../appGate';
 import './LoginPage.css';
 
 type ErrTone = 'danger' | 'warning';
@@ -29,6 +30,9 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useState<{ tone: ErrTone; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [ssoEnabled, setSsoEnabled] = useState(false);
+  // Read from the store, not fetched: `App` has already settled the config by the time this screen
+  // renders, and a second request for the same document would be a second answer to one question.
+  const publicBoard = useConfigStore((s) => s.config?.public_dashboard) === true;
 
   // Whether an OIDC provider is configured — surfaces the "Continue with SSO" button.
   useEffect(() => {
@@ -129,6 +133,19 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
           </form>
 
           {error && <p className={`login-error login-error-${error.tone}`}>{error.message}</p>}
+
+          {/* The way to the public board, on the screen every anonymous visitor now lands on
+              (ADR-123 Inc.1). A plain link rather than `navigate()` deliberately: the choice
+              between the board and the app is made once per page load, above the router
+              (`App.tsx` reads the path outside it), so a client-side navigation would change the
+              address without changing what is rendered. Drawn only when the deployment actually
+              publishes a board — on a private one it would lead back to this same screen, which is
+              an affordance that lies. */}
+          {!embedded && publicBoard && (
+            <a className="login-public" href={PUBLIC_PATH}>
+              {t('showPublicDashboard')}
+            </a>
+          )}
         </div>
       </div>
     </div>

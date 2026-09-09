@@ -9,7 +9,9 @@
 //     down dropped every visitor into the app shell with no login screen and every panel erroring.
 //     Unknown is now closed — see `appGate.ts`.
 //  2. A public deployment used to render the **whole application** to anonymous visitors, because
-//     every `RequireView` endpoint answered them. They now get one board and nothing else.
+//     every `RequireView` endpoint answered them. There is now one board and nothing else, and it
+//     is somewhere they are *sent* rather than where they land: every anonymous URL answers with
+//     the sign-in form, which carries a button through to the board (ADR-123 Inc.1).
 
 import { useEffect } from 'react';
 import { BrowserRouter } from 'react-router-dom';
