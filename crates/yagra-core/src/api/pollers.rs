@@ -311,7 +311,19 @@ fn build_pollers_response(
         .iter()
         .filter_map(|r| r.description.as_deref().map(|d| (r.name.as_str(), d)))
         .collect();
-    let names: Vec<String> = described.iter().map(|r| r.name.clone()).collect();
+    // 🚨 The fifth source, and this is the list where it decides whether an operator has a way
+    // back. Taking a pool over moves every node and folder that named it, so all three of
+    // `coverage`'s sources — nodes, live pollers, a `pools` row — can stop mentioning the pool the
+    // moment the takeover succeeds. It then vanishes from this response and "Put them back" goes
+    // with it, because the WebUI hangs that action off this row and `covered_by` below only
+    // decorates a row `coverage` already produced. The case that reaches it: a pool named on nodes
+    // but never given a `pools` row, which the assignment picker's Custom field creates. Measured,
+    // not reasoned — see the test below. `build_pool_options` carries the same union for the picker.
+    let names: Vec<String> = described
+        .iter()
+        .map(|r| r.name.clone())
+        .chain(covered.keys().cloned())
+        .collect();
     let pools = crate::pool_coverage::coverage(&live, &node_pools, &names)
         .into_iter()
         .map(|c| PoolSummary {
@@ -1529,6 +1541,43 @@ mod tests {
             coverage.iter().any(PoolCoverageExt::uncovered),
             "the fixture must actually exercise the uncovered branch"
         );
+    }
+
+    /// ADR-107 増分 4 決定 5, on the list that carries the button.
+    ///
+    /// The state after a successful takeover of a pool that only ever existed because nodes named
+    /// it: no `pools` row, no node left naming it, no live poller — that last one being why it was
+    /// taken over at all. Every source `coverage` reads is silent, so before the fix the row was
+    /// simply absent and the operator had no rendered "Put them back" anywhere. `covered_by` could
+    /// not save it: that decorates a row, it does not create one.
+    #[test]
+    fn a_covered_pool_still_lists_when_nothing_names_it_but_the_takeover() {
+        let mut covered = std::collections::BTreeMap::new();
+        covered.insert("site-b".to_owned(), "default".to_owned());
+        let mut node_pools = std::collections::HashMap::new();
+        node_pools.insert("default".to_owned(), 30usize);
+
+        let resp = build_pollers_response(
+            Vec::new(),
+            vec![live_view("p1", "default", true)],
+            node_pools,
+            Vec::new(),
+            covered,
+        );
+
+        let taken = resp
+            .pools
+            .iter()
+            .find(|p| p.pool == "site-b")
+            .unwrap_or_else(|| {
+                let listed: Vec<&str> = resp.pools.iter().map(|p| p.pool.as_str()).collect();
+                panic!("the covered pool is not listed, so it cannot be restored: {listed:?}")
+            });
+        // The row has to be usable, not merely present: the menu draws "Put them back" from
+        // `covered_by`, and the pill must stay quiet because the pool has no nodes left to strand.
+        assert_eq!(taken.covered_by.as_deref(), Some("default"));
+        assert_eq!(taken.nodes, 0);
+        assert_eq!(taken.warning, None);
     }
 
     /// Local alias so the assertion above reads as a predicate over the fixture.
