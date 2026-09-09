@@ -36,20 +36,46 @@ test.describe('signing in for real', () => {
 });
 
 test('a deep link is closed to a browser with no session', async ({ page }) => {
+  // Which screen replaces it depends on the deployment, so ask it rather than assuming (ADR-123).
+  // ⚠️ This is the shape Tier2a requires — assert *agreement with the deployment*, never a value.
+  // Written as a fixed expectation it passed on a private box and failed on a public one, and the
+  // failure said nothing about which of the two was wrong.
+  const config = await (await page.request.get('/api/v1/config')).json();
+  const isPublic = config.public_dashboard === true;
+
   await signedOut(page);
   await page.goto('/settings/users');
 
-  // ⚠️ The first version of this asserted a redirect to `/login` and failed — an expectation taken
-  // from habit rather than from anything this repo declares, which is the failure 決定 7 names. The
-  // declaration is `App.tsx`: when `gated`, `<LoginPage />` is rendered *instead of* `<AppRoutes>`,
-  // with the URL untouched. So the property to assert is that the requested screen was replaced,
-  // not that the address bar moved.
-  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  // ⚠️ An earlier version asserted a redirect to `/login` and failed — an expectation taken from
+  // habit rather than from anything this repo declares, which is the failure 決定 7 names. The
+  // declaration is `App.tsx`: the requested screen is *replaced*, with the URL untouched. So the
+  // property to assert is the replacement, not that the address bar moved.
+  if (isPublic) {
+    // A public deployment has exactly one page for a visitor with no session, and Settings ▸ Users
+    // is not it. The way in is a link rather than the form itself — `/login` still serves that.
+    await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+  } else {
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  }
+
+  // 🚨 The half that must hold on **both**: whatever replaced the screen, it is not the app shell.
+  // This is the actual security property — the other branch above only names which door is shown.
   await expect(page.getByRole('navigation'), 'the app shell rendered for a signed-out visitor')
     .toHaveCount(0);
   // Settings ▸ Users is the pick on purpose: a soft failure there — an empty table instead of the
   // gate — would read to an operator as "there are no users".
   await expect(page.getByRole('table')).toHaveCount(0);
+});
+
+test('a public deployment still serves the sign-in form at /login', async ({ page }) => {
+  // 🚨 The defect Tier2a found on the first real public deployment: `appView` answered every URL
+  // with the public board, so there was no route that could reach the form and no way for an
+  // operator to sign in at all. It is asserted here rather than only in `appGate.test.ts` because
+  // the unit test cannot see the router, and the router is what was wrong.
+  await signedOut(page);
+  await page.goto('/login');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('navigation')).toHaveCount(0);
 });
 
 test('the API edge refuses an unauthenticated read', async ({ page }) => {
