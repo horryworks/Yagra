@@ -2418,7 +2418,7 @@ mod tests {
             };
             let (status, out) = send(&st, method, &path, &tok, Some(body)).await;
             assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{path}: {out}");
-            assert_eq!(out["code"], "invalid_group", "{path}: {out}");
+            assert_eq!(out["error"]["code"], "invalid_group", "{path}: {out}");
         }
     }
 
@@ -2443,7 +2443,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["code"], "too_many_nodes", "{body}");
+        assert_eq!(body["error"]["code"], "too_many_nodes", "{body}");
     }
 
     /// A viewer may read the inventory and may not rearrange it.
