@@ -104,6 +104,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    reads: ['GET /api/v1/fleet/summary'],
     Component: StatusSummaryWidget,
   },
   {
@@ -114,6 +115,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/fleet/summary'],
     Component: HealthRingWidget,
   },
   {
@@ -124,6 +126,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/fleet/summary'],
     Component: NodesDownWidget,
   },
   {
@@ -135,6 +138,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2],
+    reads: ['GET /api/v1/fleet/state-history'],
     Component: FleetHealthTimelineWidget,
   },
   {
@@ -146,6 +150,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/alerts/transitions'],
     Component: RecentStateChangesWidget,
   },
   {
@@ -157,6 +162,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/stream/alerts'],
     Component: ActiveAlertsWidget,
     Actions: ActiveAlertsActions,
   },
@@ -169,6 +175,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2],
+    reads: ['GET /api/v1/alerts/history'],
     Component: AlertVolumeWidget,
   },
   {
@@ -179,6 +186,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/stream/alerts'],
     Component: SeverityMixWidget,
   },
   {
@@ -190,6 +198,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/stream/alerts',
+      'POST /api/v1/node-names',
+    ],
     Component: FlappingWatchlistWidget,
   },
   {
@@ -201,6 +213,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/alerts/top-nodes'],
     Component: TopAlertingNodesWidget,
   },
   {
@@ -212,6 +225,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2],
+    reads: ['GET /api/v1/alerts/calendar'],
     Component: AlertCalendarWidget,
   },
   {
@@ -223,6 +237,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/top'],
     Component: TopRttWidget,
     Actions: TopAggActions,
   },
@@ -235,6 +250,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/top'],
     Component: TopCpuWidget,
     Actions: TopAggActions,
   },
@@ -247,6 +263,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/top'],
     Component: TopMemoryWidget,
     Actions: TopAggActions,
   },
@@ -262,6 +279,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [4, 6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/nodes/{node_id}/metrics',
+      'GET /api/v1/nodes/{node_id}/metrics/{metric}/range',
+    ],
     Component: MetricChartWidget,
     // No view-mode actions at all: both of this widget's controls choose its subject, so both sit
     // behind the ⚙ (ADR-072). It has no window and no lens to leave in the header.
@@ -279,6 +300,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/top'],
     Component: MetricTopWidget,
     // The window is a view control and stays in the header; the metric name is the subject.
     Actions: TopAggActions,
@@ -293,6 +315,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/interface-top'],
     Component: BusiestInterfacesWidget,
     Actions: TopAggActions,
   },
@@ -305,6 +328,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/interface-top'],
     Component: MostErrorsWidget,
     Actions: TopAggActions,
   },
@@ -317,6 +341,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/interface-top'],
     Component: MostDiscardsWidget,
     Actions: TopAggActions,
   },
@@ -329,6 +354,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/interface-top'],
     Component: TopTalkersWidget,
     Actions: TopAggActions,
   },
@@ -341,6 +367,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2],
+    reads: ['GET /api/v1/metrics/throughput-range'],
     Component: AggregateThroughputWidget,
   },
   {
@@ -352,6 +379,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/metrics/interface-heatmap',
+      'GET /api/v1/nodes/{node_id}/interfaces',
+    ],
     Component: InterfaceHeatmapWidget,
   },
   {
@@ -364,6 +395,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/nodes/{node_id}/interfaces',
+      'GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series',
+    ],
     Component: InterfaceTrafficWidget,
     // Unit and window in the header; which interfaces are plotted behind the ⚙ (ADR-072).
     Actions: InterfaceTrafficActions,
@@ -378,6 +413,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/interface-delta'],
     Component: TrafficSpikesWidget,
   },
   {
@@ -389,6 +425,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/metrics/interface-delta'],
     Component: TrafficDropsWidget,
   },
   {
@@ -400,6 +437,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/events',
+      'POST /api/v1/node-names',
+    ],
     Component: EventFeedWidget,
     Actions: EventFeedActions,
   },
@@ -412,6 +453,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2],
+    reads: ['GET /api/v1/events/stats'],
     Component: EventVolumeWidget,
   },
   {
@@ -422,6 +464,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/events/stats'],
     Component: EventKindMixWidget,
   },
   {
@@ -433,6 +476,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/events/stats'],
     Component: TopTrapTypesWidget,
   },
   {
@@ -443,6 +487,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/events/stats'],
     Component: EventTriageMixWidget,
   },
   {
@@ -454,6 +499,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/events/stats',
+      'POST /api/v1/node-names',
+    ],
     Component: NoisyEventSourcesWidget,
   },
   {
@@ -464,6 +513,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/events/stats'],
     Component: EventRuleCoverageWidget,
   },
   {
@@ -475,6 +525,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/flow/top-talkers'],
     Component: FlowTopTalkersWidget,
   },
   {
@@ -486,6 +537,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/flow/top-as'],
     Component: FlowTopAsWidget,
     Actions: FlowAsDirActions,
   },
@@ -498,6 +550,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/flow/top-ports'],
     Component: FlowTopPortsWidget,
   },
   {
@@ -508,6 +561,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/flow/protocols'],
     Component: FlowProtoMixWidget,
   },
   {
@@ -519,6 +573,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/flow/conversations'],
     Component: FlowConversationsWidget,
   },
   {
@@ -530,6 +585,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2],
+    reads: ['GET /api/v1/flow/series'],
     Component: FlowTrendWidget,
   },
   {
@@ -541,6 +597,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/fleet/group-summary',
+      'GET /api/v1/node-groups',
+    ],
     Component: SiteHealthMatrixWidget,
   },
   {
@@ -552,6 +612,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2],
+    reads: [
+      'GET /api/v1/fleet/group-summary',
+      'GET /api/v1/node-groups',
+    ],
     Component: RegionRollupWidget,
   },
   {
@@ -563,6 +627,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [4, 6, 8],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/fleet/group-summary',
+      'GET /api/v1/node-groups',
+    ],
     Component: GeoMapWidget,
   },
   {
@@ -574,6 +642,10 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/topology',
+      'GET /api/v1/stream/node-states',
+    ],
     Component: DependencyWidget,
   },
   {
@@ -585,6 +657,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/maintenance-windows'],
     Component: MaintenanceWidget,
   },
   {
@@ -595,6 +668,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'new',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    reads: ['GET /api/v1/poller-health'],
     Component: PollerHealthWidget,
   },
   {
@@ -606,6 +680,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/discovery/candidates'],
     Component: DiscoveryQueueWidget,
   },
   {
@@ -616,6 +691,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    reads: ['GET /api/v1/fleet/coverage'],
     Component: DataCoverageWidget,
   },
   {
@@ -627,6 +703,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/fleet/coverage'],
     Component: StaleDataWidget,
   },
   {
@@ -638,6 +715,7 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    reads: ['GET /api/v1/audit'],
     Component: AuditWidget,
   },
 ];
@@ -660,9 +738,11 @@ export const registryView: RegistryView = {
 };
 
 /** Catalog grouped by section, in registry order (for the picker). */
-export function catalogBySection(): { section: string; widgets: WidgetDefinition[] }[] {
+export function catalogBySection(
+  defs: WidgetDefinition[] = REGISTRY,
+): { section: string; widgets: WidgetDefinition[] }[] {
   const out: { section: string; widgets: WidgetDefinition[] }[] = [];
-  for (const def of REGISTRY) {
+  for (const def of defs) {
     let group = out.find((g) => g.section === def.section);
     if (!group) {
       group = { section: def.section, widgets: [] };
@@ -689,5 +769,19 @@ export function defaultLayout(): DashboardLayout {
   return {
     version: DASHBOARD_VERSION,
     boards: [{ id: 'board-1', name: 'Dashboard 1', widgets: DEFAULT_WIDGETS.map((w) => ({ ...w })) }],
+  };
+}
+
+/** The public board's starting point: **empty**, unlike [`defaultLayout`] (ADR-123).
+ *
+ *  🚨 The default here is a publishing decision, not a presentation one. Seeding it with the same
+ *  five widgets would mean that turning the switch on published a fleet summary nobody chose to
+ *  publish — and, because the anonymous route allow-list is derived from the widgets on this board,
+ *  it would open their API routes too. An admin composes what strangers see, deliberately, or they
+ *  see an empty board and a message saying so. */
+export function emptyPublicLayout(): DashboardLayout {
+  return {
+    version: DASHBOARD_VERSION,
+    boards: [{ id: 'board-1', name: 'Public', widgets: [] }],
   };
 }

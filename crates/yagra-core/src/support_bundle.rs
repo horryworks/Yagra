@@ -125,7 +125,8 @@ pub const ENV_ALLOWLIST: &[(&str, EnvShape)] = &[
     ("YAGRA_API_ADDR", EnvShape::Plain),
     ("YAGRA_ENABLE_HA", EnvShape::Plain),
     ("YAGRA_ENABLE_MCP", EnvShape::Plain),
-    ("YAGRA_PUBLIC_DASHBOARD", EnvShape::Plain),
+    // ⚠️ `YAGRA_PUBLIC_DASHBOARD` was here and is gone (ADR-123): the public dashboard is a row
+    // in `app_settings` now, so it shows up in the bundle's settings section rather than here.
     // Stores and bus — the five-store layout, with credentials stripped
     ("YAGRA_DATABASE_URL", EnvShape::Url),
     ("YAGRA_BUS_URL", EnvShape::Url),

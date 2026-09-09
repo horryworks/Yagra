@@ -324,6 +324,36 @@ impl NodeRepo {
         .await?;
         Ok(())
     }
+
+    /// Whether this deployment serves the public board to anonymous visitors (ADR-123 決定 1).
+    ///
+    /// Reads **fail-closed**: a missing row, an unreadable value or any error reports `false`.
+    /// That is the opposite direction from [`Self::get_meraki_polling_enabled`] and the same one
+    /// [`crate::upgrade`]'s switch chose, for the same reason — a database core cannot read is not
+    /// a reason to keep authentication switched off. The cost of being wrong here is strangers
+    /// reading the fleet; the cost of being wrong the other way is a dashboard that needs a retry.
+    pub async fn get_public_dashboard_enabled(&self) -> bool {
+        sqlx::query("SELECT public_dashboard_enabled FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.try_get::<bool, _>("public_dashboard_enabled").ok())
+            .unwrap_or(false)
+    }
+
+    /// Set the public-dashboard switch, upserting the singleton row.
+    pub async fn set_public_dashboard_enabled(&self, enabled: bool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, public_dashboard_enabled, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET public_dashboard_enabled = $1, updated_at = now()",
+        )
+        .bind(enabled)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

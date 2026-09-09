@@ -79,7 +79,11 @@ These are known, intentional, and documented so a reviewer does not have to gues
   a scoped account to Admin clears the scope it held rather than leaving a contradiction in place.
 - **The MCP tool surface (`/mcp`) is disabled by default** (`YAGRA_ENABLE_MCP`) and always requires
   a token, including when the anonymous read-only dashboard is enabled.
-- **The anonymous read-only dashboard is disabled by default** (`YAGRA_PUBLIC_DASHBOARD`).
+- **The anonymous public dashboard is disabled by default**, and turning it on is an Admin act
+  in the WebUI (Settings ▸ Sign-in methods). When on, anonymous visitors reach **one board and
+  nothing else**: the API routes open to them are derived from the widgets that board carries,
+  so the node list, the event log and the internal shared board stay closed unless a widget on
+  the public board reads them. Writes are never anonymous.
 - **The bootstrap admin password is generated randomly and printed once** to the core log on first
   start. There is no built-in default password.
 - **The WebUI is served over HTTPS by default** on host `:443`, terminated in the web container.

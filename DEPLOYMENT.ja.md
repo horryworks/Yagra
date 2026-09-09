@@ -141,7 +141,6 @@ POSTGRES_PASSWORD=change-me            # 使い捨てでないマシンでは必
 YAGRA_API_PORT=8080                    # API のホストポート（平文）
 YAGRA_WEB_PORT=443                     # WebUI のホストポート（HTTPS）
 # YAGRA_ADMIN_PASSWORD=choose-a-strong-password   # 未設定なら一度限りのランダム値をログ出力
-# YAGRA_PUBLIC_DASHBOARD=false         # true = ログイン不要の読み取り専用ダッシュボード
 # YAGRA_WEB_TLS=off                    # 手前のプロキシが既に HTTPS を終端している場合のみ
 # YAGRA_API_BIND=127.0.0.1             # core の平文ポートを LAN から閉じる — 下記参照
 ```
@@ -465,7 +464,6 @@ export RUST_LOG=info
 | `YAGRA_KEK_FILE` | 未設定 ⇒ 一時 dev 鍵 | マウントした 32 バイト鍵ファイルへのパス |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` のバインドアドレス |
 | `YAGRA_ADMIN_PASSWORD` | 未設定 ⇒ 一度限りのランダム値（ログ出力） | ブートストラップ `admin` パスワード（初回起動のみ） |
-| `YAGRA_PUBLIC_DASHBOARD` | `false` | `true` = ログイン不要の読み取り専用ダッシュボード |
 | **ポーリングと通知** | | |
 | `YAGRA_POLL_INTERVAL_SECS` | `30`（10–3600 にクランプ） | 初期の既定ポーリング間隔（初回起動でシード。以後は DB が権威） |
 | `YAGRA_SNMP_COMMUNITY` | 未設定 | 資格情報が未バインドのノードに使うフォールバック SNMP v2c コミュニティ |

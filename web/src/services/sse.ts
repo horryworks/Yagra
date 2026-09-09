@@ -11,7 +11,7 @@
 import type { Alert, AnalysisJob, NodeState, ReportRun } from '../types/api';
 import { isNodeState } from '../lib/nodeState';
 import { isRunState } from '../reports/runStatus';
-import { getToken, notifyAuthFailure } from './api';
+import { getToken, isAnonymousPreview, notifyAuthFailure } from './api';
 
 // Origin prefix, empty by default — the same meaning `services/api.ts` gives it, with `/api/v1`
 // spelled at the call site. It used to default to `/api/v1` and be used as a path prefix here while
@@ -149,7 +149,10 @@ function subscribeSSE(
   const run = async (): Promise<void> => {
     while (!closed) {
       try {
-        const token = getToken();
+        // ⚠️ Not `getToken()`: during an anonymous preview (ADR-123 決定 8) the stream must go out
+        // uncredentialed too, or the live widgets would keep updating for an admin looking at what
+        // a stranger sees — which is the one thing the preview exists to show honestly.
+        const token = isAnonymousPreview() ? null : getToken();
         const headers: Record<string, string> = { Accept: 'text/event-stream' };
         if (token) headers.Authorization = `Bearer ${token}`;
         const res = await fetch(`${ORIGIN}${path}`, {

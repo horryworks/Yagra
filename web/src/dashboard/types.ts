@@ -99,6 +99,27 @@ export interface WidgetDefinition {
   allowedRowSpans?: RowSpan[];
   /** Row height when first added. Omit ⇒ 1 (standard). */
   defaultRowSpan?: RowSpan;
+  /** Every API route this widget reads in order to render — method + OpenAPI path
+   *  (`'GET /api/v1/fleet/summary'`, `'GET /api/v1/nodes/{node_id}/interfaces'`).
+   *
+   *  🚨 **This is an access-control declaration, not documentation.** ADR-123 決定 5: the set of
+   *  routes an anonymous visitor may reach is derived from the widgets on the public board, so a
+   *  widget placed there opens exactly what it declares here. Getting it wrong fails in two
+   *  directions and neither is loud — **too few** and the widget breaks only for anonymous
+   *  visitors (an admin previewing it while signed in sees it work), **too many** and routes the
+   *  board never reads are open to strangers.
+   *
+   *  Required, deliberately: an optional field would default to "declares nothing", which reads
+   *  as a correct empty answer rather than as a widget nobody has thought about. Nothing can check
+   *  this against the component — what a `.tsx` fetches is not statically reachable — so the two
+   *  things that do exist are `widgetRoutes.test.ts` (every route named here is a real route in
+   *  the OpenAPI document) and the public board's "view as anonymous" preview, which is the only
+   *  way to find an omission.
+   *
+   *  What belongs here: what the **body** fetches to show its content, including through a shared
+   *  hook (`useFleetSummary` → `/fleet/summary`) or an SSE subscription. What does not: anything
+   *  only a `Settings` panel reads — Customize is never open to an anonymous visitor. */
+  reads: readonly string[];
   /** The body renderer. */
   Component: FC<WidgetProps>;
   /** Optional **view-mode** header actions: a time window, a display lens, a "View all" link.

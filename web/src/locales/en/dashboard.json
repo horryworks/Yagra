@@ -527,5 +527,19 @@
   },
   "err": {
     "requestFailed": "request failed"
+  },
+  "public": {
+    "pageNote": "The one board people can see without signing in. It is what they can see — nothing else on this deployment is reachable without an account.",
+    "banner": "This board is visible from outside. Every widget you place here also opens the API it reads to anonymous visitors.",
+    "bannerLive_one": "Live: anonymous visitors can see this board right now, and the {{count}} API route it reads.",
+    "bannerLive_other": "Live: anonymous visitors can see this board right now, and the {{count}} API routes it reads.",
+    "bannerOff": "Not published. Compose the board here, then turn it on under Settings ▸ Sign-in methods.",
+    "loading": "Loading the public dashboard…",
+    "empty": "The public dashboard is empty. Nothing is served to anonymous visitors until you add a widget.",
+    "emptyViewer": "Nothing has been published here yet.",
+    "preview": "View as anonymous",
+    "previewExit": "Stop previewing",
+    "previewBanner": "Previewing as an anonymous visitor — requests are being sent without your session. A widget that shows nothing here shows nothing to them.",
+    "viewerUnavailable": "This dashboard is not available right now."
   }
 }

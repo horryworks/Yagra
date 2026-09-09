@@ -35,6 +35,32 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 
+/// May *this* request be served without a credential (ADR-123 決定 5)?
+///
+/// Three conditions, all required, and each is a way the old `bool` was too broad:
+///
+/// 1. **No bearer at all.** A caller presenting a credential goes through the normal path, so an
+///    expired token is answered `401` rather than being quietly upgraded to anonymous access — and
+///    a Viewer scoped to one group never gets the whole fleet back because the deployment happens
+///    to be public. (The old check ignored the header entirely; only `Scoped` looked.)
+/// 2. **The switch is on and this route is on the public board's allow-list.** Not "this is a read"
+///    — the previous implementation opened all 76 `RequireView` endpoints, which is how the node
+///    list and the event log were public on a deployment that only meant to show one board.
+/// 3. **The route pattern is known.** `MatchedPath` is the pattern axum resolved
+///    (`/api/v1/nodes/{node_id}/interfaces`), never the concrete path. Its absence — a request that
+///    matched no route, or a nested router that did not record one — is refused rather than
+///    guessed at: the allow-list is keyed by pattern, and comparing a concrete path against it
+///    would silently never match anyway.
+pub(crate) fn public_route_allowed(parts: &Parts, st: &ApiState) -> bool {
+    if bearer(&parts.headers).is_some() {
+        return false;
+    }
+    let Some(matched) = parts.extensions.get::<axum::extract::MatchedPath>() else {
+        return false;
+    };
+    crate::public_access::current(&st.public_access).allows(parts.method.as_str(), matched.as_str())
+}
+
 /// What a valid bearer token turned out to be.
 ///
 /// Two credentials reach `/api/v1` now: an interactive **session** from `POST /auth/login`, and a
@@ -232,7 +258,7 @@ impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
-        if P::OPEN_ON_PUBLIC_DASHBOARD && st.public_dashboard {
+        if P::OPEN_ON_PUBLIC_DASHBOARD && public_route_allowed(parts, st) {
             return Ok(Self(std::marker::PhantomData));
         }
         let Some(auth) = parts.extensions.get::<Authenticated>() else {
@@ -471,9 +497,15 @@ impl std::ops::Deref for Events {
 /// which is why the route ledger records a scoping rule per endpoint and a test checks the two
 /// agree. Extracting it and then ignoring it is the one failure this cannot catch on its own.
 ///
-/// Gated like [`RequireView`], **not** like [`Caller`]: a public-dashboard deployment has decided
-/// its reads are open, and its anonymous visitors resolve to [`NodeScope::All`]. Making this the
-/// stricter of the two would take the public dashboard offline rather than scope it.
+/// Gated like [`RequireView`], **not** like [`Caller`]: an anonymous visitor reaching a route the
+/// public board opened resolves to [`NodeScope::All`]. Making this the stricter of the two would
+/// take the public dashboard offline rather than scope it.
+///
+/// ⚠️ Since ADR-123 that is narrower than it sounds. The anonymous caller only gets here at all if
+/// [`public_route_allowed`] said this exact route is on the board's allow-list, so "all nodes" is
+/// bounded by what the admin put on the board — a fleet-wide summary widget, not a way to page
+/// through the inventory. There is deliberately no per-group public scope: see
+/// [`crate::public_access`]'s property 2.
 pub struct Scoped(pub super::scope::NodeScope);
 
 #[async_trait]
@@ -481,7 +513,7 @@ impl FromRequestParts<ApiState> for Scoped {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
-        if st.public_dashboard && bearer(&parts.headers).is_none() {
+        if public_route_allowed(parts, st) {
             return Ok(Self(super::scope::NodeScope::All));
         }
         // Read the credential `resolve_auth_mw` already resolved, exactly like `Require<P>` — never
@@ -635,19 +667,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn view_is_open_on_a_public_dashboard_but_gated_otherwise() {
+    async fn a_request_with_no_matched_route_is_refused_even_on_a_public_deployment() {
+        // ⚠️ This test used to read "view is open on a public dashboard", and asserted exactly
+        // that: a bare `Parts` was admitted by `RequireView` whenever the deployment was public.
+        // ADR-123 made that false on purpose — the anonymous surface is now keyed by **route**, so
+        // a request whose route axum did not resolve has nothing to look up and is refused.
+        //
+        // It cannot be written the other way round here: `MatchedPath`'s constructor is private to
+        // axum, so a test cannot hand one to an extractor. That is the same shape ADR-113 hit with
+        // `rmcp::Peer`, and the same answer applies — the positive case is tested through the real
+        // router, in `api/public_dashboard.rs` and `public_access.rs`. What stays testable at this
+        // level is the refusal, and it is the half that must not regress.
         let public = public_state();
-        assert!(
-            RequireView::from_request_parts(&mut parts_with(None), &public)
-                .await
-                .is_ok()
-        );
+        let err = RequireView::from_request_parts(&mut parts_with(None), &public)
+            .await
+            .err()
+            .expect("a request with no matched route has no allow-list entry to match");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
 
         let private = private_state();
         let err = RequireView::from_request_parts(&mut parts_with(None), &private)
             .await
             .err()
             .expect("a private deployment must not serve reads anonymously");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_bearer_token_never_takes_the_anonymous_path() {
+        // Condition 1 of `public_route_allowed`, and the one the old `bool` did not have: a caller
+        // presenting a credential is answered by the normal path. Without this, an **expired**
+        // token on a public deployment would be silently upgraded to anonymous access instead of
+        // being told to sign in again — and a group-scoped Viewer would get `NodeScope::All` back
+        // through `Scoped`, which is an ADR-014 scope escape.
+        let public = public_state();
+        let mut parts = parts_with(Some("nonsense-token"));
+        assert!(!public_route_allowed(&parts, &public));
+        let err = RequireView::from_request_parts(&mut parts, &public)
+            .await
+            .err()
+            .expect("an unresolvable bearer must be refused, not treated as anonymous");
         assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
     }
 

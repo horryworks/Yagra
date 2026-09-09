@@ -1,0 +1,38 @@
+-- 0106_public_dashboard_switch — the operator's on/off for anonymous viewing (ADR-123 決定 1).
+--
+-- Additive (expand, ADR-017): one column with a DEFAULT on the singleton app_settings row, exactly
+-- like `meraki_polling_enabled` in 0041 and `upgrade_enabled` in 0079. Existing rows and an N-1
+-- binary (which never selects it) keep working unchanged.
+--
+-- reversible: additive only — one column with a DEFAULT, nothing narrowed. An older core reads the
+-- deployment's `YAGRA_PUBLIC_DASHBOARD` environment variable instead and ignores this column, so
+-- rolling back restores the previous behaviour exactly. No `schema_compat` floor, for the same
+-- reason 0089 / 0099 / 0100 / 0102..0105 record: every release from 0.2.2 on tolerates a database
+-- carrying migrations it does not embed, and the floor 0080 recorded covers this one.
+--
+-- WHY THE DEFAULT IS false. Anonymous viewing is off unless someone turns it on, and the column
+-- must not be the thing that turns it on. A deployment upgrading into this migration has never
+-- made that decision, so the migration must not make it for them — including a deployment that
+-- had `YAGRA_PUBLIC_DASHBOARD=true` set. ⚠️ That is a deliberate breaking change (ADR-123 決定 1):
+-- the environment variable is removed in the same release, and such a deployment goes dark until
+-- an admin turns the switch on in the WebUI. The release notes say so.
+--
+-- WHY IT IS A SWITCH AT ALL, rather than staying an environment variable. The variable lives in
+-- the deployment's `.env`, and the composition is taken from the target image on every upgrade
+-- (ADR-050 decision 5), so the only way to reach it is a shell — which the production premise
+-- (ADR-045, a closed network with no shell) says is not there. A row in PostgreSQL survives an
+-- upgrade and is reachable by the people this feature is for.
+--
+-- WHY IT IS **NOT** IN THE CONFIGURATION BUNDLE. `config_bundle/export.rs` names its app_settings
+-- columns explicitly and carries only `default_poll_interval_secs` and `meraki_polling_enabled`.
+-- This one stays behind for the reason 0079 records and one more: importing a bundle must never be
+-- able to open a deployment to anonymous readers. Whether a deployment is public is a property of
+-- that deployment, not portable monitoring configuration. This is a property of that SELECT rather
+-- than of this migration — the comment there says so.
+--
+-- Read fail-closed (`repo/settings.rs`): a missing row or an unreadable value reports "off", the
+-- same direction `upgrade_enabled` chose and the opposite of `meraki_polling_enabled`. The
+-- difference is the point — one switch stops collection, this one removes authentication.
+
+ALTER TABLE app_settings
+    ADD COLUMN public_dashboard_enabled BOOLEAN NOT NULL DEFAULT false;

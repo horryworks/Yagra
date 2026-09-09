@@ -105,6 +105,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::eventlog::Doc::openapi(),
         super::audit::Doc::openapi(),
         super::dashboard::Doc::openapi(),
+        super::public_dashboard::Doc::openapi(),
         super::preferences::Doc::openapi(),
         super::mib::Doc::openapi(),
         super::api_tokens::Doc::openapi(),

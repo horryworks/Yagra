@@ -5,7 +5,8 @@
 //! an opaque bearer token held in an in-memory [`SessionStore`] mapped to a [`Principal`]
 //! (role + scope). Mutating API endpoints call [`SessionStore::authorize`] with the
 //! required [`Permission`]. Read endpoints require `View` by default, but can be opened
-//! to anonymous access via `YAGRA_PUBLIC_DASHBOARD` (a public read-only dashboard). The scope half
+//! to anonymous access by the public dashboard (ADR-123) — but only the routes the public board's
+//! own widgets read, never every read endpoint. The scope half
 //! is enforced too (ADR-014): it is captured in the session at issue time and resolved per request
 //! by `api::scope`, which is why every mutation that narrows an account — a role change, a scope
 //! change, a disable — must call [`SessionStore::revoke_user`]. Tokens are process-local (lost on

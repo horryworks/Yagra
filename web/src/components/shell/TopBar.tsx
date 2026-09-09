@@ -6,7 +6,7 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { NAV, sectionForPath } from '../../nav';
-import { useAlertStore } from '../../store';
+import { useAlertStore, useCan } from '../../store';
 import { Logo } from './Logo';
 import { UserMenu } from './UserMenu';
 import { GlobalSearch } from './GlobalSearch';
@@ -18,6 +18,8 @@ export function TopBar() {
   const navigate = useNavigate();
   const active = sectionForPath(pathname);
   const alertCount = useAlertStore((s) => Object.keys(s.alerts).length);
+  // The permission composing the public board takes — the same one its handler checks (ADR-056).
+  const canSystem = useCan('manage_system');
 
   return (
     <header className="topbar">
@@ -59,6 +61,23 @@ export function TopBar() {
           </span>
           {alertCount > 0 && <span className="topbar-bell-badge">{alertCount}</span>}
         </button>
+        {/* Beside the account badge because that is where "who am I signed in as" lives, and this
+            is the one screen about people who are not signed in at all (ADR-123). It is a shortcut
+            to the editor, not a preview — the preview toggle is on that page, where the banner can
+            explain what it does. Drawn for anyone who may compose the board; ADR-056 forbids
+            drawing it disabled for everyone else. */}
+        {canSystem && (
+          <button
+            className="topbar-bell"
+            onClick={() => navigate('/dashboard/public')}
+            title={t('shell.publicDashboard')}
+            aria-label={t('shell.publicDashboard')}
+          >
+            <span className="topbar-bell-glyph" aria-hidden>
+              ◎
+            </span>
+          </button>
+        )}
         <UserMenu />
       </div>
     </header>

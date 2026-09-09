@@ -775,6 +775,108 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
   );
 }
 
+/** Serve one board to people with no account (ADR-123).
+ *
+ *  Here rather than under System settings because this is a question about *signing in* — whether
+ *  it is required at all — and that shelf is where the answers to that question live (ADR-055 R8).
+ *
+ *  `manage_system`, not the `manage_users` its neighbours take: removing authentication changes the
+ *  deployment rather than who may sign in to it (ADR-057). And never `manage_config`, which
+ *  Operator holds — that is the mistake `PUT /api/v1/config` would have been.
+ */
+function PublicDashboardCard() {
+  const { t } = useTranslation('settings-auth');
+  const canSystem = useCan('manage_system');
+  const [state, setState] = useState<{ enabled: boolean; routes: number } | null>(null);
+  const [confirm, setConfirm] = useState<null | boolean>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .getPublicDashboardSwitch()
+      .then((s) => setState({ enabled: s.enabled, routes: s.route_count }))
+      .catch((e: unknown) => setErr(errMsg(e, t('publicDashboard.loadFailed'))));
+  }, [t]);
+
+  useEffect(() => load(), [load]);
+
+  const apply = (next: boolean) => {
+    setBusy(true);
+    setErr(null);
+    api
+      .setPublicDashboardEnabled(next)
+      .then((s) => setState({ enabled: s.enabled, routes: s.route_count }))
+      .catch((e: unknown) => setErr(errMsg(e, t('publicDashboard.saveFailed'))))
+      .finally(() => {
+        setBusy(false);
+        setConfirm(null);
+      });
+  };
+
+  return (
+    <Card title={t('publicDashboard.title')}>
+      <p className="form-hint">{t('publicDashboard.hint')}</p>
+      {err && (
+        <p className="form-error" role="alert">
+          {err}
+        </p>
+      )}
+      {state == null ? (
+        <p className="muted">{t('common:loading')}</p>
+      ) : (
+        <>
+          <p className={state.enabled ? 'form-hint is-live' : 'form-hint'}>
+            {state.enabled
+              ? t('publicDashboard.stateOn', { count: state.routes })
+              : t('publicDashboard.stateOff')}
+          </p>
+          {/* ADR-056: the control is drawn only for someone who may use it — never disabled with a
+              tooltip, which is invisible on touch and reads as broken rather than as forbidden. */}
+          {canSystem && (
+            <Button
+              variant={state.enabled ? 'danger' : 'primary'}
+              onClick={() => setConfirm(!state.enabled)}
+              disabled={busy}
+            >
+              {state.enabled ? t('publicDashboard.turnOff') : t('publicDashboard.turnOn')}
+            </Button>
+          )}
+        </>
+      )}
+
+      {confirm !== null && state != null && (
+        <Modal
+          title={confirm ? t('publicDashboard.confirmOnTitle') : t('publicDashboard.confirmOffTitle')}
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <Button onClick={() => setConfirm(null)}>{t('common:actions.cancel')}</Button>
+              <Button
+                variant={confirm ? 'primary' : 'danger'}
+                onClick={() => apply(confirm)}
+                disabled={busy}
+              >
+                {confirm ? t('publicDashboard.turnOn') : t('publicDashboard.turnOff')}
+              </Button>
+            </>
+          }
+        >
+          <p className="modal-confirm-text">
+            {confirm
+              ? t('publicDashboard.confirmOnBody', { count: state.routes })
+              : t('publicDashboard.confirmOffBody')}
+          </p>
+          {/* The cost, stated before the click rather than discovered after it. */}
+          {confirm && state.routes === 0 && (
+            <p className="form-hint">{t('publicDashboard.confirmOnEmpty')}</p>
+          )}
+        </Modal>
+      )}
+    </Card>
+  );
+}
+
 export function AuthSettingsPage() {
   const { t } = useTranslation('settings-auth');
   const canUsers = useCan('manage_users');
@@ -882,6 +984,7 @@ export function AuthSettingsPage() {
               in" is one subject with two sources, and a separate *Directory* nav item would be the
               second settings screen for one concept that decision 2 exists to prevent. */}
           <DirectoryCard canUsers={canUsers} />
+          <PublicDashboardCard />
         </>
       )}
 

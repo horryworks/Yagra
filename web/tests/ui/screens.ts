@@ -85,6 +85,12 @@ const MARKER: Expect = { kind: 'marker' };
 export const SCREEN_EXPECT: Record<string, Expect> = {
   '/dashboard': MARKER,
   '/dashboard/my': MARKER,
+  // The public board starts empty and the Tier1 mock has no saved layout, so there is no widget
+  // marker to find — what renders is the empty state and the "this is visible from outside"
+  // banner. `TEXT` on the banner rather than `NONE`: the banner is the one thing on this screen
+  // that must never silently disappear (ADR-055 R6), and an empty board is exactly when a missing
+  // warning would go unnoticed.
+  '/dashboard/public': { kind: 'text', text: 'visible from outside' },
   '/dashboard/reports': MARKER,
   '/nodes': MARKER,
   '/nodes/discovery': MARKER,

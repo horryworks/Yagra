@@ -68,6 +68,9 @@ pub(crate) mod pollers;
 pub(crate) mod pools;
 mod preferences;
 mod profiles;
+/// The public board an anonymous visitor sees, and the switch that serves it (ADR-123). Apart from
+/// `dashboard` on purpose: this board is an access-control list, not presentation state.
+mod public_dashboard;
 pub(crate) mod rca;
 /// Moving this whole deployment to another server (ADR-121). Named apart from `config_bundle`,
 /// which moves a configuration and carries no secret.
@@ -157,6 +160,12 @@ pub struct AdminState {
     pub dashboards: Arc<DashboardRepo>,
     /// The single global "Shared Dashboard" layout (admin-edited, shown to all users).
     pub shared_dashboard: Arc<SharedDashboardRepo>,
+    /// The "Public Dashboard" layout — the one board an anonymous visitor sees (ADR-123).
+    ///
+    /// ⚠️ Not a third presentation store. What this board carries decides which API routes an
+    /// unauthenticated request may reach ([`crate::public_access`]), which is why its write takes
+    /// `manage_system` while its shared-board sibling takes `manage_config`.
+    pub public_dashboard: Arc<crate::dashboard::PublicDashboardRepo>,
     /// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
     pub prefs: Arc<UserPrefsRepo>,
     /// Live poll-loop self-monitoring counters (the poller-health endpoint).
@@ -294,9 +303,16 @@ pub struct ApiState {
     /// Passive-event engine (webhook ingest + manual close + inline rule reload);
     /// `None` in skeleton mode.
     pub event_engine: Option<Arc<crate::events::EventEngine>>,
-    /// When true, read-only endpoints skip authentication (public read-only dashboard).
-    /// When false (default), they require a valid session with `View` (every role has it).
-    pub public_dashboard: bool,
+    /// What an **anonymous** request may reach (ADR-123): whether public viewing is switched on,
+    /// and the route allow-list derived from the widgets on the public board.
+    ///
+    /// ⚠️ This used to be a `bool` meaning "every `RequireView` handler answers without a
+    /// credential" — 76 endpoints, so a public deployment served the node list, the event log and
+    /// the board composed for colleagues to strangers. It is now a handle because both halves
+    /// change at runtime: the switch is a row an admin toggles (`app_settings`), and the allow-list
+    /// changes whenever the public board is edited. A refresh loop keeps standby cores in step
+    /// (ADR-123 決定 5); reads go through `public_access::current`.
+    pub public_access: crate::public_access::PublicAccessHandle,
     /// HA leadership (ADR-016): `true` when this core holds the advisory lock and runs the
     /// coordinator + ingest + alert/notify singletons. Drives `/readyz` (so a load balancer routes
     /// only to the leader) and gates the event-ingest handlers that would otherwise enqueue to an
@@ -412,6 +428,9 @@ pub fn router(state: ApiState) -> Router {
         .merge(eventlog::routes())
         .merge(audit::routes())
         .merge(dashboard::routes())
+        // The public board and the switch that serves it anonymously (ADR-123). Separate from
+        // `dashboard` because saving this board changes what an unauthenticated request may read.
+        .merge(public_dashboard::routes())
         // Per-account WebUI preferences (ADR-058), in `api/preferences.rs`.
         .merge(preferences::routes())
         .merge(mib::routes())
@@ -674,7 +693,9 @@ mod tests {
             history: None,
             ack: None,
             event_engine: None,
-            public_dashboard: true,
+            public_access: crate::public_access::handle(
+                crate::public_access::PublicAccess::skeleton_open(),
+            ),
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
             oidc: None,
@@ -714,7 +735,9 @@ mod tests {
             history: None,
             ack: None,
             event_engine: None,
-            public_dashboard: false,
+            public_access: crate::public_access::handle(
+                crate::public_access::PublicAccess::closed(),
+            ),
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
             oidc: None,
@@ -752,7 +775,9 @@ mod tests {
             history: None,
             ack: None,
             event_engine: None,
-            public_dashboard: false,
+            public_access: crate::public_access::handle(
+                crate::public_access::PublicAccess::closed(),
+            ),
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
             oidc: None,

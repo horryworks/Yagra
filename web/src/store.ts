@@ -7,7 +7,8 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { severityRank } from './lib/format';
 import { grants, permissionLabel } from './lib/permissions';
-import { getToken } from './services/api';
+import { getToken, type ClientConfig } from './services/api';
+import type { Viewer } from './dashboard/layoutAccess';
 import type { Alert, Permission, RoleMatrix, Scope, UserKind } from './types/api';
 import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
 
@@ -60,6 +61,48 @@ export const useAuthStore = create<AuthStore>((set) => ({
   setAccountKind: (accountKind) => set({ accountKind }),
   setRoleMatrix: (roleMatrix) => set({ roleMatrix }),
 }));
+
+// ── The deployment's own client config (`GET /api/v1/config`) ────────────────────────────────
+//
+// Held in a store rather than in `App.tsx`'s local state because three things now branch on it: the
+// login gate, the anonymous shell, and every layout store's decision about whether there is a row
+// to fetch. Passing it down would mean threading it through the dashboard stores, which are created
+// at module scope.
+
+/** How far the config fetch has got. `unreachable` is a state, not a value — see [`useConfigStore`]. */
+export type ConfigStatus = 'loading' | 'ready' | 'unreachable';
+
+interface ConfigStore {
+  status: ConfigStatus;
+  config: ClientConfig | null;
+  setConfig: (config: ClientConfig) => void;
+  setUnreachable: () => void;
+}
+
+/**
+ * The deployment's client config, and whether we could read it.
+ *
+ * 🚨 **`unreachable` must never be treated as "public".** `App.tsx` used to `.catch()` the fetch and
+ * substitute `{ public_dashboard: true }`, so a core that was down — or upgrading, or misconfigured
+ * — put every visitor straight into the app shell with no login screen and every panel erroring.
+ * Nothing leaked (the API answers 401 regardless), but the screen was wrong in the one moment an
+ * operator most needs it to be right. Unknown is closed: see `appGate.ts`.
+ */
+export const useConfigStore = create<ConfigStore>((set) => ({
+  status: 'loading',
+  config: null,
+  setConfig: (config) => set({ config, status: 'ready' }),
+  setUnreachable: () => set({ status: 'unreachable' }),
+}));
+
+/** What the dashboard stores need to know about the viewer (ADR-123). Not a hook: the layout stores
+ *  are created at module scope and read this from outside React, in `load()`. */
+export function currentViewer(): Viewer {
+  return {
+    hasSession: getToken() != null,
+    publicDashboard: useConfigStore.getState().config?.public_dashboard === true,
+  };
+}
 
 /**
  * Whether the current principal may do `perm` — the hook every write control asks before drawing

@@ -69,6 +69,12 @@ export const NAV: NavSection[] = [
             implemented: true,
           },
           {
+            labelKey: 'dashboard.public',
+            descKey: 'descriptions.dashboardPublic',
+            path: '/dashboard/public',
+            implemented: true,
+          },
+          {
             labelKey: 'dashboard.reports',
             descKey: 'descriptions.dashboardReports',
             path: '/dashboard/reports',

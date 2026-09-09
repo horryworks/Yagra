@@ -57,10 +57,13 @@ pub struct Config {
     pub poll_interval_secs: u32,
     /// API bind address.
     pub api_addr: String,
-    /// When true, read-only endpoints (node list, metrics, alerts) are served without
-    /// authentication — a public, read-only dashboard. Default `false`: viewing requires
-    /// a valid session (Viewer role), matching the RBAC design.
-    pub public_dashboard: bool,
+    // ⚠️ `public_dashboard` was here, read from `YAGRA_PUBLIC_DASHBOARD`, and it is **gone**
+    // (ADR-123 決定 1, a breaking change recorded in the release notes). Anonymous viewing is now
+    // a row in `app_settings` an admin toggles from Settings ▸ Sign-in methods, because the
+    // environment variable lives in a `.env` an in-place upgrade replaces (ADR-050 decision 5) and
+    // the production premise is a deployment with no shell (ADR-045). Do not reintroduce it: two
+    // sources for one switch is the shape this repo's own anti-drift rule exists to refuse, and
+    // the environment side would silently win at every restart.
     /// Days an SSO-owned API token survives its owner's silence — see
     /// [`DEFAULT_PAT_OIDC_IDLE_DAYS`] for why this is the only handle on IdP-side revocation.
     pub pat_oidc_idle_days: i64,
@@ -159,7 +162,6 @@ impl Config {
             poll_interval_secs: parse_interval(std::env::var("YAGRA_POLL_INTERVAL_SECS").ok()),
             api_addr: std::env::var("YAGRA_API_ADDR")
                 .unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned()),
-            public_dashboard: parse_bool(std::env::var("YAGRA_PUBLIC_DASHBOARD").ok()),
             pat_oidc_idle_days: parse_idle_days(std::env::var("YAGRA_PAT_OIDC_IDLE_DAYS").ok()),
             // Read but *not* required: a missing/blank URL leaves Redis mirroring disabled without
             // affecting the live/skeleton gating above.

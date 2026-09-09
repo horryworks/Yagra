@@ -952,7 +952,7 @@ mod tests {
     #[tokio::test]
     async fn reading_the_log_is_gated_before_the_store_is_consulted() {
         for st in [private_state(), public_state()] {
-            let public = st.public_dashboard;
+            let public = crate::public_access::current(&st.public_access).enabled();
             let resp = router(st)
                 .oneshot(
                     Request::builder()

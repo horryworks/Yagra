@@ -1,21 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// App root: applies the persisted theme, discovers whether reads are gated, and mounts the
-// router. In private-dashboard mode (reads require auth) and not logged in, the whole app is
-// gated behind the login screen; otherwise the shell + routes render. On a config-fetch
-// error we fall back to an open dashboard so a transient/older server never hard-locks the UI.
+// App root: applies the persisted theme, discovers whether reads are gated, and mounts one of four
+// things — a spinner, the login screen, the bare public board, or the full shell.
+//
+// ⚠️ Two things here changed with ADR-123 and the old behaviour is worth knowing, because both were
+// wrong in ways nothing reported:
+//
+//  1. A failed config fetch used to fall back to `{ public_dashboard: true }`, so a core that was
+//     down dropped every visitor into the app shell with no login screen and every panel erroring.
+//     Unknown is now closed — see `appGate.ts`.
+//  2. A public deployment used to render the **whole application** to anonymous visitors, because
+//     every `RequireView` endpoint answered them. They now get one board and nothing else.
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 import { OidcCallbackPage } from './pages/OidcCallbackPage';
 import { AppRoutes } from './routes';
 import { useTranslation } from 'react-i18next';
-import { api, getToken, setUnauthorizedHandler, type ClientConfig } from './services/api';
+import { api, getToken, setUnauthorizedHandler } from './services/api';
+import { appView } from './appGate';
+import { PublicShell } from './dashboard/PublicDashboardPage';
 import { applyLanguage, applyTheme, usePrefsStore } from './prefs';
 import { loadServerPrefs, resetServerPrefs } from './serverPrefs';
 import { applyViewportMode, useViewportMode } from './lib/viewport';
 import i18n from './i18n';
-import { useAuthStore } from './store';
+import { useAuthStore, useConfigStore } from './store';
 
 export function App() {
   const { t } = useTranslation();
@@ -29,7 +38,12 @@ export function App() {
   const theme = usePrefsStore((s) => s.theme);
   const language = usePrefsStore((s) => s.language);
   const viewportMode = useViewportMode();
-  const [config, setConfig] = useState<ClientConfig | null>(null);
+  // In a store rather than local state: the dashboard layout stores read `public_dashboard` from
+  // outside React to decide whether there is a row to fetch (`layoutAccess.ts`).
+  const config = useConfigStore((s) => s.config);
+  const configStatus = useConfigStore((s) => s.status);
+  const setConfig = useConfigStore((s) => s.setConfig);
+  const setUnreachable = useConfigStore((s) => s.setUnreachable);
 
   // Resolve the current principal's role, visibility scope and permissions once we're authenticated
   // but don't yet know them (after a page reload the token is in localStorage but none of them is),
@@ -107,21 +121,32 @@ export function App() {
     return () => setUnauthorizedHandler(null);
   }, []);
 
+  // Retry a few times before settling on `unreachable`: a core that is still starting answers
+  // nothing for a few seconds, and the old code papered over exactly that case by pretending the
+  // deployment was public. Retrying is the honest version of the same intent.
   useEffect(() => {
-    api
-      .getConfig()
-      .then(setConfig)
-      .catch(() =>
-        setConfig({
-          public_dashboard: true,
-          auth_available: false,
-          sso_enabled: false,
-          default_poll_interval_secs: 30,
-        }),
-      );
-  }, []);
+    let cancelled = false;
+    let attempt = 0;
+    const tryOnce = () => {
+      api
+        .getConfig()
+        .then((c) => {
+          if (!cancelled) setConfig(c);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          attempt += 1;
+          if (attempt < 3) setTimeout(tryOnce, 5000);
+          else setUnreachable();
+        });
+    };
+    tryOnce();
+    return () => {
+      cancelled = true;
+    };
+  }, [setConfig, setUnreachable]);
 
-  const gated = config != null && !config.public_dashboard && !authed;
+  const view = appView(configStatus, config?.public_dashboard === true, authed);
   // The OIDC redirect lands here before a session exists — handle it regardless of the login gate
   // (otherwise the gate would swap in the login screen and drop the code/state).
   const isOidcCallback =
@@ -129,12 +154,14 @@ export function App() {
 
   return (
     <BrowserRouter>
-      {config == null ? (
-        <div className="app-loading muted">{t('loading')}</div>
-      ) : isOidcCallback ? (
+      {isOidcCallback ? (
         <OidcCallbackPage />
-      ) : gated ? (
+      ) : view === 'loading' ? (
+        <div className="app-loading muted">{t('loading')}</div>
+      ) : view === 'login' ? (
         <LoginPage />
+      ) : view === 'public' ? (
+        <PublicShell />
       ) : (
         <AppRoutes />
       )}

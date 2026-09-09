@@ -3099,6 +3099,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public-dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The public board's layout, or JSON `null` when no admin has composed one.
+         * @description 🚨 **The one route anonymous callers reach whatever the board says** (`ALWAYS_OPEN` in
+         *     [`crate::public_access`]): the page cannot draw itself without knowing which widgets to place.
+         *     It carries the board's *shape* and no monitoring data — every widget fetches its own content
+         *     through a route the board had to open.
+         */
+        get: operations["get_public_dashboard"];
+        /**
+         * Compose the public board — **Admin only**, because this is what decides the anonymous surface.
+         * @description Takes `RequireManageSystem` *and* [`Caller`]: the first decides whether the write is allowed,
+         *     the second names who made it. Attribution matters more here than on the shared board — the row
+         *     records who last widened what strangers can read.
+         */
+        put: operations["put_public_dashboard"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/rca": {
         parameters: {
             query?: never;
@@ -3486,6 +3515,28 @@ export interface paths {
         put: operations["update_oidc_provider"];
         post?: never;
         delete: operations["delete_oidc_provider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/public-dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Is this deployment public, and how much does the current board open? */
+        get: operations["get_public_dashboard_switch"];
+        /**
+         * Turn anonymous viewing on or off.
+         * @description `ManageSystem`, not `ManageConfig` — see the module doc. Mutating, so `audit_mw` records it
+         *     automatically; the row is the durable answer to "who opened this deployment and when".
+         */
+        put: operations["put_public_dashboard_switch"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -8803,6 +8854,28 @@ export interface components {
             suggested_location?: string | null;
             suggested_model: string;
         };
+        /** @description A save's acknowledgement, carrying what the board now opens. */
+        PublicDashboardSaved: {
+            ok: boolean;
+            /**
+             * @description Recomputed from the board just saved — so the editor can say "this board opens N routes"
+             *     without a second round trip, and without the WebUI reimplementing the derivation.
+             */
+            route_count: number;
+        };
+        /** @description The state of the switch, and what it currently opens. */
+        PublicDashboardSwitch: {
+            /** @description Whether anonymous visitors are served the public board. */
+            enabled: boolean;
+            /**
+             * @description How many API routes the current board opens to them.
+             *
+             *     Shown in the confirmation dialog before the switch is turned on — the cost stated before the
+             *     click rather than discovered after it. Zero with an empty board, which is the honest answer:
+             *     turning the switch on with nothing composed serves a page and no data.
+             */
+            route_count: number;
+        };
         /** @description A ranked Top-N result. */
         Ranked_AlertNodeCount: {
             /** @description The ranked rows, highest first, at most the requested `limit`. */
@@ -9603,6 +9676,10 @@ export interface components {
         /** @description Replace-all body for a profile's attached templates. */
         SetProfileTemplates: {
             template_ids: string[];
+        };
+        /** @description Request body for the switch. */
+        SetPublicDashboard: {
+            enabled: boolean;
         };
         /** @description Change-role request body. */
         SetRole: {
@@ -22989,6 +23066,122 @@ export interface operations {
             };
         };
     };
+    get_public_dashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The public board's opaque layout document, or JSON null when none has been composed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No valid bearer token, and this deployment is not public */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks read permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_public_dashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Board saved; the anonymous route set has already been re-derived from it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDashboardSaved"];
+                };
+            };
+            /** @description The layout is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The layout exceeds the document size cap */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     create_rca: {
         parameters: {
             query?: never;
@@ -24815,6 +25008,95 @@ export interface operations {
                 };
             };
             /** @description This deployment does not persist SSO configuration */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_public_dashboard_switch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The switch state and the number of routes the current board opens */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDashboardSwitch"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks read permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_public_dashboard_switch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPublicDashboard"];
+            };
+        };
+        responses: {
+            /** @description Switch applied; the anonymous surface has already been re-derived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDashboardSwitch"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
             503: {
                 headers: {
                     [name: string]: unknown;

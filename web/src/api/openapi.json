@@ -15689,6 +15689,134 @@
         }
       }
     },
+    "/api/v1/public-dashboard": {
+      "get": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "The public board's layout, or JSON `null` when no admin has composed one.",
+        "description": "🚨 **The one route anonymous callers reach whatever the board says** (`ALWAYS_OPEN` in\n[`crate::public_access`]): the page cannot draw itself without knowing which widgets to place.\nIt carries the board's *shape* and no monitoring data — every widget fetches its own content\nthrough a route the board had to open.",
+        "operationId": "get_public_dashboard",
+        "responses": {
+          "200": {
+            "description": "The public board's opaque layout document, or JSON null when none has been composed",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token, and this deployment is not public",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Compose the public board — **Admin only**, because this is what decides the anonymous surface.",
+        "description": "Takes `RequireManageSystem` *and* [`Caller`]: the first decides whether the write is allowed,\nthe second names who made it. Attribution matters more here than on the shared board — the row\nrecords who last widened what strangers can read.",
+        "operationId": "put_public_dashboard",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Board saved; the anonymous route set has already been re-derived from it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicDashboardSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The layout is not a JSON object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The layout exceeds the document size cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/rca": {
       "post": {
         "tags": [
@@ -17847,6 +17975,107 @@
           },
           "503": {
             "description": "This deployment does not persist SSO configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/public-dashboard": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Is this deployment public, and how much does the current board open?",
+        "operationId": "get_public_dashboard_switch",
+        "responses": {
+          "200": {
+            "description": "The switch state and the number of routes the current board opens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicDashboardSwitch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Turn anonymous viewing on or off.",
+        "description": "`ManageSystem`, not `ManageConfig` — see the module doc. Mutating, so `audit_mw` records it\nautomatically; the row is the durable answer to \"who opened this deployment and when\".",
+        "operationId": "put_public_dashboard_switch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPublicDashboard"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Switch applied; the anonymous surface has already been re-derived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicDashboardSwitch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
             "content": {
               "application/json": {
                 "schema": {
@@ -31001,6 +31230,43 @@
           }
         }
       },
+      "PublicDashboardSaved": {
+        "type": "object",
+        "description": "A save's acknowledgement, carrying what the board now opens.",
+        "required": [
+          "ok",
+          "route_count"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "route_count": {
+            "type": "integer",
+            "description": "Recomputed from the board just saved — so the editor can say \"this board opens N routes\"\nwithout a second round trip, and without the WebUI reimplementing the derivation.",
+            "minimum": 0
+          }
+        }
+      },
+      "PublicDashboardSwitch": {
+        "type": "object",
+        "description": "The state of the switch, and what it currently opens.",
+        "required": [
+          "enabled",
+          "route_count"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether anonymous visitors are served the public board."
+          },
+          "route_count": {
+            "type": "integer",
+            "description": "How many API routes the current board opens to them.\n\nShown in the confirmation dialog before the switch is turned on — the cost stated before the\nclick rather than discovered after it. Zero with an empty board, which is the honest answer:\nturning the switch on with nothing composed serves a page and no data.",
+            "minimum": 0
+          }
+        }
+      },
       "Ranked_AlertNodeCount": {
         "type": "object",
         "description": "A ranked Top-N result.",
@@ -32830,6 +33096,18 @@
               "type": "string",
               "format": "uuid"
             }
+          }
+        }
+      },
+      "SetPublicDashboard": {
+        "type": "object",
+        "description": "Request body for the switch.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
           }
         }
       },

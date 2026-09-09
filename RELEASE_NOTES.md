@@ -10,7 +10,32 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`YAGRA_PUBLIC_DASHBOARD` is gone** (ADR-123). Anonymous viewing is now a setting an admin turns
+  on in the WebUI — **Settings ▸ Sign-in methods ▸ Public dashboard** — and it is **off by default**.
+  A deployment that had the environment variable set to `true` comes up **private** after this
+  upgrade and stays private until someone turns the switch on. The variable moved because it lives
+  in a `.env` that an in-place upgrade replaces, so the only way to reach it was a shell — which the
+  production premise says is not there.
+- **The public dashboard no longer opens the whole read surface.** It used to serve every
+  `RequireView` endpoint — 76 of them — so an anonymous visitor could reach the node list, the event
+  log, the topology and the internal shared board. It now serves **one board and nothing else**: the
+  API routes open to an anonymous caller are derived from the widgets on the new **public board**,
+  so removing a widget closes the routes it read. If you were relying on the old behaviour to expose
+  a particular page anonymously, that page is now closed; put the equivalent widget on the public
+  board instead.
+
 ### New Features
+
+- **A public dashboard you compose, under Dashboard ▸ Public dashboard** (ADR-123). Separate from
+  the shared board on purpose: the shared board is for colleagues and may carry widgets an anonymous
+  visitor cannot load, and you can now see exactly what will go out before turning the switch on.
+  The editor takes **Admin** (`manage_system`) rather than the shared board's `manage_config` —
+  composing this board decides what strangers can read — and its catalog offers only widgets that
+  work without an account. A **View as anonymous** toggle sends requests without your session, which
+  is the only way to see the board as a visitor will: your own session would answer every call.
+  A shortcut to it sits beside the account badge.
 
 - **Change your own password from the account badge** (ADR-122). The top-right badge now offers
   **Change my password** between Preferences and Log out. It asks for the current password as well

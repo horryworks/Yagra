@@ -191,7 +191,7 @@ http://<yagra-host>:8080/mcp          # core の API ポート直（平文）
 ⚠️ `YAGRA_MCP_ALLOWED_HOSTS` を設定している場合は web 側のホスト名も列挙してください。これは `Host` ヘッダに
 対する照合で、上の 2 つの URL では値が異なります。
 
-無効時は未マウント（404）で従来と byte-identical。MCP は `YAGRA_PUBLIC_DASHBOARD` が ON でも **常に認証必須**です。
+無効時は未マウント（404）で従来と byte-identical。MCP は公開ダッシュボードが ON でも **常に認証必須**です。
 
 ### 2. API トークンを発行
 

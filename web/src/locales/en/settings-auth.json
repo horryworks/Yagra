@@ -127,5 +127,22 @@
       "test": "Could not test the directory."
     }
   },
-  "redirectUriMismatch": "⚠️ A configured SSO redirect URI does not match the address you are using. Yagra now serves the WebUI over HTTPS, so the stored redirect URI and the one registered at your identity provider both need updating — sign-in will fail at the callback until they do. Yagra will not change it for you: where an identity provider may send an authorization code is not something an upgrade should decide."
+  "redirectUriMismatch": "⚠️ A configured SSO redirect URI does not match the address you are using. Yagra now serves the WebUI over HTTPS, so the stored redirect URI and the one registered at your identity provider both need updating — sign-in will fail at the callback until they do. Yagra will not change it for you: where an identity provider may send an authorization code is not something an upgrade should decide.",
+  "publicDashboard": {
+    "title": "Public dashboard",
+    "hint": "Serve one board to people with no account. They see that board and nothing else — the API routes open to them are derived from the widgets it carries, so the node list, the event log and the internal shared board stay closed. Writes are never anonymous. Compose the board under Dashboard ▸ Public dashboard.",
+    "stateOn_one": "On — anonymous visitors can see the public board and the {{count}} API route it reads.",
+    "stateOn_other": "On — anonymous visitors can see the public board and the {{count}} API routes it reads.",
+    "stateOff": "Off — every page requires signing in.",
+    "turnOn": "Turn on",
+    "turnOff": "Turn off",
+    "confirmOnTitle": "Serve the public board without a login?",
+    "confirmOnBody_one": "Anyone who can reach this deployment will see the public board, and the {{count}} API route its widgets read. Nothing else becomes reachable, and nothing can be changed anonymously.",
+    "confirmOnBody_other": "Anyone who can reach this deployment will see the public board, and the {{count}} API routes its widgets read. Nothing else becomes reachable, and nothing can be changed anonymously.",
+    "confirmOnEmpty": "The public board is currently empty, so visitors will see a page with no data on it. Add widgets under Dashboard ▸ Public dashboard.",
+    "confirmOffTitle": "Require a login again?",
+    "confirmOffBody": "Anonymous visitors stop seeing the public board immediately on this core, and within 30 seconds on any standby. The board itself is kept.",
+    "loadFailed": "Could not read the public dashboard setting",
+    "saveFailed": "Could not change the public dashboard setting"
+  }
 }

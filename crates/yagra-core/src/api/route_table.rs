@@ -1509,6 +1509,41 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
+    // The public board (ADR-123). 🚨 Its GET is the one route an **anonymous** caller reaches
+    // whatever the board carries (`public_access::ALWAYS_OPEN`) — the page cannot draw itself
+    // without knowing which widgets to place. Its PUT is `ManageSystem`, not the `ManageConfig`
+    // its shared-board sibling takes: what this board carries decides which routes an
+    // unauthenticated request may read.
+    (
+        "GET",
+        "/api/v1/public-dashboard",
+        Global("one board served to anonymous visitors; it names no node and no group"),
+        Exempt(
+            "widget layout is presentation, and every widget's underlying query is separately \
+             reachable as its own tool",
+        ),
+    ),
+    (
+        "PUT",
+        "/api/v1/public-dashboard",
+        Global("one board served to anonymous visitors; it names no node and no group"),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/settings/public-dashboard",
+        Global("a deployment-wide switch; there is no per-group public dashboard to permit"),
+        Exempt(
+            "whether this deployment serves anonymous readers is a property of the deployment, \
+             not a monitoring question an AI client asks",
+        ),
+    ),
+    (
+        "PUT",
+        "/api/v1/settings/public-dashboard",
+        Global("a deployment-wide switch; there is no per-group public dashboard to permit"),
+        NO_MCP_WRITE,
+    ),
     (
         "GET",
         "/api/v1/stream/alerts",

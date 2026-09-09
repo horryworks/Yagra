@@ -91,6 +91,7 @@ mod pool_coverage;
 mod poolres;
 /// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
 mod preferences;
+mod public_access;
 mod ratelimit;
 mod rca;
 /// Moving this whole deployment to another host (ADR-121). Named apart from `config_bundle`,
@@ -154,7 +155,7 @@ use axum::routing::get;
 use collection::CollectionRepo;
 use config::Config;
 use coordinator::Coordinator;
-use dashboard::{DashboardRepo, SharedDashboardRepo};
+use dashboard::{DashboardRepo, PublicDashboardRepo, SharedDashboardRepo};
 use discovery::DiscoveryRunner;
 use flowstore::{ChStore, FlowRow, FlowStore};
 use history::AlertHistoryStore;
@@ -858,6 +859,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         audit: audit_repo.clone(),
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
         shared_dashboard: Arc::new(SharedDashboardRepo::new(repo.pool())),
+        public_dashboard: Arc::new(PublicDashboardRepo::new(repo.pool())),
         prefs: Arc::new(UserPrefsRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
         dispatcher,
@@ -961,6 +963,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // on every core; `poller_logs::start` carries why it is neither per-bundle nor leader-gated.
     let poller_log_collector = poller_logs::start(bus.clone(), &shutdown).await;
 
+    // What an anonymous request may reach (ADR-123). Starts **closed** and is filled in by the
+    // refresh task, which also keeps a standby core in step — see `public_access::start` for why
+    // that task is every-core rather than leader-gated.
+    let public_access = public_access::handle(public_access::PublicAccess::closed());
+    public_access::start(
+        public_access.clone(),
+        repo.clone(),
+        Arc::new(PublicDashboardRepo::new(repo.pool())),
+        &shutdown,
+    );
+
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
         store,
@@ -976,7 +989,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         history: Some(history),
         ack: Some(acks),
         event_engine: Some(event_engine),
-        public_dashboard: cfg.public_dashboard,
+        public_access,
         is_leader: is_leader.clone(),
         ldap,
         oidc,
@@ -1541,7 +1554,13 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         event_engine: None,
         // Skeleton has no user store (login returns 503), so reads must stay open or the
         // dev dashboard would be unreachable. Auth gating applies in live mode.
-        public_dashboard: true,
+        //
+        // ⚠️ ADR-123 narrowed the live surface to the routes the public board declares, and this
+        // is the one place that stays unrestricted — there is no database here to hold either the
+        // switch or the board, so a derived surface would be empty and the dev stack would show
+        // nothing. `skeleton_open`'s doc carries why that is safe: `admin: None` means every write
+        // handler answers 503 before authorization is reached.
+        public_access: public_access::handle(public_access::PublicAccess::skeleton_open()),
         // Skeleton has no directory store either; `login` treats that as "no directory configured"
         // rather than an error, so the local path is unaffected.
         ldap: None,

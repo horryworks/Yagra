@@ -11,6 +11,7 @@ import { Modal } from '../components/ui/Modal';
 import { useLayoutStoreContext } from './LayoutStoreContext';
 import { SearchInput } from '../components/ui/SearchInput';
 import { catalogBySection } from './registry';
+import { catalogFor } from './publicCatalog';
 import { countWidgets, filterCatalog } from './catalogFilter';
 import type { Backing } from './types';
 import './CatalogModal.css';
@@ -21,12 +22,20 @@ const BACKING_TONE: Record<Backing, 'up' | 'info' | 'neutral'> = {
   new: 'neutral',
 };
 
-export function CatalogModal({ onClose }: { onClose: () => void }) {
+export function CatalogModal({
+  onClose,
+  publicOnly = false,
+}: {
+  onClose: () => void;
+  /** Offer only widgets an anonymous visitor can actually load (ADR-123). See `publicCatalog.ts`
+   *  for what that excludes and why the list is a deny-list. */
+  publicOnly?: boolean;
+}) {
   const { t } = useTranslation('dashboard');
   const useStore = useLayoutStoreContext();
   const addWidget = useStore((s) => s.addWidget);
   const [q, setQ] = useState('');
-  const all = catalogBySection();
+  const all = catalogBySection(catalogFor(publicOnly));
   // Forty-six widgets across nine sections: until now the only way to find one was to read all of
   // them. Client-side and instant — the registry is already in the bundle, so there is nothing to
   // debounce. The search runs over the *rendered* words, see `catalogFilter.ts`.

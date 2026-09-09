@@ -201,7 +201,7 @@ usable everywhere.
 the `Host` header, which differs between the two URLs above.
 
 When MCP is disabled the path is not mounted (404), byte-identical to before. MCP always requires
-authentication, even if `YAGRA_PUBLIC_DASHBOARD` is on.
+authentication, even when the public dashboard is on.
 
 ### 2. Create an API token
 

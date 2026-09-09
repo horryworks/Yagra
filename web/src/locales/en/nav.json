@@ -11,7 +11,8 @@
   "dashboard": {
     "shared": "Shared dashboard",
     "my": "My dashboard",
-    "reports": "Reports"
+    "reports": "Reports",
+    "public": "Public dashboard"
   },
   "nodes": {
     "all": "All nodes",
@@ -117,7 +118,8 @@
     "settingsUsers": "Accounts that can sign in, their role, and the node groups each may see",
     "settingsRoles": "What each role is allowed to do, privilege by privilege",
     "settingsAuth": "Sign-in sources — local passwords, an external identity provider, LDAP",
-    "settingsAudit": "Who changed or acknowledged what, and when"
+    "settingsAudit": "Who changed or acknowledged what, and when",
+    "dashboardPublic": "The one board people can see without signing in"
   },
   "shell": {
     "home": "Home",
@@ -153,6 +155,7 @@
     "passwordAtIdp": "Password managed by your identity provider",
     "passwordAtDirectory": "Password managed by your directory",
     "logOut": "Log out",
-    "signIn": "Sign in"
+    "signIn": "Sign in",
+    "publicDashboard": "Public dashboard — what people see without signing in"
   }
 }

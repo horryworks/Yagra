@@ -212,6 +212,38 @@ export function getToken(): string | null {
   return authToken;
 }
 
+// ── Anonymous preview (ADR-123 決定 8) ────────────────────────────────────────────────────────
+//
+// While this is on, every request goes out **without** the bearer token, so a signed-in admin sees
+// exactly what an anonymous visitor sees. It is the only way to find a widget whose `reads`
+// declaration is wrong: the admin's own session answers every call, so a missing declaration is
+// invisible until a stranger hits it.
+//
+// 🚨 It is process-wide, and that is a real hazard — a background poll from another mounted screen
+// would also lose its credential. Two things contain it: the preview is only reachable from the
+// public-board editor, and that editor forces edit mode off and unmounts everything else while it
+// is on. `PublicDashboardPage` clears it on unmount, unconditionally.
+//
+// ⚠️ Never leave a write path reachable while it is on. A `PUT` sent without a token is refused by
+// the server, so nothing can be corrupted — but the operator would see a save fail for a reason
+// the screen never explained.
+let anonymousPreview = false;
+
+/** Turn the anonymous preview on or off. See the note above before adding a second caller. */
+export function setAnonymousPreview(on: boolean): void {
+  anonymousPreview = on;
+}
+
+/** Whether requests are currently being sent without a credential. */
+export function isAnonymousPreview(): boolean {
+  return anonymousPreview;
+}
+
+/** The token a request should actually carry — `null` while previewing as an anonymous visitor. */
+function requestToken(): string | null {
+  return anonymousPreview ? null : authToken;
+}
+
 // Invoked when a request fails auth with a token already attached — i.e. the stored token
 // has gone stale (most commonly: yagra-core restarted and dropped its in-memory sessions).
 // The app registers a handler to flip auth state off and prompt a fresh sign-in, instead of
@@ -255,9 +287,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Attach the bearer token when logged in; otherwise keep the single-arg call shape
   // for plain GETs (tests assert on it).
   let finalInit = init;
-  if (authToken) {
+  const token = requestToken();
+  if (token) {
     const headers = new Headers(init?.headers);
-    headers.set('Authorization', `Bearer ${authToken}`);
+    headers.set('Authorization', `Bearer ${token}`);
     finalInit = { ...init, headers };
   }
   const res = finalInit ? await fetch(`${BASE}${path}`, finalInit) : await fetch(`${BASE}${path}`);
@@ -276,7 +309,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // A 401 while a token was attached means the stored token is no longer valid; drop it
     // and let the app re-prompt for sign-in. (Bad-credentials at /auth/login never hits this:
     // no token is attached yet during login.)
-    if (res.status === 401 && authToken) {
+    // ⚠️ `requestToken()`, not `authToken`: during an anonymous preview a 401 is the *expected*
+    // answer, and dropping the admin's session because they looked at their own public board would
+    // sign them out of the app.
+    if (res.status === 401 && token) {
       setToken(null);
       onUnauthorized?.();
     }
@@ -2211,6 +2247,30 @@ export const api = {
    *  may not change it (the change applies to every user). */
   putSharedDashboard: (layout: unknown): Promise<{ ok: boolean }> =>
     apiPut('/api/v1/shared-dashboard', { body: layout }),
+
+  /** The public board's layout, or `null` when no admin has composed one (ADR-123).
+   *
+   *  🚨 The one API call an anonymous visitor may always make on a public deployment — without it
+   *  there is no page to draw. It carries the board's shape and no monitoring data; each widget
+   *  fetches its own content through a route that board had to open. */
+  getPublicDashboard: (): Promise<unknown> => apiGet('/api/v1/public-dashboard'),
+
+  /** Compose the public board. **Admin only** (`manage_system`), because what this board carries
+   *  decides which API routes an unauthenticated request may reach. `route_count` is what the board
+   *  now opens — the editor shows it rather than recomputing the derivation client-side. */
+  putPublicDashboard: (layout: unknown): Promise<{ ok: boolean; route_count: number }> =>
+    apiPut('/api/v1/public-dashboard', { body: layout }),
+
+  /** Whether this deployment serves the public board anonymously, and how many routes that opens. */
+  getPublicDashboardSwitch: (): Promise<{ enabled: boolean; route_count: number }> =>
+    apiGet('/api/v1/settings/public-dashboard'),
+
+  /** Turn anonymous viewing on or off. **Admin only** (`manage_system`) — a 403 means the caller's
+   *  role may not remove authentication from the deployment. Audited. */
+  setPublicDashboardEnabled: (
+    enabled: boolean,
+  ): Promise<{ enabled: boolean; route_count: number }> =>
+    apiPut('/api/v1/settings/public-dashboard', { body: { enabled } }),
 
   /** The caller's saved WebUI preferences, or `null` if none saved yet (ADR-058). Opaque JSON on
    *  the same contract as the dashboard layout: the client owns the shape (`prefs/serverPrefs.ts`)

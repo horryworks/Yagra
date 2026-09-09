@@ -11,7 +11,8 @@
   "dashboard": {
     "shared": "共有ダッシュボード",
     "my": "マイダッシュボード",
-    "reports": "レポート"
+    "reports": "レポート",
+    "public": "公開ダッシュボード"
   },
   "nodes": {
     "all": "すべてのノード",
@@ -117,7 +118,8 @@
     "settingsUsers": "サインインできるアカウントと、そのロール・閲覧できるノードグループ",
     "settingsRoles": "ロールごとに何を許可するかを、権限 1 つずつ設定します",
     "settingsAuth": "サインインの方式 — ローカルパスワード・外部 IdP・LDAP",
-    "settingsAudit": "誰が何を変更・ACK したか、その時刻"
+    "settingsAudit": "誰が何を変更・ACK したか、その時刻",
+    "dashboardPublic": "サインインしなくても見える 1 枚"
   },
   "shell": {
     "home": "ホーム",
@@ -151,6 +153,7 @@
     "passwordAtIdp": "パスワードは ID プロバイダ側で管理",
     "passwordAtDirectory": "パスワードはディレクトリ側で管理",
     "logOut": "ログアウト",
-    "signIn": "サインイン"
+    "signIn": "サインイン",
+    "publicDashboard": "公開ダッシュボード — サインインしない相手に見えるもの"
   }
 }

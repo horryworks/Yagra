@@ -24,6 +24,7 @@ import { LoginPage } from './pages/LoginPage';
 import { usePrefsDialogStore } from './store';
 import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
 import { MyDashboardPage } from './dashboard/MyDashboardPage';
+import { PublicDashboardPage } from './dashboard/PublicDashboardPage';
 import { ReportsPage } from './reports/ReportsPage';
 import { NodesPage } from './pages/NodesPage';
 import { NodeDetailPage } from './pages/NodeDetailPage';
@@ -93,6 +94,7 @@ export function AppRoutes() {
         {/* Dashboard */}
         <Route path="dashboard" element={<SharedDashboardPage />} />
         <Route path="dashboard/my" element={<MyDashboardPage />} />
+        <Route path="dashboard/public" element={<PublicDashboardPage />} />
         <Route path="dashboard/reports" element={<ReportsPage />} />
 
         {/* Nodes — static paths rank above the :nodeId dynamic segment in v6. */}

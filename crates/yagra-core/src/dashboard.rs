@@ -104,6 +104,61 @@ impl SharedDashboardRepo {
     }
 }
 
+/// The single "Public Dashboard" layout (`public_dashboard`, one row keyed `id = TRUE`).
+///
+/// 🚨 **This is not another presentation store.** It round-trips an opaque JSON document like its
+/// two siblings, but core also reads the widget *types* out of it to derive which API routes an
+/// anonymous request may reach (ADR-123 決定 5, [`crate::public_access`]). Saving a board with one
+/// more widget on it opens the routes that widget reads; removing one closes them. That is why the
+/// write is `manage_system` at the API edge while [`SharedDashboardRepo`]'s is `manage_config` —
+/// composing this board is an access-control act, not a layout preference.
+///
+/// No row until an admin saves one. `None` therefore means "no public board has been composed",
+/// which the derivation turns into an **empty** route set rather than an open one.
+pub struct PublicDashboardRepo {
+    pool: PgPool,
+}
+
+impl PublicDashboardRepo {
+    /// New store over the metadata pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// The saved public layout, or `None` if no admin has ever composed one.
+    pub async fn get_public(&self) -> anyhow::Result<Option<Value>> {
+        let row = sqlx::query("SELECT layout_json FROM public_dashboard WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some(row) => Ok(Some(row.try_get::<Value, _>("layout_json")?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Upsert the public layout, recording which admin last saved it. The single row is replaced
+    /// wholesale (the WebUI always sends the full layout, not a patch).
+    ///
+    /// ⚠️ `updated_by` is not decoration here — this row decides what an unauthenticated caller can
+    /// read, so "who last widened it" is an access-control question. The API edge also writes an
+    /// audit row via `audit_mw`; this column is what survives a log rotation.
+    pub async fn upsert_public(&self, layout: &Value, updated_by: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO public_dashboard (id, layout_json, updated_by) VALUES (TRUE, $1, $2) \
+             ON CONFLICT (id) DO UPDATE \
+                 SET layout_json = EXCLUDED.layout_json, \
+                     updated_by = EXCLUDED.updated_by, \
+                     updated_at = now()",
+        )
+        .bind(layout)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -132,14 +187,14 @@ mod tests {
 
     #[test]
     fn every_layout_write_replaces_the_row_wholesale() {
-        // The WebUI always sends the full document, so both writers upsert. Without this a second
+        // The WebUI always sends the full document, so all three writers upsert. Without this a second
         // save would fail on the primary key and the operator's edit would silently not persist.
         let src = production_source();
-        assert_eq!(src.matches("ON CONFLICT").count(), 2);
+        assert_eq!(src.matches("ON CONFLICT").count(), 3);
         assert_eq!(
             src.matches("SET layout_json = EXCLUDED.layout_json")
                 .count(),
-            2
+            3
         );
     }
 
@@ -152,6 +207,29 @@ mod tests {
         assert!(src.contains(
             "INSERT INTO shared_dashboard (id, layout_json, updated_by) VALUES (TRUE, $1, $2)"
         ));
+    }
+
+    #[test]
+    fn the_public_dashboard_is_a_single_row_keyed_true() {
+        // Same singleton shape as the shared board. Separate table, deliberately: this one also
+        // decides what an anonymous caller can read (ADR-123 決定 5), so it must not be possible
+        // to widen the public surface by editing the board colleagues look at.
+        let src = production_source();
+        assert!(src.contains("FROM public_dashboard WHERE id = TRUE"));
+        assert!(src.contains(
+            "INSERT INTO public_dashboard (id, layout_json, updated_by) VALUES (TRUE, $1, $2)"
+        ));
+    }
+
+    #[test]
+    fn the_public_and_shared_boards_are_different_tables() {
+        // 🚨 The failure this exists for is a copy-paste that leaves the public writer pointing at
+        // `shared_dashboard`: composing the public board would then rewrite the internal one, and
+        // every signed-in user would land on the board meant for strangers. Nothing else notices —
+        // both statements compile, both run, and both round-trip a layout.
+        let src = production_source();
+        assert_eq!(src.matches("shared_dashboard").count(), 2);
+        assert_eq!(src.matches("public_dashboard").count(), 2);
     }
 
     #[test]

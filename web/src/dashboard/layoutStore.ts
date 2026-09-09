@@ -13,7 +13,9 @@
 
 import { create } from 'zustand';
 import i18n from '../i18n';
-import { ApiError, api, getToken } from '../services/api';
+import { ApiError, api } from '../services/api';
+import { currentViewer } from '../store';
+import { mayLoad, maySave, type BoardGate } from './layoutAccess';
 import {
   addBoard,
   addInstance,
@@ -30,7 +32,7 @@ import {
   setSettingsById,
   setSizeById,
 } from './layout';
-import { defaultLayout, getDefinition, registryView } from './registry';
+import { defaultLayout, emptyPublicLayout, getDefinition, registryView } from './registry';
 import type { Board, DashboardLayout, WidgetInstance, WidgetSettings } from './types';
 
 const SAVE_DEBOUNCE_MS = 800;
@@ -98,6 +100,12 @@ export interface LayoutStoreConfig {
   load: () => Promise<unknown>;
   save: (doc: DashboardLayout) => Promise<unknown>;
   defaultDoc: () => DashboardLayout;
+  /** Which credential this board's `GET` needs — the guard its API route takes.
+   *
+   *  Required, because the three boards genuinely differ and the old code assumed they did not: it
+   *  skipped the fetch whenever there was no token, which is right for My Dashboard and wrong for
+   *  the other two. See `layoutAccess.ts`. */
+  readGate: BoardGate;
 }
 
 /** Build an independent layout store. Each instance owns its own debounce timer (declared in the
@@ -120,7 +128,11 @@ export function createLayoutStore(config: LayoutStoreConfig) {
     /** Persist the current boards after a short quiet period (coalesces rapid edits into one save).
      *  Skips when unauthenticated — there's no row to write. */
     const scheduleSave = (boards: Board[]) => {
-      if (!getToken()) return;
+      // 🚨 Session only, deliberately — `maySave` takes no permission. Gating this on
+      // `manage_config` would discard an admin's edit during the window before the role matrix
+      // arrives, because `useCan` is fail-closed while it resolves. Which boards a signed-in user
+      // may actually write is enforced by the API guard and by not drawing the Customize button.
+      if (!maySave(currentViewer())) return;
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
         config
@@ -177,8 +189,11 @@ export function createLayoutStore(config: LayoutStoreConfig) {
 
       load: async () => {
         set({ status: 'loading', saveError: null });
-        // Public-dashboard / not logged in: no row to read — render the default, read-only.
-        if (!getToken()) {
+        // Nothing this viewer may read — render the default, read-only. ⚠️ This used to be
+        // `if (!getToken())`, which was right for My Dashboard and silently wrong for the shared
+        // board: its GET is open on a public deployment, so an anonymous visitor was shown the
+        // hardcoded default while the admin's composed board sat unread in the database.
+        if (!mayLoad(config.readGate, currentViewer())) {
           adopt(config.defaultDoc(), 'ready');
           return;
         }
@@ -287,6 +302,7 @@ export const useLayoutStore = createLayoutStore({
   load: () => api.getDashboard(),
   save: (doc) => api.putDashboard(doc),
   defaultDoc: defaultLayout,
+  readGate: 'session',
 });
 
 /** Shared Dashboard — one global layout shown to all users. Reads are open; saves are admin-only
@@ -295,4 +311,19 @@ export const useSharedLayoutStore = createLayoutStore({
   load: () => api.getSharedDashboard(),
   save: (doc) => api.putSharedDashboard(doc),
   defaultDoc: defaultLayout,
+  readGate: 'view',
+});
+
+/** The Public Dashboard — the one board an anonymous visitor sees (ADR-123).
+ *
+ *  🚨 **Not a third presentation store.** What this board carries decides which API routes an
+ *  unauthenticated request may reach, so its save is `manage_system` (Admin) where the shared
+ *  board's is `manage_config`, and the catalog offers it a narrower set of widgets. Its default is
+ *  **empty**, not the five-widget default the other two seed: an unconfigured public board must
+ *  show nothing rather than quietly publishing a fleet summary nobody chose to publish. */
+export const usePublicLayoutStore = createLayoutStore({
+  load: () => api.getPublicDashboard(),
+  save: (doc) => api.putPublicDashboard(doc),
+  defaultDoc: emptyPublicLayout,
+  readGate: 'public',
 });

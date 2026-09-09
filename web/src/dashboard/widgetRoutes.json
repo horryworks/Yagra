@@ -1,0 +1,156 @@
+{
+  "active-alerts": [
+    "GET /api/v1/stream/alerts"
+  ],
+  "aggregate-throughput": [
+    "GET /api/v1/metrics/throughput-range"
+  ],
+  "alert-calendar": [
+    "GET /api/v1/alerts/calendar"
+  ],
+  "alert-volume": [
+    "GET /api/v1/alerts/history"
+  ],
+  "audit": [
+    "GET /api/v1/audit"
+  ],
+  "busiest-interfaces": [
+    "GET /api/v1/metrics/interface-top"
+  ],
+  "data-coverage": [
+    "GET /api/v1/fleet/coverage"
+  ],
+  "dependency-view": [
+    "GET /api/v1/topology",
+    "GET /api/v1/stream/node-states"
+  ],
+  "discovery-queue": [
+    "GET /api/v1/discovery/candidates"
+  ],
+  "event-feed": [
+    "GET /api/v1/events",
+    "POST /api/v1/node-names"
+  ],
+  "event-kind-mix": [
+    "GET /api/v1/events/stats"
+  ],
+  "event-rule-coverage": [
+    "GET /api/v1/events/stats"
+  ],
+  "event-triage-mix": [
+    "GET /api/v1/events/stats"
+  ],
+  "event-volume": [
+    "GET /api/v1/events/stats"
+  ],
+  "flapping-watchlist": [
+    "GET /api/v1/stream/alerts",
+    "POST /api/v1/node-names"
+  ],
+  "fleet-health-timeline": [
+    "GET /api/v1/fleet/state-history"
+  ],
+  "flow-conversations": [
+    "GET /api/v1/flow/conversations"
+  ],
+  "flow-proto-mix": [
+    "GET /api/v1/flow/protocols"
+  ],
+  "flow-top-as": [
+    "GET /api/v1/flow/top-as"
+  ],
+  "flow-top-ports": [
+    "GET /api/v1/flow/top-ports"
+  ],
+  "flow-top-talkers": [
+    "GET /api/v1/flow/top-talkers"
+  ],
+  "flow-trend": [
+    "GET /api/v1/flow/series"
+  ],
+  "geo-map": [
+    "GET /api/v1/fleet/group-summary",
+    "GET /api/v1/node-groups"
+  ],
+  "health-ring": [
+    "GET /api/v1/fleet/summary"
+  ],
+  "interface-heatmap": [
+    "GET /api/v1/metrics/interface-heatmap",
+    "GET /api/v1/nodes/{node_id}/interfaces"
+  ],
+  "interface-traffic": [
+    "GET /api/v1/nodes/{node_id}/interfaces",
+    "GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series"
+  ],
+  "maintenance": [
+    "GET /api/v1/maintenance-windows"
+  ],
+  "metric-chart": [
+    "GET /api/v1/nodes/{node_id}/metrics",
+    "GET /api/v1/nodes/{node_id}/metrics/{metric}/range"
+  ],
+  "metric-top": [
+    "GET /api/v1/metrics/top"
+  ],
+  "most-interface-discards": [
+    "GET /api/v1/metrics/interface-top"
+  ],
+  "most-interface-errors": [
+    "GET /api/v1/metrics/interface-top"
+  ],
+  "nodes-down": [
+    "GET /api/v1/fleet/summary"
+  ],
+  "noisy-event-sources": [
+    "GET /api/v1/events/stats",
+    "POST /api/v1/node-names"
+  ],
+  "poller-health": [
+    "GET /api/v1/poller-health"
+  ],
+  "recent-state-changes": [
+    "GET /api/v1/alerts/transitions"
+  ],
+  "region-rollup": [
+    "GET /api/v1/fleet/group-summary",
+    "GET /api/v1/node-groups"
+  ],
+  "severity-mix": [
+    "GET /api/v1/stream/alerts"
+  ],
+  "site-matrix": [
+    "GET /api/v1/fleet/group-summary",
+    "GET /api/v1/node-groups"
+  ],
+  "stale-data": [
+    "GET /api/v1/fleet/coverage"
+  ],
+  "status-summary": [
+    "GET /api/v1/fleet/summary"
+  ],
+  "top-alerting-nodes": [
+    "GET /api/v1/alerts/top-nodes"
+  ],
+  "top-cpu": [
+    "GET /api/v1/metrics/top"
+  ],
+  "top-memory": [
+    "GET /api/v1/metrics/top"
+  ],
+  "top-rtt": [
+    "GET /api/v1/metrics/top"
+  ],
+  "top-talkers": [
+    "GET /api/v1/metrics/interface-top"
+  ],
+  "top-trap-types": [
+    "GET /api/v1/events/stats"
+  ],
+  "traffic-drops": [
+    "GET /api/v1/metrics/interface-delta"
+  ],
+  "traffic-spikes": [
+    "GET /api/v1/metrics/interface-delta"
+  ]
+}

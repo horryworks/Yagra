@@ -14,6 +14,18 @@ use crate::store::MetricStore;
 use std::sync::Arc;
 
 /// Skeleton-mode state with `public_dashboard` set as given and no write side.
+///
+/// ⚠️ `public_dashboard = true` builds the **unrestricted** surface
+/// ([`crate::public_access::PublicAccess::skeleton_open`]), not a board-derived one. That keeps the
+/// twenty "…is closed even on a public dashboard" tests measuring what they were written to
+/// measure — that a *write* guard stays shut when reads are open — without each of them having to
+/// compose a board carrying the widget that happens to read the route under test.
+///
+/// 🚨 So a test built from this fixture proves **nothing** about ADR-123's allow-list. That the
+/// anonymous surface is limited to the public board's routes is tested where the derivation lives
+/// (`public_access.rs`) and end-to-end in `api/public_dashboard.rs`; a passing test here means
+/// "closed even when everything readable is open", which is the stronger claim for a write and no
+/// claim at all for a read.
 fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
     ApiState {
         store,
@@ -29,7 +41,11 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         history: None,
         ack: None,
         event_engine: None,
-        public_dashboard,
+        public_access: crate::public_access::handle(if public_dashboard {
+            crate::public_access::PublicAccess::skeleton_open()
+        } else {
+            crate::public_access::PublicAccess::closed()
+        }),
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: None,
         oidc: None,
@@ -250,6 +266,7 @@ async fn live_state_with(
         audit: audit_repo.clone(),
         dashboards: Arc::new(crate::dashboard::DashboardRepo::new(pool.clone())),
         shared_dashboard: Arc::new(crate::dashboard::SharedDashboardRepo::new(pool.clone())),
+        public_dashboard: Arc::new(crate::dashboard::PublicDashboardRepo::new(pool.clone())),
         prefs: Arc::new(crate::preferences::UserPrefsRepo::new(pool.clone())),
         scheduler_stats: scheduler_stats.clone(),
         dispatcher: Arc::new(crate::scheduler::PollDispatcher::new(
@@ -321,7 +338,10 @@ async fn live_state_with(
         history: Some(history),
         ack: Some(Arc::new(crate::ack::AckRepo::new(pool.clone()))),
         event_engine: Some(event_engine),
-        public_dashboard: false,
+        // Closed: `live_state` exists to test writes being *accepted* (ADR-115), and anonymous
+        // access has nothing to do with that. A test that wants the public surface builds it with
+        // `public_access::store` after the fact, so the board it derives from is explicit.
+        public_access: crate::public_access::handle(crate::public_access::PublicAccess::closed()),
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: Some(Arc::new(crate::ldap::LdapRepo::new(
             pool.clone(),

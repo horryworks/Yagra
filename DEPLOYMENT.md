@@ -148,7 +148,6 @@ POSTGRES_PASSWORD=change-me            # change for any non-throwaway box
 YAGRA_API_PORT=8080                    # host port for the API (plaintext)
 YAGRA_WEB_PORT=443                     # host port for the WebUI (HTTPS)
 # YAGRA_ADMIN_PASSWORD=choose-a-strong-password   # else a one-time random one is logged
-# YAGRA_PUBLIC_DASHBOARD=false         # true = read-only dashboards without login
 # YAGRA_WEB_TLS=off                    # only if a proxy in front already terminates HTTPS
 # YAGRA_API_BIND=127.0.0.1             # close core's plaintext port to the LAN — see below
 ```
@@ -472,7 +471,6 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_KEK_FILE` | unset ⇒ ephemeral dev key | Path to the mounted 32-byte key-encryption key |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` bind address |
 | `YAGRA_ADMIN_PASSWORD` | unset ⇒ one-time random (logged) | Bootstrap `admin` password, first boot only |
-| `YAGRA_PUBLIC_DASHBOARD` | `false` | `true` = read-only dashboards without login |
 | **Polling & notifications** | | |
 | `YAGRA_POLL_INTERVAL_SECS` | `30` (clamp 10–3600) | Initial default poll interval (seeded on first boot; DB-authoritative after) |
 | `YAGRA_SNMP_COMMUNITY` | unset | Fallback SNMP v2c community for nodes without a bound credential |
