@@ -7,6 +7,7 @@ import {
   isValidPollerToken,
   lastSeenLabel,
   poolHasWarning,
+  poolTakeoverActions,
   poolModeLabel,
   workingSetLabel,
   POLLER_UP_COMMAND,
@@ -103,5 +104,33 @@ describe('buildPollerEnv', () => {
 describe('POLLER_UP_COMMAND', () => {
   it('targets the remote-poller compose file', () => {
     expect(POLLER_UP_COMMAND).toBe('docker compose -f docker-compose.poller.yml up -d');
+  });
+});
+
+describe('poolTakeoverActions', () => {
+  it('offers the takeover only for a pool that has members and nothing polling them', () => {
+    expect(poolTakeoverActions(pool({ warning: 'nodes_without_live_poller', live_pollers: 0 })))
+      .toEqual({ cover: true, restore: false });
+    expect(poolTakeoverActions(pool({ warning: null }))).toEqual({ cover: false, restore: false });
+  });
+
+  it('offers only the restore once a pool is covered, never both', () => {
+    // A covered pool reads 0 nodes and 0 live pollers, so it carries no warning either — but pin
+    // both halves, because "cover" on an already-covered pool would lose the first `previous_pool`.
+    expect(poolTakeoverActions(pool({ covered_by: 'default', nodes: 0, live_pollers: 0 })))
+      .toEqual({ cover: false, restore: true });
+    expect(poolTakeoverActions(pool({ covered_by: 'default', warning: 'nodes_without_live_poller' })))
+      .toEqual({ cover: false, restore: true });
+  });
+
+  // 🚨 The bug this helper exists to prevent, found on hardware 2026-09-09. The page asked
+  // `p.warning &&` — truthy — while the card's pill asked `poolHasWarning`, which tests for one
+  // token. They agree today because `warning` has exactly one non-null value, so no test that used
+  // a REAL warning could tell them apart. This one uses a warning that is not that token: the loose
+  // form says "cover", the correct form says nothing.
+  it('is silent for a warning that is not the no-live-poller one', () => {
+    const other = pool({ warning: 'some_future_warning' as never, live_pollers: 3 });
+    expect(poolHasWarning(other)).toBe(false);
+    expect(poolTakeoverActions(other)).toEqual({ cover: false, restore: false });
   });
 });

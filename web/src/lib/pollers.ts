@@ -78,3 +78,22 @@ export function buildPollerEnv({ id, pool, busUrl, caFile }: PollerEnvInput): st
 
 /** The command that brings the remote poller up once its `.env` is in place. */
 export const POLLER_UP_COMMAND = 'docker compose -f docker-compose.poller.yml up -d';
+
+/** Which of the two ADR-107 増分 4 pool actions a pool's own state calls for.
+ *
+ * 🚨 `cover` asks `poolHasWarning`, never a bare truthiness check on `warning` — it is the SAME
+ * question the card's pill asks, so it has to be the same spelling of it. The helper tests for one
+ * token; truthiness accepts any. Today `warning` has exactly one non-null value and the two agree,
+ * which is why the page shipped with the loose form and nothing noticed. The day a second warning
+ * kind is added, the loose form would offer "poll these from another pool" on a pool whose poller
+ * is perfectly alive. (`poolAdmin.ts` annotates the opposite case — a question that is deliberately
+ * *not* this one.)
+ *
+ * ⚠️ It lives here rather than inline in `PollersPage.tsx` so a test can run it: Vitest's
+ * `include` never loads a `.tsx`, so a judgement left there is a judgement nothing checks.
+ */
+export function poolTakeoverActions(pool: PoolSummary): { cover: boolean; restore: boolean } {
+  const covered = Boolean(pool.covered_by);
+  // Never both: a covered pool has had its members moved away, so it has nothing left to cover.
+  return { cover: poolHasWarning(pool) && !covered, restore: covered };
+}

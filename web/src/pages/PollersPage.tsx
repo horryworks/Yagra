@@ -43,6 +43,7 @@ import {
   isValidPollerToken,
   lastSeenLabel,
   poolHasWarning,
+  poolTakeoverActions,
   poolModeLabel,
   workingSetLabel,
   POLLER_UP_COMMAND,
@@ -1721,7 +1722,12 @@ export function PollersPage() {
           {moveError && !confirmMove && <p className="form-error pool-move-error">{moveError}</p>}
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
           <div className="pool-strip">
-            {pools.map((p) => (
+            {pools.map((p) => {
+              // ADR-107 増分 4. Both entries come from ONE helper, so this page cannot spell the
+              // question differently from the pill on the card beside it — which is exactly what
+              // it did on the first attempt. See `poolTakeoverActions` in `lib/pollers.ts`.
+              const takeover = poolTakeoverActions(p);
+              return (
               <PoolCard
                 key={p.pool}
                 pool={p}
@@ -1737,10 +1743,10 @@ export function PollersPage() {
                         // that has members and nothing to poll them, restore one already covered.
                         // Showing both always would put "stop covering" on 20 pools nobody is
                         // covering, which reads as a feature that does nothing.
-                        ...(p.warning && !p.covered_by
+                        ...(takeover.cover
                           ? [{ label: t('pollers.pool.coverAction'), onSelect: () => setPoolAction({ pool: p, kind: 'cover' as const }) }]
                           : []),
-                        ...(p.covered_by
+                        ...(takeover.restore
                           ? [{ label: t('pollers.pool.restoreAction'), onSelect: () => setPoolAction({ pool: p, kind: 'restore' as const }) }]
                           : []),
                         { label: t('common:actions.delete'), onSelect: () => setPoolAction({ pool: p, kind: 'delete' }), danger: true },
@@ -1748,7 +1754,8 @@ export function PollersPage() {
                     : []
                 }
               />
-            ))}
+              );
+            })}
             {canSystem && (
               <button type="button" className="pool-card pool-card-new" onClick={() => setCreatingPool(true)}>
                 {t('pollers.pool.createButton')}
