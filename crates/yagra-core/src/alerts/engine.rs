@@ -300,6 +300,50 @@ impl AlertManager {
         out
     }
 
+    /// The rolled-up display state for a PAGE of nodes — [`Self::node_states`] without the
+    /// whole-fleet clone (ADR-125).
+    ///
+    /// `node_states` copies the entire live map on every call, and `display_states` goes through it
+    /// to look up a few dozen entries — on the hottest read in the product (every inventory page,
+    /// every lazy folder load, every debounced search keystroke). At a few thousand nodes that is a
+    /// fresh allocation and copy per request, made while holding the `live` lock that the poll
+    /// ingest path also takes (`process_check`). This walks the page instead: **O(page + active)**
+    /// rather than O(fleet + active).
+    ///
+    /// 🚨 **The two locks are taken one after the other, never nested** — the shape
+    /// [`Self::node_state`] already uses. `node_states` is the one that nests them, and copying its
+    /// body here would have carried that over silently.
+    ///
+    /// ⚠️ **`node_states` stays.** [`Self::node_state_counts`] asks about the whole fleet, and the
+    /// answer for a page is not a smaller version of that question.
+    #[must_use]
+    pub fn node_states_for(&self, nodes: &[NodeId]) -> HashMap<NodeId, NodeState> {
+        let mut out: HashMap<NodeId, NodeState> = {
+            let live = self.live.lock().expect("live mutex poisoned");
+            nodes
+                .iter()
+                .filter_map(|n| live.get(n).map(|s| (*n, *s)))
+                .collect()
+        };
+        // Same rollup as `node_states`: the worst of the committed liveness and any active alert on
+        // the node, and alerts whose subject is not a node belong to no node's display state.
+        let wanted: BTreeSet<NodeId> = nodes.iter().copied().collect();
+        for alert in self.active.lock().expect("alerts mutex poisoned").values() {
+            let Some(node) = alert.node() else { continue };
+            if !wanted.contains(&node) {
+                continue;
+            }
+            out.entry(node)
+                .and_modify(|s| {
+                    if severity_rank(alert.state) > severity_rank(*s) {
+                        *s = alert.state;
+                    }
+                })
+                .or_insert(alert.state);
+        }
+        out
+    }
+
     /// The rolled-up display state for one node, if the engine has observed it. Resolves the one
     /// node directly (its committed liveness rolled up with any active alert on it) instead of
     /// cloning the whole fleet's state map just to index one entry (S17) — the node-detail endpoint
@@ -3216,6 +3260,71 @@ mod tests {
             *manual.entry(*s).or_insert(0) += 1;
         }
         assert_eq!(counts, manual, "summary tally must match node_states()");
+    }
+
+    /// 🚨 **The paged reader must answer exactly what the fleet-wide one does** (ADR-125).
+    /// `node_states_for` is a second implementation of `node_states`' rollup, written to avoid
+    /// cloning the whole fleet on the hottest read in the product — and a second implementation of
+    /// a rule is a mirror, so it needs the test that fails when the two drift
+    /// (`extensibility.md` §2). Nothing else would notice: both return a plausible map.
+    #[test]
+    fn the_paged_states_agree_with_the_fleet_wide_ones() {
+        use yagra_bus::Sample;
+        use yagra_common::{ThresholdBounds, ThresholdRule};
+
+        let mgr = manager();
+        let up = NodeId::new();
+        let down = NodeId::new();
+        let breaching = NodeId::new();
+        let never_observed = NodeId::new();
+
+        for i in 0..DEFAULT_LIVENESS_DWELL {
+            mgr.observe(&result(up, CheckOutcome::Reachable, i64::from(i)));
+            mgr.observe(&result(down, CheckOutcome::Unreachable, i64::from(i)));
+            mgr.observe(&result(breaching, CheckOutcome::Reachable, i64::from(i)));
+        }
+        // One node reachable but breaching a threshold, so the alert rollup — the half that reads
+        // `active` rather than `live` — is exercised on both sides rather than only liveness.
+        let mut meta = HashMap::new();
+        meta.insert(breaching, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![breaching.to_string()],
+                ThresholdRule::new(
+                    "icmp_rtt_ms",
+                    ThresholdBounds::above(Some(50.0), Some(100.0)),
+                    1,
+                ),
+            )],
+            meta,
+        ));
+        let mut high = result(breaching, CheckOutcome::Reachable, 100);
+        high.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
+        let _ = mgr.observe(&high);
+
+        let fleet = mgr.node_states();
+        let page = [up, down, breaching, never_observed];
+        let paged = mgr.node_states_for(&page);
+
+        for n in page {
+            assert_eq!(
+                paged.get(&n).copied(),
+                fleet.get(&n).copied(),
+                "paged and fleet-wide answers differ for {n}"
+            );
+        }
+        // The rollup actually did something — without this the loop above is satisfied by two
+        // implementations that both return nothing.
+        assert_eq!(paged.get(&up).copied(), Some(NodeState::Ok));
+        assert_eq!(paged.get(&down).copied(), Some(NodeState::Unreachable));
+        assert_eq!(paged.get(&breaching).copied(), Some(NodeState::Critical));
+        // A node the engine has never observed stays absent, so the caller's fallback still runs.
+        assert!(!paged.contains_key(&never_observed));
+        // And the page is a page: nothing outside it comes back, however much the fleet holds.
+        assert_eq!(paged.len(), 3);
+        assert!(fleet.len() >= paged.len());
     }
 
     #[test]

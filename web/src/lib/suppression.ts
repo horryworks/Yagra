@@ -5,6 +5,7 @@
 // group). Kept free of React so the index logic is unit-tested directly.
 
 import { LIVENESS_METRIC } from './format';
+import { pushInto } from './mapBucket';
 import type {
   Alert,
   MaintenanceWindow,
@@ -140,7 +141,7 @@ export function groupContainers(groups: NodeGroup[], groupId: string | null): st
 export function groupSubtree(groups: NodeGroup[], rootId: string): Set<string> {
   const childrenOf = new Map<string, string[]>();
   for (const g of groups) {
-    if (g.parent_id) childrenOf.set(g.parent_id, [...(childrenOf.get(g.parent_id) ?? []), g.id]);
+    if (g.parent_id) pushInto(childrenOf, g.parent_id, g.id);
   }
   const out = new Set<string>([rootId]);
   const queue = [rootId];
@@ -220,7 +221,7 @@ export function buildSuppressionIndex(
   }
   const nodesByGroup = new Map<string, string[]>();
   for (const n of nodes) {
-    if (n.group_id) nodesByGroup.set(n.group_id, [...(nodesByGroup.get(n.group_id) ?? []), n.id]);
+    if (n.group_id) pushInto(nodesByGroup, n.group_id, n.id);
   }
   const markSubtree = (rootId: string, groupSet: Set<string>, nodeSet: Set<string>) => {
     for (const gid of groupSubtree(groups, rootId)) {

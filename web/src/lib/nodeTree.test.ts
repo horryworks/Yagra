@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
-  UNGROUPED,
   asGroupType,
   buildNodeTree,
   descendantNodes,
@@ -15,12 +14,12 @@ import {
   groupPath,
   isSelfOrDescendant,
   mergeNodesById,
+  pendingGroupKeys,
   revealedGroupKeys,
   subtreeGroupIds,
   tallyStates,
   type StateCounts,
   type TreeGroup,
-  visibleOpenGroupKeys,
 } from './nodeTree';
 import type { TFunction } from 'i18next';
 import { GROUP_TYPES } from '../types/api';
@@ -285,6 +284,33 @@ describe('flattenTree lazy load (A-3)', () => {
       filter: '',
       groupCounts: { g1: counts({ ok: 5 }) },
       loadedGroups: new Set(), // g1 not loaded
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'loading:g1', 'ungrouped-head']);
+  });
+
+  it('emits a FAILED row, not a loading one, for a group whose fetch failed', () => {
+    // The two must be distinguishable (ADR-125). Nothing retries a failed group on its own any
+    // more, so drawing it as "loading" leaves the operator waiting on something never coming.
+    const t = buildNodeTree([group('g1', 'Tokyo')], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: { g1: counts({ ok: 5 }) },
+      loadedGroups: new Set(),
+      failedGroups: new Set(['g1']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'failed:g1', 'ungrouped-head']);
+  });
+
+  it('leaves a group that has not failed on the loading row', () => {
+    // The other direction: a failed set naming some *other* group must not repaint this one.
+    const t = buildNodeTree([group('g1', 'Tokyo')], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: { g1: counts({ ok: 5 }) },
+      loadedGroups: new Set(),
+      failedGroups: new Set(['g2']),
     });
     expect(rows.map(flatRowKey)).toEqual(['g:g1', 'loading:g1', 'ungrouped-head']);
   });
@@ -642,38 +668,64 @@ describe('isSelfOrDescendant', () => {
   });
 });
 
-describe('visibleOpenGroupKeys', () => {
-  //   a ── a1 ── a11
-  //   b
-  const groups = [
-    group('a', 'A'),
-    group('a1', 'A1', 'a'),
-    group('a11', 'A11', 'a1'),
-    group('b', 'B'),
-  ];
-
-  it('always includes the ungrouped bucket', () => {
-    // It has no row to expand, so nothing else would ever ask for it — but it is always on screen.
-    expect(visibleOpenGroupKeys([], {})).toEqual([UNGROUPED]);
-    expect(visibleOpenGroupKeys(groups, { a: true, b: true })).toEqual([UNGROUPED]);
+describe('pendingGroupKeys', () => {
+  // The rows the virtualizer is showing decide what gets fetched (ADR-125). Building them through
+  // `flattenTree` rather than by hand is the point: the three rules that decide whether a folder
+  // gets a loading row (open, unloaded, non-empty) then have exactly one implementation.
+  const counts = (partial: Partial<Record<NodeState, number>>): Record<NodeState, number> => ({
+    ok: 0,
+    warning: 0,
+    critical: 0,
+    unreachable: 0,
+    maintenance: 0,
+    unknown: 0,
+    ...partial,
   });
-
-  it('includes every open group when nothing is collapsed', () => {
-    expect(visibleOpenGroupKeys(groups, {}).sort()).toEqual(
-      [UNGROUPED, 'a', 'a1', 'a11', 'b'].sort(),
+  const rowsFor = (opts: { loaded?: string[]; failed?: string[]; collapsed?: string[] }) =>
+    flattenTree(
+      buildNodeTree(
+        [group('g1', 'Tokyo'), group('g2', 'Osaka'), group('g3', 'Empty')],
+        [node('n1', 'sw1', 'g1')],
+      ),
+      {
+        collapsed: Object.fromEntries((opts.collapsed ?? []).map((id) => [id, true])),
+        filter: '',
+        groupCounts: { g1: counts({ ok: 1 }), g2: counts({ ok: 4 }), g3: counts({}) },
+        loadedGroups: new Set(opts.loaded ?? []),
+        failedGroups: new Set(opts.failed ?? []),
+      },
     );
+
+  it('names the groups that are waiting for members', () => {
+    expect(pendingGroupKeys(rowsFor({ loaded: ['g1'] }))).toEqual(['g2']);
   });
 
-  it('skips a collapsed group and everything beneath it', () => {
-    // a1/a11 are still "open" in the prefs, but they are inside a collapsed parent — nothing of
-    // theirs is on screen, so fetching their members would be a request for nothing.
-    expect(visibleOpenGroupKeys(groups, { a: true }).sort()).toEqual([UNGROUPED, 'b'].sort());
+  it('leaves out a group that is already loaded', () => {
+    expect(pendingGroupKeys(rowsFor({ loaded: ['g1', 'g2'] }))).toEqual([]);
   });
 
-  it('skips a nested collapsed group but keeps its open ancestors', () => {
-    expect(visibleOpenGroupKeys(groups, { a1: true }).sort()).toEqual(
-      [UNGROUPED, 'a', 'b'].sort(),
-    );
+  it('leaves out an empty group — there is nothing to ask for', () => {
+    // g3 has zero direct members in the server counts, so it never gets a loading row.
+    expect(pendingGroupKeys(rowsFor({ loaded: ['g1', 'g2'] }))).not.toContain('g3');
+  });
+
+  it('leaves out a collapsed group', () => {
+    expect(pendingGroupKeys(rowsFor({ loaded: ['g1'], collapsed: ['g2'] }))).toEqual([]);
+  });
+
+  it('🚨 leaves out a FAILED group — nothing retries on its own', () => {
+    // Including it here would put the automatic retry back one level up, where the queue could not
+    // see it either. A failed folder is fetched again only when the operator presses retry.
+    expect(pendingGroupKeys(rowsFor({ loaded: ['g1'], failed: ['g2'] }))).toEqual([]);
+  });
+
+  it('ignores group and node rows', () => {
+    // Only the placeholder rows are the fetch set; a `group` row is drawn from the server counts
+    // and says nothing about whether its members are wanted.
+    const rows = rowsFor({ loaded: ['g1', 'g2'] });
+    expect(rows.some((r) => r.kind === 'group')).toBe(true);
+    expect(rows.some((r) => r.kind === 'node')).toBe(true);
+    expect(pendingGroupKeys(rows)).toEqual([]);
   });
 });
 

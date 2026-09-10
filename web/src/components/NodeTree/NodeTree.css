@@ -284,6 +284,35 @@
   font-style: italic;
 }
 
+/* Row for a group whose members could not be fetched (ADR-125). Deliberately NOT italic-muted like
+   the loading row above: the two must not read as the same state, which is the whole reason the
+   flat row is its own variant. */
+.ntree-failed {
+  cursor: default;
+  gap: 8px;
+}
+.ntree-failed-label {
+  font-size: var(--font-sm);
+  color: var(--status-critical);
+}
+.ntree-retry {
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  color: var(--accent-color);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.ntree-retry:hover {
+  color: var(--accent-hover);
+}
+.ntree-retry:focus-visible {
+  outline: none;
+  color: var(--accent-hover);
+}
+
 /* Right-click context menu (HoTTY-style). */
 /* The context menu. Its SURFACE — fixed positioning, portal, clamping, background, border,
    shadow — is `.apop` (AnchoredPopover.css) since ADR-124 Inc.2; this class carries only what is

@@ -10222,6 +10222,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Too many inventory reads in flight — retry shortly (`list_busy`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           }
         }
       },
@@ -10310,6 +10320,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "groups",
+            "in": "query",
+            "description": "Comma-separated group ids. Bounded by [`BY_GROUP_BATCH_MAX`].",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10335,6 +10354,16 @@
           },
           "403": {
             "description": "Role lacks the View permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Too many inventory reads in flight — retry shortly (`list_busy`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -27037,12 +27066,23 @@
       },
       "GroupNodes": {
         "type": "object",
-        "description": "One group's direct members. Not keyset-paged — a folder is loaded whole when it is expanded —\nso it reports truncation instead of offering a cursor.",
+        "description": "One group's direct members, or several groups' when `groups=` was used. Not keyset-paged — a\nfolder is loaded whole when it is expanded — so it reports truncation instead of offering a\ncursor.",
         "required": [
           "nodes",
           "truncated"
         ],
         "properties": {
+          "answered": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Which groups this answer actually covers — present only when `groups=` was understood.\n\n🚨 **This field is what makes the batch form safe against an older core** (ADR-125), and\nwithout it the failure is silent and wrong rather than loud. `GroupNodesQuery` is a plain\n`Deserialize` with no `deny_unknown_fields`, so a core that predates `groups=` **ignores it**\n— and with no `group=` either, it falls through to the ungrouped bucket and returns those\nnodes with a perfectly ordinary 200. A newer WebUI would read that as \"here are the members\nof the thirty folders you asked about\" and file every ungrouped node under all of them.\n\n⚠️ **Inferring coverage from the rows cannot work**: a folder with no members and a folder\nthat was never asked about both come back as no rows. The set has to be stated.\n\n`None` for the single-group form, so an older WebUI sees exactly the response it always did."
+          },
           "nodes": {
             "type": "array",
             "items": {

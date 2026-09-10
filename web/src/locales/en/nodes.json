@@ -509,6 +509,8 @@
     "moveToGroup": "Move to group…",
     "dragHint": "Drag onto a group to nest/assign; drag between rows to reorder.",
     "loadingNodes": "Loading nodes…",
+    "loadFailed": "Could not load this folder's nodes.",
+    "retry": "Retry",
     "emptyInventory": "No nodes in inventory. Add one to start monitoring.",
     "addNodeHere": "Add node here…",
     "editMove": "Edit / move…",

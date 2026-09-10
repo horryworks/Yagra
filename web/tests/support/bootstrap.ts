@@ -235,6 +235,23 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // would put the same node id in the flat row list twice, which is a broken tree, not a bigger one.
   '/api/v1/nodes/by-group': (url) => {
     const body = defaultBodyFor('/api/v1/nodes/by-group') as Schemas['GroupNodes'];
+    // 🚨 **`answered` has to mirror the real contract, not the generator's sample** (ADR-125). It is
+    // the echo that tells the client "this core understood `groups=`", and the client refuses to
+    // attribute rows to a folder the echo does not name. The generated body carries a placeholder
+    // set unrelated to the request, which made every folder look un-answered — and an un-answered
+    // folder is neither loaded nor failed, so the tree re-queued it forever. That is what this
+    // branch exists to get right, and it is why the batch form is spelled out here at all.
+    const batch = url.searchParams.get('groups');
+    if (batch) {
+      return {
+        nodes: [],
+        truncated: false,
+        answered: batch.split(',').filter(Boolean),
+      } as unknown as Json;
+    }
+    // ⚠️ The single-group form carries NO echo — that absence is what an older core looks like, and
+    // a mock that always sent one could never exercise the fallback.
+    delete (body as { answered?: unknown }).answered;
     if (url.searchParams.get('group')) return { ...body, nodes: [] } as unknown as Json;
     const first = { ...body.nodes[0], group_id: null, sort_order: 1 };
     body.nodes = [

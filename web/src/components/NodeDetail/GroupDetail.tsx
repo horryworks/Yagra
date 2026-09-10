@@ -5,6 +5,7 @@
 // groups say so rather than showing an empty member list. Reuses the parent page's modals for edit
 // and add-node.
 
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
@@ -13,34 +14,62 @@ import { GroupIcon } from '../NodeTree/GroupIcon';
 import {
   asGroupType,
   buildNodeTree,
-  descendantNodes,
   groupPath,
   STATE_ORDER,
+  subtreeTallyMap,
   tallyStates,
+  type StateCounts,
 } from '../../lib/nodeTree';
 import { stateLabel } from '../../lib/format';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import './NodeDetail.css';
-import { findTreeGroup } from '../../lib/nodeTree';
 
 interface Props {
   group: NodeGroup;
   groups: NodeGroup[];
   nodes: NodeSummary[];
+  /** The server's per-group DIRECT member counts (`/fleet/group-summary`) — the same input the tree
+   *  row's rollup uses. Required, and that is the point: see the rollup note below. */
+  groupCounts: Record<string, StateCounts>;
   canEdit: boolean;
   onEditGroup: (group: NodeGroup) => void;
   onAddNode: () => void;
 }
 
-export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddNode }: Props) {
+export function GroupDetail({
+  group,
+  groups,
+  nodes,
+  groupCounts,
+  canEdit,
+  onEditGroup,
+  onAddNode,
+}: Props) {
   const { t } = useTranslation('nodes');
-  const tree = buildNodeTree(groups, nodes);
-  const tg = findTreeGroup(tree.roots, group.id);
-  const all = tg ? descendantNodes(tg) : [];
-  const directMembers = tg ? tg.nodes : [];
-  const subgroups = tg ? tg.children.length : 0;
-  const tally = tallyStates(all);
+  // 🚨 **The rollup comes from the server counts, exactly as the tree row's does** (ADR-125). It
+  // used to be `tallyStates(descendantNodes(...))` over the members that happened to be LOADED,
+  // while the row beside it read `subtreeTallyMap(groupCounts)` — so the same folder could show two
+  // different numbers, and which one you got depended on what had been fetched
+  // (`extensibility.md` §3). It also cost the whole subtree load: the member cache fetched every
+  // descendant folder purely so this arithmetic would come out right, which on the deployment this
+  // was measured on meant selecting a root folder fired ~500 requests.
+  //
+  // The tree is built from the groups alone — `buildNodeTree(groups, [])` — because only the shape
+  // is needed here; the nodes are not walked at all. Memoized because this component re-renders on
+  // every SSE frame.
+  const tally = useMemo(() => {
+    const roots = buildNodeTree(groups, []).roots;
+    return subtreeTallyMap(roots, groupCounts).get(group.id) ?? tallyStates([]);
+  }, [groups, groupCounts, group.id]);
+  const directMembers = useMemo(
+    () => nodes.filter((n) => n.group_id === group.id),
+    [nodes, group.id],
+  );
+  const subgroups = useMemo(
+    () => groups.filter((g) => g.parent_id === group.id).length,
+    [groups, group.id],
+  );
   const path = groupPath(groups, group.id);
 
   return (
@@ -69,7 +98,7 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
         </div>
         <div className="nd-sub">
           <span>
-            {all.length} {t('common:noun.node', { count: all.length })}
+            {tally.total} {t('common:noun.node', { count: tally.total })}
           </span>
           <span className="nd-sep">·</span>
           <span>{t('count.subgroup', { count: subgroups })}</span>
@@ -83,7 +112,7 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
       <div className="nd-grpbody">
         <section>
           <div className="nd-section-t">{t('groupDetail.health')}</div>
-          <HealthBar nodes={all} className="nd-grp-healthbar" />
+          <HealthBar tally={tally} className="nd-grp-healthbar" />
           <div className="nd-grp-legend">
             {STATE_ORDER.filter((s) => tally.counts[s] > 0).map((s) => (
               <span className="nd-grp-legend-item" key={s}>
@@ -91,7 +120,7 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
                 {tally.counts[s]} {stateLabel(s)}
               </span>
             ))}
-            {all.length === 0 && <span className="nd-muted">{t('groupDetail.noNodes')}</span>}
+            {tally.total === 0 && <span className="nd-muted">{t('groupDetail.noNodes')}</span>}
           </div>
         </section>
 

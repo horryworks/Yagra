@@ -628,6 +628,56 @@ impl FromRequestParts<ApiState> for Leader {
     }
 }
 
+/// How many fleet-scale list reads may run at once (ADR-125).
+///
+/// Each one takes **four PostgreSQL connections concurrently** (`build_node_summaries`) from a pool
+/// whose default is 20 and which the scheduler sweep and result ingest share. Eight seats is 32
+/// concurrent connection requests at the peak — enough to queue, nowhere near the 5-second
+/// `acquire_timeout` that turns a slow page into a 500.
+const LIST_SEATS: usize = 8;
+
+/// How long a request waits for a seat before being turned away. Short on purpose: the point is to
+/// shed load quickly rather than to hold a caller open, and the browser's own queue is what smooths
+/// the retry.
+const LIST_SEAT_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Process-wide, because the resource it protects is process-wide — the one PostgreSQL pool every
+/// core store shares. `api/scope.rs`'s `EDGE_CACHE` is the same shape and the same reason.
+static LIST_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(LIST_SEATS));
+
+/// A seat at the fleet-scale list reads. Held for the length of the handler and released when it
+/// returns, because the permit lives in the extracted value.
+///
+/// 🚨 **This is deliberately NOT a `tower` layer over the router.** `/stream/*` and the alert SSE
+/// hold a connection open for an hour (`web/nginx.conf` sets `proxy_read_timeout 1h`), so a
+/// `ConcurrencyLimitLayer` on `/api/v1` would let a handful of subscribers occupy every permit
+/// permanently and the whole API would stop answering. A `TimeoutLayer` would sever them outright.
+/// The seats belong on the two handlers that are expensive and bounded, not on the surface.
+///
+/// ⚠️ **Why this exists when the WebUI already limits itself**: an N-1 WebUI still fires one request
+/// per open folder, and nothing stops another client — or a script — from doing the same. A client
+/// fix is not a server guarantee (`api-conventions.md`: an unbounded top-N is a DoS vector).
+pub(crate) struct ListSlot(#[allow(dead_code)] tokio::sync::SemaphorePermit<'static>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for ListSlot {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, _: &ApiState) -> Result<Self, Self::Rejection> {
+        match tokio::time::timeout(LIST_SEAT_WAIT, LIST_SEMAPHORE.acquire()).await {
+            // The semaphore is never closed — it is a `static` with no owner to close it — so the
+            // inner error is unreachable. Treated as "busy" rather than unwrapped: a panic in an
+            // extractor takes the connection down, and this one guards a hot path.
+            Ok(Ok(permit)) => Ok(Self(permit)),
+            Ok(Err(_)) | Err(_) => Err(ApiError::unavailable(
+                "list_busy",
+                "too many inventory reads in flight — retry shortly",
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -896,5 +946,42 @@ mod tests {
 
         // No credential, no actor — `audit_mw` renders that as the anonymous marker.
         assert_eq!(current_actor(&parts_with(None)), None);
+    }
+
+    /// 🚨 **A limiter with only passing examples is indistinguishable from no limiter.** This drives
+    /// both directions: seats are handed out up to the budget, and the request past it is turned
+    /// away with the typed 503 rather than queued forever (ADR-125).
+    ///
+    /// ⚠️ The permits are taken from the process-wide `static`, so this test holds every seat in the
+    /// binary while it runs. It releases them before returning; a test that acquired one and left
+    /// it would starve any other test that later needs one.
+    #[tokio::test(start_paused = true)]
+    async fn the_seats_are_finite_and_the_overflow_is_shed() {
+        let st = private_state();
+
+        let mut held = Vec::new();
+        for i in 0..LIST_SEATS {
+            let mut parts = parts_with(None);
+            held.push(
+                ListSlot::from_request_parts(&mut parts, &st)
+                    .await
+                    .unwrap_or_else(|_| panic!("seat {i} of {LIST_SEATS} should be free")),
+            );
+        }
+
+        // One more than the budget: the wait elapses (time is paused, so this is instant and not a
+        // real half-second) and the caller is told, in the shape the UI can branch on.
+        let mut parts = parts_with(None);
+        let err = ListSlot::from_request_parts(&mut parts, &st)
+            .await
+            .err()
+            .expect("the seat past the budget must be refused");
+        assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err.code(), "list_busy");
+
+        // Releasing one lets the next caller straight through — the limiter sheds, it does not latch.
+        held.pop();
+        let mut parts = parts_with(None);
+        assert!(ListSlot::from_request_parts(&mut parts, &st).await.is_ok());
     }
 }

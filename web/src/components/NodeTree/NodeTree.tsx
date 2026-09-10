@@ -15,7 +15,7 @@
 // group inside its own subtree are refused (cycle guard). This component is presentation +
 // interaction only; the page owns the data and turns the callbacks into API calls + a reload.
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
@@ -27,10 +27,12 @@ import {
   filterTerm,
   flattenTree,
   flatRowKey,
+  pendingGroupKeys,
   type FlatRow,
   type StateCounts,
   type TreeGroup,
 } from '../../lib/nodeTree';
+import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { usePrefsStore } from '../../prefs';
 import {
   DURATION_PRESETS,
@@ -82,6 +84,13 @@ const BASE_PAD = 6;
  *  flattened list virtualizes with a uniform estimate (S13). */
 const ROW_H = 30;
 
+/** How long the viewport must settle before its folders are fetched (ADR-125).
+ *
+ *  Deliberately NOT `SEARCH_DEBOUNCE_MS` (200ms): that one is tuned to a person typing, and here the
+ *  operator is looking at a tree waiting for it to fill in. Short enough to feel immediate, long
+ *  enough that a momentum scroll queues the folders it lands on rather than every one it passes. */
+const PENDING_SETTLE_MS = 100;
+
 /** One shared empty working set, so a tree rendered without `checked` reads from a stable value
  *  rather than allocating a new `Map` on every render (which would defeat every memo below it). */
 const EMPTY_CHECKED: CheckedNodes = new Map();
@@ -111,6 +120,16 @@ interface Props {
    *  matched the group's own NAME (`revealedGroupKeys`). Only these can show a loading row while
    *  filtering — every other group is showing the search page's hits and nothing more. */
   revealedGroups?: Set<string>;
+  /** Ids of groups whose member fetch failed (ADR-125). They show a failed row with a retry
+   *  control rather than a placeholder that never resolves. */
+  failedGroups?: Set<string>;
+  /** Fetch one failed group's members again. The only retry there is — a failed group is never
+   *  re-fetched on its own, because doing that automatically is what produced an unbounded loop. */
+  onRetryGroup?: (groupId: string) => void;
+  /** The folders currently ON SCREEN and still waiting for their members (ADR-125). This is what
+   *  makes the fetch follow the viewport the way the rendering already does; the page hands it
+   *  straight to the member cache. Called only when the set actually changes. */
+  onPendingGroupsChange?: (groupIds: string[]) => void;
   /** First inventory load in flight — show a loading placeholder, not the empty message. */
   loading?: boolean;
   /** Currently-selected row (highlighted with the inset accent bar); drives the split detail pane. */
@@ -209,6 +228,9 @@ export function NodeTree({
   groupCounts,
   loadedGroups,
   revealedGroups,
+  failedGroups,
+  onRetryGroup,
+  onPendingGroupsChange,
   loading,
   selected,
   onSelectNode,
@@ -274,8 +296,9 @@ export function NodeTree({
         groupCounts,
         loadedGroups,
         revealedGroups,
+        failedGroups,
       }),
-    [tree, collapsed, filter, narrowed, groupCounts, loadedGroups, revealedGroups],
+    [tree, collapsed, filter, narrowed, groupCounts, loadedGroups, revealedGroups, failedGroups],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
@@ -910,6 +933,21 @@ export function NodeTree({
     </div>
   );
 
+  // A group whose members could not be fetched (ADR-125). Says so, and offers the retry — because
+  // nothing retries on its own any more, and a row that only said "loading" would be a lie the
+  // operator waits on forever (ADR-055 R6: say it where they are looking).
+  const failedRow = (depth: number, groupId: string): React.ReactNode => (
+    <div className="ntree-row ntree-failed" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
+      <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
+      <span className="ntree-failed-label">{t('tree.loadFailed')}</span>
+      {onRetryGroup && (
+        <button type="button" className="ntree-retry" onClick={() => onRetryGroup(groupId)}>
+          {t('tree.retry')}
+        </button>
+      )}
+    </div>
+  );
+
   const renderRow = (row: FlatRow): React.ReactNode => {
     switch (row.kind) {
       case 'group':
@@ -919,12 +957,51 @@ export function NodeTree({
         return renderNode(row.node, row.depth);
       case 'group-loading':
         return loadingRow(row.depth);
+      case 'group-failed':
+        return failedRow(row.depth, row.groupId);
       case 'ungrouped-head':
         return ungroupedHeadRow(row.count);
     }
+    // 🚨 **Exhaustiveness has to be asked for, and this switch did not ask.** The return type is
+    // `React.ReactNode`, which includes `undefined`, so a switch that falls through compiles
+    // cleanly and renders nothing — a new `FlatRow` variant would ship as an invisible row with
+    // every check green. (`tsconfig.json` has `strict` and `noFallthroughCasesInSwitch` but not
+    // `noImplicitReturns`, and neither of those two sees this.) Assigning the narrowed `row` to
+    // `never` is what makes the compiler demand a decision here. Found while adding
+    // `group-failed` (ADR-125), whose whole reason for being a variant was this guarantee.
+    const unhandled: never = row;
+    return unhandled;
   };
 
   const virtualRows = rowVirtualizer.getVirtualItems();
+
+  /** Publish the on-screen folders that are still waiting for members, so the fetch follows the
+   *  viewport the way the rendering already does (ADR-125).
+   *
+   *  🚨 **No judgement lives here.** Which rows count is `pendingGroupKeys` in `lib/nodeTree.ts`,
+   *  where Vitest can reach it. ADR-124 Inc.2 paid for the other arrangement: the one branch left
+   *  in a `.tsx` was the one branch no test could run, and it was the one that was wrong.
+   *
+   *  🚨 **The settle is not a nicety — it is what stops a momentum scroll from re-creating the
+   *  burst.** Flicking through 500 folders makes every one of them briefly "on screen and waiting";
+   *  without a settle each is queued, and the queue bounds the RATE, not the total — so all 501
+   *  would still be fetched, six at a time. The first publish is immediate (`ms = 0`), because
+   *  delaying the initial screenful buys nothing.
+   *
+   *  Joined into a string so the debounce compares CONTENT: `getVirtualItems()` returns a fresh
+   *  array every render and would otherwise re-arm the timer forever. Group ids are UUIDs, so a
+   *  comma cannot appear inside one. */
+  const publishedOnce = useRef(false);
+  const pendingKey = pendingGroupKeys(
+    // An index can briefly fall outside `flat` between a virtualizer measure and a re-render.
+    virtualRows.map((v) => flat[v.index]).filter((r): r is FlatRow => r !== undefined),
+  ).join(',');
+  const settledKey = useDebouncedValue(pendingKey, publishedOnce.current ? PENDING_SETTLE_MS : 0);
+  useEffect(() => {
+    if (!onPendingGroupsChange) return;
+    publishedOnce.current = true;
+    onPendingGroupsChange(settledKey ? settledKey.split(',') : []);
+  }, [settledKey, onPendingGroupsChange]);
 
   /** What the open node menu's move items act on (ADR-124 Inc.2). Decided in `nodeTreeMenu.ts`;
    *  here it is only applied. */

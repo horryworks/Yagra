@@ -705,10 +705,20 @@ export const api = {
     apiGet('/api/v1/nodes/search', { query: { q: q || undefined, limit } }),
 
   /** A group's direct member nodes for the inventory tree's per-group lazy load (A-3). Pass a group
-   *  id, or omit `group` for the ungrouped bucket. Fetched only when a group is expanded, so the
+   *  id, or omit `group` for the ungrouped bucket. Fetched only when a group is on screen, so the
    *  tree never pulls the whole fleet up front. */
   getGroupNodes: (group: string | null): Promise<GroupNodesResult> =>
     apiGet('/api/v1/nodes/by-group', { query: { group: group || undefined } }),
+
+  /** The direct members of SEVERAL folders in one request (ADR-125) — what the tree uses for the
+   *  folders in its viewport, so a screenful is one round trip rather than one per folder.
+   *
+   *  🚨 **The caller must check `answered` before believing the rows.** A core older than the batch
+   *  form ignores `groups=`, finds no `group=` either, and answers with the UNGROUPED bucket and a
+   *  perfectly ordinary 200 — which, read as "the members of the folders you asked about", files
+   *  every ungrouped node under all of them. `answered` is absent exactly then. */
+  getGroupNodesBatch: (groups: string[]): Promise<GroupNodesResult> =>
+    apiGet('/api/v1/nodes/by-group', { query: { groups: groups.join(',') } }),
 
   /** One keyset page of the inventory (for the virtualized node table). Pass the previous
    *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. A non-empty

@@ -10,7 +10,42 @@
 
 ## Unreleased
 
+### Improvements
+
+- **`GET /api/v1/nodes/by-group` can ask about several folders at once.** Pass
+  `?groups=<uuid>,<uuid>,…` (up to 64) instead of `?group=<uuid>`, and the response carries an
+  **`answered`** array naming the folders it covers. The single-folder form is unchanged and still
+  carries no `answered`. ⚠️ **If you use the batch form, check `answered` before attributing rows to
+  a folder**: a core older than this release ignores the unknown parameter and answers with the
+  *ungrouped* nodes and an ordinary `200`, and `answered` being absent is the only way to tell.
+  More than 64 folders is refused with `400 too_many_groups` rather than trimmed.
+
+- **`GET /api/v1/nodes` and `GET /api/v1/nodes/by-group` can now answer `503 list_busy`.** These two
+  reads are the most expensive in the product, and eight may now run at once; past that a caller
+  waits briefly and is then told to retry rather than queuing behind a database that has run out of
+  connections. Streaming endpoints are unaffected.
+
 ### Bug Fixes
+
+- **Opening Nodes could take ten seconds or more on a deployment with many folders, and sometimes
+  never finished.** The tree only ever drew the rows on screen, but it *fetched* every folder that
+  was open — and folders start open, so a deployment with 500 of them asked for all 501 the moment
+  the page loaded. Whatever those requests could not get from the database came back as errors, and
+  a failed folder was then re-fetched on every render, at whatever speed the errors arrived. Four
+  changes: **the tree now fetches the folders you can actually see** (and the ones you scroll to),
+  **a folder that fails is left alone** and says so with a Retry link instead of showing a
+  never-ending "Loading nodes…", **a screenful of folders is fetched in one request** rather than
+  one each, and **no more than six requests are ever in flight**. A folder's contents, its health
+  bar and its counts are unchanged — nothing about the tree looks different.
+  ⚠️ **Why it was hard to reproduce**: over plain HTTP a browser only opens six connections at a
+  time, which accidentally throttled the burst. With TLS on — the default since v0.3.x — the
+  connection is HTTP/2 and that throttle disappears, so the same inventory behaved differently
+  depending on how the WebUI was served.
+
+- **A folder's node count could differ between the tree and the panel beside it.** The tree row
+  rolled up from the server's per-folder counts while the detail panel counted only the members it
+  happened to have loaded, so the same folder could show two numbers. Both now read the server's
+  counts. This also means selecting a folder no longer loads every folder beneath it.
 
 - **The inventory tree scrolled on its own while you were picking nodes.** Ctrl / Shift clicking
   several nodes moved the tree under the pointer, so the next row you wanted had shifted. Two

@@ -417,6 +417,47 @@ impl NodeRepo {
         rows.iter().map(node_from_row).collect()
     }
 
+    /// The direct member nodes of **several** groups at once, ordered by group then by the tree's
+    /// sort order, capped at `limit` across the whole answer (ADR-125).
+    ///
+    /// The inventory tree asks for the folders in its viewport, which is tens of them — one request
+    /// each meant tens of round trips and, worse, tens of runs of `build_node_summaries` (five
+    /// reads apiece). Batching collapses that to one of each.
+    ///
+    /// 🚨 **`= ANY($2)`, deliberately not `IS NOT DISTINCT FROM`.** PostgreSQL does not treat the
+    /// latter as the btree equality operator, so the single-group form above cannot use
+    /// `nodes_group_idx` even for an unscoped caller — adding an index would not have helped it.
+    /// This form can. The ungrouped bucket keeps the other method precisely because `NULL` is not a
+    /// value `= ANY` can match, and pretending otherwise is what the `IS NOT DISTINCT FROM` there
+    /// is for.
+    ///
+    /// ⚠️ `ORDER BY group_id` first so a truncated answer is truncated at a folder boundary rather
+    /// than mixing a partial folder into the middle of the list.
+    pub async fn list_nodes_in_groups(
+        &self,
+        groups: GroupFilter<'_>,
+        group_ids: &[Uuid],
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>> {
+        if group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 5001);
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM nodes \
+             WHERE {} AND group_id = ANY($2) \
+             ORDER BY group_id, sort_order, name, id LIMIT $3",
+            Self::NODE_COLUMNS,
+            Self::SCOPE_PREDICATE
+        ))
+        .bind(Self::scope_bind(groups))
+        .bind(group_ids)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(node_from_row).collect()
+    }
+
     /// Assign a node to `group` and set its order in one update (drag reorder). Returns existence.
     pub async fn place_node(
         &self,
@@ -1048,6 +1089,96 @@ mod tests {
                 .await
                 .expect("move"),
             (0, 0)
+        );
+    }
+
+    /// 🚨 **The batch read must return exactly what the single reads return** (ADR-125).
+    /// `list_nodes_in_groups` is a second implementation of `list_nodes_in_group` — different SQL
+    /// (`= ANY` rather than `IS NOT DISTINCT FROM`), a different `ORDER BY` — written so the tree
+    /// can ask about a viewport in one round trip. Two implementations of one question is a mirror,
+    /// and a mirror needs the test that fails when they drift (`extensibility.md` §2). Nothing else
+    /// would notice: both return a plausible list of nodes.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_batch_read_returns_what_the_single_reads_return(pool: sqlx::PgPool) {
+        let tokyo = pgtest::group(&pool, "Tokyo").await;
+        let osaka = pgtest::group(&pool, "Osaka").await;
+        let empty = pgtest::group(&pool, "Empty").await;
+        let a = pgtest::node(&pool, "a", 1, Some(tokyo)).await;
+        let b = pgtest::node(&pool, "b", 2, Some(tokyo)).await;
+        let c = pgtest::node(&pool, "c", 1, Some(osaka)).await;
+        let ungrouped = pgtest::node(&pool, "z", 1, None).await;
+        let repo = pgtest::repo(pool);
+
+        let ids = |v: Vec<Node>| v.into_iter().map(|n| n.id.as_uuid()).collect::<Vec<_>>();
+        let one = |g| {
+            let repo = &repo;
+            async move {
+                ids(repo
+                    .list_nodes_in_group(None, Some(g), 100)
+                    .await
+                    .expect("one"))
+            }
+        };
+
+        // Folder by folder, then the same three folders in one call.
+        assert_eq!(one(tokyo).await, vec![a, b]);
+        assert_eq!(one(osaka).await, vec![c]);
+        assert_eq!(one(empty).await, Vec::<Uuid>::new());
+        let batched = ids(repo
+            .list_nodes_in_groups(None, &[tokyo, osaka, empty], 100)
+            .await
+            .expect("batch"));
+        let mut expected = vec![a, b, c];
+        expected.sort();
+        let mut got = batched.clone();
+        got.sort();
+        assert_eq!(got, expected, "the batch must cover exactly the same rows");
+
+        // ⚠️ The empty folder contributes nothing and is indistinguishable in the ROWS from a
+        // folder that was never asked about — which is why the API echoes `answered` rather than
+        // letting a caller infer coverage from what came back.
+        assert_eq!(batched.len(), 3);
+
+        // The ungrouped bucket is NOT reachable through the batch form: `= ANY` cannot match NULL,
+        // and that is the whole reason `list_nodes_in_group` keeps `IS NOT DISTINCT FROM`.
+        assert!(!batched.contains(&ungrouped));
+        assert_eq!(
+            ids(repo
+                .list_nodes_in_group(None, None, 100)
+                .await
+                .expect("ungrouped")),
+            vec![ungrouped]
+        );
+
+        // An empty id list asks nothing and touches no database.
+        assert!(repo
+            .list_nodes_in_groups(None, &[], 100)
+            .await
+            .expect("empty")
+            .is_empty());
+    }
+
+    /// A scoped caller cannot widen their view by batching. The scope predicate rides alongside the
+    /// group filter in both forms, and this is the direction that fails open if it ever stops.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_batch_read_refuses_a_group_outside_the_scope(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "Mine").await;
+        let theirs = pgtest::group(&pool, "Theirs").await;
+        let ours = pgtest::node(&pool, "ours", 1, Some(mine)).await;
+        let _hidden = pgtest::node(&pool, "hidden", 1, Some(theirs)).await;
+        let repo = pgtest::repo(pool);
+
+        let scope = [mine];
+        let got = repo
+            .list_nodes_in_groups(Some(&scope), &[mine, theirs], 100)
+            .await
+            .expect("scoped batch");
+        assert_eq!(
+            got.into_iter().map(|n| n.id.as_uuid()).collect::<Vec<_>>(),
+            vec![ours],
+            "asking about a folder outside the scope must not return its nodes"
         );
     }
 }

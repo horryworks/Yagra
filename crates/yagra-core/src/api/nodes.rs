@@ -23,7 +23,7 @@
 //! Pollers view in [`super`] (it answers "which poller holds this", sharing that view's resolution
 //! helpers), and `GET /nodes/:id/interfaces` belongs to metrics.
 
-use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
+use super::extract::{Admin, ListSlot, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::CreatedId;
 use super::{pool_resolver, AdminState, ApiError, ApiResult, ApiState};
 use crate::groups::{placement_order, would_create_cycle};
@@ -151,7 +151,11 @@ pub(crate) async fn display_state(st: &ApiState, node: NodeId) -> NodeState {
 /// a single scoped freshness query (S20 — scoped to this page, never the whole fleet), and the
 /// query is skipped entirely when nothing is unobserved, which is the steady state.
 pub(crate) async fn display_states(st: &ApiState, nodes: &[NodeId]) -> HashMap<NodeId, NodeState> {
-    let known = st.alerts.node_states();
+    // ⚠️ `node_states_for`, not `node_states` (ADR-125). The latter clones the whole fleet's state
+    // map, and this function is on the hottest read in the product — S20 scoped the TSDB query to
+    // the page and left the clone fleet-wide, which is a copy of thousands of entries to look up a
+    // few dozen, per request, under the lock the poll ingest path shares.
+    let known = st.alerts.node_states_for(nodes);
     let unobserved: Vec<Uuid> = nodes
         .iter()
         .filter(|n| !known.contains_key(n))
@@ -253,12 +257,28 @@ pub(crate) struct NodePage {
     truncated: bool,
 }
 
-/// One group's direct members. Not keyset-paged — a folder is loaded whole when it is expanded —
-/// so it reports truncation instead of offering a cursor.
+/// One group's direct members, or several groups' when `groups=` was used. Not keyset-paged — a
+/// folder is loaded whole when it is expanded — so it reports truncation instead of offering a
+/// cursor.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct GroupNodes {
     nodes: Vec<NodeSummary>,
     truncated: bool,
+    /// Which groups this answer actually covers — present only when `groups=` was understood.
+    ///
+    /// 🚨 **This field is what makes the batch form safe against an older core** (ADR-125), and
+    /// without it the failure is silent and wrong rather than loud. `GroupNodesQuery` is a plain
+    /// `Deserialize` with no `deny_unknown_fields`, so a core that predates `groups=` **ignores it**
+    /// — and with no `group=` either, it falls through to the ungrouped bucket and returns those
+    /// nodes with a perfectly ordinary 200. A newer WebUI would read that as "here are the members
+    /// of the thirty folders you asked about" and file every ungrouped node under all of them.
+    ///
+    /// ⚠️ **Inferring coverage from the rows cannot work**: a folder with no members and a folder
+    /// that was never asked about both come back as no rows. The set has to be stated.
+    ///
+    /// `None` for the single-group form, so an older WebUI sees exactly the response it always did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    answered: Option<Vec<Uuid>>,
 }
 
 /// Keyset pagination query for the node list. Any of `search` / `state` / `kind` / `pool`
@@ -459,10 +479,14 @@ async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummar
         (status = 200, description = "One keyset page of the inventory, or a single capped page in search mode", body = NodePage),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Too many inventory reads in flight — retry shortly (`list_busy`)", body = super::error::ErrorBody),
     ),
 )]
 async fn list_nodes(
     _perm: RequireView,
+    // A seat at the fleet-scale reads (ADR-125). After the permission guard, before the work: an
+    // unauthenticated caller must not be able to occupy one.
+    _seat: ListSlot,
     Scoped(scope): Scoped,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<NodePageQuery>,
@@ -698,13 +722,28 @@ async fn search_nodes(
     ))
 }
 
-/// Query for the per-group lazy tree load: `?group=<uuid>` returns that group's direct members; an
-/// absent/empty `group` returns the ungrouped nodes (`group_id IS NULL`).
+/// Query for the per-group lazy tree load.
+///
+/// - `?groups=<uuid>,<uuid>,…` — several folders' direct members in one answer (ADR-125). The
+///   response echoes the set it covered in `answered`.
+/// - `?group=<uuid>` — one folder's direct members.
+/// - neither — the ungrouped nodes (`group_id IS NULL`).
+///
+/// ⚠️ `groups` wins when both are given. They are never sent together by this product; the rule
+/// exists so the behaviour is decided rather than incidental.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(super) struct GroupNodesQuery {
     group: Option<Uuid>,
+    /// Comma-separated group ids. Bounded by [`BY_GROUP_BATCH_MAX`].
+    groups: Option<String>,
 }
+
+/// How many folders one batch may name.
+///
+/// Twice the largest window the inventory tree can ask for (its viewport holds ~30 folder rows at
+/// 1080p), so the client never has to split a request it can legitimately make.
+const BY_GROUP_BATCH_MAX: usize = 64;
 
 /// Backstop cap on one group's direct-member load. The inventory tree lazy-loads a group's members
 /// only when it is expanded, so this bounds a single pathologically large group; the client flags a
@@ -722,19 +761,53 @@ const GROUP_NODES_CAP: i64 = 2000;
         (status = 200, description = "The group's direct members in tree order, flagged if capped", body = GroupNodes),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Too many inventory reads in flight — retry shortly (`list_busy`)", body = super::error::ErrorBody),
     ),
 )]
 async fn list_group_nodes(
     _perm: RequireView,
+    // The other seat holder, and the one the burst actually came through (ADR-125).
+    _seat: ListSlot,
     Scoped(scope): Scoped,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<GroupNodesQuery>,
 ) -> ApiResult<Json<GroupNodes>> {
+    // The batch form. Parsed at the edge into typed ids, so an unparseable one is a 400 rather than
+    // a folder silently missing from an answer that still looks complete.
+    let batch: Option<Vec<Uuid>> =
+        match q.groups.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            None => None,
+            Some(raw) => {
+                let ids = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(Uuid::parse_str)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| {
+                        ApiError::bad_request(
+                            "invalid_group_id",
+                            "`groups` must be comma-separated UUIDs",
+                        )
+                    })?;
+                // 🚨 Refused, never truncated. Silently dropping the tail would answer with a set the
+                // caller did not ask for while looking exactly like success — the same failure the
+                // `answered` echo exists to prevent, arriving by a different door (ADR-124 決定 7).
+                if ids.len() > BY_GROUP_BATCH_MAX {
+                    return Err(ApiError::bad_request(
+                        "too_many_groups",
+                        format!("at most {BY_GROUP_BATCH_MAX} groups per request"),
+                    ));
+                }
+                Some(ids)
+            }
+        };
+
     let Some(admin) = st.admin.as_ref() else {
         // Skeleton mode has no group membership; the demo node is ungrouped. Return it for the
         // ungrouped bucket, nothing for a specific group. A scoped caller gets nothing either way:
         // an ungrouped node is outside every group scope, which `search` enforces for us.
-        let nodes = if q.group.is_none() {
+        let nodes = if q.group.is_none() && batch.is_none() {
             st.nodes
                 .search(scope.group_filter(), "", GROUP_NODES_CAP)
                 .await
@@ -745,15 +818,28 @@ async fn list_group_nodes(
         return Ok(Json(GroupNodes {
             nodes: build_node_summaries(&st, nodes).await,
             truncated: false,
+            // Still echoed in skeleton mode: the answer is empty because there is no inventory,
+            // which is a different statement from "this core does not understand the question".
+            answered: batch,
         }));
     };
-    let mut nodes = admin
-        .repo
-        .list_nodes_in_group(scope.group_filter(), q.group, GROUP_NODES_CAP + 1)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "list group nodes", "failed to load group nodes")
-        })?;
+    let mut nodes = match &batch {
+        Some(ids) => {
+            admin
+                .repo
+                .list_nodes_in_groups(scope.group_filter(), ids, GROUP_NODES_CAP + 1)
+                .await
+        }
+        None => {
+            admin
+                .repo
+                .list_nodes_in_group(scope.group_filter(), q.group, GROUP_NODES_CAP + 1)
+                .await
+        }
+    }
+    .map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "list group nodes", "failed to load group nodes")
+    })?;
     let truncated = i64::try_from(nodes.len()).unwrap_or(i64::MAX) > GROUP_NODES_CAP;
     if truncated {
         nodes.truncate(usize::try_from(GROUP_NODES_CAP).unwrap_or(usize::MAX));
@@ -761,6 +847,7 @@ async fn list_group_nodes(
     Ok(Json(GroupNodes {
         nodes: build_node_summaries(&st, nodes).await,
         truncated,
+        answered: batch,
     }))
 }
 
@@ -1782,6 +1869,106 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// The batch form's edge validation (ADR-125). Both of these are refusals a caller can reach
+    /// without a database, and both are refusals rather than quiet repairs: a request that names
+    /// more folders than allowed, or names one that is not a UUID, must not come back looking like
+    /// a complete answer to a smaller question.
+    #[tokio::test]
+    async fn the_batch_form_refuses_a_bad_group_list_rather_than_trimming_it() {
+        use crate::api::tests_support::send;
+
+        let st = private_state();
+        let token = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer1",
+        );
+
+        // 🚨 Over the cap: refused, not truncated. Truncating would answer about the first 64 of
+        // the 65 folders asked for, with a 200 and no way for the caller to tell.
+        let too_many = (0..=BY_GROUP_BATCH_MAX)
+            .map(|_| Uuid::new_v4().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/by-group?groups={too_many}"),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "too_many_groups");
+
+        // An unparseable id is the same shape of mistake: it would otherwise be dropped by the
+        // filter and the folder would simply be missing from the answer.
+        let (status, body) = send(
+            &st,
+            "GET",
+            "/api/v1/nodes/by-group?groups=not-a-uuid",
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "invalid_group_id");
+
+        // ⚠️ And the single-group form is untouched — an older WebUI keeps working unchanged.
+        let (status, _) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/by-group?group={}", Uuid::new_v4()),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    /// The N-1 contract, from the side this core can actually demonstrate: the single-group form
+    /// carries no `answered`, so a newer WebUI talking to a core that predates the batch form sees
+    /// its absence and falls back. `skip_serializing_if` is what makes that absence real rather
+    /// than a `null` the client would have to special-case.
+    #[tokio::test]
+    async fn the_single_group_form_carries_no_answered_echo() {
+        use crate::api::tests_support::send;
+
+        let st = private_state();
+        let token = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer1",
+        );
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/by-group?group={}", Uuid::new_v4()),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.get("answered").is_none(),
+            "the single-group form must look exactly as it did before ADR-125"
+        );
+
+        // The batch form echoes the set even when it can answer nothing, which is the whole point:
+        // "no rows" and "this core does not understand the question" must not look alike.
+        let g = Uuid::new_v4();
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/by-group?groups={g}"),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["answered"], serde_json::json!([g.to_string()]));
     }
 
     #[tokio::test]

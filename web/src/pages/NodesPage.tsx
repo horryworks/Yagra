@@ -8,8 +8,12 @@
 //
 // Scale note: the tree is lazy (A-3). The initial view loads only the group skeleton + per-group
 // health counts (`/fleet/group-summary`) + fleet totals — so the group rows and rollups paint
-// instantly at any fleet size. A group's member nodes are fetched only when it is open and visible
-// (`/nodes/by-group`), streaming in per group; collapsed groups are never loaded. An active name
+// instantly at any fleet size. A group's member nodes are fetched only once that group is **on
+// screen** (`/nodes/by-group`), streaming in per group; a folder nobody has scrolled to is never
+// loaded, and neither is a collapsed one. ⚠️ That used to say "open and visible", and meant it in
+// the weaker sense of "no collapsed ancestor" — which, since collapse state defaults to empty, is
+// every folder there is. A deployment with 500 of them asked for all 501 on first paint (ADR-125).
+// The fetch set now comes from the rows the virtualizer is showing. An active name
 // filter runs a debounced SERVER-side search (`/nodes?search=`), capped at one page, and drops the
 // matches under their groups — it never loads the fleet into the browser. A term matching a GROUP's
 // name additionally loads that folder's whole subtree, since the server search matches nodes and
@@ -111,8 +115,13 @@ export function NodesPage() {
   const [fleetSummary, setFleetSummary] = useState<FleetSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // The user's collapsed-group set (prefs) decides which groups are open → which members to load.
-  const collapsed = usePrefsStore((s) => s.nodeTreeCollapsed);
+  /** The folders the tree says are on screen and still waiting for members (ADR-125). The tree
+   *  publishes it from the rows the virtualizer is showing; this page only relays it to the member
+   *  cache. It used to be the collapse prefs, and the hook derived "open, with no collapsed
+   *  ancestor" — which defaults to every folder, so a 500-folder deployment asked for all of them
+   *  on first paint. `NodeTree` publishes it only once the viewport has settled, so this state
+   *  changes when the answer really does rather than on every scroll frame. */
+  const [visibleGroupKeys, setVisibleGroupKeys] = useState<string[]>([]);
   // Inventory-pane collapse (desktop only): slim the tree to a rail so the detail uses the full
   // width. On mobile the pane switcher governs, so the rail is suppressed there.
   const paneCollapsed = usePrefsStore((s) => s.nodesPaneCollapsed);
@@ -356,7 +365,7 @@ export function NodesPage() {
   const refetchSearch = search.refetch;
   const members = useLazyGroupMembers({
     groups,
-    collapsed,
+    visibleGroupKeys,
     ready: !loading,
     browsing: !filtering,
     selectedGroupId: selected?.kind === 'group' ? selected.id : null,
@@ -847,11 +856,20 @@ export function NodesPage() {
             groupCounts={groupCounts}
             loadedGroups={members.loadedGroups}
             revealedGroups={members.revealedGroups}
+            failedGroups={members.failedGroups}
+            onRetryGroup={members.retry}
+            onPendingGroupsChange={setVisibleGroupKeys}
             canEdit={canConfig}
             loading={loading || (filtering && search.loading)}
             showToolbar={false}
             selected={selected}
-            filter={filter}
+            // 🚨 The APPLIED (debounced) term, not the raw box (ADR-125). `flattenTree` walks every
+            // group's subtree while narrowing, so passing the raw value ran that whole walk on
+            // every keystroke while the search it belongs to was already debounced to 200ms.
+            // ⚠️ `filtering` above deliberately stays on the RAW value: it decides whether the tree
+            // is in filter mode at all, and lagging it by 200ms would leave the browse-mode fetch
+            // running over a tree the operator has already started narrowing.
+            filter={search.appliedTerm}
             // The tree cannot see the state / kind / pool controls — those run server-side — so it
             // has to be told, or it does not know it is filtering and hides nothing.
             narrowed={serverNarrowed}
@@ -991,6 +1009,7 @@ export function NodesPage() {
               group={selectedGroup}
               groups={groups}
               nodes={treeNodes}
+              groupCounts={groupCounts}
               canEdit={canConfig}
               onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
               onAddNode={() => openAddNode(selectedGroup.id)}

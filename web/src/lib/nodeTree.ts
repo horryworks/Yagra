@@ -6,6 +6,7 @@
 import type { TFunction } from 'i18next';
 import { GROUP_TYPES } from '../types/api';
 import type { GroupType, NodeGroup, NodeState, NodeSummary } from '../types/api';
+import { pushInto } from './mapBucket';
 import { DISPLAY_ORDER, PROBLEM_STATES, emptyStateCounts } from './nodeState';
 
 /** Re-exported for the health-bar/legend call sites that read "the order states are shown in".
@@ -87,6 +88,12 @@ export type FlatRow =
   | { kind: 'node'; depth: number; node: NodeSummary }
   /** Placeholder under an open group whose members haven't been lazily fetched yet (A-3). */
   | { kind: 'group-loading'; depth: number; groupId: string }
+  /** Under an open group whose member fetch FAILED (ADR-125). A separate variant rather than a
+   *  `failed` flag on `group-loading`, so the exhaustive switches — `flatRowKey` here and
+   *  `renderRow` in NodeTree.tsx — refuse to compile until someone decides how it looks. Without
+   *  it a failed folder is indistinguishable from a slow one and reads as "loading" forever,
+   *  which is ADR-055 R6: the screen must say what it cannot do, where the operator is looking. */
+  | { kind: 'group-failed'; depth: number; groupId: string }
   | { kind: 'ungrouped-head'; count: number }
   | { kind: 'ungrouped-node'; depth: number; node: NodeSummary };
 
@@ -100,6 +107,8 @@ export function flatRowKey(row: FlatRow): string {
       return `n:${row.node.id}`;
     case 'group-loading':
       return `loading:${row.groupId}`;
+    case 'group-failed':
+      return `failed:${row.groupId}`;
     case 'ungrouped-head':
       return 'ungrouped-head';
   }
@@ -213,6 +222,10 @@ export function flattenTree(
     groupCounts?: Record<string, StateCounts>;
     loadedGroups?: Set<string>;
     revealedGroups?: Set<string>;
+    /** Groups whose member fetch failed (ADR-125). They emit a `group-failed` row instead of the
+     *  `group-loading` placeholder — otherwise a folder nobody can load is drawn exactly like one
+     *  that is still arriving, forever. */
+    failedGroups?: Set<string>;
   },
 ): FlatRow[] {
   const q = filterTerm(opts.filter);
@@ -255,8 +268,14 @@ export function flattenTree(
     // Hide a group entirely when nothing under it survives the narrowing. With a term that means
     // "no name below matches"; without one it means "no rows below at all", because the caller
     // already removed the rows that did not survive.
-    const keep = byTerm ? subtreeMatches(group, q) : subtreeHasNodes(group);
-    if (narrowing && !effMatch && !keep) return;
+    // 🚨 **Only `narrowing` needs this, so only `narrowing` may pay for it** (ADR-125). Both
+    // branches walk the group's whole subtree, and this used to be computed into a `const` above
+    // the `if` — so every browse-mode flatten walked every subtree and threw the answer away one
+    // line later. That is O((groups + nodes) × depth) per flatten, and a flatten runs once per
+    // arriving `/nodes/by-group` response. `&&` short-circuits, so browsing now walks nothing.
+    if (narrowing && !effMatch && !(byTerm ? subtreeMatches(group, q) : subtreeHasNodes(group))) {
+      return;
+    }
 
     const isOpen = narrowing ? true : !opts.collapsed[group.id];
     // 🚨 **While narrowing, the bar describes the rows on screen — not the fleet.** The server
@@ -288,7 +307,10 @@ export function flattenTree(
     // first — in filter mode the search page already carries this group's MATCHING nodes, and hiding
     // them behind the placeholder would flicker them out while the rest of the folder loads.
     if (!isLoaded(group.id) && directTotal > shown.length) {
-      rows.push({ kind: 'group-loading', depth: depth + 1, groupId: group.id });
+      // A failed fetch is not a slow one, and drawing it as one leaves the operator waiting on
+      // something that is never coming (ADR-125). The failed row carries the retry control.
+      const kind = opts.failedGroups?.has(group.id) ? 'group-failed' : 'group-loading';
+      rows.push({ kind, depth: depth + 1, groupId: group.id });
     }
   };
 
@@ -354,8 +376,13 @@ export function tallyFromCounts(counts: StateCounts): StateTally {
 
 /** Roll each group's DIRECT member counts up its subtree, yielding a per-group DESCENDANT tally
  *  (the whole subtree's health) from the server per-group direct counts (A-3). Bottom-up over the
- *  built tree, which is acyclic (each group appears once), so no cycle guard is needed. */
-function subtreeTallyMap(
+ *  built tree, which is acyclic (each group appears once), so no cycle guard is needed.
+ *
+ *  ⚠️ **Exported so the group detail pane can roll up the same way the tree row does** (ADR-125).
+ *  It used to derive its own tally from the members that happened to be LOADED, while the row beside
+ *  it used these server counts — so the two could show different numbers for the same folder. Same
+ *  question, one answer (`extensibility.md` §3). */
+export function subtreeTallyMap(
   roots: TreeGroup[],
   counts: Record<string, StateCounts>,
 ): Map<string, StateTally> {
@@ -422,8 +449,7 @@ export interface GroupOption {
 export function groupOptions(groups: NodeGroup[]): GroupOption[] {
   const byParent = new Map<string | null, NodeGroup[]>();
   for (const g of groups) {
-    const k = g.parent_id ?? null;
-    byParent.set(k, [...(byParent.get(k) ?? []), g]);
+    pushInto(byParent, g.parent_id ?? null, g);
   }
   const out: GroupOption[] = [];
   const walk = (parent: string | null, depth: number, trail: string[]) => {
@@ -460,34 +486,45 @@ export function filterGroupOptions(
  *  `Record<string, …>` keyed the same way for both. */
 export const UNGROUPED = '__ungrouped__';
 
-/** The group keys whose direct members should be loaded now: the ungrouped bucket (always) plus
- *  every group that is open AND visible — i.e. every one of its ancestors is also open, so its
- *  expanded content is actually on screen (A-3 lazy load).
+/** The groups in these rows that are waiting for their members — i.e. the fetch set (ADR-125).
  *
- *  The ancestor condition is the whole point. A group the operator once expanded stays open in the
- *  collapse prefs forever, so "open" alone is a set that only grows; without the visibility test
- *  the first render of a deep tree would fetch members for every group ever expanded — the fleet
- *  load this lazy path exists to avoid, and invisible from the screen it produces. */
-export function visibleOpenGroupKeys(
-  groups: NodeGroup[],
-  collapsed: Record<string, boolean>,
-): string[] {
-  const childrenOf = new Map<string | null, NodeGroup[]>();
-  for (const g of groups) {
-    const k = g.parent_id ?? null;
-    childrenOf.set(k, [...(childrenOf.get(k) ?? []), g]);
-  }
-  const out: string[] = [UNGROUPED];
-  const walk = (parentId: string | null, ancestorsOpen: boolean) => {
-    for (const g of childrenOf.get(parentId) ?? []) {
-      const open = !collapsed[g.id];
-      if (ancestorsOpen && open) out.push(g.id);
-      walk(g.id, ancestorsOpen && open);
-    }
-  };
-  walk(null, true);
+ *  🚨 **Derived from the `group-loading` rows, never from the `group` rows.** A loading row is
+ *  emitted for exactly the folders that are open, unloaded and non-empty (see `flattenTree`'s
+ *  `isLoaded` and the `directTotal > shown.length` test), so the set that gets FETCHED and the set
+ *  the tree draws a placeholder for cannot disagree — the same guarantee `revealedGroups` already
+ *  carries. Collapsed folders, empty ones and already-loaded ones drop out for free, with no second
+ *  copy of those three rules.
+ *
+ *  ⚠️ **`group-failed` rows are deliberately excluded.** A failed folder is retried only when the
+ *  operator asks (ADR-125 decision 2); including it here would put the automatic retry back, one
+ *  level up, where the queue could not see it either.
+ *
+ *  Hand it the rows the virtualizer is actually showing and the fetch follows the viewport; hand it
+ *  every row and it degrades to "everything open", which is what this replaced. */
+export function pendingGroupKeys(rows: readonly FlatRow[]): string[] {
+  const out: string[] = [];
+  for (const r of rows) if (r.kind === 'group-loading') out.push(r.groupId);
   return out;
 }
+
+// A `stableKeys(prev, next)` helper lived here briefly and is gone. It existed to keep the fetch
+// set's array IDENTITY stable across scroll frames, so an effect keyed on it would not re-run. The
+// caller needed a settle anyway (a momentum scroll must not queue every folder it passes, only the
+// ones it lands on), and debouncing the keys as a joined STRING compares content for free — so the
+// identity helper became a second answer to a question already settled one line above it.
+
+// `visibleOpenGroupKeys(groups, collapsed)` lived here and is gone (ADR-125). It answered "every
+// folder with no collapsed ancestor", which the member cache used as its fetch set — and since
+// collapse state defaults to empty, that was EVERY folder, so a 500-folder deployment fired 501
+// requests on first paint. Its name said "visible" and its doc said "actually on screen"; neither
+// was true, and the gap was invisible from the screen it produced, because a folder row is drawn
+// from the server rollup whether or not its members are loaded.
+//
+// What replaced it is {@link pendingGroupKeys}, which reads the rows the virtualizer is showing —
+// so "on screen" is answered by the thing that decides what is on screen, rather than by a second
+// implementation of it. Deleted rather than kept for a future caller: there was none, and a
+// plausible-looking function that answers a *slightly different* question is exactly how this one
+// came to be used for the wrong thing.
 
 /** A group id plus every descendant group id (its whole subtree). Used to lazily load a selected
  *  group's subtree so the detail pane can roll up its members. Cycle-guarded by the visited set —
@@ -495,7 +532,7 @@ export function visibleOpenGroupKeys(
 export function subtreeGroupIds(groups: NodeGroup[], rootId: string): string[] {
   const childrenOf = new Map<string, NodeGroup[]>();
   for (const g of groups) {
-    if (g.parent_id) childrenOf.set(g.parent_id, [...(childrenOf.get(g.parent_id) ?? []), g]);
+    if (g.parent_id) pushInto(childrenOf, g.parent_id, g);
   }
   const out: string[] = [];
   const seen = new Set<string>();

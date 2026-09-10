@@ -6859,10 +6859,27 @@ export interface components {
             longitude?: number | null;
         };
         /**
-         * @description One group's direct members. Not keyset-paged — a folder is loaded whole when it is expanded —
-         *     so it reports truncation instead of offering a cursor.
+         * @description One group's direct members, or several groups' when `groups=` was used. Not keyset-paged — a
+         *     folder is loaded whole when it is expanded — so it reports truncation instead of offering a
+         *     cursor.
          */
         GroupNodes: {
+            /**
+             * @description Which groups this answer actually covers — present only when `groups=` was understood.
+             *
+             *     🚨 **This field is what makes the batch form safe against an older core** (ADR-125), and
+             *     without it the failure is silent and wrong rather than loud. `GroupNodesQuery` is a plain
+             *     `Deserialize` with no `deny_unknown_fields`, so a core that predates `groups=` **ignores it**
+             *     — and with no `group=` either, it falls through to the ungrouped bucket and returns those
+             *     nodes with a perfectly ordinary 200. A newer WebUI would read that as "here are the members
+             *     of the thirty folders you asked about" and file every ungrouped node under all of them.
+             *
+             *     ⚠️ **Inferring coverage from the rows cannot work**: a folder with no members and a folder
+             *     that was never asked about both come back as no rows. The set has to be stated.
+             *
+             *     `None` for the single-group form, so an older WebUI sees exactly the response it always did.
+             */
+            answered?: string[] | null;
             nodes: components["schemas"]["NodeSummary"][];
             truncated: boolean;
         };
@@ -18949,6 +18966,15 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
+            /** @description Too many inventory reads in flight — retry shortly (`list_busy`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
         };
     };
     create_node: {
@@ -19015,6 +19041,8 @@ export interface operations {
         parameters: {
             query?: {
                 group?: string;
+                /** @description Comma-separated group ids. Bounded by [`BY_GROUP_BATCH_MAX`]. */
+                groups?: string;
             };
             header?: never;
             path?: never;
@@ -19042,6 +19070,15 @@ export interface operations {
             };
             /** @description Role lacks the View permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Too many inventory reads in flight — retry shortly (`list_busy`) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
