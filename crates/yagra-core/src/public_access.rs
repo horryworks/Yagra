@@ -47,6 +47,11 @@ const WIDGET_ROUTES_JSON: &str = include_str!("../../../web/src/dashboard/widget
 ///
 /// ⚠️ `GET /api/v1/config` and `GET /api/v1/version` are **not** listed: they take no permission
 /// guard at all (`security(())`), so they never reach this check.
+///
+/// ⚠️ Every entry here is written in **axum** form. Nothing converts this table — unlike the
+/// generated one, which arrives in OpenAPI form and is converted by [`widget_route_table`] — so
+/// an entry added with `{braces}` would be compared against a `MatchedPath` spelled `:name` and
+/// would never open anything.
 const ALWAYS_OPEN: &[(&str, &str)] = &[("GET", "/api/v1/public-dashboard")];
 
 /// The anonymous surface of this deployment: whether it is open at all, and to exactly what.
@@ -123,8 +128,16 @@ impl PublicAccess {
 
     /// May an anonymous caller reach `method path`?
     ///
-    /// `path` is the **matched route pattern** (`/api/v1/nodes/{node_id}/interfaces`), never the
-    /// concrete request path — axum's `MatchedPath` is where the caller gets it.
+    /// `path` is the **matched route pattern**, never the concrete request path — axum's
+    /// `MatchedPath` is where the caller gets it, and in axum 0.7 that is the spelling the route
+    /// was *registered* with: `/api/v1/nodes/:node_id/interfaces`, not the OpenAPI document’s
+    /// `{node_id}`.
+    ///
+    /// 🚨 The generated table is written the other way round, so [`widget_route_table`] converts
+    /// on the way in ([`crate::api::route_path`]) and this stays a plain equality. Comparing the
+    /// two spellings raw is what kept **every** parameterized route permanently closed to
+    /// anonymous callers — silently, because a route that is not on the list and a route whose
+    /// spelling does not match are the same 401.
     #[must_use]
     pub fn allows(&self, method: &str, path: &str) -> bool {
         if !self.enabled {
@@ -260,7 +273,14 @@ async fn refresh(
 // through here would mean handing that module a `NodeRepo` it otherwise has no reason to hold.
 // A helper with no user is dead code, so it went rather than being kept "for symmetry".
 
-/// The generated table, parsed once.
+/// The generated table, parsed once — and **converted to axum spelling on the way in**.
+///
+/// The JSON arrives in OpenAPI form (`{node_id}`) and cannot arrive any other way:
+/// `widgetRoutes.test.ts` pins every declared route to a key of the OpenAPI document, which is
+/// the only mechanical check that a declared route exists at all. The comparison in
+/// [`PublicAccess::allows`] is against a `MatchedPath`, which is axum form (`:node_id`). So the
+/// conversion happens here rather than there: once, inside the `OnceLock`, instead of on every
+/// guarded request.
 fn widget_route_table() -> &'static HashMap<String, Vec<(String, String)>> {
     static TABLE: OnceLock<HashMap<String, Vec<(String, String)>>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -271,7 +291,7 @@ fn widget_route_table() -> &'static HashMap<String, Vec<(String, String)>> {
                 let parsed = routes
                     .iter()
                     .filter_map(|r| r.split_once(' '))
-                    .map(|(m, p)| (m.to_string(), p.to_string()))
+                    .map(|(m, p)| (m.to_string(), crate::api::route_path::from_openapi(p)))
                     .collect();
                 (ty, parsed)
             })
@@ -313,19 +333,10 @@ fn widget_types(layout: Option<&Value>) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    fn board(types: &[&str]) -> Value {
-        json!({
-            "version": 2,
-            "boards": [{
-                "id": "b1",
-                "name": "Public",
-                "widgets": types.iter().enumerate()
-                    .map(|(i, t)| json!({ "instanceId": format!("w{i}"), "type": t }))
-                    .collect::<Vec<_>>(),
-            }],
-        })
-    }
+    // The board builder lives with the API fixtures: `api::tests_support::public_board_state`
+    // needs the same layout shape, and two copies would drift on the one thing `widget_types`
+    // parses.
+    use crate::api::tests_support::public_board as board;
 
     #[test]
     fn the_generated_table_covers_the_whole_catalog() {
@@ -340,6 +351,98 @@ mod tests {
         );
         assert!(table.contains_key("status-summary"));
         assert!(table.contains_key("audit"));
+    }
+
+    #[test]
+    fn every_declared_route_is_spelled_the_way_the_router_registers_it() {
+        // The generated table arrives in OpenAPI form and is compared against a `MatchedPath`,
+        // which is the spelling `.route(...)` was given. This pins the converted table to the
+        // ledger, which is that spelling written down.
+        //
+        // 🚨 This is the check that did not exist. Every route taking a path parameter was
+        // refused for every anonymous visitor, whatever the board carried, and nothing anywhere
+        // said so: a route absent from the allow-list and a route whose spelling does not match
+        // produce the same 401.
+        let ledger: std::collections::BTreeSet<(String, String)> = crate::api::route_table::ROUTES
+            .iter()
+            .map(|(m, p, _, _)| ((*m).to_owned(), (*p).to_owned()))
+            .collect();
+        let mut checked = std::collections::BTreeSet::new();
+        let mut missing = Vec::new();
+        for (ty, routes) in widget_route_table() {
+            for (m, p) in routes {
+                checked.insert((m.clone(), p.clone()));
+                if !ledger.contains(&(m.clone(), p.clone())) {
+                    missing.push(format!("{ty}: {m} {p}"));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "declared routes the router does not serve: {missing:#?}"
+        );
+
+        // Two floors, and the second is the load-bearing one. The healthy answer above is
+        // "found nothing", so it must be able to tell that apart from "looked at nothing" — and
+        // the population this check exists for is the parameterized routes alone. A total-count
+        // floor stays green while that population goes to zero, which is precisely the state
+        // that would make the conversion pointless and unnoticed.
+        assert!(
+            checked.len() >= 30,
+            "only {} distinct routes checked",
+            checked.len()
+        );
+        let parameterized = checked.iter().filter(|(_, p)| p.contains(':')).count();
+        assert!(
+            parameterized >= 3,
+            "only {parameterized} parameterized routes checked — this test has no population left"
+        );
+    }
+
+    #[test]
+    fn no_derived_route_keeps_the_openapi_spelling() {
+        // The narrow question the test above cannot ask: did the conversion run at all? A table
+        // left unconverted still satisfies a ledger comparison if the ledger were ever rewritten
+        // in OpenAPI form, and satisfies any floor counting routes.
+        //
+        // ⚠️ Its direction is a fact about axum 0.7. On a move to axum 0.8 this assertion is a
+        // decision to re-make by hand, not a line to flip — which is the job it is here to do.
+        for (ty, routes) in widget_route_table() {
+            for (m, p) in routes {
+                assert!(
+                    !p.contains('{') && !p.contains('}'),
+                    "{ty} declares {m} {p} in OpenAPI form — the conversion did not run"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_parameterized_widget_opens_the_axum_spelling_and_not_the_openapi_one() {
+        let a = PublicAccess::derive(true, Some(&board(&["interface-traffic"])));
+        assert!(a.allows("GET", "/api/v1/nodes/:node_id/interfaces"));
+        assert!(a.allows("GET", "/api/v1/nodes/:node_id/interfaces/:ifindex/series"));
+        // 🚨 The negative half refuses an implementation that inserts both spellings to be safe.
+        // That would pass the positive assertions and quietly double the surface, and every
+        // extra entry here is an API opened to strangers.
+        assert!(!a.allows("GET", "/api/v1/nodes/{node_id}/interfaces"));
+
+        let m = PublicAccess::derive(true, Some(&board(&["metric-chart"])));
+        assert!(m.allows("GET", "/api/v1/nodes/:node_id/metrics"));
+        assert!(m.allows("GET", "/api/v1/nodes/:node_id/metrics/:metric/range"));
+    }
+
+    #[test]
+    fn the_heatmap_opens_only_the_route_it_reads() {
+        // ADR-123 増分 2 決定 3. `InterfaceHeatmapWidget` calls `getInterfaceHeatmap` and nothing
+        // else — the row labels come back inside that response. The per-node roster it used to
+        // declare opened an API to strangers for a request the widget never makes, and the
+        // spelling defect is what hid that: an over-declaration costs nothing while the
+        // allow-list cannot match a parameterized route at all.
+        let a = PublicAccess::derive(true, Some(&board(&["interface-heatmap"])));
+        assert!(a.allows("GET", "/api/v1/metrics/interface-heatmap"));
+        assert!(!a.allows("GET", "/api/v1/nodes/:node_id/interfaces"));
+        assert_eq!(a.route_count(), 1);
     }
 
     #[test]

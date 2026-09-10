@@ -355,6 +355,7 @@
       "pickCount": "Interfaces ({{n}}/{{max}})",
       "pickSome": "Pick one or more interfaces to plot — press Customize, then the ⚙ on this card.",
       "noneYet": "Nothing plotted yet. Choose a node, then one of its interfaces.",
+      "seriesFailed": "Couldn’t read traffic for any of these interfaces",
       "removeAria": "Stop plotting this interface",
       "full": "{{max}} is the maximum — the chart has {{max}} colours, and a seventh line would reuse one.",
       "pickNodePlaceholder": "Node…",

@@ -379,10 +379,12 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
-    reads: [
-      'GET /api/v1/metrics/interface-heatmap',
-      'GET /api/v1/nodes/{node_id}/interfaces',
-    ],
+    // 🚨 It reads ONE route. The row labels come back inside the heatmap response
+    // (`data.links`), so the per-node interface roster this used to declare was never fetched —
+    // and on a public board a declaration is not documentation, it is an API opened to strangers
+    // (ADR-123 増分 2 決定 3). The over-declaration was invisible only because the allow-list
+    // never matched a parameterized route at all.
+    reads: ['GET /api/v1/metrics/interface-heatmap'],
     Component: InterfaceHeatmapWidget,
   },
   {

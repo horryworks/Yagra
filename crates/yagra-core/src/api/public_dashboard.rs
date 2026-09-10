@@ -258,7 +258,7 @@ async fn apply(
 #[cfg(test)]
 mod tests {
     use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
+    use crate::api::tests_support::{private_state, public_board_state, public_state};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
@@ -303,6 +303,65 @@ mod tests {
             get(private_state(), "/api/v1/public-dashboard").await,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    /// A node id that exists nowhere. `VisibleNode` only asks whether the caller’s scope admits
+    /// the id, and an anonymous caller on an allowed route is unscoped, so any well-formed uuid
+    /// reaches the handler — which is what these two are about.
+    const SOME_NODE: &str = "11111111-2222-3333-4444-555555555555";
+
+    #[tokio::test]
+    async fn a_board_with_a_parameterized_widget_opens_the_route_that_widget_reads() {
+        // 🚨 The test this feature shipped without, and the defect it would have caught on day
+        // one: the allow-list was built from the OpenAPI spelling (`{node_id}`) and compared
+        // against `MatchedPath`, which is the router’s (`:node_id`). Every parameterized route
+        // was refused for every anonymous visitor, whatever the board carried — and the WebUI
+        // drops the reason, so the widget rendered "no traffic yet" rather than an error.
+        //
+        // ⚠️ It has to go through the real router. `MatchedPath` has no public constructor, so a
+        // unit test asserting "the guard accepts `/api/v1/nodes/:node_id/interfaces`" would be
+        // asserting our own belief about what axum hands over — the belief that was wrong.
+        //
+        // 200, not 503: this handler answers an empty list in skeleton mode instead of taking
+        // `Admin`. What is being measured is only that it got past the guard.
+        assert_eq!(
+            get(
+                public_board_state(&["interface-traffic"]),
+                &format!("/api/v1/nodes/{SOME_NODE}/interfaces")
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn a_board_without_that_widget_still_refuses_the_same_parameterized_route() {
+        // 🚨 The other half, and neither half means anything alone. With only the accepting test,
+        // an implementation that opened every route would pass; with only this one, the shipped
+        // defect — which refused everything parameterized — passes. Same shape as
+        // `api/guards.rs::every_write_domain_has_an_accepted_write_test`.
+        assert_eq!(
+            get(
+                public_board_state(&["status-summary"]),
+                &format!("/api/v1/nodes/{SOME_NODE}/interfaces")
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn taking_the_widget_off_the_board_closes_the_route_again() {
+        // The property the whole design rests on — the board *is* the access-control list — is
+        // only visible across two boards. Asserted here on a parameterized route because that is
+        // the family that had never been exercised at all.
+        let open = public_board_state(&["metric-chart"]);
+        let closed = public_board_state(&["status-summary"]);
+        let path = format!("/api/v1/nodes/{SOME_NODE}/metrics");
+        // 503 rather than 200: unlike the interfaces list, this handler takes `Admin`. Past the
+        // guard is the claim; what the handler then does about a missing write side is not.
+        assert_eq!(get(open, &path).await, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(get(closed, &path).await, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

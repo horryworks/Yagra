@@ -21,6 +21,7 @@ import {
   TRAFFIC_RANGES,
   availableInterfaces,
   buildTrafficSeries,
+  everyLinkFailed,
   interfaceLabel,
   interfaceTrafficPlan,
   linkId,
@@ -386,7 +387,9 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
   // Hooks run unconditionally, so the fetch is armed for every plan and asks for nothing when there
   // is nothing to ask for.
   const armed = plan.kind === 'chart' && plan.links.length > 0 ? plan.links : null;
-  const { data, loading, error } = usePolled(
+  // `error` is deliberately not destructured: the fetcher below is a `Promise.allSettled`, so it
+  // never rejects and this hook can never populate it. See the note at the render branch.
+  const { data, loading } = usePolled(
     () => {
       if (!armed) return Promise.resolve(null);
       // One window for every link, resolved once per poll: the series are only comparable if they
@@ -419,7 +422,11 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
   );
 
   if (plan.links.length === 0) return <>{gone}</>;
-  if (error) return <p className="muted">{error}</p>;
+  // ⚠️ No `error` branch, deliberately: the fetcher above is a `Promise.allSettled`, which never
+  // rejects, so `usePolled` can only ever hand back `error: null` here. One used to sit on this
+  // line and read as handled failure — which is how a `401` on every request looked like quiet
+  // ports for the whole of ADR-123 増分 1. What a failure is reported as now comes from
+  // `everyLinkFailed`, below.
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
 
   const { timestamps, series } = buildTrafficSeries(
@@ -432,7 +439,11 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
     return (
       <>
         {gone}
-        <p className="muted">{t('widgets.interfaceTraffic.empty')}</p>
+        <p className="muted">
+          {everyLinkFailed(data?.entries ?? [])
+            ? t('widgets.ifTraffic.seriesFailed')
+            : t('widgets.interfaceTraffic.empty')}
+        </p>
       </>
     );
 

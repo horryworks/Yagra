@@ -984,21 +984,6 @@ mod tests {
     ];
     const INVENTORY_NOISE_KEYS: &[&str] = &["pool", "profile"];
 
-    /// The ledger path (`:id`) for an OpenAPI path (`{id}`) — the same normalization
-    /// `route_table::documented` uses.
-    fn ledger_path(openapi_path: &str) -> String {
-        openapi_path
-            .split('/')
-            .map(
-                |seg| match seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-                    Some(name) => format!(":{name}"),
-                    None => seg.to_owned(),
-                },
-            )
-            .collect::<Vec<_>>()
-            .join("/")
-    }
-
     /// The OpenAPI document as JSON, so schemas can be walked with `serde_json` rather than by
     /// pattern-matching utoipa's `RefOr<Schema>` tree.
     fn document() -> serde_json::Value {
@@ -1012,7 +997,9 @@ mod tests {
         f: &FoldedRead,
     ) -> Option<&'a serde_json::Value> {
         let paths = doc.get("paths")?.as_object()?;
-        let (_, item) = paths.iter().find(|(p, _)| ledger_path(p) == f.path)?;
+        let (_, item) = paths
+            .iter()
+            .find(|(p, _)| crate::api::route_path::from_openapi(p) == f.path)?;
         item.get(f.method.to_lowercase())
     }
 

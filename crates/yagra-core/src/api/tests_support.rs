@@ -76,6 +76,44 @@ pub(crate) fn private_state() -> ApiState {
     base(Arc::new(InMemorySink::default()), false)
 }
 
+/// A saved public board carrying exactly `types`, in the v2 layout shape the WebUI writes.
+///
+/// Only `type` is read out of a layout by [`crate::public_access::derive`], so the widgets carry
+/// nothing else. Shared with `public_access.rs`’s own tests rather than written twice — the two
+/// would drift on the layout shape, which is the one thing the derivation actually parses.
+pub(crate) fn public_board(types: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "version": 2,
+        "boards": [{
+            "id": "b1",
+            "name": "Public",
+            "widgets": types.iter().enumerate()
+                .map(|(i, t)| serde_json::json!({ "instanceId": format!("w{i}"), "type": t }))
+                .collect::<Vec<_>>(),
+        }],
+    })
+}
+
+/// Skeleton state whose anonymous surface is **derived from a board** carrying `types`.
+///
+/// 🚨 The other half of [`public_state`], and the half that was missing. `public_state` builds
+/// the *unrestricted* surface, so every router-level "an anonymous caller reaches this" test in
+/// this crate has been measuring `skeleton_open`, never [`crate::public_access::derive`] — and
+/// the derivation is where ADR-123 actually lives. A parameterized route was closed to every
+/// anonymous visitor for the whole of increment 1 with all of those tests green, because none of
+/// them went through the code that builds the allow-list.
+///
+/// Drive the real router with this: what a `MatchedPath` is spelled like is a fact about axum,
+/// and a test that asserts it directly is a second copy of that belief rather than a check on it.
+pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
+    let st = base(Arc::new(InMemorySink::default()), true);
+    crate::public_access::store(
+        &st.public_access,
+        crate::public_access::PublicAccess::derive(true, Some(&public_board(types))),
+    );
+    st
+}
+
 // ── Live mode: the write side, over a real PostgreSQL (ADR-115) ─────────────────────────────────
 
 /// Live-mode state over the database the test harness handed us — the half [`base`] leaves out.

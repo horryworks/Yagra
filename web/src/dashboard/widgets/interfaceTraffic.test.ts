@@ -21,6 +21,7 @@ import {
   TRAFFIC_RANGES,
   availableInterfaces,
   buildTrafficSeries,
+  everyLinkFailed,
   interfaceLabel,
   interfaceTrafficPlan,
   linkId,
@@ -412,5 +413,37 @@ describe('buildTrafficSeries', () => {
       LABELS,
     );
     expect(out.series[0].values).toEqual([null, null, null]);
+  });
+});
+
+describe('everyLinkFailed', () => {
+  const link = (nodeId: string, ifindex: number, label: string) => ({ nodeId, ifindex, label });
+
+  it('says nothing answered when no link answered at all', () => {
+    // The anonymous case ADR-123 増分 2 was about: every request refused, every entry null.
+    expect(
+      everyLinkFailed([
+        { link: link('n1', 1, 'sw1 Gi0/1'), series: null },
+        { link: link('n2', 3, 'sw2 Gi0/3'), series: null },
+      ] as never),
+    ).toBe(true);
+  });
+
+  it('does not say that when a link answered with an empty window', () => {
+    // 🚨 The discriminating half. `buildTrafficSeries` folds "nobody answered" and "everyone
+    // answered nothing" into the same empty result, so without this a function that always
+    // returned true would pass the test above and relabel every idle chart as a failure.
+    expect(
+      everyLinkFailed([
+        { link: link('n1', 1, 'sw1 Gi0/1'), series: null },
+        { link: link('n2', 3, 'sw2 Gi0/3'), series: { timestamps: [], in_bps: [], out_bps: [] } },
+      ] as never),
+    ).toBe(false);
+  });
+
+  it('treats an empty selection as not a failure', () => {
+    // Nothing was asked, so nothing failed — the "pick some interfaces" branch owns this state
+    // and must not be overwritten by an error message.
+    expect(everyLinkFailed([])).toBe(false);
   });
 });

@@ -77,6 +77,9 @@ pub(crate) mod rca;
 pub(crate) mod relocation;
 pub(crate) mod reports;
 pub(crate) mod retention;
+/// The two spellings a parameterized route has (OpenAPI `{id}` vs axum `:id`), and the
+/// conversion between them. Production, unlike its neighbour below: ADR-123 needs it at runtime.
+pub(crate) mod route_path;
 #[cfg(test)]
 pub(crate) mod route_table;
 pub(crate) mod scope;

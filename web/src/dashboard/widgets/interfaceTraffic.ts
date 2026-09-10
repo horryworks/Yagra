@@ -241,6 +241,28 @@ export interface LinkSeries {
   series: InterfaceSeries | null;
 }
 
+/**
+ * Did every link fail to answer — as opposed to answering with nothing to show?
+ *
+ * `buildTrafficSeries` folds those two into the same `{ timestamps: [], series: [] }`, and that is
+ * right for *drawing*: neither one has a line. It is wrong for the *sentence*. "No traffic yet"
+ * describes idle ports; a refused or failed request describes nothing about the ports at all.
+ *
+ * 🚨 The cost of conflating them was measured: ADR-123 shipped an allow-list that refused every
+ * parameterized route, so this widget was answered `401` for every anonymous visitor on a public
+ * board — and reported it as quiet interfaces. The caller uses `Promise.allSettled`, so
+ * `usePolled`'s error path is structurally unreachable here and the 401 reached no one.
+ *
+ * ⚠️ It says "nothing answered", never "you are not allowed": `allSettled` discards the reasons,
+ * so a status code is not available at this point and naming one would be a guess. Widening this
+ * to report *why* means carrying the rejection into `LinkSeries`, which is a different change.
+ *
+ * An empty selection is not a failure — there was nothing to ask.
+ */
+export function everyLinkFailed(entries: readonly LinkSeries[]): boolean {
+  return entries.length > 0 && entries.every((e) => e.series == null);
+}
+
 /** Labels for the two directions of one link, supplied by the caller so they are translated. */
 export interface DirectionLabels {
   in: string;

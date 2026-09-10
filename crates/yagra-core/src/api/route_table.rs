@@ -1961,17 +1961,7 @@ mod tests {
         let doc = crate::api::openapi::document();
         let mut out = std::collections::BTreeSet::new();
         for (path, item) in &doc.paths.paths {
-            // OpenAPI writes params as `{name}`; the ledger and axum write them as `:name`.
-            let ledger_path = path
-                .split('/')
-                .map(
-                    |seg| match seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-                        Some(name) => format!(":{name}"),
-                        None => seg.to_owned(),
-                    },
-                )
-                .collect::<Vec<_>>()
-                .join("/");
+            let ledger_path = crate::api::route_path::from_openapi(path);
             for (method, op) in [
                 ("GET", &item.get),
                 ("PUT", &item.put),

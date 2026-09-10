@@ -46,11 +46,22 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
 /// 2. **The switch is on and this route is on the public board's allow-list.** Not "this is a read"
 ///    — the previous implementation opened all 76 `RequireView` endpoints, which is how the node
 ///    list and the event log were public on a deployment that only meant to show one board.
-/// 3. **The route pattern is known.** `MatchedPath` is the pattern axum resolved
-///    (`/api/v1/nodes/{node_id}/interfaces`), never the concrete path. Its absence — a request that
-///    matched no route, or a nested router that did not record one — is refused rather than
-///    guessed at: the allow-list is keyed by pattern, and comparing a concrete path against it
-///    would silently never match anyway.
+/// 3. **The route pattern is known.** `MatchedPath` is the pattern axum resolved, never the
+///    concrete path — and in axum 0.7 it is the pattern as *registered*
+///    (`/api/v1/nodes/:node_id/interfaces`), not the OpenAPI document’s `{node_id}`. Its absence
+///    — a request that matched no route, or a nested router that did not record one — is refused
+///    rather than guessed at: the allow-list is keyed by pattern, and comparing a concrete path
+///    against it would silently never match anyway.
+///
+///    🚨 That last sentence describes the failure this check had for its whole first increment,
+///    one level up: the allow-list was built from the OpenAPI spelling and compared against this
+///    one, so every parameterized route was refused however the board was composed. The
+///    conversion now happens where the table is read (`public_access::widget_route_table`).
+///    ⚠️ It cannot be checked from *this* module: `MatchedPath`’s constructor is private to
+///    axum, so parts built by hand never carry one and every test here is structurally blind
+///    to condition 3. The pair that covers it drives the real router and lives with the
+///    feature — `api::public_dashboard`’s `…opens_the_parameterized_route…` and its refusing
+///    twin.
 pub(crate) fn public_route_allowed(parts: &Parts, st: &ApiState) -> bool {
     if bearer(&parts.headers).is_some() {
         return false;

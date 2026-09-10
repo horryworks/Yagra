@@ -76,8 +76,7 @@
     "GET /api/v1/fleet/summary"
   ],
   "interface-heatmap": [
-    "GET /api/v1/metrics/interface-heatmap",
-    "GET /api/v1/nodes/{node_id}/interfaces"
+    "GET /api/v1/metrics/interface-heatmap"
   ],
   "interface-traffic": [
     "GET /api/v1/nodes/{node_id}/interfaces",

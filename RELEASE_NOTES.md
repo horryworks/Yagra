@@ -10,6 +10,22 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A public dashboard carrying an interface or metric widget served nothing to anonymous
+  visitors.** The routes an anonymous caller may reach are derived from the widgets on the public
+  board, and three of those widgets read a route that takes a path parameter. The derived list
+  spelled the parameter the way the API contract does (`{node_id}`) while the router matches it
+  the way it is registered (`:node_id`), and nothing converted between the two — so **Interface
+  traffic** and **Metric chart** were refused with `401` for every visitor, however the board was
+  composed. Signed-in users were never affected. Separately, the **Interface utilization heatmap**
+  declared an interface-list route it never calls; that declaration is gone, so putting it on a
+  public board opens one route rather than two, and a board carrying it will report a lower route
+  count in the confirmation dialog than before.
+- **The Interface traffic widget reported a failed read as idle interfaces.** Every request
+  failing and every interface answering with an empty window produced the same "No interface
+  traffic yet…". It now says it could not read them.
+
 ## v0.3.13 — A whole deployment moves to another server from the WebUI, and the public dashboard is one board you compose
 
 ### Breaking changes
