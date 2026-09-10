@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.14 — Opening Nodes is fast on a deployment with many folders, the inventory tree stays where you put it, and a public board's interface and metric widgets answer anonymous visitors
+
 ### Improvements
 
 - **`GET /api/v1/nodes/by-group` can ask about several folders at once.** Pass

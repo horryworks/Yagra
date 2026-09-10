@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.13 — A whole deployment moves to another server from the WebUI, and the public dashboard is one board you compose**
+> Status: **v0.3.14 — Opening Nodes is fast on a deployment with many folders, the inventory tree stays where you put it, and a public board's interface and metric widgets answer anonymous visitors**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
