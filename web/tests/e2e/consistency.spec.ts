@@ -146,9 +146,23 @@ test('searching the inventory narrows it to matching nodes', async ({ page, api 
 
   // Everything still listed matches. Asserting a *count* would be asserting the fleet's contents;
   // asserting that nothing unrelated survived is true at any size.
-  const names = await rows.allInnerTexts();
-  const stray = names.filter((n) => !n.toLowerCase().includes(target.name.toLowerCase()));
-  expect(stray, 'the search left rows that do not match the term').toEqual([]);
+  //
+  // 🚨 **This has to poll, and the `toBeVisible` above is not the wait it looks like.** The tree
+  // narrows on the DEBOUNCED term — since ADR-125 the same 200ms value the search request itself
+  // waits for, so both halves of the screen move together instead of the rows narrowing a beat
+  // ahead of the results. The target row is visible the whole time either way, because it is in
+  // the UNnarrowed tree too, so waiting for it settles nothing. Reading `allInnerTexts()` once
+  // sampled whatever frame the keystroke landed on: measured against a live deployment, 19 rows
+  // at t=37ms and t=157ms, 1 row at t=281ms. A single read is a coin toss on a 200ms window.
+  await expect
+    .poll(
+      async () => {
+        const names = await rows.allInnerTexts();
+        return names.filter((n) => !n.toLowerCase().includes(target.name.toLowerCase()));
+      },
+      { message: 'the search left rows that do not match the term' },
+    )
+    .toEqual([]);
 
   await search.fill('');
   await expect(rows.first()).toBeVisible();
