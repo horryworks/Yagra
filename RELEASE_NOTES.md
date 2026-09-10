@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.13 — A whole deployment moves to another server from the WebUI, and the public dashboard is one board you compose
+
 ### Breaking changes
 
 - **`YAGRA_PUBLIC_DASHBOARD` is gone** (ADR-123). Anonymous viewing is now a setting an admin turns
@@ -98,6 +100,42 @@
   switched off and on again. Until the sites are back, their pool reports that it has no live
   poller and its nodes are not polled.
 
+### Improvements
+
+- **Moving a node into a folder that does not exist answers 400 `invalid_group`** instead of 500
+  (ADR-124). It affects `PUT /api/v1/nodes/{id}/group` as well as the new bulk route — both go
+  through one check now, the one the discovery import already used.
+
+- **Every node move on the Nodes screen is now one request** (ADR-124). Dragging a node, filing
+  a newly added one, and both move dialogs all send `POST /api/v1/nodes/move`, so there is one
+  answer to what moving a node does. `PUT /api/v1/nodes/{id}/group` still exists and still
+  works — the WebUI no longer calls it. **One consequence worth knowing**: the bulk route
+  honours a token’s group scope and the single-node one does not, so a group-scoped operator
+  dragging a node they cannot see now has that refused rather than silently applied.
+
+- **A pool that has lost its poller can be covered from another one, and put back** (ADR-107).
+  Settings ▸ Pollers offers it on a pool whose nodes have nothing to poll them — most obviously
+  after moving a deployment to a new server, where the sites do not follow until their bundles are
+  reissued. Every node and folder is recorded before it moves, so "Put them back" returns each one
+  to exactly the assignment it had, including the ones that were inheriting rather than assigned.
+  ⚠️ **It is never the default and nothing does it automatically.** A site has its own poller
+  because this deployment usually cannot reach its network; standing in from here makes every
+  unreachable device report as down, which replaces one accurate "this pool is unmonitored" alert
+  with a false outage per node. The dialog says so and makes you choose the destination.
+- **`YAGRA_PULL_POLICY` chooses whether Compose re-pulls the images on every start.** The default
+  is unchanged (`always`), so nothing about an existing deployment moves. It exists because images
+  can now arrive without a registry behind them: a relocation that carries the three images loads
+  them onto the new host, and that host is then pinned to `missing` so it can start itself again
+  without reaching for a registry that only ever answered on the machine it came from.
+- **`yagra-core verify-secrets`** — a new subcommand that prints, as one line of JSON, how many
+  sealed secrets this deployment holds and how many the mounted KEK can open. It reads the database
+  and the key directly, so it answers on a host where nothing is logged in yet. `decryptable` below
+  `total` means the key and the database do not match, which is the one restore failure that
+  otherwise looks healthy until the next poll.
+- **The pre-upgrade backup can be told to leave the metrics out** (`YAGRA_BACKUP_SKIP_METRICS=1`),
+  and records that as an omission in its manifest exactly as an unreachable store would be. Set by
+  a relocation whose operator unticked the metrics; the upgrade path never sets it.
+
 ### Bug Fixes
 
 - **Dragging a selection moves the selection.** Ctrl- or Shift-picking several nodes and then
@@ -156,42 +194,6 @@
   the new `yagra-core verify-secrets` for the credential check, neither of which needs a port, an
   account or a token. The credential check also got **wider**: it opens every sealed row in all
   nine tables that hold one, where it used to see `credentials` alone.
-
-### Improvements
-
-- **Moving a node into a folder that does not exist answers 400 `invalid_group`** instead of 500
-  (ADR-124). It affects `PUT /api/v1/nodes/{id}/group` as well as the new bulk route — both go
-  through one check now, the one the discovery import already used.
-
-- **Every node move on the Nodes screen is now one request** (ADR-124). Dragging a node, filing
-  a newly added one, and both move dialogs all send `POST /api/v1/nodes/move`, so there is one
-  answer to what moving a node does. `PUT /api/v1/nodes/{id}/group` still exists and still
-  works — the WebUI no longer calls it. **One consequence worth knowing**: the bulk route
-  honours a token’s group scope and the single-node one does not, so a group-scoped operator
-  dragging a node they cannot see now has that refused rather than silently applied.
-
-- **A pool that has lost its poller can be covered from another one, and put back** (ADR-107).
-  Settings ▸ Pollers offers it on a pool whose nodes have nothing to poll them — most obviously
-  after moving a deployment to a new server, where the sites do not follow until their bundles are
-  reissued. Every node and folder is recorded before it moves, so "Put them back" returns each one
-  to exactly the assignment it had, including the ones that were inheriting rather than assigned.
-  ⚠️ **It is never the default and nothing does it automatically.** A site has its own poller
-  because this deployment usually cannot reach its network; standing in from here makes every
-  unreachable device report as down, which replaces one accurate "this pool is unmonitored" alert
-  with a false outage per node. The dialog says so and makes you choose the destination.
-- **`YAGRA_PULL_POLICY` chooses whether Compose re-pulls the images on every start.** The default
-  is unchanged (`always`), so nothing about an existing deployment moves. It exists because images
-  can now arrive without a registry behind them: a relocation that carries the three images loads
-  them onto the new host, and that host is then pinned to `missing` so it can start itself again
-  without reaching for a registry that only ever answered on the machine it came from.
-- **`yagra-core verify-secrets`** — a new subcommand that prints, as one line of JSON, how many
-  sealed secrets this deployment holds and how many the mounted KEK can open. It reads the database
-  and the key directly, so it answers on a host where nothing is logged in yet. `decryptable` below
-  `total` means the key and the database do not match, which is the one restore failure that
-  otherwise looks healthy until the next poll.
-- **The pre-upgrade backup can be told to leave the metrics out** (`YAGRA_BACKUP_SKIP_METRICS=1`),
-  and records that as an omission in its manifest exactly as an unreachable store would be. Set by
-  a relocation whose operator unticked the metrics; the upgrade path never sets it.
 
 ## v0.3.12 — A broken database URL says so at once instead of blaming PostgreSQL for a minute
 
