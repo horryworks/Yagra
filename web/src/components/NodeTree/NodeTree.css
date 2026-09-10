@@ -25,6 +25,11 @@
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  /* Scroll anchoring off (ADR-124 増分 5). The rows are absolutely positioned inside a spacer whose
+     height is `count × 30px`, so nothing here is an anchor candidate and nothing above the viewport
+     ever changes size — anchoring has nothing to buy and can only move a pane the operator placed.
+     The tree's rule is that its scroll position changes when a human scrolls it, and not otherwise. */
+  overflow-anchor: none;
 }
 
 .ntree-row {
@@ -39,6 +44,19 @@
 .ntree-row {
   cursor: pointer;
   position: relative;
+  /* No text selection across rows (ADR-124 増分 5 決定 C) — and 🚨 **read the measurement before
+     assuming this fixes anything.** The increment was opened believing a Shift click extended the
+     document selection across rows and that the browser then scrolled to keep its end in view.
+     Measured in Chromium: it does not, because the row carries `draggable`, and the UA stylesheet
+     gives a draggable element `user-select: none` already — flipping `draggable` off in the live
+     page turns the computed value from `none` to `auto`. So for every operator who can move nodes
+     (`manage_config`, the only ones with a draggable row) this line changes nothing, and deleting
+     it fails no test.
+     ⇒ What it is actually for: a row that is **not** draggable — a caller without `manage_config`,
+     who can still build a working set — and not depending on a UA quirk for a visual property.
+     ⚠️ The cost is real: the node names in this pane cannot be selected and copied. They are still
+     in a `title`, and the id has its own copy affordance in the tables. */
+  user-select: none;
 }
 
 .ntree-row:hover {

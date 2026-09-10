@@ -841,33 +841,6 @@ export function NodesPage() {
               />
             )}
           </div>
-          {/* The working set's own row (ADR-124 決定 3). It appears only once something is
-              checked, so it costs nothing until it is needed — and it carries the gesture in
-              **visible text**, because Ctrl / Shift is written nowhere else on the screen and a
-              `title=` is unreadable on touch (ADR-055 R4).
-
-              ⚠️ A sibling of `.nodes-pane-filters`, exactly like that row is a sibling of
-              `.nodes-pane-head` — the head is a 38px single-line flex and has already squeezed
-              one control to nothing. */}
-          {canConfig && checked.size > 0 && (
-            <div className="nodes-selbar">
-              <span className="nodes-selbar-count">
-                {t('select.count', { count: checked.size })}
-              </span>
-              <Button variant="outline" onClick={() => setMoving([...checked.values()])}>
-                {t('select.move')}
-              </Button>
-              {canMoveByPrefix(groups, canConfig) && (
-                <Button variant="outline" onClick={() => setMovingByPrefix([...checked.values()])}>
-                  {t('select.moveByPrefix')}
-                </Button>
-              )}
-              <Button variant="outline" onClick={clearChecked}>
-                {t('select.clear')}
-              </Button>
-              <span className="nodes-selbar-hint">{t('select.hint')}</span>
-            </div>
-          )}
           <NodeTree
             groups={groups}
             nodes={liveTreeNodes}
@@ -921,6 +894,39 @@ export function NodesPage() {
                 : undefined
             }
           />
+          {/* The working set's own row (ADR-124 決定 3, moved below the tree by 増分 5). It appears
+              only once something is checked, so it costs nothing until it is needed — and it
+              carries the gesture in **visible text**, because Ctrl / Shift is written nowhere else
+              on the screen and a `title=` is unreadable on touch (ADR-055 R4).
+
+              ⚠️ **Still never inside `.nodes-pane-head`** — that is a 38px single-line flex and has
+              already squeezed one control to nothing. But **after** the tree, not before it:
+              `.ntree-body` is `flex: 1`, so a `flex: none` sibling appearing above it dropped the
+              scroller's top edge ~60px and every visible row translated down two rows on the first
+              Ctrl click. Below it, neither the scroller's top edge nor its `scrollTop` moves, so no
+              row moves at all — the bottom two rows are covered instead (増分 5 決定 A).
+              🚨 **Do not "fix" that by writing `scrollTop`** the way
+              `NodeDetail/InterfacesTab.tsx`'s `keepSelectedInView` does. Scrolling the tree for the
+              operator is precisely what 増分 5 exists to stop. */}
+          {canConfig && checked.size > 0 && (
+            <div className="nodes-selbar">
+              <span className="nodes-selbar-count">
+                {t('select.count', { count: checked.size })}
+              </span>
+              <Button variant="outline" onClick={() => setMoving([...checked.values()])}>
+                {t('select.move')}
+              </Button>
+              {canMoveByPrefix(groups, canConfig) && (
+                <Button variant="outline" onClick={() => setMovingByPrefix([...checked.values()])}>
+                  {t('select.moveByPrefix')}
+                </Button>
+              )}
+              <Button variant="outline" onClick={clearChecked}>
+                {t('select.clear')}
+              </Button>
+              <span className="nodes-selbar-hint">{t('select.hint')}</span>
+            </div>
+          )}
           </div>
         )}
 

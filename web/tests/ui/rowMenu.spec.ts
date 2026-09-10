@@ -139,3 +139,79 @@ test('Escape closes the menu and returns focus to the trigger', async ({ page })
   // on the body strands a keyboard user wherever the document happens to start.
   await expect(trigger).toBeFocused();
 });
+
+
+test('Escape does not scroll the tree while returning focus to the trigger', async ({ page }) => {
+  // The tree's scroll position changes when a human scrolls it and not otherwise (ADR-124 増分 5),
+  // and closing a popover over a clipped trigger is the gesture most likely to break that: the
+  // trigger lives inside a virtualized scroller and `focusPopoverTrigger` focuses it on the way
+  // out.
+  //
+  // ⚠️ **This pins the property, NOT the one-line fix in `AnchoredPopover` (増分 5 決定 D), and it
+  // cannot** — reverting that line leaves this test green, which was measured. The reason is
+  // `ui-conventions.md`'s own rule: a panel of *choices* leaves focus on the trigger, so while the
+  // menu is open the trigger is already `document.activeElement` (probed) and re-focusing it moves
+  // nothing. The missing `preventScroll` bites where the panel takes focus **inward** — the column
+  // filter, the condition editor and the two pickers all focus a text entry — and none of those is
+  // this surface. So the line is a convention fix with no demonstrable defect here, and this test
+  // is the forward-looking guard: it goes red the day this menu starts focusing its own contents.
+  //
+  // The test above already proves focus comes back; it does it on the FIRST row at scroll 0, which
+  // is never clipped, so it can say nothing about the scroll.
+  //
+  // 🚨 **Every gesture here is `page.mouse`, and that is not a stylistic choice.** Playwright's
+  // `hover()` and `click()` run `scrollIntoViewIfNeeded` on their target first, so a clipped
+  // trigger is fully visible by the time it has been clicked — and the test then passes with the
+  // fix reverted, which was measured. Arranging the clipping *after* opening does not work either:
+  // the scroll re-renders the virtual window and the open row's trigger is no longer findable.
+  // Raw mouse events at a point scroll nothing, so the trigger is still cut when Escape arrives.
+  await page.goto('/nodes');
+  const scroller = page.locator('.ntree-body');
+  await expect(page.locator('.ntree-grow').first()).toBeVisible();
+  const room = await scroller.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(room, 'the tree does not scroll — nothing here could move').toBeGreaterThan(300);
+
+  // 137 is deliberately not a multiple of `--row-h` (30px), so the top row is cut by 17px — and a
+  // row's ＋ is vertically centred, which puts its top edge above the pane's.
+  await scroller.evaluate((el) => {
+    el.scrollTop = 137;
+  });
+  await page.waitForTimeout(60);
+
+  // Reveal the top row's actions by hovering it for real, then take the ＋'s live rect.
+  const rowPoint = await scroller.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const top = [...el.querySelectorAll<HTMLElement>('.ntree-grow')].find((r) => {
+      const b = r.getBoundingClientRect();
+      return b.top < box.top && b.bottom > box.top;
+    });
+    if (!top) return null;
+    const b = top.getBoundingClientRect();
+    return { x: b.left + 40, y: (box.top + b.bottom) / 2 };
+  });
+  expect(rowPoint, 'no group row is clipped at the top edge').not.toBeNull();
+  await page.mouse.move(rowPoint!.x, rowPoint!.y);
+
+  const trigger = await scroller.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const t = el.querySelector<HTMLElement>('.ntree-row:hover [aria-haspopup="menu"]');
+    if (!t) return null;
+    const b = t.getBoundingClientRect();
+    // Inside the ＋ AND inside the pane, so the click lands on something the operator can see.
+    return { x: b.left + b.width / 2, y: (Math.max(b.top, box.top) + b.bottom) / 2, cut: b.top < box.top };
+  });
+  expect(trigger, 'the hovered row revealed no ＋ trigger').not.toBeNull();
+  expect(trigger!.cut, 'the trigger is not clipped, so a focus would not need to scroll').toBe(true);
+
+  await page.mouse.click(trigger!.x, trigger!.y);
+  await expect(page.getByRole('menu')).toBeVisible();
+  const parked = await scroller.evaluate((el) => el.scrollTop);
+  expect(parked, 'opening the menu already scrolled the tree').toBe(137);
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  expect(
+    await scroller.evaluate((el) => el.scrollTop),
+    'closing the menu scrolled the tree to show the trigger it focused',
+  ).toBe(parked);
+});

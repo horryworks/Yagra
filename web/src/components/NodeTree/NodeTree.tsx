@@ -67,6 +67,7 @@ import {
   type MenuCapabilities,
 } from './nodeTreeMenu';
 import { clickOutcome, toggleChecked, type CheckedNodes } from './nodeTreeSelect';
+import { pinFocusScroll, restoreScroll, type ScrollAt } from './nodeTreeScroll';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
 
@@ -565,6 +566,16 @@ export function NodeTree({
    *  `click`, after the body had already seen it open; this ref is that ordering, kept. */
   const menuAtDown = useRef(false);
 
+  /** Where the tree was parked when the pointer last went down on **a control**, or null when
+   *  there is nothing to put back (ADR-124 増分 5).
+   *
+   *  🚨 **Only a press on a control pins, and any scroll clears it.** A pin taken from every press
+   *  goes stale — pressing the scrollbar fires no `click` on the body, so nothing resets it, and
+   *  the next keyboard focus would drag the operator back to where they were before their own
+   *  wheel. A keyboard `Tab` has no pin at all, so the browser still scrolls the target into
+   *  view, which for a keyboard is the correct behaviour. */
+  const pinned = useRef<ScrollAt | null>(null);
+
   const reset = () => {
     setDrag(null);
     setDropTarget(null);
@@ -971,12 +982,30 @@ export function NodeTree({
       <div
         className="ntree-body"
         ref={scrollRef}
-        onMouseDown={() => {
+        // ADR-124 増分 5 決定 B, both halves, from one place. Capture phase, so a descendant that
+        // ever stops mousedown propagation cannot disarm either of them — and `menuAtDown` is the
+        // ADR-073 決定 4 ordering, which must not become optional. Same element, same event.
+        onMouseDownCapture={(e) => {
           menuAtDown.current = menu !== null;
+          pinFocusScroll(scrollRef.current, e.target as Element, (at) => {
+            pinned.current = at;
+          });
+        }}
+        // A scroll the OPERATOR made is the one scroll that must survive, so it voids the pin.
+        // Our own restore writes fire this asynchronously, after the pin is already null.
+        onScroll={() => {
+          pinned.current = null;
+        }}
+        // React's spelling of `focusin`, so a focus landing on any descendant reaches this
+        // element — which is what covers every control in every row from a single handler.
+        onFocus={(e) => {
+          restoreScroll(e.currentTarget, pinned.current);
+          pinned.current = null;
         }}
         onClick={(e) => {
           const wasOpen = menuAtDown.current;
           menuAtDown.current = false;
+          pinned.current = null;
           if (wasOpen || !onSelectNone) return;
           if (e.target === e.currentTarget) onSelectNone();
         }}

@@ -12,6 +12,17 @@
 
 ### Bug Fixes
 
+- **The inventory tree scrolled on its own while you were picking nodes.** Ctrl / Shift clicking
+  several nodes moved the tree under the pointer, so the next row you wanted had shifted. Two
+  causes, neither of them a scroll the application asked for: the "N selected" bar appeared
+  **above** the tree and took two rows' worth of height out of the scroller, and clicking a row
+  focused a button the browser then scrolled into view whenever the row was clipped at the top or
+  bottom edge. The bar is now the **last** thing in the inventory pane rather than the first, and a
+  press on a row takes focus without a scroll. **The tree's scroll position now changes when you
+  scroll it, and not otherwise.** Two effects remain by design: while a selection is active the bar
+  covers the bottom two rows, and clearing a selection while scrolled to the very end still lets
+  the browser clamp the position by up to the bar's height.
+
 - **A public dashboard carrying an interface or metric widget served nothing to anonymous
   visitors.** The routes an anonymous caller may reach are derived from the widgets on the public
   board, and three of those widgets read a route that takes a path parameter. The derived list
