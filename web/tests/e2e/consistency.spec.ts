@@ -136,9 +136,15 @@ test('searching the inventory narrows it to matching nodes', async ({ page, api 
   await page.goto('/nodes');
   await expect(page.locator('.pageheader-note')).toBeVisible();
 
-  // By role, not by placeholder: the topbar's global search carries the same placeholder and is a
-  // `combobox`, so a placeholder query matches two boxes and types into whichever came first.
-  const search = page.getByRole('textbox', { name: 'Search…' });
+  // By role and by name, not by placeholder: the topbar's global search carries the same
+  // placeholder, so a placeholder query matches two boxes and types into whichever came first.
+  //
+  // ⚠️ **Both halves of this locator moved in ADR-132** and the old one matched nothing. The box is
+  // now the shared `SearchField`, so it is `type="search"` — role `searchbox`, not `textbox` — and
+  // it carries a real `aria-label` instead of falling back to its placeholder, so the name is
+  // `Search` and no longer `Search…`. The top bar's box is a `combobox` named "Global search", so
+  // this still matches exactly one thing.
+  const search = page.getByRole('searchbox', { name: 'Search' });
   await search.fill(target.name);
 
   const rows = page.locator('.ntree-node');

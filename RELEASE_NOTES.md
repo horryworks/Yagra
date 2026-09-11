@@ -83,6 +83,11 @@
   - It is not a tab stop: Ctrl+A then Delete already empties a box from the keyboard, and a stop in
     every one of the eleven would be one more press on the way through a list of options. On a touch
     device it widens to 40px.
+  - ⚠️ **Two boxes changed what assistive tech and browser automation see.** The node tree's search
+    and the collection editor's catalog search are now search fields (ARIA role `searchbox`, not
+    `textbox`) and carry a real accessible name instead of falling back to their placeholder — so
+    the tree's box is named `Search` rather than `Search…`. If you drive the WebUI from a script
+    that located either box by its placeholder, that selector needs updating.
 
 - **The Interface traffic card now draws transmit above the zero line and receive below it** — the
   other way round from every release before this one. Nothing else about the chart changed: zero
