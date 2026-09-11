@@ -17,6 +17,7 @@ import type {
   DiscoveryCandidate,
   DiscoveryScan,
   DiscoveryScanSummary,
+  NodeGroup,
   PoolOption,
   ProfileSummary,
 } from '../types/api';
@@ -43,6 +44,7 @@ import {
   type RowDestination,
 } from './importFiling';
 import { GroupPicker } from '../components/ui/GroupPicker';
+import { groupOptions } from '../lib/nodeTree';
 import {
   defaultChecked,
   hostCount,
@@ -83,6 +85,16 @@ import './DiscoveryPage.css';
  *  per-row form state on each one. */
 const NO_CANDIDATES: DiscoveryCandidate[] = [];
 
+/** The destination picker's "let the rule decide" value.
+ *
+ * ⚠️ It cannot be `''` — that is a real destination (the tree root), and a `<select>` has no way to
+ * carry `undefined`. A sentinel that could never be a folder id keeps the two apart.
+ *
+ * WARNING: plain ASCII on purpose. The first version used a leading NUL, which survived tsc,
+ * the unit suite and the production build without complaint - a control value nothing can see
+ * is exactly the kind that breaks somewhere it cannot be traced back from. */
+const FOLLOW_RULE = '__follow_rule__';
+
 interface RowState {
   selected: boolean;
   name: string;
@@ -90,6 +102,13 @@ interface RowState {
   credential_id: string;
   vendor: string;
   model: string;
+  /** The folder the operator picked for this one device (ADR-131 決定 11).
+   *
+   *  `undefined` means "follow the rule" — the IP-range match, or the sweep's folder. An empty
+   *  string is a **choice**, not an absence: it means the tree root. Those two must stay
+   *  distinguishable, or a row deliberately sent to the root would silently follow the rule
+   *  instead. */
+  group_id?: string;
 }
 
 export function DiscoveryPage() {
@@ -123,9 +142,21 @@ export function DiscoveryPage() {
    *  is where a sweep's minutes went. Kept as a choice because a firewall that filters ICMP and
    *  answers SNMP is a real device this would otherwise never find. */
   const [snmpWhenUnreachable, setSnmpWhenUnreachable] = useState(false);
-  /** File each device into the folder whose IP range contains its address (ADR-131). Off by
-   *  default: it changes where a batch lands, and the old behaviour is one folder for all. */
-  const [fileByPrefix, setFileByPrefix] = useState(false);
+  /** File each device into the folder whose IP range contains its address (ADR-131).
+   *
+   *  **On by default** (決定 11): where a folder carries a range, that range is the best answer
+   *  anyone has to "where does this device belong", and the row picker beside it makes disagreeing
+   *  a single click. ⚠️ The *API* still defaults this off — `file_by_prefix` is
+   *  `#[serde(default)]`, so an N-1 client's body means exactly what it always did. The default
+   *  that changed is the one an operator sees, which is a UI decision and belongs here.
+   *
+   *  Turned on only once the folder list has arrived: the checkbox is not drawn until some folder
+   *  carries a range, and switching it on before that would flip a control under the operator. */
+  const [fileByPrefix, setFileByPrefix] = useState(true);
+  /** Every folder, for the per-row destination picker. `siteOptions` is the subset carrying a
+   *  range and cannot serve here — an override is precisely the case where the operator wants a
+   *  folder the ranges do not name. */
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
   /** The server's answer per candidate address — which folder's range claims it, or neither.
    *  Accumulated rather than refetched: a sweep streams, so re-previewing the whole set on every
    *  2s poll would fire a `ManageConfig` request every two seconds for the length of the scan. */
@@ -230,6 +261,7 @@ export function DiscoveryPage() {
       .then((groups) => {
         const options = siteTargetOptions(groups);
         setSiteOptions(options);
+        setGroups(groups);
         const wanted = arrivedWithGroup.current;
         const picked = wanted ? options.find((o) => o.id === wanted) : undefined;
         if (!picked) return;
@@ -330,6 +362,9 @@ export function DiscoveryPage() {
           credential_id: c.matched_credential_id ?? '',
           vendor: c.vendor ?? '',
           model: c.model ?? '',
+          // Deliberately absent rather than pre-filled: the row follows the rule until the
+          // operator overrides it, and seeding it here would make every row read as chosen.
+          group_id: undefined,
         };
       }
       return next ?? cur;
@@ -538,6 +573,10 @@ export function DiscoveryPage() {
           credential_id: r.credential_id || undefined,
           vendor: r.vendor.trim() || undefined,
           model: r.model.trim() || undefined,
+          // ⚠️ `undefined` and `null` are different answers here. Absent means "follow the rule";
+          // `null` is the operator choosing the tree root, which the server must not mistake for
+          // "unset" and quietly resolve through the range match.
+          group_id: r.group_id === undefined ? undefined : r.group_id || null,
         };
       });
     if (nodes.length === 0) {
@@ -548,7 +587,7 @@ export function DiscoveryPage() {
       // The folder the sweep was aimed at, so a site's devices arrive filed rather than in a heap
       // at the tree root. Empty when the operator typed a range instead of picking a site, which
       // is the pre-ADR-100 behaviour and still the right answer for an ad-hoc sweep.
-      .importDiscovered(nodes, siteId || undefined, fileByPrefix || undefined)
+      .importDiscovered(nodes, siteId || undefined, filingByPrefix || undefined)
       .then((result) => {
         // The sentences come from `importFiling.ts` so the "how many were filed, how many fell
         // back, how many were contested" judgement is somewhere a test can reach it.
@@ -579,6 +618,24 @@ export function DiscoveryPage() {
   /** The chosen site's path, for the sentence that says where an import lands. */
   const siteLabel = siteOptions.find((o) => o.id === siteId)?.label ?? '';
 
+  /** Every folder, as depth-ordered paths for the per-row picker. */
+  const groupChoices = useMemo(() => groupOptions(groups), [groups]);
+
+  /** Whether the IP-range rule is actually in force.
+   *
+   * 🚨 **Not `fileByPrefix` on its own.** That starts `true`, but the checkbox is only drawn when
+   * some folder carries a range — so on a deployment with none, the state would be on with no
+   * control on screen saying so, and the request would carry an option the operator was never
+   * offered. An option nobody can see must not be one that is set. */
+  const filingByPrefix = fileByPrefix && siteOptions.length > 0;
+
+  /** A folder id as its full path.
+   *
+   * ⚠️ Reads the whole folder list, not `siteOptions`. A matched folder always carries a range so
+   * either would do for the rule's answer — but the operator can override to a folder that carries
+   * none, and the cell has to be able to name that one too. */
+  const groupPathOf = (id: string) => groupChoices.find((o) => o.id === id)?.path ?? id;
+
   /** One row's Folder cell (ADR-131).
    *
    * The judgement is in `importFiling.ts`; this only turns it into elements.
@@ -589,23 +646,47 @@ export function DiscoveryPage() {
    *
    * `anyPrefixes` false means the deployment has no ranges at all — a different statement from
    * "this address matched none", and the reason the server reports the two separately. */
-  const destinationCell = (address: string) => {
+  const destinationCell = (address: string, row: RowState) => {
     const label = destinationLabel(destinations.get(address), {
-      filing: fileByPrefix,
+      filing: filingByPrefix,
       fallbackPath: siteLabel || null,
       rootLabel: t('discovery.dest.root'),
       pendingLabel: t('discovery.dest.pending'),
-      pathOf: (id) => siteOptions.find((o) => o.id === id)?.label ?? id,
+      pathOf: (id) => groupPathOf(id),
     });
-    const why = !fileByPrefix
-      ? null
-      : anyPrefixes
-        ? label.whyKey && t(label.whyKey, label.whyArgs)
-        : t('discovery.dest.why.noRanges');
+    // ⚠️ Not gated on `fileByPrefix`. With the option off a matched row still explains where it
+    // could go — that is the half an operator on a real sweep found missing. The `noRanges`
+    // override stays gated: "no folder has a range yet" only answers a question the operator has
+    // actually asked, which is what ticking the box does.
+    const why =
+      filingByPrefix && !anyPrefixes
+        ? t('discovery.dest.why.noRanges')
+        : label.whyKey && t(label.whyKey, label.whyArgs);
+    // The picker's value. `undefined` ⇒ the rule decides, and the option showing that says what
+    // the rule decided rather than a bare "(automatic)" the operator would have to decode.
+    const chosen = row.group_id;
     return (
       <>
-        <span className="disco-dest-to">{label.primary}</span>
-        {why && <span className="muted disco-dest-why">{why}</span>}
+        <Select
+          value={chosen ?? FOLLOW_RULE}
+          onChange={(e) =>
+            patchRow(address, {
+              group_id: e.target.value === FOLLOW_RULE ? undefined : e.target.value,
+            })
+          }
+          aria-label={t('discovery.cols.destination')}
+        >
+          <option value={FOLLOW_RULE}>{t('discovery.dest.auto', { folder: label.primary })}</option>
+          <option value="">{t('discovery.dest.root')}</option>
+          {groupChoices.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.path}
+            </option>
+          ))}
+        </Select>
+        {/* The explanation belongs to the rule, so it goes when the operator overrides it —
+            leaving it would have the cell say "would go to X" under a picker reading Y. */}
+        {chosen === undefined && why && <span className="muted disco-dest-why">{why}</span>}
       </>
     );
   };
@@ -1038,7 +1119,7 @@ export function DiscoveryPage() {
                       by one rule for the whole request, never chosen per row — which is what keeps
                       ADR-100 decision 10 intact. Drawn with the option off too, because then it
                       answers "where does this land" before the button rather than afterwards. */}
-                  <span className="disco-dest">{destinationCell(c.address)}</span>
+                  <span className="disco-dest">{destinationCell(c.address, r)}</span>
                   <TextInput
                     value={r.name}
                     onChange={(e) => patchRow(c.address, { name: e.target.value })}

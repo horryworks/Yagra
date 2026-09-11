@@ -539,7 +539,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'import destination',
       { en: enMonitoring, ja: jaMonitoring },
       'discovery.dest.why.',
-      [...DESTINATION_KINDS, 'noRanges'],
+      [...DESTINATION_KINDS, 'noRanges', 'wouldMatch'],
     );
   });
 

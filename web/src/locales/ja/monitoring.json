@@ -362,7 +362,8 @@
       "importedFiled_other": "{{count}} 台を取り込みました。うち {{filed}} 台は IP レンジで振り分けました。",
       "fellBackInto_other": "{{count}} 台は {{site}} へ入りました。",
       "fellBackToRoot_other": "{{count}} 台はツリー直下へ入りました。",
-      "contested_other": "そのうち {{count}} 台は 2 つのフォルダーが主張しています。"
+      "contested_other": "そのうち {{count}} 台は 2 つのフォルダーが主張しています。",
+      "chosen_other": "{{count}} 台は指定したフォルダーへ入りました。"
     },
     "err": {
       "badTargets": "IP・CIDR（≤/22）・範囲（例: 192.168.1.10-20）をカンマ区切りで入力してください — 合計 ≤1024 ホスト。",
@@ -384,8 +385,10 @@
         "matched": "レンジ {{prefix}}",
         "ambiguous": "{{count}} 個のフォルダーが主張",
         "unmatched": "どのフォルダーのレンジにも入りません",
-        "noRanges": "IP レンジを持つフォルダーがまだありません"
-      }
+        "noRanges": "IP レンジを持つフォルダーがまだありません",
+        "wouldMatch": "{{folder}} へ入れられます（{{prefix}}）"
+      },
+      "auto": "自動: {{folder}}"
     }
   }
 }

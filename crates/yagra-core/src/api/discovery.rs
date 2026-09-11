@@ -35,7 +35,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::Instant;
 use uuid::Uuid;
@@ -141,6 +141,10 @@ pub(crate) struct PrefixFiling {
     ambiguous: u32,
     /// No folder's range contained it; filed into the fallback.
     unmatched: u32,
+    /// The operator named this row's folder themselves, so no rule was applied to it
+    /// (ADR-131 決定 11). Counted apart from the three above because it is not an outcome of the
+    /// match — reporting it as `matched` would credit the rule with a choice a person made.
+    chosen: u32,
 }
 
 /// How many nodes an import created, and — when filing by IP range was asked for — how.
@@ -448,6 +452,35 @@ pub(super) struct ImportNode {
     vendor: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    /// The folder this one device goes into, overriding both the IP-range rule and the request's
+    /// `group_id` (ADR-131 決定 11).
+    ///
+    /// 🚨 **Three states, not two, and `Option<Uuid>` cannot carry them.** Absent means "follow the
+    /// rule"; an id means that folder; **`null` means the operator chose the tree root**, which is
+    /// a destination like any other. With a plain `Option<Uuid>` serde maps absent and `null` to
+    /// the same `None`, so a device deliberately sent to the root would silently be filed by range
+    /// instead — a control that lies about what it does. `deserialize_some` keeps them apart.
+    ///
+    /// ⚠️ **This is the per-row field ADR-100 決定 10 refused, and it is admitted under a
+    /// condition.** That decision's objection was a UI in which fifty rows each carry an
+    /// independent choice and the screen has to explain the result. Here a row's destination still
+    /// comes from one rule by default, and this is an *override* of it — so the screen explains
+    /// itself by saying which rows the operator changed, and a row nobody touched is still the
+    /// rule's answer. Remove the default and the original objection applies again in full.
+    #[serde(default, deserialize_with = "deserialize_some")]
+    #[schema(value_type = Option<String>, nullable)]
+    group_id: Option<Option<Uuid>>,
+}
+
+/// Deserialize into `Some`, so an explicit `null` survives as `Some(None)` while an absent field
+/// stays `None`. The standard three-state idiom for a JSON field that can be unset, set, or
+/// cleared; [`ImportNode::group_id`] says why this one needs it.
+fn deserialize_some<'de, T, D>(d: D) -> Result<Option<T>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    T::deserialize(d).map(Some)
 }
 
 /// Import body: the selected devices to create as nodes.
@@ -511,6 +544,22 @@ async fn import_discovered(
     // Checked before anything is prepared: `nodes.group_id` is a foreign key, so an id that is
     // not there would abort the transaction and surface as a 500 that names nothing.
     super::groups::require_group_exists(&admin, body.group_id).await?;
+    // Every per-row folder gets the same two checks, deduplicated so fifty rows aimed at one
+    // folder cost one round trip rather than fifty. Doing it here, before any row is prepared,
+    // keeps the guarantee the whole handler rests on: the insert is one transaction, so a folder
+    // refused halfway would otherwise roll back an import the operator was told had started.
+    let mut seen_rows: HashSet<Uuid> = HashSet::new();
+    for n in &body.nodes {
+        // `Some(None)` is the tree root, which needs no folder check — only a named folder does.
+        let Some(Some(group)) = n.group_id else {
+            continue;
+        };
+        if !seen_rows.insert(group) {
+            continue;
+        }
+        super::scope::require_visible_group(&scope, group)?;
+        super::groups::require_group_exists(&admin, Some(group)).await?;
+    }
     // Every node is validated up front and the batch is then inserted in one transaction, so a
     // failure partway cannot leave half an import behind (NodeRepo::import_nodes).
     let mut prepared: Vec<crate::repo::NewNode<'_>> = Vec::with_capacity(body.nodes.len());
@@ -543,16 +592,35 @@ async fn import_discovered(
             credential,
             vendor: n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
             model: n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-            // Overwritten below when filing by range; `body.group_id` is the fallback either way.
-            group: body.group_id,
+            // Precedence, narrowest first (ADR-131 決定 11): the operator's own choice for this
+            // row, else the IP-range rule applied below, else the request's folder.
+            group: match n.group_id {
+                Some(choice) => choice,
+                None => body.group_id,
+            },
         });
     }
 
     // Filing by IP range (ADR-131). `NodeRepo::import_nodes` already binds `group_id` per row and
     // computes `sort_order` per destination folder inside its transaction, so a batch that lands in
     // several folders needs nothing from the writer — only a different value in each row.
+    // The addresses the rule still has to decide: a row the operator named a folder for is already
+    // settled, and asking the matcher about it would only invite the answer to overwrite the
+    // choice. Collected before the rule runs so the two cannot disagree.
+    let chosen: Vec<IpAddr> = body
+        .nodes
+        .iter()
+        .zip(prepared.iter())
+        .filter(|(n, _)| n.group_id.is_some())
+        .map(|(_, row)| row.address)
+        .collect();
+
     let filed = if body.file_by_prefix {
-        let addrs: Vec<IpAddr> = prepared.iter().map(|n| n.address).collect();
+        let addrs: Vec<IpAddr> = prepared
+            .iter()
+            .filter(|n| !chosen.contains(&n.address))
+            .map(|n| n.address)
+            .collect();
         let hits = admin
             .groups
             .match_address_prefixes(&addrs, scope.group_filter())
@@ -571,6 +639,8 @@ async fn import_discovered(
             .map(|(addr, group, _)| (*addr, *group))
             .collect();
         for row in prepared.iter_mut() {
+            // `chosen` rows keep what the operator gave them; nothing here can reach them, because
+            // their addresses were never handed to the matcher.
             if let Some(group) = by_address.get(&row.address) {
                 row.group = Some(*group);
             }
@@ -579,6 +649,16 @@ async fn import_discovered(
             matched: fold.matched.len() as u32,
             ambiguous: fold.ambiguous.len() as u32,
             unmatched: fold.unmatched.len() as u32,
+            chosen: chosen.len() as u32,
+        })
+    } else if !chosen.is_empty() {
+        // The rule is off but the operator still directed some rows. Reporting that is the honest
+        // answer; `None` here would say "nothing was decided per row", which is untrue.
+        Some(PrefixFiling {
+            matched: 0,
+            ambiguous: 0,
+            unmatched: 0,
+            chosen: chosen.len() as u32,
         })
     } else {
         None
@@ -1686,5 +1766,175 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_address", "{body}");
+    }
+
+    /// 🚨 A row's `group_id` has **three** states and they must stay apart.
+    ///
+    /// Absent ⇒ follow the rule. An id ⇒ that folder. `null` ⇒ the operator chose the tree root.
+    /// A plain `Option<Uuid>` collapses the first and the third, which would make the picker's
+    /// "Tree root" option quietly mean "file by range instead" — a control that lies.
+    #[test]
+    fn a_rows_folder_tells_absent_apart_from_an_explicit_root() {
+        let body: ImportDiscovered = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                { "address": "10.0.0.1", "name": "follows-the-rule" },
+                { "address": "10.0.0.2", "name": "sent-to-root", "group_id": null },
+                { "address": "10.0.0.3", "name": "sent-to-a-folder",
+                  "group_id": "11111111-1111-4111-8111-111111111111" },
+            ],
+        }))
+        .expect("parse");
+        assert!(
+            body.nodes[0].group_id.is_none(),
+            "absent means follow the rule"
+        );
+        assert_eq!(
+            body.nodes[1].group_id,
+            Some(None),
+            "an explicit null is a choice: the tree root"
+        );
+        assert_eq!(
+            body.nodes[2].group_id,
+            Some(Some(
+                "11111111-1111-4111-8111-111111111111"
+                    .parse()
+                    .expect("uuid")
+            ))
+        );
+    }
+
+    /// A per-row folder wins over the IP-range rule, and over the request's fallback.
+    ///
+    /// The row that names a folder is also **kept out of the matcher**, so the two can never
+    /// disagree — that is why `chosen` is counted separately from `matched`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_row_the_operator_directed_ignores_the_range_that_claims_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+
+        let mk = |name: &'static str| {
+            let st = st.clone();
+            let tok = tok.clone();
+            async move {
+                let (_, g) = send(
+                    &st,
+                    "POST",
+                    "/api/v1/node-groups",
+                    &tok,
+                    Some(serde_json::json!({ "name": name, "group_type": "site" })),
+                )
+                .await;
+                g["id"].as_str().expect("id").to_owned()
+            }
+        };
+        let ranged = mk("ranged").await;
+        let elsewhere = mk("elsewhere").await;
+        let fallback = mk("fallback").await;
+        let ranged_id: Uuid = ranged.parse().expect("uuid");
+        let elsewhere_id: Uuid = elsewhere.parse().expect("uuid");
+        let fallback_id: Uuid = fallback.parse().expect("uuid");
+        crate::pgtest::prefix(&pool, ranged_id, "192.168.1.0/24").await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(serde_json::json!({
+                "group_id": fallback,
+                "file_by_prefix": true,
+                "nodes": [
+                    // The range claims this one, and nobody overrode it.
+                    { "address": "192.168.1.10", "name": "by-rule" },
+                    // The range claims this one too, and the operator said otherwise.
+                    { "address": "192.168.1.11", "name": "overridden", "group_id": elsewhere },
+                    // …and this one was deliberately sent to the tree root.
+                    { "address": "192.168.1.12", "name": "to-root", "group_id": null },
+                ],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(body["filed"]["matched"], 1, "{body}");
+        assert_eq!(
+            body["filed"]["chosen"], 2,
+            "both directed rows are the operator's, not the rule's: {body}"
+        );
+
+        let placed = |name: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<Uuid>>("SELECT group_id FROM nodes WHERE name = $1")
+                    .bind(name)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or_else(|e| panic!("read {name}: {e}"))
+            }
+        };
+        assert_eq!(placed("by-rule").await, Some(ranged_id));
+        assert_eq!(
+            placed("overridden").await,
+            Some(elsewhere_id),
+            "the range must not overwrite a folder the operator named"
+        );
+        assert_eq!(
+            placed("to-root").await,
+            None,
+            "an explicit null is the tree root, not a fall-through to the rule"
+        );
+        assert_ne!(placed("to-root").await, Some(fallback_id));
+    }
+
+    /// A per-row folder outside a scoped caller's reach is refused, and **nothing is imported**.
+    ///
+    /// The insert is one transaction, so the check has to happen before any row is prepared —
+    /// otherwise the operator would be told an import started and then have it rolled back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_row_aimed_at_a_folder_out_of_scope_imports_nothing(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (_, mine) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({ "name": "mine", "group_type": "site" })),
+        )
+        .await;
+        let (_, theirs) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({ "name": "theirs", "group_type": "site" })),
+        )
+        .await;
+        let mine_id: Uuid = mine["id"].as_str().expect("id").parse().expect("uuid");
+
+        let scoped = scoped_token(&st, &[mine_id]);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &scoped,
+            Some(serde_json::json!({
+                "group_id": mine["id"],
+                "nodes": [
+                    { "address": "10.0.0.1", "name": "ok" },
+                    { "address": "10.0.0.2", "name": "out-of-scope", "group_id": theirs["id"] },
+                ],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "nodes").await,
+            0,
+            "the good row must not have landed either"
+        );
     }
 }

@@ -85,10 +85,38 @@ describe('mergePreview', () => {
 });
 
 describe('destinationLabel', () => {
-  it('reads the fallback on every row when filing is off', () => {
+  it('reads the fallback on a row with no answer when filing is off', () => {
     expect(destinationLabel(undefined, { ...labelOpts, filing: false })).toEqual({
       primary: 'Matsuyama Home',
     });
+  });
+
+  // 🚨 The defect this pins, found by an operator on a real sweep and by no test: with the option
+  // off, a row the server had already matched to a site printed only "Tree root". The answer was
+  // on hand and thrown away, and the cell read as "no folder owns this address" rather than as
+  // "you have not ticked the box".
+  it('still names the folder that claims a row when filing is off', () => {
+    const off = destinationLabel(
+      { kind: 'matched', groupId: 'g1', prefix: '192.168.1.0/24' },
+      { ...labelOpts, filing: false, fallbackPath: null },
+    );
+    expect(off.primary).toBe('Tree root');
+    expect(off.whyKey).toBe('discovery.dest.why.wouldMatch');
+    expect(off.whyArgs).toEqual({ folder: 'path/g1', prefix: '192.168.1.0/24' });
+  });
+
+  it('offers nothing extra when filing is off and nothing claims the row', () => {
+    // An unmatched or contested row lands in the fallback either way, so there is nothing the
+    // operator is missing by leaving the box unticked — and a hint there would be noise.
+    const cases: RowDestination[] = [
+      { kind: 'unmatched' },
+      { kind: 'ambiguous', groupIds: ['g1', 'g2'] },
+    ];
+    for (const dest of cases) {
+      expect(destinationLabel(dest, { ...labelOpts, filing: false })).toEqual({
+        primary: 'Matsuyama Home',
+      });
+    }
   });
 
   it('names the tree root when no folder was chosen', () => {
@@ -140,9 +168,9 @@ describe('destinationLabel', () => {
 });
 
 describe('importMessage', () => {
-  const filed = (m: number, a: number, u: number): ImportResult => ({
-    created: m + a + u,
-    filed: { matched: m, ambiguous: a, unmatched: u },
+  const filed = (m: number, a: number, u: number, c = 0): ImportResult => ({
+    created: m + a + u + c,
+    filed: { matched: m, ambiguous: a, unmatched: u, chosen: c },
   });
 
   it('says nothing about filing when the option was off', () => {
@@ -180,6 +208,18 @@ describe('importMessage', () => {
     expect(contested.find((p) => p.key === 'discovery.msg.contested')?.args).toEqual({
       count: 1,
     });
+  });
+
+  // 🚨 A row the operator directed is not the rule succeeding. Folding it into `matched` would
+  // report the rule as having decided something a person decided (ADR-131 決定 11).
+  it('reports rows the operator directed as their own sentence', () => {
+    const quiet = importMessage(filed(2, 0, 0), null);
+    const directed = importMessage(filed(2, 0, 0, 3), null);
+    expect(quiet.some((p) => p.key === 'discovery.msg.chosen')).toBe(false);
+    const part = directed.find((p) => p.key === 'discovery.msg.chosen');
+    expect(part?.args).toEqual({ count: 3 });
+    // …and it does not inflate the rule's own count.
+    expect(directed[0].args).toEqual({ count: 5, filed: 2 });
   });
 
   it('omits the fallback sentence when everything was filed', () => {

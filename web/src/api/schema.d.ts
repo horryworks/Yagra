@@ -7223,6 +7223,24 @@ export interface components {
         ImportNode: {
             address: string;
             credential_id?: string | null;
+            /**
+             * @description The folder this one device goes into, overriding both the IP-range rule and the request's
+             *     `group_id` (ADR-131 決定 11).
+             *
+             *     🚨 **Three states, not two, and `Option<Uuid>` cannot carry them.** Absent means "follow the
+             *     rule"; an id means that folder; **`null` means the operator chose the tree root**, which is
+             *     a destination like any other. With a plain `Option<Uuid>` serde maps absent and `null` to
+             *     the same `None`, so a device deliberately sent to the root would silently be filed by range
+             *     instead — a control that lies about what it does. `deserialize_some` keeps them apart.
+             *
+             *     ⚠️ **This is the per-row field ADR-100 決定 10 refused, and it is admitted under a
+             *     condition.** That decision's objection was a UI in which fifty rows each carry an
+             *     independent choice and the screen has to explain the result. Here a row's destination still
+             *     comes from one rule by default, and this is an *override* of it — so the screen explains
+             *     itself by saying which rows the operator changed, and a row nobody touched is still the
+             *     rule's answer. Remove the default and the original objection applies again in full.
+             */
+            group_id?: string | null;
             model?: string | null;
             name: string;
             profile_id?: string | null;
@@ -8997,6 +9015,13 @@ export interface components {
              * @description Two or more folders claimed it at the same prefix length; filed into the fallback.
              */
             ambiguous: number;
+            /**
+             * Format: int32
+             * @description The operator named this row's folder themselves, so no rule was applied to it
+             *     (ADR-131 決定 11). Counted apart from the three above because it is not an outcome of the
+             *     match — reporting it as `matched` would credit the rule with a choice a person made.
+             */
+            chosen: number;
             /**
              * Format: int32
              * @description Filed into the one folder whose range contains the address.

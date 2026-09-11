@@ -378,7 +378,9 @@
       "fellBackToRoot_one": "{{count}} went to the tree root.",
       "fellBackToRoot_other": "{{count}} went to the tree root.",
       "contested_one": "{{count}} of those is claimed by two folders.",
-      "contested_other": "{{count}} of those are claimed by two folders."
+      "contested_other": "{{count}} of those are claimed by two folders.",
+      "chosen_one": "{{count}} went where you chose.",
+      "chosen_other": "{{count}} went where you chose."
     },
     "err": {
       "badTargets": "Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.",
@@ -400,8 +402,10 @@
         "matched": "range {{prefix}}",
         "ambiguous": "claimed by {{count}} folders",
         "unmatched": "no folder range covers this",
-        "noRanges": "no folder has an IP range yet"
-      }
+        "noRanges": "no folder has an IP range yet",
+        "wouldMatch": "would go to {{folder}} ({{prefix}})"
+      },
+      "auto": "Auto: {{folder}}"
     }
   }
 }

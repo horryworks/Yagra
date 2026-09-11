@@ -27838,6 +27838,13 @@
               "null"
             ]
           },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The folder this one device goes into, overriding both the IP-range rule and the request's\n`group_id` (ADR-131 決定 11).\n\n🚨 **Three states, not two, and `Option<Uuid>` cannot carry them.** Absent means \"follow the\nrule\"; an id means that folder; **`null` means the operator chose the tree root**, which is\na destination like any other. With a plain `Option<Uuid>` serde maps absent and `null` to\nthe same `None`, so a device deliberately sent to the root would silently be filed by range\ninstead — a control that lies about what it does. `deserialize_some` keeps them apart.\n\n⚠️ **This is the per-row field ADR-100 決定 10 refused, and it is admitted under a\ncondition.** That decision's objection was a UI in which fifty rows each carry an\nindependent choice and the screen has to explain the result. Here a row's destination still\ncomes from one rule by default, and this is an *override* of it — so the screen explains\nitself by saying which rows the operator changed, and a row nobody touched is still the\nrule's answer. Remove the default and the original objection applies again in full."
+          },
           "model": {
             "type": [
               "string",
@@ -31672,13 +31679,20 @@
         "required": [
           "matched",
           "ambiguous",
-          "unmatched"
+          "unmatched",
+          "chosen"
         ],
         "properties": {
           "ambiguous": {
             "type": "integer",
             "format": "int32",
             "description": "Two or more folders claimed it at the same prefix length; filed into the fallback.",
+            "minimum": 0
+          },
+          "chosen": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The operator named this row's folder themselves, so no rule was applied to it\n(ADR-131 決定 11). Counted apart from the three above because it is not an outcome of the\nmatch — reporting it as `matched` would credit the rule with a choice a person made.",
             "minimum": 0
           },
           "matched": {

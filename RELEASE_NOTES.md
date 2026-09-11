@@ -28,9 +28,11 @@
   range" dialog. The group dialog now has an **IP ranges** section: add a range and a name for it,
   and it is stored. Host bits are allowed, so `192.168.1.5/24` is accepted and stored as
   `192.168.1.0/24`. IPv4 and IPv6 are both accepted.
-  With that in place, the Discovery import gained **File each device by its IP range**. With it on,
-  every device goes into the folder whose range contains its address instead of all of them landing
-  in one folder. The candidate list gained a **Folder** column showing where each device will land
+  With that in place, the Discovery import gained **File each device by its IP range**, and it is
+  **on by default** where a folder carries a range: every device goes into the folder whose range
+  contains its address instead of all of them landing in one folder. The **Folder** column on each
+  row is a picker, so a device that belongs somewhere else is one click to redirect — including to
+  the tree root — and a row nobody touches stays the range's answer. The candidate list gained a **Folder** column showing where each device will land
   **before** the Import button is pressed, and the message afterwards says how many were filed by
   range and how many fell back.
   - A device no range covers, or one that **two folders claim equally well**, goes into the folder

@@ -91,8 +91,13 @@ export interface DestinationLabel {
  * second is actionable — it means two folders have overlapping ranges configured. Folding them
  * would tell the operator that an address is outside every range when it is inside two.
  *
- * `filing` off ⇒ every row reads the same fallback, which is deliberate: it answers "where does
- * this land" *before* the button rather than in the message afterwards.
+ * 🚨 **With `filing` off, a row a range *would* claim still says so.** The primary line stays the
+ * truthful destination — the device really is about to land in the fallback — but the muted line
+ * names the folder that claims it. The first version printed only the fallback, and it was wrong
+ * in the way `ui-conventions.md` R6 describes: an operator reads the Folder column to learn *which
+ * folder owns this address*, so a row reading "Tree root" over an address the server had already
+ * matched to a site read as "no folder owns this", not as "you have not ticked the box". The
+ * answer was on hand and being thrown away. Found by an operator on a real sweep, not by a test.
  */
 export function destinationLabel(
   dest: RowDestination | undefined,
@@ -105,7 +110,18 @@ export function destinationLabel(
   },
 ): DestinationLabel {
   const fallback = opts.fallbackPath ?? opts.rootLabel;
-  if (!opts.filing) return { primary: fallback };
+  if (!opts.filing) {
+    // Only the matched case has something to offer. An unmatched or contested row would land in
+    // the fallback whether or not the box is ticked, so there is nothing the operator is missing.
+    if (dest?.kind === 'matched') {
+      return {
+        primary: fallback,
+        whyKey: 'discovery.dest.why.wouldMatch',
+        whyArgs: { folder: opts.pathOf(dest.groupId), prefix: dest.prefix },
+      };
+    }
+    return { primary: fallback };
+  }
   if (!dest) return { primary: opts.pendingLabel };
   switch (dest.kind) {
     case 'matched':
@@ -160,6 +176,12 @@ export function importMessage(
   const parts: ImportMessagePart[] = [
     { key: 'discovery.msg.importedFiled', args: { count: created, filed: filed.matched } },
   ];
+  // Rows the operator directed are neither the rule's success nor its fallback, so they are their
+  // own sentence. Crediting them to `matched` would report the rule as having decided something a
+  // person decided (ADR-131 決定 11).
+  if (filed.chosen > 0) {
+    parts.push({ key: 'discovery.msg.chosen', args: { count: filed.chosen } });
+  }
   if (fellBack > 0) {
     parts.push(
       sitePath
