@@ -103,6 +103,23 @@
   --util-wash-min: 8%;
   --util-wash-max: 30%;
 
+  /* The ground under each half of a MIRRORED chart — one that plots one direction above zero and
+     the other below (ADR-128; only the Interface traffic widget is one). Registered here rather
+     than written inline in the canvas code because it is a new drawing channel, and this file is
+     where a channel is declared — the same reason --util-* is above.
+
+     ⚠️ The two differ in LIGHTNESS ONLY, never in hue. A green half over a red half would read as
+     "sending is the bad one"; neither direction is worse than the other, so the split has to carry
+     no judgement. A lightness split also separates for a reader who cannot separate hues, which a
+     status-coloured one would not.
+
+     ⚠️ Unlike --util-*, these are real values rather than aliases of tokens the dark block already
+     overrides, so [data-theme='dark'] carries its own pair. Keep the two in sync: light sits on
+     white, so BOTH steps are darkening; dark sits on #1f2630, where lifting the upper half reads
+     more cleanly than darkening it twice. */
+  --chart-zone-above: rgba(0, 0, 0, 0.018);
+  --chart-zone-below: rgba(0, 0, 0, 0.055);
+
   /* ---- typography (§1.4) — theme-independent ---- */
   --ui-font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-family: 'SFMono-Regular', 'JetBrains Mono', 'Consolas', ui-monospace, monospace;
@@ -229,4 +246,10 @@
 
   --supp-maintenance: #5cb8e0;
   --supp-mute: #d4bb4a;
+
+  /* The mirrored chart's two grounds on the dark surface (ADR-128). Lightness only, as above: the
+     upper half lifts off #1f2630, the lower half sinks. Darkening both would leave the upper one
+     indistinguishable from the card it sits on. */
+  --chart-zone-above: rgba(255, 255, 255, 0.035);
+  --chart-zone-below: rgba(0, 0, 0, 0.2);
 }

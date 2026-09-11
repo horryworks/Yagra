@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import uPlot from 'uplot';
+import type { MirrorAxis } from './mirror';
 
 /** The axis windows a chart is pinned to *right now* — each absent when that axis is free to
  *  auto-fit its data. Read on every scale pass, so a window that changes, or is dropped, lands on
@@ -7,6 +8,38 @@ import uPlot from 'uplot';
 export interface ChartPins {
   xRange?: [number, number];
   yRange?: [number, number];
+  /** Present ⇒ the value axis is pinned symmetrically about zero (ADR-128). This module asks only
+   *  whether there is one; the labels it carries are for the draw layer.
+   *
+   *  ⚠️ **`yRange` wins over it.** A window the caller named outranks one derived from the data —
+   *  and the derivation is the thing a caller would be overriding. */
+  mirrored?: MirrorAxis;
+}
+
+/**
+ * The smallest nice window that holds `[min, max]` **with zero exactly at its midpoint**.
+ *
+ * 🚨 **Symmetry is a property of the construction, not of `rangeNum`.** The top is computed from
+ * the larger magnitude alone and then mirrored, so no behaviour of uPlot's can put zero off-centre.
+ * `rangeNum(-m, m, …)` looks like it would do the same and probably does — but "probably" is the
+ * wrong footing for the one property this whole feature exists to guarantee, and nothing would go
+ * red if it stopped being true. Reading a single edge cannot be got wrong.
+ *
+ * The nice-number choice is still uPlot's, from the same `rangeNum` the unpinned axis uses, so a
+ * mirrored chart's ticks land where an ordinary chart's would.
+ *
+ * A flat-zero series (every sample `0`, or no spread at all) has no magnitude to scale to; `[-1, 1]`
+ * gives it an axis to draw the zero rule on instead of a degenerate one.
+ */
+export function symmetricRange(min: number, max: number): [number, number] {
+  const m = Math.max(Math.abs(min), Math.abs(max));
+  if (!Number.isFinite(m) || m === 0) return [-1, 1];
+  // `rangeNum` is typed `[number | null, number | null]` (it really does return nulls on an empty
+  // chart). Falling back to the bare magnitude keeps BOTH properties this function promises —
+  // centred, and wide enough for the data — at the cost of ticks that are not round.
+  const top = uPlot.rangeNum(0, m, 0.1, true)[1];
+  if (top == null || !Number.isFinite(top) || top < m) return [-m, m];
+  return [-top, top];
 }
 
 /** Build the uPlot `scales` option from a getter for the caller's *current* axis pins.
@@ -43,8 +76,14 @@ export function buildChartScales(pins: () => ChartPins): NonNullable<uPlot.Optio
   // so this is still assignable to `uPlot.Scale.Range`.
   const x = (_u: uPlot, min: number | null, max: number | null): uPlot.Range.MinMax =>
     pins().xRange ?? (min == null || max == null ? [null, null] : [min, max]);
-  const y = (_u: uPlot, min: number | null, max: number | null): uPlot.Range.MinMax =>
-    pins().yRange ??
-    (min == null || max == null ? [null, null] : uPlot.rangeNum(min, max, 0.1, true));
+  const y = (_u: uPlot, min: number | null, max: number | null): uPlot.Range.MinMax => {
+    const p = pins();
+    if (p.yRange) return p.yRange;
+    if (min == null || max == null) return [null, null];
+    // A mirrored chart's window is derived from the data like the default one, so it advances with
+    // the data on every pass — it is not a fixed pin and must not be hoisted out of here.
+    if (p.mirrored) return symmetricRange(min, max);
+    return uPlot.rangeNum(min, max, 0.1, true);
+  };
   return { x: { time: true, range: x }, y: { range: y } };
 }

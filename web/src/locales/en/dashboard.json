@@ -368,6 +368,8 @@
       "unitTitle": "Bits per second, or unicast packets per second (multicast and broadcast are not counted)",
       "unitBps": "bps",
       "unitPps": "pps",
+      "axisIn": "IN",
+      "axisOut": "OUT",
       "rangeAria": "Time window"
     },
     "mostErrors": {

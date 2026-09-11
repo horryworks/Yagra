@@ -119,6 +119,78 @@ async function openCatalog(page: import('@playwright/test').Page) {
   await expect(page.locator('.catalog')).toBeVisible({ timeout: 15_000 });
 }
 
+/**
+ * Read one column of pixels out of the mirrored chart (ADR-128).
+ *
+ * Everything ADR-128 draws goes into a canvas, so no DOM assertion reaches it and
+ * `scales.test.ts` — which runs a real uPlot in jsdom — reaches only the *scale*. This is the
+ * only way to ask whether the draw hook ran at all.
+ *
+ * ⚠️ It resolves the tokens through the LIVE `getComputedStyle`, so it re-reads them per call.
+ * That is what lets the same probe be pointed at a chart after a theme switch.
+ */
+async function probeMirror(cell: import('@playwright/test').Locator) {
+  return cell.locator('canvas').first().evaluate((el) => {
+    const canvas = el as HTMLCanvasElement;
+    // `.u-over` is uPlot's own overlay for the plot box, so its rect IS the drawing area — the
+    // alternative is re-deriving the axis width, which is the number under test.
+    const over = canvas.closest('.uplot')?.querySelector('.u-over') as HTMLElement;
+    const cr = canvas.getBoundingClientRect();
+    const or = over.getBoundingClientRect();
+    const sy = canvas.height / cr.height;
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+
+    const top = Math.round((or.top - cr.top) * sy);
+    const height = Math.round(or.height * sy);
+    const x = Math.round(((or.left - cr.left) + or.width / 2) * (canvas.width / cr.width));
+    const column = ctx.getImageData(x, top, 1, height).data;
+    const at = (row: number) => [0, 1, 2, 3].map((c) => column[row * 4 + c]);
+
+    /** A token as the literal the canvas would have used — the same resolution the chart does. */
+    const resolve = (name: string) => {
+      const c = document.createElement('canvas');
+      const cx = c.getContext('2d') as CanvasRenderingContext2D;
+      cx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      cx.fillRect(0, 0, 1, 1);
+      return [...cx.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    };
+    const near = (row: number, rgb: number[]) =>
+      Math.hypot(...rgb.map((v, i) => v - at(row)[i]));
+
+    /** The colour most of a band is — the ground, since gridlines and series are a few rows. */
+    const ground = (from: number, to: number) => {
+      const seen = new Map<string, number>();
+      for (let r = from; r < to; r++) {
+        const k = at(r).join(',');
+        seen.set(k, (seen.get(k) ?? 0) + 1);
+      }
+      return [...seen].sort((a, b) => b[1] - a[1])[0][0].split(',').map(Number);
+    };
+
+    const mid = Math.round(height / 2);
+    const rule = resolve('--text-secondary');
+    const series = resolve('--series-1');
+    let ruleRow = 0;
+    for (let r = 1; r < height; r++) if (near(r, rule) < near(ruleRow, rule)) ruleRow = r;
+    // Measured in the LOWER half, where the fixture's transmit line is and where the ground is
+    // the heavier of the two. A line painted over by that ground reads ~20% darker; one drawn on
+    // top of it is the token exactly. Searching the whole column instead would find the receive
+    // line in the upper half, which the 0.035 ground barely touches — a difference too small for
+    // any threshold to sit inside, which is what the first version of this check measured.
+    let seriesBelow = Infinity;
+    for (let r = mid + 2; r < height - 2; r++) seriesBelow = Math.min(seriesBelow, near(r, series));
+
+    return {
+      height,
+      mid,
+      ruleRow,
+      ruleDistance: near(ruleRow, rule),
+      seriesBelow,
+      above: ground(4, mid - 4),
+      below: ground(mid + 4, height - 4),
+    };
+  });
+}
 // The three widgets that shipped before this harness existed and each left "does it appear in the
 // catalogue, and does placing it draw anything" as an outstanding manual check (ADR-046 Inc.2,
 // Inc.3 and Inc.4). They are covered here rather than in three files because the seam is identical
@@ -336,6 +408,87 @@ test.describe('with a link already plotted', () => {
     // The labels came from the roster, and each names its direction.
     await expect(legend.nth(1)).toContainText('router-a · Gi0/3 In');
     await expect(legend.nth(2)).toContainText('router-a · Gi0/3 Out');
+
+    expect(errors.uncaught).toEqual([]);
+  });
+
+  // ADR-128. Everything below is painted into the canvas, so no DOM assertion can reach it and
+  // `scales.test.ts` — which runs a real uPlot in jsdom — can only reach the *scale*. The draw hook
+  // itself is executed by nothing else in the suite, and its likeliest failure is not a wrong
+  // colour: it is the block landing after `if (!referenceLine) return`, which this widget always
+  // takes. Then the axis would centre correctly and not one pixel of the overlay would exist.
+  test('centres zero, rules it, and gives each half its own ground', async ({ page, errors }) => {
+    await page.goto('/dashboard/my');
+    const cell = page.locator('.mydash-cell').first();
+    await expect(cell.locator('.metricchart-fill')).toBeVisible({ timeout: 15_000 });
+    await expect(cell.locator('.u-legend .u-series')).toHaveCount(3);
+
+    const probe = await probeMirror(cell);
+
+    // 🚨 The headline. Receive is 8 Mbps and transmit 2 Mbps in this fixture, so before ADR-128 the
+    // window auto-fitted to roughly [-2.6M, +8.8M] and zero sat about three quarters of the way
+    // down. The rule being at the middle is the symmetric window, measured end to end.
+    expect(Math.abs(probe.ruleRow - probe.mid), 'the zero rule is not at the axis midpoint').
+      toBeLessThanOrEqual(3);
+    // …and it really is the rule, not the nearest thing to it: a plot with no rule at all would
+    // still hand back *some* closest row, which is how this check could pass over an empty canvas.
+    expect(probe.ruleDistance, 'nothing at the midpoint is the rule colour').toBeLessThan(40);
+
+    // Each half has a ground, and the two are told apart — which is the whole of 案 C.
+    expect(probe.above[3], 'the upper half has no ground').toBeGreaterThan(0);
+    expect(probe.below[3], 'the lower half has no ground').toBeGreaterThan(0);
+    expect(probe.above, 'both halves painted the same ground').not.toEqual(probe.below);
+
+    // ⚠️ And the ground went UNDERNEATH, which nothing above can see: drop the `destination-over`
+    // and every other assertion here still passes. Transmit must be the series token exactly; a
+    // ground laid on top of it shifts it about 20% toward black, which is the gap this sits in.
+    expect(probe.seriesBelow, 'the lower half’s line is tinted — the ground is on top of it').
+      toBeLessThan(25);
+
+    expect(errors.uncaught).toEqual([]);
+  });
+
+// 🚨 Found by looking at a light-theme render, and it is NOT specific to this widget: every colour
+  // on a uPlot canvas is resolved once with `getComputedStyle` and captured in the option closures,
+  // so a theme switch changed nothing until the instance was rebuilt — and nothing rebuilt it. The
+  // file's own header said a data tick picked the theme up; it did not, and on a 7d window that tick
+  // is 15 minutes away. It was a mild wrongness while only the axis ink was stale. With ADR-128's
+  // ground painted over half the plot, a dark theme's `rgba(0,0,0,0.2)` left on a light card is a
+  // grey slab. Two things had to change: the chart subscribes to the theme (making the switch
+  // structural), and `setTheme` stamps `<html data-theme>` itself — because a child's effect runs
+  // BEFORE its parent's, so the rebuild was reading the theme the operator had just left.
+  test('repaints when the theme changes, rather than keeping the one it was built in', async ({
+    page,
+    errors,
+  }) => {
+    await page.goto('/dashboard/my');
+    const cell = page.locator('.mydash-cell').first();
+    await expect(cell.locator('.metricchart-fill')).toBeVisible({ timeout: 15_000 });
+
+    const canvas = cell.locator('canvas').first();
+    const pixels = () => canvas.evaluate((c) => (c as HTMLCanvasElement).toDataURL());
+    const dark = await pixels();
+
+    await page.locator('.usermenu-avatar').click();
+    await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    await page.getByRole('radio', { name: 'Light' }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[role="dialog"]')).toHaveCount(0);
+
+    // Byte-identical means the canvas was never redrawn — the defect, exactly.
+    await expect
+      .poll(pixels, { message: 'the canvas kept the theme it was built in', timeout: 5_000 })
+      .not.toBe(dark);
+
+    // …and it is repainted in the RIGHT theme, not merely repainted. The probe resolves the tokens
+    // live, so this compares the canvas against light's `--text-secondary`, which is the comparison
+    // that failed while the rule was still drawn in dark's.
+    const probe = await probeMirror(cell);
+    expect(Math.abs(probe.ruleRow - probe.mid)).toBeLessThanOrEqual(3);
+    expect(probe.ruleDistance, 'the zero rule is still the old theme’s colour').toBeLessThan(40);
+    expect(probe.above, 'both halves painted the same ground').not.toEqual(probe.below);
 
     expect(errors.uncaught).toEqual([]);
   });

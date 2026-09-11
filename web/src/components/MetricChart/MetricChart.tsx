@@ -3,7 +3,9 @@
 // theme's `--series-*` tokens (the same categorical palette every other chart surface uses), so
 // charts adapt to light/dark and never collide with the status channel. A uPlot canvas stroke
 // can't read a CSS var directly, so MetricChart resolves the `var(--series-N)` tokens against the
-// element's computed style at build time (like it already does for the axis/grid/reference colors).
+// element's computed style at build time (like it already does for the axis/grid/reference colors)
+// — which is why the active theme is part of `structKey`: a resolved colour is a literal captured
+// in a closure, so it can only follow a theme switch by the instance being rebuilt.
 // Supports a single series (`values`) or multiple (`series`), and resizes to its container width.
 
 import { useEffect, useRef } from 'react';
@@ -12,6 +14,8 @@ import 'uplot/dist/uPlot.min.css';
 import { buildChartScales } from './scales';
 import './MetricChart.css';
 import { applyIdleLegend, resolveColor } from './chartColor';
+import { gutterLabels, labelFits, mirrorLayout, type MirrorAxis } from './mirror';
+import { usePrefsStore } from '../../prefs';
 
 /** Default series palette (In / Out / aux …), indexed by series position, as theme tokens. In a DOM
  *  or SVG (via inline `style`/CSS) `var(--series-N)` resolves directly; passed to MetricChart as a
@@ -39,6 +43,14 @@ const SERIES_FALLBACK = ['#4c8dd6', '#9b7bd4', '#4caf9b', '#d68a4c', '#b05c8e', 
 // elements exist to measure. Corrected to the exact measured value immediately after construction.
 const FILL_CHROME_ESTIMATE = 28;
 const MIN_PLOT_HEIGHT = 40;
+
+/** Width of the value-axis gutter on a `mirrored` chart (px). uPlot's default is 50, which the tick
+ *  labels fill; the extra 18 is the lane the rotated IN/OUT labels stand in. Set at build time, so
+ *  turning `mirrored` on or off is a structural change (see `structKey`). */
+const MIRROR_AXIS_SIZE = 68;
+/** Where the rotated gutter label's centre line sits, measured from the canvas' left edge (px).
+ *  Left of the tick labels, which uPlot right-aligns against the plot. */
+const MIRROR_LABEL_X = 13;
 
 export interface ChartSeries {
   label: string;
@@ -98,6 +110,19 @@ interface Props {
    *  Drawn first, so the series stay legible on top. A band whose bounds are not finite, or whose
    *  `from` is not below its `to`, is skipped rather than drawn inside-out. */
   referenceBands?: { from: number; to: number; color: string; label?: string }[];
+  /** Declare that this chart plots one direction above zero and the other below it, and name the
+   *  two halves (ADR-128). Four things follow from that one fact, which is why they are one prop
+   *  rather than four flags a caller could half-apply:
+   *
+   *  1. the value axis is pinned **symmetrically about zero**, so the boundary is always the
+   *     midpoint — an explicit `yRange` still outranks it;
+   *  2. the zero line is drawn as a **rule over** the series, beating uPlot's own gridline there;
+   *  3. each half gets its **own ground** (`--chart-zone-above` / `--chart-zone-below`);
+   *  4. the gutter carries the two names, rotated, with ▲ / ▼ added here.
+   *
+   *  Pass the already-translated words (`IN` / `OUT`, `受信` / `送信`) — the marks are not theirs
+   *  to carry. */
+  mirrored?: MirrorAxis;
   /** Share the cursor with every other chart given the same key: hovering one moves the crosshair
    *  and the live legend of all of them, so charts stacked over the same time window can be read at
    *  a single instant instead of one at a time. Only the cursor position is shared — series
@@ -123,25 +148,47 @@ export function MetricChart({
   legendFormat,
   referenceLine,
   referenceBands,
+  mirrored,
   syncKey,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
+  // 🚨 **Every colour on this canvas is resolved once, at build time**, and captured in the option
+  // closures — the axis, the grid, the reference line, the palette and (ADR-128) the two grounds.
+  // So a theme switch changed nothing until something else rebuilt the chart: a poll tick calls
+  // `setData`, which redraws with the colours already captured. The header of this file claimed the
+  // data tick picked a theme up; it never did, and on a 7d window the next tick is 15 minutes away.
+  // Subscribing here is what makes the switch a structural change, below. It was a mild wrongness
+  // while only the axis ink was stale; with a ground painted over half the plot, a dark theme's
+  // `rgba(0,0,0,0.2)` left on a light card is a grey slab.
+  const theme = usePrefsStore((s) => s.theme);
   // Latest render-varying props, read by the uPlot option closures at draw AND scale time. This is
   // what lets a poll tick refresh data WITHOUT rebuilding the chart: fresh inline formatters / a
   // fresh `referenceLine` object each render don't change the instance, only what its closures read.
   // The axis pins belong here for the same reason — `buildChartScales` reads them through this ref
   // on every scale pass, which is what makes a range switch land without a rebuild (ADR-117).
-  const live = useRef({ yFormat, legendFormat, referenceLine, referenceBands, xRange, yRange });
-  live.current = { yFormat, legendFormat, referenceLine, referenceBands, xRange, yRange };
+  const live = useRef({
+    yFormat,
+    legendFormat,
+    referenceLine,
+    referenceBands,
+    xRange,
+    yRange,
+    mirrored,
+  });
+  live.current = { yFormat, legendFormat, referenceLine, referenceBands, xRange, yRange, mirrored };
 
   const resolved: ChartSeries[] =
     series ?? (values ? [{ label: title, values, color: PALETTE[0] }] : []);
   // A full rebuild is needed only when the chart *shape* changes (title, height, series
   // count/labels/colors) — not when the data values, axis ranges, or formatters change. Those
   // update the existing instance in place (see the data effect below).
+  // `mirrored` is in here because the gutter it needs is an axis `size`, which uPlot reads once at
+  // construction. Its two words are in as well, for the reason the series labels are: they are
+  // translated, so a language switch has to repaint them rather than wait for the next poll tick.
   const structKey =
-    `${title}|${height}|${syncKey ?? ''}|` +
+    `${title}|${height}|${syncKey ?? ''}|${theme}|` +
+    `${mirrored ? `mirror:${mirrored.above}/${mirrored.below}` : ''}|` +
     resolved.map((s) => `${s.label}:${s.color ?? ''}`).join('|');
   // Content signature of the optional reference line, so a value/label change redraws in place.
   // Overlay identity, in the data effect's deps so a changed overlay repaints without rebuilding
@@ -158,13 +205,22 @@ export function MetricChart({
     if (!el) return;
 
     // Canvas can't read CSS variables, so resolve the theme's axis/grid colors here (adapts
-    // to light/dark). The instance is rebuilt on a structural/theme-affecting change, so a theme
-    // switch is picked up then (and on the next data tick's redraw via the live refs).
+    // to light/dark). ⚠️ Everything resolved in this block is a literal from here on — a redraw
+    // reuses it. The theme is in `structKey`, so a switch runs this effect again; nothing else
+    // would, and the note that used to sit here said a data tick was enough. It is not.
     const cs = getComputedStyle(el);
     const axisColor = cs.getPropertyValue('--text-tertiary').trim() || '#8a8f98';
     const gridColor = cs.getPropertyValue('--border-color').trim() || 'rgba(255,255,255,0.1)';
     const refColor = cs.getPropertyValue('--status-critical').trim() || '#ef5350';
     const uiFont = cs.getPropertyValue('--ui-font-family').trim() || 'sans-serif';
+    // The two grounds of a mirrored chart, and the rule between them (ADR-128). The grounds are
+    // their own registered channel; the rule borrows `--text-secondary` the way the reference line
+    // borrows `--status-critical` — it is structure, so it wears the ink the axis wears, one step
+    // brighter than the tick labels. Fallbacks are hue-free on purpose: a zone that fell back to a
+    // colour would say something about the direction, which is exactly what the split must not do.
+    const zoneAbove = cs.getPropertyValue('--chart-zone-above').trim() || 'rgba(128,128,128,0.05)';
+    const zoneBelow = cs.getPropertyValue('--chart-zone-below').trim() || 'rgba(0,0,0,0.12)';
+    const zeroColor = cs.getPropertyValue('--text-secondary').trim() || '#a7aebb';
     // Resolve the theme's categorical series palette once for this build (canvas needs concrete
     // colors). A series' own `color` (which may itself be a `var(--series-N)`) wins over the palette.
     const pal = PALETTE.map((v, i) => resolveColor(v, cs, SERIES_FALLBACK[i % SERIES_FALLBACK.length]));
@@ -175,6 +231,9 @@ export function MetricChart({
     };
     const yAxis = {
       ...axis,
+      // A mirrored chart needs a wider gutter to stand its IN/OUT labels in. uPlot reads `size`
+      // once, which is why `mirrored` is part of `structKey`.
+      ...(mirrored ? { size: MIRROR_AXIS_SIZE } : {}),
       // Compact Y tick labels (e.g. SI suffixes) so wide numbers aren't clipped. Reads the live
       // formatter so a formatter swap is picked up on the next redraw without a rebuild.
       values: (_u: uPlot, splits: number[]) =>
@@ -222,6 +281,10 @@ export function MetricChart({
       hooks: {
         draw: [
           (u: uPlot) => {
+            // Canvas works in device pixels, so every stroke width and font size below is scaled by
+            // it. Hoisted out of the reference-line block because the mirror overlay needs it too.
+            const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
+
             // Bands first: they are context for the series, so they belong underneath it. The
             // series are drawn by uPlot before `draw` fires, so "underneath" is achieved with
             // `destination-over` rather than by ordering — repainting the series here would mean
@@ -249,6 +312,64 @@ export function MetricChart({
               ctx.restore();
             }
 
+            // The mirror overlay (ADR-128). ⚠️ It must sit ABOVE the early return below: the
+            // Interface traffic widget passes no `referenceLine`, so anything after that line never
+            // runs for the one chart this is for.
+            const mirror = live.current.mirrored;
+            if (mirror) {
+              const layout = mirrorLayout(u.bbox, u.valToPos(0, 'y', true));
+              // `null` ⇒ zero is not inside the plot, and then nothing is drawn rather than a
+              // boundary pinned to an edge. See `mirrorLayout`.
+              if (layout) {
+                const ctx = u.ctx;
+                // The grounds go under everything already painted — grid and series alike — by the
+                // same `destination-over` route the bands take. Drawn after the bands, so they land
+                // below those too: this is the ground, and a band is context on top of it.
+                ctx.save();
+                ctx.globalCompositeOperation = 'destination-over';
+                ctx.fillStyle = zoneAbove;
+                ctx.fillRect(u.bbox.left, layout.above.y, u.bbox.width, layout.above.height);
+                ctx.fillStyle = zoneBelow;
+                ctx.fillRect(u.bbox.left, layout.below.y, u.bbox.width, layout.below.height);
+                ctx.restore();
+
+                // The rule goes OVER the series, so it beats the gridline uPlot drew at zero.
+                // Underneath, that thin gridline would sit in the middle of the thick rule and
+                // muddy the one line the reader is meant to find.
+                ctx.save();
+                ctx.strokeStyle = zeroColor;
+                ctx.lineWidth = 1.75 * dpr;
+                ctx.beginPath();
+                ctx.moveTo(u.bbox.left, layout.zeroY);
+                ctx.lineTo(u.bbox.left + u.bbox.width, layout.zeroY);
+                ctx.stroke();
+                ctx.restore();
+
+                // The two names, rotated to read bottom-to-top, centred in their own half — each
+                // drawn only if its half is tall enough to hold it. A dashboard cell can be
+                // dragged short, and rotated text is as tall as it is wide: at a 60px plot the two
+                // ran together into one unreadable `OUT ▼IN ▲`.
+                const names = gutterLabels(mirror);
+                ctx.save();
+                ctx.font = `600 ${10.5 * dpr}px ${uiFont}`;
+                ctx.fillStyle = axisColor;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                for (const [text, y, half] of [
+                  [names.above, layout.aboveLabelY, layout.above.height],
+                  [names.below, layout.belowLabelY, layout.below.height],
+                ] as const) {
+                  if (!labelFits(half, ctx.measureText(text).width)) continue;
+                  ctx.save();
+                  ctx.translate(MIRROR_LABEL_X * dpr, y);
+                  ctx.rotate(-Math.PI / 2);
+                  ctx.fillText(text, 0, 0);
+                  ctx.restore();
+                }
+                ctx.restore();
+              }
+            }
+
             const referenceLine = live.current.referenceLine;
             if (!referenceLine) return;
             const refv = referenceLine.value;
@@ -259,7 +380,6 @@ export function MetricChart({
                 const belowRange = trueY > top + height; // value less than the visible min
                 const y = Math.min(top + height, Math.max(top, trueY)); // pin to the edge
                 const ctx = u.ctx;
-                const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
                 ctx.save();
                 ctx.strokeStyle = refColor;
                 ctx.lineWidth = 1.5 * dpr;

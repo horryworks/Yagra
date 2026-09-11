@@ -366,6 +366,8 @@
       "unitTitle": "ビット毎秒、またはユニキャストのパケット毎秒（マルチキャストとブロードキャストは数えません）",
       "unitBps": "bps",
       "unitPps": "pps",
+      "axisIn": "受信",
+      "axisOut": "送信",
       "rangeAria": "時間の幅"
     },
     "mostErrors": {

@@ -461,6 +461,16 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
         fill
         yFormat={(v) => formatSi(Math.abs(v))}
         legendFormat={(v) => fmt(Math.abs(v))}
+        // The whole of ADR-128: zero is pinned to the middle of the axis, drawn as a rule rather
+        // than a gridline, and each half gets its own ground and its name. Receive and transmit
+        // share one colour per link (ADR-069 decision 2), so which side of zero a line is on is the
+        // ONLY thing carrying its direction — and until this, that zero could sit anywhere.
+        // ⚠️ A fresh object each render is free here: `MetricChart` folds it into `structKey` by
+        // its two words, not by reference.
+        mirrored={{
+          above: t('widgets.ifTraffic.axisIn'),
+          below: t('widgets.ifTraffic.axisOut'),
+        }}
       />
     </>
   );

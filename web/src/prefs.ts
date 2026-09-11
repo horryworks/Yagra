@@ -137,8 +137,23 @@ export const usePrefsStore = create<PrefsStore>()(
       // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
       // object over the initial state, so a missing key reads as `null` and no migration is owed.
       interfaceDockHeight: null,
-      setTheme: (theme) => set({ theme }),
-      toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+      // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
+      // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
+      // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
+      // while `<html>` still carried the previous `data-theme`, and the chart came back painted in
+      // the theme the operator had just left. Setting the attribute inside the action makes it true
+      // before React re-renders at all, which is the only ordering nothing can get behind.
+      // App.tsx's effect stays: it is what applies the *persisted* theme on load, when no action ran.
+      setTheme: (theme) => {
+        applyTheme(theme);
+        set({ theme });
+      },
+      toggleTheme: () =>
+        set((s) => {
+          const theme = s.theme === 'dark' ? 'light' : 'dark';
+          applyTheme(theme);
+          return { theme };
+        }),
       setLanguage: (language) => set({ language }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       toggleNodeTreeGroup: (id) =>

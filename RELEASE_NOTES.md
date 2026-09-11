@@ -30,6 +30,24 @@
   port that is down, are left unshaded: there is no denominator for the first and nothing to shade
   for the second. Hovering a cell names the figure and the share of the link it represents.
 
+- **Dashboard ▸ Interface traffic: zero is now fixed to the middle of the chart, and the two
+  directions are told apart at a glance.** The widget draws receive above zero and transmit below
+  it, but the axis used to fit itself to the data — so a link running 95 Mbps in and 458 Mbps out
+  put zero a quarter of the way down, and the only thing separating the two directions was a thin
+  gridline. The value axis is now symmetric (`±` the larger of the two), so the boundary is always
+  the midpoint; zero is drawn as a rule rather than a gridline; each half has its own slightly
+  different ground; and the axis names them, `IN ▲` above and `OUT ▼` below. The trade is
+  deliberate: the quieter direction now shares the busier one's scale, so it is drawn smaller than
+  before — in exchange, the two can be compared against each other at all.
+
+### Bug Fixes
+
+- **Charts now repaint when you switch between the light and dark themes.** Every colour on a chart
+  is resolved once when the chart is built, so switching the theme left the plot — its axis, its
+  grid and its reference lines — drawn in the theme you had just left, until something else
+  happened to rebuild it. On a 7-day window that could be fifteen minutes. Affects every chart in
+  the product, not only the dashboard.
+
 ## v0.3.14 — Opening Nodes is fast on a deployment with many folders, the inventory tree stays where you put it, and a public board's interface and metric widgets answer anonymous visitors
 
 ### Improvements
