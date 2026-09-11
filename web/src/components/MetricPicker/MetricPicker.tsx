@@ -20,7 +20,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnchoredPopover, focusPopoverTrigger } from '../ui/AnchoredPopover';
-import { SearchInput } from '../ui/SearchInput';
+import { SearchField } from '../ui/SearchField';
 import { api } from '../../services/api';
 import type { MibCatalogEntry } from '../../types/api';
 import {
@@ -175,11 +175,13 @@ export function MetricPicker({ value, onChange, id, onlyPerInterface }: Props) {
         onKeyDown={onKeyDown}
       >
         <div className="metricpick-search">
-          <SearchInput
+          <SearchField
+            icon
             value={query}
-            onChange={setQuery}
+            onChange={(e) => setQuery(e.target.value)}
+            onClear={() => setQuery('')}
             placeholder={t('picker.search')}
-            ariaLabel={t('picker.search')}
+            aria-label={t('picker.search')}
           />
         </div>
         <div className="metricpick-list" ref={listRef}>

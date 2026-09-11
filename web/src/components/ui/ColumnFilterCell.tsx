@@ -15,6 +15,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next';
 import { AnchoredPopover, focusPopoverTrigger } from './AnchoredPopover';
 import { MultiSelectList } from './MultiSelectList';
+import { SearchField } from './SearchField';
 import { TextConditionEditor } from './TextConditionEditor';
 import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import {
@@ -150,14 +151,19 @@ function ValuesBody<T>({
     if (takeFocus) inputRef.current?.focus({ preventScroll: true });
   }, [takeFocus]);
   return (
-    <input
-      ref={inputRef}
-      className="field dt-f-values"
-      type="text"
+    <SearchField
+      inputRef={inputRef}
+      className="dt-f-values"
       value={draft}
       placeholder={spec.placeholder ?? t('filter.valuesPlaceholder')}
       aria-label={spec.placeholder ?? t('filter.valuesPlaceholder')}
       onChange={(e) => setDraft(e.target.value)}
+      // Past the debounce on purpose: the set is empty the moment the ✕ is pressed, and waiting
+      // 350ms to say so would leave the list narrowed by a value no longer on screen.
+      onClear={() => {
+        setDraft('');
+        commit.current('');
+      }}
     />
   );
 }

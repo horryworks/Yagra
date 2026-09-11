@@ -10,7 +10,8 @@
 //
 // Two things were deleted from this file in Inc.7 rather than kept "just in case":
 //
-//  - **`SearchInput` moved to `SearchInput.tsx`.** Three pickers still use it and none of them is a
+//  - **The search box moved out, and is now `SearchField.tsx`** (ADR-132 folded the picker-only
+//    `SearchInput` into the one box every surface uses). Five pickers use it and none of them is a
 //    list; leaving it here would have kept the toolbar advertising a search slot that no list may
 //    use. Its own header says what it is for now.
 //  - **`FilterSelect` is gone entirely.** It was the single-valued toolbar dropdown, and its last

@@ -3,11 +3,11 @@
 // node search that queries the server on each keystroke (debounced), capped — never a flat dropdown
 // and never a whole-inventory client load (A-2). Emits a plain { id, name } | null. Distinct from
 // the troubleshoot ScopePicker (which also offers All/Group modes) because the events API filters by
-// node_id only. Reuses the popover/roving-key pattern and SearchInput.
+// node_id only. Reuses the popover/roving-key pattern and SearchField.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SearchInput } from '../ui/SearchInput';
+import { SearchField } from '../ui/SearchField';
 import { useNodeSearch } from '../../lib/useNodeSearch';
 import './NodePicker.css';
 
@@ -184,14 +184,19 @@ export function NodePicker({
         <div ref={popRef} className={dropUp ? 'nodepick-pop drop-up' : 'nodepick-pop'}>
           <div ref={boxRef} onKeyDown={onKeyDown}>
             <div className="nodepick-search">
-              <SearchInput
+              <SearchField
+                icon
                 value={query}
-                onChange={(v) => {
-                  setQuery(v);
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setActive(0);
+                }}
+                onClear={() => {
+                  setQuery('');
                   setActive(0);
                 }}
                 placeholder={t('nodePicker.searchPlaceholder')}
-                ariaLabel={t('nodePicker.searchAria')}
+                aria-label={t('nodePicker.searchAria')}
               />
             </div>
             <div className="nodepick-list" role="listbox" aria-label={t('nodePicker.listAria')}>

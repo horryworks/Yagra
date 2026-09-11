@@ -78,7 +78,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ActionMenu } from '../components/ui/ActionMenu';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
-import { TextInput } from '../components/ui/Field';
+import { SearchField } from '../components/ui/SearchField';
 import { AddNodeModal } from '../components/AddNodeModal/AddNodeModal';
 import { GroupModal, type GroupModalState } from '../components/GroupModal/GroupModal';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
@@ -812,10 +812,15 @@ export function NodesPage() {
                   )}
                 />
               )}
-              <TextInput
-                className="nodes-pane-search"
+              {/* The clear affordance is the box's own, and it clears the box and nothing else.
+                  clearAllFilters also writes the URL, which would take the state / kind / pool
+                  controls with it — three filters the operator did not ask to drop. ClearFilters in
+                  the action row is the control that means all of them. */}
+              <SearchField
+                boxClassName="nodes-pane-search"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
+                onClear={() => setFilter('')}
                 placeholder={t('inventory.searchPlaceholder')}
               />
             </div>

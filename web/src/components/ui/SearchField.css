@@ -1,0 +1,130 @@
+/* The one search box (ADR-132). Moved here from `styles/table.css`'s `.table-search*` block, which
+   sat beside the toolbar rules because the box used to be the toolbar's search slot — the toolbar
+   has had no search slot since ADR-053 Inc.7, so the styling now lives with its component like
+   every other primitive's does.
+
+   What this file owns: the wrapper, the ✕, the magnifier, and the room reserved for the ✕. What it
+   does NOT own is how each box looks — there are five shipped looks (`--bg-secondary` here,
+   `--bg-tertiary` in the top bar, `--bg-primary` inside a popover so it sits below the panel it is
+   drawn on) and unifying them would repaint screens nobody asked about. */
+
+.sfield {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* The default box. Every call site gets this; the four that need a different one declare their own
+   single-class rule, which wins on a tie because its stylesheet loads after this one (every consumer
+   imports this component, so this file is always the earlier of the two). */
+.sfield-input {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+}
+
+.sfield-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.sfield-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+/* 🚨 Compound on purpose, and a longhand rather than the `padding` shorthand. A call site's own
+   `padding: 6px 8px` is one class, so a single-class rule here would be decided by stylesheet order
+   and lose — the text would then run under the ✕, which reads as "a bit cramped" rather than as a
+   bug. Specificity resolves per property, so the right side comes from here and the other three
+   sides keep coming from the call site. */
+.sfield > .sfield-input {
+  padding-right: 26px;
+}
+
+/* 🚨 Blink and WebKit draw their own ✕ here and Gecko draws none. Suppressing it is half of what
+   makes this component one answer instead of a per-browser one. */
+.sfield-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+/* The standalone box: a magnifier on the left and a fixed width. The five call sites that carry one
+   are exactly the five that are a box in their own right (the pickers and the widget catalog) — the
+   rest are a box inside something that already has a width. */
+.sfield-icon {
+  width: 240px;
+  max-width: 100%;
+}
+
+.sfield-icon > svg {
+  position: absolute;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.sfield-icon > .sfield-input {
+  padding-left: 28px;
+}
+
+/* The ✕. Same 20px square, same two colours and the same inset focus ring as `.dt-f-clear`, which is
+   the clear button beside a filter trigger — one clear affordance, drawn once. */
+.sfield-clear {
+  position: absolute;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.sfield-clear:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.sfield-clear:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
+/* A 20px square is not a touch target. Widen it to the 40px floor for a secondary in-row control and
+   let it take the box's full height — ⚠️ which is the box's height, not 40px, when the box is
+   shorter. That limit is the one `.dt-f-clear` already lives with; the box cannot grow without
+   changing the row it sits in. */
+@media (hover: none) {
+  .sfield-clear {
+    right: 0;
+    width: 40px;
+    height: 100%;
+    border-radius: var(--radius);
+  }
+
+  .sfield > .sfield-input {
+    padding-right: 44px;
+  }
+}
+
+/* Mobile: the standalone box takes the whole row it is on (carried over from the toolbar rule this
+   replaced — the boxes it applies to are now in modals and popovers, where the same reading holds). */
+html[data-viewport='mobile'] .sfield-icon {
+  flex: 1 1 100%;
+  width: 100%;
+}

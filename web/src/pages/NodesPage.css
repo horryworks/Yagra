@@ -64,8 +64,14 @@
   gap: 6px;
 }
 
+/* Width on the wrapper, height on the input — the ✕ is positioned against the wrapper (ADR-132).
+   The height is compound because the shared default (`.sfield-input`) sets `--control-h`, and a
+   single class would be decided by stylesheet order. */
 .nodes-pane-search {
   width: 150px;
+}
+
+.nodes-pane-search > .sfield-input {
   height: 28px;
 }
 

@@ -20,6 +20,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { SearchField } from './SearchField';
 import type { TextMode } from '../../lib/columnFilter';
 import {
   conditionEcho,
@@ -129,9 +130,8 @@ export function TextConditionEditor({
 
   return (
     <div className="tcond">
-      <input
-        ref={inputRef}
-        type="search"
+      <SearchField
+        inputRef={inputRef}
         className="tcond-input"
         value={draft.term}
         placeholder={placeholder ?? t('filter.termPlaceholder')}
@@ -142,6 +142,10 @@ export function TextConditionEditor({
           // they are done.
           if (e.key === 'Enter') commitNow(draft);
         }}
+        // Same reading as Enter, and why it is not setDraft: emptying the box is a decision, not a
+        // keystroke on the way to one. The mode and the NOT toggle survive it — the cell's own ✕
+        // beside the trigger is the one that drops those too.
+        onClear={() => commitNow({ ...draft, term: '' })}
       />
       {(modes.length > 1 || allowNot) && (
         <div className="tcond-controls">

@@ -59,8 +59,9 @@
   gap: 10px;
 }
 
+/* The box itself. Its width lives on the SearchField wrapper (`.gsearch-box`), not here — see
+   that rule for why. */
 .topbar-search {
-  width: 200px;
   height: 30px;
   padding: 0 10px;
   background: var(--bg-tertiary);

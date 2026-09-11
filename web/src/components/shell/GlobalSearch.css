@@ -6,6 +6,13 @@
   position: relative;
 }
 
+/* 🚨 The search box's width belongs to the SearchField wrapper, not to the input. The ✕ is
+   positioned against the wrapper, so a 200px input inside a full-width wrapper would put the ✕
+   somewhere to the right of the box it belongs to (ADR-132). */
+.gsearch-box {
+  width: 200px;
+}
+
 .gsearch-pop {
   position: absolute;
   top: calc(100% + 6px);
@@ -82,8 +89,11 @@ html[data-viewport='mobile'] .gsearch.mobile {
   flex: 1;
 }
 
-html[data-viewport='mobile'] .gsearch.mobile .topbar-search {
+html[data-viewport='mobile'] .gsearch.mobile .gsearch-box {
   width: 100%;
+}
+
+html[data-viewport='mobile'] .gsearch.mobile .topbar-search {
   height: var(--touch-target);
   font-size: var(--font-touch-input);
 }

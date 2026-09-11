@@ -25,7 +25,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnchoredPopover } from './AnchoredPopover';
-import { SearchInput } from './SearchInput';
+import { SearchField } from './SearchField';
 import { SEARCH_THRESHOLD } from './MultiSelectList';
 import { filterGroupOptions, type GroupOption } from '../../lib/nodeTree';
 import './GroupPicker.css';
@@ -149,14 +149,19 @@ export function GroupPicker({
       >
         {showSearch && (
           <div className="grouppick-search" ref={searchRef}>
-            <SearchInput
+            <SearchField
+              icon
               value={query}
-              onChange={(v) => {
-                setQuery(v);
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setActive(0);
+              }}
+              onClear={() => {
+                setQuery('');
                 setActive(0);
               }}
               placeholder={t('groupPicker.searchPlaceholder')}
-              ariaLabel={t('groupPicker.searchAria')}
+              aria-label={t('groupPicker.searchAria')}
             />
           </div>
         )}

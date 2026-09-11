@@ -640,42 +640,9 @@ html[data-viewport='mobile'] .ytable {
   flex-wrap: wrap;
 }
 
-.table-search {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.table-search svg {
-  position: absolute;
-  left: 9px;
-  width: 14px;
-  height: 14px;
-  color: var(--text-tertiary);
-  pointer-events: none;
-}
-
-.table-search input {
-  height: var(--control-h);
-  width: 240px;
-  max-width: 100%;
-  padding: 0 10px 0 28px;
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-  color: var(--text-primary);
-  font-family: var(--ui-font-family);
-  font-size: var(--font-sm);
-}
-
-.table-search input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.table-search input:focus {
-  outline: none;
-  border-color: var(--accent-color);
-}
+/* The search box moved out to `components/ui/SearchField.css` (ADR-132) — it was never the
+   toolbar's any more (ADR-053 Inc.7 removed the search slot), and it is now one shared primitive
+   with its own ✕. `.table-search` no longer exists. */
 
 /* Toolbar filter dropdowns (FilterSelect). `.field` already gives the 30px height the search box
    uses; only the type scale differs — a filter reads as chrome beside the search box, not as a form
@@ -688,16 +655,6 @@ html[data-viewport='mobile'] .ytable {
 
 .table-spacer {
   flex: 1;
-}
-
-/* Mobile (ADR-027): the search takes the whole first row; filters/count/primary action wrap onto
-   the next row (the toolbar already `flex-wrap: wrap`s). */
-html[data-viewport='mobile'] .table-search {
-  flex: 1 1 100%;
-}
-
-html[data-viewport='mobile'] .table-search input {
-  width: 100%;
 }
 
 .table-count {

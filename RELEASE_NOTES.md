@@ -66,6 +66,24 @@
 
 ### Improvements
 
+- **Every search box can now empty itself: while it holds anything, a ✕ sits at its right edge.**
+  Eleven boxes across the WebUI gained it — the top bar's global search, the node tree's search, the
+  node / scope / folder / metric pickers, the widget catalog, the collection editor's catalog
+  search, and the three boxes a column filter draws (the free-text term, the comma-separated value
+  set, and the "find an option" typeahead). Pressing it leaves the caret in the box, so a popover
+  stays open and you can type again straight away.
+  - Before this, whether a box could be emptied depended on the browser: four of them relied on the
+    clear button Chrome and Safari draw for a search field, which Firefox does not draw at all, and
+    the rest had nothing. Escape has never cleared a search box and still does not — inside a
+    popover it means "close", and a single key with two meanings is worse than a button you can see.
+  - The ✕ clears **that box and nothing else**. On the node tree it leaves the state / kind / pool
+    filters alone (**Clear all filters** in the action row is still the control that means all of
+    them), and inside a column filter it clears the term while leaving the regex and exclude
+    settings — the ✕ beside the closed filter trigger is the one that drops the whole condition.
+  - It is not a tab stop: Ctrl+A then Delete already empties a box from the keyboard, and a stop in
+    every one of the eleven would be one more press on the way through a list of options. On a touch
+    device it widens to 40px.
+
 - **The Interface traffic card now draws transmit above the zero line and receive below it** — the
   other way round from every release before this one. Nothing else about the chart changed: zero
   stays pinned to the middle of the axis, each half keeps its own shading and its name in the

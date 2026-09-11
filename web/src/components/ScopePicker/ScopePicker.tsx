@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SearchInput } from '../ui/SearchInput';
+import { SearchField } from '../ui/SearchField';
 import { groupOptions } from '../../lib/nodeTree';
 import { useNodeSearch } from '../../lib/useNodeSearch';
 import { Segmented } from '../../components/ui/Segmented';
@@ -179,14 +179,19 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
           {mode === 'node' && (
             <div ref={nodeBoxRef} onKeyDown={onNodeKeyDown}>
               <div className="scope-search">
-                <SearchInput
+                <SearchField
+                  icon
                   value={query}
-                  onChange={(v) => {
-                    setQuery(v);
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setActive(0);
+                  }}
+                  onClear={() => {
+                    setQuery('');
                     setActive(0);
                   }}
                   placeholder={t('common:nodePicker.searchPlaceholder')}
-                  ariaLabel={t('common:nodePicker.searchAria')}
+                  aria-label={t('common:nodePicker.searchAria')}
                 />
               </div>
               <div className="scope-list" role="listbox" aria-label={t('common:nodePicker.listAria')}>

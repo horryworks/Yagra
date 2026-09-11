@@ -9,7 +9,7 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { useLayoutStoreContext } from './LayoutStoreContext';
-import { SearchInput } from '../components/ui/SearchInput';
+import { SearchField } from '../components/ui/SearchField';
 import { catalogBySection } from './registry';
 import { catalogFor } from './publicCatalog';
 import { countWidgets, filterCatalog } from './catalogFilter';
@@ -48,11 +48,13 @@ export function CatalogModal({
       footer={<Button onClick={onClose}>{t('actions.done')}</Button>}
     >
       <div className="catalog-search">
-        <SearchInput
+        <SearchField
+          icon
           value={q}
-          onChange={setQ}
+          onChange={(e) => setQ(e.target.value)}
+          onClear={() => setQ('')}
           placeholder={t('catalog.searchPlaceholder')}
-          ariaLabel={t('catalog.searchAria')}
+          aria-label={t('catalog.searchAria')}
         />
         <span className="catalog-count muted">
           {t('catalog.count', { shown, total: countWidgets(all) })}

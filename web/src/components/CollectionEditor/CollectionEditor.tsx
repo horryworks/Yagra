@@ -17,6 +17,7 @@ import type {
 } from '../../types/api';
 import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
+import { SearchField } from '../ui/SearchField';
 import { IconButton } from '../ui/IconButton';
 import { TrashIcon } from '../ui/icons';
 import './CollectionEditor.css';
@@ -214,11 +215,12 @@ export function CollectionEditor({
           {/* The catalog picker belongs with the form it fills in, so it moved with it. */}
           {picking && (
             <div className="ce-picker">
-              <TextInput
-                className="ce-picker-search"
+              <SearchField
+                boxClassName="ce-picker-search"
                 placeholder={t('editor.pickerSearchPlaceholder')}
                 value={pickQuery}
                 onChange={(e) => setPickQuery(e.target.value)}
+                onClear={() => setPickQuery('')}
               />
               {picks.length === 0 ? (
                 <p className="muted">{t('editor.noCatalogMatch')}</p>

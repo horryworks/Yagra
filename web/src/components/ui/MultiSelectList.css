@@ -10,8 +10,14 @@
   gap: 4px;
 }
 
-.msel-search {
+/* The margin is on the SearchField wrapper, not here: the ✕ sits against the wrapper's right
+   edge, so a margin on the input would push the box away from its own ✕ (ADR-132). */
+.msel > .sfield {
   margin: 2px;
+}
+
+.msel-search {
+  height: auto;
   padding: 5px 8px;
   background: var(--bg-primary);
   border: var(--border-width) solid var(--border-color);

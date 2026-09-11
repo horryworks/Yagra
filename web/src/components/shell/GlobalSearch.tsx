@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { SearchField } from '../ui/SearchField';
 import { useNodeSearch } from '../../lib/useNodeSearch';
 import type { NodeSearchResult } from '../../types/api';
 import {
@@ -98,10 +99,10 @@ export function GlobalSearch({ mobile = false }: { mobile?: boolean }) {
 
   return (
     <div className={mobile ? 'gsearch mobile' : 'gsearch'} ref={rootRef}>
-      <input
-        ref={inputRef}
+      <SearchField
+        inputRef={inputRef}
+        boxClassName="gsearch-box"
         className="topbar-search"
-        type="search"
         value={query}
         placeholder={t('shell.search')}
         aria-label={t('shell.globalSearch')}
@@ -115,6 +116,12 @@ export function GlobalSearch({ mobile = false }: { mobile?: boolean }) {
           setOpen(true);
         }}
         onKeyDown={onKeyDown}
+        // The popover stays open: clearing is "start again", not "I am done here" — and the caret
+        // never leaves the box, so nothing would reopen it.
+        onClear={() => {
+          setQuery('');
+          setActive(0);
+        }}
       />
       {open && (
         <div className="gsearch-pop" id="gsearch-results">

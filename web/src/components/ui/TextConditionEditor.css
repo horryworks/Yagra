@@ -11,6 +11,8 @@
 }
 
 .tcond-input {
+  /* Grows to its own padding, rather than taking the shared `--control-h` from `.sfield-input`. */
+  height: auto;
   padding: 6px 8px;
   background: var(--bg-primary);
   border: var(--border-width) solid var(--border-color);

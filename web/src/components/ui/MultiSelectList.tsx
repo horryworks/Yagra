@@ -19,6 +19,7 @@
 
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { SearchField } from './SearchField';
 import type { FilterOption } from '../../lib/columnFilter';
 import './MultiSelectList.css';
 
@@ -97,14 +98,16 @@ export function MultiSelectList({
   return (
     <div className="msel">
       {showSearch && (
-        <input
-          ref={searchRef}
-          type="search"
+        <SearchField
+          inputRef={searchRef}
           className="msel-search"
           value={query}
           placeholder={t('filter.optionSearch')}
           aria-label={t('filter.optionSearch')}
           onChange={(e) => setQuery(e.target.value)}
+          // Only the typeahead. .msel-clear below clears the *selection*, which is a different thing
+          // and lives in a different place on purpose.
+          onClear={() => setQuery('')}
         />
       )}
       <div
