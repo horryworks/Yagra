@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.15 — Every list's column widths are yours to set and they follow your account, the Interfaces list splits In and Out and shades each by how full the link is, and the Geo map is drawn from real coastline data
+
 ### Improvements
 
 - **Every list can have its column widths set by the person reading it, and they follow that
