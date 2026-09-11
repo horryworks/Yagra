@@ -96,9 +96,13 @@ export interface GeoView {
 }
 
 /** Zoom bounds. `1` shows the whole world at its intrinsic size; the floor lets a small pane still
- *  fit the world, and the ceiling stops a single site zooming to a meaningless blur of coastline. */
+ *  fit the world, and the ceiling stops a single site zooming to a meaningless blur of coastline.
+ *  The ceiling follows the outline's resolution: it was 12 while the coastline came from the
+ *  1:110m set, whose ~19 km simplification was already several pixels wide there. The 1:10m set is
+ *  simplified at ≈3.3 km, which is still under 1.5 px at 24 — the point at which a whole prefecture
+ *  fills the pane and the sites in it stop overlapping. */
 export const MIN_GEO_SCALE = 0.3;
-export const MAX_GEO_SCALE = 12;
+export const MAX_GEO_SCALE = 24;
 
 /** Fraction of the viewport the fitted content fills, so pins near the edge are not flush. */
 const MARGIN = 0.88;

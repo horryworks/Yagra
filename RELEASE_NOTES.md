@@ -12,6 +12,16 @@
 
 ### Improvements
 
+- **Topology ▸ Geo map: the coastline is drawn from Natural Earth's 1:10m data, and the map zooms
+  twice as far.** The outline used to come from the coarsest set (1:110m, simplified to about
+  19 km), which is right at the world view and a dozen straight edges once Japan fills the pane —
+  the Seto Inland Sea was a notch, Tokyo Bay was land, Awaji and Sado were missing. It is now the
+  finest set, simplified to about 3 km, so a prefecture reads like a map rather than a sketch; the
+  Caspian, the Great Lakes, Baikal, Biwa and every lake above roughly 500 km² are drawn as water;
+  and the zoom ceiling rises from 12× to 24×, where the new detail is still under two pixels wide.
+  The map is still bundled with the app and needs no internet, but the Topology chunk it belongs to
+  grows from ~40 KB to ~240 KB over the wire — downloaded once, and only when Topology is opened.
+
 - **Node detail ▸ Interfaces: In and Out are now two columns, each shaded by how full the link is.**
   They used to share one cell (`1.2 Gbps / 340 Mbps`), so telling which direction was congested
   meant reading either side of a slash on every row. Each cell's background now runs green → amber

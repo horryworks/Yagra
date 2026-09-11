@@ -46,7 +46,7 @@ import {
   project,
   type GeoView,
 } from './geoProjection';
-import { WORLD_OUTLINE } from './worldOutline';
+import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
 import './GeoMapPage.css';
 
 export function GeoMapPage() {
@@ -291,6 +291,10 @@ export function GeoMapPage() {
                 <rect className="geopage-ocean" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} />
                 {WORLD_OUTLINE.map((d, i) => (
                   <path className="geopage-land" d={d} key={i} />
+                ))}
+                {/* Inland water, in the ocean colour, over the land it sits in. */}
+                {WORLD_LAKES.map((d, i) => (
+                  <path className="geopage-lake" d={d} key={i} />
                 ))}
                 {placed.map((g) => {
                   const p = project(g.latitude, g.longitude);

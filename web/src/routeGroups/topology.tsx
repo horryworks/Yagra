@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Lazy route group: Topology (network map, dependency editor, geo map). Mounted by `routes.tsx` at
-// `topology/*` through `React.lazy`, so the geo outline (`pages/worldOutline.ts`, ~39 KB of source)
-// and the two hand-written SVG views stay out of the initial chunk — an operator who only opens the
-// dashboard never downloads them (ADR-027 makes mobile a supported persona).
+// `topology/*` through `React.lazy`, so the geo outline (`pages/worldOutline.ts`, ~620 KB of
+// source, ~170 KB over the wire) and the two hand-written SVG views stay out of the initial chunk —
+// an operator who only opens the dashboard never downloads them (ADR-027 makes mobile a supported
+// persona). That outline is the reason this group is lazy at all: it grew sixteenfold when the
+// coastline moved from the 1:110m set to 1:10m, and it is the largest single constant in the app.
 //
 // The whole group is ONE boundary on purpose: the group component stays mounted while the operator
 // moves between its screens, so only the first entry suspends. Splitting per page would re-suspend

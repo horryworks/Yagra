@@ -90,6 +90,16 @@
   vector-effect: non-scaling-stroke; /* the coastline stays hairline at every zoom */
 }
 
+/* Inland water (the Caspian, the Great Lakes, Baikal …) is painted over the land in the ocean
+   colour, with the same hairline shore, so it reads as the same water rather than as a hole. */
+.geopage-lake {
+  fill: var(--bg-secondary);
+  stroke: var(--border-color);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
 .geopage-pin {
   cursor: pointer;
 }
