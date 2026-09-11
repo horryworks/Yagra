@@ -27,7 +27,13 @@
   width: 2px;
   margin: 7px 0;
   border-radius: 1px;
-  background: transparent;
+  /* Visible at rest, and that is a decision. A grip that appears only on hover is a control the
+     operator has to already know about in order to find — the first thing said about this feature
+     on a real deployment was "I expected a slider on hover and nothing came out", and half of that
+     was a layout bug while the other half was having nothing to aim at. At rest it reads as an
+     ordinary column rule in the header; under the pointer or the focus ring it takes the accent and
+     says it is a control. ui-conventions.md R6: a feature nobody can find is not shipped. */
+  background: var(--border-color);
   transition: background 0.15s;
 }
 
@@ -41,10 +47,6 @@
 @media (hover: none) {
   .colresize {
     width: 20px;
-  }
-
-  .colresize-grip {
-    background: var(--border-color);
   }
 }
 

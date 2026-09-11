@@ -376,44 +376,45 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         ref={listRef}
         style={{ ['--nd-if-cols' as string]: interfaceCols }}
       >
-        {/* ⚠️ Every header cell names its track explicitly, because the resize grips below are
-            explicitly placed and CSS grid auto-placement skips a cell an explicit item already
-            occupies — without this the nine headings drop into an implicit second row the moment a
-            grip is drawn (ADR-129). The filter row and the data rows still auto-place: they carry
+        {/* ⚠️ Every header cell names its track AND its row explicitly, because the resize grips
+            below are placed at an explicit row and column. An item given only `grid-column` is
+            still auto-placed down the rows, so it lands in the first row where that column is free
+            — row 2, because the grip holds row 1 — and the whole header renders one band lower.
+            Shipped that way once (ADR-129). The filter row and the data rows still auto-place: they carry
             no grips. Not rendered on a phone at all — `.nd-if-head` is `display: none` there, so
             the grips leave the focus order with it. */}
         <div className="nd-if-head">
-          <div className="nd-if-h" style={{ gridColumn: 1 }}>
+          <div className="nd-if-h" style={{ gridColumn: 1, gridRow: 1 }}>
             {t('interfaces.colInterface')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 2 }}>
+          <div className="nd-if-h" style={{ gridColumn: 2, gridRow: 1 }}>
             {t('interfaces.colDescription')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 3 }} title={t('interfaces.colOperTitle')}>
+          <div className="nd-if-h" style={{ gridColumn: 3, gridRow: 1 }} title={t('interfaces.colOperTitle')}>
             {t('interfaces.colOper')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 4 }}>
+          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }}>
             {t('interfaces.colMedia')}
           </div>
-          <div className="nd-if-h right" style={{ gridColumn: 5 }}>
+          <div className="nd-if-h right" style={{ gridColumn: 5, gridRow: 1 }}>
             {t('interfaces.colSpeed')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 6 }} title={t('interfaces.duplexHint')}>
+          <div className="nd-if-h" style={{ gridColumn: 6, gridRow: 1 }} title={t('interfaces.duplexHint')}>
             {t('interfaces.colDuplex')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 7 }}>
+          <div className="nd-if-h" style={{ gridColumn: 7, gridRow: 1 }}>
             {t('interfaces.colThroughput')}
           </div>
           <div
             className="nd-if-h right"
-            style={{ gridColumn: 8 }}
+            style={{ gridColumn: 8, gridRow: 1 }}
             title={t('interfaces.colInOutTitle')}
           >
             {t('interfaces.colIn')}
           </div>
           <div
             className="nd-if-h right"
-            style={{ gridColumn: 9 }}
+            style={{ gridColumn: 9, gridRow: 1 }}
             title={t('interfaces.colInOutTitle')}
           >
             {t('interfaces.colOut')}

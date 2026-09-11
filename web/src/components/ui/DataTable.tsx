@@ -239,11 +239,13 @@ export function DataTable<T>({
         <div className="dt-head" style={{ gridTemplateColumns: template, ...widthStyle }}>
           {columns.map((c, i) => {
             const cls = c.align === 'right' ? 'dt-h right' : 'dt-h';
-            // ⚠️ The track is named explicitly because the resize grips below are explicitly
-            // placed, and CSS grid auto-placement skips cells an explicit item already occupies —
-            // leaving the headers to auto-place would drop them into an implicit second row
-            // (ADR-129). The filter row and the data rows still auto-place; they carry no grips.
-            const at = { gridColumn: i + 1 };
+            // ⚠️ **Both axes, and the row is the half that bites.** The resize grips below are
+            // placed at an explicit row AND column; an item given only `grid-column` is still
+            // auto-placed down the rows, so it lands in the first row where that column is free —
+            // which is row 2, because the grip has row 1. The whole header then renders one band
+            // lower. Shipped that way once (ADR-129); the filter row and the data rows still
+            // auto-place, because they carry no grips.
+            const at = { gridColumn: i + 1, gridRow: 1 };
             if (!c.sortable || !sort || !onSortChange) {
               return (
                 <div key={c.key} className={cls} style={at}>

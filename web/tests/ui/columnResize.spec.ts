@@ -58,19 +58,41 @@ test('every column carries a grip, announced as a control with real bounds', asy
   await expect(first).toHaveAttribute('aria-valuemax', /\d+/);
 });
 
-test('the headings stay on one row once the grips are drawn', async ({ page }) => {
-  // 🚨 The failure this exists for: the grips are placed into explicit grid cells, and CSS grid
-  // auto-placement skips a cell an explicit item already occupies. If a header cell ever loses its
-  // own explicit `gridColumn`, the headings drop into an implicit second row — a table that still
-  // "renders" and is completely wrong. Same y, and the header keeps its declared height.
+test('the headings share the grips’ row instead of being pushed below them', async ({ page }) => {
+  // 🚨 THE FAILURE THIS EXISTS FOR, and the first version of it could not see it. The grips are
+  // placed at an explicit row AND column; a header cell given only `grid-column` is still
+  // auto-placed down the rows, so it lands in row 2 and the whole header renders one band lower.
+  // That shipped (ADR-129) — and the check written for it compared the headings **to each other**,
+  // which is exactly the quantity that does not change when they all move together.
+  //
+  // So compare each heading to the thing that displaced it: its own grip. They occupy one grid
+  // cell, so their boxes must overlap vertically. And assert the header did not grow a second row.
   await page.goto('/events');
   await expect(page.locator(TABLE).first()).toBeVisible();
 
-  const boxes = await page.locator(`${HEAD} > .dt-h`).evaluateAll((els) =>
-    els.map((el) => el.getBoundingClientRect().top),
-  );
-  expect(boxes.length).toBeGreaterThan(3);
-  expect(Math.max(...boxes) - Math.min(...boxes), 'the headings wrapped to a second row').toBeLessThan(2);
+  const overlap = await page.locator(HEAD).first().evaluate((head) => {
+    const rowH = head.getBoundingClientRect().height;
+    const cells = [...head.querySelectorAll(':scope > .dt-h')];
+    const grips = [...head.querySelectorAll(':scope > .colresize')];
+    return {
+      rowH,
+      pairs: cells.length,
+      apart: cells.map((c, i) => {
+        const a = c.getBoundingClientRect();
+        const b = grips[i]?.getBoundingClientRect();
+        return b ? Math.max(a.top - b.bottom, b.top - a.bottom) : Number.NaN;
+      }),
+    };
+  });
+
+  expect(overlap.pairs, 'no header cells were inspected').toBeGreaterThan(3);
+  for (const [i, gap] of overlap.apart.entries()) {
+    expect(gap, `heading ${i} does not share a row with its own grip`).toBeLessThan(0);
+  }
+  // `.dt-head` declares `height: 38px`, so a second implicit row cannot make it taller — it clips
+  // instead, which is why the overlap check above is the one that has to hold. The Interfaces list
+  // uses `min-height` and does grow, so both symptoms are covered between here and its own test.
+  expect(overlap.rowH, 'the header row grew a second band').toBeLessThan(48);
 });
 
 test('dragging a grip widens its own column and leaves the others where they were', async ({
@@ -248,6 +270,15 @@ test.describe('the node-detail Interfaces list', () => {
 
     const grips = page.locator('.nd-if-head .colresize');
     await expect(grips).toHaveCount(9);
+
+    // 🚨 The symptom the operator actually reported: `.nd-if-head` is `min-height: 32px`, so a
+    // heading pushed into an implicit second row does not clip — the band doubles and the labels
+    // sit along the bottom of it. That is what shipped, and it is why this assertion is a height
+    // and not a comparison between the headings (which all moved together and stayed level).
+    const headH = await page
+      .locator('.nd-if-head')
+      .evaluate((el) => el.getBoundingClientRect().height);
+    expect(headH, 'the Interfaces header grew a second row under the grips').toBeLessThan(40);
 
     const before = (await tracks(page, '.nd-if-head')).split(' ').map(parseFloat);
     const box = (await grips.first().boundingBox())!;
