@@ -33,6 +33,27 @@
   bump the configuration generation: the tree's order is display order and no poll-spec, alert,
   pool or topology rebuild reads it.
 
+### Improvements
+
+- **The Interface traffic card now draws transmit above the zero line and receive below it** — the
+  other way round from every release before this one. Nothing else about the chart changed: zero
+  stays pinned to the middle of the axis, each half keeps its own shading and its name in the
+  gutter, and both readouts are still magnitudes, so neither direction is ever reported as a
+  negative rate. The legend is ordered to match, transmit first.
+  - ⚠️ **A card you already have swaps the moment you load it.** There is no per-card setting and
+    no migration — which direction is on top is a property of the widget, not of your board.
+- **The Interface traffic card can be made half as narrow as it could before** — down to a third of
+  the board (4 of its 12 columns), where the floor used to be a half (6). The default is unchanged
+  at two-thirds, and a card already sized 6, 8 or 12 columns keeps that width: the narrower step is
+  offered, never applied. Drag the ⤡ grip in Customize, or focus it and press ←. On a window
+  narrower than 1180px the card is laid out as a half either way, and on a phone as one column, so
+  this changes nothing there.
+  - ⚠️ **Give it a second row of height when you narrow it.** The legend wraps as the card gets
+    narrower and takes that space out of the chart, so at the standard height a 4-wide card has
+    almost nothing left to draw in. Drag the same grip down one step and the chart is full size
+    again. This is not new to the narrow step — a 6-wide card plotting three links already has
+    the same problem — but you reach it sooner here.
+
 ## v0.3.15 — Every list's column widths are yours to set and they follow your account, the Interfaces list splits In and Out and shades each by how full the link is, and the Geo map is drawn from real coastline data
 
 ### Improvements

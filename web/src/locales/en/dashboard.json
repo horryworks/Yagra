@@ -169,7 +169,7 @@
       },
       "interface-traffic": {
         "title": "Interface traffic",
-        "blurb": "Up to six interfaces you pick, across nodes. In above the line, out below."
+        "blurb": "Up to six interfaces you pick, across nodes. Out above the line, in below."
       },
       "traffic-spikes": {
         "title": "Traffic spikes",

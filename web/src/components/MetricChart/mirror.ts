@@ -8,11 +8,19 @@
 // judgement nothing executes (ADR-052 Inc.6). What is left there is the `ctx` calls; every question
 // with an answer that can be wrong is here.
 
-/** The two directions a mirrored chart plots, as the words that go in the axis gutter. */
+/**
+ * The two directions a mirrored chart plots, as the words that go in the axis gutter.
+ *
+ * ⚠️ **This module does not know which direction belongs on top, and must not learn.** The
+ * caller decides, by the sign it gave each series; these two words only have to agree with that
+ * choice. Naming a direction here would be a second copy of a decision that lives at the call
+ * site — and the Interface traffic widget has already swapped its halves once (ADR-069 増分 2),
+ * which a copy here would have quietly contradicted.
+ */
 export interface MirrorAxis {
-  /** The half ABOVE zero — "IN" / "受信". */
+  /** Whatever the caller drew above zero. */
   above: string;
-  /** The half BELOW zero — "OUT" / "送信". */
+  /** Whatever the caller drew below zero. */
   below: string;
 }
 

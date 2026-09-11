@@ -28,6 +28,31 @@ const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
  *  the generated mock happened to invent for the layout document. */
 const EMPTY_BOARD = { version: 3, boards: [{ id: 'b1', name: 'Board', widgets: [] }] };
 
+/**
+ * The same board at the widget's NARROWEST allowed width — 4 of 12 columns, which ADR-069 増分 2
+ * lowered it to from 6. Seeded rather than dragged: the gesture belongs to `useResizeHandle` and
+ * is tested in `resize.test.ts`; what no unit test can reach is whether the card is usable there.
+ *
+ * 🚨 **`rowSpan: 2`, and the reason is a defect this width made visible rather than caused.**
+ * uPlot's legend wraps as the card narrows, and `MetricChart`'s `MIN_PLOT_HEIGHT` floors the
+ * plot's TOTAL height — the time axis comes out of that 40px, so the drawable band is whatever
+ * is left. Measured at the standard height (240px), one link: **58px of plot at span 12, 33px at
+ * span 6, 7px at span 4** — and with three links, **0px at span 6**, which is today's shipped
+ * minimum. So the narrow step does not introduce this; it reaches it sooner. Asserting the chart
+ * at the standard height would mean either pinning the defect or failing for something this
+ * change did not do. At `rowSpan: 2` the plot is 265px and the card is simply correct.
+ */
+const NARROW_BOARD = () => ({
+  version: 3,
+  boards: [
+    {
+      id: 'b1',
+      name: 'Board',
+      widgets: [{ ...SEEDED_BOARD.boards[0].widgets[0], span: 4, rowSpan: 2 }],
+    },
+  ],
+});
+
 /** A board that already plots one link, for the assertions about the chart itself. */
 const SEEDED_BOARD = {
   version: 3,
@@ -172,11 +197,13 @@ async function probeMirror(cell: import('@playwright/test').Locator) {
     const series = resolve('--series-1');
     let ruleRow = 0;
     for (let r = 1; r < height; r++) if (near(r, rule) < near(ruleRow, rule)) ruleRow = r;
-    // Measured in the LOWER half, where the fixture's transmit line is and where the ground is
-    // the heavier of the two. A line painted over by that ground reads ~20% darker; one drawn on
-    // top of it is the token exactly. Searching the whole column instead would find the receive
-    // line in the upper half, which the 0.035 ground barely touches — a difference too small for
-    // any threshold to sit inside, which is what the first version of this check measured.
+    // Measured in the LOWER half, where the ground is the heavier of the two. A line painted over
+    // by that ground reads ~20% darker; one drawn on top of it is the token exactly. Searching
+    // the whole column instead would find the line in the UPPER half, which the 0.035 ground
+    // barely touches — a difference too small for any threshold to sit inside, which is what the
+    // first version of this check measured.
+    // ⚠️ Which DIRECTION is down here changed with ADR-069 増分 2 (receive now), and this check
+    // does not care: the argument is about the weight of the two grounds, not about direction.
     let seriesBelow = Infinity;
     for (let r = mid + 2; r < height - 2; r++) seriesBelow = Math.min(seriesBelow, near(r, series));
 
@@ -394,20 +421,22 @@ test.describe('with a link already plotted', () => {
     const legend = cell.locator('.u-legend .u-series');
     await expect(legend).toHaveCount(3);
 
-    // 🚨 The assertion this file exists for. Transmit is plotted BELOW zero, so its stored value is
-    // negative — and if `legendFormat` did not take the magnitude, the readout would say
-    // `-2.0 Mbps`, a rate that cannot exist. Read the value cell alone: the label beside it
-    // contains `router-a`, whose hyphen would make a "no minus sign" check on the whole row pass
-    // or fail for reasons that have nothing to do with the sign.
-    const inValue = await legend.nth(1).locator('.u-value').innerText();
-    const outValue = await legend.nth(2).locator('.u-value').innerText();
-    expect(inValue).toBe('8.0 Mbps');
+    // 🚨 The assertion this file exists for. Receive is plotted BELOW zero since ADR-069 増分 2,
+    // so its stored value is negative — and if `legendFormat` did not take the magnitude, the
+    // readout would say `-8.0 Mbps`, a rate that cannot exist. Read the value cell alone: the
+    // label beside it contains `router-a`, whose hyphen would make a "no minus sign" check on
+    // the whole row pass or fail for reasons that have nothing to do with the sign.
+    // ⚠️ Transmit is row 1 now: the legend is ordered to match the chart, top-down.
+    const outValue = await legend.nth(1).locator('.u-value').innerText();
+    const inValue = await legend.nth(2).locator('.u-value').innerText();
     expect(outValue).toBe('2.0 Mbps');
-    expect(outValue, 'transmit reported as a negative rate').not.toContain('-');
+    expect(inValue).toBe('8.0 Mbps');
+    expect(inValue, 'receive reported as a negative rate').not.toContain('-');
 
-    // The labels came from the roster, and each names its direction.
-    await expect(legend.nth(1)).toContainText('router-a · Gi0/3 In');
-    await expect(legend.nth(2)).toContainText('router-a · Gi0/3 Out');
+    // The labels came from the roster, and each names its direction — in the order the chart
+    // draws them, so a legend that stopped matching the halves would show up here.
+    await expect(legend.nth(1)).toContainText('router-a · Gi0/3 Out');
+    await expect(legend.nth(2)).toContainText('router-a · Gi0/3 In');
 
     expect(errors.uncaught).toEqual([]);
   });
@@ -426,8 +455,9 @@ test.describe('with a link already plotted', () => {
     const probe = await probeMirror(cell);
 
     // 🚨 The headline. Receive is 8 Mbps and transmit 2 Mbps in this fixture, so before ADR-128 the
-    // window auto-fitted to roughly [-2.6M, +8.8M] and zero sat about three quarters of the way
-    // down. The rule being at the middle is the symmetric window, measured end to end.
+    // window auto-fitted to one direction's extent and zero sat about three quarters of the way
+    // along it. The rule being at the middle is the symmetric window, measured end to end.
+    // (Which half holds the 8 Mbps swapped with ADR-069 増分 2; the symmetry does not care.)
     expect(Math.abs(probe.ruleRow - probe.mid), 'the zero rule is not at the axis midpoint').
       toBeLessThanOrEqual(3);
     // …and it really is the rule, not the nearest thing to it: a plot with no rule at all would
@@ -440,8 +470,8 @@ test.describe('with a link already plotted', () => {
     expect(probe.above, 'both halves painted the same ground').not.toEqual(probe.below);
 
     // ⚠️ And the ground went UNDERNEATH, which nothing above can see: drop the `destination-over`
-    // and every other assertion here still passes. Transmit must be the series token exactly; a
-    // ground laid on top of it shifts it about 20% toward black, which is the gap this sits in.
+    // and every other assertion here still passes. The lower half's line must be the series token
+    // exactly; a ground laid on top of it shifts it about 20% toward black — the gap this sits in.
     expect(probe.seriesBelow, 'the lower half’s line is tinted — the ground is on top of it').
       toBeLessThan(25);
 
@@ -510,12 +540,86 @@ test.describe('with a link already plotted', () => {
     const legend = cell.locator('.u-legend .u-series');
     // Different numbers from the bps pair, so this cannot pass by drawing the same arrays under a
     // new axis label — and still magnitudes, so the mirroring survives the unit change.
-    await expect(legend.nth(1).locator('.u-value')).toHaveText('1 kpps');
-    await expect(legend.nth(2).locator('.u-value')).toHaveText('250 pps');
+    // Row 1 is transmit (the upper half), row 2 receive — the same order as the bps assertions.
+    await expect(legend.nth(1).locator('.u-value')).toHaveText('250 pps');
+    await expect(legend.nth(2).locator('.u-value')).toHaveText('1 kpps');
 
     // ADR-060 decision 5: the response carries both units, so the toggle re-reads what is already
     // in hand. A refetch here would be a regression in the dependency list, not a visible bug.
     expect(seriesCalls(), 'flipping the unit re-queried the store').toBe(before);
+  });
+});
+
+// ADR-069 増分 2 let this card be dragged down to 4 of 12 columns, where it had stopped at 6.
+// The doubt that came with it was not whether the grid would do it — `.mydash-span-4` has existed
+// since the board did and 29 other widgets use it — but whether THIS card is still usable there:
+// its header carries a title plus two `<select>`s, and `TRAFFIC_RANGES` says in its own comment
+// that the window list was trimmed to keep them fitting "at its narrowest allowed span", which
+// this change moved under it. Neither tsc nor Vitest can answer that; only a layout engine can.
+test.describe('at its narrowest width', () => {
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/dashboard': () => NARROW_BOARD(),
+        '/api/v1/nodes/{node_id}/interfaces': () => ROSTER,
+        '/api/v1/nodes/{node_id}/interfaces/{ifindex}/series': (url: URL) => seriesBody(url),
+      },
+    },
+  });
+
+  test('still draws the chart, and its header controls stay inside the card', async ({
+    page,
+    errors,
+  }) => {
+    await page.goto('/dashboard/my');
+    const cell = page.locator('.mydash-cell').first();
+    await expect(cell.locator('.metricchart-fill')).toBeVisible({ timeout: 15_000 });
+
+    // The card really is at the narrow step — otherwise everything below is about a 6-wide card
+    // and passes for the wrong reason.
+    await expect(cell).toHaveClass(/mydash-span-4/);
+
+    // Both directions still reach the chart…
+    await expect(cell.locator('.u-legend .u-series')).toHaveCount(3);
+
+    // …and there is somewhere to draw them. 🚨 The legend row count above is true of a card whose
+    // plot has collapsed to nothing — that is exactly the state at the standard height (7px at
+    // this width, see NARROW_BOARD) — so a legend check on its own reports a squashed card as a
+    // healthy one. `.u-over` is uPlot's own plot box, which is the band the lines go in.
+    const plot = await cell.locator('.u-over').first().boundingBox();
+    expect(plot, 'the plot box has no geometry').not.toBeNull();
+    expect(plot!.height, 'the plot collapsed at this width').toBeGreaterThan(100);
+
+    const cardBox = await cell.locator('.card').first().boundingBox();
+    expect(cardBox, 'the card has no box').not.toBeNull();
+
+    // 🚨 Every header control, named individually. A bare "the card does not scroll sideways"
+    // check cannot fail here: the header is a flex row, so an overflowing `<select>` is SHRUNK
+    // or clipped rather than pushed past the edge — the card stays tidy and the control becomes
+    // unreadable, which is the actual defect.
+    const selects = cell.locator('.iftraffic-actions select');
+    await expect(selects).toHaveCount(2);
+    for (let i = 0; i < 2; i++) {
+      const b = await selects.nth(i).boundingBox();
+      expect(b, `header select ${i} has no box`).not.toBeNull();
+      expect(b!.x, `header select ${i} starts left of the card`).toBeGreaterThanOrEqual(
+        cardBox!.x - 1,
+      );
+      expect(b!.x + b!.width, `header select ${i} runs past the card`).toBeLessThanOrEqual(
+        cardBox!.x + cardBox!.width + 1,
+      );
+      // Wide enough to read `24h` / `pps` plus the disclosure arrow. Below this the control is
+      // present, inside the card, and useless — the state a containment check calls healthy.
+      expect(b!.width, `header select ${i} is too narrow to read`).toBeGreaterThan(44);
+    }
+
+    // The header is one row, not two: a wrapped header eats the plot, and the wrap rule is
+    // supposed to apply under the mobile shell only.
+    const rows = await selects.evaluateAll((els) => new Set(els.map((e) => Math.round(e.getBoundingClientRect().top))).size);
+    expect(rows, 'the header controls wrapped onto two rows').toBe(1);
+
+    expect(errors.uncaught).toEqual([]);
   });
 });
 

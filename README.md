@@ -94,7 +94,7 @@ polling**. Users access it through the WebUI.
 > poller answers first, stopped mid-run, and it skips the addresses that do not answer ping — which
 > took a /24 on the test network from 5m21s to a fraction of it. And a dashboard card can now
 > **carry the name and the links you gave it**, plotting up to six interfaces from any nodes on one
-> chart with receive above the line and transmit below.
+> chart with transmit above the line and receive below.
 > HA stores remain a configuration step away, not a rewrite.
 
 ## Components

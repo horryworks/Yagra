@@ -395,7 +395,10 @@ export const REGISTRY: WidgetDefinition[] = [
     blurb: 'registry.widgets.interface-traffic.blurb',
     backing: 'live',
     defaultSpan: 8,
-    allowedSpans: [6, 8, 12],
+    // 4 is the narrowest the board has (ADR-069 増分 2). Adding a step is non-destructive —
+    // `clampSpan` only asks whether a stored span is in the set — but REMOVING one is not:
+    // every board sitting at that width would snap to its neighbour on the next load.
+    allowedSpans: [4, 6, 8, 12],
     allowedRowSpans: [1, 2, 3],
     reads: [
       'GET /api/v1/nodes/{node_id}/interfaces',

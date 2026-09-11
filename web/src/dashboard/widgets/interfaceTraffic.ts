@@ -32,7 +32,12 @@ export const MAX_LINKS = 6;
  *  locales, and a runtime-built `t()` key is the shape that renders a raw key when someone forgets
  *  a string (`extensibility.md` §4).
  *
- *  `3d` is left out so the card header keeps room for three controls at its narrowest allowed span.
+ *  `3d` is left out so the card header keeps room for its controls at the widget's narrowest
+ *  allowed span — which 増分 2 lowered from 6 columns to 4, so that margin is thinner than it was
+ *  when this was written. ⚠️ This is a claim about a rendered card, so tsc and Vitest are both
+ *  blind to it: what holds it is the Tier1 case `at its narrowest width`, which measures the two
+ *  `<select>`s against the card at 4 columns (63px each, one row, nothing clipped). A window
+ *  added here widens one of them — re-run it rather than reasoning about it.
  *  The subset relation is pinned by a test rather than by an import: the shared list lives in a
  *  `.tsx`, and this module is on the widget's runtime path (the test is not). A window added to the
  *  shared list therefore forces the question here instead of silently diverging — the
@@ -270,14 +275,35 @@ export interface DirectionLabels {
 }
 
 /**
+ * Which direction occupies the half ABOVE zero. Transmit since ADR-069 増分 2; receive before it.
+ *
+ * 🚨 **One answer, because there are two readers and nothing compares what they produce.**
+ * {@link buildTrafficSeries} decides the *sign*; the widget decides which word the axis gutter
+ * stands on top (`MetricChart`'s `mirrored`). Written out twice they can disagree, and the result
+ * is a gutter that says OUT over a line drawn from receive — a plausible, exactly wrong chart.
+ * **No test in this repo can see that**: the gutter is text painted into a canvas, so neither
+ * Vitest nor a DOM assertion reaches it. Deriving both from here is what makes the pair testable
+ * at all (`the positive half is the one the gutter names on top`).
+ */
+export const POSITIVE_HALF: 'in' | 'out' = 'out';
+
+/** The gutter words for `MetricChart`'s `mirrored`, ordered by {@link POSITIVE_HALF}. */
+export function mirrorAxisLabels(labels: DirectionLabels): { above: string; below: string } {
+  return POSITIVE_HALF === 'out'
+    ? { above: labels.out, below: labels.in }
+    : { above: labels.in, below: labels.out };
+}
+
+/**
  * Build the chart's shared x-axis and its series.
  *
  * Three things here are load-bearing:
  *
- *  1. **Out is negated.** Receive occupies the positive half and transmit the negative half, so one
- *     link needs one colour and six links fit the palette (ADR-069 decisions 1 and 2). `null` stays
- *     `null` — a gap is a hole, not a valley, and turning it into `0` draws traffic that never
- *     happened.
+ *  1. **In is negated.** Transmit occupies the positive half and receive the negative half, so one
+ *     link needs one colour and six links fit the palette (ADR-069 decisions 1 and 2). ⚠️ Which
+ *     direction sits on top is the ONLY thing 増分 2 changed — the sign is still the second
+ *     channel, because the colour is spent on the link. `null` stays `null` — a gap is a hole, not
+ *     a valley, and turning it into `0` draws traffic that never happened.
  *  2. **The unit picks the arrays through `throughputPair`,** not through a local branch. All four
  *     candidate arrays have the same type, so a swapped pair compiles and renders a pps axis drawn
  *     from bps values (which is why ADR-060 put that choice in one tested function).
@@ -316,8 +342,22 @@ export function buildTrafficSeries(
         return v == null ? null : sign * v;
       });
     };
-    series.push({ label: `${entry.link.label} ${labels.in}`, values: align(inRaw, 1), color });
-    series.push({ label: `${entry.link.label} ${labels.out}`, values: align(outRaw, -1), color });
+    // The positive half first, so the legend reads in the order the chart draws it: top-down.
+    // Both directions of a link share a colour, so the order costs nothing.
+    const outSign: 1 | -1 = POSITIVE_HALF === 'out' ? 1 : -1;
+    const pair: [string, (number | null)[], 1 | -1][] =
+      outSign === 1
+        ? [
+            [labels.out, outRaw, 1],
+            [labels.in, inRaw, -1],
+          ]
+        : [
+            [labels.in, inRaw, 1],
+            [labels.out, outRaw, -1],
+          ];
+    for (const [label, raw, sign] of pair) {
+      series.push({ label: `${entry.link.label} ${label}`, values: align(raw, sign), color });
+    }
   });
 
   return { timestamps, series };

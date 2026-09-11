@@ -26,6 +26,7 @@ import {
   interfaceTrafficPlan,
   linkId,
   linksKey,
+  mirrorAxisLabels,
   readTrafficSettings,
   refreshMsFor,
   selectedNodeIds,
@@ -308,7 +309,10 @@ describe('interfaceTrafficPlan', () => {
 describe('buildTrafficSeries', () => {
   const ts = [100, 160, 220];
 
-  it('draws two series per link: receive positive, transmit negative', () => {
+  it('draws two series per link: transmit positive, receive negative', () => {
+    // ADR-069 増分 2 swapped the halves. The fixture's two directions carry different magnitudes
+    // on purpose, so asserting the label beside the values catches a pair read the wrong way
+    // round as well as a sign applied to the wrong one.
     const entries: LinkSeries[] = [
       {
         link: resolved(NODE_A, 7, 'router-a · GE0/0/1'),
@@ -318,8 +322,31 @@ describe('buildTrafficSeries', () => {
     const out = buildTrafficSeries(entries, 'bps', PALETTE, LABELS);
     expect(out.timestamps).toEqual(ts);
     expect(out.series).toHaveLength(2);
-    expect(out.series[0]).toMatchObject({ label: 'router-a · GE0/0/1 In', values: [10, 20, 30] });
-    expect(out.series[1]).toMatchObject({ label: 'router-a · GE0/0/1 Out', values: [-1, -2, -3] });
+    expect(out.series[0]).toMatchObject({ label: 'router-a · GE0/0/1 Out', values: [1, 2, 3] });
+    expect(out.series[1]).toMatchObject({
+      label: 'router-a · GE0/0/1 In',
+      values: [-10, -20, -30],
+    });
+  });
+
+  it('names on top the same direction it gave the positive sign', () => {
+    // 🚨 The one check that the sign and the gutter word agree. They are read by two different
+    // files and the rendered result is canvas text, which nothing in this repo can assert on —
+    // so if this pair ever drifts, the chart is wrong and everything stays green.
+    const entries: LinkSeries[] = [
+      {
+        link: resolved(NODE_A, 7, 'a'),
+        series: series(ts, { in_bps: [10, 10, 10], out_bps: [1, 1, 1] }),
+      },
+    ];
+    const built = buildTrafficSeries(entries, 'bps', PALETTE, LABELS);
+    const axis = mirrorAxisLabels(LABELS);
+    const positive = built.series.find((s) => (s.values[0] as number) > 0);
+    const negative = built.series.find((s) => (s.values[0] as number) < 0);
+    expect(positive?.label.endsWith(` ${axis.above}`)).toBe(true);
+    expect(negative?.label.endsWith(` ${axis.below}`)).toBe(true);
+    // …and the two words really are different, or both assertions above pass on one label.
+    expect(axis.above).not.toBe(axis.below);
   });
 
   it('gives both directions of one link the same colour, and each link a different one', () => {
@@ -339,8 +366,8 @@ describe('buildTrafficSeries', () => {
       },
     ];
     const out = buildTrafficSeries(entries, 'bps', PALETTE, LABELS);
-    expect(out.series[0].values).toEqual([10, null, 30]);
-    expect(out.series[1].values).toEqual([null, -2, null]);
+    expect(out.series[0].values).toEqual([null, 2, null]);
+    expect(out.series[1].values).toEqual([-10, null, -30]);
   });
 
   it('reads a different pair of arrays for pps than for bps', () => {
@@ -359,10 +386,10 @@ describe('buildTrafficSeries', () => {
     ];
     const bps = buildTrafficSeries(entries, 'bps', PALETTE, LABELS);
     const pps = buildTrafficSeries(entries, 'pps', PALETTE, LABELS);
-    expect(bps.series[0].values).toEqual([8000, 8000, 8000]);
-    expect(bps.series[1].values).toEqual([-4000, -4000, -4000]);
-    expect(pps.series[0].values).toEqual([10, 10, 10]);
-    expect(pps.series[1].values).toEqual([-5, -5, -5]);
+    expect(bps.series[0].values).toEqual([4000, 4000, 4000]);
+    expect(bps.series[1].values).toEqual([-8000, -8000, -8000]);
+    expect(pps.series[0].values).toEqual([5, 5, 5]);
+    expect(pps.series[1].values).toEqual([-10, -10, -10]);
   });
 
   it('places values by timestamp when a link answers on a different axis', () => {
@@ -377,7 +404,10 @@ describe('buildTrafficSeries', () => {
     const out = buildTrafficSeries(entries, 'bps', PALETTE, LABELS);
     expect(out.timestamps).toEqual(ts);
     // 100 has no sample on link b, 160/220 line up, and 280 falls outside the axis entirely.
-    expect(out.series[2].values).toEqual([null, 20, 30]);
+    // ⚠️ Index 3, not 2: link b's series are Out (2) then In (3), and the fixture only gives it
+    // receive values — `series()` fills every other array with zeros, so index 2 would be
+    // [null, 0, 0] and would read the same however the values were placed.
+    expect(out.series[3].values).toEqual([null, -20, -30]);
   });
 
   it('drops a link whose fetch failed without moving the others onto its colour', () => {
@@ -412,7 +442,9 @@ describe('buildTrafficSeries', () => {
       PALETTE,
       LABELS,
     );
+    // Both halves, so this cannot pass by checking only whichever direction happens to be first.
     expect(out.series[0].values).toEqual([null, null, null]);
+    expect(out.series[1].values).toEqual([null, null, null]);
   });
 });
 

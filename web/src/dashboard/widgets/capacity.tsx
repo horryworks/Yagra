@@ -26,6 +26,7 @@ import {
   interfaceTrafficPlan,
   linkId,
   linksKey,
+  mirrorAxisLabels,
   readTrafficSettings,
   refreshMsFor,
   selectedNodeIds,
@@ -117,7 +118,7 @@ export function InterfaceHeatmapWidget() {
   );
 }
 
-// ── Interface traffic — the links the operator named, receive up and transmit down (ADR-069) ──
+// ── Interface traffic — the links the operator named, transmit up and receive down (ADR-069) ──
 //
 // The counterpart of `aggregate-throughput` (the whole fleet as one line) and of the utilization
 // heatmap (whichever links are busiest right now): here the operator says which links, across
@@ -447,8 +448,8 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
       </>
     );
 
-  // Transmit is plotted below zero, so both axis ticks and the cursor readout report magnitudes —
-  // the sign is the direction, not a negative rate.
+  // Receive is plotted below zero (増分 2 swapped the halves), so both axis ticks and the cursor
+  // readout report magnitudes — the sign is the direction, not a negative rate.
   const fmt = sel.unit === 'pps' ? formatPps : formatBps;
   return (
     <>
@@ -467,10 +468,14 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
         // ONLY thing carrying its direction — and until this, that zero could sit anywhere.
         // ⚠️ A fresh object each render is free here: `MetricChart` folds it into `structKey` by
         // its two words, not by reference.
-        mirrored={{
-          above: t('widgets.ifTraffic.axisIn'),
-          below: t('widgets.ifTraffic.axisOut'),
-        }}
+        // 🚨 Which word goes on top is NOT decided here — `mirrorAxisLabels` reads the same
+        // `POSITIVE_HALF` the signs come from. Spelling `{ above: axisOut, … }` out here instead
+        // would be a second answer to one question, and the disagreement would render as a
+        // plausible, exactly wrong chart that no test in this repo can see (canvas text).
+        mirrored={mirrorAxisLabels({
+          in: t('widgets.ifTraffic.axisIn'),
+          out: t('widgets.ifTraffic.axisOut'),
+        })}
       />
     </>
   );
