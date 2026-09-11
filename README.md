@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.15 — Every list's column widths are yours to set and they follow your account, the Interfaces list splits In and Out and shades each by how full the link is, and the Geo map is drawn from real coastline data**
+> Status: **v0.3.16 — A folder carries the IP ranges in use at it and Discovery files each device into the one whose range holds it, a folder's contents sort by name from the right-click menu, every search box clears itself from a ✕, and the Interface traffic chart draws transmit above the line**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

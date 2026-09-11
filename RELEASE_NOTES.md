@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.16 — A folder carries the IP ranges in use at it and Discovery files each device into the one whose range holds it, a folder's contents sort by name from the right-click menu, every search box clears itself from a ✕, and the Interface traffic chart draws transmit above the line
+
 ### Breaking changes
 
 - **`POST /api/v1/discovery/import` now enforces group scope.** It previously declared itself
