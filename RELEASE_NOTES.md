@@ -10,6 +10,29 @@
 
 ## Unreleased
 
+### New Features
+
+- **Right-click a folder in the inventory tree to arrange its contents in name order.** The tree's
+  order could only be changed by dragging, and new folders and nodes are appended as they are
+  created, so a long-running deployment drifts into registration order. **Sort ascending** and
+  **Sort descending** now sit on a folder's right-click menu and renumber that folder's direct
+  children in one request. Subfolders and member nodes are ordered within their own groups, so
+  every folder stays above every node whichever direction is chosen. Names are compared without
+  regard to case, so `SW-01` and `sw-02` fall next to each other. Folders deeper down are not
+  touched — the command acts on the folder that was clicked. It needs the same privilege as the
+  rest of the tree's editing (Operator and up), and it is the **stored** order, so everyone sees
+  the result.
+  - ⚠️ **There is no undo.** An order somebody arranged by dragging is replaced, and the old one is
+    not kept anywhere.
+  - ⚠️ **On a deployment that syncs folders from NetBox**, the sync rewrites subfolder order to
+    name-ascending on every cycle, so a descending sort of *subfolders* is undone the next time it
+    runs. The nodes inside a folder are not touched by the sync and keep whatever order was set.
+  - ⚠️ The top level of the tree cannot be sorted — there is no folder row to right-click.
+- New endpoint `POST /api/v1/node-groups/{id}/sort`, body `{"direction": "asc" | "desc"}`,
+  answering `204` (`404` for a folder that is not there). Requires `manage_config`. It does **not**
+  bump the configuration generation: the tree's order is display order and no poll-spec, alert,
+  pool or topology rebuild reads it.
+
 ## v0.3.15 — Every list's column widths are yours to set and they follow your account, the Interfaces list splits In and Out and shades each by how full the link is, and the Geo map is drawn from real coastline data
 
 ### Improvements

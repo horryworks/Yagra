@@ -503,6 +503,30 @@ describe('buildNodeTree', () => {
     expect(tree.roots.map((g) => g.name)).toEqual(['Zeta', 'Alpha']);
     expect(tree.ungrouped.map((n) => n.name)).toEqual(['zzz', 'aaa']);
   });
+
+  it('keeps every folder above every node, whatever the sort_order values are', () => {
+    // 🚨 A property of the **structure**, not of the comparator: a `TreeGroup` holds folders and
+    // nodes in two separate arrays and `flattenTree` walks the children before the members, so the
+    // two can never interleave. The ADR-130 sort commands lean on this — they renumber the two
+    // scopes independently and never compare a folder against a node — so merging the two lists
+    // into one ordered array would make "Sort descending" interleave them, and no other test here
+    // would notice.
+    //
+    // Chosen so the assertion can only hold structurally: the folder sorts last by name *and* last
+    // by sort_order, the node first on both. One merged list would put the node on top.
+    const tree = buildNodeTree(
+      [group('p', 'parent'), group('c', 'zzz', 'p', 99)],
+      [node('n1', 'aaa', 'p', 1)],
+    );
+    expect(flattenTree(tree, { collapsed: {}, filter: '' }).map(flatRowKey)).toEqual([
+      'g:p',
+      'g:c',
+      'n:n1',
+      // The Ungrouped header is always emitted while there is any inventory — it is the root drop
+      // zone, not a row about these three.
+      'ungrouped-head',
+    ]);
+  });
 });
 
 describe('descendantNodes', () => {

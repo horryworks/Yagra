@@ -1196,6 +1196,20 @@ describe('api client', () => {
     expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ parent_id: null, after: 'g2' });
   });
 
+  it("sorts a folder's children in one request", async () => {
+    // One call, not one per child: the browser never holds a folder's whole membership, and a
+    // per-child loop would be a partial write with nothing to read back on a halfway failure.
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.sortNodeGroupChildren('g1', 'desc');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/node-groups/g1/sort');
+    expect(spy.mock.calls[0][1].method).toBe('POST');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ direction: 'desc' });
+  });
+
   it('lists node groups', async () => {
     const spy = vi.fn().mockResolvedValue({
       ok: true,

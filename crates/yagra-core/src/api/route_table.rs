@@ -869,6 +869,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/node-groups/:id/sort",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/node-names",
         GroupFiltered,
         Exempt(

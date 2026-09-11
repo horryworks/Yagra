@@ -1359,6 +1359,15 @@ export const api = {
     body: { parent_id: string | null; before?: string; after?: string },
   ): Promise<void> => apiPut('/api/v1/node-groups/{id}/placement', { path: { id }, body }),
 
+  /** Arrange a folder's **direct** children in name order, writing the tree's stored order
+   *  (ADR-130). Subfolders and member nodes are renumbered in their own sibling scopes, so the two
+   *  never interleave; folders deeper down are untouched.
+   *
+   *  🚨 **This replaces an order somebody arranged by hand and there is no undo.** The caller is
+   *  expected to have named the folder deliberately — it is reached by right-clicking it. */
+  sortNodeGroupChildren: (id: string, direction: 'asc' | 'desc'): Promise<void> =>
+    apiPost('/api/v1/node-groups/{id}/sort', { path: { id }, body: { direction } }),
+
   /** Set or clear a folder's map pin — the coordinates the dashboard's Geo map widget places.
    *  Both fields or neither; `null`/`null` clears it. Validated server-side as well. */
   setNodeGroupGeo: (

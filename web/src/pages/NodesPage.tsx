@@ -662,6 +662,16 @@ export function NodesPage() {
       .then(reload)
       .catch((e: unknown) => setError(errMsg(e, t('err.reorderGroup'))));
 
+  // Arrange one folder's direct children in name order (ADR-130). One request, not one per child:
+  // the browser does not hold a folder's whole membership (it is fetched lazily and capped
+  // server-side), and a per-child loop would be a partial write with nothing to read back when it
+  // fails halfway — the same reason a multi-node drag appends rather than inserting.
+  const sortGroupChildren = (groupId: string, direction: 'asc' | 'desc') =>
+    api
+      .sortNodeGroupChildren(groupId, direction)
+      .then(reload)
+      .catch((e: unknown) => setError(errMsg(e, t('err.sortChildren'))));
+
   // Header stats come from the server fleet summary (whole fleet, not the lazily-loaded subset).
   const nodeCount = fleetSummary?.total ?? treeNodes.length;
   const attention = fleetSummary
@@ -899,6 +909,7 @@ export function NodesPage() {
             onMoveGroup={moveGroup}
             onReorderNode={reorderNode}
             onReorderGroup={reorderGroup}
+            onSortGroupChildren={sortGroupChildren}
             suppression={suppression}
             suppressionRows={suppressionRows}
             onRelease={canMaintenance || canAck ? release : undefined}

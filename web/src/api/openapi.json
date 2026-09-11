@@ -10076,6 +10076,83 @@
         }
       }
     },
+    "/api/v1/node-groups/{id}/sort": {
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.",
+        "description": "Subfolders and member nodes are renumbered within their own sibling scopes, so the two never\ninterleave — the tree draws every folder above every node whatever the values are. Folders\ndeeper down are untouched: the operator right-clicked one folder.\n\n🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is\nthe decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking\nthe folder it acts on, which is the same consent a file manager asks for.\n\n⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per\nchild would be a partial write with nothing to read back when it fails halfway, which is the\nsame reason a multi-node drag appends rather than inserting (`nodeTreeDnd.ts`). One request,\none transaction.",
+        "operationId": "sort_group_children",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SortChildren"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The folder's direct children were renumbered in name order"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-names": {
       "post": {
         "tags": [
@@ -33608,6 +33685,27 @@
             "description": "🚨 `false` means the token **may not read** `/api/extras/custom-fields/` — not that this\nNetBox has none. The form offers a type-it-in box in that case, and collapsing the two\nwould leave the operator reading \"there are no custom fields here\" and never finding it.\nThis is the same distinction, for the same reason, that [`TestNetboxResult`] draws between\n`reachable` and `authenticated`."
           }
         }
+      },
+      "SortChildren": {
+        "type": "object",
+        "description": "Which way to order this folder's children (ADR-130).",
+        "required": [
+          "direction"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/SortDirection",
+            "description": "`asc` = A → Z, `desc` = Z → A. Required: there is no sensible default for a command whose\nwhole content is the direction, and a missing field would silently pick one."
+          }
+        }
+      },
+      "SortDirection": {
+        "type": "string",
+        "description": "Which way a \"sort this folder's children by name\" command orders them (ADR-130).\n\nTwo spellings and they must not drift: [`SortDirection::sql`] is the SQL keyword spliced into\nthe `ORDER BY`, and the serde tag is what the API edge parses out of the request body. A test\nbelow pins both, because they are produced by different mechanisms and nothing else compares\nthem (`testing.md`, \"an enum's token and its serde tag\").",
+        "enum": [
+          "asc",
+          "desc"
+        ]
       },
       "SourceKind": {
         "type": "string",

@@ -77,6 +77,32 @@ test.describe('on a short screen', () => {
   });
 });
 
+test("a folder's menu offers both sort directions, on screen", async ({ page }) => {
+  // ADR-130. Two items rather than a toggle, so both have to be reachable — and "reachable" is a
+  // geometry question here for the same reason the clipping test above exists: this menu grew two
+  // more items, and the ones that fall off the bottom are the ones nobody presses.
+  await page.goto('/nodes');
+  const folders = page.locator('.ntree-grow');
+  await expect(folders.first()).toBeVisible();
+  await folders.first().click({ button: 'right' });
+
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  const vp = page.viewportSize();
+  expect(vp).not.toBeNull();
+  if (!vp) return;
+
+  for (const name of ['Sort ascending', 'Sort descending']) {
+    const item = menu.getByRole('button', { name, exact: true });
+    await expect(item, name + ' is not in the folder menu').toHaveCount(1);
+    // 🚨 Not `toBeVisible()` — that is true for an item laid out below the fold (ADR-088).
+    const box = await rect(item);
+    expect(box.top, name + ' is off the top edge').toBeGreaterThanOrEqual(0);
+    expect(box.bottom, name + ' is below the fold').toBeLessThanOrEqual(vp.height);
+    expect(box.bottom - box.top, name + ' has no height').toBeGreaterThan(0);
+  }
+});
+
 test('a hovered item is painted in a colour the menu itself is not', async ({ page }) => {
   // The surface is `.apop` (`--bg-secondary`) since the migration, and every hover in the old
   // stylesheet was `--bg-secondary` too — a hover painted in the surface colour is no hover. The

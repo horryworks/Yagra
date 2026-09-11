@@ -17,11 +17,11 @@ use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
 use super::util::CreatedId;
 use super::ApiState;
-use crate::groups::{placement_order, would_create_cycle, GroupType};
+use crate::groups::{placement_order, would_create_cycle, GroupType, SortDirection};
 use axum::{
     extract::Path,
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -35,6 +35,7 @@ use uuid::Uuid;
     update_node_group,
     delete_node_group,
     place_group,
+    sort_group_children,
     set_node_group_pool,
     set_node_group_geo
 ))]
@@ -52,6 +53,7 @@ pub(super) fn routes() -> Router<ApiState> {
             put(update_node_group).delete(delete_node_group),
         )
         .route("/api/v1/node-groups/:id/placement", put(place_group))
+        .route("/api/v1/node-groups/:id/sort", post(sort_group_children))
         .route("/api/v1/node-groups/:id/pool", put(set_node_group_pool))
         .route("/api/v1/node-groups/:id/geo", put(set_node_group_geo))
 }
@@ -325,6 +327,67 @@ async fn place_group(
     }
 }
 
+/// Which way to order this folder's children (ADR-130).
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct SortChildren {
+    /// `asc` = A → Z, `desc` = Z → A. Required: there is no sensible default for a command whose
+    /// whole content is the direction, and a missing field would silently pick one.
+    direction: SortDirection,
+}
+
+/// Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.
+///
+/// Subfolders and member nodes are renumbered within their own sibling scopes, so the two never
+/// interleave — the tree draws every folder above every node whatever the values are. Folders
+/// deeper down are untouched: the operator right-clicked one folder.
+///
+/// 🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is
+/// the decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking
+/// the folder it acts on, which is the same consent a file manager asks for.
+///
+/// ⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per
+/// child would be a partial write with nothing to read back when it fails halfway, which is the
+/// same reason a multi-node drag appends rather than inserting (`nodeTreeDnd.ts`). One request,
+/// one transaction.
+#[utoipa::path(
+    post, path = "/api/v1/node-groups/{id}/sort", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    request_body = SortChildren,
+    responses(
+        (status = 204, description = "The folder's direct children were renumbered in name order"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn sort_group_children(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SortChildren>,
+) -> ApiResult<StatusCode> {
+    let sorted = admin
+        .groups
+        .sort_children(id, body.direction)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "sort group children",
+                "failed to sort the folder",
+            )
+        })?;
+    if sorted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(
+            "group_not_found",
+            format!("no group {id}"),
+        ))
+    }
+}
+
 /// Set just the folder's pool. Every node beneath it that has no pool of its own follows on the
 /// next sweep (see `poolres`).
 #[utoipa::path(
@@ -480,6 +543,7 @@ mod tests {
             ("PUT", format!("/api/v1/node-groups/{ID}/placement")),
             ("PUT", format!("/api/v1/node-groups/{ID}/pool")),
             ("PUT", format!("/api/v1/node-groups/{ID}/geo")),
+            ("POST", format!("/api/v1/node-groups/{ID}/sort")),
         ]
     }
 
@@ -582,6 +646,182 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/node-groups", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("tokyo"), "{list}");
+    }
+
+    /// Sorting a folder renumbers its subfolders and its member nodes, in name order (ADR-130).
+    ///
+    /// The two scopes are asserted **separately and both**, because they are two statements over
+    /// two tables, and a transaction that renumbered only the folders would look entirely correct
+    /// from a screenshot of the folder list.
+    ///
+    /// Names are deliberately mixed-case and deliberately not in creation order: `create` appends
+    /// at `MAX(sort_order)+1`, so the starting state is creation order. Spelled ASCII-betically,
+    /// `Alpha` and `Mike` would come before *every* lowercase name and the test would pass just as
+    /// well on a case-sensitive `ORDER BY` — so the two capitals sit where only `lower(name)` puts
+    /// them, and the descending pass puts them last.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn sorting_a_folder_renumbers_its_subfolders_and_its_nodes(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let groups = GroupRepo::new(pool.clone());
+        let repo = crate::pgtest::repo(pool.clone());
+
+        let parent = groups
+            .create("parent", GroupType::Site, None, None)
+            .await
+            .expect("parent");
+        for name in ["charlie", "Alpha", "bravo"] {
+            groups
+                .create(name, GroupType::Generic, Some(parent), None)
+                .await
+                .expect("subfolder");
+        }
+        for (i, name) in ["zulu", "Mike", "november"].into_iter().enumerate() {
+            crate::pgtest::node(
+                &pool,
+                name,
+                10 + u8::try_from(i).expect("small"),
+                Some(parent),
+            )
+            .await;
+        }
+
+        let read_folders = || async {
+            let all = groups.list().await.expect("list");
+            groups
+                .ordered_siblings(Some(parent))
+                .await
+                .expect("siblings")
+                .into_iter()
+                .map(|(id, _)| {
+                    all.iter()
+                        .find(|g| g.id == id)
+                        .expect("listed")
+                        .name
+                        .clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        let read_nodes = || async {
+            let ordered = repo
+                .ordered_nodes_in_group(Some(parent))
+                .await
+                .expect("members");
+            let mut out = Vec::new();
+            for (id, _) in ordered {
+                out.push(repo.get_node(id).await.expect("get").expect("node").name);
+            }
+            out
+        };
+
+        // What the tree would draw right now: creation order, in both scopes.
+        assert_eq!(read_folders().await, ["charlie", "Alpha", "bravo"]);
+        assert_eq!(read_nodes().await, ["zulu", "Mike", "november"]);
+
+        // 204, not `is_success()` — the documented status is what the WebUI branches on.
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/node-groups/{parent}/sort"),
+            &tok,
+            Some(serde_json::json!({ "direction": "asc" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(read_folders().await, ["Alpha", "bravo", "charlie"]);
+        assert_eq!(read_nodes().await, ["Mike", "november", "zulu"]);
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/node-groups/{parent}/sort"),
+            &tok,
+            Some(serde_json::json!({ "direction": "desc" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(read_folders().await, ["charlie", "bravo", "Alpha"]);
+        assert_eq!(read_nodes().await, ["zulu", "november", "Mike"]);
+
+        // A folder that is not there is a 404, never a silent no-op — otherwise the tree reports
+        // success for a folder somebody else has just deleted.
+        let (status, _) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/node-groups/{}/sort", uuid::Uuid::new_v4()),
+            &tok,
+            Some(serde_json::json!({ "direction": "asc" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    /// Sorting one folder leaves every **other** scope alone (ADR-130 決定 2).
+    ///
+    /// The two `UPDATE`s carry the whole of the scoping in their `WHERE`. Drop either predicate and
+    /// the entire table is renumbered — while the folder the operator clicked still looks perfectly
+    /// sorted. So the assertion that matters here is about the rows the request did *not* name.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn sorting_one_folder_does_not_touch_another(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let groups = GroupRepo::new(pool.clone());
+        let repo = crate::pgtest::repo(pool.clone());
+
+        let target = groups
+            .create("target", GroupType::Site, None, None)
+            .await
+            .expect("target");
+        let other = groups
+            .create("other", GroupType::Site, None, None)
+            .await
+            .expect("other");
+        // Deliberately NOT in name order, so "was not touched" is distinguishable from "was sorted
+        // and happened to already be right".
+        for name in ["b", "a"] {
+            groups
+                .create(name, GroupType::Generic, Some(other), None)
+                .await
+                .expect("sub");
+        }
+        crate::pgtest::node(&pool, "zz", 1, Some(other)).await;
+        crate::pgtest::node(&pool, "aa", 2, Some(other)).await;
+        crate::pgtest::node(&pool, "yy", 3, Some(target)).await;
+
+        let before_folders = groups.ordered_siblings(Some(other)).await.expect("sibs");
+        let before_nodes = repo
+            .ordered_nodes_in_group(Some(other))
+            .await
+            .expect("members");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/node-groups/{target}/sort"),
+            &tok,
+            Some(serde_json::json!({ "direction": "asc" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        assert_eq!(
+            groups.ordered_siblings(Some(other)).await.expect("sibs"),
+            before_folders,
+            "another folder's subfolders were renumbered"
+        );
+        assert_eq!(
+            repo.ordered_nodes_in_group(Some(other))
+                .await
+                .expect("members"),
+            before_nodes,
+            "another folder's nodes were renumbered"
+        );
     }
 
     /// 🚨 A breadcrumb ancestor is listed by name and **without its prefixes** (ADR-100 decision

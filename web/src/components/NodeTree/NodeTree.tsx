@@ -192,6 +192,12 @@ interface Props {
     nodeId: string,
     dest: { groupId: string | null; before?: string; after?: string },
   ) => void;
+  /** Arrange one folder's **direct** children in name order (ADR-130). Subfolders and member
+   *  nodes are renumbered in their own scopes, so folders stay above nodes whatever the direction;
+   *  folders deeper down are untouched. 🚨 **Overwrites a hand-arranged order with no undo** — by
+   *  decision, and the reason no confirmation is asked is that the caller right-clicked the folder
+   *  this acts on. Gated on `canEdit` at the item, never at the menu (see `nodeTreeMenu.ts`). */
+  onSortGroupChildren: (groupId: string, direction: 'asc' | 'desc') => void;
   /** Drag-reorder a group next to a sibling group (before/after) under a parent. */
   onReorderGroup: (
     groupId: string,
@@ -255,6 +261,7 @@ export function NodeTree({
   onMoveNodeByPrefix,
   onMoveNodes,
   onMoveGroup,
+  onSortGroupChildren,
   onReorderNode,
   onReorderGroup,
   suppression,
@@ -1185,6 +1192,35 @@ export function NodeTree({
                 >
                   {t('tree.runDiscovery')}
                 </button>
+              )}
+              {/* Arrange this folder's own children in name order (ADR-130). Two items rather
+                  than one toggle: the tree has no "current sort" to toggle away from — the stored
+                  order is whatever anyone last dragged it into — so a single item would have to
+                  guess which direction the operator meant. `canEdit` is the same permission as
+                  "Add subgroup" above, so this cannot be the only surviving item and
+                  `groupMenuHasItems` needs no new field. */}
+              {canEdit && (
+                <>
+                  <div className="ntree-menu-sep" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSortGroupChildren(menu.group.id, 'asc');
+                      setMenu(null);
+                    }}
+                  >
+                    {t('tree.sortAsc')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSortGroupChildren(menu.group.id, 'desc');
+                      setMenu(null);
+                    }}
+                  >
+                    {t('tree.sortDesc')}
+                  </button>
+                </>
               )}
               {poolMenu(
                 { kind: 'group', id: menu.group.id, name: menu.group.name },

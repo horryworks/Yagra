@@ -619,6 +619,17 @@ fn changes_monitoring_config(path: &str) -> bool {
         // this function keeps the entry honest — and forgetting it makes every press of the
         // preview button rebuild the poll specs for the whole fleet, silently.
         || path == "/api/v1/nodes/move-preview"
+        // Arranging one folder's children in name order (ADR-130 決定 4). It writes real rows —
+        // `node_groups.sort_order` and `nodes.sort_order` — so the verb is not why it is here. The
+        // criterion is what the rebuilds read, and **none of them reads `sort_order`**: measured
+        // across `scheduler/`, `alerts/`, `poolres.rs` and `yagra-topology/`, zero hits. It is the
+        // tree's display order and nothing else. Counting it would make tidying a folder re-resolve
+        // the poll specs for the whole fleet, which is `/api/v1/node-names`' failure one floor up.
+        //
+        // ⚠️ The two `/placement` routes beside it have the same property and are **not** exempt, so
+        // every drag-reorder still invalidates. That is older behaviour this decision deliberately
+        // did not change; it wants deciding on its own.
+        || (path.starts_with("/api/v1/node-groups/") && path.ends_with("/sort"))
         // The "test this before you save it" probes. Each compiles a pattern, opens an outbound
         // connection, or asks a vendor API a question, and writes nothing — the same shape as
         // `/notification-channels/preview` above, and pressed the same way: repeatedly, while
@@ -1644,6 +1655,26 @@ mod tests {
             changes_monitoring_config("/api/v1/nodes/move"),
             "a move changes which folder a node's thresholds and pool come from"
         );
+    }
+
+    /// 🚨 Sorting a folder writes rows and still must not rebuild the fleet (ADR-130 決定 4).
+    ///
+    /// Invisible to the mechanical check below for the same reason `/nodes/move-preview` is: the
+    /// handler demands `ManageConfig`. The difference is that this one genuinely writes — so the
+    /// only thing keeping it exempt is the fact that no rebuilder reads `sort_order`, and the only
+    /// thing recording that fact is this test.
+    #[test]
+    fn sorting_a_folder_does_not_dirty_the_config_generation() {
+        assert!(
+            !changes_monitoring_config("/api/v1/node-groups/abc/sort"),
+            "sort_order is display order; no rebuild reads it"
+        );
+        // The prefix/suffix match must not swallow its neighbours, which do invalidate.
+        assert!(changes_monitoring_config(
+            "/api/v1/node-groups/abc/placement"
+        ));
+        assert!(changes_monitoring_config("/api/v1/node-groups/abc/pool"));
+        assert!(changes_monitoring_config("/api/v1/node-groups/abc"));
     }
 
     /// A route registered with a mutating method whose handler asks only for a **read** permission

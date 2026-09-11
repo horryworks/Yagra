@@ -1960,6 +1960,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-groups/{id}/sort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.
+         * @description Subfolders and member nodes are renumbered within their own sibling scopes, so the two never
+         *     interleave — the tree draws every folder above every node whatever the values are. Folders
+         *     deeper down are untouched: the operator right-clicked one folder.
+         *
+         *     🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is
+         *     the decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking
+         *     the folder it acts on, which is the same consent a file manager asks for.
+         *
+         *     ⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per
+         *     child would be a partial write with nothing to read back when it fails halfway, which is the
+         *     same reason a multi-node drag appends rather than inserting (`nodeTreeDnd.ts`). One request,
+         *     one transaction.
+         */
+        post: operations["sort_group_children"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-names": {
         parameters: {
             query?: never;
@@ -9883,6 +9914,24 @@ export interface components {
              */
             custom_fields_readable: boolean;
         };
+        /** @description Which way to order this folder's children (ADR-130). */
+        SortChildren: {
+            /**
+             * @description `asc` = A → Z, `desc` = Z → A. Required: there is no sensible default for a command whose
+             *     whole content is the direction, and a missing field would silently pick one.
+             */
+            direction: components["schemas"]["SortDirection"];
+        };
+        /**
+         * @description Which way a "sort this folder's children by name" command orders them (ADR-130).
+         *
+         *     Two spellings and they must not drift: [`SortDirection::sql`] is the SQL keyword spliced into
+         *     the `ORDER BY`, and the serde tag is what the API edge parses out of the request body. A test
+         *     below pins both, because they are produced by different mechanisms and nothing else compares
+         *     them (`testing.md`, "an enum's token and its serde tag").
+         * @enum {string}
+         */
+        SortDirection: "asc" | "desc";
         /**
          * @description Which received stream a destination tees. Kept here (rather than in core) so the DB `CHECK`
          *     strings, the API validation and the WebUI all agree on one spelling.
@@ -18825,6 +18874,67 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such group */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    sort_group_children: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Group id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SortChildren"];
+            };
+        };
+        responses: {
+            /** @description The folder's direct children were renumbered in name order */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description No valid bearer token */
             401: {

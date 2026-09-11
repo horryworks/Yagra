@@ -68,6 +68,41 @@ impl GroupType {
     }
 }
 
+/// Which way a "sort this folder's children by name" command orders them (ADR-130).
+///
+/// Two spellings and they must not drift: [`SortDirection::sql`] is the SQL keyword spliced into
+/// the `ORDER BY`, and the serde tag is what the API edge parses out of the request body. A test
+/// below pins both, because they are produced by different mechanisms and nothing else compares
+/// them (`testing.md`, "an enum's token and its serde tag").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SortDirection {
+    /// A → Z.
+    Asc,
+    /// Z → A.
+    Desc,
+}
+
+impl SortDirection {
+    /// Every direction, so the agreement test iterates rather than naming them — a third variant
+    /// is then covered without anyone remembering to extend the test.
+    #[cfg(test)]
+    pub const ALL: [SortDirection; 2] = [SortDirection::Asc, SortDirection::Desc];
+
+    /// The SQL keyword.
+    ///
+    /// 🚨 **This is the only thing that reaches the statement.** The request body's string is
+    /// parsed into this enum at the API edge and then dropped; nothing operator-supplied is ever
+    /// interpolated into SQL (`security.md`).
+    #[must_use]
+    pub const fn sql(self) -> &'static str {
+        match self {
+            SortDirection::Asc => "ASC",
+            SortDirection::Desc => "DESC",
+        }
+    }
+}
+
 /// One group row returned by the API. `group_type` is the snake_case key.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GroupSummary {
@@ -745,11 +780,93 @@ impl GroupRepo {
         tx.commit().await?;
         Ok(res.rows_affected() > 0)
     }
+
+    /// Renumber one folder's **direct** children by name (ADR-130). Returns whether the folder
+    /// existed.
+    ///
+    /// Two scopes, not one: subfolders are `node_groups` sharing this `parent_id`, member nodes
+    /// are `nodes` sharing this `group_id`. They are separate sibling sets by construction, which
+    /// is why folders can never interleave with nodes in the tree however this is called — the
+    /// renderer walks the two lists in turn (`web/src/lib/nodeTree.ts`). Grandchildren are not
+    /// touched: the operator right-clicked one folder and that is the scope that changes.
+    ///
+    /// The statements are the ones migration `0015_tree_ordering.sql` already uses to seed this
+    /// column, so nothing new is invented here — `row_number()` over the sibling scope. Two
+    /// consequences worth knowing: the values land as **integers from 1**, which re-spaces a scope
+    /// whose fractions have been squeezed by a long run of midpoint drags; and `lower(name)` is
+    /// what makes `SW-01` and `sw-02` fall where a person expects, with `id` last so the same
+    /// input always produces the same output.
+    ///
+    /// 🚨 **This overwrites a hand-arranged order and there is no undo** (ADR-130 decision 5:
+    /// no confirmation dialog — the caller named the folder by right-clicking it).
+    ///
+    /// ⚠️ `dir.sql()` is a `&'static str` from an enum parsed at the API edge. Nothing an operator
+    /// typed reaches the statement (`security.md`).
+    pub async fn sort_children(&self, id: Uuid, dir: SortDirection) -> anyhow::Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        // Confirm the folder exists and hold it for the length of the transaction, so a concurrent
+        // delete cannot leave this renumbering half-applied against a folder that has gone.
+        let found: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM node_groups WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if found.is_none() {
+            return Ok(false);
+        }
+        let keyword = dir.sql();
+        sqlx::query(&format!(
+            "UPDATE node_groups g SET sort_order = s.rn FROM ( \
+               SELECT id, row_number() OVER (ORDER BY lower(name) {keyword}, id) AS rn \
+               FROM node_groups WHERE parent_id = $1 \
+             ) s WHERE g.id = s.id"
+        ))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "UPDATE nodes n SET sort_order = s.rn, updated_at = now() FROM ( \
+               SELECT id, row_number() OVER (ORDER BY lower(name) {keyword}, id) AS rn \
+               FROM nodes WHERE group_id = $1 \
+             ) s WHERE n.id = s.id"
+        ))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sort_direction_token_and_serde_agree() {
+        // Two spellings of one value, produced by different mechanisms: `sql()` is a hand-written
+        // match and the JSON tag comes from `rename_all`. Nothing but this test compares them, and
+        // a disagreement would mean the API edge accepts a word the statement never sees
+        // (`testing.md`, "an enum's token and its serde tag").
+        for d in SortDirection::ALL {
+            let json = serde_json::to_string(&d).expect("serialize");
+            let back: SortDirection = serde_json::from_str(&json).expect("round trip");
+            assert_eq!(back, d);
+            assert_eq!(json.to_uppercase(), format!("\"{}\"", d.sql()));
+        }
+        // Pinned as literals too: the assertion above would pass if both sides were renamed
+        // together, and `ASC`/`DESC` are SQL keywords that may not be renamed at all.
+        assert_eq!(SortDirection::Asc.sql(), "ASC");
+        assert_eq!(SortDirection::Desc.sql(), "DESC");
+        assert_eq!(
+            serde_json::to_string(&SortDirection::Asc).unwrap(),
+            "\"asc\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SortDirection::Desc).unwrap(),
+            "\"desc\""
+        );
+    }
 
     #[test]
     fn group_type_keys_round_trip() {
