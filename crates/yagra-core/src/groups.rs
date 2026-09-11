@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::IpAddr;
 use uuid::Uuid;
 
 /// Longest ancestor chain any group walk will follow before giving up.
@@ -144,32 +145,122 @@ pub struct GroupSummary {
     pub prefixes: Vec<GroupPrefix>,
 }
 
+/// Who put a prefix row on a folder (ADR-131 決定 9).
+///
+/// This is not decoration: it decides what the editor may offer. A row a NetBox sync owns is
+/// listed read-only — `PUT /node-groups/{id}/prefixes` deliberately cannot touch it — so a UI
+/// that could not tell the two apart would draw a remove button that does nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefixSource {
+    /// Typed by an operator here (`netbox_server_id IS NULL`).
+    Manual,
+    /// Written by a NetBox sync, and swept by it when NetBox stops mentioning it.
+    Sync,
+}
+
 /// One IP prefix attached to a folder.
 ///
-/// Two fields and no more, on purpose. NetBox's prefix rows also carry `status`, `vrf`,
-/// `is_pool`, `role` and a tenant, and none of them has a reader here: what a person needs in
-/// order to choose a sweep target is the range and what it is called. Storing the rest would be a
-/// second copy of NetBox's inventory that nothing consults.
+/// Three fields, and the third was added under the rule the original two were chosen by
+/// (ADR-131 決定 9). NetBox's prefix rows also carry `status`, `vrf`, `is_pool`, `role` and a
+/// tenant, and none of them has a reader here — the bar for a field is a real reader, not
+/// availability. `source` cleared that bar when two appeared at once: the range editor must not
+/// offer to delete a row it cannot delete, and the folder detail pane says where a range came
+/// from. It costs one column on a SELECT `attach_prefixes` already runs.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GroupPrefix {
     /// Canonical CIDR, e.g. `"192.168.1.0/24"`. PostgreSQL's `cidr` type rendered as text, so the
     /// mask is always present — unlike `inet`, where a host address would print bare.
     pub prefix: String,
-    /// NetBox's description of the range ("Matsuyama LAN"), or empty.
+    /// NetBox's description of the range ("Matsuyama LAN"), or what the operator typed, or empty.
     pub description: String,
+    /// Whether an operator typed this row or a sync wrote it.
+    pub source: PrefixSource,
 }
 
-/// One "this node's address falls inside this folder's range" hit (ADR-124).
+/// One "this thing's address falls inside this folder's range" hit (ADR-124, generalised by
+/// ADR-131).
 ///
 /// Already narrowed to the longest prefix that contains the address, so two rows for the same
-/// node mean two *different folders* claim it equally well — the ambiguous case, which is
+/// key mean two *different folders* claim it equally well — the ambiguous case, which is
 /// reported and never resolved automatically.
+///
+/// `K` is what the caller asked about: a `Uuid` when the subject is an existing node
+/// ([`GroupRepo::match_prefixes`]), an `IpAddr` when it is an address that is not a node yet
+/// ([`GroupRepo::match_address_prefixes`]). The two queries differ in what they join against and
+/// in how far the scope reaches; everything downstream of them is identical, which is why
+/// [`fold_prefix_matches`] is written once rather than twice.
 #[derive(Debug, Clone)]
-pub struct PrefixMatch {
-    pub node: Uuid,
+pub struct PrefixHit<K> {
+    pub key: K,
     pub group: Uuid,
     /// The range that matched, for showing the operator *why* this folder was proposed.
     pub prefix: String,
+}
+
+/// The three answers a prefix match can give about one key.
+///
+/// 🚨 **Three, not two.** "No folder's range covers this" and "two folders claim it equally well"
+/// both end with the caller falling back to whatever it had planned — but they are different
+/// facts about the deployment, and folding them loses the one that is actionable: an ambiguous
+/// address means two folders have overlapping ranges configured, which is a thing to go and fix.
+#[derive(Debug, Clone, Default)]
+pub struct PrefixFold<K> {
+    /// Exactly one folder claims this key, with the range that did it.
+    pub matched: Vec<(K, Uuid, String)>,
+    /// Two or more folders claim it at the same prefix length. Never resolved here.
+    pub ambiguous: Vec<(K, Vec<Uuid>)>,
+    /// No folder's range contains it.
+    pub unmatched: Vec<K>,
+}
+
+/// Fold the flat longest-prefix hits into the three answers above.
+///
+/// Pure, so the part that decides *meaning* is testable without a database. The SQL decides which
+/// rows come back; this decides whether one folder claims a key or two do, and that boundary is
+/// where a mistake would file a device into a site nobody chose.
+///
+/// ⚠️ Rows must arrive **ordered by key then group**, so a duplicate folder (one folder carrying
+/// two ranges that both contain the address at the same length — impossible for a canonical CIDR,
+/// but not worth trusting) collapses with `dedup` before the count is read. Both queries that
+/// feed this carry that `ORDER BY`; a third one owes it too.
+///
+/// ⚠️ A key the caller listed twice is answered once. A key the query dropped — because the scope
+/// refused it, or because nothing matched — is `unmatched`, and those two are deliberately
+/// indistinguishable here: fail-closed, and the caller reports both the same way.
+#[must_use]
+pub fn fold_prefix_matches<K>(requested: &[K], hits: Vec<PrefixHit<K>>) -> PrefixFold<K>
+where
+    K: Copy + Eq + std::hash::Hash,
+{
+    let mut by_key: HashMap<K, Vec<PrefixHit<K>>> = HashMap::new();
+    for h in hits {
+        by_key.entry(h.key).or_default().push(h);
+    }
+    let mut fold = PrefixFold {
+        matched: Vec::new(),
+        ambiguous: Vec::new(),
+        unmatched: Vec::new(),
+    };
+    let mut seen = HashSet::new();
+    for key in requested {
+        if !seen.insert(*key) {
+            continue;
+        }
+        let Some(rows) = by_key.remove(key) else {
+            fold.unmatched.push(*key);
+            continue;
+        };
+        let mut groups: Vec<Uuid> = rows.iter().map(|h| h.group).collect();
+        groups.dedup();
+        if groups.len() == 1 {
+            fold.matched
+                .push((*key, rows[0].group, rows[0].prefix.clone()));
+        } else {
+            fold.ambiguous.push((*key, groups));
+        }
+    }
+    fold
 }
 
 /// A fractional sort_order that places an item between `prev` and `next` — the order values of
@@ -475,7 +566,8 @@ impl GroupRepo {
     /// address, which is the trap `dns_check.rs` records.)
     async fn attach_prefixes(&self, groups: &mut [GroupSummary]) -> anyhow::Result<()> {
         let rows = sqlx::query(
-            "SELECT group_id, prefix::TEXT AS prefix, description \
+            "SELECT group_id, prefix::TEXT AS prefix, description, \
+                    netbox_server_id IS NULL AS manual \
              FROM node_group_prefixes ORDER BY prefix",
         )
         .fetch_all(&self.pool)
@@ -487,9 +579,16 @@ impl GroupRepo {
             std::collections::HashMap::new();
         for row in rows {
             let group_id: Uuid = row.try_get("group_id")?;
+            // `IS NULL` is never itself NULL, so this is a plain bool rather than an Option.
+            let manual: bool = row.try_get("manual")?;
             by_group.entry(group_id).or_default().push(GroupPrefix {
                 prefix: row.try_get("prefix")?,
                 description: row.try_get("description")?,
+                source: if manual {
+                    PrefixSource::Manual
+                } else {
+                    PrefixSource::Sync
+                },
             });
         }
         for g in groups.iter_mut() {
@@ -528,7 +627,7 @@ impl GroupRepo {
         &self,
         nodes: &[Uuid],
         scope: Option<&[Uuid]>,
-    ) -> anyhow::Result<Vec<PrefixMatch>> {
+    ) -> anyhow::Result<Vec<PrefixHit<Uuid>>> {
         if nodes.is_empty() {
             return Ok(Vec::new());
         }
@@ -552,8 +651,79 @@ impl GroupRepo {
         .await?;
         rows.into_iter()
             .map(|row| {
-                Ok(PrefixMatch {
-                    node: row.try_get("node_id")?,
+                Ok(PrefixHit {
+                    key: row.try_get::<Uuid, _>("node_id")?,
+                    group: row.try_get("group_id")?,
+                    prefix: row.try_get("prefix")?,
+                })
+            })
+            .collect()
+    }
+
+    /// The same question as [`GroupRepo::match_prefixes`], asked about **addresses that are not
+    /// nodes yet** — the candidates a discovery sweep just found (ADR-131 決定 4).
+    ///
+    /// 🚨 **`$1` is `text[]`, not `inet[]`.** sqlx has no `inet` mapping without the `ipnetwork`
+    /// feature, which this module keeps out of the build on purpose (see `attach_prefixes`). The
+    /// cast happens in SQL, exactly as `NodeRepo::import_nodes` binds `$3::inet`.
+    /// ⚠️ **Only ever hand this parsed addresses.** The caller takes `IpAddr`, so raw request text
+    /// cannot reach the cast — a value that is not an address would fail the *statement*, which is
+    /// an internal error rather than the named 400 the edge already produces.
+    ///
+    /// 🚨 **`host(addr)`, never `addr::TEXT`.** Casting an `inet` to text **adds the mask**
+    /// (`10.0.0.1` becomes `10.0.0.1/32`), which is the defect `arp.rs` shipped for a release.
+    /// `host()` renders the bare address, and the caller parses it back into an `IpAddr` before
+    /// using it as a key — so no text-canonicalisation difference (`2001:DB8::1` against
+    /// `2001:db8::1`) can split one address into two answers.
+    ///
+    /// ⚠️ **The scope narrows the folder side only, and that is the difference from the node
+    /// version.** There, both sides narrow, because naming a node id asks a question about a row
+    /// that already exists and the caller may not be allowed to read. Here there is no such row:
+    /// the addresses are ones the caller's own sweep just found and already holds, so there is
+    /// nothing to withhold about them. The folders still narrow, for the reason
+    /// [`crate::api::groups::visible_groups`] clears prefixes — answering with a folder the caller
+    /// cannot see hands over the subnet layout of a site whose membership they were refused.
+    /// A future reader "fixing" the asymmetry would be adding a filter to data the client supplied.
+    ///
+    /// `DISTINCT` in the CTE so fifty candidates in one /24 do not re-run the `MAX(masklen)`
+    /// subquery fifty times; [`fold_prefix_matches`] still answers per requested address.
+    pub async fn match_address_prefixes(
+        &self,
+        addresses: &[IpAddr],
+        scope: Option<&[Uuid]>,
+    ) -> anyhow::Result<Vec<PrefixHit<IpAddr>>> {
+        if addresses.is_empty() {
+            return Ok(Vec::new());
+        }
+        let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
+        let rows = sqlx::query(
+            "WITH addrs AS (SELECT DISTINCT a.txt::inet AS addr FROM unnest($1::text[]) AS a(txt)) \
+             SELECT host(addrs.addr) AS address, p.group_id AS group_id, \
+                    p.prefix::TEXT AS prefix \
+             FROM addrs \
+             JOIN node_group_prefixes p ON addrs.addr <<= p.prefix \
+             WHERE ($2::uuid[] IS NULL OR p.group_id = ANY($2)) \
+               AND masklen(p.prefix) = ( \
+                     SELECT MAX(masklen(q.prefix)) FROM node_group_prefixes q \
+                     WHERE addrs.addr <<= q.prefix \
+                       AND ($2::uuid[] IS NULL OR q.group_id = ANY($2))) \
+             ORDER BY addrs.addr, p.group_id",
+        )
+        .bind(&text)
+        .bind(&scope_bind)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let rendered: String = row.try_get("address")?;
+                let key: IpAddr = rendered.parse().map_err(|_| {
+                    // Unreachable: `host()` of an `inet` PostgreSQL accepted is always parseable.
+                    // Named rather than unwrapped so a future projection change fails loudly.
+                    anyhow::anyhow!("prefix match returned an unparseable address")
+                })?;
+                Ok(PrefixHit {
+                    key,
                     group: row.try_get("group_id")?,
                     prefix: row.try_get("prefix")?,
                 })
@@ -577,6 +747,101 @@ impl GroupRepo {
         .fetch_one(&self.pool)
         .await?;
         Ok(found)
+    }
+
+    /// Canonicalise one operator-typed range, or `None` when it is not an address at all.
+    ///
+    /// 🚨 **`network($1::inet)::cidr`, not `$1::cidr`.** A plain `cidr` cast **rejects** a value
+    /// with host bits set, so `192.168.1.5/24` — which is what a person reading a device's config
+    /// types — would be refused as malformed. `network()` canonicalises it to `192.168.1.0/24`.
+    /// Migration 0104's header records this; the NetBox writer uses the same spelling, and so must
+    /// anything else that stores one.
+    ///
+    /// **The database is the validator, because there is no CIDR parser in this workspace** and
+    /// `web/src/lib/cidr.ts` — the only one in the repository — is IPv4-only while IPv6 is in
+    /// scope. This method exists so a caller can turn PostgreSQL's refusal into a 400 naming the
+    /// offending string, rather than letting a failed statement become a 500 naming nothing.
+    ///
+    /// ⚠️ **Call it outside a transaction, one row at a time.** A failed statement poisons its
+    /// transaction, so probing inside one would abort the write it was meant to guard. And one
+    /// `unnest` covering the batch cannot say *which* value failed: PostgreSQL does not promise
+    /// row-evaluation order, so the only honest message would be "one of these is wrong". At
+    /// form-submit pace the round trips are free; the named row is not.
+    pub async fn canonical_prefix(&self, raw: &str) -> anyhow::Result<Option<String>> {
+        let canonical: Result<String, _> =
+            sqlx::query_scalar("SELECT network($1::inet)::cidr::TEXT")
+                .bind(raw)
+                .fetch_one(&self.pool)
+                .await;
+        match canonical {
+            Ok(v) => Ok(Some(v)),
+            // Any database error here means the cast refused the value. Distinguishing a genuine
+            // outage would need the SQLSTATE, and the caller's fallback for both is the same 400 —
+            // a real outage fails again on the very next statement of the write itself.
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Replace this folder's **hand-made** ranges with `rows` (ADR-131 決定 5).
+    ///
+    /// 🚨 **The `DELETE` is scoped to `netbox_server_id IS NULL`, and that is the whole safety
+    /// property.** A plain "replace the folder's list" would let an operator delete rows a NetBox
+    /// sync owns — rows the sync would then re-create on its next run, so the edit would appear to
+    /// work and silently undo itself. Scoping the delete means this endpoint can only touch what
+    /// it created, and `delete_stale_prefixes`' ownership model is never disturbed.
+    ///
+    /// 🚨 **`ON CONFLICT DO NOTHING`, never `DO UPDATE`.** Taking over a sync-owned row would
+    /// clear its `netbox_server_id` and put it permanently out of the stale sweep's reach. The
+    /// normal path for a collision is the caller's named 400; `DO NOTHING` is what keeps the race
+    /// (a sync landing between the check and the commit) harmless instead of aborting the
+    /// transaction.
+    ///
+    /// Every `prefix` must already have been through [`GroupRepo::canonical_prefix`] — the
+    /// `network()` cast is repeated here so there is one spelling of migration 0104's rule, not so
+    /// that an unvalidated value may be passed.
+    pub async fn set_manual_prefixes(
+        &self,
+        group: Uuid,
+        rows: &[(String, String)],
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM node_group_prefixes WHERE group_id = $1 AND netbox_server_id IS NULL",
+        )
+        .bind(group)
+        .execute(&mut *tx)
+        .await?;
+        for (prefix, description) in rows {
+            sqlx::query(
+                "INSERT INTO node_group_prefixes \
+                   (group_id, prefix, description, netbox_server_id) \
+                 VALUES ($1, network($2::inet)::cidr, $3, NULL) \
+                 ON CONFLICT (group_id, prefix) DO NOTHING",
+            )
+            .bind(group)
+            .bind(prefix)
+            .bind(description)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The canonical ranges on this folder that a **sync** owns, so a write path can refuse to
+    /// take one over with a 400 that names it.
+    ///
+    /// Refusing is more honest than silently dropping the row: the operator typed it, and nothing
+    /// on screen would otherwise say it did not land.
+    pub async fn sync_owned_prefixes(&self, group: Uuid) -> anyhow::Result<Vec<String>> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT prefix::TEXT FROM node_group_prefixes \
+             WHERE group_id = $1 AND netbox_server_id IS NOT NULL",
+        )
+        .bind(group)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// Whether a folder with this id exists.
@@ -1253,7 +1518,7 @@ mod tests {
         // The v6 node matches its own family's range; the v4 one matches nothing. `<<=` across
         // families is false rather than an error, which is what makes storing both safe.
         assert_eq!(hits.len(), 1, "{hits:?}");
-        assert_eq!(hits[0].node, v6);
+        assert_eq!(hits[0].key, v6);
     }
 
     /// 🚨 The scope narrows the candidate folders.
@@ -1343,6 +1608,437 @@ mod tests {
         assert!(
             !repo.any_prefixes(Some(&[mine])).await.expect("read"),
             "a range outside the scope was counted"
+        );
+    }
+
+    // ── The shared fold (moved from `api/nodes.rs` by ADR-131) ──────────────────────────
+
+    /// The fold, without a database: which of the three answers each key lands in.
+    #[test]
+    fn folding_hits_separates_one_folder_from_two_and_from_none() {
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let (g1, g2) = (Uuid::new_v4(), Uuid::new_v4());
+        let hit = |key, group| PrefixHit {
+            key,
+            group,
+            prefix: "10.0.0.0/24".to_string(),
+        };
+        // `a` is claimed once, `b` twice, `c` not at all — and `a` is named twice in the request.
+        let fold = fold_prefix_matches(&[a, b, c, a], vec![hit(a, g1), hit(b, g1), hit(b, g2)]);
+        assert_eq!(fold.matched.len(), 1);
+        assert_eq!(fold.matched[0].0, a);
+        assert_eq!(fold.ambiguous.len(), 1);
+        assert_eq!(fold.ambiguous[0].1, vec![g1, g2]);
+        assert_eq!(fold.unmatched, vec![c], "a repeated id was answered twice");
+    }
+
+    /// One folder carrying two ranges that both contain the address is still one folder.
+    #[test]
+    fn folding_hits_does_not_call_one_folder_a_tie() {
+        let node = Uuid::new_v4();
+        let group = Uuid::new_v4();
+        let hit = |prefix: &str| PrefixHit {
+            key: node,
+            group,
+            prefix: prefix.to_string(),
+        };
+        let fold = fold_prefix_matches(&[node], vec![hit("10.0.0.0/24"), hit("10.0.0.0/24")]);
+        assert_eq!(fold.matched.len(), 1, "one folder read as a tie");
+        assert!(fold.ambiguous.is_empty());
+    }
+
+    /// The same fold, keyed by an address — the shape ADR-131's import path uses.
+    ///
+    /// Worth its own test rather than trusting the generic: `IpAddr` is the key type where a
+    /// mixed-family list is normal, and an IPv6 key must not collide with an IPv4 one.
+    #[test]
+    fn folding_hits_works_the_same_when_the_key_is_an_address() {
+        let v4: IpAddr = "192.168.1.10".parse().expect("v4");
+        let v6: IpAddr = "2001:db8::1".parse().expect("v6");
+        let absent: IpAddr = "10.9.9.9".parse().expect("v4");
+        let (g1, g2) = (Uuid::new_v4(), Uuid::new_v4());
+        let hit = |key, group, prefix: &str| PrefixHit {
+            key,
+            group,
+            prefix: prefix.to_string(),
+        };
+        let fold = fold_prefix_matches(
+            &[v4, v6, absent],
+            vec![
+                hit(v4, g1, "192.168.1.0/24"),
+                hit(v6, g1, "2001:db8::/32"),
+                hit(v6, g2, "2001:db8::/32"),
+            ],
+        );
+        assert_eq!(
+            fold.matched.len(),
+            1,
+            "only the v4 address landed on one folder"
+        );
+        assert_eq!(fold.matched[0].0, v4);
+        assert_eq!(
+            fold.matched[0].2, "192.168.1.0/24",
+            "the range that matched is reported"
+        );
+        assert_eq!(fold.ambiguous.len(), 1);
+        assert_eq!(fold.ambiguous[0].0, v6);
+        assert_eq!(fold.unmatched, vec![absent]);
+    }
+
+    /// `PrefixSource` round-trips through serde with the tokens the WebUI branches on.
+    ///
+    /// The TypeScript side has a `PREFIX_SOURCES` array and builds `t()` keys from it, so a
+    /// rename here that nothing compared would render a raw key in both locales at once.
+    #[test]
+    fn prefix_source_serializes_as_the_tokens_the_web_ui_expects() {
+        assert_eq!(
+            serde_json::to_string(&PrefixSource::Manual).expect("manual"),
+            "\"manual\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PrefixSource::Sync).expect("sync"),
+            "\"sync\""
+        );
+    }
+
+    // ── ADR-131: matching addresses that are not nodes yet, and hand-made ranges ─────────
+
+    /// Longest prefix wins, a same-length tie comes back twice, and an address outside every
+    /// range is simply absent.
+    ///
+    /// The address-keyed twin of `match_prefixes`' own tests. Worth repeating rather than trusting
+    /// the shared fold: this query joins against `unnest`, not `nodes`, so the containment and the
+    /// `MAX(masklen)` correlation are a second implementation of the same rule.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn matching_addresses_narrows_to_the_longest_prefix(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let broad = crate::pgtest::group(&pool, "broad").await;
+        let narrow = crate::pgtest::group(&pool, "narrow").await;
+        crate::pgtest::prefix(&pool, broad, "10.0.0.0/8").await;
+        crate::pgtest::prefix(&pool, narrow, "10.1.2.0/24").await;
+
+        let inside: IpAddr = "10.1.2.5".parse().expect("addr");
+        let broader: IpAddr = "10.9.9.9".parse().expect("addr");
+        let outside: IpAddr = "192.0.2.1".parse().expect("addr");
+        let hits = repo
+            .match_address_prefixes(&[inside, broader, outside], None)
+            .await
+            .expect("match");
+        let fold = fold_prefix_matches(&[inside, broader, outside], hits);
+        assert_eq!(fold.matched.len(), 2, "{fold:?}");
+        let by_key: HashMap<IpAddr, Uuid> = fold.matched.iter().map(|(k, g, _)| (*k, *g)).collect();
+        assert_eq!(by_key[&inside], narrow, "the /24 beat the /8");
+        assert_eq!(by_key[&broader], broad);
+        assert_eq!(fold.unmatched, vec![outside]);
+        assert!(fold.ambiguous.is_empty());
+    }
+
+    /// Two folders claiming an address at the same length is reported, never resolved.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn matching_addresses_reports_a_tie_rather_than_choosing(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let a = crate::pgtest::group(&pool, "a").await;
+        let b = crate::pgtest::group(&pool, "b").await;
+        crate::pgtest::prefix(&pool, a, "192.168.1.0/24").await;
+        crate::pgtest::prefix(&pool, b, "192.168.1.0/24").await;
+
+        let addr: IpAddr = "192.168.1.50".parse().expect("addr");
+        let hits = repo
+            .match_address_prefixes(&[addr], None)
+            .await
+            .expect("match");
+        let fold = fold_prefix_matches(&[addr], hits);
+        assert!(fold.matched.is_empty(), "a tie must not be filed");
+        assert_eq!(fold.ambiguous.len(), 1);
+        let mut claimed = fold.ambiguous[0].1.clone();
+        claimed.sort();
+        let mut expected = vec![a, b];
+        expected.sort();
+        assert_eq!(claimed, expected);
+    }
+
+    /// 🚨 The key that comes back parses into the address that was sent.
+    ///
+    /// The projection is `host(addr)`, not `addr::TEXT` — the latter **adds a mask**
+    /// (`10.0.0.1/32`), which is the defect `arp.rs` shipped for a release and which here would
+    /// make every candidate read as filed nowhere. IPv6 is in the fixture because that is where a
+    /// text round trip is most likely to change spelling.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn matching_addresses_returns_keys_that_are_the_addresses_sent(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let g = crate::pgtest::group(&pool, "mixed").await;
+        crate::pgtest::prefix(&pool, g, "192.168.1.0/24").await;
+        crate::pgtest::prefix(&pool, g, "2001:db8::/32").await;
+
+        // Deliberately upper-case, so a text comparison rather than a parse would fail here.
+        let v6: IpAddr = "2001:DB8::1".parse().expect("v6");
+        let v4: IpAddr = "192.168.1.1".parse().expect("v4");
+        let hits = repo
+            .match_address_prefixes(&[v4, v6], None)
+            .await
+            .expect("match");
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        let keys: HashSet<IpAddr> = hits.iter().map(|h| h.key).collect();
+        assert!(keys.contains(&v4), "{keys:?}");
+        assert!(keys.contains(&v6), "{keys:?}");
+        // And the fold agrees, which is the property the import path actually depends on.
+        let fold = fold_prefix_matches(&[v4, v6], hits);
+        assert_eq!(fold.matched.len(), 2, "{fold:?}");
+        assert!(fold.unmatched.is_empty());
+    }
+
+    /// An IPv4 address against an IPv6 range is `false`, never an error — so storing both is safe.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn matching_addresses_does_not_cross_address_families(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let g = crate::pgtest::group(&pool, "v6 only").await;
+        crate::pgtest::prefix(&pool, g, "2001:db8::/32").await;
+
+        let v4: IpAddr = "192.168.1.1".parse().expect("v4");
+        let v6: IpAddr = "2001:db8::5".parse().expect("v6");
+        let hits = repo
+            .match_address_prefixes(&[v4, v6], None)
+            .await
+            .expect("match");
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].key, v6);
+    }
+
+    /// 🚨 The scope narrows the **folder** side, and nothing else.
+    ///
+    /// Unlike `match_prefixes` there is no node side to narrow: the addresses are the caller's own
+    /// sweep results, which they already hold. What must still be true is that a folder outside the
+    /// scope never appears in the answer — that is the leak `visible_groups` clears prefixes to
+    /// prevent, and it would be handed over here instead.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn matching_addresses_narrows_the_folder_side_only(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        crate::pgtest::prefix(&pool, mine, "10.0.0.0/8").await;
+        crate::pgtest::prefix(&pool, theirs, "10.1.2.0/24").await;
+
+        let addr: IpAddr = "10.1.2.5".parse().expect("addr");
+        // Unscoped, the /24 wins.
+        let unscoped = repo
+            .match_address_prefixes(&[addr], None)
+            .await
+            .expect("match");
+        assert_eq!(unscoped.len(), 1);
+        assert_eq!(unscoped[0].group, theirs);
+
+        // Scoped to `mine`, the other folder's range is invisible — and the answer falls back to
+        // the longest prefix *among the folders the caller may see*, rather than to nothing.
+        let scoped = repo
+            .match_address_prefixes(&[addr], Some(&[mine]))
+            .await
+            .expect("match");
+        assert_eq!(scoped.len(), 1, "{scoped:?}");
+        assert_eq!(scoped[0].group, mine);
+        // The address itself was never filtered: it is answered for, which is the asymmetry.
+        assert_eq!(scoped[0].key, addr);
+    }
+
+    /// `canonical_prefix` accepts host bits and normalises them; a non-address is `None`.
+    ///
+    /// 🚨 And the pool is still usable afterwards — that is the whole reason the probe runs outside
+    /// a transaction. A failed statement poisons its transaction, so probing inside the write would
+    /// abort the very thing it guards.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn canonicalising_a_prefix_accepts_host_bits_and_refuses_a_non_address(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = GroupRepo::new(pool.clone());
+        assert_eq!(
+            repo.canonical_prefix("192.168.1.5/24")
+                .await
+                .expect("probe"),
+            Some("192.168.1.0/24".to_string()),
+            "a plain ::cidr cast would have rejected this"
+        );
+        assert_eq!(
+            repo.canonical_prefix("2001:db8::1/64")
+                .await
+                .expect("probe"),
+            Some("2001:db8::/64".to_string())
+        );
+        assert_eq!(
+            repo.canonical_prefix("not-an-address")
+                .await
+                .expect("probe"),
+            None
+        );
+        // The refusal did not take the connection with it.
+        assert_eq!(
+            repo.canonical_prefix("10.0.0.0/8").await.expect("probe"),
+            Some("10.0.0.0/8".to_string())
+        );
+    }
+
+    /// 🚨 Replacing the hand-made ranges leaves a sync's rows exactly where they are.
+    ///
+    /// The failure this exists for is not a crash: a plain "replace the folder's list" would delete
+    /// rows NetBox owns, NetBox would re-create them on its next run, and the edit would appear to
+    /// work and silently undo itself.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn setting_manual_prefixes_never_touches_a_syncs_rows(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let g = crate::pgtest::group(&pool, "site").await;
+        let server = crate::pgtest::netbox_server(&pool, "nb").await;
+        sqlx::query(
+            "INSERT INTO node_group_prefixes (group_id, prefix, description, netbox_server_id) \
+             VALUES ($1, network($2::inet)::cidr, 'from netbox', $3)",
+        )
+        .bind(g)
+        .bind("172.16.0.0/12")
+        .bind(server)
+        .execute(&pool)
+        .await
+        .expect("seed sync row");
+
+        repo.set_manual_prefixes(
+            g,
+            &[
+                ("192.168.1.0/24".into(), "office".into()),
+                ("10.0.0.0/8".into(), String::new()),
+            ],
+        )
+        .await
+        .expect("set");
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 3);
+
+        // A second write replaces only what this endpoint created.
+        repo.set_manual_prefixes(g, &[("192.168.2.0/24".into(), "annex".into())])
+            .await
+            .expect("set again");
+        let listed = repo.list().await.expect("list");
+        let folder = listed.first().expect("one folder");
+        let mut seen: Vec<(String, PrefixSource)> = folder
+            .prefixes
+            .iter()
+            .map(|p| (p.prefix.clone(), p.source))
+            .collect();
+        seen.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            seen,
+            vec![
+                ("172.16.0.0/12".to_string(), PrefixSource::Sync),
+                ("192.168.2.0/24".to_string(), PrefixSource::Manual),
+            ],
+            "the sync row survived both writes and the first manual pair was replaced"
+        );
+
+        // Clearing removes every manual row and still leaves the sync's.
+        repo.set_manual_prefixes(g, &[]).await.expect("clear");
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
+    }
+
+    /// A hand-made row is **not** swept when a sync prunes what NetBox no longer mentions.
+    ///
+    /// Migration 0104's header claims this and nothing tested it. It holds because the sweep is
+    /// `WHERE netbox_server_id = $1` and `NULL = $1` is never true.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_hand_made_range_survives_a_syncs_stale_sweep(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let g = crate::pgtest::group(&pool, "site").await;
+        let server = crate::pgtest::netbox_server(&pool, "nb").await;
+        repo.set_manual_prefixes(g, &[("192.168.1.0/24".into(), "typed".into())])
+            .await
+            .expect("set");
+
+        // The sweep's own statement, with a cutoff in the future so it would delete anything it
+        // was entitled to delete.
+        let swept = sqlx::query(
+            "DELETE FROM node_group_prefixes \
+             WHERE netbox_server_id = $1 AND last_seen_at < now() + interval '1 hour'",
+        )
+        .bind(server)
+        .execute(&pool)
+        .await
+        .expect("sweep");
+        assert_eq!(swept.rows_affected(), 0);
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
+    }
+
+    /// The other direction, decided by ADR-131 決定 6: a sync that learns a hand-made CIDR
+    /// **takes the row over**, and it then becomes sweepable.
+    ///
+    /// This was already how `netbox.rs`'s `ON CONFLICT ... DO UPDATE SET netbox_server_id =
+    /// EXCLUDED.netbox_server_id` behaved; it was an accident of the clause rather than a decision.
+    /// Pinned here so changing it is deliberate.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_sync_that_learns_a_hand_made_range_takes_it_over(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let g = crate::pgtest::group(&pool, "site").await;
+        let server = crate::pgtest::netbox_server(&pool, "nb").await;
+        repo.set_manual_prefixes(g, &[("192.168.1.0/24".into(), "typed".into())])
+            .await
+            .expect("set");
+
+        // `netbox.rs::upsert_prefix`'s statement, verbatim in shape.
+        sqlx::query(
+            "INSERT INTO node_group_prefixes \
+               (group_id, prefix, description, netbox_server_id, last_seen_at) \
+             VALUES ($1, network($2::inet)::cidr, $3, $4, now()) \
+             ON CONFLICT (group_id, prefix) DO UPDATE SET \
+               description = EXCLUDED.description, \
+               netbox_server_id = EXCLUDED.netbox_server_id, \
+               last_seen_at = now()",
+        )
+        .bind(g)
+        .bind("192.168.1.0/24")
+        .bind("Matsuyama LAN")
+        .bind(server)
+        .execute(&pool)
+        .await
+        .expect("sync upsert");
+
+        let listed = repo.list().await.expect("list");
+        let folder = listed.first().expect("one folder");
+        assert_eq!(folder.prefixes.len(), 1);
+        assert_eq!(
+            folder.prefixes[0].source,
+            PrefixSource::Sync,
+            "the row is the sync's now"
+        );
+        // And `set_manual_prefixes` can no longer remove it — which is what the API's
+        // `prefix_owned_by_sync` refusal exists to explain rather than to hide.
+        repo.set_manual_prefixes(g, &[]).await.expect("clear");
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
+    }
+
+    /// `sync_owned_prefixes` names only the sync's rows, canonicalised.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn sync_owned_prefixes_lists_only_what_a_sync_wrote(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let g = crate::pgtest::group(&pool, "site").await;
+        let server = crate::pgtest::netbox_server(&pool, "nb").await;
+        repo.set_manual_prefixes(g, &[("10.0.0.0/8".into(), String::new())])
+            .await
+            .expect("set");
+        sqlx::query(
+            "INSERT INTO node_group_prefixes (group_id, prefix, description, netbox_server_id) \
+             VALUES ($1, network($2::inet)::cidr, '', $3)",
+        )
+        .bind(g)
+        .bind("172.16.0.0/12")
+        .bind(server)
+        .execute(&pool)
+        .await
+        .expect("seed");
+        assert_eq!(
+            repo.sync_owned_prefixes(g).await.expect("read"),
+            vec!["172.16.0.0/12".to_string()]
         );
     }
 }

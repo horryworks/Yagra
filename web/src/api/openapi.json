@@ -3808,6 +3808,76 @@
         }
       }
     },
+    "/api/v1/discovery/import-preview": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "operationId": "preview_discovery_import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportPreviewQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Which folder's IP range would claim each address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreviewResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unparseable address, or more than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/discovery/scan": {
       "post": {
         "tags": [
@@ -10065,6 +10135,90 @@
           },
           "503": {
             "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/node-groups/{id}/prefixes": {
+      "put": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "set_node_group_prefixes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupPrefixes"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The folder's hand-made ranges were replaced"
+          },
+          "400": {
+            "description": "A value that is not an IP range, a duplicate, one a sync already owns, too many, or a description that is too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder, or not one this caller may act on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -21714,6 +21868,48 @@
         ],
         "description": "An active alert plus its inbound (read-only) ack state.\n\n`subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a\nnode's UUID or `pool:<name>`. The live alert stream emits the same three keys."
       },
+      "AddressAmbiguity": {
+        "type": "object",
+        "description": "One address claimed equally well by two or more folders. Never resolved automatically.",
+        "required": [
+          "address",
+          "group_ids"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "AddressProposal": {
+        "type": "object",
+        "description": "One address, and the single folder whose IP range contains it.",
+        "required": [
+          "address",
+          "group_id",
+          "prefix"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The range that matched — shown so the operator can see *why* this folder is proposed."
+          }
+        }
+      },
       "Alert": {
         "type": "object",
         "description": "A single alert produced by the engine.",
@@ -27200,19 +27396,56 @@
       },
       "GroupPrefix": {
         "type": "object",
-        "description": "One IP prefix attached to a folder.\n\nTwo fields and no more, on purpose. NetBox's prefix rows also carry `status`, `vrf`,\n`is_pool`, `role` and a tenant, and none of them has a reader here: what a person needs in\norder to choose a sweep target is the range and what it is called. Storing the rest would be a\nsecond copy of NetBox's inventory that nothing consults.",
+        "description": "One IP prefix attached to a folder.\n\nThree fields, and the third was added under the rule the original two were chosen by\n(ADR-131 決定 9). NetBox's prefix rows also carry `status`, `vrf`, `is_pool`, `role` and a\ntenant, and none of them has a reader here — the bar for a field is a real reader, not\navailability. `source` cleared that bar when two appeared at once: the range editor must not\noffer to delete a row it cannot delete, and the folder detail pane says where a range came\nfrom. It costs one column on a SELECT `attach_prefixes` already runs.",
         "required": [
           "prefix",
-          "description"
+          "description",
+          "source"
         ],
         "properties": {
           "description": {
             "type": "string",
-            "description": "NetBox's description of the range (\"Matsuyama LAN\"), or empty."
+            "description": "NetBox's description of the range (\"Matsuyama LAN\"), or what the operator typed, or empty."
           },
           "prefix": {
             "type": "string",
             "description": "Canonical CIDR, e.g. `\"192.168.1.0/24\"`. PostgreSQL's `cidr` type rendered as text, so the\nmask is always present — unlike `inet`, where a host address would print bare."
+          },
+          "source": {
+            "$ref": "#/components/schemas/PrefixSource",
+            "description": "Whether an operator typed this row or a sync wrote it."
+          }
+        }
+      },
+      "GroupPrefixEntry": {
+        "type": "object",
+        "description": "One hand-made IP range on a folder.",
+        "required": [
+          "prefix"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What the range is called (\"Matsuyama LAN\"), or empty."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "A CIDR. Host bits are allowed and canonicalised — `192.168.1.5/24` is stored as\n`192.168.1.0/24`, because that is what a person reading a device's config types."
+          }
+        }
+      },
+      "GroupPrefixes": {
+        "type": "object",
+        "description": "The folder's hand-made ranges, in full.\n\n⚠️ **Whole list, not a diff.** The three sibling sub-resources here (`pool`, `geo`,\n`placement`) are whole-value PUTs for the same reason: the editor is a dialog with a Save\nbutton, so a per-row `DELETE` would act the moment ✕ is clicked — before Save, and with no way\nback. Clearing every hand-made range is `{\"prefixes\": []}`, which is why there is no companion\nDELETE endpoint. (A per-row path could not carry a CIDR anyway: `/` and `:` are in the value.)",
+        "required": [
+          "prefixes"
+        ],
+        "properties": {
+          "prefixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupPrefixEntry"
+            }
           }
         }
       },
@@ -27543,13 +27776,17 @@
           "nodes"
         ],
         "properties": {
+          "file_by_prefix": {
+            "type": "boolean",
+            "description": "File each device into the folder whose IP range contains its address, falling back to\n`group_id` for one no range covers — or that two folders claim equally well (ADR-131).\n\n⚠️ **This does not reverse ADR-100 decision 10.** That decision refuses a *per-row folder\nfield*, because fifty rows could then disagree and the screen would have to explain it.\nThis is a rule for the whole request: no row carries a choice, every destination is derived\nby one rule from data the operator did not type, and the request still names exactly one\noperator-chosen folder. One request, one intent, one thing to explain.\n\n`#[serde(default)]` so an N-1 client's body means exactly what it meant before."
+          },
           "group_id": {
             "type": [
               "string",
               "null"
             ],
             "format": "uuid",
-            "description": "Inventory folder to file every imported node under (ADR-100 decision 10), or absent for\nthe tree root — which is what every import did before this existed.\n\n⚠️ **One folder for the whole request, not one per node.** A sweep is aimed at a site, so\nthe folder is a property of the sweep; per-row would invite a UI that lets fifty rows\ndisagree and then have to explain itself."
+            "description": "Inventory folder to file every imported node under (ADR-100 decision 10), or absent for\nthe tree root — which is what every import did before this existed.\n\n⚠️ **One folder for the whole request, not one per node.** A sweep is aimed at a site, so\nthe folder is a property of the sweep; per-row would invite a UI that lets fifty rows\ndisagree and then have to explain itself.\n\nWhen `file_by_prefix` is set this is the **fallback** rather than the destination — still\none folder, still a property of the request."
           },
           "nodes": {
             "type": "array",
@@ -27625,6 +27862,56 @@
           }
         }
       },
+      "ImportPreviewQuery": {
+        "type": "object",
+        "description": "Body for the import preview: the candidate addresses about to be imported.",
+        "required": [
+          "addresses"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ImportPreviewResult": {
+        "type": "object",
+        "description": "Where each candidate would be filed. **A proposal, not an action** — nothing is written by the\nendpoint that returns this (ADR-131 決定 7, the same posture as ADR-124 決定 6).",
+        "required": [
+          "matched",
+          "ambiguous",
+          "unmatched",
+          "any_prefixes"
+        ],
+        "properties": {
+          "ambiguous": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddressAmbiguity"
+            }
+          },
+          "any_prefixes": {
+            "type": "boolean",
+            "description": "Whether **any** folder this caller can see carries a range at all.\n\nWithout this, a deployment with no ranges reports every address as unmatched and the\noperator cannot tell \"these addresses are not covered\" from \"there was never anything to\nmatch against\" — one message for two situations is how an inert feature looks like a\nworking one."
+          },
+          "matched": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddressProposal"
+            }
+          },
+          "unmatched": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Addresses that fall inside no visible folder's range."
+          }
+        }
+      },
       "ImportReport": {
         "type": "object",
         "description": "The outcome of an import.",
@@ -27656,7 +27943,7 @@
       },
       "ImportResult": {
         "type": "object",
-        "description": "How many nodes an import created.",
+        "description": "How many nodes an import created, and — when filing by IP range was asked for — how.",
         "required": [
           "created"
         ],
@@ -27665,6 +27952,17 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "filed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PrefixFiling",
+                "description": "Present only when the request set `file_by_prefix`. `null` otherwise, which is every\nendpoint promotion and every scan import with the option off.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct, for two reasons. This type is\nshared with `import_discovered_endpoint`, where filing by range never happens and zeros\nwould be a lie; and with the field absent the wire shape is byte-identical to what every\nexisting client already parses. `created == matched + ambiguous + unmatched`."
+              }
+            ]
           }
         }
       },
@@ -31368,6 +31666,35 @@
           }
         }
       },
+      "PrefixFiling": {
+        "type": "object",
+        "description": "How the batch was filed, when the request asked for filing by IP range (ADR-131 決定 2).\n\n🚨 **Three numbers, not two.** A device two folders claim equally well and one no range covers\nboth end up in the request's fallback folder — but they are different facts, and folding them\nloses the actionable one: an ambiguous address means two folders have overlapping ranges\nconfigured, which is a thing to go and fix. Reported separately so the operator reads\n\"3 fell back, 1 of them because two folders disagree\" rather than \"3 addresses are outside\nevery range\", which would be untrue.",
+        "required": [
+          "matched",
+          "ambiguous",
+          "unmatched"
+        ],
+        "properties": {
+          "ambiguous": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Two or more folders claimed it at the same prefix length; filed into the fallback.",
+            "minimum": 0
+          },
+          "matched": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Filed into the one folder whose range contains the address.",
+            "minimum": 0
+          },
+          "unmatched": {
+            "type": "integer",
+            "format": "int32",
+            "description": "No folder's range contained it; filed into the fallback.",
+            "minimum": 0
+          }
+        }
+      },
       "PrefixProposal": {
         "type": "object",
         "description": "One node, and the single folder whose IP range contains its address.",
@@ -31390,6 +31717,14 @@
             "description": "The range that matched — shown so the operator can see *why* this folder is proposed."
           }
         }
+      },
+      "PrefixSource": {
+        "type": "string",
+        "description": "Who put a prefix row on a folder (ADR-131 決定 9).\n\nThis is not decoration: it decides what the editor may offer. A row a NetBox sync owns is\nlisted read-only — `PUT /node-groups/{id}/prefixes` deliberately cannot touch it — so a UI\nthat could not tell the two apart would draw a remove button that does nothing.",
+        "enum": [
+          "manual",
+          "sync"
+        ]
       },
       "PreviewProblem": {
         "type": "object",

@@ -136,6 +136,10 @@ export function GroupDetail({
                 <div className="nd-prefix" key={p.prefix}>
                   <span className="nd-prefix-cidr mono">{p.prefix}</span>
                   {p.description && <span className="nd-prefix-desc">{p.description}</span>}
+                  {/* Where the range came from (ADR-131). Worth saying here for the same reason
+                      the editor disables a sync row: an operator looking at a range they cannot
+                      change should be able to see why without opening the dialog. */}
+                  <span className="nd-prefix-src">{t(`group.prefixSource.${p.source}`)}</span>
                 </div>
               ))}
             </div>

@@ -1349,49 +1349,30 @@ pub(super) struct MovePreviewResult {
     any_prefixes: bool,
 }
 
-/// Fold the flat longest-prefix hits into the three answers the preview shows.
+/// Shape this domain's DTOs from the shared fold (`crate::groups::fold_prefix_matches`).
 ///
-/// Pure, so the part that decides *meaning* is testable without a database. The SQL decides which
-/// rows come back; this decides whether one folder claims a node or two do, and that boundary is
-/// where a mistake would move nodes into a site nobody chose.
-///
-/// ⚠️ Rows arrive ordered by node then group, so a duplicate folder (one folder carrying two
-/// ranges that both contain the address at the same length — impossible for a canonical CIDR, but
-/// not worth trusting) collapses with `dedup` before the count is read.
-fn fold_prefix_matches(
-    requested: &[Uuid],
-    hits: Vec<crate::groups::PrefixMatch>,
+/// The fold itself moved to `crate::groups` in ADR-131, because a second caller appeared that asks
+/// the same question about **addresses that are not nodes yet**. What is left here is the part
+/// that is genuinely about this domain: turning `(key, group, prefix)` into the node-shaped DTOs
+/// this endpoint publishes.
+fn node_prefix_dtos(
+    fold: crate::groups::PrefixFold<Uuid>,
 ) -> (Vec<PrefixProposal>, Vec<PrefixAmbiguity>, Vec<Uuid>) {
-    let mut by_node: HashMap<Uuid, Vec<crate::groups::PrefixMatch>> = HashMap::new();
-    for h in hits {
-        by_node.entry(h.node).or_default().push(h);
-    }
-    let (mut matched, mut ambiguous, mut unmatched) = (Vec::new(), Vec::new(), Vec::new());
-    let mut seen = HashSet::new();
-    for id in requested {
-        if !seen.insert(*id) {
-            continue;
-        }
-        let Some(rows) = by_node.remove(id) else {
-            unmatched.push(*id);
-            continue;
-        };
-        let mut groups: Vec<Uuid> = rows.iter().map(|h| h.group).collect();
-        groups.dedup();
-        if groups.len() == 1 {
-            matched.push(PrefixProposal {
-                node_id: *id,
-                group_id: rows[0].group,
-                prefix: rows[0].prefix.clone(),
-            });
-        } else {
-            ambiguous.push(PrefixAmbiguity {
-                node_id: *id,
-                group_ids: groups,
-            });
-        }
-    }
-    (matched, ambiguous, unmatched)
+    (
+        fold.matched
+            .into_iter()
+            .map(|(node_id, group_id, prefix)| PrefixProposal {
+                node_id,
+                group_id,
+                prefix,
+            })
+            .collect(),
+        fold.ambiguous
+            .into_iter()
+            .map(|(node_id, group_ids)| PrefixAmbiguity { node_id, group_ids })
+            .collect(),
+        fold.unmatched,
+    )
 }
 
 #[utoipa::path(
@@ -1491,7 +1472,8 @@ async fn preview_move_by_prefix(
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "read group prefixes", "failed to read prefixes")
         })?;
-    let (matched, ambiguous, unmatched) = fold_prefix_matches(&body.node_ids, hits);
+    let (matched, ambiguous, unmatched) =
+        node_prefix_dtos(crate::groups::fold_prefix_matches(&body.node_ids, hits));
     Ok(Json(MovePreviewResult {
         matched,
         ambiguous,
@@ -2707,45 +2689,5 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert_eq!(body["any_prefixes"], false, "{body}");
         assert_eq!(body["unmatched"][0], a.to_string(), "{body}");
-    }
-
-    /// The fold, without a database: which of the three answers each node lands in.
-    #[test]
-    fn folding_hits_separates_one_folder_from_two_and_from_none() {
-        let (a, b, c) = (
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-        );
-        let (g1, g2) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
-        let hit = |node, group| crate::groups::PrefixMatch {
-            node,
-            group,
-            prefix: "10.0.0.0/24".into(),
-        };
-        // `a` is claimed once, `b` twice, `c` not at all — and `a` is named twice in the request.
-        let (matched, ambiguous, unmatched) =
-            fold_prefix_matches(&[a, b, c, a], vec![hit(a, g1), hit(b, g1), hit(b, g2)]);
-        assert_eq!(matched.len(), 1);
-        assert_eq!(matched[0].node_id, a);
-        assert_eq!(ambiguous.len(), 1);
-        assert_eq!(ambiguous[0].group_ids, vec![g1, g2]);
-        assert_eq!(unmatched, vec![c], "a repeated id was answered twice");
-    }
-
-    /// One folder carrying two ranges that both contain the address is still one folder.
-    #[test]
-    fn folding_hits_does_not_call_one_folder_a_tie() {
-        let node = uuid::Uuid::new_v4();
-        let group = uuid::Uuid::new_v4();
-        let hit = |prefix: &str| crate::groups::PrefixMatch {
-            node,
-            group,
-            prefix: prefix.into(),
-        };
-        let (matched, ambiguous, _) =
-            fold_prefix_matches(&[node], vec![hit("10.0.0.0/24"), hit("10.0.0.0/24")]);
-        assert_eq!(matched.len(), 1, "one folder read as a tie");
-        assert!(ambiguous.is_empty());
     }
 }

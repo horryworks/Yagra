@@ -1,0 +1,34 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The group dialog's IP-range rows (ADR-131). Everything else in this dialog uses the shared
+   `.form-*` classes from index.css; only the repeating three-column row needs its own rule. */
+
+.gm-prefixes {
+  gap: 6px;
+}
+
+/* Range, description, and the row's one control. The range is the fixed-width column because it
+   is monospace and bounded; the description takes what is left. */
+.gm-prefix-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+/* A sync-owned range carries a word rather than a control, so the third track stays aligned with
+   the ✕ on the editable rows below it. */
+.gm-prefix-badge {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* The dialog is narrow on a phone; three tracks there would leave nothing readable in any of
+   them, so the row stacks and the badge sits under its pair. */
+html[data-viewport='mobile'] .gm-prefix-row {
+  grid-template-columns: 1fr;
+}

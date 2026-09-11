@@ -1627,3 +1627,21 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
+
+/* Who owns the range (ADR-131). After the description, so the line reads
+   "cidr — name — where it came from"; `margin-left: auto` stays on the description so a row with
+   no description still pushes this to the right edge. */
+.nd-prefix-src {
+  margin-left: 8px;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.nd-prefix-desc + .nd-prefix-src {
+  margin-left: 8px;
+}
+
+.nd-prefix-cidr + .nd-prefix-src {
+  margin-left: auto;
+}

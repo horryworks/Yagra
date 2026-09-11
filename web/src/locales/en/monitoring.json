@@ -357,7 +357,8 @@
       "identity": "Identity",
       "name": "Name",
       "profile": "Profile",
-      "credential": "Credential"
+      "credential": "Credential",
+      "destination": "Folder"
     },
     "msg": {
       "scanningCount_one": "Scanning {{count}} address…",
@@ -369,7 +370,15 @@
       "imported_one": "Imported {{count}} node — they will start polling shortly.",
       "imported_other": "Imported {{count}} nodes — they will start polling shortly.",
       "importedInto_one": "Imported {{count}} node into {{site}} — it will start polling shortly.",
-      "importedInto_other": "Imported {{count}} nodes into {{site}} — they will start polling shortly."
+      "importedInto_other": "Imported {{count}} nodes into {{site}} — they will start polling shortly.",
+      "importedFiled_one": "Imported {{count}} node, {{filed}} filed by IP range.",
+      "importedFiled_other": "Imported {{count}} nodes, {{filed}} filed by IP range.",
+      "fellBackInto_one": "{{count}} went into {{site}}.",
+      "fellBackInto_other": "{{count}} went into {{site}}.",
+      "fellBackToRoot_one": "{{count}} went to the tree root.",
+      "fellBackToRoot_other": "{{count}} went to the tree root.",
+      "contested_one": "{{count}} of those is claimed by two folders.",
+      "contested_other": "{{count}} of those are claimed by two folders."
     },
     "err": {
       "badTargets": "Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.",
@@ -379,6 +388,20 @@
     },
     "filter": {
       "candidateNoun": "addresses"
+    },
+    "fileByPrefix": {
+      "label": "File each device by its IP range",
+      "hint": "Each device goes into the folder whose IP range contains its address. One that no range covers — or that two folders claim equally well — goes into the folder chosen above instead."
+    },
+    "dest": {
+      "root": "Tree root",
+      "pending": "…",
+      "why": {
+        "matched": "range {{prefix}}",
+        "ambiguous": "claimed by {{count}} folders",
+        "unmatched": "no folder range covers this",
+        "noRanges": "no folder has an IP range yet"
+      }
     }
   }
 }

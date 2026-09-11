@@ -495,7 +495,30 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         Tool("get_config"),
     ),
-    ("POST", "/api/v1/discovery/import", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "POST",
+        "/api/v1/discovery/import",
+        // `GroupFiltered` since ADR-131 決定 8, where it used to claim `ADMIN_CFG`. Two reasons.
+        // `manage_config` is held by Operator and an Operator can be group-scoped, so "an Admin is
+        // unscoped by construction" never described everyone who reaches this — the same defect
+        // `PUT /nodes/:id/group` still carries. And `file_by_prefix` makes it load-bearing: without
+        // the scope, the server would choose a destination folder from a table the caller is not
+        // allowed to read, and file their nodes somewhere they cannot see them.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/discovery/import-preview",
+        GroupFiltered,
+        Exempt(
+            "a proposal for a write, not an answer about the fleet: it says which folder's IP \
+             range would claim each address a sweep just found, so the only thing to do with it \
+             is press Import. MCP is read-only and cannot start a sweep, so the addresses this \
+             needs do not exist on that surface — and the two facts it folds (a folder's \
+             prefixes, an address) are already served by list_node_groups and get_config",
+        ),
+    ),
     ("POST", "/api/v1/discovery/scan", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",
@@ -865,6 +888,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "PUT",
         "/api/v1/node-groups/:id/pool",
         ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "PUT",
+        "/api/v1/node-groups/:id/prefixes",
+        // `GroupFiltered`, deliberately not inheriting the `ADMIN_CFG` its siblings claim
+        // (ADR-131 決定 8). `manage_config` is held by Operator too and an Operator can be
+        // group-scoped, so "an Admin is unscoped by construction" does not describe everyone who
+        // reaches this — and what it writes is exactly what `visible_groups` clears `prefixes` on
+        // a breadcrumb ancestor to protect.
+        GroupFiltered,
         NO_MCP_WRITE,
     ),
     (

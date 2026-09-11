@@ -10,7 +10,36 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`POST /api/v1/discovery/import` now enforces group scope.** It previously declared itself
+  admin-only and unscoped, which was never true: `manage_config` is held by Operator, and an
+  Operator can be restricted to a set of folders. Such a caller naming a folder outside their scope
+  used to get `201`; they now get `404`. Unrestricted callers are unaffected. This had to change
+  before filing by IP range could ship — without it the server would have picked a destination
+  folder from a table the caller is not allowed to read.
+
 ### New Features
+
+- **A folder can be given the IP ranges in use at it, and Discovery can file each device it finds
+  into the folder whose range contains its address.** A folder could already carry IP ranges, but
+  only a NetBox sync could put them there — so on a deployment without NetBox the field was
+  unreachable, and with it the "aim a sweep at this site" command and the "move these nodes by IP
+  range" dialog. The group dialog now has an **IP ranges** section: add a range and a name for it,
+  and it is stored. Host bits are allowed, so `192.168.1.5/24` is accepted and stored as
+  `192.168.1.0/24`. IPv4 and IPv6 are both accepted.
+  With that in place, the Discovery import gained **File each device by its IP range**. With it on,
+  every device goes into the folder whose range contains its address instead of all of them landing
+  in one folder. The candidate list gained a **Folder** column showing where each device will land
+  **before** the Import button is pressed, and the message afterwards says how many were filed by
+  range and how many fell back.
+  - A device no range covers, or one that **two folders claim equally well**, goes into the folder
+    chosen for the sweep — the tree root when none was chosen. The import never fails because of an
+    address. The two are counted separately in the result, because "outside every range" and
+    "inside two ranges" are different facts and only the second is something to go and fix.
+  - Ranges a NetBox sync maintains are listed in the dialog but cannot be edited or removed there;
+    they are marked **From sync**, and a range the sync owns is refused by name rather than silently
+    dropped. Clearing the section removes only the ranges typed in by hand.
 
 - **Right-click a folder in the inventory tree to arrange its contents in name order.** The tree's
   order could only be changed by dragging, and new folders and nodes are appended as they are

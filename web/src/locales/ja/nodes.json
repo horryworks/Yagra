@@ -120,7 +120,18 @@
     "latitude": "緯度（任意）",
     "longitude": "経度（任意）",
     "geoHint": "ジオマップ上での位置です。緯度と経度は両方入力するか、両方空欄にしてピンを外してください。",
-    "geoInherited": "上位フォルダから継承して、すでに「{{name}}」の位置に載っています（このグループのノードはそのピンに集計されます）。ここに座標を入れるのは、このグループ自身のピンを立てたいときだけです。"
+    "geoInherited": "上位フォルダから継承して、すでに「{{name}}」の位置に載っています（このグループのノードはそのピンに集計されます）。ここに座標を入れるのは、このグループ自身のピンを立てたいときだけです。",
+    "prefixes": "IP レンジ",
+    "prefixesHint": "このフォルダーで使っているサブネットです。ディスカバリの掃引先に指定できます。取り込みのときは、アドレスを含むレンジを持つフォルダーへ機器を振り分けられます。ホスト部が立っていても構いません（192.168.1.5/24 は 192.168.1.0/24 として保存します）。",
+    "prefixAdd": "+ レンジを追加",
+    "prefixRemove": "レンジを削除",
+    "prefixPlaceholder": "192.168.1.0/24",
+    "prefixDescPlaceholder": "呼び名",
+    "prefixSource": {
+      "manual": "手入力",
+      "sync": "同期由来"
+    },
+    "prefixSyncHint": "これらのレンジは NetBox 同期が管理しています。変更は NetBox 側で行ってください。"
   },
   "deleteGroup": {
     "confirm": "グループ <b>{{name}}</b> を削除しますか？{{impact}} — <b>ノードは削除されません</b>。",
@@ -152,7 +163,13 @@
     "saveNode": "ノードの保存に失敗しました",
     "setDependency": "依存関係の設定に失敗しました",
     "addDnsMonitor": "DNS 監視の追加に失敗しました",
-    "movePreview": "アドレスとフォルダの IP レンジの照合に失敗しました"
+    "movePreview": "アドレスとフォルダの IP レンジの照合に失敗しました",
+    "prefixEmpty": "レンジが空です。",
+    "prefixDuplicate": "{{prefix}} が 2 回書かれています。",
+    "prefixOwnedBySync": "{{prefix}} は同期が管理しているため、ここでは編集できません。",
+    "prefixTooMany": "1 つのフォルダーが持てるレンジは最大 64 件です。",
+    "prefixDescTooLong": "{{prefix}} の呼び名が長すぎます（最大 200 文字）。",
+    "savePrefixes": "IP レンジを保存できませんでした"
   },
   "maintenanceWindowName": "メンテナンス — {{name}}",
   "detail": {

@@ -65,6 +65,7 @@ import { EXPLAINED_METRICS } from './lib/metricMeaning';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
+import { PREFIX_PROBLEMS } from './components/GroupModal/prefixFields';
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
 import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
@@ -86,6 +87,8 @@ import { MERAKI_TIERS } from './pages/merakiTiers';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
 import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
 import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
+import { DESTINATION_KINDS } from './pages/importFiling';
+import { PREFIX_SOURCES } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
@@ -523,6 +526,31 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enMonitoring, ja: jaMonitoring },
       'discovery.site.cannot.',
       [...UNSWEEPABLE_REASONS],
+    );
+  });
+
+  it('every import destination has a sentence (monitoring:discovery.dest.why.*)', () => {
+    // The Folder column builds this key at runtime from the server's answer (ADR-131). A fourth
+    // answer added without strings would render a raw key in the cell that says where a device is
+    // about to land — and EN/JA parity cannot catch it, because a key missing from both is "in
+    // parity". `noRanges` is in the list but not in DESTINATION_KINDS: it is the deployment-wide
+    // case (no folder has a range at all), not one of the three per-address answers.
+    expectKeys(
+      'import destination',
+      { en: enMonitoring, ja: jaMonitoring },
+      'discovery.dest.why.',
+      [...DESTINATION_KINDS, 'noRanges'],
+    );
+  });
+
+  it('every prefix source has a label (nodes:group.prefixSource.*)', () => {
+    // The range editor labels a row by who owns it, keyed at runtime. A third source would
+    // otherwise show a raw key beside a control the operator cannot use.
+    expectKeys(
+      'prefix source',
+      { en: enNodes, ja: jaNodes },
+      'group.prefixSource.',
+      [...PREFIX_SOURCES],
     );
   });
 
@@ -1010,6 +1038,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enNodes, ja: jaNodes },
       'err.',
       GEO_PROBLEMS,
+    );
+    // ADR-131: the range editor's refusals, rendered the same way and with the same exposure.
+    expectKeys(
+      'group prefix problem',
+      { en: enNodes, ja: jaNodes },
+      'err.',
+      [...PREFIX_PROBLEMS],
     );
     expectKeys(
       'check config problem',

@@ -85,6 +85,7 @@ import type {
   NodeDetail,
   NodeGroup,
   MovePreview,
+  ImportPreview,
   NodeNameEntry,
   NodePage,
   NodeSearchResult,
@@ -1375,6 +1376,17 @@ export const api = {
     body: { latitude: number | null; longitude: number | null },
   ): Promise<void> => apiPut('/api/v1/node-groups/{id}/geo', { path: { id }, body }),
 
+  /** Replace a folder's **hand-made** IP ranges (ADR-131).
+   *
+   *  ⚠️ Whole list, not a diff — `{ prefixes: [] }` clears them, which is why there is no
+   *  companion delete. Ranges a NetBox sync owns are untouched and cannot be sent here: the server
+   *  refuses one with `prefix_owned_by_sync` rather than silently dropping it. */
+  setNodeGroupPrefixes: (
+    id: string,
+    prefixes: { prefix: string; description: string }[],
+  ): Promise<void> =>
+    apiPut('/api/v1/node-groups/{id}/prefixes', { path: { id }, body: { prefixes } }),
+
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>
     apiDelete('/api/v1/node-groups/{id}', { path: { id } }),
@@ -1652,7 +1664,12 @@ export const api = {
    *
    *  `group_id` files every node in the batch under one folder (ADR-100 decision 10) — the site
    *  the sweep was aimed at. Omitted, they land at the tree root, which is what every import did
-   *  before folders could be swept. */
+   *  before folders could be swept.
+   *
+   *  `fileByPrefix` (ADR-131) makes the server file each device into the folder whose IP range
+   *  contains its address instead, and `group_id` becomes the **fallback** for one no range covers
+   *  — or that two folders claim equally well. Still one folder per request either way: there is
+   *  deliberately no per-row destination. */
   importDiscovered: (
     nodes: {
       address: string;
@@ -1663,10 +1680,23 @@ export const api = {
       model?: string;
     }[],
     groupId?: string,
-  ): Promise<{ created: number }> =>
+    fileByPrefix?: boolean,
+  ): Promise<ImportResult> =>
     apiPost('/api/v1/discovery/import', {
-      body: { nodes, ...(groupId ? { group_id: groupId } : {}) },
+      body: {
+        nodes,
+        ...(groupId ? { group_id: groupId } : {}),
+        ...(fileByPrefix ? { file_by_prefix: true } : {}),
+      },
     }),
+
+  /** Which folder's IP range would claim each candidate address (ADR-131).
+   *
+   *  A proposal, not an action — nothing is written. The match itself has to happen on the server:
+   *  a scoped caller is served breadcrumb folders with their prefixes cleared, so the same test
+   *  done here would silently miss ranges (`api/groups.rs::visible_groups`). */
+  previewDiscoveryImport: (addresses: string[]): Promise<ImportPreview> =>
+    apiPost('/api/v1/discovery/import-preview', { body: { addresses } }),
 
   /** Device-classification rules (discovery → suggested profile), ascending by priority. */
   listClassificationRules: (): Promise<ClassificationRule[]> =>

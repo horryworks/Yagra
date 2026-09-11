@@ -802,6 +802,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/discovery/import-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["preview_discovery_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/discovery/scan": {
         parameters: {
             query?: never;
@@ -1953,6 +1969,22 @@ export interface paths {
          *     next sweep (see `poolres`).
          */
         put: operations["set_node_group_pool"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/node-groups/{id}/prefixes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_node_group_prefixes"];
         post?: never;
         delete?: never;
         options?: never;
@@ -4503,6 +4535,19 @@ export interface components {
             /** @description The subject's name, for a subject identified by name rather than by id (a poller pool). */
             subject_name?: string | null;
         };
+        /** @description One address claimed equally well by two or more folders. Never resolved automatically. */
+        AddressAmbiguity: {
+            address: string;
+            group_ids: string[];
+        };
+        /** @description One address, and the single folder whose IP range contains it. */
+        AddressProposal: {
+            address: string;
+            /** Format: uuid */
+            group_id: string;
+            /** @description The range that matched — shown so the operator can see *why* this folder is proposed. */
+            prefix: string;
+        };
         /** @description A single alert produced by the engine. */
         Alert: {
             /**
@@ -6929,19 +6974,45 @@ export interface components {
         /**
          * @description One IP prefix attached to a folder.
          *
-         *     Two fields and no more, on purpose. NetBox's prefix rows also carry `status`, `vrf`,
-         *     `is_pool`, `role` and a tenant, and none of them has a reader here: what a person needs in
-         *     order to choose a sweep target is the range and what it is called. Storing the rest would be a
-         *     second copy of NetBox's inventory that nothing consults.
+         *     Three fields, and the third was added under the rule the original two were chosen by
+         *     (ADR-131 決定 9). NetBox's prefix rows also carry `status`, `vrf`, `is_pool`, `role` and a
+         *     tenant, and none of them has a reader here — the bar for a field is a real reader, not
+         *     availability. `source` cleared that bar when two appeared at once: the range editor must not
+         *     offer to delete a row it cannot delete, and the folder detail pane says where a range came
+         *     from. It costs one column on a SELECT `attach_prefixes` already runs.
          */
         GroupPrefix: {
-            /** @description NetBox's description of the range ("Matsuyama LAN"), or empty. */
+            /** @description NetBox's description of the range ("Matsuyama LAN"), or what the operator typed, or empty. */
             description: string;
             /**
              * @description Canonical CIDR, e.g. `"192.168.1.0/24"`. PostgreSQL's `cidr` type rendered as text, so the
              *     mask is always present — unlike `inet`, where a host address would print bare.
              */
             prefix: string;
+            /** @description Whether an operator typed this row or a sync wrote it. */
+            source: components["schemas"]["PrefixSource"];
+        };
+        /** @description One hand-made IP range on a folder. */
+        GroupPrefixEntry: {
+            /** @description What the range is called ("Matsuyama LAN"), or empty. */
+            description?: string;
+            /**
+             * @description A CIDR. Host bits are allowed and canonicalised — `192.168.1.5/24` is stored as
+             *     `192.168.1.0/24`, because that is what a person reading a device's config types.
+             */
+            prefix: string;
+        };
+        /**
+         * @description The folder's hand-made ranges, in full.
+         *
+         *     ⚠️ **Whole list, not a diff.** The three sibling sub-resources here (`pool`, `geo`,
+         *     `placement`) are whole-value PUTs for the same reason: the editor is a dialog with a Save
+         *     button, so a per-row `DELETE` would act the moment ✕ is clicked — before Save, and with no way
+         *     back. Clearing every hand-made range is `{"prefixes": []}`, which is why there is no companion
+         *     DELETE endpoint. (A per-row path could not carry a CIDR anyway: `/` and `:` are in the value.)
+         */
+        GroupPrefixes: {
+            prefixes: components["schemas"]["GroupPrefixEntry"][];
         };
         /**
          * @description Per-group direct-member state tally. All six keys are always present (a missing state is `0`)
@@ -7114,6 +7185,19 @@ export interface components {
         /** @description Import body: the selected devices to create as nodes. */
         ImportDiscovered: {
             /**
+             * @description File each device into the folder whose IP range contains its address, falling back to
+             *     `group_id` for one no range covers — or that two folders claim equally well (ADR-131).
+             *
+             *     ⚠️ **This does not reverse ADR-100 decision 10.** That decision refuses a *per-row folder
+             *     field*, because fifty rows could then disagree and the screen would have to explain it.
+             *     This is a rule for the whole request: no row carries a choice, every destination is derived
+             *     by one rule from data the operator did not type, and the request still names exactly one
+             *     operator-chosen folder. One request, one intent, one thing to explain.
+             *
+             *     `#[serde(default)]` so an N-1 client's body means exactly what it meant before.
+             */
+            file_by_prefix?: boolean;
+            /**
              * Format: uuid
              * @description Inventory folder to file every imported node under (ADR-100 decision 10), or absent for
              *     the tree root — which is what every import did before this existed.
@@ -7121,6 +7205,9 @@ export interface components {
              *     ⚠️ **One folder for the whole request, not one per node.** A sweep is aimed at a site, so
              *     the folder is a property of the sweep; per-row would invite a UI that lets fifty rows
              *     disagree and then have to explain itself.
+             *
+             *     When `file_by_prefix` is set this is the **fallback** rather than the destination — still
+             *     one folder, still a property of the request.
              */
             group_id?: string | null;
             nodes: components["schemas"]["ImportNode"][];
@@ -7142,6 +7229,29 @@ export interface components {
             /** @description Maker/model pre-filled from discovery's sysDescr classification (editable before import). */
             vendor?: string | null;
         };
+        /** @description Body for the import preview: the candidate addresses about to be imported. */
+        ImportPreviewQuery: {
+            addresses: string[];
+        };
+        /**
+         * @description Where each candidate would be filed. **A proposal, not an action** — nothing is written by the
+         *     endpoint that returns this (ADR-131 決定 7, the same posture as ADR-124 決定 6).
+         */
+        ImportPreviewResult: {
+            ambiguous: components["schemas"]["AddressAmbiguity"][];
+            /**
+             * @description Whether **any** folder this caller can see carries a range at all.
+             *
+             *     Without this, a deployment with no ranges reports every address as unmatched and the
+             *     operator cannot tell "these addresses are not covered" from "there was never anything to
+             *     match against" — one message for two situations is how an inert feature looks like a
+             *     working one.
+             */
+            any_prefixes: boolean;
+            matched: components["schemas"]["AddressProposal"][];
+            /** @description Addresses that fall inside no visible folder's range. */
+            unmatched: string[];
+        };
         /** @description The outcome of an import. */
         ImportReport: {
             /** @description True when nothing was committed: the whole import ran and was rolled back. */
@@ -7151,10 +7261,11 @@ export interface components {
             /** @description Per-table counts, in dependency order. */
             tables: components["schemas"]["TableResult"][];
         };
-        /** @description How many nodes an import created. */
+        /** @description How many nodes an import created, and — when filing by IP range was asked for — how. */
         ImportResult: {
             /** Format: int32 */
             created: number;
+            filed?: null | components["schemas"]["PrefixFiling"];
         };
         /**
          * @description Exactly what the model was shown about the incident, so an answer can be checked rather than
@@ -8870,6 +8981,33 @@ export interface components {
             /** Format: uuid */
             node_id: string;
         };
+        /**
+         * @description How the batch was filed, when the request asked for filing by IP range (ADR-131 決定 2).
+         *
+         *     🚨 **Three numbers, not two.** A device two folders claim equally well and one no range covers
+         *     both end up in the request's fallback folder — but they are different facts, and folding them
+         *     loses the actionable one: an ambiguous address means two folders have overlapping ranges
+         *     configured, which is a thing to go and fix. Reported separately so the operator reads
+         *     "3 fell back, 1 of them because two folders disagree" rather than "3 addresses are outside
+         *     every range", which would be untrue.
+         */
+        PrefixFiling: {
+            /**
+             * Format: int32
+             * @description Two or more folders claimed it at the same prefix length; filed into the fallback.
+             */
+            ambiguous: number;
+            /**
+             * Format: int32
+             * @description Filed into the one folder whose range contains the address.
+             */
+            matched: number;
+            /**
+             * Format: int32
+             * @description No folder's range contained it; filed into the fallback.
+             */
+            unmatched: number;
+        };
         /** @description One node, and the single folder whose IP range contains its address. */
         PrefixProposal: {
             /** Format: uuid */
@@ -8879,6 +9017,15 @@ export interface components {
             /** @description The range that matched — shown so the operator can see *why* this folder is proposed. */
             prefix: string;
         };
+        /**
+         * @description Who put a prefix row on a folder (ADR-131 決定 9).
+         *
+         *     This is not decoration: it decides what the editor may offer. A row a NetBox sync owns is
+         *     listed read-only — `PUT /node-groups/{id}/prefixes` deliberately cannot touch it — so a UI
+         *     that could not tell the two apart would draw a remove button that does nothing.
+         * @enum {string}
+         */
+        PrefixSource: "manual" | "sync";
         /** @description One field that could not be used. */
         PreviewProblem: {
             /** @description `subject` or `body`. */
@@ -14058,6 +14205,66 @@ export interface operations {
             };
         };
     };
+    preview_discovery_import: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportPreviewQuery"];
+            };
+        };
+        responses: {
+            /** @description Which folder's IP range would claim each address */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportPreviewResult"];
+                };
+            };
+            /** @description An unparseable address, or more than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     start_discovery_scan: {
         parameters: {
             query?: never;
@@ -18903,6 +19110,76 @@ export interface operations {
                 };
             };
             /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_node_group_prefixes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Folder id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupPrefixes"];
+            };
+        };
+        responses: {
+            /** @description The folder's hand-made ranges were replaced */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A value that is not an IP range, a duplicate, one a sync already owns, too many, or a description that is too long */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such folder, or not one this caller may act on */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

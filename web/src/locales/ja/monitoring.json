@@ -349,7 +349,8 @@
       "identity": "識別情報",
       "name": "名前",
       "profile": "プロファイル",
-      "credential": "認証情報"
+      "credential": "認証情報",
+      "destination": "フォルダー"
     },
     "msg": {
       "scanningCount_other": "アドレス {{count}} 件をスキャン中…",
@@ -357,7 +358,11 @@
       "scanningProgress": "スキャン中… アドレス {{probed}}/{{total}} 件を確認済み",
       "nowAt": " — 現在 {{addr}}",
       "imported_other": "ノード {{count}} 台をインポートしました — まもなくポーリングを開始します。",
-      "importedInto_other": "ノード {{count}} 台を「{{site}}」に取り込みました。まもなくポーリングを開始します。"
+      "importedInto_other": "ノード {{count}} 台を「{{site}}」に取り込みました。まもなくポーリングを開始します。",
+      "importedFiled_other": "{{count}} 台を取り込みました。うち {{filed}} 台は IP レンジで振り分けました。",
+      "fellBackInto_other": "{{count}} 台は {{site}} へ入りました。",
+      "fellBackToRoot_other": "{{count}} 台はツリー直下へ入りました。",
+      "contested_other": "そのうち {{count}} 台は 2 つのフォルダーが主張しています。"
     },
     "err": {
       "badTargets": "IP・CIDR（≤/22）・範囲（例: 192.168.1.10-20）をカンマ区切りで入力してください — 合計 ≤1024 ホスト。",
@@ -367,6 +372,20 @@
     },
     "filter": {
       "candidateNoun": "件のアドレス"
+    },
+    "fileByPrefix": {
+      "label": "IP レンジに合うフォルダーへ入れる",
+      "hint": "機器ごとに、そのアドレスを含む IP レンジを持つフォルダーへ入れます。どのレンジにも入らない機器と、2 つのフォルダーが同じ強さで主張している機器は、上で選んだフォルダーへ入ります。"
+    },
+    "dest": {
+      "root": "ツリー直下",
+      "pending": "…",
+      "why": {
+        "matched": "レンジ {{prefix}}",
+        "ambiguous": "{{count}} 個のフォルダーが主張",
+        "unmatched": "どのフォルダーのレンジにも入りません",
+        "noRanges": "IP レンジを持つフォルダーがまだありません"
+      }
     }
   }
 }

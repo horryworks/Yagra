@@ -150,6 +150,29 @@ pub async fn prefix(pool: &PgPool, group: Uuid, cidr: &str) {
     .expect("seed prefix");
 }
 
+/// A NetBox server row, for the tests about **who owns a prefix** (ADR-131 決定 6).
+///
+/// `node_group_prefixes.netbox_server_id` is the only thing separating a range an operator typed
+/// from one a sync maintains, and the two questions worth testing — that a hand-made row survives
+/// the stale sweep, and that a sync claiming the same CIDR takes it over — both need a real server
+/// row for the foreign key. A sealed credential comes with it because `credential_id` is `NOT NULL
+/// REFERENCES credentials (id)`; its contents never matter here.
+pub async fn netbox_server(pool: &PgPool, name: &str) -> Uuid {
+    let cred = credential(pool, &format!("{name}-token"), "netbox_token").await;
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO netbox_servers (id, name, base_url, credential_id) \
+         VALUES ($1, $2, 'https://netbox.example', $3)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(cred)
+    .execute(pool)
+    .await
+    .unwrap_or_else(|e| panic!("seed netbox server {name}: {e}"));
+    id
+}
+
 /// A device profile, created through the production writer.
 ///
 /// For the tables keyed by `REFERENCES profiles (id)` — `profile_collection_templates` is the one

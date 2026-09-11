@@ -37,7 +37,8 @@ use uuid::Uuid;
     place_group,
     sort_group_children,
     set_node_group_pool,
-    set_node_group_geo
+    set_node_group_geo,
+    set_node_group_prefixes
 ))]
 pub(super) struct Doc;
 
@@ -56,7 +57,21 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/node-groups/:id/sort", post(sort_group_children))
         .route("/api/v1/node-groups/:id/pool", put(set_node_group_pool))
         .route("/api/v1/node-groups/:id/geo", put(set_node_group_geo))
+        .route(
+            "/api/v1/node-groups/:id/prefixes",
+            put(set_node_group_prefixes),
+        )
 }
+
+/// How many hand-made ranges one folder may carry.
+///
+/// Bounded because every limit at this edge is (`api-conventions.md`), and because the list is
+/// rendered as a row per range in a dialog. A site with more than this many distinct subnets is
+/// one NetBox should be the source of truth for.
+const MAX_GROUP_PREFIXES: usize = 64;
+
+/// How long a range's description may be. The column is unbounded `TEXT`; the dialog is not.
+const MAX_PREFIX_DESCRIPTION: usize = 200;
 
 #[utoipa::path(
     get, path = "/api/v1/node-groups", tag = "groups",
@@ -523,6 +538,137 @@ async fn delete_node_group(
     }
 }
 
+/// One hand-made IP range on a folder.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupPrefixEntry {
+    /// A CIDR. Host bits are allowed and canonicalised — `192.168.1.5/24` is stored as
+    /// `192.168.1.0/24`, because that is what a person reading a device's config types.
+    prefix: String,
+    /// What the range is called ("Matsuyama LAN"), or empty.
+    #[serde(default)]
+    description: String,
+}
+
+/// The folder's hand-made ranges, in full.
+///
+/// ⚠️ **Whole list, not a diff.** The three sibling sub-resources here (`pool`, `geo`,
+/// `placement`) are whole-value PUTs for the same reason: the editor is a dialog with a Save
+/// button, so a per-row `DELETE` would act the moment ✕ is clicked — before Save, and with no way
+/// back. Clearing every hand-made range is `{"prefixes": []}`, which is why there is no companion
+/// DELETE endpoint. (A per-row path could not carry a CIDR anyway: `/` and `:` are in the value.)
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupPrefixes {
+    prefixes: Vec<GroupPrefixEntry>,
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/prefixes", tag = "groups",
+    params(("id" = String, Path, description = "Folder id")),
+    request_body = GroupPrefixes,
+    responses(
+        (status = 204, description = "The folder's hand-made ranges were replaced"),
+        (status = 400, description = "A value that is not an IP range, a duplicate, one a sync already owns, too many, or a description that is too long", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such folder, or not one this caller may act on", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_node_group_prefixes(
+    _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GroupPrefixes>,
+) -> ApiResult<StatusCode> {
+    // Before anything is read or written: a folder this caller may not act on is a 404, not a
+    // silent no-op. `GroupFiltered` on the ledger line is what makes this obligatory.
+    super::scope::require_visible_group(&scope, id)?;
+    if body.prefixes.len() > MAX_GROUP_PREFIXES {
+        return Err(ApiError::bad_request(
+            "too_many_prefixes",
+            format!(
+                "a folder may carry at most {MAX_GROUP_PREFIXES} ranges, got {}",
+                body.prefixes.len()
+            ),
+        ));
+    }
+    if !admin.groups.exists(id).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "check node group", "failed to read node groups")
+    })? {
+        return Err(ApiError::not_found("group_not_found", "no such node group"));
+    }
+
+    // 🚨 Canonicalise one row at a time, on the pool, **before** the transaction opens.
+    //
+    // Two reasons, and neither is style. A failed statement poisons its transaction, so probing
+    // inside the write would abort the very thing being guarded. And one `unnest` over the batch
+    // cannot say *which* value was wrong — PostgreSQL does not promise row-evaluation order — so
+    // the only honest message would be "one of these is not an IP range". At form-submit pace the
+    // round trips are free; naming the offending row is not.
+    let mut rows: Vec<(String, String)> = Vec::with_capacity(body.prefixes.len());
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in &body.prefixes {
+        let raw = entry.prefix.trim();
+        if raw.is_empty() {
+            return Err(ApiError::bad_request(
+                "invalid_prefix",
+                "a range must not be empty",
+            ));
+        }
+        let description = entry.description.trim();
+        if description.chars().count() > MAX_PREFIX_DESCRIPTION {
+            return Err(ApiError::bad_request(
+                "prefix_description_too_long",
+                format!("a description may be at most {MAX_PREFIX_DESCRIPTION} characters"),
+            ));
+        }
+        let Some(canonical) = admin.groups.canonical_prefix(raw).await.map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "canonicalise prefix", "failed to read prefixes")
+        })?
+        else {
+            // Echoing the value is safe and is the point: it is the caller's own input, not an
+            // internal error's text (`security.md` forbids the latter, never the former).
+            return Err(ApiError::bad_request(
+                "invalid_prefix",
+                format!("'{raw}' is not an IP range"),
+            ));
+        };
+        if !seen.insert(canonical.clone()) {
+            return Err(ApiError::bad_request(
+                "duplicate_prefix",
+                format!("'{canonical}' is listed twice"),
+            ));
+        }
+        rows.push((canonical, description.to_owned()));
+    }
+
+    // A range a sync owns is refused by name rather than silently dropped: the operator typed it,
+    // and nothing on screen would otherwise say it did not land (ADR-131 決定 5).
+    let sync_owned = admin.groups.sync_owned_prefixes(id).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "read sync prefixes", "failed to read prefixes")
+    })?;
+    if let Some((clash, _)) = rows.iter().find(|(p, _)| sync_owned.contains(p)) {
+        return Err(ApiError::bad_request(
+            "prefix_owned_by_sync",
+            format!("'{clash}' is maintained by a sync and cannot be edited here"),
+        ));
+    }
+
+    admin
+        .groups
+        .set_manual_prefixes(id, &rows)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set node group prefixes",
+                "failed to set node group prefixes",
+            )
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +690,7 @@ mod tests {
             ("PUT", format!("/api/v1/node-groups/{ID}/pool")),
             ("PUT", format!("/api/v1/node-groups/{ID}/geo")),
             ("POST", format!("/api/v1/node-groups/{ID}/sort")),
+            ("PUT", format!("/api/v1/node-groups/{ID}/prefixes")),
         ]
     }
 
@@ -916,5 +1063,215 @@ mod tests {
             parent_row["prefixes"][0]["prefix"], "192.168.1.0/24",
             "unscoped, the ancestor's prefixes are there"
         );
+    }
+
+    // ── ADR-131: the hand-made IP ranges ────────────────────────────────────────────────
+
+    /// 🚨 An accepted write, asserted on the **row** rather than the status.
+    ///
+    /// A 204 says the handler returned; it does not say a range was stored, canonicalised, or
+    /// marked as the operator's. This checks all three, and then reads them back through
+    /// `GET /node-groups` — the surface the editor actually renders from.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn setting_a_folders_ranges_stores_them_as_the_operators(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (_, created) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "matsuyama", "group_type": "site" })),
+        )
+        .await;
+        let id = created["id"].as_str().expect("id").to_owned();
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{id}/prefixes"),
+            &tok,
+            Some(serde_json::json!({ "prefixes": [
+                // Host bits set on purpose: a plain `::cidr` cast would refuse this, and it is
+                // what a person reading a device's config types.
+                { "prefix": "192.168.1.5/24", "description": "office" },
+                { "prefix": "2001:db8::1/64" },
+            ] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 2);
+
+        let (status, list) = send(&st, "GET", "/api/v1/node-groups", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        let row = list
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|g| g["id"] == id)
+            .expect("the folder")
+            .clone();
+        let mut seen: Vec<(String, String)> = row["prefixes"]
+            .as_array()
+            .expect("prefixes")
+            .iter()
+            .map(|p| {
+                (
+                    p["prefix"].as_str().expect("prefix").to_owned(),
+                    p["source"].as_str().expect("source").to_owned(),
+                )
+            })
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                ("192.168.1.0/24".to_string(), "manual".to_string()),
+                ("2001:db8::/64".to_string(), "manual".to_string()),
+            ],
+            "both were canonicalised and both are the operator's"
+        );
+
+        // The empty list is the clear: there is deliberately no DELETE endpoint.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{id}/prefixes"),
+            &tok,
+            Some(serde_json::json!({ "prefixes": [] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 0);
+    }
+
+    /// A value that is not an IP range is a 400 that **names it**, and nothing is written.
+    ///
+    /// The second half is the point: the canonicalisation probe runs on the pool before the
+    /// transaction opens, so a bad row cannot abort a write that had already begun.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_range_that_is_not_an_address_is_refused_by_name(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (_, created) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "site", "group_type": "site" })),
+        )
+        .await;
+        let id = created["id"].as_str().expect("id").to_owned();
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{id}/prefixes"),
+            &tok,
+            Some(serde_json::json!({ "prefixes": [
+                { "prefix": "10.0.0.0/8" },
+                { "prefix": "not-an-address" },
+            ] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "invalid_prefix", "{body}");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not-an-address"),
+            "the offending value is named: {body}"
+        );
+        assert_eq!(
+            crate::pgtest::rows(&pool, "node_group_prefixes").await,
+            0,
+            "the good row must not have landed either"
+        );
+    }
+
+    /// A range a sync owns is refused by name rather than silently dropped.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_range_a_sync_owns_cannot_be_taken_over_here(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (_, created) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "site", "group_type": "site" })),
+        )
+        .await;
+        let id = created["id"].as_str().expect("id").to_owned();
+        let group: Uuid = id.parse().expect("uuid");
+        let server = crate::pgtest::netbox_server(&pool, "nb").await;
+        sqlx::query(
+            "INSERT INTO node_group_prefixes (group_id, prefix, description, netbox_server_id) \
+             VALUES ($1, network($2::inet)::cidr, 'from netbox', $3)",
+        )
+        .bind(group)
+        .bind("172.16.0.0/12")
+        .bind(server)
+        .execute(&pool)
+        .await
+        .expect("seed");
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{id}/prefixes"),
+            &tok,
+            Some(serde_json::json!({ "prefixes": [{ "prefix": "172.16.0.0/12" }] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "prefix_owned_by_sync", "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
+    }
+
+    /// A folder outside a scoped caller's reach is a 404, not a silent write.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_cannot_set_ranges_on_a_folder_it_cannot_see(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (_, mine) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({ "name": "mine", "group_type": "site" })),
+        )
+        .await;
+        let (_, theirs) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({ "name": "theirs", "group_type": "site" })),
+        )
+        .await;
+        let mine_id: Uuid = mine["id"].as_str().expect("id").parse().expect("uuid");
+        let theirs_id = theirs["id"].as_str().expect("id").to_owned();
+
+        let scoped = scoped_token(&st, &[mine_id]);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{theirs_id}/prefixes"),
+            &scoped,
+            Some(serde_json::json!({ "prefixes": [{ "prefix": "10.0.0.0/8" }] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 0);
     }
 }

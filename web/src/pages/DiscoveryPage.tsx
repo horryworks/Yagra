@@ -35,6 +35,13 @@ import {
   statusFor,
 } from './discoveryScans';
 import { expandTargets } from '../lib/cidr';
+import {
+  destinationLabel,
+  importMessage,
+  mergePreview,
+  pendingAddresses,
+  type RowDestination,
+} from './importFiling';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import {
   defaultChecked,
@@ -116,6 +123,17 @@ export function DiscoveryPage() {
    *  is where a sweep's minutes went. Kept as a choice because a firewall that filters ICMP and
    *  answers SNMP is a real device this would otherwise never find. */
   const [snmpWhenUnreachable, setSnmpWhenUnreachable] = useState(false);
+  /** File each device into the folder whose IP range contains its address (ADR-131). Off by
+   *  default: it changes where a batch lands, and the old behaviour is one folder for all. */
+  const [fileByPrefix, setFileByPrefix] = useState(false);
+  /** The server's answer per candidate address — which folder's range claims it, or neither.
+   *  Accumulated rather than refetched: a sweep streams, so re-previewing the whole set on every
+   *  2s poll would fire a `ManageConfig` request every two seconds for the length of the scan. */
+  const [destinations, setDestinations] = useState<Map<string, RowDestination>>(() => new Map());
+  /** Whether any folder this caller can see carries a range at all — the server's own answer,
+   *  used for the per-row wording so "nothing matched" is never shown for "nothing to match
+   *  against" (the distinction `moveByPrefix.ts::emptyReason` exists for). */
+  const [anyPrefixes, setAnyPrefixes] = useState(true);
   /** The operator pressed Scan and the first status has not landed. Drives polling on its own —
    *  see `shouldPollScan` for why this cannot be derived from what the server currently says. */
   const [justStarted, setJustStarted] = useState(false);
@@ -478,6 +496,34 @@ export function DiscoveryPage() {
   const patchRow = (addr: string, patch: Partial<RowState>) =>
     setRowState((cur) => ({ ...cur, [addr]: { ...cur[addr], ...patch } }));
 
+  /** Ask the server where the candidates it has not answered for yet would be filed.
+   *
+   * ⚠️ Only the **new** addresses, which is what makes this safe to run beside a 2s candidate
+   * poll. The dependency is the candidate count rather than the array, because a re-poll returns a
+   * fresh array with the same contents and would otherwise re-run this every tick.
+   *
+   * A failure is left silent and simply retried on the next arrival: the column falls back to the
+   * pending marker, and a red banner over a *preview* would be louder than the thing it describes.
+   */
+  useEffect(() => {
+    if (!canConfig) return;
+    let live = true;
+    const pending = pendingAddresses(destinations, candidates);
+    if (pending.length === 0) return;
+    api
+      .previewDiscoveryImport(pending)
+      .then((p) => {
+        if (!live) return;
+        setDestinations((cur) => mergePreview(cur, p));
+        setAnyPrefixes(p.any_prefixes);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidates.length, canConfig]);
+
   const importSelected = () => {
     setImportNote(null);
     setImportError(null);
@@ -502,12 +548,14 @@ export function DiscoveryPage() {
       // The folder the sweep was aimed at, so a site's devices arrive filed rather than in a heap
       // at the tree root. Empty when the operator typed a range instead of picking a site, which
       // is the pre-ADR-100 behaviour and still the right answer for an ad-hoc sweep.
-      .importDiscovered(nodes, siteId || undefined)
-      .then(({ created }) => {
+      .importDiscovered(nodes, siteId || undefined, fileByPrefix || undefined)
+      .then((result) => {
+        // The sentences come from `importFiling.ts` so the "how many were filed, how many fell
+        // back, how many were contested" judgement is somewhere a test can reach it.
         setImportNote(
-          siteLabel
-            ? t('discovery.msg.importedInto', { count: created, site: siteLabel })
-            : t('discovery.msg.imported', { count: created }),
+          importMessage(result, siteLabel || null)
+            .map((p) => t(p.key, p.args))
+            .join(' '),
         );
         // Mark the imported rows and clear their selection (no double-import).
         setImported((cur) => {
@@ -530,6 +578,37 @@ export function DiscoveryPage() {
 
   /** The chosen site's path, for the sentence that says where an import lands. */
   const siteLabel = siteOptions.find((o) => o.id === siteId)?.label ?? '';
+
+  /** One row's Folder cell (ADR-131).
+   *
+   * The judgement is in `importFiling.ts`; this only turns it into elements.
+   *
+   * ⚠️ `siteOptions` resolves the matched folder's path, and it can: it is every folder carrying a
+   * range, which is exactly the set the server can match against. A folder the caller may not see
+   * is never proposed in the first place, because the match narrows on the same scope.
+   *
+   * `anyPrefixes` false means the deployment has no ranges at all — a different statement from
+   * "this address matched none", and the reason the server reports the two separately. */
+  const destinationCell = (address: string) => {
+    const label = destinationLabel(destinations.get(address), {
+      filing: fileByPrefix,
+      fallbackPath: siteLabel || null,
+      rootLabel: t('discovery.dest.root'),
+      pendingLabel: t('discovery.dest.pending'),
+      pathOf: (id) => siteOptions.find((o) => o.id === id)?.label ?? id,
+    });
+    const why = !fileByPrefix
+      ? null
+      : anyPrefixes
+        ? label.whyKey && t(label.whyKey, label.whyArgs)
+        : t('discovery.dest.why.noRanges');
+    return (
+      <>
+        <span className="disco-dest-to">{label.primary}</span>
+        {why && <span className="muted disco-dest-why">{why}</span>}
+      </>
+    );
+  };
 
   return (
     <div>
@@ -727,6 +806,28 @@ export function DiscoveryPage() {
               <FieldHint>{t('discovery.icmpGate.hint')}</FieldHint>
             </div>
 
+            {/* File each device into the folder whose IP range contains it (ADR-131).
+                Drawn only when some folder actually carries a range — the same expression the site
+                picker uses above, deliberately not a second predicate. It is not weaker than the
+                server's `any_prefixes`: `visible_groups` clears `prefixes` on exactly the rows
+                `allows_group` rejects, so a range this list cannot see is one the matcher will not
+                use either. It has to be answerable before any candidate exists, which is why the
+                server's answer cannot be waited for here — only the per-row wording uses that. */}
+            {siteOptions.length > 0 && (
+              <div className="disco-opt">
+                {/* Hint outside the label, for the reason the ICMP gate's is. */}
+                <label className="form-label form-check">
+                  <input
+                    type="checkbox"
+                    checked={fileByPrefix}
+                    onChange={(e) => setFileByPrefix(e.target.checked)}
+                  />
+                  {t('discovery.fileByPrefix.label')}
+                </label>
+                <FieldHint>{t('discovery.fileByPrefix.hint')}</FieldHint>
+              </div>
+            )}
+
             {/* Below the row rather than in it. Each field is now three bands tall (label, input,
                 hint), and a hint that wraps makes its column taller than the others — so a button
                 sharing the row would drift away from the control it acts on, by an amount that
@@ -861,6 +962,7 @@ export function DiscoveryPage() {
               <div className="disco-h" />
               <div className="disco-h">{t('discovery.cols.address')}</div>
               <div className="disco-h">{t('discovery.cols.identity')}</div>
+              <div className="disco-h">{t('discovery.cols.destination')}</div>
               <div className="disco-h">{t('discovery.cols.name')}</div>
               <div className="disco-h">{t('discovery.cols.profile')}</div>
               <div className="disco-h">{t('discovery.cols.credential')}</div>
@@ -879,7 +981,7 @@ export function DiscoveryPage() {
                 width and every control sat somewhere other than under its column. */}
             <ColumnFilterRow
               columns={candCols}
-              slots={[null, 'address', 'identity', null, null, null]}
+              slots={[null, 'address', 'identity', null, null, null, null]}
               filters={filters}
               onChange={setFilters}
               counts={candCounts}
@@ -932,6 +1034,11 @@ export function DiscoveryPage() {
                       </span>
                     )}
                   </span>
+                  {/* Where this device would land (ADR-131). Read-only: the destination is derived
+                      by one rule for the whole request, never chosen per row — which is what keeps
+                      ADR-100 decision 10 intact. Drawn with the option off too, because then it
+                      answers "where does this land" before the button rather than afterwards. */}
+                  <span className="disco-dest">{destinationCell(c.address)}</span>
                   <TextInput
                     value={r.name}
                     onChange={(e) => patchRow(c.address, { name: e.target.value })}

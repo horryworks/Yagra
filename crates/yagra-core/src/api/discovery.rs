@@ -35,6 +35,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Instant;
 use uuid::Uuid;
@@ -56,6 +57,7 @@ const ENDPOINT_MAX_LIMIT: i64 = 500;
     list_discovery_scans,
     cancel_discovery_scan,
     import_discovered,
+    preview_discovery_import,
     discovery_candidates,
     list_discovered_endpoints,
     import_discovered_endpoint
@@ -79,6 +81,10 @@ pub(super) fn routes() -> Router<ApiState> {
             post(cancel_discovery_scan),
         )
         .route("/api/v1/discovery/import", post(import_discovered))
+        .route(
+            "/api/v1/discovery/import-preview",
+            post(preview_discovery_import),
+        )
         .route("/api/v1/discovery/candidates", get(discovery_candidates))
         .route(
             "/api/v1/discovered-endpoints",
@@ -119,10 +125,37 @@ pub(crate) struct StartedScan {
     scan_id: Uuid,
 }
 
-/// How many nodes an import created.
+/// How the batch was filed, when the request asked for filing by IP range (ADR-131 決定 2).
+///
+/// 🚨 **Three numbers, not two.** A device two folders claim equally well and one no range covers
+/// both end up in the request's fallback folder — but they are different facts, and folding them
+/// loses the actionable one: an ambiguous address means two folders have overlapping ranges
+/// configured, which is a thing to go and fix. Reported separately so the operator reads
+/// "3 fell back, 1 of them because two folders disagree" rather than "3 addresses are outside
+/// every range", which would be untrue.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct PrefixFiling {
+    /// Filed into the one folder whose range contains the address.
+    matched: u32,
+    /// Two or more folders claimed it at the same prefix length; filed into the fallback.
+    ambiguous: u32,
+    /// No folder's range contained it; filed into the fallback.
+    unmatched: u32,
+}
+
+/// How many nodes an import created, and — when filing by IP range was asked for — how.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ImportResult {
     created: u32,
+    /// Present only when the request set `file_by_prefix`. `null` otherwise, which is every
+    /// endpoint promotion and every scan import with the option off.
+    ///
+    /// ⚠️ `skip_serializing_if` rather than a zero-filled struct, for two reasons. This type is
+    /// shared with `import_discovered_endpoint`, where filing by range never happens and zeros
+    /// would be a lie; and with the field absent the wire shape is byte-identical to what every
+    /// existing client already parses. `created == matched + ambiguous + unmatched`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filed: Option<PrefixFiling>,
 }
 
 /// Resolve stored credential ids into the inline candidates the sweep job carries.
@@ -427,8 +460,23 @@ pub(super) struct ImportDiscovered {
     /// ⚠️ **One folder for the whole request, not one per node.** A sweep is aimed at a site, so
     /// the folder is a property of the sweep; per-row would invite a UI that lets fifty rows
     /// disagree and then have to explain itself.
+    ///
+    /// When `file_by_prefix` is set this is the **fallback** rather than the destination — still
+    /// one folder, still a property of the request.
     #[serde(default)]
     group_id: Option<Uuid>,
+    /// File each device into the folder whose IP range contains its address, falling back to
+    /// `group_id` for one no range covers — or that two folders claim equally well (ADR-131).
+    ///
+    /// ⚠️ **This does not reverse ADR-100 decision 10.** That decision refuses a *per-row folder
+    /// field*, because fifty rows could then disagree and the screen would have to explain it.
+    /// This is a rule for the whole request: no row carries a choice, every destination is derived
+    /// by one rule from data the operator did not type, and the request still names exactly one
+    /// operator-chosen folder. One request, one intent, one thing to explain.
+    ///
+    /// `#[serde(default)]` so an N-1 client's body means exactly what it meant before.
+    #[serde(default)]
+    file_by_prefix: bool,
 }
 
 #[utoipa::path(
@@ -444,6 +492,7 @@ pub(super) struct ImportDiscovered {
 )]
 async fn import_discovered(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Json(body): Json<ImportDiscovered>,
 ) -> ApiResult<(StatusCode, Json<ImportResult>)> {
@@ -453,6 +502,12 @@ async fn import_discovered(
             Some(v) => v.parse::<Uuid>().map(Some).map_err(|_| ()),
         }
     };
+    // The destination is checked before the rows: filing nodes *into* a folder this caller may not
+    // act on would put them where that caller can no longer reach them — the same order and the
+    // same reason as `nodes::move_nodes` (ADR-131 決定 8).
+    if let Some(group) = body.group_id {
+        super::scope::require_visible_group(&scope, group)?;
+    }
     // Checked before anything is prepared: `nodes.group_id` is a foreign key, so an id that is
     // not there would abort the transaction and surface as a 500 that names nothing.
     super::groups::require_group_exists(&admin, body.group_id).await?;
@@ -488,9 +543,47 @@ async fn import_discovered(
             credential,
             vendor: n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
             model: n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            // Overwritten below when filing by range; `body.group_id` is the fallback either way.
             group: body.group_id,
         });
     }
+
+    // Filing by IP range (ADR-131). `NodeRepo::import_nodes` already binds `group_id` per row and
+    // computes `sort_order` per destination folder inside its transaction, so a batch that lands in
+    // several folders needs nothing from the writer — only a different value in each row.
+    let filed = if body.file_by_prefix {
+        let addrs: Vec<IpAddr> = prepared.iter().map(|n| n.address).collect();
+        let hits = admin
+            .groups
+            .match_address_prefixes(&addrs, scope.group_filter())
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "match discovered addresses",
+                    "failed to match prefixes",
+                )
+            })?;
+        let fold = crate::groups::fold_prefix_matches(&addrs, hits);
+        let by_address: HashMap<IpAddr, Uuid> = fold
+            .matched
+            .iter()
+            .map(|(addr, group, _)| (*addr, *group))
+            .collect();
+        for row in prepared.iter_mut() {
+            if let Some(group) = by_address.get(&row.address) {
+                row.group = Some(*group);
+            }
+        }
+        Some(PrefixFiling {
+            matched: fold.matched.len() as u32,
+            ambiguous: fold.ambiguous.len() as u32,
+            unmatched: fold.unmatched.len() as u32,
+        })
+    } else {
+        None
+    };
+
     let created = admin.repo.import_nodes(&prepared).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -498,7 +591,127 @@ async fn import_discovered(
             "failed to import discovered nodes",
         )
     })?;
-    Ok((StatusCode::CREATED, Json(ImportResult { created })))
+    Ok((StatusCode::CREATED, Json(ImportResult { created, filed })))
+}
+
+/// Body for the import preview: the candidate addresses about to be imported.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ImportPreviewQuery {
+    addresses: Vec<String>,
+}
+
+/// One address, and the single folder whose IP range contains it.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct AddressProposal {
+    address: String,
+    group_id: Uuid,
+    /// The range that matched — shown so the operator can see *why* this folder is proposed.
+    prefix: String,
+}
+
+/// One address claimed equally well by two or more folders. Never resolved automatically.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct AddressAmbiguity {
+    address: String,
+    group_ids: Vec<Uuid>,
+}
+
+/// Where each candidate would be filed. **A proposal, not an action** — nothing is written by the
+/// endpoint that returns this (ADR-131 決定 7, the same posture as ADR-124 決定 6).
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct ImportPreviewResult {
+    matched: Vec<AddressProposal>,
+    ambiguous: Vec<AddressAmbiguity>,
+    /// Addresses that fall inside no visible folder's range.
+    unmatched: Vec<String>,
+    /// Whether **any** folder this caller can see carries a range at all.
+    ///
+    /// Without this, a deployment with no ranges reports every address as unmatched and the
+    /// operator cannot tell "these addresses are not covered" from "there was never anything to
+    /// match against" — one message for two situations is how an inert feature looks like a
+    /// working one.
+    any_prefixes: bool,
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/discovery/import-preview", tag = "discovery",
+    request_body = ImportPreviewQuery,
+    responses(
+        (status = 200, description = "Which folder's IP range would claim each address", body = ImportPreviewResult),
+        (status = 400, description = "An unparseable address, or more than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
+async fn preview_discovery_import(
+    _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<ImportPreviewQuery>,
+) -> ApiResult<Json<ImportPreviewResult>> {
+    if body.addresses.len() > MAX_SCAN_TARGETS {
+        return Err(ApiError::bad_request(
+            "too_many_addresses",
+            format!(
+                "at most {MAX_SCAN_TARGETS} addresses may be examined in one request, got {}",
+                body.addresses.len()
+            ),
+        ));
+    }
+    // Parsed at the edge, so the `::inet` cast downstream can only ever see a real address —
+    // `match_address_prefixes`' doc says why that matters (a bad value would fail the statement
+    // and become a 500 naming nothing, instead of the named 400 below).
+    let mut addrs: Vec<IpAddr> = Vec::with_capacity(body.addresses.len());
+    for raw in &body.addresses {
+        let Ok(addr) = raw.parse::<IpAddr>() else {
+            return Err(ApiError::bad_request(
+                "invalid_address",
+                format!("'{raw}' is not a valid IP address"),
+            ));
+        };
+        addrs.push(addr);
+    }
+    let hits = admin
+        .groups
+        .match_address_prefixes(&addrs, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match discovered addresses",
+                "failed to match prefixes",
+            )
+        })?;
+    let any_prefixes = admin
+        .groups
+        .any_prefixes(scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "read group prefixes", "failed to read prefixes")
+        })?;
+    let fold = crate::groups::fold_prefix_matches(&addrs, hits);
+    Ok(Json(ImportPreviewResult {
+        matched: fold
+            .matched
+            .into_iter()
+            .map(|(address, group_id, prefix)| AddressProposal {
+                address: address.to_string(),
+                group_id,
+                prefix,
+            })
+            .collect(),
+        ambiguous: fold
+            .ambiguous
+            .into_iter()
+            .map(|(address, group_ids)| AddressAmbiguity {
+                address: address.to_string(),
+                group_ids,
+            })
+            .collect(),
+        unmatched: fold.unmatched.iter().map(ToString::to_string).collect(),
+        any_prefixes,
+    }))
 }
 
 /// Query for the standing discovery-candidates view.
@@ -865,7 +1078,15 @@ async fn import_discovered_endpoint(
     if let Err(e) = admin.discovered.reconcile_promotions().await {
         tracing::warn!(error = %e, "reconciling the promoted endpoint failed");
     }
-    Ok((StatusCode::CREATED, Json(ImportResult { created })))
+    Ok((
+        StatusCode::CREATED,
+        // Filing by IP range is a scan-import concept: this promotes one address a router
+        // mentioned, with no sweep and no folder behind it (see `group: None` above).
+        Json(ImportResult {
+            created,
+            filed: None,
+        }),
+    ))
 }
 
 #[cfg(test)]
@@ -891,6 +1112,9 @@ mod tests {
             // Stopping a sweep is the same authority as causing one (ADR-068 Inc.2).
             ("POST", format!("/api/v1/discovery/scan/{ID}/cancel")),
             ("POST", "/api/v1/discovery/import".to_owned()),
+            // The preview writes nothing, but it discloses which folder claims an address, so it
+            // is gated exactly as the import it precedes (ADR-131 決定 7).
+            ("POST", "/api/v1/discovery/import-preview".to_owned()),
         ]
     }
 
@@ -1234,5 +1458,233 @@ mod tests {
             0,
             "the batch is refused before anything is written"
         );
+    }
+
+    // ── ADR-131: filing an import by IP range ───────────────────────────────────────────
+
+    /// A body with no `file_by_prefix` means exactly what it meant before (the N-1 client).
+    #[test]
+    fn an_import_body_without_the_option_reads_as_off() {
+        let body: ImportDiscovered = serde_json::from_value(serde_json::json!({
+            "nodes": [{ "address": "10.0.0.1", "name": "r1" }],
+        }))
+        .expect("parse");
+        assert!(!body.file_by_prefix);
+        assert!(body.group_id.is_none());
+    }
+
+    /// 🚨 The feature's own accepted write: four devices, four destinations, asserted on the rows.
+    ///
+    /// One inside folder A's range, one inside B's, one inside nothing, and one that A and B claim
+    /// at the same length. The last two both land in the fallback — and the counts report them
+    /// **separately**, which is the whole of ADR-131 決定 2: folding them would tell the operator
+    /// that two addresses are outside every range, which is untrue of the ambiguous one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_import_files_each_device_into_the_folder_whose_range_holds_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+
+        let folder = |name: &'static str| {
+            let st = st.clone();
+            let tok = tok.clone();
+            async move {
+                let (_, g) = send(
+                    &st,
+                    "POST",
+                    "/api/v1/node-groups",
+                    &tok,
+                    Some(serde_json::json!({ "name": name, "group_type": "site" })),
+                )
+                .await;
+                g["id"].as_str().expect("id").to_owned()
+            }
+        };
+        let a = folder("A").await;
+        let b = folder("B").await;
+        let fallback = folder("fallback").await;
+        let (a_id, b_id, fb_id): (Uuid, Uuid, Uuid) = (
+            a.parse().expect("uuid"),
+            b.parse().expect("uuid"),
+            fallback.parse().expect("uuid"),
+        );
+
+        crate::pgtest::prefix(&pool, a_id, "192.168.1.0/24").await;
+        crate::pgtest::prefix(&pool, b_id, "192.168.2.0/24").await;
+        // Both claim this one at the same length: the tie the feature refuses to break.
+        crate::pgtest::prefix(&pool, a_id, "10.5.0.0/16").await;
+        crate::pgtest::prefix(&pool, b_id, "10.5.0.0/16").await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(serde_json::json!({
+                "group_id": fallback,
+                "file_by_prefix": true,
+                "nodes": [
+                    { "address": "192.168.1.10", "name": "in-a" },
+                    { "address": "192.168.2.10", "name": "in-b" },
+                    { "address": "172.31.0.1",   "name": "nowhere" },
+                    { "address": "10.5.0.9",     "name": "contested" },
+                ],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(body["created"], 4, "{body}");
+        assert_eq!(body["filed"]["matched"], 2, "{body}");
+        assert_eq!(body["filed"]["ambiguous"], 1, "{body}");
+        assert_eq!(body["filed"]["unmatched"], 1, "{body}");
+
+        let placed = |name: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<Uuid>>("SELECT group_id FROM nodes WHERE name = $1")
+                    .bind(name)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or_else(|e| panic!("read {name}: {e}"))
+            }
+        };
+        assert_eq!(placed("in-a").await, Some(a_id));
+        assert_eq!(placed("in-b").await, Some(b_id));
+        assert_eq!(
+            placed("nowhere").await,
+            Some(fb_id),
+            "an address no range covers falls back"
+        );
+        assert_eq!(
+            placed("contested").await,
+            Some(fb_id),
+            "a tie falls back rather than being broken"
+        );
+    }
+
+    /// With the option off, the same data all lands in the one folder — the compatibility half.
+    ///
+    /// Without this the test above would pass just as well against an implementation that files by
+    /// range unconditionally, which is the behaviour change nobody asked for.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_import_with_the_option_off_still_uses_one_folder(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (_, a) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "A", "group_type": "site" })),
+        )
+        .await;
+        let (_, fb) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "fallback", "group_type": "site" })),
+        )
+        .await;
+        let a_id: Uuid = a["id"].as_str().expect("id").parse().expect("uuid");
+        let fb_id: Uuid = fb["id"].as_str().expect("id").parse().expect("uuid");
+        crate::pgtest::prefix(&pool, a_id, "192.168.1.0/24").await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(serde_json::json!({
+                "group_id": fb["id"],
+                "nodes": [{ "address": "192.168.1.10", "name": "would-match" }],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert!(
+            body.get("filed").is_none_or(serde_json::Value::is_null),
+            "the wire shape is unchanged when the option is off: {body}"
+        );
+        let group: Option<Uuid> =
+            sqlx::query_scalar("SELECT group_id FROM nodes WHERE name = 'would-match'")
+                .fetch_one(&pool)
+                .await
+                .expect("read");
+        assert_eq!(group, Some(fb_id), "the range was not consulted");
+    }
+
+    /// The preview answers per address, and says whether there was anything to match against.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_import_preview_names_the_folder_that_would_claim_each_address(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+
+        // Before any range exists, `any_prefixes` is what stops "nothing matched" from being read
+        // as "these addresses are not covered".
+        let (status, empty) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import-preview",
+            &tok,
+            Some(serde_json::json!({ "addresses": ["192.168.1.10"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{empty}");
+        assert_eq!(empty["any_prefixes"], false, "{empty}");
+        assert_eq!(empty["unmatched"][0], "192.168.1.10", "{empty}");
+
+        let (_, g) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &tok,
+            Some(serde_json::json!({ "name": "A", "group_type": "site" })),
+        )
+        .await;
+        let gid: Uuid = g["id"].as_str().expect("id").parse().expect("uuid");
+        crate::pgtest::prefix(&pool, gid, "192.168.1.0/24").await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import-preview",
+            &tok,
+            Some(serde_json::json!({ "addresses": ["192.168.1.10", "10.9.9.9"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["any_prefixes"], true, "{body}");
+        assert_eq!(body["matched"][0]["address"], "192.168.1.10", "{body}");
+        assert_eq!(body["matched"][0]["group_id"], g["id"], "{body}");
+        assert_eq!(body["matched"][0]["prefix"], "192.168.1.0/24", "{body}");
+        assert_eq!(body["unmatched"][0], "10.9.9.9", "{body}");
+    }
+
+    /// An address the preview cannot parse is a named 400, never a failed statement.
+    ///
+    /// This is what keeps raw request text away from `match_address_prefixes`' `::inet` cast,
+    /// which that method's doc says must never see one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_import_preview_refuses_a_value_that_is_not_an_address(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import-preview",
+            &tok,
+            Some(serde_json::json!({ "addresses": ["nonsense"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "invalid_address", "{body}");
     }
 }

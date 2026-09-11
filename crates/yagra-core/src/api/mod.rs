@@ -619,6 +619,17 @@ fn changes_monitoring_config(path: &str) -> bool {
         // this function keeps the entry honest — and forgetting it makes every press of the
         // preview button rebuild the poll specs for the whole fleet, silently.
         || path == "/api/v1/nodes/move-preview"
+        // The same shape, one step earlier in the workflow (ADR-131 決定 7): which folder's range
+        // would claim each address a sweep just found. It writes nothing — the import that may
+        // follow is `POST /discovery/import`, which is **not** listed here and does bump the
+        // signal.
+        //
+        // 🚨 The same blind spot applies: `every_read_shaped_write_route_is_exempt_from_the_dirty_signal`
+        // cannot see this one either, because it demands ManageConfig rather than a read
+        // permission. And this one is pressed *harder* than the move preview — the candidate list
+        // grows on a 2s poll while a sweep runs, so a missing entry here rebuilds the whole fleet's
+        // poll specs every few seconds for the length of the scan.
+        || path == "/api/v1/discovery/import-preview"
         // Arranging one folder's children in name order (ADR-130 決定 4). It writes real rows —
         // `node_groups.sort_order` and `nodes.sort_order` — so the verb is not why it is here. The
         // criterion is what the rebuilds read, and **none of them reads `sort_order`**: measured

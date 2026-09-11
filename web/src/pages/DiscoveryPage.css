@@ -95,7 +95,7 @@ html[data-viewport='mobile'] .disco-actions .btn {
 .disco-filters,
 .disco-row {
   display: grid;
-  grid-template-columns: 28px 1.4fr 2fr 1.2fr 1.2fr 1.2fr;
+  grid-template-columns: 28px 1.4fr 2fr 1.4fr 1.2fr 1.2fr 1.2fr;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -218,7 +218,7 @@ html[data-viewport='mobile'] .disco-table {
 
 html[data-viewport='mobile'] .disco-head,
 html[data-viewport='mobile'] .disco-row {
-  grid-template-columns: 40px 150px 200px 150px 150px 170px;
+  grid-template-columns: 40px 150px 200px 160px 150px 150px 170px;
   width: max-content;
 }
 
@@ -450,4 +450,23 @@ html[data-viewport='mobile'] .disco-scan {
   .disco-prefix {
     min-height: var(--touch-target);
   }
+}
+
+/* The Folder cell (ADR-131): where this device would land, and — when filing by IP range — why.
+   Two stacked lines, the second muted, matching .disco-identity's shape one column to the left. */
+.disco-dest {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.disco-dest-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disco-dest-why {
+  font-size: var(--font-xs);
 }

@@ -1104,6 +1104,7 @@ mod tests {
             prefixes: vec![crate::groups::GroupPrefix {
                 prefix: "192.168.1.0/24".to_owned(),
                 description: "Tokyo LAN".to_owned(),
+                source: crate::groups::PrefixSource::Manual,
             }],
         };
         let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();

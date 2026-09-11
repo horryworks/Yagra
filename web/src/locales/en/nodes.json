@@ -120,7 +120,18 @@
     "latitude": "Latitude (optional)",
     "longitude": "Longitude (optional)",
     "geoHint": "Where this group sits on the Geo map. Set both or leave both blank to remove the pin.",
-    "geoInherited": "Already on the map at {{name}}, inherited from the folder above — nodes in this group are counted at that pin. Set coordinates here only to give this group a pin of its own."
+    "geoInherited": "Already on the map at {{name}}, inherited from the folder above — nodes in this group are counted at that pin. Set coordinates here only to give this group a pin of its own.",
+    "prefixes": "IP ranges",
+    "prefixesHint": "The subnets in use at this folder. Discovery can be aimed at them, and an import can file each device into the folder whose range contains its address. Host bits are allowed — 192.168.1.5/24 is stored as 192.168.1.0/24.",
+    "prefixAdd": "+ Add range",
+    "prefixRemove": "Remove range",
+    "prefixPlaceholder": "192.168.1.0/24",
+    "prefixDescPlaceholder": "What it is called",
+    "prefixSource": {
+      "manual": "Typed here",
+      "sync": "From sync"
+    },
+    "prefixSyncHint": "These ranges come from a NetBox sync and are kept in step with it. Edit them in NetBox."
   },
   "deleteGroup": {
     "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>no nodes are deleted</b>.",
@@ -152,7 +163,13 @@
     "saveNode": "failed to save node",
     "setDependency": "failed to set dependency",
     "addDnsMonitor": "failed to add DNS monitor",
-    "movePreview": "failed to match addresses against folder ranges"
+    "movePreview": "failed to match addresses against folder ranges",
+    "prefixEmpty": "A range cannot be empty.",
+    "prefixDuplicate": "{{prefix}} is listed twice.",
+    "prefixOwnedBySync": "{{prefix}} is maintained by a sync and cannot be edited here.",
+    "prefixTooMany": "A folder can carry at most 64 ranges.",
+    "prefixDescTooLong": "The description for {{prefix}} is too long (200 characters at most).",
+    "savePrefixes": "Failed to save the IP ranges"
   },
   "maintenanceWindowName": "Maintenance — {{name}}",
   "detail": {

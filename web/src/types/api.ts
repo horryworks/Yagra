@@ -260,6 +260,24 @@ export type GroupType = (typeof GROUP_TYPES)[number];
 /** One node group (folder) in the hierarchical inventory tree (`GET /api/v1/node-groups`). */
 export type NodeGroup = components['schemas']['GroupSummary'];
 
+/** One IP range attached to a folder (ADR-100 decision 10 / ADR-131). */
+export type GroupPrefix = components['schemas']['GroupPrefix'];
+
+/** Who put a range on a folder — an operator here, or a NetBox sync.
+ *
+ *  ⚠️ `as const` rather than derived from the schema alone, because the per-member label is built
+ *  at runtime (`` t(`group.prefixSource.${source}`) ``). EN/JA parity cannot catch a member missing
+ *  from *both* locales, so `i18nEnumKeys.test.ts` iterates this array instead. */
+export const PREFIX_SOURCES = ['manual', 'sync'] as const;
+
+/** Where a folder's range came from. */
+export type PrefixSource = (typeof PREFIX_SOURCES)[number];
+
+/** Which folder's IP range would claim each candidate address
+ *  (`POST /api/v1/discovery/import-preview`). A proposal — nothing is imported when this
+ *  arrives (ADR-131 決定 7). */
+export type ImportPreview = components['schemas']['ImportPreviewResult'];
+
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
  *  alerts currently attributed to it (bare engine alerts — no ack state). */
 export type NodeStatus = components['schemas']['NodeStatus'];
