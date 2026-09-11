@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { GROUP_TYPES } from '../../types/api';
 import type { GroupType, NodeGroup } from '../../types/api';
-import { asGroupType, groupOptions, isSelfOrDescendant } from '../../lib/nodeTree';
+import { asGroupType, groupOptions, subtreeGroupIds } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
 import { inheritedGroupPool, isValidPoolName } from '../../lib/pool';
 import { geoBodyFrom, geoChanged, geoDraftFrom, inheritedPin } from './geoFields';
@@ -73,9 +73,15 @@ export function GroupModal({
   const pinnedAt = pinnedAtId ? groups.find((g) => g.id === pinnedAtId) : undefined;
 
   // For an edit, a group cannot be parented under itself or any of its descendants.
-  const parentChoices = groupOptions(groups).filter(
-    (o) => !(editing && state.group && isSelfOrDescendant(groups, state.group.id, o.id)),
-  );
+  //
+  // 🚨 **One walk down, not a walk up per option** (ADR-133). This asked
+  // `isSelfOrDescendant(groups, …, o.id)` inside the filter, and that helper rebuilds the whole
+  // parent index on entry — so opening this dialog on a thousand folders was a thousand index
+  // builds, ~10^6 operations, on every render of the dialog. `subtreeGroupIds` answers the same
+  // question in one pass, and the set is the shape the filter actually wants.
+  const forbiddenParents =
+    editing && state.group ? new Set(subtreeGroupIds(groups, state.group.id)) : null;
+  const parentChoices = groupOptions(groups).filter((o) => !forbiddenParents?.has(o.id));
 
   const save = () => {
     // Validate the pin before issuing anything, so a bad coordinate costs no round trip and cannot

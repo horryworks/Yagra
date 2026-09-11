@@ -71,6 +71,11 @@ FROM ${WEB_SRC} AS bundle
 # downstream has to track a moving port. The host port defaults to 443.
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+# The proxy directives the three core-facing locations share (ADR-133). An absolute path, matching
+# the listener fragment the entrypoint renders — nginx resolves a relative `include` against its
+# prefix, and two spellings of "where the fragments live" is the kind of thing that only shows up
+# when one of them moves.
+COPY nginx-proxy-core.conf /etc/nginx/yagra-proxy-core.conf
 
 # --chmod is load-bearing, not tidiness. The stock nginx entrypoint runs /docker-entrypoint.d/*.sh
 # only if the file is executable and otherwise **logs "Ignoring … not executable" and continues** —

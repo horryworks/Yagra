@@ -39,18 +39,22 @@ export interface AddMenuTarget {
  * see is worse than top level, so an unresolvable selection (lazily-unloaded node, filter-mode
  * search page, a `?sel=` pointing at a deleted group) collapses to null. That is what makes
  * `groupName === null` ⟺ `groupId === null` an invariant, and the key choice derivable from it.
+ *
+ * ⚠️ **Takes indexes, not arrays** (ADR-133). It ran two `find`s over the full member list and the
+ * full folder list on every render of the page — including every SSE flush, up to ten a second —
+ * for two single-row answers. The caller holds the two maps anyway, for the selected row.
  */
 export function addMenuTarget(
   selected: TreeSelection,
-  groups: NodeGroup[],
-  nodes: NodeSummary[],
+  groupById: ReadonlyMap<string, NodeGroup>,
+  nodeById: ReadonlyMap<string, NodeSummary>,
 ): AddMenuTarget {
   const wanted = !selected
     ? null
     : selected.kind === 'group'
       ? selected.id
-      : (nodes.find((n) => n.id === selected.id)?.group_id ?? null);
-  const group = wanted ? (groups.find((g) => g.id === wanted) ?? null) : null;
+      : (nodeById.get(selected.id)?.group_id ?? null);
+  const group = wanted ? (groupById.get(wanted) ?? null) : null;
   return group
     ? {
         groupId: group.id,

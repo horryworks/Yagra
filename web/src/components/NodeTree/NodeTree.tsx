@@ -113,6 +113,11 @@ interface Props {
   /** Per-group DIRECT member state counts (server rollup, A-1). When given, group rows roll up from
    *  these — correct over the whole fleet even before a group's members are lazily loaded (A-3). */
   groupCounts?: Record<string, StateCounts>;
+  /** The counts above have been requested and have not arrived (ADR-133). The tree paints from the
+   *  folder list alone and starts fetching members immediately; the bars and pills fill in when the
+   *  rollup lands. Without it a skeleton with no counts asks for no members at all — the reason is
+   *  on `flattenTree`'s `countsPending`, which is where the decision lives. */
+  countsPending?: boolean;
   /** Ids of groups whose members have been lazily fetched (A-3). An open group not in this set shows
    *  a loading placeholder instead of its members. Omit (with `groupCounts`) ⇒ every group loaded. */
   loadedGroups?: Set<string>;
@@ -232,6 +237,7 @@ export function NodeTree({
   nodes,
   canEdit,
   groupCounts,
+  countsPending,
   loadedGroups,
   revealedGroups,
   failedGroups,
@@ -301,11 +307,22 @@ export function NodeTree({
         filter: filter ?? '',
         narrowed,
         groupCounts,
+        countsPending,
         loadedGroups,
         revealedGroups,
         failedGroups,
       }),
-    [tree, collapsed, filter, narrowed, groupCounts, loadedGroups, revealedGroups, failedGroups],
+    [
+      tree,
+      collapsed,
+      filter,
+      narrowed,
+      groupCounts,
+      countsPending,
+      loadedGroups,
+      revealedGroups,
+      failedGroups,
+    ],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
@@ -730,8 +747,17 @@ export function NodeTree({
         >
           {group.name}
         </button>
-        <HealthBar tally={tally} className="ntree-health" />
-        <span className="ntree-count">{tally.total}</span>
+        {/* `tally === null` is "the rollup has not answered yet" (ADR-133), and the two elements
+            still occupy their width. Dropping them instead would let the name column stretch and
+            then snap back as each answer lands — the tree moving for a reason that is not the
+            operator, which ADR-124 増分 5 exists to stop. An empty pill reads as a skeleton; a `0`
+            would read as an empty folder. */}
+        {tally ? (
+          <HealthBar tally={tally} className="ntree-health" />
+        ) : (
+          <span className="ntree-health" />
+        )}
+        <span className="ntree-count">{tally ? tally.total : ''}</span>
         {/* The hover-revealed actions come BEFORE the markers on purpose — see `.ntree-actions` in
             the stylesheet. Revealing them shifts everything to their left, and a marker that moves
             under the pointer is a mis-click onto Delete group. */}

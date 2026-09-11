@@ -419,17 +419,28 @@ export function NodesPage() {
   );
 
   // Load the group skeleton + server rollups (fast at any fleet size). Members load lazily below.
+  //
+  // 🚨 **Three independent settles, not one `Promise.all`** (ADR-133). The tree paints from the
+  // folder list alone, and `useLazyGroupMembers` cannot start until `loading` clears — so waiting
+  // for all three made the first member fetch wait on the SLOWEST of them, which is the per-group
+  // rollup: a full scan of `nodes`, plus a fleet-wide TSDB freshness query whenever the alert
+  // engine has no opinion about someone. The bars and the header totals fill in a round trip later.
+  //
+  // ⚠️ **Only the folder list is awaited, and that is deliberate.** `moveNodes` awaits this call
+  // before reporting a partial move, and what it needs current is the tree — not the health bars.
   const reload = useCallback(async () => {
     setError(null);
+    // ⚠️ **A failure leaves the previous answer in place, and `null` when there was none**
+    // (ADR-133). This used to substitute `{}`, which is not "no answer" — it is the valid answer
+    // "every folder is empty". Read as one, it stopped the lazy load dead: no counts, therefore no
+    // `group-loading` rows, therefore nothing asking for members, therefore every folder drawn as
+    // empty — for as long as the page stayed open. `countsPending` below says "not answered"
+    // instead, and the members arrive whether or not this endpoint ever does.
+    api.getFleetGroupSummary().then(setGroupSummary).catch(() => undefined);
+    api.getFleetSummary().then(setFleetSummary).catch(() => undefined);
     try {
-      const [g, gs, fs] = await Promise.all([
-        api.listNodeGroups(),
-        api.getFleetGroupSummary().catch(() => ({ groups: {} }) as FleetGroupSummary),
-        api.getFleetSummary().catch(() => null),
-      ]);
+      const g = await api.listNodeGroups();
       setGroups(g);
-      setGroupSummary(gs);
-      setFleetSummary(fs);
       // Both member caches are now stale, and both have to be told so. Dropping the per-group
       // members alone left filter mode showing an empty tree after any edit: the search page was
       // cleared but nothing re-issued the search, so it stayed cleared until the operator retyped
@@ -689,14 +700,19 @@ export function NodesPage() {
   );
   // The selected node's summary, if it's among the loaded members (for the Move action). The detail
   // pane itself renders from the id, so it still works for a selection whose group isn't loaded.
-  const selectedNode =
-    selected?.kind === 'node' ? treeNodes.find((n) => n.id === selected.id) ?? null : null;
-  const selectedGroup =
-    selected?.kind === 'group' ? groups.find((g) => g.id === selected.id) ?? null : null;
+  //
+  // 🚨 **Indexed, not scanned** (ADR-133). These were three `find`s over `treeNodes`/`groups`, and
+  // the comment below used to explain why memoizing them was pointless: `selected` is re-parsed into
+  // a fresh object every render, so a memo keyed on it never hits. That reasoning was right and the
+  // conclusion was wrong — what to memoize is the INDEX, whose key is the array, not the lookup.
+  // `NodesPage` re-renders on every SSE flush (up to ten a second), and at ten thousand loaded
+  // members that was three linear scans per flush for three single-row answers.
+  const nodeById = useMemo(() => new Map(treeNodes.map((n) => [n.id, n])), [treeNodes]);
+  const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
+  const selectedNode = selected?.kind === 'node' ? nodeById.get(selected.id) ?? null : null;
+  const selectedGroup = selected?.kind === 'group' ? groupById.get(selected.id) ?? null : null;
   // What the pane-head ＋ acts on: the selected group, a selected node's folder, else top level.
-  // Not memoized — `selected` is re-parsed into a fresh object every render, so a memo on it would
-  // never hit, and this is two finds over the arrays the two lines above already scan.
-  const addTarget = addMenuTarget(selected, groups, treeNodes);
+  const addTarget = addMenuTarget(selected, groupById, nodeById);
 
   return (
     <div className={selected ? 'page-fill nodes-detail-active' : 'page-fill'}>
@@ -869,6 +885,11 @@ export function NodesPage() {
             groups={groups}
             nodes={liveTreeNodes}
             groupCounts={groupCounts}
+            // Asked for, not yet answered — which is a different statement from "every folder is
+            // empty" and is what lets the members start arriving while the rollup is in flight
+            // (ADR-133). `groupCounts` stays `{}` in that window so `GroupDetail` and
+            // `groupDeletionImpact` keep the shape they expect; the flag is what the tree reads.
+            countsPending={groupSummary === null}
             loadedGroups={members.loadedGroups}
             revealedGroups={members.revealedGroups}
             failedGroups={members.failedGroups}

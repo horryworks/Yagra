@@ -25,10 +25,22 @@ export interface NodeTreeData {
   ungrouped: NodeSummary[];
 }
 
+/** One collator, built once and reused (ADR-133).
+ *
+ *  `a.localeCompare(b)` has to obtain a collator for every comparison, and `buildNodeTree` re-sorts
+ *  every folder's members from scratch each time a `/nodes/by-group` batch arrives — which, browsing
+ *  a thousand folders, is a couple of dozen times.
+ *
+ *  🚨 **No options, deliberately.** A bare `new Intl.Collator()` performs the same comparison a bare
+ *  `localeCompare()` does; passing `numeric: true` or a `sensitivity` here would quietly re-order
+ *  every operator's tree, which is not a change a performance fix is allowed to make.
+ *  `the_collator_orders_names_exactly_as_localeCompare_does` pins that. */
+const COLLATOR = new Intl.Collator();
+
 /** Order siblings by their manual `sort_order` (drag-reorder), falling back to name so equal or
  *  unset orders stay stable. */
 const byOrder = <T extends { sort_order: number; name: string }>(a: T, b: T) =>
-  a.sort_order - b.sort_order || a.name.localeCompare(b.name);
+  a.sort_order - b.sort_order || COLLATOR.compare(a.name, b.name);
 
 /** Build the nested tree from the flat group + node lists. Nodes whose `group_id` is null or
  *  points at an unknown group fall into `ungrouped`; groups whose `parent_id` is unknown are
@@ -82,8 +94,18 @@ export type FlatRow =
       hasChildren: boolean;
       /** Rolled-up health of the group's whole subtree — from the server per-group counts when
        *  supplied (A-3 lazy load, correct over the whole fleet even before members load), else from
-       *  the loaded descendant members. Drives the row's health bar + member count. */
-      tally: StateTally;
+       *  the loaded descendant members. Drives the row's health bar + member count.
+       *
+       *  🚨 **`null` means "not answered yet", and it is not a zero tally** (ADR-133). While
+       *  `/fleet/group-summary` is still in flight the row knows nothing about its own membership,
+       *  and an empty bar beside a `0` states something false — an operator reads it as "this
+       *  folder is empty", which is the one thing the count exists to rule out. A `StateTally | null`
+       *  rather than a `countsKnown` flag beside it, so the render site cannot reach for `.total`
+       *  without deciding what an unknown count looks like.
+       *
+       *  Only the browse path can be `null`: narrowing tallies the rows on screen and the legacy
+       *  full-node path tallies what it loaded, so both always have an answer of their own. */
+      tally: StateTally | null;
     }
   | { kind: 'node'; depth: number; node: NodeSummary }
   /** Placeholder under an open group whose members haven't been lazily fetched yet (A-3). */
@@ -159,11 +181,16 @@ export function mergeNodesById(...lists: NodeSummary[][]): NodeSummary[] {
 export function revealedGroupKeys(groups: NodeGroup[], filter: string, cap: number): string[] {
   const q = filterTerm(filter);
   if (!q) return [];
+  // 🚨 **Indexed once, not once per match** (ADR-133). This used to call `subtreeGroupIds(groups, …)`
+  // per matching folder, and that helper rebuilds the whole parent→children index on entry — so a
+  // one-letter term on a thousand folders was a thousand index builds, ~10^6 operations for an
+  // answer the cap trims to 200. The cap bounded the RESULT, never the work.
+  const childrenOf = childrenByParent(groups);
   const out: string[] = [];
   const seen = new Set<string>();
   for (const g of groups) {
     if (!g.name.toLowerCase().includes(q)) continue;
-    for (const id of subtreeGroupIds(groups, g.id)) {
+    for (const id of subtreeIdsFrom(childrenOf, g.id)) {
       if (seen.has(id)) continue;
       seen.add(id);
       out.push(id);
@@ -201,6 +228,12 @@ function subtreeHasNodes(group: TreeGroup): boolean {
  *  `group-loading` placeholder instead of its members. Omit both for the legacy full-node path
  *  (rollup from loaded descendants, every group treated as loaded).
  *
+ *  There are therefore **three** states for the counts, not two (ADR-133): supplied, absent because
+ *  this caller has none, and `countsPending` — asked for and not yet answered, which is the state a
+ *  progressive first paint spends its first round trip in. A pending row reports `tally: null` and
+ *  still emits its `group-loading` placeholder, so the members start arriving while the counts are
+ *  in flight rather than after them.
+ *
  *  `revealedGroups` ({@link revealedGroupKeys}) is filter mode's counterpart: the groups whose whole
  *  membership is being fetched because the term matched the group's own name. Only those can be
  *  "still loading" while filtering — every other group is showing the search page's hits and nothing
@@ -220,6 +253,22 @@ export function flattenTree(
      *  under them, and collapsed groups stayed collapsed over their own matches. */
     narrowed?: boolean;
     groupCounts?: Record<string, StateCounts>;
+    /** The per-group counts have been ASKED FOR and have not arrived (ADR-133).
+     *
+     *  🚨 **This is what makes the first member fetch happen at all.** The fetch set is derived
+     *  from the `group-loading` rows this function emits ({@link pendingGroupKeys}), a placeholder
+     *  is emitted when `directTotal > shown.length`, and `directTotal` comes from `groupCounts` —
+     *  so with no counts yet that test is `0 > 0` and **not one folder asks for its members**.
+     *  The tree would sit on a complete skeleton, fetching nothing, until the counts landed.
+     *
+     *  ⚠️ **It is not only a first-paint state.** `NodesPage` used to hand `{}` in place of a
+     *  FAILED `/fleet/group-summary`, which reads identically — so a deployment whose summary
+     *  endpoint was erroring showed every folder as empty and never loaded a single member, with
+     *  nothing on screen saying why. Distinguishing "not answered" from "answered: zero" is the
+     *  whole point of the flag.
+     *
+     *  Omit it on the legacy full-node path: there the counts are not late, they do not exist. */
+    countsPending?: boolean;
     loadedGroups?: Set<string>;
     revealedGroups?: Set<string>;
     /** Groups whose member fetch failed (ADR-125). They emit a `group-failed` row instead of the
@@ -236,8 +285,13 @@ export function flattenTree(
   const narrowing = byTerm || opts.narrowed === true;
   const rows: FlatRow[] = [];
   const counts = opts.groupCounts;
+  // The counts are on their way (ADR-133). Everything below asks this BEFORE it asks `counts`,
+  // because the caller may legitimately hand an empty object in the meantime and an empty object
+  // is indistinguishable from "every folder is empty" once you are reading values out of it.
+  const pending = opts.countsPending === true;
   // Per-group subtree tally from the server direct counts (bottom-up over the built, acyclic tree).
-  const subtree = counts ? subtreeTallyMap(tree.roots, counts) : null;
+  // Skipped while pending: it would walk every group to produce zeros that nothing reads.
+  const subtree = counts && !pending ? subtreeTallyMap(tree.roots, counts) : null;
   // Browsing: a group whose members haven't been fetched stands in with a placeholder. Filtering:
   // the server search page carries every match there is, so only a REVEALED group (whose members are
   // being fetched separately, because the term matched the folder rather than its contents) can be
@@ -285,14 +339,29 @@ export function flattenTree(
     // work out which number is the answer. Chosen deliberately (2026-08-14) over keeping the
     // health rollup; the cost is that "how big is this folder really" is not visible while a
     // filter is on.
-    const tally = narrowing
+    // ⚠️ `pending` is asked before `subtree`, not after. Narrowing still wins outright: it tallies
+    // the rows it is about to draw, which needs no server answer.
+    const tally: StateTally | null = narrowing
       ? tallyStates(visibleNodes(group, ancestorMatch))
-      : subtree
-        ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
-        : tallyStates(descendantNodes(group));
+      : pending
+        ? null
+        : subtree
+          ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
+          : tallyStates(descendantNodes(group));
     const directTotal = counts ? countsTotal(counts[group.id] ?? emptyStateCounts()) : group.nodes.length;
-    // A twisty is offered when the group has sub-groups or any (counted or loaded) member below it.
-    const hasChildren = group.children.length > 0 || tally.total > 0;
+    // A twisty is offered when the group has sub-groups or any (counted or loaded) member below it
+    // — and, while the counts are pending, whenever the members have not arrived either. We cannot
+    // yet know the folder is empty, and refusing to open a folder that has members is the worse of
+    // the two mistakes; the twisty disappears on its own for the folders the counts report as empty.
+    // ⚠️ `group.nodes.length` earns its place only in the pending case, where `tally` is null and
+    // `directTotal` is 0 even for a folder whose members have already arrived. Without it a folder
+    // that loaded its members while the counts never did would offer a DISABLED twisty — open, with
+    // no way to close it.
+    const hasChildren =
+      group.children.length > 0 ||
+      (tally?.total ?? 0) > 0 ||
+      group.nodes.length > 0 ||
+      (pending && !isLoaded(group.id));
     rows.push({ kind: 'group', depth, group, isOpen, hasChildren, tally });
     if (!isOpen) return;
     // Children first, then this group's own member nodes — matching the recursive render order.
@@ -306,7 +375,10 @@ export function flattenTree(
     // Members still arriving: one placeholder standing in for the rest. What we already have goes
     // first — in filter mode the search page already carries this group's MATCHING nodes, and hiding
     // them behind the placeholder would flicker them out while the rest of the folder loads.
-    if (!isLoaded(group.id) && directTotal > shown.length) {
+    // 🚨 **`pending ||` is what starts the very first fetch.** `directTotal` is 0 until the counts
+    // land, so without it this reads `0 > 0` for every folder and the tree asks for nothing — see
+    // `countsPending`'s own note, which is where the failure that motivated it is written down.
+    if (!isLoaded(group.id) && (pending || directTotal > shown.length)) {
       // A failed fetch is not a slow one, and drawing it as one leaves the operator waiting on
       // something that is never coming (ADR-125). The failed row carries the retry control.
       const kind = opts.failedGroups?.has(group.id) ? 'group-failed' : 'group-loading';
@@ -530,10 +602,25 @@ export function pendingGroupKeys(rows: readonly FlatRow[]): string[] {
  *  group's subtree so the detail pane can roll up its members. Cycle-guarded by the visited set —
  *  this walks the raw `parent_id` edges from the API, not the built (acyclic) tree. */
 export function subtreeGroupIds(groups: NodeGroup[], rootId: string): string[] {
-  const childrenOf = new Map<string, NodeGroup[]>();
+  return subtreeIdsFrom(childrenByParent(groups), rootId);
+}
+
+/** Index the folder list by parent id — the shape every subtree walk below needs.
+ *
+ *  Split out so a caller that walks MANY subtrees builds it once ({@link revealedGroupKeys}).
+ *  Building it per walk is O(groups) each time, which is invisible at forty folders and is the
+ *  difference between O(G) and O(G²) at a thousand. */
+function childrenByParent(groups: NodeGroup[]): Map<string, NodeGroup[]> {
+  const out = new Map<string, NodeGroup[]>();
   for (const g of groups) {
-    if (g.parent_id) pushInto(childrenOf, g.parent_id, g);
+    if (g.parent_id) pushInto(out, g.parent_id, g);
   }
+  return out;
+}
+
+/** {@link subtreeGroupIds} over an index the caller already holds. Cycle-guarded by the visited
+ *  set — this walks the raw `parent_id` edges from the API, not the built (acyclic) tree. */
+function subtreeIdsFrom(childrenOf: Map<string, NodeGroup[]>, rootId: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const walk = (id: string) => {

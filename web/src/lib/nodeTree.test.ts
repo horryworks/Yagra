@@ -76,7 +76,7 @@ describe('flattenTree', () => {
     const g2 = rows[1];
     expect(g2.kind === 'group' && g2.depth).toBe(1);
     // The group carries its rolled-up subtree health (here: the one descendant node) for the bar.
-    expect(g1.kind === 'group' && g1.tally.total).toBe(1);
+    expect(g1.kind === 'group' && g1.tally?.total).toBe(1);
   });
 
   it('collapsing a group hides its descendants but keeps the group row', () => {
@@ -209,7 +209,7 @@ describe('flattenTree — narrowed by a filter the tree cannot see (ADR-053 Inc.
       groupCounts: counts,
     });
     const dns = rows.find((r) => flatRowKey(r) === 'g:g2a');
-    expect(dns?.kind === 'group' && dns.tally.total).toBe(1);
+    expect(dns?.kind === 'group' && dns.tally?.total).toBe(1);
     // …and browsing still reads the rollup, so an unopened folder is not reported as empty.
     const browsing = flattenTree(narrowedTree(), {
       collapsed: {},
@@ -217,7 +217,7 @@ describe('flattenTree — narrowed by a filter the tree cannot see (ADR-053 Inc.
       groupCounts: counts,
     });
     const dnsBrowsing = browsing.find((r) => flatRowKey(r) === 'g:g2a');
-    expect(dnsBrowsing?.kind === 'group' && dnsBrowsing.tally.total).toBe(3);
+    expect(dnsBrowsing?.kind === 'group' && dnsBrowsing.tally?.total).toBe(3);
   });
 
   it('counts a folder matched by NAME as all of its members', () => {
@@ -230,7 +230,7 @@ describe('flattenTree — narrowed by a filter the tree cannot see (ADR-053 Inc.
     );
     const rows = flattenTree(t, { collapsed: {}, filter: 'dns' });
     const dns = rows.find((r) => flatRowKey(r) === 'g:g2a');
-    expect(dns?.kind === 'group' && dns.tally.total).toBe(2);
+    expect(dns?.kind === 'group' && dns.tally?.total).toBe(2);
     expect(rows.map(flatRowKey)).toEqual(['g:g2', 'g:g2a', 'n:a', 'n:b']);
   });
 
@@ -272,8 +272,8 @@ describe('flattenTree lazy load (A-3)', () => {
     });
     const g1 = rows.find((r) => flatRowKey(r) === 'g:g1');
     // Tokyo's subtree tally = its own 2 ok + Rack A's 1 critical.
-    expect(g1?.kind === 'group' && g1.tally.total).toBe(3);
-    expect(g1?.kind === 'group' && g1.tally.counts.critical).toBe(1);
+    expect(g1?.kind === 'group' && g1.tally?.total).toBe(3);
+    expect(g1?.kind === 'group' && g1.tally?.counts.critical).toBe(1);
     expect(g1?.kind === 'group' && g1.hasChildren).toBe(true);
   });
 
@@ -328,6 +328,147 @@ describe('flattenTree lazy load (A-3)', () => {
       loadedGroups: new Set(['g1']), // g1 loaded, g2 not (but empty → no loading row)
     });
     expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'g:g2', 'ungrouped-head']);
+  });
+});
+
+describe('flattenTree — the counts are still on their way (ADR-133)', () => {
+  it('asks for the members of every open, unloaded folder before any count has arrived', () => {
+    // 🚨 The one that matters. The fetch set is `pendingGroupKeys` over these rows, so if a
+    // count-less skeleton emits no `group-loading` row, the tree paints and then fetches NOTHING —
+    // which is what a progressive first paint would have shipped, and what a failing
+    // `/fleet/group-summary` was already doing in production.
+    const t = buildNodeTree([group('g1', 'Tokyo', null, 1), group('g2', 'Osaka', null, 2)], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(),
+    });
+    expect(rows.map(flatRowKey)).toEqual([
+      'g:g1',
+      'loading:g1',
+      'g:g2',
+      'loading:g2',
+      'ungrouped-head',
+    ]);
+    expect(pendingGroupKeys(rows)).toEqual(['g1', 'g2']);
+  });
+
+  it('asks for nothing when the same empty counts are a real answer', () => {
+    // The other half, and the reason the flag exists rather than a test on `{}` being empty:
+    // `{}` WITHOUT the flag means "answered: every folder is empty", and an empty folder must not
+    // be fetched. The two inputs differ by one boolean and must behave oppositely.
+    const t = buildNodeTree([group('g1', 'Tokyo', null, 1), group('g2', 'Osaka', null, 2)], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: {},
+      loadedGroups: new Set(),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'ungrouped-head']);
+    expect(pendingGroupKeys(rows)).toEqual([]);
+  });
+
+  it('reports an unknown tally as null rather than as zero', () => {
+    // A zero tally renders as an empty bar beside a `0`, which an operator reads as "empty folder".
+    // `null` is what lets the row draw a skeleton instead.
+    const t = buildNodeTree([group('g1', 'Tokyo')], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(),
+    });
+    const g1 = rows.find((r) => flatRowKey(r) === 'g:g1');
+    expect(g1?.kind === 'group' && g1.tally).toBeNull();
+    // And the twisty is offered: we cannot yet know the folder is empty, and refusing to open one
+    // that has members is the worse mistake.
+    expect(g1?.kind === 'group' && g1.hasChildren).toBe(true);
+  });
+
+  it('offers a twisty on a folder whose members arrived while the counts never did', () => {
+    // The degraded steady state after `/fleet/group-summary` fails outright: members loaded, counts
+    // absent forever. Without the loaded-member term in `hasChildren` the twisty is DISABLED on an
+    // already-open folder — open, with no way to close it.
+    const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(['g1']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'ungrouped-head']);
+    const g1 = rows.find((r) => flatRowKey(r) === 'g:g1');
+    expect(g1?.kind === 'group' && g1.hasChildren).toBe(true);
+  });
+
+  it('leaves a loaded folder alone: no placeholder, and it drops out of the fetch set', () => {
+    const t = buildNodeTree([group('g1', 'Tokyo', null, 1), group('g2', 'Osaka', null, 2)], [node('n1', 'sw1', 'g1')]);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(['g1']),
+    });
+    expect(pendingGroupKeys(rows)).toEqual(['g2']);
+  });
+
+  it('does not make a narrowed tree report a null tally', () => {
+    // Narrowing counts the rows it is about to draw, which needs no server answer — so the pending
+    // flag must not reach it. A null here would blank the bar during a search.
+    const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: 'sw',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(['g1']),
+    });
+    const g1 = rows.find((r) => flatRowKey(r) === 'g:g1');
+    expect(g1?.kind === 'group' && g1.tally?.total).toBe(1);
+  });
+
+  it('leaves a collapsed folder out of the fetch set while pending', () => {
+    // The property ADR-125 bought and this must not spend: collapsed means not fetched. A pending
+    // flag that reached every folder would put the 501-request first paint back.
+    const t = buildNodeTree([group('g1', 'Tokyo', null, 1), group('g2', 'Osaka', null, 2)], []);
+    const rows = flattenTree(t, {
+      collapsed: { g2: true },
+      filter: '',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(),
+    });
+    expect(pendingGroupKeys(rows)).toEqual(['g1']);
+  });
+
+  it('leaves the legacy full-node path untouched', () => {
+    // No counts, no loaded set, no flag: tally comes from the loaded descendants and every group
+    // counts as loaded. Byte-for-byte what it was.
+    const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
+    const rows = flattenTree(t, { collapsed: {}, filter: '' });
+    const g1 = rows.find((r) => flatRowKey(r) === 'g:g1');
+    expect(g1?.kind === 'group' && g1.tally?.total).toBe(1);
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'ungrouped-head']);
+  });
+
+  it('still refuses to draw a failed folder as a loading one while pending', () => {
+    const t = buildNodeTree([group('g1', 'Tokyo')], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(),
+      failedGroups: new Set(['g1']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'failed:g1', 'ungrouped-head']);
+    // …and a failed folder is never in the fetch set, pending or not (ADR-125 decision 2).
+    expect(pendingGroupKeys(rows)).toEqual([]);
   });
 });
 
@@ -467,6 +608,47 @@ describe('flattenTree — a filter that matches a GROUP reveals its contents', (
 });
 
 describe('buildNodeTree', () => {
+  it('the collator orders names exactly as localeCompare does', () => {
+    // 🚨 The guard on ADR-133's one visible risk. `byOrder` swapped `a.name.localeCompare(b.name)`
+    // for a shared `Intl.Collator`, which is the same comparison ONLY while the collator is built
+    // with no options — add `numeric: true` or a `sensitivity` and every operator's tree silently
+    // re-orders. Nothing else in the suite would notice: both orders look plausible.
+    //
+    // The names are chosen to separate the options that would matter: digits (`numeric`), case
+    // (`sensitivity`/`caseFirst`), accents, and a non-Latin script.
+    const names = [
+      'sw10',
+      'sw2',
+      'SW1',
+      'sw1',
+      'Ärger',
+      'arger',
+      'ZZZ',
+      'あ',
+      'router-1',
+      'Router-10',
+      'router-2',
+    ];
+    const viaCollator = names.map((n, i) => ({ id: String(i), name: n, sort_order: 0 }));
+    const tree = buildNodeTree(
+      [],
+      viaCollator.map((g) => ({
+        id: g.id,
+        name: g.name,
+        address: '10.0.0.1',
+        state: 'ok' as const,
+        vendor: null,
+        model: null,
+        group_id: null,
+        sort_order: 0,
+        kind: 'device' as const,
+      })),
+    );
+    expect(tree.ungrouped.map((n) => n.name)).toEqual(
+      [...names].sort((a, b) => a.localeCompare(b)),
+    );
+  });
+
   it('nests groups and places nodes under their group', () => {
     const groups = [group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1')];
     const nodes = [node('n1', 'sw1', 'g2'), node('n2', 'router', null)];
@@ -708,7 +890,7 @@ describe('pendingGroupKeys', () => {
   const rowsFor = (opts: { loaded?: string[]; failed?: string[]; collapsed?: string[] }) =>
     flattenTree(
       buildNodeTree(
-        [group('g1', 'Tokyo'), group('g2', 'Osaka'), group('g3', 'Empty')],
+        [group('g1', 'Tokyo', null, 1), group('g2', 'Osaka', null, 2), group('g3', 'Empty')],
         [node('n1', 'sw1', 'g1')],
       ),
       {

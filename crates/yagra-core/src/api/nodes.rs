@@ -430,27 +430,60 @@ fn resolve_kinds(
 /// Enrich raw `Node` rows into UI [`NodeSummary`] rows: live display state, tree sort order, and
 /// the node's resolved kind. Shared by the paged fleet list and the per-group lazy tree load so both
 /// paths produce identical rows.
-async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummary> {
+async fn build_node_summaries(
+    st: &ApiState,
+    nodes: Vec<Node>,
+    known_orders: HashMap<Uuid, f64>,
+) -> Vec<NodeSummary> {
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
     let node_ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
+    // 🚨 **Only the rows whose order is not already in hand** (ADR-133). The by-group reads
+    // `ORDER BY sort_order` and now project it, so they arrive with the answer and this asks
+    // nothing — one fewer PostgreSQL connection held concurrently on the hottest list in the
+    // product, which is the arithmetic `LIST_SEATS` is sized against. The paged and search paths
+    // still come through `NODE_COLUMNS` alone and still pay for the second read; widening that
+    // projection would put `sort_order` on every row the MCP `list_nodes` tool serves, for a field
+    // it does not have.
+    let missing: Vec<Uuid> = ids
+        .iter()
+        .copied()
+        .filter(|id| !known_orders.contains_key(id))
+        .collect();
     // Skeleton mode has neither ordering nor side tables; a read failure degrades the kind and the
     // ordering, never the list.
     let inventory = async {
         match st.admin.as_ref() {
             Some(admin) => tokio::join!(
-                async { admin.repo.node_sort_orders(&ids).await.unwrap_or_default() },
+                async {
+                    if missing.is_empty() {
+                        known_orders
+                    } else {
+                        let mut orders = admin
+                            .repo
+                            .node_sort_orders(&missing)
+                            .await
+                            .unwrap_or_default();
+                        orders.extend(known_orders);
+                        orders
+                    }
+                },
                 node_kinds(admin, &ids),
             ),
-            None => (HashMap::new(), HashMap::new()),
+            None => (known_orders, HashMap::new()),
         }
     };
-    // Five independent reads — four PostgreSQL, one TSDB — on the hottest list in the product:
-    // every tree page, every debounced search keystroke, every lazy folder expand runs all five.
-    // None needs another's answer, so they overlap rather than queue (the shape `interface_heatmap`
-    // uses for its per-link fan-out) and the wall clock is the slowest one, not their sum. The two
-    // that `node_kinds` added are the price of the list agreeing with the detail page; the cheaper-
-    // looking alternative — the three `node_ids()` full-table reads the scheduler uses — is
-    // unbounded in how many monitors exist and returns rows this page cannot use.
+    // Up to five independent reads — four PostgreSQL, one TSDB — on the hottest list in the
+    // product: every tree page, every debounced search keystroke, every lazy folder expand runs
+    // them. None needs another's answer, so they overlap rather than queue (the shape
+    // `interface_heatmap` uses for its per-link fan-out) and the wall clock is the slowest one, not
+    // their sum. The two that `node_kinds` added are the price of the list agreeing with the detail
+    // page; the cheaper-looking alternative — the three `node_ids()` full-table reads the scheduler
+    // uses — is unbounded in how many monitors exist and returns rows this page cannot use.
+    //
+    // ⚠️ **"Up to", since ADR-133**: a lazy folder expand arrives with its orders already read and
+    // spends four, not five. The wall clock barely moves — they were always parallel — but the
+    // number of connections one request holds at its peak does, and that is what a pool of 20
+    // against eight `ListSlot` seats is measured against.
     let ((orders, kinds), states) = tokio::join!(inventory, display_states(st, &node_ids));
     nodes
         .into_iter()
@@ -503,7 +536,7 @@ async fn list_nodes(
         let (nodes, truncated) =
             filtered_node_page(&st, &scope, term.unwrap_or(""), &filter, limit).await?;
         return Ok(Json(NodePage {
-            nodes: build_node_summaries(&st, nodes).await,
+            nodes: build_node_summaries(&st, nodes, HashMap::new()).await,
             next_cursor: None,
             truncated,
         }));
@@ -527,7 +560,7 @@ async fn list_nodes(
         None
     };
     Ok(Json(NodePage {
-        nodes: build_node_summaries(&st, nodes).await,
+        nodes: build_node_summaries(&st, nodes, HashMap::new()).await,
         next_cursor,
         // Paging is not truncation: `next_cursor` already says there is more, and a client that
         // read both would show a "results were cut" notice on every page but the last.
@@ -816,7 +849,7 @@ async fn list_group_nodes(
             Vec::new()
         };
         return Ok(Json(GroupNodes {
-            nodes: build_node_summaries(&st, nodes).await,
+            nodes: build_node_summaries(&st, nodes, HashMap::new()).await,
             truncated: false,
             // Still echoed in skeleton mode: the answer is empty because there is no inventory,
             // which is a different statement from "this core does not understand the question".
@@ -844,8 +877,16 @@ async fn list_group_nodes(
     if truncated {
         nodes.truncate(usize::try_from(GROUP_NODES_CAP).unwrap_or(usize::MAX));
     }
+    // Both reads above `ORDER BY sort_order` and project it, so the order arrives with the rows and
+    // `build_node_summaries` asks no second question about them (ADR-133). Split AFTER the
+    // truncation, so the map describes the rows that are actually being returned.
+    let orders: HashMap<Uuid, f64> = nodes
+        .iter()
+        .map(|o| (o.node.id.as_uuid(), o.sort_order))
+        .collect();
+    let nodes: Vec<Node> = nodes.into_iter().map(|o| o.node).collect();
     Ok(Json(GroupNodes {
-        nodes: build_node_summaries(&st, nodes).await,
+        nodes: build_node_summaries(&st, nodes, orders).await,
         truncated,
         answered: batch,
     }))

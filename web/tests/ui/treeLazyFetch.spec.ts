@@ -132,3 +132,58 @@ test('asks for more folders as they are scrolled into view', async ({ page }) =>
   expect(asked.length).toBeGreaterThan(afterFirstPaint);
   expect(new Set(asked).size).toBe(asked.length);
 });
+
+test('paints the folders and asks for members before the per-group rollup answers', async ({
+  page,
+}) => {
+  // ADR-133. The tree needs the folder list and nothing else to draw itself, and the member fetch
+  // is gated on the same `loading` flag — so waiting for all three skeleton calls made the first
+  // member request wait on the slowest of them. `/fleet/group-summary` is the slowest by
+  // construction: it scans the whole `nodes` table and, whenever the alert engine has no opinion
+  // about someone, runs a fleet-wide TSDB freshness query as well.
+  //
+  // 🚨 **Only a browser can see this.** The unit tests prove `flattenTree` emits the placeholder
+  // rows that become the fetch set; what they cannot prove is that the page reaches that state
+  // while one of its three requests is still in flight. That is React effect ordering, the
+  // virtualizer, and the settle timer — none of which exist outside a rendered page.
+  const ROLLUP_DELAY_MS = 3000;
+  await page.route('**/api/v1/node-groups', json(folders));
+  await page.route('**/api/v1/fleet/group-summary', async (route) => {
+    await new Promise((r) => setTimeout(r, ROLLUP_DELAY_MS));
+    await json(groupSummary)(route);
+  });
+
+  let rollupAnsweredAt: number | null = null;
+  page.on('response', (r) => {
+    if (new URL(r.url()).pathname === '/api/v1/fleet/group-summary') rollupAnsweredAt = Date.now();
+  });
+  // 🚨 **Requests that NAME A FOLDER, never "any `/nodes/by-group` request".** The ungrouped bucket
+  // is fetched unconditionally on first paint (it has no folder row, so the viewport can never name
+  // it), so counting every by-group call makes this test pass with the fix reverted — measured: it
+  // did, and the assertion looked perfectly reasonable while proving nothing.
+  const folderAskedAt: number[] = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (u.pathname !== '/api/v1/nodes/by-group') return;
+    if (u.searchParams.get('groups') || u.searchParams.get('group')) folderAskedAt.push(Date.now());
+  });
+
+  await page.goto('/nodes');
+  // The folder rows are on screen…
+  await expect(page.locator('.ntree-row.ntree-grow').first()).toBeVisible({ timeout: 2000 });
+  // …and their members are already being fetched, while the rollup is still out.
+  await expect.poll(() => folderAskedAt.length, { timeout: 2000 }).toBeGreaterThan(0);
+  expect(rollupAnsweredAt).toBeNull();
+
+  // ⚠️ **Assert the ORDER, not the elapsed time.** A 2s timeout against a 3s delay says the same
+  // thing today and becomes flaky on a loaded runner; the relation is what the change is about.
+  const firstFolderAsk = folderAskedAt[0];
+  await page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/fleet/group-summary');
+  expect(rollupAnsweredAt).not.toBeNull();
+  expect(firstFolderAsk).toBeLessThan(rollupAnsweredAt as unknown as number);
+
+  // And the counts land afterwards rather than never: the pill fills in.
+  await expect(page.locator('.ntree-row.ntree-grow .ntree-count').first()).toHaveText(/\d/, {
+    timeout: 3000,
+  });
+});

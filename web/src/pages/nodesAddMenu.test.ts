@@ -28,8 +28,17 @@ const node = (id: string, name: string, groupId: string | null): NodeSummary => 
   kind: 'device',
 });
 
-const GROUPS = [group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1')];
-const NODES = [node('n1', 'sw01', 'g2'), node('n2', 'fw01', null), node('n3', 'ghost', 'gone')];
+// Indexes, which is what `addMenuTarget` takes since ADR-133 — the page builds them once and the
+// helper does two lookups instead of two scans of the whole fleet on every render.
+const GROUPS = new Map(
+  [group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1')].map((g) => [g.id, g]),
+);
+const NODES = new Map(
+  [node('n1', 'sw01', 'g2'), node('n2', 'fw01', null), node('n3', 'ghost', 'gone')].map((n) => [
+    n.id,
+    n,
+  ]),
+);
 
 const TOP_LEVEL: AddMenuTarget = {
   groupId: null,

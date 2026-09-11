@@ -10,6 +10,35 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The inventory tree paints as soon as the folder list arrives, instead of waiting for all three
+  of its startup requests.** Opening **Nodes ▸ All nodes** fetched the folders, the per-folder health
+  rollup and the fleet totals and waited for the slowest of the three before drawing anything — and
+  the member fetch waited behind that too. The folders and their members now arrive first and the
+  health bars and counts fill in a moment later. On a deployment with a thousand folders the rollup
+  is the slow one by construction: it scans the whole node table, and adds a fleet-wide metrics query
+  whenever any node has not been polled yet.
+- **API and asset responses are now compressed.** Nothing served by the WebUI container carried a
+  `Content-Encoding`, so a thousand-folder inventory pulled roughly 600 KB of JSON per page load and
+  a cold browser cache pulled a further 1.2 MB of JavaScript, all uncompressed. Measured on a
+  1,000-folder / 10,000-node deployment, the folder list drops from 312 KB to 13 KB and the
+  per-folder rollup from 107 KB to 4 KB. Most noticeable on a deployment reached over a VPN or a WAN.
+  Session endpoints (`/api/v1/auth/*`) and the MCP surface are deliberately excluded.
+- **A folder's members load a little cheaper.** The per-folder read now returns each row's position
+  in the tree with the row, instead of asking a second query for the order of the rows it had just
+  read — one fewer database connection held per request on the busiest read in the product. The
+  ungrouped bucket, which the tree fetches on every render, now uses an index instead of scanning
+  the whole node table.
+
+### Bug Fixes
+
+- **Fixed: if the per-folder health rollup failed, the inventory tree silently stopped loading any
+  members.** The failure was substituted with an empty set of counts, which is indistinguishable from
+  the valid answer "every folder is empty" — so no folder was ever asked for its contents, and the
+  whole inventory read as empty with nothing on screen saying why. The tree now distinguishes "not
+  answered" from "answered: zero" and loads members either way.
+
 ## v0.3.16 — A folder carries the IP ranges in use at it and Discovery files each device into the one whose range holds it, a folder's contents sort by name from the right-click menu, every search box clears itself from a ✕, and the Interface traffic chart draws transmit above the line
 
 ### Breaking changes

@@ -131,6 +131,19 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
     })
 }
 
+/// Map a `nodes` row selected as `NODE_COLUMNS, sort_order` to an [`nodes::OrderedNode`].
+///
+/// Lives beside [`node_from_row`] rather than in `nodes.rs` because it *is* `node_from_row` plus
+/// one column, and two readers of the same projection in two files is how a column comes to be
+/// named in one and not the other — the failure `both_statements_project_the_columns_the_reader_names`
+/// exists for in `history.rs`.
+fn ordered_node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<nodes::OrderedNode> {
+    Ok(nodes::OrderedNode {
+        node: node_from_row(row)?,
+        sort_order: row.try_get("sort_order")?,
+    })
+}
+
 /// The nodes/profiles metadata store.
 pub struct NodeRepo {
     pool: PgPool,

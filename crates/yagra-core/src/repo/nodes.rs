@@ -28,6 +28,25 @@ pub struct TopologyRow {
     pub parent_id: Option<Uuid>,
 }
 
+/// A node row plus its position among its siblings in the folder tree (ADR-133).
+///
+/// The two by-group reads already `ORDER BY sort_order` and then threw the value away, because
+/// [`yagra_common::Node`] has no such field — so the caller asked a **second** query
+/// ([`NodeRepo::node_sort_orders`]) for the order of the very rows it had just read. That second
+/// read is one more PostgreSQL connection held concurrently on the hottest list in the product,
+/// which is what `LIST_SEATS` is sized against.
+///
+/// 🚨 **A wrapper here rather than a field on `Node`.** `Node` is `yagra-common`, shared by the
+/// poller, the bus and every crate that speaks about a device; `sort_order` is a fact about where
+/// an operator dragged a row in one particular tree, and putting it there would ship it over the
+/// wire to every poller for every job. The column stays inside the one file allowed to name the
+/// `nodes` table.
+#[derive(Debug, Clone)]
+pub struct OrderedNode {
+    pub node: Node,
+    pub sort_order: f64,
+}
+
 impl NodeRepo {
     /// Every node in the inventory (internal use; the API paginates via [`Self::list_nodes_page`]).
     pub async fn list_nodes(&self) -> anyhow::Result<Vec<Node>> {
@@ -390,7 +409,26 @@ impl NodeRepo {
     /// A group's **direct** member nodes (or the ungrouped bucket when `group` is `None`), ordered
     /// by the tree's sort order, capped at `limit`. Backs the inventory tree's per-group lazy load
     /// (A-3): the tree fetches a group's members only when it is expanded, so the initial view never
-    /// pulls the whole fleet. `IS NOT DISTINCT FROM` so a `NULL` group matches the ungrouped rows.
+    /// pulls the whole fleet.
+    ///
+    /// 🚨 **The `NULL` case is a separate statement, and that is the whole point** (ADR-133).
+    /// One query reading `group_id IS NOT DISTINCT FROM $2::uuid` is the obvious spelling and
+    /// PostgreSQL cannot use a btree index for it — `IS NOT DISTINCT FROM` is not the equality
+    /// operator `nodes_group_idx` is built on, so the planner reaches for a sequential scan even
+    /// for an unscoped caller. That matters because the inventory tree asks for the ungrouped
+    /// bucket **on every render** (ADR-125 決定 1, unconditionally — the bucket's header counts
+    /// from what is loaded, not from the server rollup), so the cost is paid per tree, per viewer,
+    /// and grows with the fleet rather than with the answer.
+    ///
+    /// Measured on 10,032 nodes, none of them ungrouped:
+    ///
+    /// | | plan | rows scanned | shared buffers | execution |
+    /// |---|---|---|---|---|
+    /// | `IS NOT DISTINCT FROM` | Seq Scan | 10,032 | 166 | 0.636 ms |
+    /// | `IS NULL` | Index Scan (`nodes_group_idx`) | 0 | 2 | 0.089 ms |
+    ///
+    /// ⚠️ **An index alone would not have fixed it** — this is a shape problem, not a missing
+    /// index, and ADR-125 recorded that while deferring the index it never shipped.
     ///
     /// The scope predicate rides alongside the group filter rather than replacing it: asking for
     /// the ungrouped bucket (`group = None`) as a scoped caller correctly returns nothing, because
@@ -400,21 +438,41 @@ impl NodeRepo {
         groups: GroupFilter<'_>,
         group: Option<Uuid>,
         limit: i64,
-    ) -> anyhow::Result<Vec<Node>> {
+    ) -> anyhow::Result<Vec<OrderedNode>> {
         let limit = limit.clamp(1, 5001);
-        let rows = sqlx::query(&format!(
-            "SELECT {} FROM nodes \
-             WHERE {} AND group_id IS NOT DISTINCT FROM $2::uuid \
-             ORDER BY sort_order, name, id LIMIT $3",
-            Self::NODE_COLUMNS,
-            Self::SCOPE_PREDICATE
-        ))
-        .bind(Self::scope_bind(groups))
-        .bind(group)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.iter().map(node_from_row).collect()
+        // Two statements, one `$2`: the bucket takes the cap there, a named folder takes the id.
+        // Written as two literals rather than one built from a flag, so each is greppable as the
+        // thing the planner sees.
+        let rows = match group {
+            None => {
+                sqlx::query(&format!(
+                    "SELECT {}, sort_order FROM nodes \
+                     WHERE {} AND group_id IS NULL \
+                     ORDER BY sort_order, name, id LIMIT $2",
+                    Self::NODE_COLUMNS,
+                    Self::SCOPE_PREDICATE
+                ))
+                .bind(Self::scope_bind(groups))
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            Some(id) => {
+                sqlx::query(&format!(
+                    "SELECT {}, sort_order FROM nodes \
+                     WHERE {} AND group_id = $2 \
+                     ORDER BY sort_order, name, id LIMIT $3",
+                    Self::NODE_COLUMNS,
+                    Self::SCOPE_PREDICATE
+                ))
+                .bind(Self::scope_bind(groups))
+                .bind(id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        rows.iter().map(ordered_node_from_row).collect()
     }
 
     /// The direct member nodes of **several** groups at once, ordered by group then by the tree's
@@ -438,13 +496,13 @@ impl NodeRepo {
         groups: GroupFilter<'_>,
         group_ids: &[Uuid],
         limit: i64,
-    ) -> anyhow::Result<Vec<Node>> {
+    ) -> anyhow::Result<Vec<OrderedNode>> {
         if group_ids.is_empty() {
             return Ok(Vec::new());
         }
         let limit = limit.clamp(1, 5001);
         let rows = sqlx::query(&format!(
-            "SELECT {} FROM nodes \
+            "SELECT {}, sort_order FROM nodes \
              WHERE {} AND group_id = ANY($2) \
              ORDER BY group_id, sort_order, name, id LIMIT $3",
             Self::NODE_COLUMNS,
@@ -455,7 +513,7 @@ impl NodeRepo {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(node_from_row).collect()
+        rows.iter().map(ordered_node_from_row).collect()
     }
 
     /// Assign a node to `group` and set its order in one update (drag reorder). Returns existence.
@@ -1093,11 +1151,13 @@ mod tests {
     }
 
     /// 🚨 **The batch read must return exactly what the single reads return** (ADR-125).
-    /// `list_nodes_in_groups` is a second implementation of `list_nodes_in_group` — different SQL
-    /// (`= ANY` rather than `IS NOT DISTINCT FROM`), a different `ORDER BY` — written so the tree
-    /// can ask about a viewport in one round trip. Two implementations of one question is a mirror,
-    /// and a mirror needs the test that fails when they drift (`extensibility.md` §2). Nothing else
-    /// would notice: both return a plausible list of nodes.
+    /// `list_nodes_in_groups` is a second implementation of `list_nodes_in_group` — a different
+    /// `ORDER BY`, and since ADR-133 the single read is itself two statements (`IS NULL` for the
+    /// bucket, `= $2` for a named folder, so the planner can use `nodes_group_idx` for both). That
+    /// is now **three** spellings of one question, written so the tree can ask about a viewport in
+    /// one round trip and still ask about the bucket. Three implementations is a mirror, and a
+    /// mirror needs the test that fails when they drift (`extensibility.md` §2). Nothing else would
+    /// notice: all three return a plausible list of nodes.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_batch_read_returns_what_the_single_reads_return(pool: sqlx::PgPool) {
@@ -1110,7 +1170,11 @@ mod tests {
         let ungrouped = pgtest::node(&pool, "z", 1, None).await;
         let repo = pgtest::repo(pool);
 
-        let ids = |v: Vec<Node>| v.into_iter().map(|n| n.id.as_uuid()).collect::<Vec<_>>();
+        let ids = |v: Vec<OrderedNode>| {
+            v.into_iter()
+                .map(|o| o.node.id.as_uuid())
+                .collect::<Vec<_>>()
+        };
         let one = |g| {
             let repo = &repo;
             async move {
@@ -1141,7 +1205,8 @@ mod tests {
         assert_eq!(batched.len(), 3);
 
         // The ungrouped bucket is NOT reachable through the batch form: `= ANY` cannot match NULL,
-        // and that is the whole reason `list_nodes_in_group` keeps `IS NOT DISTINCT FROM`.
+        // and that is the whole reason `list_nodes_in_group` keeps a statement of its own for it
+        // (`group_id IS NULL` since ADR-133 — index-usable, unlike `IS NOT DISTINCT FROM`).
         assert!(!batched.contains(&ungrouped));
         assert_eq!(
             ids(repo
@@ -1157,6 +1222,72 @@ mod tests {
             .await
             .expect("empty")
             .is_empty());
+    }
+
+    /// 🚨 **Both by-group reads carry each row's `sort_order` back** (ADR-133).
+    ///
+    /// They have always ordered by it and never returned it, so the API asked a second query for
+    /// the order of the rows it had just read. Projecting it is only safe if the value that arrives
+    /// is the STORED one — a projection that silently returned the default `0` would look correct
+    /// (every row present, plausible order) and would flatten the operator's manual ordering the
+    /// moment anything re-sorted client-side.
+    ///
+    /// ⚠️ The three spellings are checked against each other here too: the bucket (`IS NULL`), a
+    /// named folder (`= $2`) and the batch (`= ANY`) must agree about the same rows.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_by_group_reads_return_the_stored_sort_order(pool: sqlx::PgPool) {
+        let tokyo = pgtest::group(&pool, "Tokyo").await;
+        let a = pgtest::node(&pool, "a", 1, Some(tokyo)).await;
+        let b = pgtest::node(&pool, "b", 2, Some(tokyo)).await;
+        let loose = pgtest::node(&pool, "z", 3, None).await;
+        let repo = pgtest::repo(pool);
+
+        // Deliberately not 0, and deliberately fractional: `sort_order` is a `DOUBLE PRECISION`
+        // that drag-reorder bisects, so a run of integers would not notice a column read as an int.
+        repo.place_node(b, Some(tokyo), 1.5).await.expect("place b");
+        repo.place_node(a, Some(tokyo), 2.5).await.expect("place a");
+        repo.place_node(loose, None, 7.25).await.expect("place z");
+
+        let named = repo
+            .list_nodes_in_group(None, Some(tokyo), 100)
+            .await
+            .expect("named folder");
+        assert_eq!(
+            named
+                .iter()
+                .map(|o| (o.node.id.as_uuid(), o.sort_order))
+                .collect::<Vec<_>>(),
+            vec![(b, 1.5), (a, 2.5)],
+            "the named-folder read returns the stored order, in it"
+        );
+
+        let batched = repo
+            .list_nodes_in_groups(None, &[tokyo], 100)
+            .await
+            .expect("batch");
+        assert_eq!(
+            batched
+                .iter()
+                .map(|o| (o.node.id.as_uuid(), o.sort_order))
+                .collect::<Vec<_>>(),
+            vec![(b, 1.5), (a, 2.5)],
+            "and the batch form agrees with it, row for row"
+        );
+
+        // The bucket takes the third statement (`group_id IS NULL`), so it needs its own case.
+        let bucket = repo
+            .list_nodes_in_group(None, None, 100)
+            .await
+            .expect("ungrouped");
+        assert_eq!(
+            bucket
+                .iter()
+                .map(|o| (o.node.id.as_uuid(), o.sort_order))
+                .collect::<Vec<_>>(),
+            vec![(loose, 7.25)],
+            "the ungrouped bucket carries it too"
+        );
     }
 
     /// A scoped caller cannot widen their view by batching. The scope predicate rides alongside the
@@ -1176,7 +1307,9 @@ mod tests {
             .await
             .expect("scoped batch");
         assert_eq!(
-            got.into_iter().map(|n| n.id.as_uuid()).collect::<Vec<_>>(),
+            got.into_iter()
+                .map(|o| o.node.id.as_uuid())
+                .collect::<Vec<_>>(),
             vec![ours],
             "asking about a folder outside the scope must not return its nodes"
         );

@@ -139,13 +139,34 @@ export function groupContainers(groups: NodeGroup[], groupId: string | null): st
 /** A folder group plus every group beneath it (BFS over `parent_id`), bounded by the group count so
  *  malformed/cyclic data can't loop forever. Mirrors the backend `group_subtree` (ADR-022). */
 export function groupSubtree(groups: NodeGroup[], rootId: string): Set<string> {
+  return subtreeFrom(childrenByParent(groups), rootId, groups.length);
+}
+
+/** Index the folder list by parent id.
+ *
+ *  Split out for the reason the twin in `nodeTree.ts` is (ADR-133): {@link buildSuppressionIndex}
+ *  walks one subtree **per active window and per active mute**, and rebuilding this on each walk
+ *  made that O(windows × groups). It is rebuilt whenever `treeNodes` changes, which is once per
+ *  arriving member batch — so at a thousand folders it was tens of thousands of wasted inserts
+ *  while the tree filled in. */
+function childrenByParent(groups: NodeGroup[]): Map<string, string[]> {
   const childrenOf = new Map<string, string[]>();
   for (const g of groups) {
     if (g.parent_id) pushInto(childrenOf, g.parent_id, g.id);
   }
+  return childrenOf;
+}
+
+/** {@link groupSubtree} over an index the caller already holds. `bound` is the group count, which
+ *  keeps malformed (cyclic) data from looping forever. */
+function subtreeFrom(
+  childrenOf: Map<string, string[]>,
+  rootId: string,
+  bound: number,
+): Set<string> {
   const out = new Set<string>([rootId]);
   const queue = [rootId];
-  for (let guard = 0; queue.length && guard <= groups.length; guard += 1) {
+  for (let guard = 0; queue.length && guard <= bound; guard += 1) {
     const cur = queue.shift() as string;
     for (const child of childrenOf.get(cur) ?? []) {
       if (!out.has(child)) {
@@ -223,8 +244,10 @@ export function buildSuppressionIndex(
   for (const n of nodes) {
     if (n.group_id) pushInto(nodesByGroup, n.group_id, n.id);
   }
+  // One index for every walk below (ADR-133) — see `childrenByParent`.
+  const childrenOf = childrenByParent(groups);
   const markSubtree = (rootId: string, groupSet: Set<string>, nodeSet: Set<string>) => {
-    for (const gid of groupSubtree(groups, rootId)) {
+    for (const gid of subtreeFrom(childrenOf, rootId, groups.length)) {
       groupSet.add(gid);
       for (const nid of nodesByGroup.get(gid) ?? []) nodeSet.add(nid);
     }
