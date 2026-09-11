@@ -1042,7 +1042,7 @@ mod tests {
         };
         assert_eq!(
             of(child_id)["prefixes"],
-            serde_json::json!([{ "prefix": "192.168.9.0/24", "description": "lab" }]),
+            serde_json::json!([{ "prefix": "192.168.9.0/24", "description": "lab", "source": "manual" }]),
             "the folder in scope keeps its prefixes"
         );
         assert_eq!(
@@ -1179,9 +1179,9 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["code"], "invalid_prefix", "{body}");
+        assert_eq!(body["error"]["code"], "invalid_prefix", "{body}");
         assert!(
-            body["message"]
+            body["error"]["message"]
                 .as_str()
                 .unwrap_or_default()
                 .contains("not-an-address"),
@@ -1232,7 +1232,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["code"], "prefix_owned_by_sync", "{body}");
+        assert_eq!(body["error"]["code"], "prefix_owned_by_sync", "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
     }
 

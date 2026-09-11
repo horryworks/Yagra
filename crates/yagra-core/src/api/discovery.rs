@@ -1685,6 +1685,6 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["code"], "invalid_address", "{body}");
+        assert_eq!(body["error"]["code"], "invalid_address", "{body}");
     }
 }
