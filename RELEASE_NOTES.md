@@ -10,6 +10,16 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Node detail ▸ Interfaces: In and Out are now two columns, each shaded by how full the link is.**
+  They used to share one cell (`1.2 Gbps / 340 Mbps`), so telling which direction was congested
+  meant reading either side of a slash on every row. Each cell's background now runs green → amber
+  → red by **utilization** — the reading against the interface's own advertised rate — so 900 Mbps
+  reads red on a gigabit port and green on a ten-gig one. A port that does not report a rate, and a
+  port that is down, are left unshaded: there is no denominator for the first and nothing to shade
+  for the second. Hovering a cell names the figure and the share of the link it represents.
+
 ## v0.3.14 — Opening Nodes is fast on a deployment with many folders, the inventory tree stays where you put it, and a public board's interface and metric widgets answer anonymous visitors
 
 ### Improvements

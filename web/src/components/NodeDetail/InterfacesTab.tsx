@@ -41,6 +41,8 @@ import {
   sparklinePath,
   throughputBandwidthOverlay,
   throughputPair,
+  trafficCell,
+  TRAFFIC_DIRS,
 } from './interfaceMetrics';
 import {
   defaultDockHeight,
@@ -51,6 +53,7 @@ import {
   LIST_MIN_PX,
 } from './interfaceDockHeight';
 import { interfaceColumns } from './tabFilters';
+import { utilHeat } from '../../lib/utilHeat';
 import { duplexState } from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
@@ -351,7 +354,12 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             {t('interfaces.colDuplex')}
           </div>
           <div className="nd-if-h">{t('interfaces.colThroughput')}</div>
-          <div className="nd-if-h right">{t('interfaces.colInOut')}</div>
+          <div className="nd-if-h right" title={t('interfaces.colInOutTitle')}>
+            {t('interfaces.colIn')}
+          </div>
+          <div className="nd-if-h right" title={t('interfaces.colInOutTitle')}>
+            {t('interfaces.colOut')}
+          </div>
         </div>
         {/* A real filter row: same grid rule as `.nd-if-head` and `.nd-if-row` (one CSS
             declaration, three selectors — the same discipline `DataTable`'s shared template
@@ -365,7 +373,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             halfway down the scroller and the interface rows ran through the gap above it. */}
         <ColumnFilterRow
           columns={columns}
-          slots={['if_name', 'if_alias', 'oper', 'media', 'speed', 'duplex', null, null]}
+          slots={['if_name', 'if_alias', 'oper', 'media', 'speed', 'duplex', null, null, null]}
           filters={filters}
           onChange={setFilters}
           counts={counts}
@@ -386,7 +394,12 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               <span className="nd-if-id">
                 <span className="nd-if-name mono">{r.if_name ?? `if${r.ifindex}`}</span>
               </span>
-              <span className="nd-if-cell nd-if-desc">{r.if_alias || '—'}</span>
+              {/* The title carries the whole alias: this column's floor dropped to 88px when
+                  ADR-126 split In/Out, and it is the one that ellipsizes first. Device-supplied
+                  text, so it is an attribute and never markup. */}
+              <span className="nd-if-cell nd-if-desc" title={r.if_alias || undefined}>
+                {r.if_alias || '—'}
+              </span>
               <span className="nd-if-oper">
                 <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
                 {operLabel(r.oper_status ?? null, t)}
@@ -409,11 +422,49 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               <span className="nd-if-spark">
                 <Sparkline nodeId={nodeId} ifindex={r.ifindex} down={down} />
               </span>
-              <span className="nd-if-cell right">
-                {r.oper_status === 1
-                  ? `${formatBps(r.in_bps ?? null)} / ${formatBps(r.out_bps ?? null)}`
-                  : t('interfaces.operDown')}
-              </span>
+              {/* One cell per direction since ADR-126. The background shades by UTILIZATION, not
+                  by the bps figure beside it: 900 Mbps is a saturated gigabit port and a quiet
+                  ten-gig one, so an absolute scale would be wrong on one of them every time.
+                  `trafficCell` returns null for a port that is not up, so nothing is washed behind
+                  the word `down` — which is also what stops a green cell from ever sitting beside
+                  a red StatusDot. */}
+              {TRAFFIC_DIRS.map((dir) => {
+                const cell = trafficCell(r, dir);
+                const heat = cell ? utilHeat(cell.util) : null;
+                const share =
+                  cell && cell.util != null && cell.speedBps != null
+                    ? t('interfaces.utilOfSpeed', {
+                        pct: Math.round(cell.util),
+                        speed: formatBps(cell.speedBps),
+                      })
+                    : null;
+                return (
+                  <span
+                    key={dir}
+                    className={`nd-if-cell right nd-if-${dir}${heat ? ' heat' : ''}`}
+                    /* Two custom properties rather than a finished colour, so the final color-mix
+                       — the one that leaves the row hover visible underneath — stays in the
+                       stylesheet with the rest of the cell's appearance. */
+                    style={
+                      heat
+                        ? ({
+                            '--heat-hue': heat.hue,
+                            '--heat-wash': heat.wash,
+                          } as React.CSSProperties)
+                        : undefined
+                    }
+                    title={
+                      cell
+                        ? [t(`interfaces.${dir}`), formatBps(cell.bps), share]
+                            .filter(Boolean)
+                            .join(' · ')
+                        : undefined
+                    }
+                  >
+                    {cell ? formatBps(cell.bps) : t('interfaces.operDown')}
+                  </span>
+                );
+              })}
             </button>
           );
         })}

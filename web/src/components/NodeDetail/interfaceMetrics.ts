@@ -306,3 +306,58 @@ export function sparklinePath(
   const area = `${line} L${xa(n - 1).toFixed(1)} ${baseline} L${xa(0).toFixed(1)} ${baseline} Z`;
   return { line, area };
 }
+
+/** The two directions, in the order the columns appear. An `as const` array rather than a bare
+ *  union because the row iterates it to render its two cells — `extensibility.md` §4. */
+export const TRAFFIC_DIRS = ['in', 'out'] as const;
+
+/** Which direction of a row's traffic a cell shows. */
+export type TrafficDir = (typeof TRAFFIC_DIRS)[number];
+
+/** The fields one traffic cell reads — structural, so a test needs no full `InterfaceRow`. */
+export interface TrafficRow {
+  oper_status?: number | null;
+  in_bps?: number | null;
+  out_bps?: number | null;
+  in_util_pct?: number | null;
+  out_util_pct?: number | null;
+  if_speed_bps?: number | null;
+}
+
+/** Everything one In or Out cell needs (ADR-126). The three fields are independently nullable on
+ *  purpose — see the note on `trafficCell`. */
+export interface TrafficCell {
+  /** Bits per second, or `null` when the poller has no reading and the cell shows an em dash. */
+  bps: number | null;
+  /** Percent of the link's own rate, or `null` when that rate is unknown — which is what decides
+   *  whether the cell gets a heat wash at all. */
+  util: number | null;
+  /** The advertised rate, carried so the title can name what the percentage is *of*. */
+  speedBps: number | null;
+}
+
+/**
+ * One direction's figures, or `null` when the port is not up.
+ *
+ * Parameterized by direction rather than written twice, for the reason `latestPairRate` above is:
+ * the two differ only in which fields they read, and a copy is a second place to fix the rules
+ * about what is absent (`extensibility.md` §3).
+ *
+ * ⚠️ **A port that is not `up` returns `null` outright**, and that is what keeps the heat wash from
+ * contradicting the row's own `StatusDot`: nothing is painted unless the link is up, so a green
+ * cell can never sit beside a red dot. `oper_status` is `ifOperStatus`, where 1 is up and
+ * everything else — including `null`, meaning the poller has never had an answer — is not.
+ *
+ * 🚨 **`util` being `null` is not the same as `util` being `0`.** The API returns `null` for an
+ * interface that never advertised a rate (`api/collection.rs` refuses to divide by an absent or
+ * zero speed); `0` is a real reading from an idle link. Painting the first would put a judgement
+ * on screen with no denominator behind it, so the two must stay distinguishable all the way to
+ * the cell.
+ */
+export function trafficCell(row: TrafficRow, dir: TrafficDir): TrafficCell | null {
+  if (row.oper_status !== 1) return null;
+  const bps = (dir === 'in' ? row.in_bps : row.out_bps) ?? null;
+  const util = (dir === 'in' ? row.in_util_pct : row.out_util_pct) ?? null;
+  const speed = row.if_speed_bps != null && row.if_speed_bps > 0 ? row.if_speed_bps : null;
+  return { bps, util, speedBps: speed };
+}

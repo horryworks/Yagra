@@ -530,12 +530,24 @@ html[data-viewport='mobile'] .nd-extract-row {
    The same rule `DataTable` enforces in TS with a shared template const: if they ever disagree the
    filter controls sit under the wrong headers, and nothing catches it (`.tsx` tests never run).
 
-   Eight tracks since ADR-063 (media / speed / duplex). The minimum width went 622px → 874px, so the
-   pane scrolls sideways below roughly 1140px of browser (220px sidebar + chrome) instead of at
-   ~870px. That is deliberate and ADR-054's rule applies: a table wider than its pane scrolls, it
-   does not silently drop columns. DESCRIPTION gives up 20px of floor and a fraction of its share to
-   pay for part of it — an ifAlias is usually short, and it is the one flexible column here whose
-   content the operator wrote rather than the device.
+   Nine tracks since ADR-126 (In and Out split). The minimum width went 622px → 874px, and ADR-126
+   kept it at 874px, so the pane still scrolls sideways below roughly 1140px of browser (220px
+   sidebar + chrome) rather than at ~870px. That is deliberate and ADR-054's rule applies: a table
+   wider than its pane scrolls, it does not silently drop columns. DESCRIPTION gives up 52px of
+   floor and a fraction of its share to pay for both rounds — an ifAlias is usually short, it
+   carries a title with the whole string, and it is the one flexible column here whose content the
+   operator wrote rather than the device.
+
+   ⚠️ **Splitting In/Out cost the table nothing, and the two numbers here are measured, not
+   estimated.** The widest string formatBps can produce is nine characters ("99.9 Gbps"), which
+   renders at 53px; with the 10px side padding those two cells carry (not the 14px the rest use)
+   the floor is 74px each, so the pair needs 148px against the single cell's 116px — and
+   DESCRIPTION hands back exactly those 32px.
+
+   🚨 It was NOT free on the first attempt. Two cells of 92px "to be safe" put the minimum at 932px,
+   and a 1152px browser — a 15" laptop at 125% scaling, an ordinary way to run this — gives the pane
+   884px and scrolled. The floor has to come from measuring the text, because the margin here is
+   about ten pixels wide.
 
    MEDIA is the only new flexible track: its values ("1000BASE-LX10") are the longest of the three
    and are device text, where SPEED and DUPLEX render from closed sets we can size exactly. */
@@ -544,8 +556,8 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-row {
   display: grid;
   grid-template-columns:
-    minmax(140px, 1.4fr) minmax(120px, 1.4fr) 94px
-    minmax(112px, 1fr) 84px 76px 132px minmax(116px, 1fr);
+    minmax(140px, 1.4fr) minmax(88px, 1.3fr) 94px
+    minmax(112px, 1fr) 84px 76px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr);
   align-items: center;
 }
 
@@ -586,6 +598,12 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 .nd-if-row {
   min-height: 42px;
+  /* 🚨 A <button> carries a UA default `padding: 1px 6px`, and never resetting it made every data
+     row 12px narrower than the header and filter row it shares a grid template with — so the five
+     flexible tracks resolved to different widths in the three grids and every control sat slightly
+     off its heading. Found by `tests/ui/interfaceHeat.spec.ts` comparing the three resolved track
+     lists; the note above the template claimed they agreed, and nothing had ever checked. */
+  padding: 0;
   border: none;
   border-bottom: var(--border-width) solid var(--border-color);
   background: none;
@@ -653,6 +671,30 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-cell.right {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* The traffic-heat wash (ADR-126). `lib/utilHeat.ts` hands each cell two custom properties — the
+   ramp position as a colour, and how much of it survives — and the mix happens here.
+
+   🚨 The second operand is `transparent`, NOT `--bg-secondary`. `.nd-if-row:hover` and
+   `.nd-if-row.selected` paint the ROW, so an opaque cell background would cover the hover feedback
+   on two of the nine cells and read as "hover stopped working on the right-hand side". Mixing
+   toward transparent lets the row's own colour come through underneath.
+
+   ⚠️ There is no gradient inside a cell — each one is a single flat colour, and it is the sequence
+   of rows that forms the ramp. design-system §1.4 ("flat: no gradients, shadows or decorative
+   effects") is about what one surface looks like, and this stays inside it. */
+.nd-if-cell.heat {
+  background: color-mix(in oklab, var(--heat-hue) var(--heat-wash), transparent);
+}
+
+/* 10px rather than the 14px every other cell uses. The two sit side by side at the right edge, so
+   the gutter between them is doubled anyway — and those 8px are what buy the pair a floor of 148px,
+   which is 32px more than the single In/Out cell it replaced rather than 116px more. The
+   measurement is in the note above the grid template. */
+.nd-if-in,
+.nd-if-out {
+  padding: 0 10px;
 }
 
 /* Physical-link cells (ADR-063). Speed is right-aligned and tabular so a column of rates lines up
@@ -1421,18 +1463,21 @@ html[data-viewport='mobile'] .nd-facts {
   gap: 12px;
 }
 
-/* Interfaces list: the desktop 5-column grid needs ~620px (the sparkline + In/Out sit off-screen at
-   ~390px, forcing a sideways scroll to reach the graph). Reflow each row to two lines — line 1: name
-   + oper, line 2: full-width sparkline + In/Out — and hide the header + description. */
+/* Interfaces list: the desktop grid needs ~874px (the sparkline + In/Out sit off-screen at ~390px,
+   forcing a sideways scroll to reach the graph). Reflow each row to two lines — line 1: name +
+   oper, line 2: full-width sparkline + In and Out — and hide the header + description.
+
+   ⚠️ Three columns since ADR-126, because In and Out are two cells now. Both stay on line 2:
+   giving either one a line of its own would push the row past the touch target for no gain. */
 html[data-viewport='mobile'] .nd-if-head {
   display: none;
 }
 
 html[data-viewport='mobile'] .nd-if-row {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   grid-template-areas:
-    'name oper'
-    'spark inout';
+    'name oper oper'
+    'spark in out';
   gap: 4px 10px;
   height: auto;
   min-height: var(--touch-target);
@@ -1467,10 +1512,18 @@ html[data-viewport='mobile'] .nd-if-spark {
   padding: 0;
 }
 
-html[data-viewport='mobile'] .nd-if-cell.right {
-  grid-area: inout;
+/* 🚨 Both cells need a named area. An unplaced one auto-places into an implicit THIRD row and
+   pushes every row past the touch target — the trap the note above this block warns about. */
+html[data-viewport='mobile'] .nd-if-in {
+  grid-area: in;
   justify-self: end;
   padding: 0;
+}
+
+html[data-viewport='mobile'] .nd-if-out {
+  grid-area: out;
+  justify-self: end;
+  padding: 0 0 0 10px;
 }
 
 /* The selected-interface dock takes up to ~60% of the screen on mobile so the throughput + errors

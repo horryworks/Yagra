@@ -75,6 +75,34 @@
   --status-unreachable: var(--status-critical);
   --status-ok: var(--status-up); /* ui-conventions alias spelling */
 
+  /* ---- utilization heat (ADR-126) — how full a link is, as a wash behind its bps figure ----
+     A SEPARATE CHANNEL that deliberately BORROWS the status hues rather than inventing a fourth
+     green and a fourth red. Two reasons, and the borrow is written down here because the
+     --supp-* block above is the opposite decision and the difference has to be readable later:
+
+     1. ui-conventions.md forbids inventing an ad-hoc red/yellow/green per component, and a new
+        ramp would be exactly that.
+     2. The repo ALREADY paints utilization in status colours — dashboard/widgets/performance.tsx
+        turns a link amber at 70% and red at 90%, and four more places do the same. A second
+        vocabulary for the same quantity is what --supp-* exists to prevent, one level down.
+
+     The borrow is safe on the Interfaces row because the two vocabularies cannot contradict each
+     other there: a port that is not `up` renders the word `down` instead of a figure, so nothing
+     is washed unless the link is up AND its rate is known. Green then means "not congested"
+     beside a dot meaning "the link is up" — the same direction, never opposed.
+
+     ⚠️ No per-theme values below, ON PURPOSE: these are aliases of tokens [data-theme='dark']
+     already overrides, so dark inherits the correct hues with nothing to keep in sync. */
+  --util-cool: var(--status-up); /* quiet */
+  --util-mid: var(--status-warning); /* busy — the 70% stop */
+  --util-hot: var(--status-critical); /* at its rate */
+  /* How much of the hue survives the mix with `transparent`, at 0% and at 100% utilization. The
+     strength ramps with the reading as well as the hue, so the cell still separates by density
+     for a reader who cannot separate the hues. `lib/utilHeat.ts` holds the same two numbers —
+     these exist so the concept is registered here, as this file's header requires. */
+  --util-wash-min: 8%;
+  --util-wash-max: 30%;
+
   /* ---- typography (§1.4) — theme-independent ---- */
   --ui-font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-family: 'SFMono-Regular', 'JetBrains Mono', 'Consolas', ui-monospace, monospace;

@@ -16,6 +16,8 @@ import {
   sparklinePath,
   throughputBandwidthOverlay,
   throughputPair,
+  trafficCell,
+  TRAFFIC_DIRS,
 } from './interfaceMetrics';
 import { formatBps } from '../../lib/format';
 import type { InterfaceSeries } from '../../types/api';
@@ -417,5 +419,69 @@ describe('opticalWindowText', () => {
   it('puts the low bound first', () => {
     const text = opticalWindowText({ key: 'tx_power_dbm', from: -9, to: -1 }, fmt)!;
     expect(text.indexOf('-9.0')).toBeLessThan(text.indexOf('-1.0'));
+  });
+});
+
+describe('trafficCell', () => {
+  const up = {
+    oper_status: 1,
+    in_bps: 4.8e8,
+    out_bps: 2.2e8,
+    in_util_pct: 48,
+    out_util_pct: 22,
+    if_speed_bps: 1e9,
+  };
+
+  it('reads the direction it was asked for, not a fixed one', () => {
+    expect(trafficCell(up, 'in')).toEqual({ bps: 4.8e8, util: 48, speedBps: 1e9 });
+    expect(trafficCell(up, 'out')).toEqual({ bps: 2.2e8, util: 22, speedBps: 1e9 });
+  });
+
+  it('covers both directions for every member of TRAFFIC_DIRS', () => {
+    // The row renders by iterating this array, so a direction added to it without a branch here
+    // would render an empty cell rather than failing to compile.
+    for (const dir of TRAFFIC_DIRS) {
+      expect(trafficCell(up, dir)).not.toBeNull();
+    }
+    expect([...TRAFFIC_DIRS]).toEqual(['in', 'out']);
+  });
+
+  // The rule that keeps the heat wash from ever contradicting the row's own StatusDot: a port that
+  // is not up shows the word `down`, and a null cell is what produces it.
+  it('says nothing at all about a port that is not up', () => {
+    expect(trafficCell({ ...up, oper_status: 2 }, 'in')).toBeNull();
+    expect(trafficCell({ ...up, oper_status: 0 }, 'in')).toBeNull();
+    // `null` is "the poller has never had an answer", which is also not up.
+    expect(trafficCell({ ...up, oper_status: null }, 'in')).toBeNull();
+    expect(trafficCell({ ...up, oper_status: undefined }, 'in')).toBeNull();
+  });
+
+  // 🚨 The distinction the whole feature rests on. A port with no advertised rate has no
+  // denominator and must not be shaded; an idle port has one and must be.
+  it('separates an unknown link rate from an idle link', () => {
+    const noSpeed = trafficCell(
+      { oper_status: 1, in_bps: 1e6, in_util_pct: null, if_speed_bps: null },
+      'in',
+    );
+    expect(noSpeed).not.toBeNull();
+    expect(noSpeed!.util).toBeNull();
+    expect(noSpeed!.speedBps).toBeNull();
+
+    const idle = trafficCell({ oper_status: 1, in_bps: 0, in_util_pct: 0, if_speed_bps: 1e9 }, 'in');
+    expect(idle!.util).toBe(0);
+  });
+
+  // A zero speed is "never advertised", the same reading the API takes when it declines to divide.
+  it('treats a zero or negative advertised rate as no rate at all', () => {
+    expect(trafficCell({ ...up, if_speed_bps: 0 }, 'in')!.speedBps).toBeNull();
+    expect(trafficCell({ ...up, if_speed_bps: -1 }, 'in')!.speedBps).toBeNull();
+  });
+
+  it('keeps a missing reading distinguishable from a zero one', () => {
+    expect(trafficCell({ oper_status: 1 }, 'in')).toEqual({
+      bps: null,
+      util: null,
+      speedBps: null,
+    });
   });
 });
