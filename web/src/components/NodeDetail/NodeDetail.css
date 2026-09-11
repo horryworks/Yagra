@@ -555,9 +555,22 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-filters,
 .nd-if-row {
   display: grid;
-  grid-template-columns:
-    minmax(140px, 1.4fr) minmax(88px, 1.3fr) 94px
-    minmax(112px, 1fr) 84px 76px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr);
+  /* ADR-129: the operator may drag a column's edge, so the resolved template arrives as an inline
+     custom property on `.nd-if-list` and inherits to all three grids from there.
+
+     🚨 The value is passed as a CUSTOM PROPERTY, never as an inline `grid-template-columns`.
+     An inline declaration beats every media query, and the mobile rule further down this file
+     re-lays this table out as a named 2x2 grid — so writing the template inline would break the
+     phone silently, as "the layout looks a bit off" rather than as an error (ADR-074 decision 2).
+
+     ⚠️ The fallback below is a SECOND COPY of `interfaceColumns.ts`'s tracks, kept because a
+     missing property must not collapse this to one column. `interfaceColumns.test.ts` reads this
+     file and fails when the two disagree. */
+  grid-template-columns: var(
+    --nd-if-cols,
+    minmax(140px, 1.4fr) minmax(88px, 1.3fr) 94px minmax(112px, 1fr) 84px 76px 132px
+      minmax(74px, 0.7fr) minmax(74px, 0.7fr)
+  );
   align-items: center;
 }
 

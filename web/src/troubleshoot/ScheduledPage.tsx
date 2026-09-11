@@ -215,6 +215,7 @@ export function ScheduledPage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
+            tableId="troubleshoot.scheduled"
             rows={shown}
             columns={columns}
             filters={filters}

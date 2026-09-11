@@ -361,6 +361,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
             <h3 className="nd-flow-h">{t('flow.conversations')}</h3>
             <div className="nd-flow-table">
               <DataTable
+                tableId="node.flows"
                 rows={convos}
                 columns={convoColumns}
                 rowKey={(r) => `${r.src}->${r.dst}`}

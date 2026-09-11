@@ -181,6 +181,7 @@ export function EventsPage() {
           the one the operator typed. Silently widening would be the worse half of this trade. */}
       {widened && <p className="ev-widened">{t('events.widened')}</p>}
       <DataTable
+        tableId="events.log"
         rows={rows}
         columns={columns}
         filters={filters}

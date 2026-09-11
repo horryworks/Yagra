@@ -109,6 +109,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
       </TableToolbar>
       {widened && <p className="ev-widened">{t('events.widened')}</p>}
       <DataTable
+        tableId="node.events"
         rows={rows}
         columns={columns}
         filters={filters}

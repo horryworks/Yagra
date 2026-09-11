@@ -17,6 +17,15 @@
 
 import { usePrefsStore } from './prefs';
 import { api, getToken } from './services/api';
+import {
+  adoptWidths,
+  clearColumn,
+  clearTable,
+  setWidths,
+  type ColumnWidthDoc,
+  type TableColumnWidths,
+} from './lib/columnWidths';
+import type { TableId } from './lib/tableIds';
 
 /** Coalesce a burst of adjustments into one write. Same value and same reason as the dashboard's
  *  (`dashboard/layoutStore.ts`): a drag emits a value per frame, and **every** PUT writes an audit
@@ -28,6 +37,8 @@ const SAVE_DEBOUNCE_MS = 800;
 interface ServerPrefsDoc {
   /** Node-detail Interfaces chart dock height, px (issue #65). */
   interfaceDockHeight?: number;
+  /** Table column widths, keyed by table id then by column key (ADR-129). */
+  tableColumnWidths?: ColumnWidthDoc;
 }
 
 /** False once the server has told us it does not serve this endpoint, so a drag on a deployment
@@ -49,12 +60,24 @@ function adopt(raw: unknown): void {
     // not swallow the list on a laptop.
     usePrefsStore.getState().setInterfaceDockHeight(doc.interfaceDockHeight);
   }
+  if (doc.tableColumnWidths !== undefined) {
+    // `adoptWidths` does the selecting — it is in a `.ts` beside its tests because "survive
+    // anything" is a claim that needs examples, and the branch above is the shape that has none.
+    usePrefsStore.getState().setTableColumnWidths(adoptWidths(doc.tableColumnWidths));
+  }
 }
 
 /** The document to send: the account-scoped subset of `prefs.ts`. */
 function currentDoc(): ServerPrefsDoc {
-  const { interfaceDockHeight } = usePrefsStore.getState();
-  return interfaceDockHeight == null ? {} : { interfaceDockHeight };
+  const { interfaceDockHeight, tableColumnWidths } = usePrefsStore.getState();
+  const doc: ServerPrefsDoc = {};
+  if (interfaceDockHeight != null) doc.interfaceDockHeight = interfaceDockHeight;
+  // Omitted while empty rather than sent as `{}`: the account row has a 16 KiB ceiling every
+  // preference shares, and an operator who never drags a column should cost it nothing.
+  if (tableColumnWidths && Object.keys(tableColumnWidths).length > 0) {
+    doc.tableColumnWidths = tableColumnWidths;
+  }
+  return doc;
 }
 
 /**
@@ -104,5 +127,36 @@ function scheduleSave(): void {
  */
 export function setInterfaceDockHeight(px: number): void {
   usePrefsStore.getState().setInterfaceDockHeight(px);
+  scheduleSave();
+}
+
+/** The document as it stands, for the three setters below. */
+function widthDoc(): ColumnWidthDoc {
+  return usePrefsStore.getState().tableColumnWidths ?? {};
+}
+
+/**
+ * Record what one gesture did to a table's columns: locally now, on the account shortly (ADR-129).
+ *
+ * Takes the whole map rather than one column because a drag freezes every column at the width it
+ * already had (`freezeTracks`) — that is one gesture, and it must be one write.
+ *
+ * ⚠️ Call it on **gesture end**, not per pointer event — see `SAVE_DEBOUNCE_MS`. Keyboard steps are
+ * discrete and fine to send as they happen; the debounce coalesces a held arrow key anyway.
+ */
+export function mergeTableColumnWidths(tableId: TableId, widths: TableColumnWidths): void {
+  usePrefsStore.getState().setTableColumnWidths(setWidths(widthDoc(), tableId, widths));
+  scheduleSave();
+}
+
+/** Put one column back to the width its author declared (the grip's double-click). */
+export function clearTableColumnWidth(tableId: TableId, columnKey: string): void {
+  usePrefsStore.getState().setTableColumnWidths(clearColumn(widthDoc(), tableId, columnKey));
+  scheduleSave();
+}
+
+/** Put every column of one table back (the reset control in its header row). */
+export function clearTableColumnWidths(tableId: TableId): void {
+  usePrefsStore.getState().setTableColumnWidths(clearTable(widthDoc(), tableId));
   scheduleSave();
 }

@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
+import type { ColumnWidthDoc } from './lib/columnWidths';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
 // node env (no localStorage) without a persist warning. localStorage (not sessionStorage) so UI
@@ -89,6 +90,18 @@ interface PrefsStore {
    *  module adopts the server's value into this field on load and mirrors writes back out; nothing
    *  else should call the setter directly. */
   interfaceDockHeight: number | null;
+  /** How wide the operator dragged each table's columns, keyed by table then by column key
+   *  (ADR-129). `{}` = nothing has ever been dragged, so every table keeps the tracks its columns
+   *  declare.
+   *
+   *  ⚠️ **This one has a second, authoritative home: the server** (ADR-058, `serverPrefs.ts`) —
+   *  the same arrangement as `interfaceDockHeight` above, and for the same reason: the copy here
+   *  paints the first frame with no flash and is the whole answer when signed out, offline, or
+   *  talking to a core that predates the endpoint. Nothing should call the setter directly.
+   *
+   *  ⚠️ The shape is bounded on the way in (`lib/columnWidths.ts`'s two caps) because the account
+   *  document has a 16 KiB ceiling that every preference shares. */
+  tableColumnWidths: ColumnWidthDoc;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -113,6 +126,9 @@ interface PrefsStore {
   /** Record the Interfaces dock height locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`interfaceDockHeight`]). */
   setInterfaceDockHeight: (px: number | null) => void;
+  /** Record every table's column widths locally. ⚠️ Prefer `serverPrefs.ts`'s three setters, which
+   *  also sync the account (see [`tableColumnWidths`]). */
+  setTableColumnWidths: (doc: ColumnWidthDoc) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -137,6 +153,9 @@ export const usePrefsStore = create<PrefsStore>()(
       // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
       // object over the initial state, so a missing key reads as `null` and no migration is owed.
       interfaceDockHeight: null,
+      // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
+      // object over the initial state, so a missing key reads as `{}` and no migration is owed.
+      tableColumnWidths: {},
       // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
       // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
       // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
@@ -173,6 +192,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setNodesPaneWidth: (nodesPaneWidth) => set({ nodesPaneWidth }),
       toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),
+      setTableColumnWidths: (tableColumnWidths) => set({ tableColumnWidths }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

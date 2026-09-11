@@ -343,6 +343,7 @@ export function ReportsPage() {
             />
           </TableToolbar>
           <DataTable
+            tableId="reports.runs"
             rows={runF.shown}
             columns={runColumns}
             filters={runF.filters}
@@ -397,6 +398,7 @@ export function ReportsPage() {
             )}
           </TableToolbar>
           <DataTable
+            tableId="reports.definitions"
             rows={defF.shown}
             columns={defColumns}
             filters={defF.filters}
@@ -458,6 +460,7 @@ export function ReportsPage() {
             )}
           </TableToolbar>
           <DataTable
+            tableId="reports.schedules"
             rows={schedF.shown}
             columns={schedColumns}
             filters={schedF.filters}

@@ -192,6 +192,7 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         <ResultCount shown={rows.length} total={findings.length} noun={t('report.flow_scan.noun')} />
       </TableToolbar>
       <DataTable
+        tableId="troubleshoot.flowScan"
         rows={rows}
         columns={columns}
         filters={filters}

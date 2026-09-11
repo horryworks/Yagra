@@ -243,6 +243,7 @@ export function MutesPage() {
           </TableToolbar>
 
           <DataTable
+            tableId="alerts.mutes"
             rows={shown}
             columns={columns}
             rowKey={(m) => m.id}

@@ -273,6 +273,7 @@ export function SavedFindingsPage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
+            tableId="troubleshoot.findings"
             rows={rows}
             columns={columns}
             filters={rowFilters}

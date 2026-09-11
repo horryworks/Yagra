@@ -641,6 +641,7 @@ export function CredentialsPage() {
           </TableToolbar>
 
           <DataTable
+            tableId="settings.credentials"
             rows={shown}
             columns={columns}
             rowKey={(c) => c.id}

@@ -723,6 +723,7 @@ export function ForwardingPage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
+            tableId="settings.forwarding"
             rows={shown}
             columns={columns}
             filters={filters}

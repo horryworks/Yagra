@@ -250,6 +250,7 @@ function ChannelsSection({
       </div>
 
       <DataTable
+        tableId="settings.notificationChannels"
         rows={shown}
         columns={columns}
         rowKey={(c) => c.id}
@@ -612,6 +613,7 @@ function RulesSection({
       </div>
 
       <DataTable
+        tableId="settings.routingRules"
         rows={shown}
         columns={columns}
         rowKey={(r) => r.id}

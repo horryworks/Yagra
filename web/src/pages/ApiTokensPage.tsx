@@ -580,6 +580,7 @@ export function ApiTokensPage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
+            tableId="settings.apiTokens"
             rows={shown}
             columns={columns}
             sort={sort}

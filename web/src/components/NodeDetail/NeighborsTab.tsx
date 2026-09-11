@@ -178,6 +178,7 @@ export function NeighborsTab({ node }: Props) {
           </TableToolbar>
           <div className="nd-nb-table">
             <DataTable
+              tableId="node.neighbors"
               rows={shownNeighbors}
               columns={columns}
               filters={filters}

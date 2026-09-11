@@ -23,6 +23,10 @@ import { BellIcon } from '../ui/icons';
 import { usePrefsStore } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
+import { resolveWidths } from '../../lib/columnWidths';
+import { INTERFACE_COLUMNS } from './interfaceColumns';
+import { ColumnResizeHandles, ColumnWidthReset } from '../ui/ColumnResizeHandles';
+import { useColumnWidths } from '../ui/useColumnWidths';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { escapeClosesInPageSurface } from '../../lib/escapeDismiss';
 import {
@@ -177,11 +181,31 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   );
   // Keyed by the column each control sits under. ⚠️ Untyped, exactly like `DataTable`'s
   // `specs[c.key]` lookup: rename a key in `tabFilters.ts` and the cell silently stops rendering.
+  // Since ADR-129 it covers all nine columns, not only the filterable ones: the resize grips read
+  // the same map for their accessible names, and a grip announced as "out" rather than "Out" is a
+  // grip nobody driving this from a screen reader can place.
   const labels: Record<string, string> = {
     if_name: t('interfaces.colInterface'),
     if_alias: t('interfaces.colDescription'),
     oper: t('interfaces.colOper'),
+    media: t('interfaces.colMedia'),
+    speed: t('interfaces.colSpeed'),
+    duplex: t('interfaces.colDuplex'),
+    throughput: t('interfaces.colThroughput'),
+    in: t('interfaces.colIn'),
+    out: t('interfaces.colOut'),
   };
+  // The operator's own column widths for this table (ADR-129). `interfaceCols` is the one string
+  // the header, the filter row and every data row resolve from — the TS twin of what
+  // `NodeDetail.css` used to declare alone.
+  const colResize = useColumnWidths('node.interfaces');
+  const interfaceCols = useMemo(
+    () =>
+      resolveWidths(INTERFACE_COLUMNS, colResize.widths)
+        .map((c) => c.width)
+        .join(' '),
+    [colResize.widths],
+  );
   const up = rows.filter((r) => r.oper_status === 1).length;
   const selectedRow = rows.find((r) => r.ifindex === selected) ?? null;
 
@@ -341,25 +365,61 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
       )}
       {error && <p className="form-error nd-tabpad">{error}</p>}
 
-      <div className="nd-if-list" ref={listRef}>
+      {/* 🚨 The template goes in as a CUSTOM PROPERTY, never as an inline
+          `grid-template-columns`: an inline declaration beats every media query and this table is
+          re-laid-out on a phone (`NodeDetail.css`'s `html[data-viewport='mobile'] .nd-if-row`).
+          It is set here rather than on each grid so the header, the filter row and every data row
+          inherit one value — the same "one template, three grids" rule `DataTable` states in TS
+          and this table has always stated in CSS. */}
+      <div
+        className="nd-if-list"
+        ref={listRef}
+        style={{ ['--nd-if-cols' as string]: interfaceCols }}
+      >
+        {/* ⚠️ Every header cell names its track explicitly, because the resize grips below are
+            explicitly placed and CSS grid auto-placement skips a cell an explicit item already
+            occupies — without this the nine headings drop into an implicit second row the moment a
+            grip is drawn (ADR-129). The filter row and the data rows still auto-place: they carry
+            no grips. Not rendered on a phone at all — `.nd-if-head` is `display: none` there, so
+            the grips leave the focus order with it. */}
         <div className="nd-if-head">
-          <div className="nd-if-h">{t('interfaces.colInterface')}</div>
-          <div className="nd-if-h">{t('interfaces.colDescription')}</div>
-          <div className="nd-if-h" title={t('interfaces.colOperTitle')}>
+          <div className="nd-if-h" style={{ gridColumn: 1 }}>
+            {t('interfaces.colInterface')}
+          </div>
+          <div className="nd-if-h" style={{ gridColumn: 2 }}>
+            {t('interfaces.colDescription')}
+          </div>
+          <div className="nd-if-h" style={{ gridColumn: 3 }} title={t('interfaces.colOperTitle')}>
             {t('interfaces.colOper')}
           </div>
-          <div className="nd-if-h">{t('interfaces.colMedia')}</div>
-          <div className="nd-if-h right">{t('interfaces.colSpeed')}</div>
-          <div className="nd-if-h" title={t('interfaces.duplexHint')}>
+          <div className="nd-if-h" style={{ gridColumn: 4 }}>
+            {t('interfaces.colMedia')}
+          </div>
+          <div className="nd-if-h right" style={{ gridColumn: 5 }}>
+            {t('interfaces.colSpeed')}
+          </div>
+          <div className="nd-if-h" style={{ gridColumn: 6 }} title={t('interfaces.duplexHint')}>
             {t('interfaces.colDuplex')}
           </div>
-          <div className="nd-if-h">{t('interfaces.colThroughput')}</div>
-          <div className="nd-if-h right" title={t('interfaces.colInOutTitle')}>
+          <div className="nd-if-h" style={{ gridColumn: 7 }}>
+            {t('interfaces.colThroughput')}
+          </div>
+          <div
+            className="nd-if-h right"
+            style={{ gridColumn: 8 }}
+            title={t('interfaces.colInOutTitle')}
+          >
             {t('interfaces.colIn')}
           </div>
-          <div className="nd-if-h right" title={t('interfaces.colInOutTitle')}>
+          <div
+            className="nd-if-h right"
+            style={{ gridColumn: 9 }}
+            title={t('interfaces.colInOutTitle')}
+          >
             {t('interfaces.colOut')}
           </div>
+          <ColumnResizeHandles control={colResize} columns={INTERFACE_COLUMNS} labels={labels} />
+          <ColumnWidthReset control={colResize} columnCount={INTERFACE_COLUMNS.length} />
         </div>
         {/* A real filter row: same grid rule as `.nd-if-head` and `.nd-if-row` (one CSS
             declaration, three selectors — the same discipline `DataTable`'s shared template

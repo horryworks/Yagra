@@ -207,6 +207,7 @@ export function ClassificationRulesPage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
+            tableId="nodes.classification"
             rows={shown}
             columns={columns}
             rowKey={(r) => r.id}

@@ -82,6 +82,12 @@
     "result_other": "結果",
     "item_other": "項目"
   },
+  "column": {
+    "resize": "{{column}} 列の幅を変える",
+    "resizeHint": "ドラッグで幅を変えます。ダブルクリックで既定に戻ります。",
+    "resetWidths": "列幅を既定に戻す",
+    "resetWidthsAria": "この表のすべての列を既定の幅に戻す"
+  },
   "filter": {
     "allEnabled": "有効・無効の両方",
     "enabledAria": "有効・無効で絞り込む",

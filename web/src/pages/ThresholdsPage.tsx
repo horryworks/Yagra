@@ -451,6 +451,7 @@ export function ThresholdsPage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
+            tableId="alerts.thresholds"
             rows={rows}
             columns={columns}
             // The Scope cell stacks one line per target, so a row is as tall as its rule is broad

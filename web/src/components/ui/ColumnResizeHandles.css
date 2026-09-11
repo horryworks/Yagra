@@ -1,0 +1,88 @@
+/* Column-resize grips and the reset control (ADR-129). Shared by `DataTable`'s `.dt-head` and the
+   node-detail Interfaces list's `.nd-if-head`, so nothing here may assume either one's colours
+   beyond the shared tokens. */
+
+.colresize {
+  /* Sits in the same grid cell as its column's header, pinned to that column's right edge. The
+     grab zone is inside the cell rather than straddling the boundary: `.dt` is `overflow-x: auto`,
+     so an item hanging past the last track would invent a few pixels of horizontal scroll on every
+     table in the app. */
+  justify-self: end;
+  align-self: stretch;
+  width: 10px;
+  /* Above the header cell so the grip is reachable even where a sortable header's <button> fills
+     the whole track. */
+  z-index: 1;
+  cursor: col-resize;
+  /* Without this the browser scrolls the page instead of dragging (ui-conventions). */
+  touch-action: none;
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  /* Focus is a colour change on the grip, never an outline. */
+  outline: none;
+}
+
+.colresize-grip {
+  width: 2px;
+  margin: 7px 0;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.colresize:hover .colresize-grip,
+.colresize:focus-visible .colresize-grip {
+  background: var(--accent-color);
+}
+
+/* A 10px rail is not a touch target, and a tablet forced to the desktop shell still has fingers.
+   Keyed on the pointer, not on the layout mode — the same rule the other three handles follow. */
+@media (hover: none) {
+  .colresize {
+    width: 20px;
+  }
+
+  .colresize-grip {
+    background: var(--border-color);
+  }
+}
+
+.colresize-reset {
+  /* Last track, beside that column's grip rather than on top of it (the grip owns the last 10px).
+     `position: sticky` keeps it at the visible right edge while a widened table is scrolled
+     sideways; if that ever misbehaves, dropping these two lines leaves it at the end of the header
+     row, which is still correct — just further away. */
+  position: sticky;
+  right: 0;
+  justify-self: end;
+  align-self: center;
+  margin-right: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.colresize-reset:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+.colresize-reset:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}

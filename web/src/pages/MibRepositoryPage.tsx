@@ -307,6 +307,7 @@ export function MibRepositoryPage() {
           </TableToolbar>
 
           <DataTable
+            tableId="nodes.mib"
             rows={rows}
             columns={columns}
             rowKey={(e) => e.id}

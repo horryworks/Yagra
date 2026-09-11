@@ -219,6 +219,7 @@ export function AuditPage() {
               query that legitimately returns zero is indistinguishable from an empty log, and the
               screen would claim there is nothing here while a filter is hiding it. */}
           <DataTable
+            tableId="settings.audit"
             rows={rows}
             columns={columns}
             filters={rowFilters}

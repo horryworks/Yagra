@@ -181,6 +181,7 @@ export function CollectionTemplatesPage() {
               measured height of a row that has just closed. */}
           <div className="templates-table">
             <DataTable
+              tableId="nodes.collectionTemplates"
               rows={filtered}
               columns={columns}
               rowKey={(r) => r.id}

@@ -14,7 +14,7 @@ import 'uplot/dist/uPlot.min.css';
 import { buildChartScales } from './scales';
 import './MetricChart.css';
 import { applyIdleLegend, resolveColor } from './chartColor';
-import { gutterLabels, labelFits, mirrorLayout, type MirrorAxis } from './mirror';
+import { LABEL_ROTATION, gutterLabels, labelFits, mirrorLayout, type MirrorAxis } from './mirror';
 import { usePrefsStore } from '../../prefs';
 
 /** Default series palette (In / Out / aux …), indexed by series position, as theme tokens. In a DOM
@@ -118,7 +118,8 @@ interface Props {
    *     midpoint — an explicit `yRange` still outranks it;
    *  2. the zero line is drawn as a **rule over** the series, beating uPlot's own gridline there;
    *  3. each half gets its **own ground** (`--chart-zone-above` / `--chart-zone-below`);
-   *  4. the gutter carries the two names, rotated, with ▲ / ▼ added here.
+   *  4. the gutter carries the two names, rotated, with a direction mark added here (`mirror.ts`
+   *     picks the glyph for how it looks AFTER the rotation — see the note on `ABOVE_MARK`).
    *
    *  Pass the already-translated words (`IN` / `OUT`, `受信` / `送信`) — the marks are not theirs
    *  to carry. */
@@ -362,7 +363,10 @@ export function MetricChart({
                   if (!labelFits(half, ctx.measureText(text).width)) continue;
                   ctx.save();
                   ctx.translate(MIRROR_LABEL_X * dpr, y);
-                  ctx.rotate(-Math.PI / 2);
+                  // 🚨 `LABEL_ROTATION`, never a literal: the ▲/▼ marks are chosen for how they
+                  // look after exactly this rotation, and a second copy of the angle is a way for
+                  // the two to drift. They shipped pointing sideways once already.
+                  ctx.rotate(LABEL_ROTATION);
                   ctx.fillText(text, 0, 0);
                   ctx.restore();
                 }

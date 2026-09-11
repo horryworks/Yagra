@@ -12,6 +12,21 @@
 
 ### Improvements
 
+- **Every list can have its column widths set by the person reading it, and they follow that
+  account to the next machine.** Column widths were literals in the source: whatever a screen
+  declared was what every deployment got, so a long node name or a long description was cut off
+  even with empty space to the right of it. Each column heading now has a grip on its right edge —
+  drag it, or focus it and press ← / →. The column that is dragged is the only one that changes:
+  the table takes the space from the pane and scrolls sideways when it no longer fits, rather than
+  taking it off the neighbour and moving the truncation one column along. Double-click a grip to
+  put that column back, or use the reset control that appears at the right of a header row once
+  something has been changed. The widths are stored against the signed-in account (the same place
+  the Interfaces chart height already lived), so they are there on the next machine that account
+  signs in from; signed out, they are remembered in that browser only. This reaches node detail ▸
+  Interfaces and all 29 lists built on the shared table — nodes, alerts, events, history, audit,
+  thresholds, reports, troubleshoot and the settings screens. Phones are unaffected: a list is
+  already a stack of cards there, with no columns to size.
+
 - **Topology ▸ Geo map: the coastline is drawn from Natural Earth's 1:10m data, and the map zooms
   twice as far.** The outline used to come from the coarsest set (1:110m, simplified to about
   19 km), which is right at the world view and a dozen straight edges once Japan fills the pane —

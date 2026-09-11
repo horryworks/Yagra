@@ -121,7 +121,7 @@ test('dragging the top edge upward makes the dock and its charts taller', async 
   const before = await heightOf(page, '.nd-if-dock');
   const chartBefore = await heightOf(page, '.nd-if-chart > .metricchart-fill');
 
-  const handle = page.getByRole('slider', { name: /resize/i });
+  const handle = page.getByRole('slider', { name: /resize the charts/i });
   const box = (await handle.boundingBox())!;
   const midX = box.x + box.width / 2;
   const midY = box.y + box.height / 2;
@@ -140,7 +140,7 @@ test('dragging the top edge upward makes the dock and its charts taller', async 
 
 test('the interface list cannot be dragged out of existence', async ({ page }) => {
   await openDock(page);
-  const handle = page.getByRole('slider', { name: /resize/i });
+  const handle = page.getByRole('slider', { name: /resize the charts/i });
   const box = (await handle.boundingBox())!;
 
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -158,7 +158,7 @@ test('resizing logs nothing — the ResizeObserver chain does not oscillate', as
   errors,
 }) => {
   await openDock(page);
-  const handle = page.getByRole('slider', { name: /resize/i });
+  const handle = page.getByRole('slider', { name: /resize the charts/i });
   const box = (await handle.boundingBox())!;
   const midX = box.x + box.width / 2;
 

@@ -256,6 +256,7 @@ export function HistoryPage() {
         />
       </TableToolbar>
       <DataTable
+        tableId="alerts.history"
         rows={rows}
         columns={columns}
         filters={filters}

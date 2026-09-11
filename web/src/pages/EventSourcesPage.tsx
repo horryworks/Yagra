@@ -168,6 +168,7 @@ export function EventSourcesPage() {
           </TableToolbar>
           {error && <p className="form-error">{error}</p>}
           <DataTable
+            tableId="events.sources"
             rows={shown}
             columns={columns}
             rowKey={(r) => r.id}

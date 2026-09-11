@@ -1784,6 +1784,7 @@ export function PollersPage() {
           </TableToolbar>
 
           <DataTable
+            tableId="settings.pollers"
             rows={shown}
             columns={columns}
             rowKey={(p) => p.id}

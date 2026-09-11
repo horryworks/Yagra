@@ -302,6 +302,7 @@ export function MaintenancePage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
+            tableId="alerts.maintenance"
             rows={shown}
             columns={columns}
             rowKey={(w) => w.id}

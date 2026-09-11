@@ -367,6 +367,7 @@ export function DependencyPage() {
           </TableToolbar>
 
           <DataTable
+            tableId="nodes.dependencies"
             rows={rows}
             columns={columns}
             filters={filters}

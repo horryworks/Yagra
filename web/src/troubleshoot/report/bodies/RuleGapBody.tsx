@@ -184,6 +184,7 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
         <ResultCount shown={rows.length} total={findings.length} noun={t('report.rule_gap.noun')} />
       </TableToolbar>
       <DataTable
+        tableId="troubleshoot.ruleGap"
         rows={rows}
         columns={columns}
         filters={filters}

@@ -14,6 +14,10 @@ import { nextSort, type SortState } from '../../lib/tableSort';
 import { ColumnFilterRow } from './ColumnFilterRow';
 import { filterableColumns, type ColumnFilterSpec, type FilterState } from '../../lib/columnFilter';
 import { minTableWidth } from '../../lib/tableWidth';
+import { resolveWidths } from '../../lib/columnWidths';
+import type { TableId } from '../../lib/tableIds';
+import { ColumnResizeHandles, ColumnWidthReset } from './ColumnResizeHandles';
+import { useColumnWidths } from './useColumnWidths';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -42,6 +46,13 @@ export interface Column<T> {
 interface Props<T> {
   rows: T[];
   columns: Column<T>[];
+  /** What this table is called, so it can remember the widths its operator dragged (ADR-129).
+   *
+   *  Required, and drawn from the registry in `lib/tableIds.ts` rather than being a free string:
+   *  the id is a storage key, so an unregistered spelling would silently remember nothing and two
+   *  tables sharing one would apply one screen's widths to another. Neither is a compile error
+   *  against `string`; both are against `TableId`. Two tables on one screen need two ids. */
+  tableId: TableId;
   rowKey: (row: T) => string;
   /** Called when scrolled near the end (load the next keyset page). */
   onReachEnd?: () => void;
@@ -123,6 +134,7 @@ const CARD_PX = 110; // default estimate for a mobile card before it is measured
 export function DataTable<T>({
   rows,
   columns,
+  tableId,
   rowKey,
   onReachEnd,
   onRowClick,
@@ -148,7 +160,14 @@ export function DataTable<T>({
   // never run (see .claude/rules/testing.md), so this shared binding IS the guard. Do not compute a
   // fourth grid template anywhere else, and do not let a track become `auto`: an `auto` track sizes
   // to its own content, so the three grids would resolve to different widths from the same string.
-  const template = columns.map((c) => c.width ?? '1fr').join(' ');
+  // The operator's own widths, laid over what the columns declare (ADR-129). 🚨 **`sized` is the
+  // single input both the template below and `minTableWidth` read**, so a dragged column cannot
+  // reach one of them and not the other — which is the whole content of the ADR-054 rule. It is
+  // the array `columns` itself whenever nothing has been dragged, so a table nobody has touched
+  // renders byte-for-byte what it always did.
+  const resize = useColumnWidths(tableId);
+  const sized = useMemo(() => resolveWidths(columns, resize.widths), [columns, resize.widths]);
+  const template = sized.map((c) => c.width ?? '1fr').join(' ');
   // ⚠️ …and the shared string is **not** enough on its own (ADR-054). Three grids resolve the same
   // template to different track widths once the pane is narrower than the columns need: a `1fr`
   // track then collapses to the item's min-content contribution, which here is only its padding —
@@ -157,7 +176,7 @@ export function DataTable<T>({
   // nothing could reach them. Handing all three the same `min-width` removes the room to differ and
   // turns the overflow into a scroll. Inert while the pane is wide enough, which is why the tables
   // that already fit are untouched.
-  const minWidth = minTableWidth(columns);
+  const minWidth = minTableWidth(sized);
   const widthStyle = minWidth > 0 ? { minWidth: `${minWidth}px` } : undefined;
   // Card mode whenever we're in mobile layout (respects the uiMode='desktop' override): the desktop
   // grid can't fit ~390px. A custom `renderCard` wins; otherwise a generic labeled card is built
@@ -218,11 +237,16 @@ export function DataTable<T>({
     <div className="dt">
       {!cardMode && (
         <div className="dt-head" style={{ gridTemplateColumns: template, ...widthStyle }}>
-          {columns.map((c) => {
+          {columns.map((c, i) => {
             const cls = c.align === 'right' ? 'dt-h right' : 'dt-h';
+            // ⚠️ The track is named explicitly because the resize grips below are explicitly
+            // placed, and CSS grid auto-placement skips cells an explicit item already occupies —
+            // leaving the headers to auto-place would drop them into an implicit second row
+            // (ADR-129). The filter row and the data rows still auto-place; they carry no grips.
+            const at = { gridColumn: i + 1 };
             if (!c.sortable || !sort || !onSortChange) {
               return (
-                <div key={c.key} className={cls}>
+                <div key={c.key} className={cls} style={at}>
                   {c.header}
                 </div>
               );
@@ -232,6 +256,7 @@ export function DataTable<T>({
               <button
                 key={c.key}
                 type="button"
+                style={at}
                 className={active ? `${cls} dt-h-sort active` : `${cls} dt-h-sort`}
                 // The header is a real button, so the sort is keyboard-operable — an operator
                 // driving the table from the keyboard is a stated requirement, and a click handler
@@ -246,6 +271,8 @@ export function DataTable<T>({
               </button>
             );
           })}
+          <ColumnResizeHandles control={resize} columns={columns} labels={filterLabels} />
+          <ColumnWidthReset control={resize} columnCount={columns.length} />
         </div>
       )}
       {!!filters && !!onFiltersChange && (

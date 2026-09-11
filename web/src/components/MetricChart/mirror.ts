@@ -16,16 +16,33 @@ export interface MirrorAxis {
   below: string;
 }
 
+/** The rotation a gutter label is drawn at, in radians — counter-clockwise, so the text reads
+ *  bottom-to-top. Exported because the marks below are picked for how they look *after* it; the
+ *  two cannot be changed independently. */
+export const LABEL_ROTATION = -Math.PI / 2;
+
 /**
- * The marks that say which way each half runs.
+ * The marks that say which way each half runs — **as they appear on the screen, once
+ * {@link LABEL_ROTATION} has been applied**.
+ *
+ * 🚨 **The glyph rotates with the text.** `rotate(-π/2)` maps "right in the text" to "up on the
+ * screen", so a `▲` written here renders pointing LEFT. It shipped that way and read `IN ◀` /
+ * `OUT ▶` on a real board: two arrows pointing sideways, saying nothing about up and down. Hence
+ * the right-pointing glyph above and the left-pointing one below, which is the opposite of how it
+ * reads in this file.
+ *
+ * ⚠️ **And the test written for this pinned the codepoint** (`ABOVE_MARK === '▲'`), so it agreed
+ * with the defect and went green for as long as the defect existed. What a test can hold here is
+ * that the pair is horizontal, that the two differ, and that the rotation has not changed under
+ * them. **Which way they point on screen was settled by looking at a render, and nothing mechanical
+ * can re-settle it** — if you change either constant, look at a chart.
  *
  * ⚠️ **Composed here, never carried in the locale files.** Which direction is up is a fact about
- * the chart, not about the language, and a glyph inside a translated string is a glyph nothing can
- * check — a locale could ship `IN ▼` and every gate would pass. Held out here, "the upper label
- * ends in ▲" is a test.
+ * the chart, not about the language, and a glyph inside a translated string is one nothing can
+ * check at all — a locale could ship the pair reversed and every gate would pass.
  */
-export const ABOVE_MARK = '▲';
-export const BELOW_MARK = '▼';
+export const ABOVE_MARK = '▶';
+export const BELOW_MARK = '◀';
 
 /** The two strings as they are painted into the gutter. */
 export function gutterLabels(axis: MirrorAxis): { above: string; below: string } {

@@ -229,6 +229,7 @@ export function DnsHealth({
       <div className="dns-history">
         <div className="dns-history-head">{t('overview.resolutionHistory')}</div>
         <DataTable
+          tableId="node.dnsHealth"
           rows={history}
           columns={historyColumns}
           rowKey={(row) => String(row.id)}

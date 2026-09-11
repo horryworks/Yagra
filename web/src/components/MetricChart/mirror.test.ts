@@ -4,6 +4,7 @@ import {
   ABOVE_MARK,
   BELOW_MARK,
   LABEL_MARGIN,
+  LABEL_ROTATION,
   gutterLabels,
   labelFits,
   mirrorLayout,
@@ -15,14 +16,30 @@ const BOX: PlotBox = { left: 60, top: 10, width: 800, height: 200 };
 const BOTTOM = BOX.top + BOX.height; // 210
 
 describe('gutterLabels', () => {
-  it('marks the upper half with ▲ and the lower half with ▼', () => {
+  it('puts one mark on each label, and they are not the same one', () => {
     const l = gutterLabels({ above: 'IN', below: 'OUT' });
     expect(l.above).toBe(`IN ${ABOVE_MARK}`);
     expect(l.below).toBe(`OUT ${BELOW_MARK}`);
-    // The direction is the whole point of the mark, so pin the glyphs themselves too: a swap here
-    // renders a chart that names both halves and points them the wrong way, which reads as correct.
-    expect(ABOVE_MARK).toBe('▲');
-    expect(BELOW_MARK).toBe('▼');
+    expect(ABOVE_MARK).not.toBe(BELOW_MARK);
+  });
+
+  // 🚨 This test's first version asserted `ABOVE_MARK === '▲'` and went green while the chart drew
+  // `IN ◀` / `OUT ▶` on a real board — two arrows pointing sideways. The glyph is rotated with the
+  // text, so what matters is the direction AFTER `LABEL_ROTATION`, and a codepoint assertion cannot
+  // see that: it agreed with the defect for as long as the defect existed
+  // (`test-written-from-the-implementation-pins-the-defect`).
+  //
+  // ⚠️ So what is held here is the *relationship*, not the rendering. `rotate(-π/2)` maps right → up
+  // and left → down, so the mark for the upper half is the RIGHT-pointing glyph. The rotation is
+  // pinned beside them: change it and this goes red, which is the point at which someone has to
+  // look at a chart again. **Nothing mechanical can check where they actually end up pointing.**
+  it('uses a horizontal pair, because the rotation turns them a quarter turn', () => {
+    expect(LABEL_ROTATION).toBe(-Math.PI / 2);
+    expect(ABOVE_MARK).toBe('▶'); // renders pointing UP
+    expect(BELOW_MARK).toBe('◀'); // renders pointing DOWN
+    // The vertical pair is what was shipped and what read sideways — refuse it by name.
+    expect([ABOVE_MARK, BELOW_MARK]).not.toContain('▲');
+    expect([ABOVE_MARK, BELOW_MARK]).not.toContain('▼');
   });
 
   it('carries the caller’s words through untouched, in either language', () => {
@@ -100,7 +117,7 @@ describe('mirrorLayout', () => {
 
 describe('labelFits', () => {
   // 🚨 Measured on a real render, not imagined: at a 60px plot the two rotated labels ran together
-  // into the single unreadable run `OUT ▼IN ▲`. A rotated label's footprint is its text WIDTH, and
+  // into one unreadable run of both names. A rotated label's footprint is its text WIDTH, and
   // a dashboard cell can be dragged to any height, so a short chart is a normal state.
   it('drops a label whose half is shorter than the text is wide', () => {
     expect(labelFits(30, 40)).toBe(false);

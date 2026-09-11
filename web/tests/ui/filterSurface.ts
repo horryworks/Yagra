@@ -90,7 +90,12 @@ export async function inspectFilterSurface(page: Page): Promise<FilterFinding[]>
           continue;
         }
         const cells = Array.from(filters.children);
-        const heads = Array.from(head.children);
+        // `:scope > .dt-h` rather than `head.children`: since ADR-129 the header row also carries
+        // the column-resize handles and the reset-widths button as extra grid items, and those are
+        // not columns. Counting every child would report "N filter cells under N+K headers" on
+        // every table in the app. The pairing below is still one filter cell per header cell, so
+        // this narrows what is *counted*, not what is *checked*.
+        const heads = Array.from(head.querySelectorAll(':scope > .dt-h'));
         if (cells.length !== heads.length) {
           out.push({
             where: '.dt-filters',

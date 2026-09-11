@@ -205,6 +205,7 @@ export function EventRulesPage() {
           </TableToolbar>
           {error && <p className="form-error">{error}</p>}
           <DataTable
+            tableId="alerts.eventRules"
             rows={shown}
             columns={columns}
             rowKey={(r) => r.id}
