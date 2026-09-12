@@ -27,11 +27,14 @@ import {
   formatUtil,
   httpStatusLabel,
   httpStatusTone,
+  isPercentMetric,
+  metricUnitSuffix,
   pointsToSeries,
   scalarLabel,
   scalarValueFormat,
   severityColorVar,
   stateLabel,
+  withUnit,
 } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
@@ -797,7 +800,14 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
                 nodeId={nodeId}
                 label={t(spec.labelKey)}
                 scale={spec.scale}
-                unit={'unit' in spec ? spec.unit : undefined}
+                // The card's own unit wins, then the metric it resolved onto (ADR-046 Inc.7
+                // 決定 5). `setupRate` needs the first half: its `/s` is a property of how the
+                // card reads a counter, not of `huawei_usg_session_total`, which is a session
+                // total. Everything else needs the second, and the second is why the `vpnUsers`
+                // card reads "28 sessions" on a Cisco — it resolves onto `cisco_ra_sessions`
+                // while its label says users. That mismatch predates this and is deliberately
+                // left visible rather than papered over with a hardcoded `users` here.
+                unit={('unit' in spec ? spec.unit : undefined) ?? metricUnitSuffix(resolved.metric) ?? undefined}
                 resolved={resolved}
                 range={range}
               />
@@ -820,10 +830,13 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
  *  The two scales were two components that differed only in how a number is rendered. A `percent`
  *  card pins the Y axis to 0–100 so a CPU hovering at 40% doesn't fill the chart; a `count` card
  *  auto-fits, since session counts vary by orders of magnitude per device, and its axis uses compact
- *  SI suffixes ("12.8k") while the headline and hover show the full count ("12,840"). Generic cards
- *  are always `count`: nothing in the API says a metric is a percentage (ADR-046 決定 6 declined a
- *  unit column and Inc.6 did not reopen it), and guessing from the name gets `huawei_cpu_usage`
- *  wrong.
+ *  SI suffixes ("12.8k") while the headline and hover show the full count ("12,840").
+ *
+ *  **A generic card used to be `count` unconditionally**, on the grounds that nothing in the API
+ *  said a metric was a percentage and guessing from the name gets `huawei_cpu_usage` wrong. ADR-046
+ *  Inc.7 says so in data — a hand-written table in `metric_meaning.rs`, still not a name rule — so
+ *  `scale` and `unit` now come from `isPercentMetric` / `metricUnitSuffix` and a percentage is
+ *  pinned to 0–100 wherever it is drawn, instead of only when Device health resolved onto it.
  *
  *  ⚠️ **How it reads is `resolved`'s decision, never this component's.** `read`/`chart` come from
  *  `metricView`; a counter is charted as a rate and its headline is taken from that series' last
@@ -904,7 +917,10 @@ function MetricCard({
   }, [nodeId, metric, readKind, chartKind, range, tick]);
 
   const pct = scale === 'percent';
-  const fmt = format ?? ((v: number) => (pct ? formatUtil(v) : `${formatCount(v)}${unit ?? ''}`));
+  // `withUnit` rather than concatenation: `%` and `/s` sit tight against the number while `ms` and
+  // `°C` take a space, and that rule lives in one place (`format.ts`) rather than as an invisible
+  // leading space inside each of 108 unit strings.
+  const fmt = format ?? ((v: number) => (pct ? formatUtil(v) : withUnit(formatCount(v), unit)));
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
@@ -1079,7 +1095,12 @@ function SnmpScalars({ nodeId }: { nodeId: string }) {
               label={label}
               labelMono={!known}
               meaning={meaning ? t(meaning) : null}
-              scale="count"
+              // Both come from the generated unit table rather than from this component
+              // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what a
+              // curated card would have drawn for the same metric; `unit` is ignored on the
+              // percent branch and by `format`, so none of the three can double up.
+              scale={isPercentMetric(c.metric) ? 'percent' : 'count'}
+              unit={metricUnitSuffix(c.metric) ?? undefined}
               format={scalarValueFormat(c.metric)}
               resolved={c}
               range={range}

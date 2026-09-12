@@ -8053,6 +8053,25 @@ export interface components {
              *     with its OID in `get_config(kind=mib_catalog)`).
              */
             source: string;
+            /**
+             * @description The unit the **stored** number is in, or `null` when it has none (ADR-046 Inc.7).
+             *
+             *     ⚠️ **Stored, not displayed.** `query_metrics` returns the stored value and a threshold bound
+             *     is written in the stored unit, so that is the one served here. When `unit_kind` is `scaled`
+             *     the WebUI shows something else — `hundredths of a second` is drawn as `1mo 9d 02:09`, and
+             *     `kilobytes` as `15.6 GB` — and the number you would write in a rule is still the stored one.
+             */
+            unit?: string | null;
+            /**
+             * @description How to read `unit`: `symbol` (append it — `%`, `ms`, `°C`), `counted` (the noun being
+             *     counted — `sessions`, `users`), `scaled` (the stored unit, spelled out, of a value the
+             *     WebUI rescales before showing), or `null` when the metric has no unit.
+             *
+             *     Separate from `unit` because the payloads are not distinguishable by inspection: `%` and
+             *     `kilobytes` are both strings, and appending one to a number is correct while appending the
+             *     other is not.
+             */
+            unit_kind?: string | null;
         };
         /** @description One point of a time series: Unix-seconds timestamp and value. */
         MetricPoint: {

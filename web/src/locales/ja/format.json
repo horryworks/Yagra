@@ -46,5 +46,21 @@
     "meraki_uplink_loss_pct": "アップリンク損失 %",
     "meraki_uplink_latency_ms": "アップリンク遅延 (ms)",
     "meraki_uplink_status": "アップリンクステータス"
+  },
+  "unit": {
+    "addresses": "アドレス",
+    "adjacencies": "隣接",
+    "answers": "件",
+    "connections": "接続",
+    "days": "日",
+    "entries": "件",
+    "hops": "段",
+    "minutes": "分",
+    "neighbours": "隣接",
+    "pages": "枚",
+    "processes": "プロセス",
+    "sessions": "セッション",
+    "tunnels": "トンネル",
+    "users": "ユーザー"
   }
 }

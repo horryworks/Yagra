@@ -50,6 +50,30 @@
 
 ### Improvements
 
+- **Metrics now carry their units on screen.** A node's Overview showed `icmp_loss_pct` as `0`,
+  `icmp_rtt_ms` as `2` and `huawei_mem_usage` as `14` — a percentage, a millisecond reading and
+  another percentage, all rendered exactly like a count of things. They now read `0%`, `2 ms` and
+  `14%`, and the counts say what they are counting (`28 users`, `2,342 sessions`, `0 tunnels`).
+  The same units appear on the Collection tab and in the chart hover readout, and a metric known to
+  be a percentage is now drawn against a 0–100 axis wherever it appears, not only when it happened
+  to land on a Device health card.
+  Units are a hand-written table of all 108 metrics, never guessed from the metric name — a rule on
+  `_pct` / `_ms` would miss `huawei_cpu_usage` and `huawei_mem_usage`, which are percentages with no
+  suffix at all. A metric whose unit genuinely varies per row or per model keeps no unit and says
+  why in its description (`ent_sensor_value` carries temperature, voltage, current, RPM and optical
+  power on one name; MikroTik reports °C on some models and tenths of a degree on others).
+- **Sixteen metrics whose stored number is not the number to read are now converted.** Memory and
+  swap totals reported in kilobytes or raw bytes showed as `16,331,908`; they now show as `15.6 GB`.
+  Load averages, which SNMP reports multiplied by 100, showed as `100`; they now show as `1.00`.
+  ⚠️ **A threshold rule is still written in the metric's stored unit.** The card reads `15.6 GB`
+  while the rule for it takes `16000000`, and `1.00` while the rule takes `100`. This was already
+  true of device uptime; it is now true of these as well. Existing rules are unaffected — nothing
+  about how a bound is evaluated changed, only how the current value is printed.
+- **The `/api/v1/metric-meanings` response (and the `get_config(kind=metric_meanings)` MCP tool)
+  now carries `unit` and `unit_kind`**, so an AI client reading a bare metric name gets the same
+  fact the screen shows. `unit` is always the unit the value is **stored** in — the one a threshold
+  bound and a `query_metrics` result are in — which for the sixteen metrics above is not what the
+  WebUI displays; `unit_kind` says which of `symbol`, `counted` and `scaled` it is.
 - **A node's Overview now says why it is in Warning.** The Active alerts list on node detail
   rendered the severity word and a timestamp and nothing else, so a node sitting in Warning gave
   no way to learn what was wrong without leaving its page for Alerts ▸ Active. It now carries the

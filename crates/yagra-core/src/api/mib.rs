@@ -60,6 +60,21 @@ pub(crate) struct MetricMeaning {
     /// `query_metrics` for it returns nothing), or `collected` (read off a device by a metric set,
     /// with its OID in `get_config(kind=mib_catalog)`).
     pub source: String,
+    /// The unit the **stored** number is in, or `null` when it has none (ADR-046 Inc.7).
+    ///
+    /// ⚠️ **Stored, not displayed.** `query_metrics` returns the stored value and a threshold bound
+    /// is written in the stored unit, so that is the one served here. When `unit_kind` is `scaled`
+    /// the WebUI shows something else — `hundredths of a second` is drawn as `1mo 9d 02:09`, and
+    /// `kilobytes` as `15.6 GB` — and the number you would write in a rule is still the stored one.
+    pub unit: Option<String>,
+    /// How to read `unit`: `symbol` (append it — `%`, `ms`, `°C`), `counted` (the noun being
+    /// counted — `sessions`, `users`), `scaled` (the stored unit, spelled out, of a value the
+    /// WebUI rescales before showing), or `null` when the metric has no unit.
+    ///
+    /// Separate from `unit` because the payloads are not distinguishable by inspection: `%` and
+    /// `kilobytes` are both strings, and appending one to a number is correct while appending the
+    /// other is not.
+    pub unit_kind: Option<String>,
 }
 
 #[utoipa::path(
@@ -91,10 +106,12 @@ async fn list_metric_meanings(_guard: RequireView) -> Json<Vec<MetricMeaning>> {
 pub(crate) fn metric_meanings() -> Vec<MetricMeaning> {
     crate::metric_meaning::METRIC_MEANINGS
         .iter()
-        .map(|(metric, meaning)| MetricMeaning {
+        .map(|(metric, meaning, unit)| MetricMeaning {
             metric: (*metric).to_owned(),
             meaning: (*meaning).to_owned(),
             source: crate::metric_meaning::metric_source(metric).to_owned(),
+            unit: unit.stored().map(str::to_owned),
+            unit_kind: unit.kind().map(str::to_owned),
         })
         .collect()
 }

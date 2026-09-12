@@ -29796,6 +29796,20 @@
           "source": {
             "type": "string",
             "description": "Where the number comes from: `check` (one of Yagra's own probes), `derived` (computed per\nport at evaluation time, and therefore present in **no** time series — asking\n`query_metrics` for it returns nothing), or `collected` (read off a device by a metric set,\nwith its OID in `get_config(kind=mib_catalog)`)."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The unit the **stored** number is in, or `null` when it has none (ADR-046 Inc.7).\n\n⚠️ **Stored, not displayed.** `query_metrics` returns the stored value and a threshold bound\nis written in the stored unit, so that is the one served here. When `unit_kind` is `scaled`\nthe WebUI shows something else — `hundredths of a second` is drawn as `1mo 9d 02:09`, and\n`kilobytes` as `15.6 GB` — and the number you would write in a rule is still the stored one."
+          },
+          "unit_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How to read `unit`: `symbol` (append it — `%`, `ms`, `°C`), `counted` (the noun being\ncounted — `sessions`, `users`), `scaled` (the stored unit, spelled out, of a value the\nWebUI rescales before showing), or `null` when the metric has no unit.\n\nSeparate from `unit` because the payloads are not distinguishable by inspection: `%` and\n`kilobytes` are both strings, and appending one to a number is correct while appending the\nother is not."
           }
         }
       },

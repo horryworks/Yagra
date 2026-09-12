@@ -8,6 +8,7 @@
 
 import i18n from '../i18n';
 import { intlLocale } from './locale';
+import metricUnits from '../api/metricUnits.json';
 import type { Tone } from '../components/ui/Badge';
 import type { MetricPoint, NodeState, Severity } from '../types/api';
 
@@ -375,15 +376,107 @@ export function scalarLabel(metric: string): { label: string; known: boolean } {
   return { label: known ? i18n.t(`format:scalar.${metric}`) : metric, known };
 }
 
+/** What a metric's number *is*, as a kind and a payload — or `null` when it has no unit.
+ *
+ *  Read straight off `api/metricUnits.json`, which is **generated** from
+ *  `crates/yagra-core/src/metric_meaning.rs` (ADR-046 Inc.7). Nothing here is hand-kept in step
+ *  with Rust, and there is deliberately no rule from the metric's *name*: Inc.6 決定 J refused a
+ *  `_pct` / `_ms` suffix rule because `huawei_cpu_usage` and `huawei_mem_usage` are percentages
+ *  with no suffix at all. All 108 rows were written by hand, in Rust.
+ *
+ *  ⚠️ **This lives here rather than in `metricMeaning.ts`** — that module imports this one, so the
+ *  dependency cannot run the other way. It is also the right address: the per-metric display
+ *  registry (`KNOWN_SCALARS`, `scalarLabel`, `scalarValueFormat`) is already here. */
+export function metricUnit(
+  metric: string,
+): { kind: 'symbol' | 'counted' | 'scaled'; unit: string } | null {
+  for (const kind of ['symbol', 'counted', 'scaled'] as const) {
+    const unit = (metricUnits as Record<string, Record<string, string>>)[kind]?.[metric];
+    if (unit != null) return { kind, unit };
+  }
+  return null;
+}
+
+/** The suffix to put after a metric's value, already localized — or `null` for no suffix.
+ *
+ *  `symbol` is the same in every language and goes through verbatim. `counted` is a **noun**
+ *  (`sessions`, `users`, `days`) and is looked up under `format:unit.*`, which is why anything
+ *  language-dependent is a counted unit in Rust and not a symbol. `scaled` returns `null`: those
+ *  values are rescaled by [`scalarValueFormat`], which owns the whole rendered string, so a suffix
+ *  here would print twice (`15.6 GB kilobytes`). */
+export function metricUnitSuffix(metric: string): string | null {
+  const u = metricUnit(metric);
+  if (!u) return null;
+  if (u.kind === 'symbol') return u.unit;
+  if (u.kind === 'counted') return i18n.t(`format:unit.${u.unit}`);
+  return null;
+}
+
+/** Is this metric a 0–100 percentage, so a chart of it should be pinned to that range?
+ *
+ *  ADR-046 Inc.6 決定 J deliberately left every generic card auto-fitting, on the grounds that
+ *  "nothing in the API says a metric is a percentage". Inc.7 makes something say so, and the
+ *  reason to act on it is **consistency rather than accuracy**: `huawei_cpu_usage` is pinned to
+ *  0–100 when Device health resolves onto it and auto-fitted when it falls through to the generic
+ *  list, so today the same metric on two devices draws two different charts.
+ *
+ *  Returns a boolean, not a `MetricScale`: that union belongs to `metricCards.ts`, and spelling it
+ *  again here would be a second copy of it. */
+export function isPercentMetric(metric: string): boolean {
+  const u = metricUnit(metric);
+  return u?.kind === 'symbol' && u.unit === '%';
+}
+
+/** Units that sit tight against the number; everything else takes a space.
+ *
+ *  Two members, and both are conventions rather than choices: `50%` and `12/s` are wrong with a
+ *  space, `2 ms` and `59 °C` are wrong without one. Kept as a set in one place rather than as a
+ *  leading space baked into each unit string — a `' ms'` in a 108-row table is a difference nobody
+ *  can see while reading it. */
+const TIGHT_UNITS = new Set(['%', '/s']);
+
+/** Join an already-formatted number to its unit, with the spacing that unit takes. */
+export function withUnit(value: string, unit: string | null | undefined): string {
+  if (!unit) return value;
+  return TIGHT_UNITS.has(unit) ? `${value}${unit}` : `${value} ${unit}`;
+}
+
 /** The formatter for a scalar whose **stored number is not the number to show**, or `undefined`
  *  when the raw value is the value.
  *
- *  One entry today: SNMP TimeTicks are hundredths of a second, so `337326072` is `1mo 9d 02:09`.
+ *  **Membership is not a list here** — it is every metric Rust marked `MetricUnit::Scaled`, read
+ *  off the generated table. A second hand-written copy of "which metrics need converting" is
+ *  exactly the mirror that rots, and it would rot in the direction that shows an odometer as a
+ *  rate (the ADR-012 accident, which ADR-046 Inc.6 already had to undo once).
+ *
+ *  🚨 **The rescaled number is not the number a threshold rule takes.** A bound is written in the
+ *  metric's stored unit (`alerts/rules.rs::lowest_bound`), so the card can read `15.6 GB` where the
+ *  rule takes `16000000`, and `1.00` where it takes `100`. That was already true of
+ *  `snmp_sys_uptime_ticks` alone; ADR-046 Inc.7 made it true of seventeen metrics, deliberately,
+ *  and the deferral to fix the rule side carries its unblocking condition in `backlog.md`.
+ *
  *  Exported rather than inlined into [`scalarDisplay`] because the Overview's metric card needs the
- *  same rule for its headline and its hover readout — and a second copy of "which metrics need
- *  converting" is exactly the mirror that rots. */
+ *  same rule for its headline and its hover readout. */
 export function scalarValueFormat(metric: string): ((v: number) => string) | undefined {
-  return metric === 'snmp_sys_uptime_ticks' ? formatUptimeTicks : undefined;
+  const u = metricUnit(metric);
+  if (u?.kind !== 'scaled') return undefined;
+  switch (u.unit) {
+    case 'bytes':
+      return (v) => formatBytes(v);
+    // Not `formatKb`: that one is the Meraki windowed-usage gauge and keeps a decimal
+    // unconditionally. These are memory and swap totals, and they have to read the same way the
+    // MEMORY card beside them does.
+    case 'kilobytes':
+      return (v) => formatBytes(v * 1024);
+    case 'hundredths of a second':
+      return formatUptimeTicks;
+    // A load average is dimensionless, so there is no suffix to add — only the ÷100 that laLoadInt
+    // needs. Two decimals because that is how every other tool prints one (`1.00`, not `1`).
+    case 'hundredths of a load average':
+      return (v) => (Number.isFinite(v) ? (v / 100).toFixed(2) : '—');
+    default:
+      return undefined;
+  }
 }
 
 /** A known scalar gets a localized label + formatted value (and renders in the UI font, not mono);
@@ -395,7 +488,14 @@ export function scalarDisplay(metric: string, value: number): {
 } {
   const { label, known } = scalarLabel(metric);
   const fmt = scalarValueFormat(metric);
-  return { label, value: fmt ? fmt(value) : String(value), known };
+  // The unit goes on here too, not only on the Overview card, so the Collection tab and the
+  // Overview do not disagree about the same metric on the same screen. A rescaled value never
+  // doubles up: `metricUnitSuffix` returns null for exactly the metrics `fmt` is non-undefined for.
+  return {
+    label,
+    value: withUnit(fmt ? fmt(value) : String(value), metricUnitSuffix(metric)),
+    known,
+  };
 }
 
 /** Whole-number count with locale thousands separators (e.g. 12840 → "12,840"), or `—` for a

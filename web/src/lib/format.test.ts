@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
+import i18n from '../i18n';
+import metricUnits from '../api/metricUnits.json';
 import {
   agoSec,
   alertWhat,
@@ -17,10 +19,14 @@ import {
   httpStatusLabel,
   httpStatusTone,
   initials,
+  isPercentMetric,
   localTimeZone,
+  metricUnit,
+  metricUnitSuffix,
   pointsToSeries,
   relativeTime,
   scalarDisplay,
+  scalarValueFormat,
   severityColorVar,
   severityRank,
   stateColorValue,
@@ -28,6 +34,7 @@ import {
   stateLabel,
   timeValue,
   toRfc3339,
+  withUnit,
 } from './format';
 
 describe('format', () => {
@@ -457,5 +464,121 @@ describe('helpers lifted out of the .tsx screens', () => {
     expect(timeValue(0, 0)).toBe('00:00');
     expect(timeValue(9, 5)).toBe('09:05');
     expect(timeValue(23, 59)).toBe('23:59');
+  });
+});
+
+// ADR-046 Inc.7 — metric units. The table itself lives in Rust
+// (`crates/yagra-core/src/metric_meaning.rs`) and reaches here as the generated
+// `src/api/metricUnits.json`, so nothing below re-declares which metric has which unit. What these
+// pin is the *rendering* of a unit, and the two places a missing answer is invisible: a `scaled`
+// metric with no formatter, and a `counted` noun with no string.
+describe('metric units', () => {
+  it('puts % and /s tight against the number and everything else a space away', () => {
+    expect(withUnit('50', '%')).toBe('50%');
+    expect(withUnit('12', '/s')).toBe('12/s');
+    expect(withUnit('2', 'ms')).toBe('2 ms');
+    expect(withUnit('59', '°C')).toBe('59 °C');
+    expect(withUnit('28', 'sessions')).toBe('28 sessions');
+  });
+
+  it('adds no separator at all when there is no unit', () => {
+    expect(withUnit('42', null)).toBe('42');
+    expect(withUnit('42', undefined)).toBe('42');
+    expect(withUnit('42', '')).toBe('42');
+  });
+
+  it('reads the kind and payload off the generated table', () => {
+    expect(metricUnit('icmp_loss_pct')).toEqual({ kind: 'symbol', unit: '%' });
+    expect(metricUnit('cisco_ra_users')).toEqual({ kind: 'counted', unit: 'users' });
+    expect(metricUnit('ucd_mem_total_kb')).toEqual({ kind: 'scaled', unit: 'kilobytes' });
+    // A code, not a quantity — `1` = up. Deliberately unitless, not merely absent.
+    expect(metricUnit('if_oper_status')).toBeNull();
+    // An operator's own collection item is not in the table at all, and reads the same way.
+    expect(metricUnit('snmp_oid_1_3_6')).toBeNull();
+  });
+
+  it('localizes a counted noun and leaves a symbol alone', () => {
+    expect(metricUnitSuffix('icmp_rtt_ms')).toBe('ms');
+    expect(metricUnitSuffix('cisco_ike_active_tunnels')).toBe('tunnels');
+    expect(metricUnitSuffix('ssl_cert_days_to_expiry')).toBe('days');
+  });
+
+  // The suffix and the rescaling are mutually exclusive by construction. If this ever returns a
+  // string, every scaled card prints its unit twice ("15.6 GB kilobytes").
+  it('offers no suffix for a metric whose value is rescaled', () => {
+    expect(metricUnitSuffix('ucd_mem_total_kb')).toBeNull();
+    expect(metricUnitSuffix('snmp_sys_uptime_ticks')).toBeNull();
+    expect(metricUnitSuffix('ucd_load_1min')).toBeNull();
+  });
+
+  it('recognises a percentage wherever it is drawn, including the ones with no _pct suffix', () => {
+    // The counter-example ADR-046 Inc.6 決定 J named: these two are percentages and neither says so
+    // in its name. A suffix rule would miss exactly the vendor the lab runs.
+    expect(isPercentMetric('huawei_cpu_usage')).toBe(true);
+    expect(isPercentMetric('huawei_mem_usage')).toBe(true);
+    expect(isPercentMetric('icmp_loss_pct')).toBe(true);
+    expect(isPercentMetric('snmp_neighbor_count')).toBe(false);
+    expect(isPercentMetric('icmp_rtt_ms')).toBe(false);
+    expect(isPercentMetric('snmp_oid_1_3_6')).toBe(false);
+  });
+
+  it('rescales the stored number for each unit the table can carry', () => {
+    // 16,331,908 kB is a 16 GB host. Read as bytes it would say "15.6 MB", which is the failure
+    // this exists to prevent — plausible, and three orders out.
+    expect(scalarValueFormat('ucd_mem_total_kb')?.(16_331_908)).toBe('15.6 GB');
+    expect(scalarValueFormat('cisco_mem_used')?.(134_217_728)).toBe('128 MB');
+    expect(scalarValueFormat('ucd_load_1min')?.(100)).toBe('1.00');
+    expect(scalarValueFormat('ucd_load_per_core')?.(250)).toBe('2.50');
+    expect(scalarValueFormat('snmp_sys_uptime_ticks')?.(337_326_072)).toBe('1mo 9d 01:01');
+  });
+
+  it('leaves a metric alone when the stored number is the number to show', () => {
+    expect(scalarValueFormat('icmp_loss_pct')).toBeUndefined();
+    expect(scalarValueFormat('cisco_ra_users')).toBeUndefined();
+    expect(scalarValueFormat('if_oper_status')).toBeUndefined();
+  });
+
+  it('puts the unit on the Collection tab too, so one screen does not disagree with itself', () => {
+    expect(scalarDisplay('icmp_loss_pct', 0).value).toBe('0%');
+    expect(scalarDisplay('cisco_ra_users', 28).value).toBe('28 users');
+    // Rescaled: the formatter owns the whole string and the suffix stays out of it.
+    expect(scalarDisplay('ucd_mem_total_kb', 16_331_908).value).toBe('15.6 GB');
+  });
+
+  // 🚨 The check this file exists for. `scalarValueFormat` switches on the *stored unit*, so a new
+  // `MetricUnit::Scaled("watt-hours")` in Rust falls through its `default` and returns undefined —
+  // and undefined is exactly what a metric with no conversion returns, so the card would silently
+  // print the raw stored number. Nothing else would notice: the Rust side only counts the Scaled
+  // population, and the WebUI would render a plausible wrong figure.
+  it('has a formatter for every metric Rust marked as rescaled, and for nothing else', () => {
+    const scaled = Object.keys(metricUnits.scaled);
+    // A floor on what was *inspected*: an empty or renamed `scaled` group would make every
+    // assertion below vacuous, and a vacuous check reads exactly like a healthy one.
+    expect(scaled.length).toBe(17);
+
+    const unhandled = scaled.filter((m) => scalarValueFormat(m) === undefined);
+    expect(unhandled).toEqual([]);
+
+    // The other direction: nothing outside the group may claim a conversion, or the stored value
+    // and the displayed value diverge for a metric whose threshold rules nobody adjusted.
+    const symbolAndCounted = [
+      ...Object.keys(metricUnits.symbol),
+      ...Object.keys(metricUnits.counted),
+    ];
+    expect(symbolAndCounted.filter((m) => scalarValueFormat(m) !== undefined)).toEqual([]);
+  });
+
+  // The counted nouns are the only part of a unit that is language-dependent, so they are the only
+  // part that can be missing from a locale. `i18nEnumKeys.test.ts` owns EN⟷JA; this owns the
+  // weaker but load-bearing half — that the key resolves at all rather than rendering
+  // `format:unit.tunnels` on screen.
+  it('resolves a string for every counted noun in the generated table', () => {
+    const nouns = [...new Set(Object.values(metricUnits.counted))];
+    expect(nouns.length).toBeGreaterThanOrEqual(14);
+    for (const noun of nouns) {
+      const rendered = i18n.t(`format:unit.${noun}`);
+      expect(rendered).not.toBe(`format:unit.${noun}`);
+      expect(rendered).not.toBe('');
+    }
   });
 });

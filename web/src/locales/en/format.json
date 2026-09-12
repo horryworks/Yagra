@@ -51,5 +51,21 @@
     "meraki_uplink_loss_pct": "Uplink loss %",
     "meraki_uplink_latency_ms": "Uplink latency (ms)",
     "meraki_uplink_status": "Uplink status"
+  },
+  "unit": {
+    "addresses": "addresses",
+    "adjacencies": "adjacencies",
+    "answers": "answers",
+    "connections": "connections",
+    "days": "days",
+    "entries": "entries",
+    "hops": "hops",
+    "minutes": "minutes",
+    "neighbours": "neighbours",
+    "pages": "pages",
+    "processes": "processes",
+    "sessions": "sessions",
+    "tunnels": "tunnels",
+    "users": "users"
   }
 }

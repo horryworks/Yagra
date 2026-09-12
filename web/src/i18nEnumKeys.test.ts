@@ -62,6 +62,7 @@ import {
 import { CREDENTIAL_KINDS } from './lib/credentialKinds';
 import { TEXT_MODES } from './lib/columnFilter';
 import { EXPLAINED_METRICS } from './lib/metricMeaning';
+import metricUnits from './api/metricUnits.json';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
@@ -335,6 +336,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // `scalarDisplay` only falls back to the raw metric name for names NOT in this set. A name in
     // the set with no strings renders the literal key to the operator instead.
     expectKeys('scalar', { en: enFormat, ja: jaFormat }, 'scalar.', [...KNOWN_SCALARS]);
+  });
+
+  it('every counted unit has a noun (format:unit.*)', () => {
+    // The nouns come from `api/metricUnits.json`, which is generated from Rust (ADR-046 Inc.7), so
+    // a `MetricUnit::Counted("frames")` added there fails here until someone writes the word in
+    // both languages. ⚠️ EN⟷JA parity alone cannot catch that: a new noun is missing from *both*
+    // files, so parity passes while the card renders `format:unit.frames` beside the number.
+    const nouns = [...new Set(Object.values(metricUnits.counted))];
+    expect(nouns.length).toBeGreaterThanOrEqual(14);
+    expectKeys('counted unit', { en: enFormat, ja: jaFormat }, 'unit.', nouns);
   });
 
   it('every Device-health metric card has a label (nodes:overview.*)', () => {
