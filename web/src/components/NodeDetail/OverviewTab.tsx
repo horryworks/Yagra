@@ -121,7 +121,7 @@ export function OverviewTab({
           {(node.tags ?? []).length > 0 && (
             <div className="nd-tag-chips">
               {[...node.tags].sort((a, b) => a.localeCompare(b)).map((label) => (
-                <Badge key={label}>{label}</Badge>
+                <Badge tone="tag" key={label}>{label}</Badge>
               ))}
             </div>
           )}
@@ -130,7 +130,7 @@ export function OverviewTab({
               <div className="nd-tag-inherited-t">{t('field.tagsInheritedFrom')}</div>
               <div className="nd-tag-chips">
                 {[...node.inherited_tags].sort((a, b) => a.localeCompare(b)).map((label) => (
-                  <Badge key={label}>{label}</Badge>
+                  <Badge tone="tag" key={label}>{label}</Badge>
                 ))}
               </div>
             </>

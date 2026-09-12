@@ -2987,8 +2987,15 @@ mod tests {
     /// ⚠️ The status is named, not `is_success()`: this route documents 200 with a body.
     ///
     /// 🚨 The first node is seeded with a label the bulk call never mentions, and that label is
-    /// asserted afterwards. Without it, an implementation that replaced the whole map would pass —
+    /// asserted afterwards. Without it, an implementation that replaced the whole list would pass —
     /// and would silently strip every other label off every node an operator ever bulk-tags.
+    ///
+    /// 🚨 **The bodies below are untyped `json!` literals, and that is exactly what made this test
+    /// survive ADR-135 増分 2's type change unnoticed.** Every typed caller of the label fields
+    /// turned into a compile error when they became `Vec<String>`; these did not, so the test
+    /// compiled, ran only under `--include-ignored`, and answered 422 against a machine with no
+    /// PostgreSQL to run it on. A `json!` body is a hand-written copy of the request schema with
+    /// nothing pinning it to the real one — when you change a DTO, grep the `json!` literals.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_tag_is_accepted_and_merges_into_what_is_already_there(pool: sqlx::PgPool) {
@@ -3004,7 +3011,7 @@ mod tests {
             "PUT",
             &format!("/api/v1/nodes/{a}/bindings"),
             &tok,
-            Some(serde_json::json!({ "tags": { "role": "core" } })),
+            Some(serde_json::json!({ "tags": ["core"] })),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
@@ -3016,7 +3023,7 @@ mod tests {
             &tok,
             Some(serde_json::json!({
                 "node_ids": [a, b],
-                "add": { "region": "JAPAN" },
+                "add": ["JAPAN"],
             })),
         )
         .await;
@@ -3025,19 +3032,33 @@ mod tests {
         assert_eq!(body["applied"], 2, "{body}");
 
         let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{a}"), &tok, None).await;
-        assert_eq!(detail["tags"]["region"], "JAPAN", "{detail}");
+        // ⚠️ Compared as a **set**, because this list is ordered by PostgreSQL's `ORDER BY` inside
+        // `merge_node_tags` and therefore by the test database's collation — `C` puts `JAPAN`
+        // before `core`, `en_US.utf8` does the opposite. What this test is about is that the
+        // merge kept both and stored neither twice; pinning a collation here would make it fail on
+        // a database that is not wrong.
+        let mut got: Vec<&str> = detail["tags"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tags is a list: {detail}"))
+            .iter()
+            .map(|v| v.as_str().expect("a string"))
+            .collect();
+        got.sort_unstable();
         assert_eq!(
-            detail["tags"]["role"], "core",
-            "the bulk add replaced the map instead of merging into it: {detail}"
+            got,
+            vec!["JAPAN", "core"],
+            "the bulk add replaced the list instead of merging into it, or stored a duplicate: \
+             {detail}"
         );
 
-        // A key that is not a legal tag key is refused rather than stored.
+        // A label the validator refuses is refused rather than stored. An empty one, since the
+        // character rule the old key carried went away with the key — `has space` is legal now.
         let (status, body) = send(
             &st,
             "POST",
             "/api/v1/nodes/tags",
             &tok,
-            Some(serde_json::json!({ "node_ids": [a], "add": { "has space": "x" } })),
+            Some(serde_json::json!({ "node_ids": [a], "add": ["  "] })),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");

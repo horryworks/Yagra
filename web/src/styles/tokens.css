@@ -62,6 +62,25 @@
      the text with the text colour left alone — the same reason a highlighter pen does not change
      the ink. Both themes keep the body text at full contrast on top of it. */
   --match-bg: #ffe08a;
+
+  /* ---- tag chip (ADR-135 増分 2) ----
+     A filled chip, because an operator scanning a node's detail is looking for *which* labels it
+     carries, and an outline chip in body-text grey has to be read rather than seen.
+
+     🚨 **Deliberately NOT --accent-color.** §1.1 reserves the orange accent for
+     active/selected/focus, and an orange chip beside a selected row would put two unrelated
+     meanings on one colour. 🚨 **And deliberately not a --status-***, for the rule that matters
+     most in this file: a node's status colour must mean the same thing in the table, the map and
+     the chart, so nothing that is not a status may borrow one.
+
+     What is left is the categorical family — --series-*, which the block above says carries no
+     status meaning — and that is exactly what a tag is: it says WHICH label, never how healthy
+     anything is. The same borrow --role-* and --severity-info already make. Named rather than
+     spelled as a bare --series-1 at three call sites, so the reason travels with the colour. */
+  --tag-bg: var(--series-1);
+  /* The white --on-status declares, for the reason it gives there: a filled chip is saturated in
+     both themes, so its ink does not change with the theme. One white, not two. */
+  --tag-fg: var(--on-status);
   --match-fg: var(--text-primary);
 
   /* ---- status (§1.3) — network-state semantics; never reused for decoration ---- */

@@ -37,3 +37,21 @@
   color: var(--severity-info);
   border-color: var(--severity-info);
 }
+
+/* A tag (ADR-135 増分 2). The one filled tone: an operator scanning a node's detail is hunting for
+   *which* labels it carries, and a grey outline chip has to be read rather than seen.
+   `--tag-bg` is categorical, never the accent and never a status colour — tokens.css carries the
+   argument.
+
+   Taller and rounder than its siblings because it reads as an object on the page rather than as an
+   annotation on a number. ⚠️ The border is kept and coloured to the fill rather than removed, so
+   the box stays the same size as every other badge's and a row of mixed badges still lines up. */
+.badge-tag {
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius);
+  background: var(--tag-bg);
+  border-color: var(--tag-bg);
+  color: var(--tag-fg);
+  font-weight: var(--weight-semibold);
+}

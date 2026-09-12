@@ -136,7 +136,7 @@ export function GroupDetail({
             {group.tags.length > 0 && (
               <div className="nd-tag-chips">
                 {[...group.tags].sort((a, b) => a.localeCompare(b)).map((label) => (
-                  <Badge key={label}>{label}</Badge>
+                  <Badge tone="tag" key={label}>{label}</Badge>
                 ))}
               </div>
             )}
@@ -148,7 +148,7 @@ export function GroupDetail({
                     .filter((l) => !group.tags.includes(l))
                     .sort((a, b) => a.localeCompare(b))
                     .map((label) => (
-                      <Badge key={label}>{label}</Badge>
+                      <Badge tone="tag" key={label}>{label}</Badge>
                     ))}
                 </div>
               </>

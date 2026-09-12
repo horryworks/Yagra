@@ -19,15 +19,20 @@
   list-style: none;
 }
 
+/* Filled, matching `.badge-tag` (ADR-135 増分 2): the chip an operator edits here is the same
+   object the node's Overview shows them, so it has to look like the same object. `--tag-bg` is
+   categorical — never the accent, never a status colour; tokens.css carries the argument. */
 .chipinput-chip {
   align-items: center;
-  background: var(--bg-tertiary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
+  background: var(--tag-bg);
+  border: var(--border-width) solid var(--tag-bg);
+  border-radius: var(--radius);
+  color: var(--tag-fg);
   display: inline-flex;
   font-size: var(--font-sm);
+  font-weight: var(--weight-semibold);
   gap: calc(var(--space-1) / 2);
-  padding: 2px var(--space-1);
+  padding: 2px var(--space-2);
   /* A label may be a phrase; let the row wrap rather than the word. */
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -35,22 +40,31 @@
 
 /* A chip the save rules refuse — one migration 0109 can hand back, longer than the limit that now
  * applies. Marked rather than hidden: the operator has to be able to see the thing they must
- * delete. Paired with a `title`, so it is never colour alone. */
+ * delete. Paired with a `title`, so it is never colour alone.
+ *
+ * Filled with the status colour rather than outlined in it, because the chip it is replacing is
+ * itself filled and an outline would read as a *different kind of thing* rather than as the same
+ * thing in trouble. This is a genuine status use — "this value is refused" — so the status palette
+ * is the right family here, unlike the chip's own colour. */
 .chipinput-chip-bad {
+  background: var(--status-critical);
   border-color: var(--status-critical);
-  color: var(--status-critical);
+  color: var(--on-status);
 }
 
+/* The ✕ sits ON the fill, so it takes the chip's ink at reduced weight rather than the page's
+   tertiary grey, which would be unreadable against it. */
 .chipinput-chip button {
   background: none;
   border: none;
-  color: var(--text-tertiary);
+  color: var(--tag-fg);
   cursor: pointer;
   font-size: var(--font-md);
   line-height: 1;
+  opacity: 0.75;
   padding: 0;
 }
 
 .chipinput-chip button:hover {
-  color: var(--status-critical);
+  opacity: 1;
 }

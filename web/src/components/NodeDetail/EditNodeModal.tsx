@@ -229,7 +229,7 @@ export function EditNodeModal({
                 <ul className="nd-tag-badges">
                   {inherited.map((label) => (
                     <li key={label}>
-                      <Badge>{label}</Badge>
+                      <Badge tone="tag">{label}</Badge>
                       {/* ✕ here EXCLUDES rather than deletes: the label lives on the folder, and
                           this node cannot edit it — only refuse it. */}
                       <IconButton

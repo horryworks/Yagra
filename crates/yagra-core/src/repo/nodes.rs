@@ -1195,15 +1195,26 @@ mod tests {
         assert_eq!(requested, 2, "the repeated id was not de-duplicated");
         assert_eq!(applied, 2);
 
+        // ⚠️ Compared as **sets**. This list is ordered by the statement's own `ORDER BY`, so its
+        // order is the test database's collation — `C` puts `JAPAN` first, `en_US.utf8` does not.
+        // What is under test is the merge and the de-duplication, and pinning a collation here
+        // would fail on a database that is not wrong.
+        let sorted = |mut v: Vec<String>| {
+            v.sort_unstable();
+            v
+        };
         let tagged = repo.get_node(a).await.expect("read").expect("a");
         assert_eq!(
-            tagged.tags,
+            sorted(tagged.tags),
             vec!["JAPAN".to_owned(), "core".to_owned(), "neteng".to_owned()],
             "a label nobody mentioned was destroyed, or a re-added one was stored twice"
         );
         // The node that started empty got exactly the two labels, once each.
         let fresh = repo.get_node(b).await.expect("read").expect("b");
-        assert_eq!(fresh.tags, vec!["JAPAN".to_owned(), "core".to_owned()]);
+        assert_eq!(
+            sorted(fresh.tags),
+            vec!["JAPAN".to_owned(), "core".to_owned()]
+        );
 
         // Removing names labels, and touches only those.
         let (_, applied) = repo
@@ -1213,7 +1224,7 @@ mod tests {
         assert_eq!(applied, 1);
         let after = repo.get_node(a).await.expect("read").expect("a");
         assert_eq!(
-            after.tags,
+            sorted(after.tags),
             vec!["JAPAN".to_owned(), "neteng".to_owned()],
             "removal took a label it was not asked to"
         );

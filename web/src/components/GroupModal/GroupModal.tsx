@@ -230,7 +230,7 @@ export function GroupModal({
               <ul className="nd-tag-badges">
                 {inheritedTags.map((label) => (
                   <li key={label}>
-                    <Badge>{label}</Badge>
+                    <Badge tone="tag">{label}</Badge>
                     <IconButton
                       title={t('field.tagExclude', { label })}
                       onClick={() =>
