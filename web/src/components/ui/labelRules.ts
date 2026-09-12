@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The judgement behind `ChipInput` (ADR-135 inc. 2).
 //
 // In a `.ts` rather than the component, because Vitest runs with `include: ['src/**/*.test.ts']`
