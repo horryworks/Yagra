@@ -10,6 +10,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError, errMsg } from '../services/api';
 import { useCan } from '../store';
+import { usePrefsStore } from '../prefs';
 import type {
   CredentialSummary,
   DiscoveredEndpoint,
@@ -23,10 +24,12 @@ import type {
 } from '../types/api';
 import {
   canRequestStop,
+  initialCredentialIds,
+  initialPool,
+  initialTargetSpec,
   isScanInFlight,
   MAX_POLL_FAILURES,
   mergeScanIntoList,
-  pickDefaultPool,
   POLL_INTERVAL_MS,
   poolIsUnrouted,
   SCAN_STATE_SPECS,
@@ -115,7 +118,12 @@ export function DiscoveryPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
   const [searchParams, setSearchParams] = useSearchParams();
-  const [targetSpec, setTargetSpec] = useState('192.168.1.0/24');
+  /** The last sweep this browser started (ADR-134), read once. A ref, not a subscription: these
+   *  values seed form fields, and re-reading them after `startScan` writes would reset the form
+   *  under the operator while their own sweep was still running. */
+  const memory = useRef(usePrefsStore.getState().discoveryScan);
+  const rememberScan = usePrefsStore((s) => s.setDiscoveryScan);
+  const [targetSpec, setTargetSpec] = useState(() => initialTargetSpec(memory.current));
   const [selectedCredIds, setSelectedCredIds] = useState<string[]>([]);
   const [scanId, setScanId] = useState<string | null>(null);
   const [status, setStatus] = useState<DiscoveryScan | null>(null);
@@ -141,7 +149,9 @@ export function DiscoveryPage() {
    *  unassigned addresses are the overwhelming majority, and asking each of them for its identity
    *  is where a sweep's minutes went. Kept as a choice because a firewall that filters ICMP and
    *  answers SNMP is a real device this would otherwise never find. */
-  const [snmpWhenUnreachable, setSnmpWhenUnreachable] = useState(false);
+  const [snmpWhenUnreachable, setSnmpWhenUnreachable] = useState(
+    memory.current?.snmpWhenUnreachable ?? false,
+  );
   /** File each device into the folder whose IP range contains its address (ADR-131).
    *
    *  **On by default** (決定 11): where a folder carries a range, that range is the best answer
@@ -238,8 +248,10 @@ export function DiscoveryPage() {
       .listCredentials()
       .then((list) => {
         setCreds(list);
-        // Preselect every SNMP credential — the common case is "try all my secrets".
-        setSelectedCredIds(list.filter((c) => isSnmpCredentialKind(c.kind)).map((c) => c.id));
+        // The credentials the last sweep tried, narrowed to ones that still exist — falling back to
+        // every SNMP credential, which is both the long-standing default and the only safe answer
+        // when the memory has been emptied by deletions (`initialCredentialIds` says why).
+        setSelectedCredIds(initialCredentialIds(memory.current, list));
       })
       .catch(() => undefined);
     // Which site sweeps from here. A read failure degrades to "no sites offered", never to a
@@ -248,7 +260,7 @@ export function DiscoveryPage() {
       .listPools()
       .then((r) => {
         setPools(r.pools);
-        setPool(pickDefaultPool(r.pools));
+        setPool(initialPool(memory.current, r.pools));
       })
       .catch(() => undefined);
     // The site picker's options, and the deep link the node tree's context menu uses.
@@ -408,6 +420,17 @@ export function DiscoveryPage() {
       setError(t(siteId ? 'discovery.site.err.nothingTicked' : 'discovery.err.badTargets'));
       return;
     }
+    // Remember this sweep's settings for the next visit (ADR-134 決定 5). **After the validation
+    // above and once per scan** — a spec that does not parse started nothing and must not become
+    // the next person's starting point, and writing per keystroke would make a preference out of
+    // every half-typed range. `targetSpec` rather than `effectiveSpec`: in site mode the ticked
+    // ranges *are* the target, and a folder's prefixes are not this browser's to remember.
+    rememberScan({
+      targetSpec,
+      credentialIds: selectedCredIds,
+      pool,
+      snmpWhenUnreachable,
+    });
     // 🚨 Selecting *nothing* is load-bearing, not tidiness. The new scan has no id until the
     // server answers, and this used to leave the previous scan selected across that window — so the
     // page fired one more read of the old scan, whose reply cleared `justStarted` and installed a

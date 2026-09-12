@@ -12,6 +12,25 @@
 
 ### Improvements
 
+- **Moving from one node to another keeps the tab you were on.** Opening **Interfaces** on a switch
+  and then picking the next switch put you back on Overview every time, so comparing one tab across
+  a rack meant re-clicking it on every device. The tab you last selected is now what a node opens
+  on, for the rest of the browser session. A `?tab=` link still wins, so shared links and reloads
+  are unchanged — and a node that does not have that tab (a URL monitor has no Interfaces) still
+  falls back to Overview without forgetting your choice.
+- **The dashboard opens on the board you were last looking at.** With more than one board, returning
+  to a dashboard always reset you to the first one. Remembered per dashboard and per browser
+  session; nothing about the saved board layout changes.
+- **Discovery starts from your last sweep.** The target range, the credentials to try, the poll pool
+  and the "try SNMP when ping fails" switch are pre-filled from the last scan you started, instead
+  of a hardcoded `192.168.1.0/24` and an empty pool. A credential or pool that has since been
+  deleted is dropped rather than carried; if none of the remembered credentials still exist, every
+  SNMP credential is selected as before.
+- **Both maps keep where you panned and zoomed to.** Stepping from the network or geographic map to
+  a node and back re-fitted the whole diagram. The position is kept for the browser session;
+  **Fit to view** still resets it, which is also the way to recover a position saved on a
+  differently-sized window.
+
 - **The inventory tree paints as soon as the folder list arrives, instead of waiting for all three
   of its startup requests.** Opening **Nodes ▸ All nodes** fetched the folders, the per-folder health
   rollup and the fleet totals and waited for the slowest of the three before drawing anything — and
@@ -33,6 +52,10 @@
 
 ### Bug Fixes
 
+- **Fixed: the node's Flow tab ignored the time window every other pane shares.** Picking 24h on
+  Overview or Interfaces and then opening Flow silently went back to the default hour, because that
+  one pane kept its own window. Flow now reads the same window as Overview, Interfaces, Collection
+  and the DNS pane.
 - **Fixed: if the per-folder health rollup failed, the inventory tree silently stopped loading any
   members.** The failure was substituted with an empty set of counts, which is indistinguishable from
   the valid answer "every folder is empty" — so no folder was ever asked for its contents, and the

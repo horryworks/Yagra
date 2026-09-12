@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
+import { BOOTSTRAP_OVERRIDES, TREE_SIBLING_IDS } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
 import {
   NODE_DETAIL_TABS,
@@ -123,6 +123,105 @@ test.describe('clicking a tab', () => {
       );
       await expect(page).toHaveURL(new RegExp(`[?&]tab=${tab}\\b`));
     }
+    expect(errors.uncaught).toEqual([]);
+  });
+});
+
+// Moving between nodes keeps the tab (ADR-134).
+//
+// WHY TIER1. The judgement is unit-tested (`requestedNodeDetailTab`), and it is three lines. What no
+// unit test can say is whether the memory survives the trip: the inventory split **deletes** `?tab=`
+// on every new selection and remounts `<NodeDetail>` through its `key`, so "the tab stays" depends
+// on the store, the URL write and the remount agreeing. That is wiring, which is what a browser is
+// for — and the original complaint was reported in exactly this gesture.
+test.describe('walking the inventory with a tab open', () => {
+  /** Answer each of the tree's three nodes differently, so the middle one is a URL monitor with no
+   *  Interfaces tab. The whole point of 決定 2 is what happens when such a node is stepped through. */
+  const perNode: Record<string, 'device' | 'url'> = {
+    [TREE_SIBLING_IDS[0]]: 'device',
+    [TREE_SIBLING_IDS[1]]: 'url',
+    [TREE_SIBLING_IDS[2]]: 'device',
+  };
+
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/nodes/{node_id}': (url) => {
+          const id = url.pathname.split('/').pop() ?? '';
+          const kind = perNode[id] ?? 'device';
+          const body = defaultBodyFor(`/api/v1/nodes/${id}`) as {
+            id: string;
+            kind: string;
+            snmp_configured: boolean;
+          };
+          body.id = id;
+          body.kind = kind;
+          // A URL monitor is never SNMP-polled; a device here is, so it has all six tabs.
+          body.snmp_configured = kind === 'device';
+          return body as unknown as Json;
+        },
+      },
+    },
+  });
+
+  /** The tab currently selected, by label. */
+  const openTab = (page: import('@playwright/test').Page) =>
+    page.getByRole('tab', { selected: true });
+
+  test('picking another node opens it on the tab already in view', async ({ page, errors }) => {
+    // 🚨 THE REPORTED DEFECT, in the gesture it was reported in: open Interfaces on one switch,
+    // click the next switch, and it used to come back on Overview — because `select()` deletes
+    // `?tab=` and nothing else answered for the tab.
+    await page.goto('/nodes');
+    const rows = page.locator('.ntree-node');
+    await expect(rows).toHaveCount(3);
+
+    await rows.nth(0).click();
+    await page
+      .getByRole('tab', { name: new RegExp(`^${TAB_LABELS.interfaces}`) })
+      .click();
+    await expect(openTab(page)).toHaveText(new RegExp(`^${TAB_LABELS.interfaces}`));
+
+    // The third row, not the second: the second is the URL monitor, which is the next test.
+    await rows.nth(2).click();
+    await expect(
+      openTab(page),
+      'selecting another node dropped the tab and fell back to Overview',
+    ).toHaveText(new RegExp(`^${TAB_LABELS.interfaces}`));
+    expect(errors.uncaught).toEqual([]);
+  });
+
+  test('a node without that tab falls back, and does not take the memory with it', async ({
+    page,
+    errors,
+  }) => {
+    // 🚨 ADR-134 決定 2. The correction effect rewrites a tab the loaded node cannot show — and if
+    // it recorded that rewrite, this sequence would leave every later switch on Overview, so the
+    // memory would mean "the last screen I was dropped onto" instead of "the last one I chose".
+    await page.goto('/nodes');
+    const rows = page.locator('.ntree-node');
+    await expect(rows).toHaveCount(3);
+
+    await rows.nth(0).click();
+    await page
+      .getByRole('tab', { name: new RegExp(`^${TAB_LABELS.interfaces}`) })
+      .click();
+    await expect(openTab(page)).toHaveText(new RegExp(`^${TAB_LABELS.interfaces}`));
+
+    // The URL monitor: Interfaces is not among its tabs, so Overview is correct here.
+    await rows.nth(1).click();
+    await expect(
+      openTab(page),
+      'a URL monitor was left on a tab it does not offer',
+    ).toHaveText(new RegExp(`^${TAB_LABELS.overview}`));
+
+    // …and back to a device, which must return to Interfaces.
+    await rows.nth(2).click();
+    await expect(
+      openTab(page),
+      'stepping through a node without the tab erased the remembered one',
+    ).toHaveText(new RegExp(`^${TAB_LABELS.interfaces}`));
     expect(errors.uncaught).toEqual([]);
   });
 });

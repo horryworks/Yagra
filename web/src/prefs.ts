@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { ColumnWidthDoc } from './lib/columnWidths';
+import type { DiscoveryScanMemory } from './pages/discoveryScans';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
 // node env (no localStorage) without a persist warning. localStorage (not sessionStorage) so UI
@@ -102,6 +103,21 @@ interface PrefsStore {
    *  ⚠️ The shape is bounded on the way in (`lib/columnWidths.ts`'s two caps) because the account
    *  document has a 16 KiB ceiling that every preference shares. */
   tableColumnWidths: ColumnWidthDoc;
+  /** The last sweep an operator actually started on Discovery (ADR-134). `null` = never swept, so
+   *  the form opens on its long-standing defaults.
+   *
+   *  Here rather than in the session stores of `store.ts` because of the question
+   *  `design-guidelines.md` asks: "next time you open this, do you want it still set?" For a chart
+   *  window the answer is no; for "which subnet do I sweep" it is yes — the same site is swept again
+   *  next week, and re-typing the range and re-ticking the credentials is the whole complaint.
+   *
+   *  ⚠️ **Local-only, and not on the account** (ADR-134 決定 4). A sweep is published to a pool
+   *  reachable from wherever you are, so this is closer to "where I work" than to "who I am".
+   *
+   *  ⚠️ Read it through `discoveryScans.ts`'s three `initial*` helpers, never field-by-field: each
+   *  one has to reconcile the memory against what the deployment still has (a deleted credential, a
+   *  removed pool), and that reconciliation is where the judgement is. */
+  discoveryScan: DiscoveryScanMemory | null;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -129,6 +145,9 @@ interface PrefsStore {
   /** Record every table's column widths locally. ⚠️ Prefer `serverPrefs.ts`'s three setters, which
    *  also sync the account (see [`tableColumnWidths`]). */
   setTableColumnWidths: (doc: ColumnWidthDoc) => void;
+  /** Record the sweep just started. Call it **once per scan**, not per keystroke — and only after
+   *  the target spec has parsed (see [`discoveryScan`]). */
+  setDiscoveryScan: (scan: DiscoveryScanMemory) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -156,6 +175,8 @@ export const usePrefsStore = create<PrefsStore>()(
       // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
       // object over the initial state, so a missing key reads as `{}` and no migration is owed.
       tableColumnWidths: {},
+      // Same again: absent before ADR-134, read as `null`, no migration owed.
+      discoveryScan: null,
       // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
       // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
       // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
@@ -193,6 +214,7 @@ export const usePrefsStore = create<PrefsStore>()(
       toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),
       setTableColumnWidths: (tableColumnWidths) => set({ tableColumnWidths }),
+      setDiscoveryScan: (discoveryScan) => set({ discoveryScan }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

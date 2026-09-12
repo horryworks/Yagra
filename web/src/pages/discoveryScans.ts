@@ -7,8 +7,20 @@
 // arrival, whether to keep polling, how to render a state, and which pool to sweep from. What stays
 // in the component is layout and effects.
 
-import type { DiscoveryScan, DiscoveryScanSummary, PoolOption } from '../types/api';
+import type {
+  CredentialSummary,
+  DiscoveryScan,
+  DiscoveryScanSummary,
+  PoolOption,
+} from '../types/api';
 import { DISCOVERY_SCAN_STATES, type DiscoveryScanState } from '../types/api';
+import { isSnmpCredentialKind } from '../lib/credentialKinds';
+
+/** The target spec a deployment with no remembered sweep starts from.
+ *
+ *  Here rather than inline in the component so the "no memory" default and the function that reads
+ *  it sit together — and so the test can name it without transcribing the literal. */
+export const DEFAULT_TARGET_SPEC = '192.168.1.0/24';
 
 /** How a scan state is presented. `unknown` is this side's invention — the wire has no such value.
  *
@@ -253,4 +265,69 @@ export function canRequestStop(state: string | null | undefined): boolean {
 export function poolIsUnrouted(pools: readonly PoolOption[], chosen: string | null): boolean {
   if (!chosen) return true;
   return !pools.some((p) => p.name === chosen && p.live);
+}
+
+/** What the browser remembers about the last sweep an operator actually started (ADR-134).
+ *
+ *  Written **once per scan**, from `startScan` after the target spec has been validated and before
+ *  the request goes out — not per keystroke. Validating first matters: a spec that does not parse
+ *  started nothing, and seeding the next visit with it would hand the next person a broken field.
+ *
+ *  ⚠️ **Held in `localStorage`, unlike the session-scoped memories in `store.ts`.** The question
+ *  `design-guidelines.md` asks is "do you want this still here next time you open the app", and for
+ *  "which subnet do I sweep" the answer is yes — the same site gets swept again next week. */
+export interface DiscoveryScanMemory {
+  /** The free-text target spec, exactly as typed. Empty when the last sweep came from a folder's
+   *  ranges instead (the site mode owns the target then, and the folder is not remembered — it is a
+   *  mode, and re-entering it is one click from a list that may have changed). */
+  targetSpec: string;
+  /** Credential ids that were tried. Ids, so a deleted credential drops out rather than resurrecting. */
+  credentialIds: string[];
+  /** The pool the sweep was published to, or `null` for "any poller". */
+  pool: string | null;
+  snmpWhenUnreachable: boolean;
+}
+
+/** The spec a fresh visit should start from: the last one typed, else the long-standing default.
+ *
+ *  ⚠️ The hardcoded `/24` stays as the no-memory default deliberately. That it is hardcoded at all
+ *  is a separate question (it names one deployment's subnet); what ADR-134 changes is only the
+ *  *second* visit. */
+export function initialTargetSpec(mem: DiscoveryScanMemory | null): string {
+  return mem?.targetSpec || DEFAULT_TARGET_SPEC;
+}
+
+/** The credentials a fresh visit should tick.
+ *
+ *  The remembered set, narrowed to ids that still exist — and when nothing survives that narrowing,
+ *  **the original default (every SNMP credential)** rather than an empty set.
+ *
+ *  🚨 That fallback is the load-bearing part. An empty tick list is a legal sweep: it probes with
+ *  ICMP and identifies nothing. So a memory whose credentials have all been deleted would silently
+ *  turn the next sweep into a ping scan that finds no device identities — a behaviour change nobody
+ *  asked for, presented as a remembered preference. */
+export function initialCredentialIds(
+  mem: DiscoveryScanMemory | null,
+  creds: readonly CredentialSummary[],
+): string[] {
+  const snmp = creds.filter((c) => isSnmpCredentialKind(c.kind)).map((c) => c.id);
+  if (!mem) return snmp;
+  const live = new Set(creds.map((c) => c.id));
+  const kept = mem.credentialIds.filter((id) => live.has(id));
+  return kept.length > 0 ? kept : snmp;
+}
+
+/** The pool a fresh visit should preselect: the last one swept from, if it is still a pool this
+ *  deployment has. Otherwise the answer `pickDefaultPool` already gives.
+ *
+ *  ⚠️ Matched by name against the list, including dead pools: a site whose poller is momentarily
+ *  down is still the site the operator means, and `poolIsUnrouted` is what says so on screen. What
+ *  must not survive is a pool that has been **removed** — that would send the sweep to the global
+ *  subject while the control claimed a site. */
+export function initialPool(
+  mem: DiscoveryScanMemory | null,
+  pools: readonly PoolOption[],
+): string | null {
+  if (mem?.pool && pools.some((p) => p.name === mem.pool)) return mem.pool;
+  return pickDefaultPool(pools);
 }

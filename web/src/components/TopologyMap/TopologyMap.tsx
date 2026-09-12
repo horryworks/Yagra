@@ -7,13 +7,14 @@
 // drills into that node's detail page. Device-supplied names render as React <text> children, so
 // they're auto-escaped (no dangerouslySetInnerHTML) — device data is untrusted.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { stateColorVar, stateLabel } from '../../lib/format';
+import { useStoredMapView } from '../../lib/storedMapView';
 import type { GraphLayout, PlacedNode } from './graphLayout';
 import { NODE_H, NODE_W } from './graphLayout';
-import { clampScale, fitView, MAX_SCALE, MIN_SCALE, type View } from './fitView';
+import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
 import './TopologyMap.css';
 
 function NodeBox({
@@ -69,7 +70,11 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
   const { t } = useTranslation('topology');
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [view, setView] = useState<View | null>(null);
+  // Where the operator panned and zoomed to, remembered for the session (ADR-134). The `view ===
+  // null` guard below is unchanged and still does its original job — stopping the 15s refresh from
+  // re-fitting the diagram — it now just starts from a stored value instead of always from `null`,
+  // so stepping to a node and back no longer throws the position away.
+  const [view, setView] = useStoredMapView('topo');
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // Live pointers by id. One pointer pans; two pointers pinch-zoom (touch). `pinch` freezes the
   // view at the moment the second finger lands so scale/pan stay anchored to the gesture.
@@ -88,7 +93,7 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
     const el = wrapRef.current;
     if (!el) return;
     setView(fitView(layout, el.clientWidth, el.clientHeight));
-  }, [layout]);
+  }, [layout, setView]);
 
   // Fit once, on the first render that has both a measured container and a laid-out diagram.
   // A poll refresh re-creates `layout` every 15s, but the `view === null` guard keeps it from
@@ -97,7 +102,7 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
     if (view === null && wrapRef.current && layout.width > 0) {
       setView(fitView(layout, wrapRef.current.clientWidth, wrapRef.current.clientHeight));
     }
-  }, [view, layout]);
+  }, [view, layout, setView]);
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     const el = wrapRef.current;
@@ -114,7 +119,7 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
       // Keep the point under the cursor fixed while zooming.
       return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
     });
-  }, []);
+  }, [setView]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -172,7 +177,7 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
     const d = drag.current;
     if (!d) return;
     setView((v) => (v ? { ...v, tx: d.tx + (e.clientX - d.x), ty: d.ty + (e.clientY - d.y) } : v));
-  }, []);
+  }, [setView]);
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
     (e.target as Element).releasePointerCapture?.(e.pointerId);
@@ -188,7 +193,7 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
     } else if (pointers.current.size === 0) {
       drag.current = null;
     }
-  }, []);
+  }, [setView]);
 
   const v = view ?? { tx: 0, ty: 0, scale: 1 };
 

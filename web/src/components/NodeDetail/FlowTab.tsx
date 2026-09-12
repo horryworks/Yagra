@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
+import { useRangeStore } from '../../store';
 import { formatBytes, formatAsn } from '../../lib/format';
 import { protoName, portLabel } from '../../lib/flowLabels';
 import { useRefreshTick } from '../../lib/refreshTick';
@@ -37,7 +38,7 @@ import type {
 import { MetricChart, PALETTE } from '../MetricChart/MetricChart';
 import { RankedBars } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
-import { RangeControl, DEFAULT_RANGE, resolveRange, type Range } from './RangeControl';
+import { RangeControl, resolveRange } from './RangeControl';
 import { FlowSankey } from './FlowSankey';
 // The protocol-series grouping is shared with the fleet-wide throughput widget — one tested
 // implementation rather than a second copy that has to be fixed twice.
@@ -56,7 +57,11 @@ const TOP_N = 10;
 export function FlowTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
-  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  // The shared window, not a local one (ADR-134 決定 6). `RangeControl.tsx` and `store.ts` both
+  // name Flow among the panes that share it, and this pane alone held its own `useState` — so
+  // picking 24h on Overview and opening Flow silently snapped back to 1h.
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
   // The four drill-downs, in the shared filter state (ADR-053 Inc.8). Every one of them is a
   // question for the server, so this state's only job is to become query parameters. The debounce
   // that used to live here is inside the `values` cell now, where the other kinds' already were.

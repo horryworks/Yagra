@@ -12,6 +12,7 @@ import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
 import { useRefreshTick } from '../../lib/refreshTick';
+import { useNodeTabStore } from '../../store';
 import type {
   InterfaceRow,
   NodeDetail as NodeDetailData,
@@ -50,7 +51,9 @@ interface Props {
   nodeId: string;
   variant: 'inline' | 'page';
   canEdit: boolean;
-  /** Controlled active tab + change handler (page wires it to the URL; split keeps local state). */
+  /** Controlled active tab + change handler. **Both hosts wire it to the URL** (`?tab=`), falling
+   *  back to the session's remembered tab when the URL names none — see `requestedNodeDetailTab`.
+   *  (This used to say the split kept local state; it has been URL-backed since ADR-055.) */
   tab: string;
   onTabChange: (tab: string) => void;
   /** Group + node lists for the breadcrumb / parent-name resolution (the split already has them;
@@ -90,6 +93,8 @@ export function NodeDetail({
   );
   // A tab this node does not show falls back to Overview.
   const activeTab = resolveNodeDetailTab(tab, subject);
+  // Written by the tab bar's onClick alone — see the comment there.
+  const rememberTab = useNodeTabStore((s) => s.rememberTab);
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
@@ -364,7 +369,15 @@ export function NodeDetail({
               role="tab"
               aria-selected={activeTab === key}
               className={`nd-tab${activeTab === key ? ' on' : ''}`}
-              onClick={() => onTabChange(key)}
+              // 🚨 A **click** is the only thing that writes the memory (ADR-134 決定 2). The
+              // correction effect above rewrites a tab the loaded node does not offer, and if that
+              // recorded too, walking a row of switches on Interfaces with one URL monitor among
+              // them would leave the memory on Overview — so the memory would mean "the last screen
+              // I was dropped onto" instead of "the last one I chose".
+              onClick={() => {
+                rememberTab(key);
+                onTabChange(key);
+              }}
             >
               {t(meta.labelKey)}
               {n != null && <span className="nd-tab-n">{n}</span>}

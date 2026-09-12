@@ -11,6 +11,7 @@ import { getToken, type ClientConfig } from './services/api';
 import type { Viewer } from './dashboard/layoutAccess';
 import type { Alert, Permission, RoleMatrix, Scope, UserKind } from './types/api';
 import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
+import { normalizeNodeDetailTab, type NodeDetailTab } from './components/NodeDetail/tabs';
 
 // sessionStorage when available (browser), else a no-op — keeps the store working in the Vitest
 // node env (no sessionStorage) without a persist warning.
@@ -142,6 +143,106 @@ export const useRangeStore = create<RangeStore>()(
       setRange: (range) => set({ range }),
     }),
     { name: 'yagra.range', storage: createJSONStorage(sessionStore) },
+  ),
+);
+
+// The node-detail sub-tab the operator last *clicked* (ADR-134). The URL's `?tab=` stays the source
+// of truth; this is only the default a host uses when the URL names no tab — which is every arrival
+// that is not a reload or a shared link: the inventory split deletes `tab` when a new row is picked,
+// and every `navigate('/nodes/<id>')` in the app carries no query at all. So without this, comparing
+// the same tab across a stack of switches means re-clicking it on every one. Read it through
+// `requestedNodeDetailTab` (components/NodeDetail/tabs.ts), never as a default of its own.
+//
+// 🚨 **Only a click writes here.** `NodeDetail`'s correction effect rewrites a tab the loaded node
+// does not offer, and it must NOT record that: walking a row of switches on Interfaces with one URL
+// monitor among them would otherwise leave the memory on Overview, so the memory would mean "the
+// last screen I was dropped onto" rather than "the last one I chose".
+//
+// sessionStorage, like the chart range above: this is part of "what am I looking at", not a standing
+// preference, and it is deliberately not on the account (ADR-134 決定 4 — one PUT and one audit row
+// per tab click, which is not a rate a debounce can fold).
+interface NodeTabStore {
+  tab: NodeDetailTab;
+  /** Record a tab the operator clicked. Normalized on the way in so a stale session value from a
+   *  build that had a tab this one does not cannot pin the whole app to Overview-by-fallback. */
+  rememberTab: (tab: string) => void;
+}
+
+export const useNodeTabStore = create<NodeTabStore>()(
+  persist(
+    (set) => ({
+      tab: 'overview',
+      rememberTab: (tab) => set({ tab: normalizeNodeDetailTab(tab) }),
+    }),
+    { name: 'yagra.nodetab', storage: createJSONStorage(sessionStore) },
+  ),
+);
+
+// Which board each dashboard was last showing (ADR-134). The boards themselves are server-persisted
+// (`user_dashboards` / `shared_dashboard`); only the *pointer* was ephemeral, and `load()` runs on
+// every mount — so a multi-board operator was put back on board 1 every time they returned to
+// /dashboard. Keyed by which dashboard it is, because the three are separate documents with
+// separate board sets and one shared key would name a board the other two do not have.
+//
+// Not in the URL: the sidebar navigates to a bare `/dashboard`, so a query parameter would be
+// dropped by the very navigation this exists to survive. Not in the saved document either — that
+// would make "which board am I looking at" a thing other sessions and other machines vote on.
+interface LastBoardStore {
+  /** Board id per dashboard key; a key absent means "never switched", so the first board wins. */
+  byBoard: Record<string, string>;
+  rememberBoard: (key: string, id: string) => void;
+}
+
+export const useLastBoardStore = create<LastBoardStore>()(
+  persist(
+    (set) => ({
+      byBoard: {},
+      rememberBoard: (key, id) =>
+        set((s) => (s.byBoard[key] === id ? s : { byBoard: { ...s.byBoard, [key]: id } })),
+    }),
+    { name: 'yagra.lastboard', storage: createJSONStorage(sessionStore) },
+  ),
+);
+
+/** A map's pan/zoom — the shape `TopologyMap`'s `View` and `GeoMapPage`'s `GeoView` share. */
+export interface MapView {
+  tx: number;
+  ty: number;
+  scale: number;
+}
+
+/** Which map a stored view belongs to. Two maps, two memories: they project different things. */
+export type MapViewKey = 'topo' | 'geo';
+
+// Where each map was panned and zoomed to (ADR-134). Both maps already work hard *not* to lose this
+// within one mount — the `view === null` guard is what stops their 15s refresh from stomping the
+// operator's pan every tick — and that care stopped at the component boundary: stepping to a node
+// and back re-fitted the whole diagram.
+//
+// ⚠️ **These are container pixels, not geography** (ADR-134 決定 7). Restored at a different window
+// width the view is off; it is worth carrying anyway because "Fit to view" puts it right in one
+// click, while re-zooming every visit has no such fix. `null` = never moved, so the first paint
+// still auto-fits.
+interface MapViewStore {
+  topo: MapView | null;
+  geo: MapView | null;
+  /** Set one map's view. Accepts an updater so a gesture can read the live value, and resolves it
+   *  **here** rather than in the hook — a judgement inside a `.tsx` hook is one no test can run. */
+  setMapView: (
+    key: MapViewKey,
+    next: MapView | null | ((prev: MapView | null) => MapView | null),
+  ) => void;
+}
+
+export const useMapViewStore = create<MapViewStore>()(
+  persist(
+    (set) => ({
+      topo: null,
+      geo: null,
+      setMapView: (key, next) =>
+        set((s) => ({ [key]: typeof next === 'function' ? next(s[key]) : next }) as Partial<MapViewStore>),
+    }),
+    { name: 'yagra.mapview', storage: createJSONStorage(sessionStore) },
   ),
 );
 

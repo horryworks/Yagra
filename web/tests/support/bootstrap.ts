@@ -31,6 +31,19 @@ export function deviceNode(nodeId: string): Json {
   return body as unknown as Json;
 }
 
+/** The three ungrouped nodes the inventory tree is mocked with, in the order they are listed.
+ *
+ *  Exported because a spec that wants to say something about *moving between* nodes needs to know
+ *  which node each row is — and answering `/api/v1/nodes/{node_id}` differently per node means
+ *  naming the ids. Transcribing them into the spec would be a second copy of the fixture, drifting
+ *  the moment this list grows a fourth row. The first is the generated body's own id, so it is
+ *  filled in where the tree mock builds the list. */
+export const TREE_SIBLING_IDS: [string, string, string] = [
+  (defaultBodyFor('/api/v1/nodes/by-group') as { nodes: { id: string }[] }).nodes[0].id,
+  '00000000-0000-4000-8000-0000000000b2',
+  '00000000-0000-4000-8000-0000000000b3',
+];
+
 /** The Troubleshoot tool whose report the walk opens. Exported so `screens.ts` builds the URL from
  *  the same constant the mocked job carries — the report shell redirects a job whose `tool` does
  *  not match the route, so these two disagreeing is a silent redirect, not an error. */
@@ -256,8 +269,8 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     const first = { ...body.nodes[0], group_id: null, sort_order: 1 };
     body.nodes = [
       first,
-      { ...first, id: '00000000-0000-4000-8000-0000000000b2', name: `${first.name}-b`, sort_order: 2 },
-      { ...first, id: '00000000-0000-4000-8000-0000000000b3', name: `${first.name}-c`, sort_order: 3 },
+      { ...first, id: TREE_SIBLING_IDS[1], name: `${first.name}-b`, sort_order: 2 },
+      { ...first, id: TREE_SIBLING_IDS[2], name: `${first.name}-c`, sort_order: 3 },
     ];
     return body as unknown as Json;
   },

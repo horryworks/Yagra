@@ -66,3 +66,39 @@ describe('uiMode pref (ADR-027)', () => {
     expect(usePrefsStore.getState().uiMode).toBe('auto');
   });
 });
+
+describe('remembered Discovery sweep (ADR-134)', () => {
+  it('defaults to no memory, so the form opens on its long-standing defaults', () => {
+    // Absent from every `yagra_prefs` written before ADR-134; `persist` merges the stored object
+    // over the initial state, so a missing key reads as `null` and no migration is owed.
+    usePrefsStore.setState({ discoveryScan: null });
+    expect(usePrefsStore.getState().discoveryScan).toBeNull();
+  });
+
+  it('records the whole sweep in one write', () => {
+    // One store write per scan, not per keystroke — the setter takes the complete shape so a
+    // half-updated memory cannot exist.
+    usePrefsStore.getState().setDiscoveryScan({
+      targetSpec: '10.1.0.0/24',
+      credentialIds: ['c1', 'c2'],
+      pool: 'tokyo',
+      snmpWhenUnreachable: true,
+    });
+    expect(usePrefsStore.getState().discoveryScan).toEqual({
+      targetSpec: '10.1.0.0/24',
+      credentialIds: ['c1', 'c2'],
+      pool: 'tokyo',
+      snmpWhenUnreachable: true,
+    });
+  });
+
+  it('keeps "any poller" as a remembered choice rather than dropping the field', () => {
+    usePrefsStore.getState().setDiscoveryScan({
+      targetSpec: '10.1.0.0/24',
+      credentialIds: [],
+      pool: null,
+      snmpWhenUnreachable: false,
+    });
+    expect(usePrefsStore.getState().discoveryScan?.pool).toBeNull();
+  });
+});

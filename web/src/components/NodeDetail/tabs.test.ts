@@ -4,6 +4,7 @@ import {
   NODE_DETAIL_TAB_META,
   NODE_DETAIL_TABS,
   normalizeNodeDetailTab,
+  requestedNodeDetailTab,
   resolveNodeDetailTab,
   visibleNodeDetailTabs,
   type NodeDetailSubject,
@@ -243,5 +244,50 @@ describe('node-detail tab badges and warnings', () => {
       expect(NODE_DETAIL_TAB_META[key].badge).toBeUndefined();
       expect(NODE_DETAIL_TAB_META[key].warn).toBeUndefined();
     }
+  });
+});
+
+// The tab a host asks for when the URL is silent (ADR-134). The defect: the inventory split drops
+// `?tab=` on every new selection and every in-app `navigate('/nodes/<id>')` carries no query, so
+// walking a stack of switches on Interfaces meant re-clicking Interfaces on each one.
+describe('which tab a host requests (ADR-134)', () => {
+  it('takes the URL when it names a tab, whatever is remembered', () => {
+    for (const tab of NODE_DETAIL_TABS) {
+      expect(requestedNodeDetailTab(tab, 'flow')).toBe(tab);
+    }
+  });
+
+  it('falls back to the remembered tab when the URL names none', () => {
+    // This single line is the feature: no `?tab=`, and Interfaces stays open on the next node.
+    expect(requestedNodeDetailTab('', 'interfaces')).toBe('interfaces');
+    for (const tab of NODE_DETAIL_TABS) {
+      expect(requestedNodeDetailTab('', tab)).toBe(tab);
+    }
+  });
+
+  it('is Overview when neither says anything', () => {
+    expect(requestedNodeDetailTab('', '')).toBe('overview');
+  });
+
+  // ⚠️ An unreadable param must NOT reach for the memory. `?tab=bogus` has always rendered Overview
+  // and left the param alone; consulting the memory there would make a broken link silently open
+  // something else, and the caller could not tell the two apart.
+  it('does not consult the memory for a tab string it cannot read', () => {
+    expect(requestedNodeDetailTab('bogus', 'interfaces')).toBe('overview');
+    expect(requestedNodeDetailTab('INTERFACES', 'flow')).toBe('overview');
+  });
+
+  // A session written by a build that had a tab this one does not (or hand-edited storage) must not
+  // pin every node to a fallback.
+  it('ignores a remembered value this build does not know', () => {
+    expect(requestedNodeDetailTab('', 'sensors')).toBe('overview');
+  });
+
+  // Deciding *whether the node offers* the tab is `resolveNodeDetailTab`'s job and needs the loaded
+  // node, which no host has when this runs. Pinned so the two are not folded together later.
+  it('does not ask whether the node offers the tab', () => {
+    const pingOnly: NodeDetailSubject = { kind: 'device', snmpConfigured: false };
+    expect(requestedNodeDetailTab('', 'interfaces')).toBe('interfaces');
+    expect(resolveNodeDetailTab(requestedNodeDetailTab('', 'interfaces'), pingOnly)).toBe('overview');
   });
 });

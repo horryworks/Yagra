@@ -48,6 +48,26 @@ export function normalizeNodeDetailTab(tab: string): NodeDetailTab {
     : 'overview';
 }
 
+/** The tab a host should request: the one the **URL names**, and only failing that the one the
+ *  operator last clicked (ADR-134).
+ *
+ *  The URL stays the source of truth, so a `?tab=` link opens what it says and a reload restores
+ *  it. What the memory answers is every *other* arrival, which is most of them: the inventory split
+ *  deletes `tab` when a new row is picked, and every `navigate('/nodes/<id>')` in the app carries no
+ *  query at all — so comparing one tab across a stack of switches used to mean re-clicking it on
+ *  every node.
+ *
+ *  ⚠️ **A tab string the build cannot read is not a reason to consult the memory.** `?tab=bogus`
+ *  keeps its long-standing behaviour (render Overview, leave the param alone) because only an
+ *  *empty* param falls through — reading the memory there would make a broken link open something
+ *  else entirely, and the caller would have no way to tell which happened.
+ *
+ *  Nothing here checks whether the node *offers* the tab: that is `resolveNodeDetailTab`'s job and
+ *  it needs the loaded node, which no host has yet at this point. */
+export function requestedNodeDetailTab(param: string, remembered: string): NodeDetailTab {
+  return normalizeNodeDetailTab(param || remembered);
+}
+
 /** Every kind — the tabs that mean something whatever the node is. */
 const ALL_KINDS: readonly NodeKind[] = NODE_KINDS;
 

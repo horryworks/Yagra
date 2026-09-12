@@ -7,6 +7,8 @@
 // inputs constructed with the same local Date fields they format back to.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   formatCompactRange,
   localInputToIso,
@@ -106,5 +108,48 @@ describe('pad2', () => {
     expect(pad2(9)).toBe('09');
     expect(pad2(23)).toBe('23');
     expect(pad2(100)).toBe('100');
+  });
+});
+
+// 🚨 Every pane that draws a range picker reads the SHARED window (ADR-134 決定 6).
+//
+// The defect this exists for: `RangeControl.tsx` says in its own comment that the window "is shared
+// across the Overview / Interfaces / Flow / DNS panes", `store.ts` names the same set — and `FlowTab`
+// held its own `useState<Range>(DEFAULT_RANGE)`. Picking 24h on Overview and opening Flow snapped
+// silently back to 1h. **Two doc comments asserted it and nothing checked it.**
+//
+// Read as source text rather than by rendering: Vitest runs no `.tsx`, so the only way to ask "does
+// this component read the store" from a test is to read the file. What that cannot tell is whether
+// the value is then *used* — the panes' `resolveRange(range)` calls are covered by the browser walk.
+describe('every range picker reads the shared window', () => {
+  const DIR = join(__dirname);
+  const panes = readdirSync(DIR)
+    .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+    .map((f) => ({ file: f, src: readFileSync(join(DIR, f), 'utf8') }))
+    // The control's own module defines it; every *other* file that mentions it is a consumer.
+    .filter((p) => p.file !== 'RangeControl.tsx' && p.src.includes('<RangeControl'));
+
+  it('inspected the panes this product actually has', () => {
+    // A floor on what was **inspected**, not on what passed: a detector that stopped matching
+    // would otherwise report "no offenders" and be indistinguishable from a clean tree
+    // (`floor-must-count-what-was-checked`). Four panes draw one today — Overview, Interfaces,
+    // Collection and Flow — and DnsHealth renders inside Overview.
+    expect(panes.map((p) => p.file).sort()).toContain('FlowTab.tsx');
+    expect(panes.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('reads useRangeStore rather than holding a local Range', () => {
+    const offenders = panes.filter((p) => !p.src.includes('useRangeStore'));
+    expect(
+      offenders.map((p) => p.file),
+      'a pane draws a range picker over its own state, so the window it shows disagrees with every other pane',
+    ).toEqual([]);
+  });
+
+  it('leaves no pane seeding its own state from DEFAULT_RANGE', () => {
+    // The exact shape the defect took. `DEFAULT_RANGE` is the store's initial value and belongs to
+    // `store.ts`; a pane naming it is a pane that has its own idea of "the window".
+    const offenders = panes.filter((p) => p.src.includes('DEFAULT_RANGE'));
+    expect(offenders.map((p) => p.file)).toEqual([]);
   });
 });

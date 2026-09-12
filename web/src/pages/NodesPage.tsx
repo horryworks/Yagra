@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
-import { useCan } from '../store';
+import { useCan, useNodeTabStore } from '../store';
 import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
 import type {
@@ -85,7 +85,7 @@ import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
 import { canMoveByPrefix } from '../components/NodeTree/nodeTreeMenu';
 import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail';
 import { EditNodeModalById } from '../components/NodeDetail/EditNodeModal';
-import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
+import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
 import { MoveByPrefixModal } from '../components/MoveByPrefixModal/MoveByPrefixModal';
@@ -216,9 +216,17 @@ export function NodesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selected: TreeSelection = parseSelection(searchParams.get('sel'));
   const tabParam = searchParams.get('tab') ?? '';
-  const tab = normalizeNodeDetailTab(tabParam);
+  // The URL wins when it names a tab (a reload, a shared link); otherwise the tab the operator last
+  // clicked does (ADR-134). That is what makes `select()` below able to drop `tab` and still open
+  // the pane on Interfaces — which is the point: comparing one tab across a stack of switches used
+  // to mean re-clicking it on every row.
+  const remembered = useNodeTabStore((s) => s.tab);
+  const tab = requestedNodeDetailTab(tabParam, remembered);
   const [filter, setFilter] = useState('');
-  // Pick a row → write the selection and reset to Overview (a fresh selection starts on Overview).
+  // Pick a row → write the selection and drop the tab param, so the pane opens on the tab the
+  // operator last clicked rather than on whatever the *previous* row's URL happened to say
+  // (`requestedNodeDetailTab`). Dropping it is still right: a link to one node's Flow tab must not
+  // silently become a link to another node's.
   // `replace` keeps rapid clicking out of the browser history.
   const select = useCallback(
     (sel: TreeSelection) => {

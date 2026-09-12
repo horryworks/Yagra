@@ -9,11 +9,11 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { useCan } from '../store';
+import { useCan, useNodeTabStore } from '../store';
 import type { NodeGroup } from '../types/api';
 import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
-import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
+import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 
 export function NodeDetailPage() {
   const { t } = useTranslation();
@@ -21,10 +21,13 @@ export function NodeDetailPage() {
   const navigate = useNavigate();
   const canConfig = useCan('manage_config');
   // Keep the active sub-tab in the URL so a browser reload restores it instead of snapping back
-  // to Overview.
+  // to Overview. When the URL names no tab — which is every in-app arrival here, since the search
+  // box, the topology map and the dependency list all navigate to a bare `/nodes/<id>` — the tab
+  // the operator last clicked stands in (ADR-134). The URL still wins whenever it says anything.
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') ?? '';
-  const tab = normalizeNodeDetailTab(tabParam);
+  const remembered = useNodeTabStore((s) => s.tab);
+  const tab = requestedNodeDetailTab(tabParam, remembered);
   const setTab = (next: string) => {
     const params = new URLSearchParams(searchParams);
     params.set('tab', next);

@@ -16,7 +16,7 @@
 // All the geometry lives in `geoProjection.ts` because Vitest never runs `.tsx`; what is left here
 // is markup and pointer plumbing, which tsc and the build cover.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
@@ -29,6 +29,7 @@ import { stateColorVar, stateLabel } from '../lib/format';
 import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
 import { useMapPaneStore } from '../store';
+import { useStoredMapView } from '../lib/storedMapView';
 import {
   clampPaneHeight,
   defaultPaneHeight,
@@ -44,7 +45,6 @@ import {
   MIN_GEO_SCALE,
   placedOnly,
   project,
-  type GeoView,
 } from './geoProjection';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
 import './GeoMapPage.css';
@@ -53,7 +53,10 @@ export function GeoMapPage() {
   const { t } = useTranslation('topology');
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [view, setView] = useState<GeoView | null>(null);
+  // Remembered for the session (ADR-134), like the topology map's. The pane height beside it has
+  // been persisted since ADR-074, so half this screen's layout was already remembered and half was
+  // thrown away on every navigation.
+  const [view, setView] = useStoredMapView('geo');
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // Live pointers by id: one pans, two pinch-zoom. Mirrors `TopologyMap`'s gesture handling so the
   // two maps in this product feel the same under a finger.
@@ -85,7 +88,7 @@ export function GeoMapPage() {
     const el = wrapRef.current;
     if (!el) return;
     setView(fitPins(placed, el.clientWidth, el.clientHeight));
-  }, [placed]);
+  }, [placed, setView]);
 
   // Fit once, on the first render that has a measured pane. The `view === null` guard is what stops
   // the 15s poll refresh from stomping the operator's pan/zoom every tick — the same guard, and the
@@ -94,7 +97,7 @@ export function GeoMapPage() {
     if (view === null && wrapRef.current && wrapRef.current.clientWidth > 0) {
       setView(fitPins(placed, wrapRef.current.clientWidth, wrapRef.current.clientHeight));
     }
-  }, [view, placed]);
+  }, [view, placed, setView]);
 
   // Refit when the operator resizes the pane. This deliberately *does* stomp the current pan/zoom,
   // unlike the poll refresh above: dragging the pane is a direct request for more (or less) map, and
@@ -121,7 +124,7 @@ export function GeoMapPage() {
       // Keep the point under the cursor fixed while zooming.
       return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
     });
-  }, []);
+  }, [setView]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -174,7 +177,7 @@ export function GeoMapPage() {
     const d = drag.current;
     if (!d) return;
     setView((v) => (v ? { ...v, tx: d.tx + (e.clientX - d.x), ty: d.ty + (e.clientY - d.y) } : v));
-  }, []);
+  }, [setView]);
 
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
@@ -189,7 +192,7 @@ export function GeoMapPage() {
     } else if (pointers.current.size === 0) {
       drag.current = null;
     }
-  }, []);
+  }, [setView]);
 
   // ── Pane resize (the handle along the bottom edge) ─────────────────────────
   const onResizeDown = useCallback(

@@ -34,6 +34,7 @@ vi.mock('../services/api', () => ({
   ApiError,
 }));
 
+import { useLastBoardStore } from '../store';
 import { useLayoutStore, useSharedLayoutStore } from './layoutStore';
 import { DASHBOARD_VERSION, sanitizeLayout } from './layout';
 import { defaultLayout, getDefinition, registryView } from './registry';
@@ -64,6 +65,9 @@ beforeEach(() => {
   putSharedDashboard.mockResolvedValue(undefined);
   reset(useLayoutStore);
   reset(useSharedLayoutStore);
+  // The session's "last board shown" memory (ADR-134). Cleared here so a test that records one
+  // cannot decide which board the next test's `load()` opens.
+  useLastBoardStore.setState({ byBoard: {} });
 });
 
 afterEach(() => {
@@ -303,5 +307,73 @@ describe('store isolation (My Dashboard vs Shared)', () => {
     useSharedLayoutStore.getState().addWidget(firstType);
     await vi.advanceTimersByTimeAsync(800);
     expect(useSharedLayoutStore.getState().saveError).toMatch(/permission/i);
+  });
+});
+
+// Which board a return visit opens on (ADR-134). `load()` runs on every mount, and it used to hard
+// -set `boards[0].id` — so a multi-board operator was put back on board 1 every single time they
+// came back to the dashboard, even though the boards themselves are server-persisted.
+describe('the board a load lands on', () => {
+  const doc = (...ids: string[]) => ({
+    version: DASHBOARD_VERSION,
+    boards: ids.map((id, i) => ({ id, name: `Board ${i + 1}`, widgets: defaultWidgets() })),
+  });
+
+  it('opens the board this session was last on', async () => {
+    getDashboard.mockResolvedValue(doc('b1', 'b2', 'b3'));
+    useLastBoardStore.getState().rememberBoard('my', 'b3');
+    await useLayoutStore.getState().load();
+    expect(useLayoutStore.getState().activeBoardId).toBe('b3');
+    // …and the derived widget list follows it, which is what the grid actually renders.
+    expect(useLayoutStore.getState().widgets).toEqual(
+      useLayoutStore.getState().boards[2].widgets,
+    );
+  });
+
+  it('opens the first board when nothing is remembered — the long-standing behaviour', async () => {
+    getDashboard.mockResolvedValue(doc('b1', 'b2'));
+    await useLayoutStore.getState().load();
+    expect(useLayoutStore.getState().activeBoardId).toBe('b1');
+  });
+
+  // A board removed on another machine keeps its id in this session's memory. Trusting it would
+  // leave the grid showing the empty widget list of a board that no longer exists.
+  it('falls back to the first board when the remembered one is gone', async () => {
+    getDashboard.mockResolvedValue(doc('b1', 'b2'));
+    useLastBoardStore.getState().rememberBoard('my', 'deleted-elsewhere');
+    await useLayoutStore.getState().load();
+    expect(useLayoutStore.getState().activeBoardId).toBe('b1');
+  });
+
+  // The memory is per dashboard: My and Shared are separate documents with separate board sets, so
+  // one shared key would name a board the other has never heard of.
+  it('does not let one dashboard answer for another', async () => {
+    getDashboard.mockResolvedValue(doc('b1', 'b2'));
+    getSharedDashboard.mockResolvedValue(doc('s1', 's2'));
+    useLastBoardStore.getState().rememberBoard('my', 'b2');
+    await useLayoutStore.getState().load();
+    await useSharedLayoutStore.getState().load();
+    expect(useLayoutStore.getState().activeBoardId).toBe('b2');
+    expect(useSharedLayoutStore.getState().activeBoardId).toBe('s1');
+  });
+
+  it('records the board a switch selects, so the next load returns to it', async () => {
+    getDashboard.mockResolvedValue(doc('b1', 'b2'));
+    await useLayoutStore.getState().load();
+    useLayoutStore.getState().setActiveBoard('b2');
+    expect(useLastBoardStore.getState().byBoard.my).toBe('b2');
+    await useLayoutStore.getState().load();
+    expect(useLayoutStore.getState().activeBoardId).toBe('b2');
+  });
+
+  // Remembering must not turn a presentation change into a write. ADR-058 found three routes that
+  // were bumping the config generation for exactly this kind of state.
+  it('remembers without saving the document', async () => {
+    getDashboard.mockResolvedValue(doc('b1', 'b2'));
+    await useLayoutStore.getState().load();
+    putDashboard.mockClear();
+    useLayoutStore.getState().setActiveBoard('b2');
+    await vi.advanceTimersByTimeAsync(800);
+    expect(putDashboard).not.toHaveBeenCalled();
   });
 });

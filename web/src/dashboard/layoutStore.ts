@@ -7,14 +7,19 @@
 // falls back to a read-only default and never saves. All mutations delegate to the pure helpers in
 // `layout.ts`.
 //
-// Documents are multi-board (schema v2): the store keeps `boards` + an *ephemeral* `activeBoardId`,
-// and exposes `widgets` = the active board's widgets so the grid/WidgetFrame/CatalogModal consume an
-// unchanged shape. Widget mutations target the active board; board actions add/remove/rename/switch.
+// Documents are multi-board (schema v2): the store keeps `boards` + `activeBoardId`, and exposes
+// `widgets` = the active board's widgets so the grid/WidgetFrame/CatalogModal consume an unchanged
+// shape. Widget mutations target the active board; board actions add/remove/rename/switch.
+//
+// `activeBoardId` is **not part of the saved document** — which board you are looking at is yours,
+// not something other sessions and other machines vote on. It is not ephemeral either: since
+// ADR-134 the session remembers it (`useLastBoardStore`), because `load()` runs on every mount and
+// returning to the dashboard therefore put a multi-board operator back on board 1 every time.
 
 import { create } from 'zustand';
 import i18n from '../i18n';
 import { ApiError, api } from '../services/api';
-import { currentViewer } from '../store';
+import { currentViewer, useLastBoardStore } from '../store';
 import { mayLoad, maySave, type BoardGate } from './layoutAccess';
 import {
   addBoard,
@@ -59,7 +64,8 @@ type LayoutStatus = 'loading' | 'ready' | 'error';
 export interface LayoutStore {
   /** All boards (persisted). */
   boards: Board[];
-  /** The board currently shown — ephemeral UI selection, not persisted in the document. */
+  /** The board currently shown. Never written to the saved document; restored for the session from
+   *  `useLastBoardStore` (ADR-134). Every write of it goes through `showBoard`. */
   activeBoardId: string;
   /** The active board's widgets (derived; kept in sync so consumers stay shape-stable). */
   widgets: WidgetInstance[];
@@ -106,6 +112,11 @@ export interface LayoutStoreConfig {
    *  skipped the fetch whenever there was no token, which is right for My Dashboard and wrong for
    *  the other two. See `layoutAccess.ts`. */
   readGate: BoardGate;
+  /** Which dashboard this is, for the session's "last board shown" memory (ADR-134).
+   *
+   *  Its own key per store, not one shared one: the three are separate documents with separate
+   *  board sets, so a shared key would name a board the other two have never heard of. */
+  key: 'my' | 'shared' | 'public';
 }
 
 /** Build an independent layout store. Each instance owns its own debounce timer (declared in the
@@ -158,9 +169,21 @@ export function createLayoutStore(config: LayoutStoreConfig) {
     const widgetsOf = (boards: Board[], activeBoardId: string): WidgetInstance[] =>
       boards.find((b) => b.id === activeBoardId)?.widgets ?? [];
 
+    /** Show a board, and remember it for the next visit (ADR-134). One funnel for every write of
+     *  `activeBoardId`, so a path that switches boards cannot forget to record it — `removeBoard`
+     *  and `cancelEditing` both reach it through `commit`. */
+    const showBoard = (patch: {
+      boards: Board[];
+      activeBoardId: string;
+      status?: LayoutStatus;
+    }) => {
+      useLastBoardStore.getState().rememberBoard(config.key, patch.activeBoardId);
+      set({ ...patch, widgets: widgetsOf(patch.boards, patch.activeBoardId) });
+    };
+
     /** Commit a new boards array: update state (+ derived widgets) optimistically and save. */
     const commit = (boards: Board[], activeBoardId = get().activeBoardId) => {
-      set({ boards, activeBoardId, widgets: widgetsOf(boards, activeBoardId) });
+      showBoard({ boards, activeBoardId });
       scheduleSave(boards);
     };
 
@@ -170,11 +193,18 @@ export function createLayoutStore(config: LayoutStoreConfig) {
       commit(setBoardWidgets(boards, activeBoardId, widgets));
     };
 
-    /** Adopt a full document (load): show the first board, no save. */
+    /** Adopt a full document (load): show the board this session was last on, no save.
+     *
+     *  ⚠️ **`load()` runs on every mount**, so this line is what decided the board on every return
+     *  to the dashboard — and it was `boards[0].id`, which put a multi-board operator back on board
+     *  1 every single time (ADR-134). The remembered id is checked against the document rather than
+     *  trusted: a board renamed elsewhere keeps its id, but a *removed* one must fall back rather
+     *  than leave the grid showing the empty widget list of a board that is gone. */
     const adopt = (doc: DashboardLayout, status: LayoutStatus) => {
       const boards = doc.boards.length ? doc.boards : config.defaultDoc().boards;
-      const activeBoardId = boards[0].id;
-      set({ boards, activeBoardId, widgets: widgetsOf(boards, activeBoardId), status });
+      const remembered = useLastBoardStore.getState().byBoard[config.key];
+      const activeBoardId = boards.some((b) => b.id === remembered) ? remembered : boards[0].id;
+      showBoard({ boards, activeBoardId, status });
     };
 
     return {
@@ -271,7 +301,9 @@ export function createLayoutStore(config: LayoutStoreConfig) {
       setActiveBoard: (id) => {
         const { boards } = get();
         if (!boards.some((b) => b.id === id)) return;
-        set({ activeBoardId: id, widgets: widgetsOf(boards, id) });
+        // Still no save: switching boards changes no document. It *is* remembered for the session,
+        // which is what `showBoard` adds and why this no longer calls `set` directly (ADR-134).
+        showBoard({ boards, activeBoardId: id });
       },
 
       addBoard: (name) => {
@@ -303,6 +335,7 @@ export const useLayoutStore = createLayoutStore({
   save: (doc) => api.putDashboard(doc),
   defaultDoc: defaultLayout,
   readGate: 'session',
+  key: 'my',
 });
 
 /** Shared Dashboard — one global layout shown to all users. Reads are open; saves are admin-only
@@ -312,6 +345,7 @@ export const useSharedLayoutStore = createLayoutStore({
   save: (doc) => api.putSharedDashboard(doc),
   defaultDoc: defaultLayout,
   readGate: 'view',
+  key: 'shared',
 });
 
 /** The Public Dashboard — the one board an anonymous visitor sees (ADR-123).
@@ -326,4 +360,5 @@ export const usePublicLayoutStore = createLayoutStore({
   save: (doc) => api.putPublicDashboard(doc),
   defaultDoc: emptyPublicLayout,
   readGate: 'public',
+  key: 'public',
 });

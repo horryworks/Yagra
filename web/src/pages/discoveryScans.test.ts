@@ -7,14 +7,24 @@
 // `.tsx`, so "navigate away and come back" is verified by hand on a real deployment or not at all.
 
 import { describe, expect, it } from 'vitest';
-import type { DiscoveryScan, DiscoveryScanSummary, PoolOption } from '../types/api';
+import type {
+  CredentialSummary,
+  DiscoveryScan,
+  DiscoveryScanSummary,
+  PoolOption,
+} from '../types/api';
 import { DISCOVERY_SCAN_STATES } from '../types/api';
 import {
   canRequestStop,
+  DEFAULT_TARGET_SPEC,
+  initialCredentialIds,
+  initialPool,
+  initialTargetSpec,
   isScanInFlight,
   MAX_POLL_FAILURES,
   mergeScanIntoList,
   pickDefaultPool,
+  type DiscoveryScanMemory,
   poolIsUnrouted,
   SCAN_STATE_SPECS,
   scanState,
@@ -339,5 +349,106 @@ describe('pool selection', () => {
     expect(poolIsUnrouted(pools, 'tokyo')).toBe(true);
     expect(poolIsUnrouted(pools, 'nonexistent')).toBe(true);
     expect(poolIsUnrouted(pools, 'default')).toBe(false);
+  });
+});
+
+// What a fresh visit starts from, once the browser remembers the last sweep (ADR-134). Each of the
+// three reconciles the memory against what the deployment still has, and that reconciliation — not
+// the reading — is where the judgement is.
+describe('seeding the form from the last sweep (ADR-134)', () => {
+  const cred = (id: string, kind: string): CredentialSummary => ({
+    id,
+    kind,
+    name: id,
+    used_by: 0,
+  });
+  const mem = (over: Partial<DiscoveryScanMemory> = {}): DiscoveryScanMemory => ({
+    targetSpec: '10.0.0.0/24',
+    credentialIds: ['c1'],
+    pool: 'tokyo',
+    snmpWhenUnreachable: false,
+    ...over,
+  });
+
+  describe('the target spec', () => {
+    it('is the one last typed', () => {
+      expect(initialTargetSpec(mem())).toBe('10.0.0.0/24');
+    });
+
+    it('is the long-standing default with no memory', () => {
+      expect(initialTargetSpec(null)).toBe(DEFAULT_TARGET_SPEC);
+    });
+
+    // Site mode stores an empty spec (the folder's ticked ranges were the target), and an empty
+    // field is not a target anyone can scan — so the default has to come back.
+    it('is the default when the last sweep swept a folder instead', () => {
+      expect(initialTargetSpec(mem({ targetSpec: '' }))).toBe(DEFAULT_TARGET_SPEC);
+    });
+  });
+
+  describe('the credentials', () => {
+    const creds = [cred('c1', 'snmp_v2c'), cred('c2', 'snmp_v3'), cred('c3', 'http_auth')];
+
+    it('preselects every SNMP credential with no memory — and never an HTTP one', () => {
+      // The original default, unchanged. `http_auth` is excluded because `resolve_snmp_auth` would
+      // put its secret on the wire as a community string (`lib/credentialKinds.ts`).
+      expect(initialCredentialIds(null, creds)).toEqual(['c1', 'c2']);
+    });
+
+    it('preselects the ones the last sweep tried', () => {
+      expect(initialCredentialIds(mem({ credentialIds: ['c2'] }), creds)).toEqual(['c2']);
+    });
+
+    it('drops a remembered credential that has since been deleted', () => {
+      expect(initialCredentialIds(mem({ credentialIds: ['c2', 'gone'] }), creds)).toEqual(['c2']);
+    });
+
+    // 🚨 The load-bearing case. An empty tick list is a *legal* sweep — it probes with ICMP and
+    // identifies nothing — so a memory whose credentials have all been deleted would silently turn
+    // the next sweep into a ping scan, presented as a remembered preference.
+    it('falls back to every SNMP credential when nothing remembered survives', () => {
+      expect(initialCredentialIds(mem({ credentialIds: ['gone', 'also-gone'] }), creds)).toEqual([
+        'c1',
+        'c2',
+      ]);
+    });
+
+    // The fallback is "the default", which on a deployment with no SNMP credentials is genuinely
+    // empty. It must not invent one.
+    it('is empty when the deployment has no SNMP credentials at all', () => {
+      expect(initialCredentialIds(mem({ credentialIds: ['gone'] }), [cred('c3', 'http_auth')])).toEqual(
+        [],
+      );
+    });
+  });
+
+  describe('the pool', () => {
+    const pools = [pool('default', true), pool('tokyo', false)];
+
+    it('is the one last swept from', () => {
+      expect(initialPool(mem({ pool: 'default' }), pools)).toBe('default');
+    });
+
+    // ⚠️ Including a pool whose poller is down: a site that is momentarily unreachable is still the
+    // site the operator means, and `poolIsUnrouted` is what says so on screen.
+    it('keeps a remembered pool whose poller is currently offline', () => {
+      expect(initialPool(mem({ pool: 'tokyo' }), pools)).toBe('tokyo');
+    });
+
+    // A removed pool is different: keeping it would send the sweep to the global subject while the
+    // control claimed a site.
+    it('falls back when the remembered pool no longer exists', () => {
+      expect(initialPool(mem({ pool: 'decommissioned' }), pools)).toBe('default');
+    });
+
+    it('is `pickDefaultPool`s answer with no memory', () => {
+      expect(initialPool(null, pools)).toBe(pickDefaultPool(pools));
+      expect(initialPool(null, [pool('a', true), pool('b', true)])).toBeNull();
+    });
+
+    // "Any poller" is a real choice, not a missing one, so it must not be re-guessed.
+    it('treats a remembered null as no memory of a pool', () => {
+      expect(initialPool(mem({ pool: null }), pools)).toBe('default');
+    });
   });
 });
