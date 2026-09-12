@@ -489,6 +489,24 @@ export function sectionForPath(pathname: string): NavSection {
 }
 
 /**
+ * The nav item a route is on, with its section — or `null` when the route is not a nav screen.
+ *
+ * The query string plays no part: an item is identified by its path. Note how much narrower this is
+ * than [`sectionForPath`], which answers "which tab lights up" by prefix and therefore claims
+ * `/nodes/<uuid>` for Nodes. This asks "is this route one of the menu's own screens", and the two
+ * answers differ for every detail page — which is exactly the distinction [`rememberableRoute`]
+ * is built on.
+ */
+export function navItemForPath(pathname: string): { section: NavSection; item: NavItem } | null {
+  for (const s of NAV) {
+    for (const item of sectionItems(s)) {
+      if (item.path === pathname) return { section: s, item };
+    }
+  }
+  return null;
+}
+
+/**
  * The section and item label keys for a route, or `null`s when the route is not in the nav.
  *
  * Used by the placeholder screen to name where the visitor is. `null` rather than a thrown error or
@@ -499,10 +517,64 @@ export function labelKeysForPath(pathname: string): {
   sectionKey: string | null;
   labelKey: string | null;
 } {
-  for (const s of NAV) {
-    for (const item of sectionItems(s)) {
-      if (item.path === pathname) return { sectionKey: s.labelKey, labelKey: item.labelKey };
-    }
-  }
-  return { sectionKey: null, labelKey: null };
+  const hit = navItemForPath(pathname);
+  if (!hit) return { sectionKey: null, labelKey: null };
+  return { sectionKey: hit.section.labelKey, labelKey: hit.item.labelKey };
+}
+
+// ── Where a top-bar tab goes back to (ADR-134 増分 2) ─────────────────────────────────────────
+//
+// `NavSection.path` above is a constant, and its own doc says so: the tab lands on the section's
+// first child, whatever the operator was last looking at. So Dashboard always opened Shared
+// dashboard, never the My-dashboard board the operator had left — which is conspicuous now that
+// the board itself is remembered (増分 1), and has been true since the shell's first commit.
+//
+// The memory is read here and nowhere else. Two functions, both pure: one decides what may be
+// written, one decides what a stored value is worth.
+
+/** How long a remembered route may be before its query is dropped (決定 9). */
+export const MAX_REMEMBERED_ROUTE = 512;
+
+/**
+ * What to remember for the route the operator has arrived on, or `null` when that route is not one
+ * of the menu's own screens — a node detail, `/login`, a vacated address mid-redirect.
+ *
+ * 🚨 **決定 8 lives here.** Remembering "wherever I am" would land the Nodes tab on one device's
+ * detail page, and on a 404 once that node is deleted. The query string *is* carried (決定 9), and
+ * what makes that safe is not this function: a filter row cannot be closed while it narrows and
+ * `Clear all filters (N)` is drawn beside it (ADR-053 Inc.9), so a resurrected filter says so on
+ * screen. Remove either of those and this decision needs revisiting.
+ */
+export function rememberableRoute(
+  pathname: string,
+  search: string,
+): { sectionKey: string; route: string } | null {
+  const hit = navItemForPath(pathname);
+  if (!hit) return null;
+  return { sectionKey: hit.section.key, route: hit.item.path + search };
+}
+
+/**
+ * Where a section's top-bar tab navigates: the last route visited inside that section, else the
+ * section's own landing child.
+ *
+ * The only reader of the memory, so the only place a stored value can be refused — and it refuses
+ * three kinds: a path `NAV` no longer declares (an item renamed since this session began), a path
+ * belonging to a *different* section (a value nothing in the app would have written), and one
+ * longer than [`MAX_REMEMBERED_ROUTE`].
+ *
+ * ⚠️ The length case keeps the path and drops only the query. The screen is still the right screen,
+ * so sending the operator somewhere else would be the larger harm.
+ */
+export function sectionLandingPath(
+  section: NavSection,
+  bySection: Record<string, string>,
+): string {
+  const stored = bySection[section.key];
+  if (!stored) return section.path;
+  const q = stored.indexOf('?');
+  const path = q === -1 ? stored : stored.slice(0, q);
+  const hit = navItemForPath(path);
+  if (!hit || hit.section.key !== section.key) return section.path;
+  return stored.length > MAX_REMEMBERED_ROUTE ? path : stored;
 }

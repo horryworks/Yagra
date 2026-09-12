@@ -12,6 +12,13 @@
 
 ### Improvements
 
+- **A section tab returns to the screen you left, not to its first page.** Pressing **Dashboard**
+  always opened Shared dashboard even if you had spent the morning on your own board, and
+  **Settings** always opened Yagra health out of sixteen screens. Each tab now goes back to the
+  last screen you visited in that section, filters included — and a narrowed list still shows
+  **Clear all filters**, so it says why rows are missing. Remembered for the browser session only.
+  A node's detail page is deliberately not remembered: **Nodes** returns to the menu item you
+  chose, not to one device. The logo stays a fixed way home.
 - **Moving from one node to another keeps the tab you were on.** Opening **Interfaces** on a switch
   and then picking the next switch put you back on Overview every time, so comparing one tab across
   a rack meant re-clicking it on every device. The tab you last selected is now what a node opens

@@ -246,6 +246,37 @@ export const useMapViewStore = create<MapViewStore>()(
   ),
 );
 
+// Where each nav section was last visited (ADR-134 増分 2). The top-bar tab used to navigate to
+// `NavSection.path`, a constant — so Dashboard always opened Shared dashboard even for an operator
+// who had spent the morning on their own board, and Settings always opened System health out of
+// sixteen screens. Read it through `sectionLandingPath` (nav.ts), which is where a stored value is
+// validated; write it through `rememberableRoute`, which is where "only a screen the menu declares"
+// lives, so a node detail never becomes the Nodes tab's destination.
+//
+// sessionStorage, like the three above: part of "what am I looking at", not a standing preference,
+// and deliberately not on the account (決定 11 — one PUT and one audit row per navigation).
+interface SectionRouteStore {
+  /** Section key → the last route visited in it (`/dashboard/my`, `/events?message=router`).
+   *  A key absent means "never visited", so that section's landing child wins. */
+  bySection: Record<string, string>;
+  rememberSectionRoute: (key: string, route: string) => void;
+}
+
+export const useSectionRouteStore = create<SectionRouteStore>()(
+  persist(
+    (set) => ({
+      bySection: {},
+      // Same value ⇒ same state object, so nothing re-renders and nothing is written. A filter can
+      // rewrite the URL on every keystroke, and this effect runs on every one of them.
+      rememberSectionRoute: (key, route) =>
+        set((s) =>
+          s.bySection[key] === route ? s : { bySection: { ...s.bySection, [key]: route } },
+        ),
+    }),
+    { name: 'yagra.navroute', storage: createJSONStorage(sessionStore) },
+  ),
+);
+
 // How tall the operator dragged the Geo map's pane. A layout preference, so it persists — snapping
 // back to the default on every navigation is exactly the annoyance `design-guidelines.md`'s
 // "画面状態の永続化" is about. localStorage rather than sessionStorage (unlike the chart range):

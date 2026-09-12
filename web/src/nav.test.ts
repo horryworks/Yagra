@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { NAV, labelKeysForPath, sectionForPath, sectionItems, sidebarGroups } from './nav';
+import {
+  MAX_REMEMBERED_ROUTE,
+  NAV,
+  labelKeysForPath,
+  navItemForPath,
+  rememberableRoute,
+  sectionForPath,
+  sectionItems,
+  sectionLandingPath,
+  sidebarGroups,
+} from './nav';
 import enNav from './locales/en/nav.json';
 
 /** Resolve a dotted i18n key (e.g. 'nodes.metricSets') against the English nav bundle. */
@@ -221,5 +231,109 @@ describe('labelKeysForPath', () => {
     // Detail pages and `/login` are legitimately absent; the caller renders a generic heading.
     expect(labelKeysForPath('/nodes/abc-123')).toEqual({ sectionKey: null, labelKey: null });
     expect(labelKeysForPath('')).toEqual({ sectionKey: null, labelKey: null });
+  });
+});
+
+describe('navItemForPath', () => {
+  it('names the item and its section for a menu screen', () => {
+    const hit = navItemForPath('/dashboard/my');
+    expect(hit?.section.key).toBe('dashboard');
+    expect(hit?.item.labelKey).toBe('dashboard.my');
+  });
+
+  it('asks a narrower question than sectionForPath, and the two disagree on a detail page', () => {
+    // This difference is the whole basis of what a tab is allowed to remember (ADR-134 増分 2
+    // 決定 8): the tab that lights up is a prefix match, the screen that can be returned to is not.
+    expect(sectionForPath('/nodes/abc-123').key).toBe('nodes');
+    expect(navItemForPath('/nodes/abc-123')).toBeNull();
+  });
+});
+
+describe('rememberableRoute (what a section may remember)', () => {
+  it('remembers a menu screen, carrying its query string', () => {
+    // 決定 9 — the filter comes back with the screen. Safe because the screen says it is narrowed:
+    // the filter row cannot be closed while it filters, and `Clear all filters (N)` sits beside it.
+    expect(rememberableRoute('/events', '?message=router')).toEqual({
+      sectionKey: 'events',
+      route: '/events?message=router',
+    });
+    expect(rememberableRoute('/dashboard/my', '')).toEqual({
+      sectionKey: 'dashboard',
+      route: '/dashboard/my',
+    });
+  });
+
+  it('refuses every route the menu does not declare', () => {
+    // 決定 8. Every one of these resolves to *a* section — `sectionForPath` never answers null —
+    // which is exactly why "which tab lights up" cannot decide what a tab returns to.
+    const routes = [
+      '/nodes/00000000-0000-4000-8000-0000000000b2', // a node detail: deletable, so a 404 later
+      '/login',
+      '/settings/preferences', // a dialog since ADR-055 Inc.7; the nav declares it nowhere
+      '/settings/integrations/meraki', // deeper than the item that owns it
+      '/alerts/events', // a vacated address, caught mid-redirect
+      '/nope',
+    ];
+    expect(routes.filter((p) => rememberableRoute(p, '') === null)).toEqual(routes);
+  });
+});
+
+describe('sectionLandingPath (where a top-bar tab goes back to)', () => {
+  const section = (key: string) => NAV.find((s) => s.key === key)!;
+
+  it('lands on the section’s own child when it has never been visited', () => {
+    expect(sectionLandingPath(section('dashboard'), {})).toBe('/dashboard');
+    expect(sectionLandingPath(section('settings'), {})).toBe('/settings/system-health');
+  });
+
+  it('returns the remembered screen — the reported symptom, in one line', () => {
+    // "My dashboard の 2 枚目を開いて Node に行き Dashboard に戻ってくると Shared dashboard が見える".
+    expect(sectionLandingPath(section('dashboard'), { dashboard: '/dashboard/my' })).toBe(
+      '/dashboard/my',
+    );
+  });
+
+  it('returns the query string with it', () => {
+    expect(sectionLandingPath(section('events'), { events: '/events?message=router' })).toBe(
+      '/events?message=router',
+    );
+  });
+
+  it('refuses a path the nav no longer declares', () => {
+    // A session that began on a build where this item had a different address.
+    expect(sectionLandingPath(section('nodes'), { nodes: '/nodes/collection-profiles' })).toBe(
+      '/nodes',
+    );
+  });
+
+  it('refuses a path belonging to another section', () => {
+    expect(sectionLandingPath(section('nodes'), { nodes: '/dashboard/my' })).toBe('/nodes');
+  });
+
+  it('drops an over-long query but keeps the screen', () => {
+    const long = '/events?message=' + 'x'.repeat(MAX_REMEMBERED_ROUTE);
+    expect(long.length).toBeGreaterThan(MAX_REMEMBERED_ROUTE);
+    expect(sectionLandingPath(section('events'), { events: long })).toBe('/events');
+  });
+
+  it('round-trips every screen in the menu, and says how many it inspected', () => {
+    const wrong: string[] = [];
+    let inspected = 0;
+    for (const s of NAV) {
+      for (const item of sectionItems(s)) {
+        inspected++;
+        const hit = rememberableRoute(item.path, '');
+        if (!hit || hit.sectionKey !== s.key) {
+          wrong.push(item.path);
+          continue;
+        }
+        if (sectionLandingPath(s, { [s.key]: hit.route }) !== item.path) wrong.push(item.path);
+      }
+    }
+    expect(wrong).toEqual([]);
+    // The floor counts what was INSPECTED, not what was found: a lookup that stopped matching
+    // would otherwise report "nothing wrong" over zero screens, which is indistinguishable from a
+    // healthy nav (floor-must-count-what-was-checked). 44 items today, across 7 sections.
+    expect(inspected).toBeGreaterThanOrEqual(34);
   });
 });

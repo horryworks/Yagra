@@ -8,6 +8,7 @@ import {
   useMapViewStore,
   useNodeTabStore,
   useRangeStore,
+  useSectionRouteStore,
 } from './store';
 import type { Alert } from './types/api';
 
@@ -161,5 +162,39 @@ describe('map view memory (ADR-134)', () => {
     useMapViewStore.getState().setMapView('topo', { tx: 1, ty: 2, scale: 1 });
     useMapViewStore.getState().setMapView('topo', null);
     expect(useMapViewStore.getState().topo).toBeNull();
+  });
+});
+
+describe('nav section route memory (ADR-134 増分 2)', () => {
+  beforeEach(() => useSectionRouteStore.setState({ bySection: {} }));
+
+  it('remembers nothing until a section is visited, so its landing child still wins', () => {
+    expect(useSectionRouteStore.getState().bySection).toEqual({});
+  });
+
+  // One entry per section: the seven tabs are seven independent destinations, and a shared key
+  // would send Nodes to a dashboard.
+  it('keeps one route per section', () => {
+    useSectionRouteStore.getState().rememberSectionRoute('dashboard', '/dashboard/my');
+    useSectionRouteStore.getState().rememberSectionRoute('events', '/events?message=router');
+    expect(useSectionRouteStore.getState().bySection).toEqual({
+      dashboard: '/dashboard/my',
+      events: '/events?message=router',
+    });
+  });
+
+  it('replaces a section’s route when the operator moves within it', () => {
+    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes');
+    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes/credentials');
+    expect(useSectionRouteStore.getState().bySection).toEqual({ nodes: '/nodes/credentials' });
+  });
+
+  // The effect that writes this runs on every route change, and a filter can rewrite the query on
+  // every keystroke — so an unchanged value must return the same state object and re-render nothing.
+  it('does not churn state when the route has not changed', () => {
+    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes/mib');
+    const before = useSectionRouteStore.getState().bySection;
+    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes/mib');
+    expect(useSectionRouteStore.getState().bySection).toBe(before);
   });
 });

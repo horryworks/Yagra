@@ -5,8 +5,8 @@
 
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { NAV, sectionForPath } from '../../nav';
-import { useAlertStore, useCan } from '../../store';
+import { NAV, sectionForPath, sectionLandingPath } from '../../nav';
+import { useAlertStore, useCan, useSectionRouteStore } from '../../store';
 import { Logo } from './Logo';
 import { UserMenu } from './UserMenu';
 import { GlobalSearch } from './GlobalSearch';
@@ -18,11 +18,17 @@ export function TopBar() {
   const navigate = useNavigate();
   const active = sectionForPath(pathname);
   const alertCount = useAlertStore((s) => Object.keys(s.alerts).length);
+  // Where each tab goes back to (ADR-134 増分 2). Not `s.path` any more — that constant always
+  // landed on the section's first child, so Dashboard could not return to My dashboard.
+  const bySection = useSectionRouteStore((s) => s.bySection);
   // The permission composing the public board takes — the same one its handler checks (ADR-056).
   const canSystem = useCan('manage_system');
 
   return (
     <header className="topbar">
+      {/* Home is fixed, and stays fixed while the tabs remember (ADR-134 増分 2 決定 10): when a
+          memory takes the operator somewhere unexpected, this is the one control whose destination
+          they can predict. The tabs remember; the logo is home. */}
       <button
         className="topbar-home"
         onClick={() => navigate('/dashboard')}
@@ -36,7 +42,7 @@ export function TopBar() {
         {NAV.map((s) => (
           <NavLink
             key={s.key}
-            to={s.path}
+            to={sectionLandingPath(s, bySection)}
             className={s.key === active.key ? 'topbar-tab active' : 'topbar-tab'}
           >
             {t(s.labelKey)}
