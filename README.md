@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.16 — A folder carries the IP ranges in use at it and Discovery files each device into the one whose range holds it, a folder's contents sort by name from the right-click menu, every search box clears itself from a ✕, and the Interface traffic chart draws transmit above the line**
+> Status: **v0.3.17 — A node can be renamed and carry Notes, nodes and folders carry tags that are inherited down the tree and reach PagerDuty and JSM, every section and node tab returns to where you left it, and the inventory tree paints without waiting**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.17 — A node can be renamed and carry Notes, nodes and folders carry tags that are inherited down the tree and reach PagerDuty and JSM, every section and node tab returns to where you left it, and the inventory tree paints without waiting
+
 ### New Features
 
 - **A node can be renamed.** Until now `Edit node` could change everything about a node except what
