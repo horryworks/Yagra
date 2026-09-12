@@ -328,9 +328,12 @@ pub struct ApiState {
     pub oidc: Option<Arc<crate::oidc::OidcRepo>>,
     /// In-flight OIDC authorizations (CSRF state → nonce/PKCE), one per pending SSO login.
     pub oidc_flight: Arc<crate::oidc::OidcFlight>,
-    /// MCP server enabled (ADR-028, `YAGRA_ENABLE_MCP`). When `true`, `serve()` mounts the read-only
-    /// MCP tool surface at `/mcp`; when `false` (default) the route is absent (a request 404s). Held
-    /// here so `serve()` reads it off the same state it already threads.
+    /// MCP server enabled (ADR-028, `YAGRA_ENABLE_MCP`). When `true` — **the default since ADR-028
+    /// Increment 3** — `serve()` mounts the read-only MCP tool surface at `/mcp`; when `false` the
+    /// route is absent (a request 404s). Held here so `serve()` reads it off the same state it
+    /// already threads. ⚠️ Skeleton mode and every test builder set it `false` explicitly: the
+    /// default belongs to `Config::from_env`, and a state with no `AdminState` has no `api_tokens`
+    /// table to authenticate a PAT against.
     pub enable_mcp: bool,
     /// AI-assisted root-cause analysis (ADR-029); `None` in skeleton mode. Present on every core —
     /// generation is an on-demand read plus one outbound call, so there is nothing for a standby to

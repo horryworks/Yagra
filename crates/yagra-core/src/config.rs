@@ -141,11 +141,18 @@ pub struct Config {
     /// (security.md/ADR-018). `None` (unset) ⇒ opaque per-process tokens, **byte-identical to today**.
     /// A configured-but-unreadable/invalid key is a hard startup error (fail-closed).
     pub session_key_file: Option<String>,
-    /// MCP server (ADR-028, Phase 4 inward-facing AI tool surface). Default `false`: the `/mcp`
-    /// Streamable-HTTP endpoint is **not mounted** (a request to it 404s), byte-identical to
-    /// pre-MCP behavior. When `true`, `serve()` mounts a read-only MCP tool surface at `/mcp`,
-    /// authenticated with an API token (PAT) or a session token. Additive, default-OFF,
-    /// N/N-1 rolling-safe (ADR-017). Consumed by `serve()` via [`crate::api::ApiState::enable_mcp`].
+    /// MCP server (ADR-028, Phase 4 inward-facing AI tool surface). **Default `true` since
+    /// ADR-028 Increment 3**: `serve()` mounts the read-only MCP tool surface at `/mcp` on the API
+    /// port, authenticated with an API token (PAT) or a session token — there is no anonymous path
+    /// to it even when the public dashboard is on (`mcp/mod.rs`). Setting `YAGRA_ENABLE_MCP=false`
+    /// leaves the route unmounted, so a request to it 404s.
+    ///
+    /// ⚠️ The flip is **opt-out, which means an upgrade turns it on** for a deployment that never
+    /// set the variable — absence of the variable cannot be told apart from "nobody decided". That
+    /// is the intended trade (ADR-028 Inc.3): `/mcp` adds no new authentication edge, it reuses the
+    /// one the REST API on the same port already has. Consumed by `serve()` via
+    /// [`crate::api::ApiState::enable_mcp`]; skeleton mode forces it off regardless, because a
+    /// skeleton has no `api_tokens` store to authenticate a PAT against.
     pub enable_mcp: bool,
 }
 
@@ -196,8 +203,11 @@ impl Config {
             // Signed session tokens (ADR-016 Increment 2a): opt-in via a mounted key file. Unset ⇒
             // opaque per-process tokens (byte-identical to today).
             session_key_file: parse_optional(std::env::var("YAGRA_SESSION_KEY_FILE").ok()),
-            // MCP server (ADR-028): opt-in. Unset ⇒ `/mcp` not mounted (byte-identical to pre-MCP).
-            enable_mcp: parse_bool(std::env::var("YAGRA_ENABLE_MCP").ok()),
+            // MCP server (ADR-028 Inc.3): opt-**out**. Unset/empty ⇒ `/mcp` is mounted; turning it
+            // off takes an explicit `YAGRA_ENABLE_MCP=false`. `parse_bool` cannot express this —
+            // it reads everything it does not recognise as `false`, which is only correct when the
+            // default is off.
+            enable_mcp: parse_bool_or(std::env::var("YAGRA_ENABLE_MCP").ok(), true),
         })
     }
 }
@@ -298,16 +308,35 @@ fn parse_idle_days(raw: Option<String>) -> i64 {
         .unwrap_or(DEFAULT_PAT_OIDC_IDLE_DAYS)
 }
 
-/// Parse a boolean flag. Truthy: `1`/`true`/`yes`/`on` (case-insensitive); everything
-/// else (including unset) is `false`.
+/// Parse a boolean flag that is off unless asked for. Truthy: `1`/`true`/`yes`/`on`
+/// (case-insensitive); everything else (including unset) is `false`. Defined in terms of
+/// [`parse_bool_or`] rather than beside it — the two answered identically when measured, and a
+/// second `matches!` would be one more place for the truthy vocabulary to drift.
 fn parse_bool(raw: Option<String>) -> bool {
-    matches!(
-        raw.as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    )
+    parse_bool_or(raw, false)
+}
+
+/// Parse a boolean flag whose default is not necessarily `false`, for an **opt-out** switch.
+///
+/// Recognises `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` (case-insensitive, trimmed); unset,
+/// empty, or unrecognised text lands on `default`. [`parse_bool`] cannot express this: it reads
+/// `off` and `garbage` alike as `false`, which is the right answer only for an opt-in flag.
+///
+/// ⚠️ **Empty must land on the default, not on `false`.** Compose renders `${VAR:-}` as an empty
+/// string rather than omitting the variable, so a deployment that never chose hands us
+/// `Some("")` — not `None` — and reading that as "the operator said no" would make an opt-out
+/// default unreachable through the very file that ships it.
+fn parse_bool_or(raw: Option<String>, default: bool) -> bool {
+    match raw
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("1" | "true" | "yes" | "on") => true,
+        Some("0" | "false" | "no" | "off") => false,
+        _ => default,
+    }
 }
 
 /// Whether a polling interval (seconds) is within the operator-configurable band `[MIN, MAX]`.
@@ -390,5 +419,47 @@ mod tests {
         assert!(parse_bool(Some("true".into())));
         assert!(parse_bool(Some(" YES ".into())));
         assert!(parse_bool(Some("On".into())));
+    }
+
+    /// The opt-out direction, which is what `YAGRA_ENABLE_MCP` reads through since ADR-028 Inc.3.
+    /// The case that matters most is the **empty string**: `docker-compose.deploy.yml` passes the
+    /// variable through as `${YAGRA_ENABLE_MCP:-}`, so a deployment whose `.env` never mentions MCP
+    /// hands core `Some("")`. Reading that as `false` would make the shipped default unreachable
+    /// through the shipped composition — which is the only way most deployments are configured.
+    #[test]
+    fn an_opt_out_flag_is_on_until_an_operator_says_otherwise() {
+        for absent in [None, Some(String::new()), Some("   ".into())] {
+            assert!(parse_bool_or(absent.clone(), true), "{absent:?} → default");
+            assert!(
+                !parse_bool_or(absent.clone(), false),
+                "{absent:?} → default"
+            );
+        }
+        for off in ["false", "0", "no", " OFF ", "Off"] {
+            assert!(!parse_bool_or(Some(off.into()), true), "{off} turns it off");
+        }
+        for on in ["true", "1", "yes", " ON ", "On"] {
+            assert!(parse_bool_or(Some(on.into()), false), "{on} turns it on");
+        }
+        // Unrecognised text is the default, not `false` — a typo must not silently disable an
+        // opt-out feature any more than it silently enables an opt-in one.
+        assert!(parse_bool_or(Some("flase".into()), true));
+        assert!(!parse_bool_or(Some("flase".into()), false));
+    }
+
+    /// `parse_bool` is `parse_bool_or(_, false)` and must stay observationally identical to the
+    /// `matches!` it replaced — every opt-in flag in this file still reads through it.
+    #[test]
+    fn the_opt_in_parser_is_the_opt_out_parser_defaulted_off() {
+        for raw in [
+            None,
+            Some(String::new()),
+            Some("true".into()),
+            Some("false".into()),
+            Some("off".into()),
+            Some("banana".into()),
+        ] {
+            assert_eq!(parse_bool(raw.clone()), parse_bool_or(raw.clone(), false));
+        }
     }
 }

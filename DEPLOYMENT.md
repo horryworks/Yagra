@@ -48,7 +48,7 @@ Yagra is two long-running binaries plus a static WebUI, backed by five stores pl
 | `4222` | — | `YAGRA_NATS_PORT` | NATS bus | internal; published **only** with TLS+auth (D) |
 | `5432` / `6379` / `8428` / `9428` / `8123` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs / ClickHouse | internal only |
 
-> The MCP tool surface (`/mcp`, opt-in via `YAGRA_ENABLE_MCP`) is served on the API port `8080` — it does not open a separate port. The web container also proxies it, so it is reachable over TLS at `https://<host>/mcp`. If you have set `YAGRA_MCP_ALLOWED_HOSTS`, add the web host's name to it or that path is refused.
+> The MCP tool surface (`/mcp`, **on by default**; `YAGRA_ENABLE_MCP=false` removes it) is served on the API port `8080` — it does not open a separate port. The web container also proxies it, so it is reachable over TLS at `https://<host>/mcp`. It always requires a bearer token, so enabling it exposes nothing until you mint one in Settings ▸ API tokens. If you have set `YAGRA_MCP_ALLOWED_HOSTS`, add the web host's name to it or that path is refused.
 
 > ### TLS
 >
@@ -491,7 +491,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_SESSION_KEY_FILE` | unset ⇒ per-process tokens | Path to the mounted HMAC session-signing key (sessions valid on any core and across restarts); set but unreadable/invalid ⇒ startup fails |
 | `YAGRA_PAT_OIDC_IDLE_DAYS` | `30` | Days an API token owned by an **externally-authenticated** account — SSO **or** LDAP directory — survives its owner not signing in. An identity provider or a domain controller disabling an account is not something Yagra is told about, so the owner going quiet is the only signal. Local/service-account-owned tokens are unaffected. The variable keeps its `OIDC` name so running deployments do not break; the rule covers every external kind. Clamped 1–365 |
 | **MCP (AI clients)** | | |
-| `YAGRA_ENABLE_MCP` | `false` | Mount the MCP tool surface at `/mcp` on the API port (auth always required) |
+| `YAGRA_ENABLE_MCP` | `true` | Mount the MCP tool surface at `/mcp` on the API port (auth always required). Set `false` to unmount it — a request then 404s |
 | `YAGRA_MCP_ALLOWED_HOSTS` | unset ⇒ any `Host` accepted | Comma-separated `Host`-header allowlist for `/mcp` (DNS-rebinding hardening) |
 | **Analysis & RCA rate caps** | | |
 | `YAGRA_ANALYSIS_MAX_CONCURRENT` | `4` | Max concurrently-running Troubleshoot analyses |

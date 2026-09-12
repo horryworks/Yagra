@@ -10,6 +10,23 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **The MCP tool surface at `/mcp` is now served by default** (ADR-028 Inc.3). `YAGRA_ENABLE_MCP`
+  became an opt-**out**: a fresh install serves `/mcp` from its first boot, and a deployment that
+  never set the variable starts serving it after this upgrade — where it previously returned 404.
+  To keep it off, set `YAGRA_ENABLE_MCP=false` for core (in `~/yagra-deploy/.env` for the deploy
+  composition) and restart. Core now logs which of the two it did on every start, so you can read
+  the answer out of `docker compose logs core` rather than probing the port.
+  ⚠️ **What this does and does not open.** `/mcp` shares the API port and the same bearer gate the
+  REST API on it already has; it is authenticated unconditionally, including when the public
+  dashboard is on, and every tool applies the same permission and group scope as the REST route it
+  mirrors. No tool returns a credential and none configures a network device. A deployment that has
+  minted no API token therefore exposes nothing new — the change is that an AI client can be pointed
+  at Yagra without an operator first finding an environment variable in a file that in-place
+  upgrades replace.
+  The `Host`-header allowlist is unchanged and still empty by default (`YAGRA_MCP_ALLOWED_HOSTS`).
+
 ## v0.3.17 — A node can be renamed and carry Notes, nodes and folders carry tags that are inherited down the tree and reach PagerDuty and JSM, every section and node tab returns to where you left it, and the inventory tree paints without waiting
 
 ### New Features

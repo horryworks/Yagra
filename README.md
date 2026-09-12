@@ -49,8 +49,8 @@ polling**. Users access it through the WebUI.
 > available** — multiple instances with automatic leader election and failover (opt-in). In an HA
 > set, **user sessions can be shared across cores** (opt-in) so a failover no longer forces re-login,
 > and **remote pollers on an exposed bus can be scoped to their own pool's credentials** (opt-in),
-> narrowing what a compromised poller can reach. **AI assistants can now query Yagra through a built-in,
-> opt-in MCP tool surface** at `/mcp` — mostly read-only status, metrics, flow, and event queries plus
+> narrowing what a compromised poller can reach. **AI assistants can now query Yagra through a built-in
+> MCP tool surface** at `/mcp`, served from the first boot — mostly read-only status, metrics, flow, and event queries plus
 > on-demand Troubleshoot analyses and **Yagra's own configuration**, each section demanding the same
 > permission the matching WebUI screen does, alongside a few audited write actions (acknowledge an
 > alert, open a maintenance window, poll now); it is authenticated by API token and cannot change
@@ -163,7 +163,8 @@ API v2) and Jira Service Management (Alerts API) with native fire/resolve lifecy
 
 ## Connecting an AI client (MCP)
 
-Yagra can expose a **read-only [MCP](https://modelcontextprotocol.io) tool surface** (ADR-028) so an
+Yagra serves a **read-only [MCP](https://modelcontextprotocol.io) tool surface** (ADR-028) from the
+first boot, so an
 AI client — Claude Code, Claude Desktop, or another MCP-capable assistant — can query live monitoring
 state in natural language: *"which nodes are down?"*, *"summarize the active alerts"*, *"show CPU on
 edge-router-1 for the last hour"*, *"run anomaly detection and tell me what looks wrong"*. Most tools
@@ -181,10 +182,10 @@ webhooks), plus the Troubleshoot trio `run_analysis`, `get_analysis_findings`, `
 Write tools (need an Operator/Admin token; every call is audited): `ack_alert`, `open_maintenance`,
 `poll_now`.
 
-### 1. Enable the server
+### 1. Find the endpoint
 
-Off by default. Set `YAGRA_ENABLE_MCP=true` for core (uncomment it in `docker-compose.yml`, or add it
-to your `.env` for the deploy compose) and restart. The endpoint is then served **on the API port** at:
+**On since the first boot — there is nothing to enable.** The endpoint is served **on the API port**
+at:
 
 ```
 https://<yagra-host>/mcp              # through the WebUI's TLS edge (preferred)
@@ -200,8 +201,10 @@ usable everywhere.
 ⚠️ If you have set `YAGRA_MCP_ALLOWED_HOSTS`, it must name the web host too — it is matched against
 the `Host` header, which differs between the two URLs above.
 
-When MCP is disabled the path is not mounted (404), byte-identical to before. MCP always requires
-authentication, even when the public dashboard is on.
+MCP always requires authentication, even when the public dashboard is on — so the surface being on
+by default exposes nothing until you mint a token in step 2. To remove it entirely, set
+`YAGRA_ENABLE_MCP=false` for core (in your `.env` for the deploy compose, or uncomment it in
+`docker-compose.yml`) and restart; the path is then not mounted and returns 404.
 
 ### 2. Create an API token
 

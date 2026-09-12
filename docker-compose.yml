@@ -139,9 +139,10 @@ services:
       # to choose your own:
       # YAGRA_ADMIN_PASSWORD: "choose-a-strong-password"
       # Viewing requires login by default. Uncomment to open reads:
-      # MCP server (ADR-028): off by default. Uncomment to expose the read-only AI/MCP tool surface
-      # at /mcp on the API port (auth always required). See README ▸ "Connecting an AI client".
-      # YAGRA_ENABLE_MCP: "true"
+      # MCP server (ADR-028): ON by default — the read-only AI/MCP tool surface is served at /mcp on
+      # the API port (auth always required). See README ▸ "Connecting an AI client". Uncomment to
+      # turn it off:
+      # YAGRA_ENABLE_MCP: "false"
       # Distributed tracing (OpenTelemetry): unset = logs only (zero overhead). Uncomment to
       # export spans over OTLP/HTTP to the `jaeger` service below (run it with
       # `docker compose --profile tracing up`). At scale, also sample — see the poller note.

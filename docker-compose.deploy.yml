@@ -280,10 +280,14 @@ services:
       YAGRA_ADMIN_PASSWORD: ${YAGRA_ADMIN_PASSWORD:-}
       # Read-only dashboard exposure: unset/false = viewing requires login (default);
       # set true to serve node/metric/alert reads without authentication.
-      # MCP server (ADR-028): unset/false = /mcp not mounted (default). Set true to expose the
-      # read-only AI/MCP tool surface on the API port at /mcp. Auth (an API token from Settings ▸
-      # API tokens, or a session token) is always required. See README ▸ "Connecting an AI client".
-      YAGRA_ENABLE_MCP: ${YAGRA_ENABLE_MCP:-false}
+      # MCP server (ADR-028): ON by default since Inc.3 — the read-only AI/MCP tool surface is
+      # served on the API port at /mcp. Auth (an API token from Settings ▸ API tokens, or a session
+      # token) is always required, including when the public dashboard is on. Set
+      # YAGRA_ENABLE_MCP=false in .env to unmount it. See README ▸ "Connecting an AI client".
+      # ⚠️ Passed through EMPTY rather than defaulted here: the default lives in core's
+      # Config::from_env and must have exactly one spelling, or the two copies drift apart and the
+      # compose file — which an upgrade replaces out of the target image — wins silently.
+      YAGRA_ENABLE_MCP: ${YAGRA_ENABLE_MCP:-}
       # Optional: alert Webhook + SNMP v2c community (left unset = disabled).
       YAGRA_WEBHOOK_URL: ${YAGRA_WEBHOOK_URL:-}
       YAGRA_SNMP_COMMUNITY: ${YAGRA_SNMP_COMMUNITY:-}

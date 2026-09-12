@@ -77,8 +77,12 @@ These are known, intentional, and documented so a reviewer does not have to gues
   management, retention, credentials — so a "scoped Admin" would be a credential whose label
   promised a restriction the role cannot honour. Scope applies to Viewer and Operator, and promoting
   a scoped account to Admin clears the scope it held rather than leaving a contradiction in place.
-- **The MCP tool surface (`/mcp`) is disabled by default** (`YAGRA_ENABLE_MCP`) and always requires
-  a token, including when the anonymous read-only dashboard is enabled.
+- **The MCP tool surface (`/mcp`) is served by default** (`YAGRA_ENABLE_MCP=false` unmounts it) and
+  **always requires a token**, including when the anonymous read-only dashboard is enabled. It adds
+  no authentication edge of its own: it shares the API port and the same bearer gate the REST API
+  there already has, every tool applies the same permission and group scope as the REST route it
+  mirrors, and no tool returns a credential or configures a network device. So a deployment that
+  mints no API token exposes nothing through it — which is why the default is on rather than off.
 - **The anonymous public dashboard is disabled by default**, and turning it on is an Admin act
   in the WebUI (Settings ▸ Sign-in methods). When on, anonymous visitors reach **one board and
   nothing else**: the API routes open to them are derived from the widgets that board carries,

@@ -2144,14 +2144,19 @@ async fn serve(
     metrics: PrometheusHandle,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    // MCP tool surface (ADR-028): mounted only when enabled, so a disabled deployment 404s `/mcp`
-    // (byte-identical to pre-MCP). Built before the router consumes `state`; the service shares the
-    // server shutdown token (child) so in-flight MCP sessions drain on stop (ADR-017).
+    // MCP tool surface (ADR-028): on by default since Increment 3, so a deployment that 404s `/mcp`
+    // did so by choice. Built before the router consumes `state`; the service shares the server
+    // shutdown token (child) so in-flight MCP sessions drain on stop (ADR-017).
     let mcp_router = state
         .enable_mcp
         .then(|| mcp::build_router(state.clone(), shutdown.child_token()));
+    // Both directions are logged, which they were not while the default was off. The absence of a
+    // line used to mean "nobody turned it on"; now it would mean "this build predates the flip",
+    // and an operator looking for /mcp after an upgrade cannot tell those apart from silence.
     if mcp_router.is_some() {
         tracing::info!("MCP server enabled — read-only tool surface at /mcp (ADR-028)");
+    } else {
+        tracing::info!("MCP server disabled by YAGRA_ENABLE_MCP — /mcp is not mounted (ADR-028)");
     }
     let mut app = api::router(state);
     if let Some(mcp_router) = mcp_router {

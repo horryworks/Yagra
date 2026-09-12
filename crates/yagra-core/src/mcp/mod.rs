@@ -3,9 +3,11 @@
 //!
 //! Exposes yagra-core's **read** seams to an MCP client (Claude Code/Desktop, an oncall operator's
 //! AI client, or later the internal RCA agent of ADR-029) over **Streamable HTTP**. The transport is
-//! an [`rmcp`] `StreamableHttpService` mounted into the existing axum `serve()` at `/mcp`, gated OFF
-//! by default behind `YAGRA_ENABLE_MCP` ([`crate::config::Config::enable_mcp`]); when off the route is
-//! not mounted (a request 404s), byte-identical to pre-MCP behavior (ADR-017, additive/N-1-safe).
+//! an [`rmcp`] `StreamableHttpService` mounted into the existing axum `serve()` at `/mcp`. **On by
+//! default since ADR-028 Increment 3** — `YAGRA_ENABLE_MCP=false`
+//! ([`crate::config::Config::enable_mcp`]) unmounts the route, and a request then 404s. What makes
+//! defaulting it on safe is the paragraph below, not the flag: `/mcp` opens no new authentication
+//! edge, it shares the API port and the bearer gate the REST surface on it already has.
 //!
 //! **Auth** is enforced in [`mcp_auth_mw`] before any tool runs: a valid bearer token (an API token,
 //! [`crate::apitokens`], or a session token, [`crate::auth`]) with `View`. MCP is **always

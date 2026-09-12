@@ -48,7 +48,7 @@ Yagra は 2 つの常駐バイナリと静的 WebUI、そして 5 つのスト�
 | `4222` | — | `YAGRA_NATS_PORT` | NATS バス | 内部。TLS+auth 時のみ公開（D） |
 | `5432` / `6379` / `8428` / `9428` / `8123` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs / ClickHouse | 内部のみ |
 
-> MCP ツールサーフェス（`/mcp`、`YAGRA_ENABLE_MCP` でオプトイン）は API ポート `8080` 上で提供されます — 別ポートは開きません。web コンテナも `/mcp` をプロキシするので `https://<host>/mcp` でも到達できます。`YAGRA_MCP_ALLOWED_HOSTS` を設定している場合は web 側のホスト名を追加してください。追加しないとこの経路は拒否されます。
+> MCP ツールサーフェス（`/mcp`、**既定で有効**。`YAGRA_ENABLE_MCP=false` で外せます）は API ポート `8080` 上で提供されます — 別ポートは開きません。web コンテナも `/mcp` をプロキシするので `https://<host>/mcp` でも到達できます。認証は常に必須なので、Settings ▸ API tokens でトークンを発行するまでは何も見えません。`YAGRA_MCP_ALLOWED_HOSTS` を設定している場合は web 側のホスト名を追加してください。追加しないとこの経路は拒否されます。
 
 > ### TLS
 >
@@ -484,7 +484,7 @@ export RUST_LOG=info
 | `YAGRA_SESSION_KEY_FILE` | 未設定 ⇒ プロセス内トークン | マウントした HMAC セッション署名鍵へのパス（セッションがどの core でも・再起動をまたいでも有効になる）。設定済みで読めない/不正なら起動失敗 |
 | `YAGRA_PAT_OIDC_IDLE_DAYS` | `30` | **外部認証**アカウント（SSO **または** LDAP ディレクトリ）が所有する API トークンが、所有者がサインインしないまま有効な日数。IdP やドメインコントローラ側でのアカウント無効化は Yagra に通知されないため、所有者の沈黙が唯一の手がかり。ローカル/サービスアカウント所有のトークンは対象外。既存デプロイを壊さないため変数名は `OIDC` のまま（規則は外部種別すべてに適用）。1〜365 にクランプ |
 | **MCP（AI クライアント）** | | |
-| `YAGRA_ENABLE_MCP` | `false` | API ポート上の `/mcp` に MCP ツールサーフェスをマウント（認証は常に必須） |
+| `YAGRA_ENABLE_MCP` | `true` | API ポート上の `/mcp` に MCP ツールサーフェスをマウント（認証は常に必須）。`false` にすると外れ、リクエストは 404 になります |
 | `YAGRA_MCP_ALLOWED_HOSTS` | 未設定 ⇒ 任意の `Host` を受理 | `/mcp` の `Host` ヘッダ許可リスト（カンマ区切り。DNS リバインディング対策） |
 | **分析と RCA のレート上限** | | |
 | `YAGRA_ANALYSIS_MAX_CONCURRENT` | `4` | 同時実行できるトラブルシュート分析の上限 |
