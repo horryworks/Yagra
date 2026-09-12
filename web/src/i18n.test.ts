@@ -7,6 +7,7 @@
 
 import { afterAll, describe, expect, it } from 'vitest';
 import i18n, { NAMESPACES as REGISTERED_NAMESPACES } from './i18n';
+import { alertWhat } from './lib/format';
 
 // English namespaces are bundled; import them directly for the parity check (type-safe, no fs).
 import enCommon from './locales/en/common.json';
@@ -138,6 +139,16 @@ describe('i18n mechanism', () => {
     expect(i18n.t('nav:shell.signIn')).toBe('サインイン');
     expect(i18n.t('alerts:history.cols.severity')).toBe('重大度');
     expect(i18n.t('format:severity.critical')).toBe('重大');
+    // "What fired" is assembled from two namespaces and reverses word order between the locales:
+    // English puts the direction before the bound, Japanese after it. That reversal is the whole
+    // reason alertWhat interpolates a template instead of concatenating the two — a plain
+    // "direction then value" join printed the raw wire token in both languages ("above 80" on a
+    // Japanese screen), which is what it did until the reason moved onto the node's own page and
+    // had to be readable there.
+    expect(
+      alertWhat({ metric: 'cisco_mem_used_pct', direction: 'above', threshold_value: 80 }),
+    ).toHaveProperty('condition', '80 を上回る');
+    expect(i18n.t('alertsConfig:thresholds.direction.below')).toBe('下回る');
   });
 });
 

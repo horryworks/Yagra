@@ -10,10 +10,12 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { rootCause, type HasSubject } from '../../lib/alertSubject';
+import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Badge } from '../ui/Badge';
 import { EntityName, useEntityNames } from '../ui/EntityName';
 import { api } from '../../services/api';
 import {
+  alertWhatOf,
   deriveMem,
   formatBytes,
   formatCount,
@@ -163,6 +165,15 @@ export function OverviewTab({
                   style={{ background: severityColorVar(a.severity) }}
                 />
                 <span className="nd-alert-state">{stateLabel(a.state)}</span>
+                {/* WHY it fired — the metric, the bound it crossed and the sample that crossed it.
+                    The same span, on the same fact, as Alerts ▸ Active and Alerts ▸ History: this
+                    row used to render the severity word and the time and nothing else, so a node
+                    sitting in Warning gave an operator no way to learn what was wrong without
+                    leaving its page. `title` is the check id, matching the triage row — the words
+                    carry their own tooltip from inside AlertWhatText. */}
+                <span className="nd-alert-what" title={a.check}>
+                  <AlertWhatText what={alertWhatOf(a)} />
+                </span>
                 {/* `causedBy` used to interpolate the raw UUID, which `no-raw-uuids-in-tables`
                     forbids and which ADR-087 made worse: on this very node's page the cause is
                     often the node itself, so it read "caused by <this node's own uuid>". */}

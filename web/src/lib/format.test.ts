@@ -90,6 +90,31 @@ describe('format', () => {
       ifindex: null,
     });
 
+    // 🚨 Both numbers are formatted, and the case above cannot tell that: 100 and 450 are integers,
+    // so `formatSi` returns exactly what interpolating them raw did. The defect this pins was found
+    // on a live alert — `cisco_mem_used_pct`, whose sample arrived as 83.86047908238002 and was
+    // printed to all seventeen digits, pushing the metric name and the bound off a phone-width row.
+    // A fractional sample is therefore the only input that distinguishes formatted from raw, which
+    // is why it is here and not folded into the integer case.
+    expect(
+      alertWhat({
+        metric: 'cisco_mem_used_pct',
+        direction: 'above',
+        threshold_value: 80,
+        observed_value: 83.86047908238002,
+      }),
+    ).toMatchObject({ condition: 'above 80', observed: 'was 83.9' });
+
+    // Large values take the SI suffix rather than running to ten digits.
+    expect(
+      alertWhat({
+        metric: 'ifHCInOctets',
+        direction: 'above',
+        threshold_value: 1_500_000_000,
+        observed_value: 2_400_000_000,
+      }),
+    ).toMatchObject({ condition: 'above 1.5G', observed: 'was 2.4G' });
+
     // A metric with no numeric breach (e.g. partial data) still shows the metric, no condition.
     expect(alertWhat({ metric: 'http_up' })).toEqual({
       kind: 'metric',

@@ -27,6 +27,21 @@
   upgrades replace.
   The `Host`-header allowlist is unchanged and still empty by default (`YAGRA_MCP_ALLOWED_HOSTS`).
 
+### Improvements
+
+- **A node's Overview now says why it is in Warning.** The Active alerts list on node detail
+  rendered the severity word and a timestamp and nothing else, so a node sitting in Warning gave
+  no way to learn what was wrong without leaving its page for Alerts ▸ Active. It now carries the
+  same "what fired" text those screens do — the metric, the bound it crossed and the sample that
+  crossed it (`cisco_mem_used_pct above 80 (was 83.9)`), plus the port for a per-interface alert.
+  Nothing new is fetched: the node-status response already carried all of it.
+- **A breach reads as a number a person can read, in both languages.** The observed sample and the
+  bound were interpolated raw, so a memory percentage printed as `83.86047908238002`; both are now
+  rounded, with an SI suffix for large values. The direction was printed as the wire token, so a
+  Japanese screen read `above 80`; it is now localized and follows Japanese word order
+  (`80 を上回る`). This applies everywhere the text appears — node detail, Alerts ▸ Active and
+  Alerts ▸ History.
+
 ## v0.3.17 — A node can be renamed and carry Notes, nodes and folders carry tags that are inherited down the tree and reach PagerDuty and JSM, every section and node tab returns to where you left it, and the inventory tree paints without waiting
 
 ### New Features

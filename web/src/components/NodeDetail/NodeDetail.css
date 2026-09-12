@@ -449,6 +449,17 @@ html[data-viewport='mobile'] .nd-extract-row {
   align-items: center;
   gap: 10px;
   font-size: var(--font-sm);
+  /* Wraps rather than overflows. The row carries the breach text since the reason moved onto this
+     page, and an interface alert spells out a port too (`ifInErrors on port 12 above 0`), so the
+     one-line assumption this rule was written under no longer holds at every width. */
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+/* min-width:0 lets the breach text be the part that gives when the row is tight, instead of a flex
+   item refusing to shrink below its content and pushing the timestamp out of the section. */
+.nd-alert-what {
+  min-width: 0;
 }
 
 .nd-alert-dot {
@@ -1548,6 +1559,17 @@ html[data-viewport='mobile'] .nd-tabpad {
 html[data-viewport='mobile'] .nd-facts {
   grid-template-columns: 1fr;
   gap: 12px;
+}
+
+/* Active alerts: at ~390px the severity word, the breach text and the timestamp do not share a
+   line. Keep line 1 as the summary the operator scans (state … time) and give the breach its own
+   full-width line beneath, indented past the dot so it reads as belonging to that alert.
+   `order` rather than DOM order, because the desktop row wants the breach in the middle — where
+   Alerts ▸ Active puts it — and only the narrow layout wants it last. */
+html[data-viewport='mobile'] .nd-alert-what {
+  order: 1;
+  flex-basis: 100%;
+  padding-left: 18px;
 }
 
 /* Interfaces list: the desktop grid needs ~874px (the sparkline + In/Out sit off-screen at ~390px,

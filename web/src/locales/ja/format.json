@@ -34,6 +34,7 @@
   },
   "localTimeZoneFallback": "ローカル時刻",
   "liveness": "到達性",
+  "alertCondition": "{{value}} を{{direction}}",
   "alertObservedWas": "実測 {{value}}",
   "alertOnPort": "ポート {{ifindex}}",
   "scalar": {

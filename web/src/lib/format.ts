@@ -437,13 +437,29 @@ export function alertWhat(row: {
 }): AlertWhat {
   if (!row.metric) return { kind: 'none' };
   if (row.metric === LIVENESS_METRIC) return { kind: 'liveness' };
+  // Both numbers go through `formatSi`, and both used to be interpolated raw. A metric sample is a
+  // double: the live PoC alert this was found on read `(was 83.86047908238002)`, seventeen
+  // significant digits of a memory percentage, which on a phone crowds the metric name and the
+  // bound — the two parts that actually say what is wrong — off the line. Rounding is not cosmetic
+  // here: this span IS the explanation, so anything that costs it legibility costs it its job.
+  //
+  // The direction is a token off the wire (`above`/`below`), not English prose, and it was being
+  // printed verbatim. It has had localized labels since thresholds got a UI; the reason it needs a
+  // template rather than `${dir} ${value}` is word order — English puts the direction first
+  // ("above 80"), Japanese puts it last ("80 を上回る"), so the two locales cannot share one
+  // concatenation.
   const condition =
     row.direction && row.threshold_value != null
-      ? `${row.direction} ${row.threshold_value}`
+      ? i18n.t('format:alertCondition', {
+          direction: i18n.t(`alertsConfig:thresholds.direction.${row.direction}`, {
+            defaultValue: row.direction,
+          }),
+          value: formatSi(row.threshold_value),
+        })
       : null;
   const observed =
     row.observed_value != null
-      ? i18n.t('format:alertObservedWas', { value: row.observed_value })
+      ? i18n.t('format:alertObservedWas', { value: formatSi(row.observed_value) })
       : null;
   return {
     kind: 'metric',
