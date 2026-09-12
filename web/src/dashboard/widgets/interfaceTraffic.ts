@@ -15,6 +15,9 @@ import type { ChartSeries } from '../../components/MetricChart/MetricChart';
 import type { RateUnit } from '../../prefs';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import type { WidgetSettings } from '../types';
+// The header's window list and its polling cadence are shared with the VPN-sessions widget
+// (ADR-136 決定 6). They lived here while one widget had a window.
+import { DEFAULT_WIDGET_RANGE_SECS, WIDGET_RANGES } from './util';
 
 /**
  * How many links one widget may plot.
@@ -25,49 +28,6 @@ import type { WidgetSettings } from '../types';
  * palette makes that failure unreachable rather than merely unlikely.
  */
 export const MAX_LINKS = 6;
-
-/** The time windows this widget offers, as a subset of the app-wide `RangeControl.RANGES`.
- *
- *  Labels are untranslated, exactly as they are in the shared list — `1h` reads the same in both
- *  locales, and a runtime-built `t()` key is the shape that renders a raw key when someone forgets
- *  a string (`extensibility.md` §4).
- *
- *  `3d` is left out so the card header keeps room for its controls at the widget's narrowest
- *  allowed span — which 増分 2 lowered from 6 columns to 4, so that margin is thinner than it was
- *  when this was written. ⚠️ This is a claim about a rendered card, so tsc and Vitest are both
- *  blind to it: what holds it is the Tier1 case `at its narrowest width`, which measures the two
- *  `<select>`s against the card at 4 columns (63px each, one row, nothing clipped). A window
- *  added here widens one of them — re-run it rather than reasoning about it.
- *  The subset relation is pinned by a test rather than by an import: the shared list lives in a
- *  `.tsx`, and this module is on the widget's runtime path (the test is not). A window added to the
- *  shared list therefore forces the question here instead of silently diverging — the
- *  `monitorKinds.ts` shape, where the registry is a deliberate subset of a larger set. */
-export const TRAFFIC_RANGES: readonly { label: string; secs: number }[] = [
-  { label: '1h', secs: 3600 },
-  { label: '6h', secs: 6 * 3600 },
-  { label: '24h', secs: 24 * 3600 },
-  { label: '7d', secs: 7 * 86400 },
-];
-
-/** Default window for a freshly added widget: the shortest one, which is also the only one whose
- *  pps series is guaranteed to be populated on a deployment that upgraded recently (ADR-060 started
- *  collecting the packet counters, so a 7d pps window is mostly empty by construction). */
-export const DEFAULT_RANGE_SECS = 3600;
-
-/**
- * How often to re-fetch, per window.
- *
- * Not the dashboard's flat 15s: the server picks `step = max(60, span/120)`, so a 7d window
- * redraws the *same* 120 points however often it is asked. Each poll costs one HTTP call and ten
- * TSDB range queries **per link**, so paying 15s for a week-long window is pure waste (ADR-069
- * decision 5).
- */
-export function refreshMsFor(rangeSecs: number): number {
-  if (rangeSecs <= 3600) return 15_000;
-  if (rangeSecs <= 6 * 3600) return 60_000;
-  if (rangeSecs <= 24 * 3600) return 300_000;
-  return 900_000;
-}
 
 /** One picked interface. `nodeName`/`ifName` are snapshots taken when it was picked, used as a
  *  provisional label until the node's roster arrives — never as the identity, which is the
@@ -117,9 +77,9 @@ export function readTrafficSettings(settings: WidgetSettings | undefined): Traff
   const unit: RateUnit = settings?.unit === 'pps' ? 'pps' : 'bps';
   const asked = settings?.rangeSecs;
   const rangeSecs =
-    typeof asked === 'number' && TRAFFIC_RANGES.some((r) => r.secs === asked)
+    typeof asked === 'number' && WIDGET_RANGES.some((r) => r.secs === asked)
       ? asked
-      : DEFAULT_RANGE_SECS;
+      : DEFAULT_WIDGET_RANGE_SECS;
   return { links, unit, rangeSecs };
 }
 

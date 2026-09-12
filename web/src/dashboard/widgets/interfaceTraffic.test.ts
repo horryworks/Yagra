@@ -10,15 +10,9 @@
 // drops everything, which is how a "nothing is ever selected" regression would hide.
 
 import { describe, expect, it } from 'vitest';
-// Importing the component module is safe under Vitest (nothing renders; the CSS import is a no-op)
-// — the same reason `RangeControl.test.ts` gives. It is imported HERE and not by the widget's
-// runtime module, which keeps a `.tsx` off the widget's import path.
-import { RANGES } from '../../components/NodeDetail/RangeControl';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import {
-  DEFAULT_RANGE_SECS,
   MAX_LINKS,
-  TRAFFIC_RANGES,
   availableInterfaces,
   buildTrafficSeries,
   everyLinkFailed,
@@ -28,11 +22,13 @@ import {
   linksKey,
   mirrorAxisLabels,
   readTrafficSettings,
-  refreshMsFor,
   selectedNodeIds,
   type LinkSeries,
   type ResolvedLink,
 } from './interfaceTraffic';
+// The default window moved to `util.ts` with the range list itself (ADR-136 決定 6); the settings
+// reader still has to land on it, so the tests below still name it.
+import { DEFAULT_WIDGET_RANGE_SECS } from './util';
 
 const NODE_A = '11111111-1111-4111-8111-111111111111';
 const NODE_B = '22222222-2222-4222-8222-222222222222';
@@ -97,7 +93,7 @@ describe('readTrafficSettings', () => {
 
   it('defaults an absent bag to no links, bps and the shortest window', () => {
     const sel = readTrafficSettings(undefined);
-    expect(sel).toEqual({ links: [], unit: 'bps', rangeSecs: DEFAULT_RANGE_SECS });
+    expect(sel).toEqual({ links: [], unit: 'bps', rangeSecs: DEFAULT_WIDGET_RANGE_SECS });
   });
 
   it('drops links whose ifindex is not a positive integer, and keeps the valid ones', () => {
@@ -141,51 +137,11 @@ describe('readTrafficSettings', () => {
   it('falls back to bps and the default window for values it does not know', () => {
     const sel = readTrafficSettings({ links: [], unit: 'octets', rangeSecs: 999 });
     expect(sel.unit).toBe('bps');
-    expect(sel.rangeSecs).toBe(DEFAULT_RANGE_SECS);
+    expect(sel.rangeSecs).toBe(DEFAULT_WIDGET_RANGE_SECS);
   });
 
   it('ignores a links value that is not an array', () => {
     expect(readTrafficSettings({ links: 'GE0/0/1' }).links).toEqual([]);
-  });
-});
-
-describe('TRAFFIC_RANGES', () => {
-  // The widget offers a deliberate subset of the app-wide windows. Pinning the relation is what
-  // makes a window added to `RangeControl` a decision here rather than a silent divergence.
-  it('is a subset of the shared range presets', () => {
-    const shared = new Set(RANGES.map((r) => r.secs));
-    for (const r of TRAFFIC_RANGES) expect(shared.has(r.secs)).toBe(true);
-  });
-
-  it('labels each window with the same text the shared control uses', () => {
-    // Both lists are on screen in the same product (a widget header, a node-detail pane), so a
-    // window spelled `24h` in one place and `1d` in the other would read as two different windows.
-    const shared = new Map(RANGES.map((r) => [r.secs, r.label]));
-    for (const r of TRAFFIC_RANGES) expect(r.label).toBe(shared.get(r.secs));
-  });
-
-  it('omits 3d, and says so by being shorter than the shared list', () => {
-    expect(TRAFFIC_RANGES.map((r) => r.secs)).not.toContain(3 * 86400);
-    expect(TRAFFIC_RANGES.length).toBeLessThan(RANGES.length);
-  });
-
-  it('contains the default window', () => {
-    expect(TRAFFIC_RANGES.map((r) => r.secs)).toContain(DEFAULT_RANGE_SECS);
-  });
-});
-
-describe('refreshMsFor', () => {
-  it('gives each window its own cadence', () => {
-    expect(refreshMsFor(3600)).toBe(15_000);
-    expect(refreshMsFor(6 * 3600)).toBe(60_000);
-    expect(refreshMsFor(24 * 3600)).toBe(300_000);
-    expect(refreshMsFor(7 * 86400)).toBe(900_000);
-  });
-
-  it('never polls a wider window more often than a narrower one', () => {
-    const secs = TRAFFIC_RANGES.map((r) => r.secs).sort((a, b) => a - b);
-    const ms = secs.map(refreshMsFor);
-    for (let i = 1; i < ms.length; i++) expect(ms[i]).toBeGreaterThanOrEqual(ms[i - 1]);
   });
 });
 

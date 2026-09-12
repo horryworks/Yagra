@@ -553,7 +553,7 @@ test.describe('with a link already plotted', () => {
 // ADR-069 増分 2 let this card be dragged down to 4 of 12 columns, where it had stopped at 6.
 // The doubt that came with it was not whether the grid would do it — `.mydash-span-4` has existed
 // since the board did and 29 other widgets use it — but whether THIS card is still usable there:
-// its header carries a title plus two `<select>`s, and `TRAFFIC_RANGES` says in its own comment
+// its header carries a title plus two `<select>`s, and `WIDGET_RANGES` says in its own comment
 // that the window list was trimmed to keep them fitting "at its narrowest allowed span", which
 // this change moved under it. Neither tsc nor Vitest can answer that; only a layout engine can.
 test.describe('at its narrowest width', () => {

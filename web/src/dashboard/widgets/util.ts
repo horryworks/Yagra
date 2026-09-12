@@ -393,3 +393,59 @@ export function timeColLabels(timestamps: number[]): string[] {
       : '',
   );
 }
+
+/** The time windows a widget's header offers, as a subset of the app-wide `RangeControl.RANGES`.
+ *
+ *  Labels are untranslated, exactly as they are in the shared list — `1h` reads the same in both
+ *  locales, and a runtime-built `t()` key is the shape that renders a raw key when someone forgets
+ *  a string (`extensibility.md` §4).
+ *
+ *  `3d` is left out so the card header keeps room for its controls at the narrowest allowed span —
+ *  which ADR-069 増分 2 lowered from 6 columns to 4, so that margin is thinner than it was when this
+ *  was written. ⚠️ This is a claim about a rendered card, so tsc and Vitest are both blind to it:
+ *  what holds it is the Tier1 case `at its narrowest width`, which measures the two `<select>`s
+ *  against the card at 4 columns (63px each, one row, nothing clipped). A window added here widens
+ *  one of them — re-run it rather than reasoning about it.
+ *  The subset relation is pinned by a test rather than by an import: the shared list lives in a
+ *  `.tsx`, and this module is on the widgets' runtime path (the test is not). A window added to the
+ *  shared list therefore forces the question here instead of silently diverging — the
+ *  `monitorKinds.ts` shape, where the registry is a deliberate subset of a larger set.
+ *
+ *  ⚠️ **Shared rather than per widget** (ADR-136 決定 6). It was `interfaceTraffic.ts::TRAFFIC_RANGES`
+ *  while one widget offered a window; the VPN-sessions widget offers the same four. Importing it
+ *  from that module would have made the module's name lie about what it contains
+ *  (`extensibility.md` §5), and re-declaring it would have been the third copy of a list. */
+export const WIDGET_RANGES: readonly { label: string; secs: number }[] = [
+  { label: '1h', secs: 3600 },
+  { label: '6h', secs: 6 * 3600 },
+  { label: '24h', secs: 24 * 3600 },
+  { label: '7d', secs: 7 * 86400 },
+];
+
+/** Default window for a freshly added widget: the shortest one.
+ *
+ *  ⚠️ The original reason is **Interface traffic's alone** — 1h is the only window whose pps series
+ *  is guaranteed to be populated on a deployment that upgraded recently (ADR-060 started collecting
+ *  the packet counters, so a 7d pps window is mostly empty by construction). It generalizes anyway:
+ *  a freshly added card should draw something immediately, and the shortest window is the one that
+ *  fills first on any metric that only just started being collected.
+ *
+ *  ⚠️ Named `DEFAULT_WIDGET_RANGE_SECS`, not `DEFAULT_RANGE_SECS`: `reports/types.ts` already
+ *  exports that name with a different value (7 days). Two meanings of one name in modules a single
+ *  file can import is how the wrong default gets picked silently. */
+export const DEFAULT_WIDGET_RANGE_SECS = 3600;
+
+/**
+ * How often to re-fetch, per window.
+ *
+ * Not the dashboard's flat 15s: the server picks `step = max(60, span/120)`, so a 7d window
+ * redraws the *same* 120 points however often it is asked. Each poll costs one HTTP call and ten
+ * TSDB range queries **per link**, so paying 15s for a week-long window is pure waste (ADR-069
+ * decision 5).
+ */
+export function refreshMsFor(rangeSecs: number): number {
+  if (rangeSecs <= 3600) return 15_000;
+  if (rangeSecs <= 6 * 3600) return 60_000;
+  if (rangeSecs <= 24 * 3600) return 300_000;
+  return 900_000;
+}

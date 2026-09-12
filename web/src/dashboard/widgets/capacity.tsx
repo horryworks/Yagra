@@ -18,7 +18,6 @@ import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
 import {
   MAX_LINKS,
-  TRAFFIC_RANGES,
   availableInterfaces,
   buildTrafficSeries,
   everyLinkFailed,
@@ -28,12 +27,12 @@ import {
   linksKey,
   mirrorAxisLabels,
   readTrafficSettings,
-  refreshMsFor,
   selectedNodeIds,
   type LinkRef,
   type LinkSeries,
   type RosterState,
 } from './interfaceTraffic';
+import { WIDGET_RANGES, refreshMsFor } from './util';
 import { deltaBarRows as toRows, timeColLabels, trailingSecs } from './util';
 
 export function TrafficSpikesWidget() {
@@ -198,7 +197,7 @@ export function InterfaceTrafficActions({ instance, setSettings }: ViewActionPro
         aria-label={t('widgets.ifTraffic.rangeAria')}
         title={t('widgets.ifTraffic.rangeAria')}
       >
-        {TRAFFIC_RANGES.map((r) => (
+        {WIDGET_RANGES.map((r) => (
           <option key={r.secs} value={r.secs}>
             {r.label}
           </option>

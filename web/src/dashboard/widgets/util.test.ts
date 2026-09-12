@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
+// Importing the component module is safe under Vitest (nothing renders; the CSS import is a no-op)
+// — the same reason `RangeControl.test.ts` gives. It is imported HERE and not by the widgets'
+// runtime module, which keeps a `.tsx` off their import path.
+import { RANGES } from '../../components/NodeDetail/RangeControl';
 import type {
   AlertHistoryRow,
   CalendarBucket,
@@ -8,6 +12,8 @@ import type {
   TopologyNode,
 } from '../../types/api';
 import {
+  DEFAULT_WIDGET_RANGE_SECS,
+  WIDGET_RANGES,
   bucketAlertsByHour,
   deltaBarRows,
   eventKindOf,
@@ -15,6 +21,7 @@ import {
   interfaceEntryLabel,
   percentText,
   rootCauseRows,
+  refreshMsFor,
   timeColLabels,
   calendarMatrix,
   countsTotal,
@@ -470,5 +477,45 @@ describe('timeColLabels', () => {
 
   it('does not divide by zero on an empty axis', () => {
     expect(timeColLabels([])).toEqual([]);
+  });
+});
+
+describe('WIDGET_RANGES', () => {
+  // A widget's header offers a deliberate subset of the app-wide windows. Pinning the relation is what
+  // makes a window added to `RangeControl` a decision here rather than a silent divergence.
+  it('is a subset of the shared range presets', () => {
+    const shared = new Set(RANGES.map((r) => r.secs));
+    for (const r of WIDGET_RANGES) expect(shared.has(r.secs)).toBe(true);
+  });
+
+  it('labels each window with the same text the shared control uses', () => {
+    // Both lists are on screen in the same product (a widget header, a node-detail pane), so a
+    // window spelled `24h` in one place and `1d` in the other would read as two different windows.
+    const shared = new Map(RANGES.map((r) => [r.secs, r.label]));
+    for (const r of WIDGET_RANGES) expect(r.label).toBe(shared.get(r.secs));
+  });
+
+  it('omits 3d, and says so by being shorter than the shared list', () => {
+    expect(WIDGET_RANGES.map((r) => r.secs)).not.toContain(3 * 86400);
+    expect(WIDGET_RANGES.length).toBeLessThan(RANGES.length);
+  });
+
+  it('contains the default window', () => {
+    expect(WIDGET_RANGES.map((r) => r.secs)).toContain(DEFAULT_WIDGET_RANGE_SECS);
+  });
+});
+
+describe('refreshMsFor', () => {
+  it('gives each window its own cadence', () => {
+    expect(refreshMsFor(3600)).toBe(15_000);
+    expect(refreshMsFor(6 * 3600)).toBe(60_000);
+    expect(refreshMsFor(24 * 3600)).toBe(300_000);
+    expect(refreshMsFor(7 * 86400)).toBe(900_000);
+  });
+
+  it('never polls a wider window more often than a narrower one', () => {
+    const secs = WIDGET_RANGES.map((r) => r.secs).sort((a, b) => a - b);
+    const ms = secs.map(refreshMsFor);
+    for (let i = 1; i < ms.length; i++) expect(ms[i]).toBeGreaterThanOrEqual(ms[i - 1]);
   });
 });
