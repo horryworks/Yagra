@@ -97,6 +97,34 @@ export function OverviewTab({
         <IcmpHealth kind={node.kind} nodeId={node.id} unreachable={unreachable} />
       )}
 
+      {/* Above the facts grid, because a note is what a person wrote for the next person to read
+          and the grid is what the machine knows. Two sections rather than one: a note and a set of
+          labels are different things, and ui-conventions R8 is about not shelving them together.
+          Both are hidden when empty — the place you go to write one is the Edit node dialog, which
+          is one button away in the header above. */}
+      {node.notes && (
+        <section>
+          <div className="nd-section-t">{t('field.notes')}</div>
+          {/* Plain text. This is operator-supplied and rendered as written — never as markup. */}
+          <p className="nd-notes">{node.notes}</p>
+        </section>
+      )}
+
+      {Object.keys(node.tags ?? {}).length > 0 && (
+        <section>
+          <div className="nd-section-t">{t('field.tags')}</div>
+          <div className="nd-tag-chips">
+            {Object.entries(node.tags)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([key, value]) => (
+                <span className="nd-tag-chip" key={key}>
+                  <b>{key}</b>={value}
+                </span>
+              ))}
+          </div>
+        </section>
+      )}
+
       <div className="nd-facts">
         {visibleFactRows(node.kind).map((row) => {
           const f = facts[row];

@@ -19,8 +19,9 @@ import { isValidPoolName } from '../../lib/pool';
 import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary, NodeDetail, ProfileSummary } from '../../types/api';
 import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
 import { Modal } from '../ui/Modal';
-import { FieldHint, Select, TextInput } from '../ui/Field';
+import { FieldHint, Select, TextArea, TextInput } from '../ui/Field';
 import { DnsCheckFields, Row, UrlCheckFields } from './CheckFields';
 import {
   nodeEditDraftFrom,
@@ -31,9 +32,15 @@ import {
   sendNodeEdit,
   visibleNodeEditFields,
   visibleNodeEditSections,
+  isValidNodeName,
+  isValidNotes,
+  tagRowProblem,
+  tagsAreValid,
   NODE_EDIT_FIELD_META,
   NODE_EDIT_KIND_SPEC,
+  NOTES_MAX,
   PARTIAL_SAVE_KEY,
+  TAGS_MAX,
   type NodeEditDraft,
   type NodeEditField,
 } from './nodeEditForm';
@@ -61,9 +68,14 @@ export function EditNodeModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const poolInvalid = !isValidPoolName(d.pool);
+  const nameInvalid = !isValidNodeName(d.name);
+  const notesTooLong = !isValidNotes(d.notes);
+  const tagsInvalid = !tagsAreValid(d.tags);
 
   const set = <K extends keyof NodeEditDraft>(k: K, v: NodeEditDraft[K]) =>
     setD((prev) => ({ ...prev, [k]: v }));
+  const setTagRow = (i: number, row: NodeEditDraft['tags'][number]) =>
+    setD((prev) => ({ ...prev, tags: prev.tags.map((r, j) => (j === i ? row : r)) }));
 
   const showsCredential = fields.includes('snmpCredential');
 
@@ -115,6 +127,12 @@ export function EditNodeModal({
   // Keyed by field rather than chained on the kind, so a new field is one entry the compiler
   // demands instead of a branch that quietly falls through to the device form.
   const rows: Record<NodeEditField, ReactNode> = {
+    name: (
+      <Row label={t('field.name')} required>
+        <TextInput value={d.name} onChange={(e) => set('name', e.target.value)} />
+        {nameInvalid && <FieldHint error>{t('field.nameRequired')}</FieldHint>}
+      </Row>
+    ),
     urlCheck: d.url ? (
       <UrlCheckFields draft={d.url} onChange={(url) => set('url', url)} />
     ) : null,
@@ -186,6 +204,71 @@ export function EditNodeModal({
         </FieldHint>
       </Row>
     ),
+    // ⚠️ Not wrapped in `Row`: that renders a `<label>`, and a label holding several inputs and a
+    // button gives every one of them the same accessible name and sends a click on the label to
+    // whichever came first. Each input carries its own `aria-label` instead.
+    tags: (
+      <div className="modal-field nd-tags">
+        <span className="modal-field-label">{t('field.tags')}</span>
+        {d.tags.map((row, i) => {
+          const problem = tagRowProblem(row);
+          return (
+            <div className="nd-tag-row" key={i}>
+              <TextInput
+                className="mono"
+                value={row.key}
+                placeholder={t('field.tagKeyPlaceholder')}
+                aria-label={t('field.tagKey')}
+                onChange={(e) => setTagRow(i, { ...row, key: e.target.value })}
+              />
+              <span className="nd-tag-eq" aria-hidden="true">
+                =
+              </span>
+              <TextInput
+                value={row.value}
+                placeholder={t('field.tagValuePlaceholder')}
+                aria-label={t('field.tagValue')}
+                onChange={(e) => setTagRow(i, { ...row, value: e.target.value })}
+              />
+              <IconButton
+                title={t('field.tagRemove', { key: row.key || t('field.tagKey') })}
+                onClick={() =>
+                  set(
+                    'tags',
+                    d.tags.filter((_, j) => j !== i),
+                  )
+                }
+              >
+                ✕
+              </IconButton>
+              {problem && <FieldHint error>{t(`field.tagErr.${problem}`)}</FieldHint>}
+            </div>
+          );
+        })}
+        <div className="nd-tag-add">
+          <Button
+            onClick={() => set('tags', [...d.tags, { key: '', value: '' }])}
+            disabled={d.tags.length >= TAGS_MAX}
+          >
+            ＋ {t('field.tagAdd')}
+          </Button>
+        </div>
+        <FieldHint error={tagsInvalid}>{t('field.tagHint', { max: TAGS_MAX })}</FieldHint>
+      </div>
+    ),
+    notes: (
+      <Row label={t('field.notes')}>
+        <TextArea
+          rows={4}
+          value={d.notes}
+          onChange={(e) => set('notes', e.target.value)}
+          placeholder={t('field.notesPlaceholder')}
+        />
+        <FieldHint error={notesTooLong}>
+          {notesTooLong ? t('field.notesTooLong', { max: NOTES_MAX }) : t('field.notesHint')}
+        </FieldHint>
+      </Row>
+    ),
   };
 
   return (
@@ -197,7 +280,11 @@ export function EditNodeModal({
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t('common:actions.cancel')}
           </Button>
-          <Button variant="primary" onClick={save} disabled={busy || poolInvalid}>
+          <Button
+            variant="primary"
+            onClick={save}
+            disabled={busy || poolInvalid || nameInvalid || notesTooLong || tagsInvalid}
+          >
             {t('common:actions.save')}
           </Button>
         </>

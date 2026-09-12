@@ -34,7 +34,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, UrlCheckConfig};
@@ -52,6 +52,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     get_node_status,
     poll_node_now,
     set_node_bindings,
+    bulk_tag_nodes,
     set_node_group,
     move_nodes,
     preview_move_by_prefix,
@@ -73,6 +74,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/by-group", get(list_group_nodes))
         .route("/api/v1/node-names", post(node_names_batch))
         .route("/api/v1/nodes/move", post(move_nodes))
+        .route("/api/v1/nodes/tags", post(bulk_tag_nodes))
         .route("/api/v1/nodes/move-preview", post(preview_move_by_prefix))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
@@ -1026,6 +1028,17 @@ pub(crate) struct NodeDetail {
     /// ⚠️ Over-reports rather than under-reports — see
     /// `PollDispatcher::snmp_configured_for`, which is the one place the rule lives.
     snmp_configured: bool,
+    /// The operator's free-text note about this node; `null` ⇒ none (ADR-135).
+    ///
+    /// ⚠️ **Detail only — deliberately not on `NodeSummary`.** The inventory tree fetches one
+    /// summary per node and ADR-133 had just made that response smaller; a note is up to 2,000
+    /// characters that the tree does not draw.
+    notes: Option<String>,
+    /// The node's grouping tags (ADR-135). Empty when it has none.
+    ///
+    /// Also detail-only, and for a second reason beyond size: the tree does not display them, and
+    /// `NodeSummaryDto` on the MCP side has carried them since before any writer existed.
+    tags: BTreeMap<String, String>,
 }
 
 #[utoipa::path(
@@ -1048,9 +1061,11 @@ async fn get_node(
     // "no such node" are the same answer to this question, and 404 is the truthful one.
     let missing = || ApiError::not_found("node_not_found", format!("no node {node_id}"));
     let admin = st.admin.as_ref().ok_or_else(missing)?;
-    let node = admin
+    // `get_node_with_notes`, not `get_node`: the note is not in `NODE_COLUMNS` and this is one of
+    // the two surfaces allowed to ask for it (ADR-135 decision 2).
+    let crate::repo::NodeWithNotes { mut node, notes } = admin
         .repo
-        .get_node(node_id)
+        .get_node_with_notes(node_id)
         .await
         .map_err(|e| ApiError::from_internal(e.as_ref(), "get node", "failed to load node"))?
         .ok_or_else(missing)?;
@@ -1063,6 +1078,8 @@ async fn get_node(
     // Asked of the dispatcher, which is the only holder of the environment community — before the
     // struct literal below moves `node`'s fields out.
     let snmp_configured = admin.dispatcher.snmp_configured_for(&node);
+    // Taken before the literal below moves the node's fields out.
+    let tags = std::mem::take(&mut node.tags);
     Ok(Json(NodeDetail {
         kind: NodeKind::resolve(NodeRows {
             meraki: meraki_device.is_some(),
@@ -1083,6 +1100,8 @@ async fn get_node(
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
         snmp_configured,
+        notes,
+        tags,
     }))
 }
 
@@ -1146,6 +1165,117 @@ fn trimmed(s: Option<&String>) -> Option<&str> {
     s.map(|v| v.trim()).filter(|v| !v.is_empty())
 }
 
+/// Longest note a node may carry (ADR-135). Enforced here rather than as a `CHECK` constraint:
+/// a violation answers 400 with a message an operator can act on, where a constraint would come
+/// back through `from_internal` as an opaque 500 — and narrowing the column later on a deployment
+/// that already holds a longer value is a migration that fails, which is a core that will not start.
+pub(crate) const NOTES_MAX: usize = 2000;
+
+/// A node's name, trimmed, or the 400 that says it was blank.
+///
+/// One helper rather than a fourth copy: [`create_node`] and [`set_node_bindings`] share it.
+/// ⚠️ **`api/discovery.rs` and `api/checks.rs` keep their own** — the three had already drifted on
+/// the error *code* (`invalid_node` there, `invalid_name` here), and folding them together would
+/// change a published response code for a reason that is only tidiness.
+fn validated_name(raw: &str) -> ApiResult<&str> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_name",
+            "node name must not be empty",
+        ));
+    }
+    Ok(name)
+}
+
+/// Tag limits (ADR-135). This endpoint is the **first validator `nodes.tags` has ever had** — the
+/// column is raw JSONB with no constraint, and its only previous writer was a config-bundle import
+/// that checked nothing.
+///
+/// ⚠️ `TAGS_MAX` is 32 while the RCA prompt silently keeps only the first **8**
+/// (`rca/context.rs::MAX_TAGS`). That is not a contradiction to fix here: a node may legitimately
+/// carry more labels than an LLM prompt should be spent on. It is written down because "the AI did
+/// not see my tag" otherwise has no discoverable cause.
+pub(crate) const TAG_KEY_MAX: usize = 64;
+pub(crate) const TAG_VALUE_MAX: usize = 128;
+pub(crate) const TAGS_MAX: usize = 32;
+
+/// Validate and normalize one node's whole tag map.
+///
+/// Keys are restricted to `[A-Za-z0-9_.:-]` because a tag key is a name an operator types twice —
+/// once here and once when reading it back — and whitespace or punctuation makes the two silently
+/// different. **Values are deliberately unrestricted** beyond length: a value is prose
+/// (`site=Matsuyama 本社`), and it is also what a `ScopeLevel::Group` threshold matches on, so
+/// narrowing it would invalidate rules that already exist.
+///
+/// ⚠️ Both sides are trimmed and an entry with an empty key **or** an empty value is dropped rather
+/// than refused: the editor sends a blank row for every "add tag" click the operator has not filled
+/// in yet, and rejecting the form for that would make the control unusable.
+fn validated_tags(raw: BTreeMap<String, String>) -> ApiResult<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for (k, v) in raw {
+        let (k, v) = (k.trim().to_owned(), v.trim().to_owned());
+        if k.is_empty() || v.is_empty() {
+            continue;
+        }
+        if k.chars().count() > TAG_KEY_MAX {
+            return Err(ApiError::bad_request(
+                "invalid_tag",
+                format!("tag key {k:?} is longer than {TAG_KEY_MAX} characters"),
+            ));
+        }
+        if !k
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+        {
+            return Err(ApiError::bad_request(
+                "invalid_tag",
+                format!("tag key {k:?} may use only letters, digits, '_', '-', '.' and ':'"),
+            ));
+        }
+        if v.chars().count() > TAG_VALUE_MAX {
+            return Err(ApiError::bad_request(
+                "invalid_tag",
+                format!("the value of tag {k:?} is longer than {TAG_VALUE_MAX} characters"),
+            ));
+        }
+        out.insert(k, v);
+    }
+    if out.len() > TAGS_MAX {
+        return Err(ApiError::bad_request(
+            "invalid_tag",
+            format!(
+                "a node may carry at most {TAGS_MAX} tags, got {}",
+                out.len()
+            ),
+        ));
+    }
+    Ok(out)
+}
+
+/// A three-state free-text update: `None` = leave the column alone, `Some(None)` = clear it,
+/// `Some(Some(v))` = set it. Mirrors [`validate_pool_update`]'s shape, for the same reason.
+///
+/// 🚨 **Not `trimmed`.** That helper maps `""` to `None`, which is exactly the distinction this
+/// field turns on — "the client did not mention notes" and "the client asked to clear the notes"
+/// would become the same value, and the first would start destroying text.
+fn free_text_update<'a>(
+    raw: Option<&'a String>,
+    max: usize,
+    code: &'static str,
+    what: &str,
+) -> ApiResult<Option<Option<&'a str>>> {
+    let Some(raw) = raw else { return Ok(None) };
+    let v = raw.trim();
+    if v.chars().count() > max {
+        return Err(ApiError::bad_request(
+            code,
+            format!("{what} may be at most {max} characters"),
+        ));
+    }
+    Ok(Some(if v.is_empty() { None } else { Some(v) }))
+}
+
 #[utoipa::path(
     post, path = "/api/v1/nodes", tag = "nodes",
     request_body = CreateNode,
@@ -1162,12 +1292,7 @@ async fn create_node(
     admin: Admin,
     Json(body): Json<CreateNode>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
-    if body.name.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "invalid_name",
-            "node name must not be empty",
-        ));
-    }
+    let name = validated_name(&body.name)?;
     let address = body.address.parse::<IpAddr>().map_err(|_| {
         ApiError::bad_request(
             "invalid_address",
@@ -1178,7 +1303,7 @@ async fn create_node(
     let id = admin
         .repo
         .create_node(
-            body.name.trim(),
+            name,
             address,
             pool.as_deref(),
             body.profile_id,
@@ -1230,9 +1355,18 @@ fn node_write_result(found: bool, id: Uuid) -> ApiResult<StatusCode> {
     }
 }
 
-/// Set/clear a node's profile + bound credential and its descriptive maker/model, and optionally
-/// move it to a different poll-pool. The node-edit UI loads the current values and resends them, so
-/// an unchanged field is preserved.
+/// One "Edit node" save: the node's own name and note, its profile + bound credential and
+/// descriptive maker/model, and optionally a move to a different poll-pool.
+///
+/// 🚨 **Two different readings of "absent" live in this one body, and the split is deliberate.**
+/// `profile_id`/`credential_id`/`vendor`/`model` are **replaced**: the node-edit UI loads the
+/// current values and resends them, so omitting one CLEARS it. `pool`/`name`/`notes` are
+/// **three-state**: omitting one LEAVES IT ALONE.
+///
+/// The asymmetry is not history, it is what the columns can survive. A blanked `vendor`/`model` is
+/// refilled from the next poll's `sysDescr` (`fill_node_identity_batch`). **Nothing refills a name
+/// or a note** — so an older client that has never heard of those fields must not be able to
+/// destroy them by saving a form (ADR-135 decision 4; the trap `026e1ef8` paid for).
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct NodeBindings {
     profile_id: Option<Uuid>,
@@ -1246,6 +1380,34 @@ pub(super) struct NodeBindings {
     /// NATS-subject-safe token). See [`validate_pool_update`].
     #[serde(default)]
     pool: Option<String>,
+    /// The node's display name. **Absent** = leave it unchanged; otherwise rename the node.
+    /// `""` (or whitespace) is **400**, not a clear — `nodes.name` is `NOT NULL`.
+    ///
+    /// Renaming is safe for everything downstream: `Node::id` is the identity every store is keyed
+    /// by, so metric series and alert history follow the node across a rename. Nothing else in the
+    /// product writes this column — no poll, no sweep, no classifier — so a hand-edited name stays.
+    #[serde(default)]
+    name: Option<String>,
+    /// The operator's free-text note about this node. **Absent** = leave it unchanged; `""` (or
+    /// whitespace) = clear it; otherwise set it. At most 2,000 characters.
+    ///
+    /// Spelled `notes` rather than `description` on purpose: in this product "Description" already
+    /// means what a *device* reports about one of its ports (`interfaces.if_alias`).
+    #[serde(default)]
+    notes: Option<String>,
+    /// The node's grouping tags. **Absent** = leave them unchanged; otherwise **the whole map is
+    /// replaced** by what is sent — the edit dialog shows every tag and resends every tag, so a
+    /// replacement is what the operator sees. `{}` clears them all.
+    ///
+    /// ⚠️ To add one tag to many nodes without knowing what else they carry, use
+    /// `POST /api/v1/nodes/tags`, which **merges**. Replacing from a bulk caller would silently
+    /// wipe labels it never saw.
+    ///
+    /// 🚨 A tag's **value** is what a `ScopeLevel::Group` threshold and a `WindowScope::Group`
+    /// maintenance window match on; the **key is discarded** by both. So `region=JAPAN` is matched
+    /// by a rule scoped to `JAPAN`, never by one scoped to `region=JAPAN` (ADR-135 decision 6).
+    #[serde(default)]
+    tags: Option<BTreeMap<String, String>>,
 }
 
 #[utoipa::path(
@@ -1254,7 +1416,7 @@ pub(super) struct NodeBindings {
     request_body = NodeBindings,
     responses(
         (status = 204, description = "Bindings updated"),
-        (status = 400, description = "Illegal pool name", body = super::error::ErrorBody),
+        (status = 400, description = "Illegal pool name, an empty name, or a note over 2,000 characters", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node", body = super::error::ErrorBody),
@@ -1268,15 +1430,30 @@ async fn set_node_bindings(
     Json(body): Json<NodeBindings>,
 ) -> ApiResult<StatusCode> {
     let pool_update = validate_pool_update(body.pool)?;
+    // A rename is present-or-absent, never a clear: `nodes.name` is NOT NULL, so an empty string is
+    // a mistake to report rather than an instruction to obey.
+    let name_update = body
+        .name
+        .as_deref()
+        .map(validated_name)
+        .transpose()?
+        .map(Some);
+    let notes_update = free_text_update(body.notes.as_ref(), NOTES_MAX, "invalid_notes", "notes")?;
+    let tags_update = body.tags.map(validated_tags).transpose()?;
     let found = admin
         .repo
         .set_node_bindings(
             id,
-            body.profile_id,
-            body.credential_id,
-            trimmed(body.vendor.as_ref()),
-            trimmed(body.model.as_ref()),
-            pool_update.as_ref().map(|inner| inner.as_deref()),
+            crate::repo::NodeBindingUpdate {
+                profile: body.profile_id,
+                credential: body.credential_id,
+                vendor: trimmed(body.vendor.as_ref()),
+                model: trimmed(body.model.as_ref()),
+                pool: pool_update.as_ref().map(|inner| inner.as_deref()),
+                name: name_update,
+                notes: notes_update,
+                tags: tags_update.as_ref(),
+            },
         )
         .await
         .map_err(|e| {
@@ -1414,6 +1591,88 @@ fn node_prefix_dtos(
             .collect(),
         fold.unmatched,
     )
+}
+
+/// Add and/or remove tags across many nodes at once (ADR-135).
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct BulkNodeTags {
+    node_ids: Vec<Uuid>,
+    /// Tags to set on every named node. An existing key is overwritten; a key not named here is
+    /// left alone. Same validation as the single-node edit.
+    #[serde(default)]
+    add: BTreeMap<String, String>,
+    /// Tag keys to remove from every named node. A key a node does not carry is not an error.
+    #[serde(default)]
+    remove: Vec<String>,
+}
+
+/// What a bulk tag edit actually did.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct BulkTagResult {
+    /// Distinct ids the request named, after de-duplication.
+    requested: usize,
+    /// Rows that were actually written. **Lower than `requested` is normal**: an id can name a node
+    /// that has since been deleted, or one outside the caller's scope. The two are not
+    /// distinguished — saying which would confirm that a node the caller may not see exists.
+    applied: u64,
+}
+
+/// Label many nodes at once — the operation that makes tagging usable at all.
+///
+/// 🚨 **This MERGES; it does not replace.** The caller picked rows in the inventory tree and knows
+/// one label it wants on all of them; it has no idea what else each of them carries. A replacing
+/// bulk write would silently wipe every other label on every selected node
+/// (`PUT /nodes/{id}/bindings` replaces, and that is correct there because the dialog shows the
+/// whole map).
+///
+/// ⚠️ **Scoped via `Scoped`, not `Admin` alone.** `manage_config` is held by Operator, and an
+/// Operator can be group-scoped, so a bulk write that skipped the scope would let one site's
+/// operator relabel another's. This is the shape `POST /nodes/move` chose deliberately (ADR-124
+/// decision 8) rather than inheriting the single-node writes' known-wrong `ADMIN_CFG` claim.
+#[utoipa::path(
+    post, path = "/api/v1/nodes/tags", tag = "nodes",
+    request_body = BulkNodeTags,
+    responses(
+        (status = 200, description = "How many of the named nodes were relabelled", body = BulkTagResult),
+        (status = 400, description = "An illegal tag key or value, or more ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn bulk_tag_nodes(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<BulkNodeTags>,
+) -> ApiResult<Json<BulkTagResult>> {
+    if body.node_ids.len() > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {NODE_MOVE_BATCH_MAX} nodes may be relabelled in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    let add = validated_tags(body.add)?;
+    let (requested, applied) = admin
+        .repo
+        .merge_node_tags(&body.node_ids, &add, &body.remove, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "bulk tag nodes", "failed to tag nodes")
+        })?;
+    // The audit middleware records method and path only, so without this the log says that someone
+    // relabelled something and never how much (the bulk move does the same).
+    tracing::info!(
+        requested,
+        applied,
+        added = add.len(),
+        removed = body.remove.len(),
+        "bulk node tag"
+    );
+    Ok(Json(BulkTagResult { requested, applied }))
 }
 
 #[utoipa::path(
@@ -2569,6 +2828,152 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/nodes", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("core-sw-01"), "{list}");
+    }
+
+    /// Renaming a node and writing its note are **accepted**, and the detail shows both (ADR-135).
+    ///
+    /// ⚠️ The status is named rather than `is_success()`: this route documents **204**, and a check
+    /// that cannot tell 204 from 200 would pass against the wrong one (ADR-115).
+    ///
+    /// 🚨 **The second save is the half that matters.** It sends only `pool`, which is what every
+    /// client written before this change sends — and asserts the name and the note survived it. A
+    /// version of this test with only the first save passes against an implementation that blanks
+    /// both on every write, which is the data-loss bug the three-state reading exists to prevent.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rename_and_a_note_are_accepted_and_survive_an_unrelated_save(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let id = crate::pgtest::node(&pool, "typo-sw-01", 1, None).await;
+        let path = format!("/api/v1/nodes/{id}/bindings");
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({
+                "name": "core-sw-01",
+                "notes": "in the ceiling void; needs a ladder",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        let (status, detail) = send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
+        assert_eq!(detail["name"], "core-sw-01", "{detail}");
+        assert_eq!(
+            detail["notes"], "in the ceiling void; needs a ladder",
+            "{detail}"
+        );
+
+        // What an N-1 client sends: a save that has never heard of either field.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "pool": "edge" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
+        assert_eq!(detail["name"], "core-sw-01", "the rename was undone");
+        assert_eq!(
+            detail["notes"], "in the ceiling void; needs a ladder",
+            "the note was destroyed by an unrelated save"
+        );
+        assert_eq!(detail["pool"], "edge", "{detail}");
+
+        // An empty name is refused rather than obeyed — the column is NOT NULL.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "name": "   " })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_name", "{body}");
+
+        // An empty note is obeyed: that is how an operator deletes one.
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "notes": "" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
+        assert_eq!(detail["notes"], serde_json::Value::Null, "{detail}");
+    }
+
+    /// A bulk tag edit is **accepted**, it **merges**, and the node detail shows the result.
+    ///
+    /// ⚠️ The status is named, not `is_success()`: this route documents 200 with a body.
+    ///
+    /// 🚨 The first node is seeded with a label the bulk call never mentions, and that label is
+    /// asserted afterwards. Without it, an implementation that replaced the whole map would pass —
+    /// and would silently strip every other label off every node an operator ever bulk-tags.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_tag_is_accepted_and_merges_into_what_is_already_there(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+
+        // Give `a` a label through the single-node path, which replaces.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/nodes/{a}/bindings"),
+            &tok,
+            Some(serde_json::json!({ "tags": { "role": "core" } })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/tags",
+            &tok,
+            Some(serde_json::json!({
+                "node_ids": [a, b],
+                "add": { "region": "JAPAN" },
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["applied"], 2, "{body}");
+
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{a}"), &tok, None).await;
+        assert_eq!(detail["tags"]["region"], "JAPAN", "{detail}");
+        assert_eq!(
+            detail["tags"]["role"], "core",
+            "the bulk add replaced the map instead of merging into it: {detail}"
+        );
+
+        // A key that is not a legal tag key is refused rather than stored.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/tags",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a], "add": { "has space": "x" } })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_tag", "{body}");
     }
 
     /// A bulk move is **accepted** and the rows actually move (ADR-115's shape, ADR-124's route).

@@ -47,6 +47,57 @@ pub struct OrderedNode {
     pub sort_order: f64,
 }
 
+/// A node row plus the operator's own free-text note (ADR-135 decision 2).
+///
+/// 🚨 **A wrapper here rather than a field on `Node`, for the reason [`OrderedNode`] gives one
+/// paragraph up — and the number is worse.** `Node` is materialized *fleet-wide* by the alert
+/// engine's config snapshot, the scheduler's sweep and maintenance-window matching. A note is up
+/// to 2,000 characters that **none of those three read**; on a
+/// 50,000-node deployment that is up to 100 MB of prose carried through every cached snapshot so
+/// that one page at a time can display it.
+///
+/// So the column stays inside the one file allowed to name the `nodes` table, it is **not** in
+/// [`NodeRepo::NODE_COLUMNS`], and exactly two callers read it: the REST node detail and the MCP
+/// `get_node_status` tool that mirrors it.
+#[derive(Debug, Clone)]
+pub struct NodeWithNotes {
+    pub node: Node,
+    /// `None` ⇒ no note. The API edge maps a whitespace-only string to `None`, so there is one
+    /// spelling of "no note" and no reader needs a second case.
+    pub notes: Option<String>,
+}
+
+/// What one "Edit node" save writes (ADR-135).
+///
+/// A struct rather than nine positional arguments: `clippy::too_many_arguments` is a design
+/// signal, not a lint to silence (`coding-conventions.md`), and five of these are
+/// `Option<Option<&str>>` — a shape no reader should have to count commas through.
+///
+/// 🚨 **Two different readings of `None` live here, and mixing them up is a data-loss bug.**
+/// The first four fields are *replacements*: a `None` CLEARS the column, because the edit
+/// dialog loads the current values and resends all of them. The last three are *three-state*:
+/// the outer `None` means LEAVE ALONE. See [`NodeRepo::set_node_bindings`].
+#[derive(Debug, Default)]
+pub struct NodeBindingUpdate<'a> {
+    // ── Replaced unconditionally (None clears) ──
+    pub profile: Option<Uuid>,
+    pub credential: Option<Uuid>,
+    pub vendor: Option<&'a str>,
+    pub model: Option<&'a str>,
+    // ── Three-state (outer None leaves the column alone) ──
+    /// Validated by the caller as a NATS-subject-safe token.
+    pub pool: Option<Option<&'a str>>,
+    /// Inner `None` is unreachable — `nodes.name` is `NOT NULL`, so the API edge answers 400
+    /// for an empty name rather than passing a clear down here. Spelled the same as its two
+    /// neighbours anyway, so the UPDATE applies one shape three times rather than
+    /// three shapes.
+    pub name: Option<Option<&'a str>>,
+    pub notes: Option<Option<&'a str>>,
+    /// The node's whole tag map, **replaced**. `None` leaves the column alone; an empty map clears
+    /// it. Merging one tag into many nodes is [`NodeRepo::merge_node_tags`], a different question.
+    pub tags: Option<&'a BTreeMap<String, String>>,
+}
+
 impl NodeRepo {
     /// Every node in the inventory (internal use; the API paginates via [`Self::list_nodes_page`]).
     pub async fn list_nodes(&self) -> anyhow::Result<Vec<Node>> {
@@ -66,6 +117,29 @@ impl NodeRepo {
         .fetch_optional(&self.pool)
         .await?;
         row.as_ref().map(node_from_row).transpose()
+    }
+
+    /// One node by id **plus its note** (ADR-135). For the two detail surfaces only.
+    ///
+    /// A second projection rather than a column on [`Self::NODE_COLUMNS`]: see [`NodeWithNotes`]
+    /// for why the note must not ride along on every fleet-wide read. The column list is
+    /// interpolated from the same constant, so the two cannot disagree about the node half.
+    pub async fn get_node_with_notes(&self, id: Uuid) -> anyhow::Result<Option<NodeWithNotes>> {
+        let row = sqlx::query(&format!(
+            "SELECT {}, notes FROM nodes WHERE id = $1",
+            Self::NODE_COLUMNS
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref()
+            .map(|row| {
+                Ok(NodeWithNotes {
+                    node: node_from_row(row)?,
+                    notes: row.try_get("notes")?,
+                })
+            })
+            .transpose()
     }
 
     /// One keyset page of nodes ordered by id, starting after `after`, within `groups`.
@@ -226,39 +300,93 @@ impl NodeRepo {
         Ok(nodes.len() as u32)
     }
 
-    /// Set (or clear) a node's profile, bound credential, and vendor/model metadata, and optionally
-    /// move it to a different poll-pool (ADR-009). Returns whether the node exists.
+    /// Apply one "Edit node" save. Returns whether the node exists.
     ///
-    /// `profile`/`credential`/`vendor`/`model` are set to the passed value (a `None` clears) — the
-    /// node-edit UI loads the current values and resends them, so an unchanged field is preserved.
-    /// `pool` is three-state so the pool can be *left alone* independently: outer `None` = leave the
-    /// pool unchanged, inner `None` = clear it to NULL (falls back to the `default` pool), inner
-    /// `Some` = set it (the caller has already validated it as a NATS-subject-safe token).
+    /// **Why the last three are gated and the first four are not**, since the asymmetry looks
+    /// arbitrary and is not:
+    ///
+    /// `profile`/`credential`/`vendor`/`model` have been full replacements since they shipped, and
+    /// a caller that omits one blanks it. That is survivable for `vendor`/`model` because
+    /// [`Self::fill_node_identity_batch`] refills them from the next poll's `sysDescr`.
+    ///
+    /// 🚨 **Nothing refills a name or a note.** A caller that omits `notes` — an older WebUI bundle
+    /// still open in a tab during a rolling upgrade, an API client written against N-1 — would
+    /// silently destroy operator-authored text with no way back. So those two join `pool` in the
+    /// three-state reading the `NodeBindings` DTO documents: **absent means leave alone**, and the
+    /// only way to clear one is to say so with an empty string.
     pub async fn set_node_bindings(
         &self,
         id: Uuid,
-        profile: Option<Uuid>,
-        credential: Option<Uuid>,
-        vendor: Option<&str>,
-        model: Option<&str>,
-        pool: Option<Option<&str>>,
+        u: NodeBindingUpdate<'_>,
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE nodes SET profile_id = $2, credential_id = $3, vendor = $4, model = $5, \
-             pool = CASE WHEN $6::boolean THEN $7::text ELSE pool END, \
+             pool  = CASE WHEN $6::boolean  THEN $7::text  ELSE pool  END, \
+             name  = CASE WHEN $8::boolean  THEN $9::text  ELSE name  END, \
+             notes = CASE WHEN $10::boolean THEN $11::text ELSE notes END, \
+             tags  = CASE WHEN $12::boolean THEN $13::jsonb ELSE tags  END, \
              updated_at = now() WHERE id = $1",
         )
         .bind(id)
-        .bind(profile)
-        .bind(credential)
-        .bind(vendor)
-        .bind(model)
-        // `$6` gates whether the pool is touched at all; `$7` is the new value (NULL when clearing).
-        .bind(pool.is_some())
-        .bind(pool.flatten())
+        .bind(u.profile)
+        .bind(u.credential)
+        .bind(u.vendor)
+        .bind(u.model)
+        // Each pair is (touch this column at all?, the new value — NULL when clearing).
+        .bind(u.pool.is_some())
+        .bind(u.pool.flatten())
+        .bind(u.name.is_some())
+        .bind(u.name.flatten())
+        .bind(u.notes.is_some())
+        .bind(u.notes.flatten())
+        .bind(u.tags.is_some())
+        .bind(sqlx::types::Json(u.tags.cloned().unwrap_or_default()))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// Add and/or remove tags across MANY nodes at once, **merging** rather than replacing
+    /// (ADR-135 decision 7). Returns `(requested, applied)`.
+    ///
+    /// 🚨 **Merge, not replace, and the difference is the whole reason this is its own method.**
+    /// The caller selected nodes in the tree and knows one label it wants on all of them; it does
+    /// **not** know what else each of them carries. `jsonb ||` adds and overwrites only the keys
+    /// named, and `- text[]` removes only the keys named, so a node's other labels are untouched.
+    ///
+    /// `scope` narrows which nodes may be written: a caller restricted to some folders cannot
+    /// label a node they cannot see. The predicate is written out rather than reusing
+    /// [`NodeRepo::SCOPE_PREDICATE`], which is bound to `$1` while this statement needs `$1` for
+    /// the id array — the same shape, and the same fail-closed reading of an empty slice, as
+    /// [`Self::set_node_group_batch`].
+    ///
+    /// `applied` lower than `requested` is normal and not an error: an id can name a node that has
+    /// since been deleted, or one outside the caller's scope. The two are not distinguished, for
+    /// the reason the bulk move states — telling them apart would confirm that a node the caller
+    /// may not see exists.
+    pub async fn merge_node_tags(
+        &self,
+        ids: &[Uuid],
+        add: &BTreeMap<String, String>,
+        remove: &[String],
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+        if ids.is_empty() {
+            return Ok((0, 0));
+        }
+        let res = sqlx::query(
+            "UPDATE nodes SET tags = (tags || $2::jsonb) - $3::text[], updated_at = now() \
+             WHERE id = ANY($1) AND ($4::uuid[] IS NULL OR group_id = ANY($4))",
+        )
+        .bind(&ids)
+        .bind(sqlx::types::Json(add))
+        .bind(remove)
+        .bind(Self::scope_bind(scope))
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
     }
 
     /// Move a node into a group (or `None` to ungroup it), appending it to the **end** of the
@@ -669,7 +797,7 @@ impl NodeRepo {
         }
         let rows = sqlx::query(
             "SELECT n.id, n.name, host(n.address) AS address, g.name AS group_name, \
-                    p.name AS profile_name \
+                    p.name AS profile_name, n.tags \
                FROM nodes n \
                LEFT JOIN node_groups g ON g.id = n.group_id \
                LEFT JOIN profiles p ON p.id = n.profile_id \
@@ -687,6 +815,9 @@ impl NodeRepo {
                         address: row.try_get("address")?,
                         group: row.try_get("group_name")?,
                         profile: row.try_get("profile_name")?,
+                        tags: row
+                            .try_get::<sqlx::types::Json<BTreeMap<String, String>>, _>("tags")?
+                            .0,
                     },
                 ))
             })
@@ -788,6 +919,202 @@ mod tests {
         assert_eq!(node.vendor.as_deref(), Some("Cisco"));
         assert_eq!(node.model.as_deref(), Some("C9300"));
         assert_eq!(repo.list_nodes().await.expect("list").len(), 1);
+        // A freshly created node has no note, and the detail projection says so rather than
+        // failing: `get_node_with_notes` reads a column `create_node` never writes.
+        let detail = repo
+            .get_node_with_notes(id)
+            .await
+            .expect("read")
+            .expect("the node");
+        assert_eq!(detail.notes, None);
+        assert_eq!(detail.node.name, "core-sw-01");
+    }
+
+    /// Renaming a node changes the name and **nothing else** — in particular not its id.
+    ///
+    /// The id is what every store is keyed by, so a rename that re-keyed the row would silently
+    /// orphan the node's metric series and its alert history. Nothing in the product could notice:
+    /// the new row would simply have no past.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn renaming_a_node_keeps_its_id_and_every_other_column(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        let id = repo
+            .create_node(
+                "typo-sw-01",
+                "10.1.2.3".parse().expect("address"),
+                Some("edge"),
+                None,
+                None,
+                None,
+                Some("Cisco"),
+                Some("C9300"),
+            )
+            .await
+            .expect("create");
+
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    vendor: Some("Cisco"),
+                    model: Some("C9300"),
+                    name: Some(Some("core-sw-01")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("rename"));
+
+        let node = repo.get_node(id).await.expect("read").expect("the node");
+        assert_eq!(node.name, "core-sw-01");
+        assert_eq!(node.id, yagra_common::NodeId::from(id), "the id moved");
+        assert_eq!(node.address.to_string(), "10.1.2.3");
+        assert_eq!(node.vendor.as_deref(), Some("Cisco"));
+        // The pool was not mentioned, so it is untouched — the same three-state rule the name uses.
+        assert_eq!(node.pool.as_deref(), Some("edge"));
+    }
+
+    /// 🚨 **The whole point of the three-state reading, and it needs both directions.**
+    ///
+    /// A save that does not mention `notes` must leave the note alone; a save that sends an empty
+    /// string must clear it. A test with only the first half passes just as well against an
+    /// implementation that ignores the field entirely, and a test with only the second half passes
+    /// against one that clears on every write — which is the data-loss bug this shape exists to
+    /// prevent (`closing-a-check-must-be-tested-with-reopening`).
+    ///
+    /// The same is asserted for `name`, where "leave alone" is the only safe reading of absence
+    /// because the column is `NOT NULL`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_unmentioned_note_survives_a_save_and_an_empty_one_clears_it(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "sw-1", 1, None).await;
+        let repo = pgtest::repo(pool);
+        // Write one.
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    notes: Some(Some("in the ceiling void; needs a ladder")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set note"));
+        let written = repo
+            .get_node_with_notes(id)
+            .await
+            .expect("read")
+            .expect("the node");
+        assert_eq!(
+            written.notes.as_deref(),
+            Some("in the ceiling void; needs a ladder")
+        );
+
+        // A save that says nothing about notes — what an older client sends — leaves it alone.
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    pool: Some(Some("edge")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set pool"));
+        let after = repo
+            .get_node_with_notes(id)
+            .await
+            .expect("read")
+            .expect("the node");
+        assert_eq!(
+            after.notes.as_deref(),
+            Some("in the ceiling void; needs a ladder"),
+            "an unmentioned note was destroyed by an unrelated save"
+        );
+        assert_eq!(after.node.pool.as_deref(), Some("edge"));
+        assert_eq!(after.node.name, "sw-1", "an unmentioned name was rewritten");
+
+        // An explicit clear does clear it — otherwise "leave alone" would be indistinguishable
+        // from "this column is write-once".
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    notes: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("clear note"));
+        let cleared = repo
+            .get_node_with_notes(id)
+            .await
+            .expect("read")
+            .expect("the node");
+        assert_eq!(cleared.notes, None);
+    }
+
+    /// 🚨 **A bulk tag edit MERGES. The label a caller never mentioned must survive it.**
+    ///
+    /// This is the whole reason `merge_node_tags` exists beside the replacing path: the tree gives
+    /// the caller a set of ids and one label, and it has no idea what else those nodes carry. A
+    /// replacing implementation passes any test that starts from an untagged node — so this one
+    /// starts from a node that already has two labels, and checks both of them afterwards.
+    ///
+    /// Removal is asserted too, and in the same run: a merge that could only add would make the ✕
+    /// in the bulk dialog do nothing, silently.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_tag_merges_and_leaves_unmentioned_labels_alone(pool: sqlx::PgPool) {
+        let a = pgtest::node(&pool, "a", 1, None).await;
+        let b = pgtest::node(&pool, "b", 2, None).await;
+        let repo = pgtest::repo(pool);
+        let existing = BTreeMap::from([
+            ("role".to_owned(), "core".to_owned()),
+            ("owner".to_owned(), "neteng".to_owned()),
+        ]);
+        assert!(repo
+            .set_node_bindings(
+                a,
+                NodeBindingUpdate {
+                    tags: Some(&existing),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("seed tags"));
+
+        let add = BTreeMap::from([("region".to_owned(), "JAPAN".to_owned())]);
+        let (requested, applied) = repo
+            .merge_node_tags(&[a, b, a], &add, &[], None)
+            .await
+            .expect("merge");
+        assert_eq!(requested, 2, "the repeated id was not de-duplicated");
+        assert_eq!(applied, 2);
+
+        let tagged = repo.get_node(a).await.expect("read").expect("a");
+        assert_eq!(tagged.tags.get("region").map(String::as_str), Some("JAPAN"));
+        assert_eq!(
+            tagged.tags.get("role").map(String::as_str),
+            Some("core"),
+            "a label nobody mentioned was destroyed by a bulk add"
+        );
+        assert_eq!(tagged.tags.get("owner").map(String::as_str), Some("neteng"));
+        // The node that started empty got exactly the one label.
+        let fresh = repo.get_node(b).await.expect("read").expect("b");
+        assert_eq!(fresh.tags.len(), 1);
+
+        // Removing names keys, and touches only those.
+        let (_, applied) = repo
+            .merge_node_tags(&[a], &BTreeMap::new(), &["role".to_owned()], None)
+            .await
+            .expect("remove");
+        assert_eq!(applied, 1);
+        let after = repo.get_node(a).await.expect("read").expect("a");
+        assert_eq!(after.tags.get("role"), None);
+        assert_eq!(after.tags.get("region").map(String::as_str), Some("JAPAN"));
+        assert_eq!(after.tags.get("owner").map(String::as_str), Some("neteng"));
     }
 
     /// Every setter reports whether it found the row — and says `false` for one that is not there.

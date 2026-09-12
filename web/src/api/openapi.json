@@ -10819,6 +10819,78 @@
         }
       }
     },
+    "/api/v1/nodes/tags": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "Label many nodes at once — the operation that makes tagging usable at all.",
+        "description": "🚨 **This MERGES; it does not replace.** The caller picked rows in the inventory tree and knows\none label it wants on all of them; it has no idea what else each of them carries. A replacing\nbulk write would silently wipe every other label on every selected node\n(`PUT /nodes/{id}/bindings` replaces, and that is correct there because the dialog shows the\nwhole map).\n\n⚠️ **Scoped via `Scoped`, not `Admin` alone.** `manage_config` is held by Operator, and an\nOperator can be group-scoped, so a bulk write that skipped the scope would let one site's\noperator relabel another's. This is the shape `POST /nodes/move` chose deliberately (ADR-124\ndecision 8) rather than inheriting the single-node writes' known-wrong `ADMIN_CFG` claim.",
+        "operationId": "bulk_tag_nodes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkNodeTags"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many of the named nodes were relabelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkTagResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An illegal tag key or value, or more ids than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}": {
       "get": {
         "tags": [
@@ -11050,7 +11122,7 @@
             "description": "Bindings updated"
           },
           "400": {
-            "description": "Illegal pool name",
+            "description": "Illegal pool name, an empty name, or a note over 2,000 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -23128,6 +23200,60 @@
           }
         }
       },
+      "BulkNodeTags": {
+        "type": "object",
+        "description": "Add and/or remove tags across many nodes at once (ADR-135).",
+        "required": [
+          "node_ids"
+        ],
+        "properties": {
+          "add": {
+            "type": "object",
+            "description": "Tags to set on every named node. An existing key is overwritten; a key not named here is\nleft alone. Same validation as the single-node edit.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tag keys to remove from every named node. A key a node does not carry is not an error."
+          }
+        }
+      },
+      "BulkTagResult": {
+        "type": "object",
+        "description": "What a bulk tag edit actually did.",
+        "required": [
+          "requested",
+          "applied"
+        ],
+        "properties": {
+          "applied": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows that were actually written. **Lower than `requested` is normal**: an id can name a node\nthat has since been deleted, or one outside the caller's scope. The two are not\ndistinguished — saying which would confirm that a node the caller may not see exists.",
+            "minimum": 0
+          },
+          "requested": {
+            "type": "integer",
+            "description": "Distinct ids the request named, after de-duplication.",
+            "minimum": 0
+          }
+        }
+      },
       "BundleNote": {
         "type": "object",
         "description": "One note, with the table it concerns and how many rows it covers.",
@@ -30182,7 +30308,7 @@
       },
       "NodeBindings": {
         "type": "object",
-        "description": "Set/clear a node's profile + bound credential and its descriptive maker/model, and optionally\nmove it to a different poll-pool. The node-edit UI loads the current values and resends them, so\nan unchanged field is preserved.",
+        "description": "One \"Edit node\" save: the node's own name and note, its profile + bound credential and\ndescriptive maker/model, and optionally a move to a different poll-pool.\n\n🚨 **Two different readings of \"absent\" live in this one body, and the split is deliberate.**\n`profile_id`/`credential_id`/`vendor`/`model` are **replaced**: the node-edit UI loads the\ncurrent values and resends them, so omitting one CLEARS it. `pool`/`name`/`notes` are\n**three-state**: omitting one LEAVES IT ALONE.\n\nThe asymmetry is not history, it is what the columns can survive. A blanked `vendor`/`model` is\nrefilled from the next poll's `sysDescr` (`fill_node_identity_batch`). **Nothing refills a name\nor a note** — so an older client that has never heard of those fields must not be able to\ndestroy them by saving a form (ADR-135 decision 4; the trap `026e1ef8` paid for).",
         "properties": {
           "credential_id": {
             "type": [
@@ -30197,6 +30323,20 @@
               "null"
             ]
           },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node's display name. **Absent** = leave it unchanged; otherwise rename the node.\n`\"\"` (or whitespace) is **400**, not a clear — `nodes.name` is `NOT NULL`.\n\nRenaming is safe for everything downstream: `Node::id` is the identity every store is keyed\nby, so metric series and alert history follow the node across a rename. Nothing else in the\nproduct writes this column — no poll, no sweep, no classifier — so a hand-edited name stays."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's free-text note about this node. **Absent** = leave it unchanged; `\"\"` (or\nwhitespace) = clear it; otherwise set it. At most 2,000 characters.\n\nSpelled `notes` rather than `description` on purpose: in this product \"Description\" already\nmeans what a *device* reports about one of its ports (`interfaces.if_alias`)."
+          },
           "pool": {
             "type": [
               "string",
@@ -30210,6 +30350,19 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "tags": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The node's grouping tags. **Absent** = leave them unchanged; otherwise **the whole map is\nreplaced** by what is sent — the edit dialog shows every tag and resends every tag, so a\nreplacement is what the operator sees. `{}` clears them all.\n\n⚠️ To add one tag to many nodes without knowing what else they carry, use\n`POST /api/v1/nodes/tags`, which **merges**. Replacing from a bulk caller would silently\nwipe labels it never saw.\n\n🚨 A tag's **value** is what a `ScopeLevel::Group` threshold and a `WindowScope::Group`\nmaintenance window match on; the **key is discarded** by both. So `region=JAPAN` is matched\nby a rule scoped to `JAPAN`, never by one scoped to `region=JAPAN` (ADR-135 decision 6).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "vendor": {
             "type": [
@@ -30246,7 +30399,8 @@
           "name",
           "address",
           "kind",
-          "snmp_configured"
+          "snmp_configured",
+          "tags"
         ],
         "properties": {
           "address": {
@@ -30305,6 +30459,13 @@
           "name": {
             "type": "string"
           },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's free-text note about this node; `null` ⇒ none (ADR-135).\n\n⚠️ **Detail only — deliberately not on `NodeSummary`.** The inventory tree fetches one\nsummary per node and ADR-133 had just made that response smaller; a note is up to 2,000\ncharacters that the tree does not draw."
+          },
           "parent_id": {
             "type": [
               "string",
@@ -30329,6 +30490,16 @@
           "snmp_configured": {
             "type": "boolean",
             "description": "Whether SNMP polling is **configured** for this node — not whether it is answering.\n\n🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the\ndeployment-wide `YAGRA_SNMP_COMMUNITY` for every node with no bound credential, so on such a\ndeployment a `credential_id` of `null` still means a device that is walked, has interface\nrows and has neighbours. The WebUI uses this to hide the tabs whose only data source is an\nSNMP walk (Interfaces, Neighbors — ADR-119); deriving it client-side would hide them on\nexactly the nodes that have the data.\n\n⚠️ Over-reports rather than under-reports — see\n`PollDispatcher::snmp_configured_for`, which is the one place the rule lives."
+          },
+          "tags": {
+            "type": "object",
+            "description": "The node's grouping tags (ADR-135). Empty when it has none.\n\nAlso detail-only, and for a second reason beyond size: the tree does not display them, and\n`NodeSummaryDto` on the MCP side has carried them since before any writer existed.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "url_check": {
             "oneOf": [
@@ -30639,8 +30810,7 @@
           "id",
           "name",
           "address",
-          "sort_order",
-          "tags"
+          "sort_order"
         ],
         "properties": {
           "address": {
@@ -30674,6 +30844,13 @@
           "name": {
             "type": "string"
           },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's free-text note (ADR-135). Absent in a bundle written by an older\ndeployment, which reads as \"no note\" rather than failing the import."
+          },
           "parent_id": {
             "type": [
               "string",
@@ -30698,7 +30875,16 @@
             "type": "number",
             "format": "double"
           },
-          "tags": {},
+          "tags": {
+            "type": "object",
+            "description": "The node's grouping tags.\n\n🚨 **Typed, not `serde_json::Value`, since ADR-135 — and the loose version was a live\nhazard.** `nodes.tags` is read back as `Json<BTreeMap<String, String>>` by\n`repo::node_from_row`, so a bundle carrying any other JSON shape made that `try_get` fail\n— and it fails for *every* reader of that row, which is the node list, the alert engine's\nconfig rebuild and the scheduler's sweep. This module's own test fixture wrote\n`json!([\"core\"])`, an array, so the shape was not hypothetical. Typing it moves the failure\nto the import's deserialization, where it is one rejected bundle instead of one unreadable\nnode.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "vendor": {
             "type": [
               "string",

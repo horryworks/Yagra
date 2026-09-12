@@ -183,6 +183,8 @@ interface Props {
   onMoveChecked?: () => void;
   /** Propose folders for every checked node by IP range. Omit to hide it. */
   onMoveCheckedByPrefix?: () => void;
+  /** Tag every checked node (the menu's bulk item). Omit to hide it. */
+  onTagChecked?: () => void;
   /** Propose a folder for this one node by IP range. Omit to hide it. */
   onMoveNodeByPrefix?: (node: NodeSummary) => void;
   /** Move nodes into a group (or null = ungroup), appending them — a drop, of one row or of the
@@ -264,6 +266,7 @@ export function NodeTree({
   onCheckedChange,
   onMoveChecked,
   onMoveCheckedByPrefix,
+  onTagChecked,
   onMoveNodeByPrefix,
   onMoveNodes,
   onMoveGroup,
@@ -1065,6 +1068,20 @@ export function NodeTree({
           }}
         >
           {t('tree.moveSelectedByPrefix', { count })}
+        </button>
+      )}
+      {/* Gated on its own prop, like its two neighbours — never on the menu as a whole. A mixed
+          menu closed on its strictest member is how every operator lost the right-click menu once
+          (ui-conventions). */}
+      {onTagChecked && (
+        <button
+          type="button"
+          onClick={() => {
+            onTagChecked();
+            setMenu(null);
+          }}
+        >
+          {t('tree.tagSelected', { count })}
         </button>
       )}
     </>

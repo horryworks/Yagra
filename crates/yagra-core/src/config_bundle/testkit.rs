@@ -7,6 +7,7 @@
 //! file is excluded from the text the guards read.
 
 use chrono::Utc;
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use super::*;
@@ -153,7 +154,11 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 vendor: Some("acme".to_owned()),
                 model: Some("x100".to_owned()),
                 sort_order: 1.0,
-                tags: serde_json::json!(["core"]),
+                // ⚠️ This was `json!(["core"])` until ADR-135 typed the field. An array is not what
+                // `repo::node_from_row` can read back, so the fixture was authoring a bundle that
+                // would have made the imported node unreadable by every query in the product.
+                tags: BTreeMap::from([("role".to_owned(), "core".to_owned())]),
+                notes: Some("scheduled for replacement in Q3".to_owned()),
             },
             NodeRow {
                 id: node_b,
@@ -167,7 +172,8 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 vendor: None,
                 model: None,
                 sort_order: 2.0,
-                tags: serde_json::json!([]),
+                tags: BTreeMap::new(),
+                notes: None,
             },
         ],
         thresholds: vec![ThresholdRow {

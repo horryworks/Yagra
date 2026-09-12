@@ -89,6 +89,7 @@ import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
 import { MoveByPrefixModal } from '../components/MoveByPrefixModal/MoveByPrefixModal';
+import { BulkTagModal } from '../components/NodeTree/BulkTagModal';
 import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
@@ -303,6 +304,7 @@ export function NodesPage() {
   const [moving, setMoving] = useState<NodeSummary[] | null>(null);
   /** Nodes the IP-range proposal is about. Same two entry points, same shape (ADR-124 決定 6). */
   const [movingByPrefix, setMovingByPrefix] = useState<NodeSummary[] | null>(null);
+  const [taggingNodes, setTaggingNodes] = useState<NodeSummary[] | null>(null);
   /** Node whose edit dialog is open, from the tree's right-click. The row is all this page has, so
    *  the dialog loads the detail itself (`EditNodeModalById`) — like Delete/Move above, editing does
    *  not move the selection, so the right pane keeps showing whatever the operator was looking at. */
@@ -939,6 +941,7 @@ export function NodesPage() {
               canConfig ? () => setMovingByPrefix([...checked.values()]) : undefined
             }
             onMoveNodeByPrefix={canConfig ? (n) => setMovingByPrefix([n]) : undefined}
+            onTagChecked={canConfig ? () => setTaggingNodes([...checked.values()]) : undefined}
             onMoveNodes={moveNodes}
             onMoveGroup={moveGroup}
             onReorderNode={reorderNode}
@@ -1048,6 +1051,9 @@ export function NodesPage() {
               nodes={treeNodes}
               onMove={() => selectedNode && setMoving([selectedNode])}
               onOpenDetail={() => navigate(`/nodes/${selected.id}`)}
+              // An edit made in this pane changes the row the tree is drawing beside it — its name
+              // and its pool are both editable from that dialog (ADR-135).
+              onChanged={() => void reload()}
             />
           ) : selectedGroup ? (
             <GroupDetail
@@ -1163,6 +1169,21 @@ export function NodesPage() {
           onClose={() => setMovingByPrefix(null)}
           onMoved={() => {
             clearChecked();
+            void reload();
+          }}
+        />
+      )}
+
+      {taggingNodes && (
+        <BulkTagModal
+          targets={taggingNodes}
+          onClose={() => setTaggingNodes(null)}
+          onDone={() => {
+            setTaggingNodes(null);
+            clearChecked();
+            // The tree does not draw tags, but the right-hand detail pane does — and it is keyed
+            // by `detailNonce`, so a reload is what makes a freshly tagged selected node show them.
+            setDetailNonce((v) => v + 1);
             void reload();
           }}
         />

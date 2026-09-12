@@ -40,10 +40,13 @@ import {
 export const NODE_EDIT_FIELDS = [
   'urlCheck',
   'dnsCheck',
+  'name',
   'profile',
   'snmpCredential',
   'identity',
   'pool',
+  'tags',
+  'notes',
 ] as const;
 
 export type NodeEditField = (typeof NODE_EDIT_FIELDS)[number];
@@ -72,6 +75,10 @@ export const NODE_EDIT_FIELD_META: Record<
 > = {
   urlCheck: { kinds: ['url'], section: 'check' },
   dnsCheck: { kinds: ['dns'], section: 'check' },
+  // The node's own name, for every kind. Until ADR-135 there was no way to change it at all: the
+  // only writer of `nodes.name` was the INSERT that created the row, so a typo meant deleting the
+  // node and making a new one — which changes its id, and therefore orphans its metric history.
+  name: { kinds: NODE_KINDS, section: 'node' },
   // Meaningful for every kind, though it means less for a monitor: a URL node never resolves a
   // collection set, so its profile carries only the poll interval and the inherited thresholds.
   profile: { kinds: NODE_KINDS, section: 'node' },
@@ -81,7 +88,75 @@ export const NODE_EDIT_FIELD_META: Record<
   snmpCredential: { kinds: ['device'], section: 'node' },
   identity: { kinds: DESCRIBED_BY_A_DEVICE, section: 'node' },
   pool: { kinds: NODE_KINDS, section: 'node' },
+  // Labels an operator hangs on the node, for every kind. They ride into PagerDuty's
+  // `custom_details` and JSM's own `tags` field, so this is where "page the Japan rota for this
+  // one" is expressed (ADR-135).
+  tags: { kinds: NODE_KINDS, section: 'node' },
+  // Last, because it is the tallest control and the only free-form one.
+  notes: { kinds: NODE_KINDS, section: 'node' },
 };
+
+/** The longest note the API accepts (ADR-135). Mirrors `api/nodes.rs::NOTES_MAX`. */
+export const NOTES_MAX = 2000;
+/** Tag limits, mirroring `api/nodes.rs`. Checked here so the operator is told before the save. */
+export const TAG_KEY_MAX = 64;
+export const TAG_VALUE_MAX = 128;
+export const TAGS_MAX = 32;
+
+/** A node name the API will accept: non-empty once trimmed. The column is `NOT NULL`, so there is
+ *  no "clear the name" — an empty box is a mistake to report, not an instruction. */
+export function isValidNodeName(name: string): boolean {
+  return name.trim() !== '';
+}
+
+/** Whether the note is short enough. Counted in code points, as the backend counts it — `.length`
+ *  counts UTF-16 units, so a note of emoji or CJK would be rejected by the server after passing
+ *  here, which is the worst place to disagree. */
+export function isValidNotes(notes: string): boolean {
+  return [...notes.trim()].length <= NOTES_MAX;
+}
+
+/** One row of the tag editor. Kept as a list rather than a map so the operator can type a key and
+ *  a value independently, and so two half-finished rows do not collapse into one. */
+export interface TagRow {
+  key: string;
+  value: string;
+}
+
+/** Why a tag row cannot be saved, or `null`. Blank rows are **not** an error — the editor adds one
+ *  on every "+" click and the request builder drops them, so refusing the form for an empty row
+ *  would make the control unusable. */
+export function tagRowProblem(row: TagRow): 'keyTooLong' | 'keyCharset' | 'valueTooLong' | null {
+  const key = row.key.trim();
+  const value = row.value.trim();
+  if (key === '' && value === '') return null;
+  if ([...key].length > TAG_KEY_MAX) return 'keyTooLong';
+  if (key !== '' && !/^[A-Za-z0-9_.:-]+$/.test(key)) return 'keyCharset';
+  if ([...value].length > TAG_VALUE_MAX) return 'valueTooLong';
+  return null;
+}
+
+/** The tag rows as the request carries them: trimmed, blanks dropped, later keys winning.
+ *
+ *  ⚠️ A row with a key and no value is dropped too, matching the backend — a key alone has no
+ *  meaning to either matcher that reads tags. */
+export function tagsFromRows(rows: readonly TagRow[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    const value = row.value.trim();
+    if (key !== '' && value !== '') out[key] = value;
+  }
+  return out;
+}
+
+/** Whether every tag row is savable and there are not too many of them. */
+export function tagsAreValid(rows: readonly TagRow[]): boolean {
+  return (
+    rows.every((r) => tagRowProblem(r) === null) &&
+    Object.keys(tagsFromRows(rows)).length <= TAGS_MAX
+  );
+}
 
 /** Facts owned by the kind rather than by a field. */
 export interface NodeEditKindSpec {
@@ -177,11 +252,14 @@ export function profileIsOffKind(
 /** The dialog's fields, as the inputs hold them. `url`/`dns` are non-null only for the kind that
  *  carries that check row. */
 export interface NodeEditDraft {
+  name: string;
   profileId: string;
   credentialId: string;
   vendor: string;
   model: string;
   pool: string;
+  notes: string;
+  tags: TagRow[];
   url: UrlCheckDraft | null;
   dns: DnsCheckDraft | null;
 }
@@ -195,11 +273,17 @@ export interface NodeEditDraft {
  *  one. */
 export function nodeEditDraftFrom(node: NodeDetail): NodeEditDraft {
   return {
+    name: node.name,
     profileId: node.profile_id ?? '',
     credentialId: node.credential_id ?? '',
     vendor: node.vendor ?? '',
     model: node.model ?? '',
     pool: node.pool ?? '',
+    notes: node.notes ?? '',
+    // Sorted, so the rows do not reshuffle between two openings of the same dialog.
+    tags: Object.entries(node.tags ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => ({ key, value })),
     url: node.url_check ? urlDraftFrom(node.url_check) : null,
     dns: node.dns_check ? dnsDraftFrom(node.dns_check) : null,
   };
@@ -214,6 +298,15 @@ export interface NodeEditBindings {
   /** Always a string, never null: `''` clears the assignment back to inherited, while a JSON `null`
    *  reads server-side as "leave unchanged" and would silently drop the edit. */
   pool: string;
+  /** Always a non-empty string. The server reads an absent `name` as "leave unchanged" and an
+   *  empty one as a 400 — the dialog refuses to submit a blank name, so neither happens. */
+  name: string;
+  /** Always a string, never null, for the same reason `pool` is: `''` is how an operator deletes
+   *  the note, and a JSON `null` would read server-side as "leave it alone". */
+  notes: string;
+  /** Always sent, because the dialog shows every tag and therefore knows the whole map. Omitting
+   *  it would read as "leave them alone", so removing the last tag would silently do nothing. */
+  tags: Record<string, string>;
 }
 
 /** Everything one Save writes. `check` is null for the kinds that have no check row of their own. */
@@ -249,6 +342,9 @@ export function nodeEditRequest(
         vendor: d.vendor.trim() || null,
         model: d.model.trim() || null,
         pool: d.pool.trim(),
+        name: d.name.trim(),
+        notes: d.notes.trim(),
+        tags: tagsFromRows(d.tags),
       },
     },
   };

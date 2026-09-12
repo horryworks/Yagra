@@ -377,7 +377,10 @@ impl YagraMcp {
                        ever runs, so an empty `interfaces` is the design and there are no \
                        neighbours to ask get_neighbors for; do not report either as a fault. True \
                        with nothing arriving is the case worth investigating, and \
-                       list_node_metrics is what tells the two apart. Use this to \
+                       list_node_metrics is what tells the two apart. `notes` is free text an \
+                       operator wrote about this node — standing context such as \"this link \
+                       flaps on purpose\" or \"replacement scheduled\" — and is null when nobody \
+                       wrote one; read it before calling anything a fault. Use this to \
                        find which port is down or busy; use get_interface_series for one port's \
                        history. Requires live mode (returns an availability note in skeleton mode)."
     )]
@@ -408,8 +411,10 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable(TOOL, "node detail requires live mode");
         };
-        let node = match admin.repo.get_node(p.node_id).await {
-            Ok(Some(n)) => n,
+        // `get_node_with_notes`, not `get_node`: this tool folds `GET /api/v1/nodes/{node_id}`, so
+        // it owes the same answer that route gives — the note included (ADR-135).
+        let (node, notes) = match admin.repo.get_node_with_notes(p.node_id).await {
+            Ok(Some(n)) => (n.node, n.notes),
             Ok(None) => return tool_unavailable(TOOL, "no node with that id"),
             Err(e) => return tool_error(TOOL, "load node", &e),
         };
@@ -443,6 +448,7 @@ impl YagraMcp {
             // The same one rule the REST detail view reads, from the same holder — never
             // `node.credential`, which misses the deployment-wide community fallback (ADR-119).
             snmp_configured: admin.dispatcher.snmp_configured_for(&node),
+            notes,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()
@@ -948,6 +954,56 @@ mod tests {
             .await;
             assert!(status.is_success(), "{label}: cleanup delete: {body}");
         }
+    }
+
+    /// Both surfaces report the same note (ADR-135), because this tool folds `GET /nodes/:node_id`.
+    ///
+    /// 🚨 **The note has to have content, and that is the whole design of this test.** A node with
+    /// no note answers `null` on both surfaces under *any* implementation — including one where the
+    /// tool never learned about the column at all. So the interesting assertion is the second pair,
+    /// after something is written; the `null` pair is only here to prove the field exists on both
+    /// before there is anything to carry (`consistent-state-is-weaker-than-a-transition`).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_surfaces_agree_on_a_nodes_note(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node_id = crate::pgtest::node(&pool, "sw-1", 1, None).await;
+
+        // Before: both say "no note", which on its own proves nothing.
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{node_id}"), &tok, None).await;
+        assert_eq!(detail["notes"], serde_json::Value::Null, "{detail}");
+        let r = YagraMcp::new(st.clone())
+            .node_status_in(NodeIdParams { node_id }, &unrestricted())
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["notes"], serde_json::Value::Null);
+
+        const NOTE: &str = "flaps on purpose: the carrier reprovisions this circuit nightly";
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/nodes/{node_id}/bindings"),
+            &tok,
+            Some(serde_json::json!({ "notes": NOTE })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        // After: the two must carry the same text. This is the pair that separates a tool which
+        // reads the column from one which does not.
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{node_id}"), &tok, None).await;
+        assert_eq!(detail["notes"], NOTE, "REST lost the note: {detail}");
+        let r = YagraMcp::new(st.clone())
+            .node_status_in(NodeIdParams { node_id }, &unrestricted())
+            .await
+            .expect("ok result");
+        let tool = json_of(&r);
+        assert_eq!(
+            tool["notes"], NOTE,
+            "get_node_status folds GET /nodes/:node_id and must answer the same: {tool}"
+        );
     }
 
     /// A half-specified keyset cursor is a protocol error on this surface as it is over REST.

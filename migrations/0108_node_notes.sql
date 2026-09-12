@@ -1,0 +1,37 @@
+-- 0108_node_notes — a node carries the operator's own note (ADR-135 decision 1/2).
+--
+-- reversible: additive only — one nullable column on `nodes`, nothing narrowed and nothing
+-- rewritten. An older core projects a node row through an explicit column list
+-- (`NodeRepo::NODE_COLUMNS`), so it never selects this column: rolling the binary back leaves the
+-- text in place, unread, and rolling forward again finds it. No `schema_compat` floor, for the same
+-- reason 0089 / 0099 / 0100 / 0102..0107 record: every release from 0.2.2 on tolerates a database
+-- carrying migrations it does not embed, and the floor 0080 recorded covers this one.
+--
+-- WHY `notes` AND NOT `description`
+-- `description` is already this product's word for what a DEVICE reports about one of its ports:
+-- `interfaces.if_alias` is rendered as the "Description" column of the Interfaces tab
+-- (`nodes:interfaces.colDescription`). Reusing the word for text a person types would put two
+-- meanings on one word in adjacent screens (ui-conventions R1, 語の衝突). The rest of the schema
+-- spells this concept `description` (pools, report_definitions, node_group_prefixes) and that
+-- inconsistency is accepted deliberately: the word an operator reads wins over the word a column
+-- is spelled with.
+--
+-- WHY IT IS NOT A FIELD ON `yagra_common::Node`
+-- `Node` is materialized fleet-wide by the alert engine's config snapshot, the scheduler's sweep
+-- and maintenance-window matching. A note is up to 2,000 characters that none of them read — on a
+-- 50,000-node deployment that is up to 100 MB of prose carried through every cached snapshot so
+-- that one page at a time can display it. Same argument `OrderedNode` records for `sort_order`
+-- (`repo/nodes.rs`): the column stays inside the one file allowed to name the `nodes` table, and
+-- `NodeRepo::get_node_with_notes` is the only reader.
+--
+-- NULLABLE, not `NOT NULL DEFAULT ''`
+-- `vendor` and `model` on this table are nullable, and the API edge already maps a whitespace-only
+-- string to NULL. One spelling of "no value" per table beats matching `node_group_prefixes`, whose
+-- description is NOT NULL because it is written by a sync that always has a string.
+--
+-- NO LENGTH CHECK CONSTRAINT, deliberately
+-- The 2,000-character cap is enforced at the API edge, where a violation can answer 400 with a
+-- message. A CHECK here would answer 500 through `from_internal`, and adding one later to a
+-- deployment that already holds a longer value is a migration that fails — which is a core that
+-- will not start (the same reason the threshold uniqueness rule is an API rule, ADR-078).
+ALTER TABLE nodes ADD COLUMN notes TEXT;

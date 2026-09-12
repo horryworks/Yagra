@@ -175,7 +175,7 @@ impl ConfigBundleRepo {
         let mut nodes = Vec::new();
         for row in sqlx::query(
             "SELECT id, name, parent_id, host(address) AS address, profile_id, group_id, \
-                    credential_id, pool, vendor, model, sort_order, tags \
+                    credential_id, pool, vendor, model, sort_order, tags, notes \
              FROM nodes ORDER BY sort_order, name",
         )
         .fetch_all(&mut *conn)
@@ -193,7 +193,13 @@ impl ConfigBundleRepo {
                 vendor: row.try_get("vendor")?,
                 model: row.try_get("model")?,
                 sort_order: row.try_get("sort_order")?,
-                tags: row.try_get("tags")?,
+                // Through `Json`, exactly as `repo::node_from_row` reads the same column — the
+                // bundle's row type is now the same `BTreeMap` the rest of the product uses, so
+                // this is the one decode that has to agree with it.
+                tags: row
+                    .try_get::<sqlx::types::Json<BTreeMap<String, String>>, _>("tags")?
+                    .0,
+                notes: row.try_get("notes")?,
             });
         }
         cap("nodes", nodes.len())?;

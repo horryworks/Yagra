@@ -2137,6 +2137,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Label many nodes at once — the operation that makes tagging usable at all.
+         * @description 🚨 **This MERGES; it does not replace.** The caller picked rows in the inventory tree and knows
+         *     one label it wants on all of them; it has no idea what else each of them carries. A replacing
+         *     bulk write would silently wipe every other label on every selected node
+         *     (`PUT /nodes/{id}/bindings` replaces, and that is correct there because the dialog shows the
+         *     whole map).
+         *
+         *     ⚠️ **Scoped via `Scoped`, not `Admin` alone.** `manage_config` is held by Operator, and an
+         *     Operator can be group-scoped, so a bulk write that skipped the scope would let one site's
+         *     operator relabel another's. This is the shape `POST /nodes/move` chose deliberately (ADR-124
+         *     decision 8) rather than inheriting the single-node writes' known-wrong `ADMIN_CFG` claim.
+         */
+        post: operations["bulk_tag_nodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}": {
         parameters: {
             query?: never;
@@ -5095,6 +5124,31 @@ export interface components {
             /** Format: uuid */
             group_id?: string | null;
             node_ids: string[];
+        };
+        /** @description Add and/or remove tags across many nodes at once (ADR-135). */
+        BulkNodeTags: {
+            /**
+             * @description Tags to set on every named node. An existing key is overwritten; a key not named here is
+             *     left alone. Same validation as the single-node edit.
+             */
+            add?: {
+                [key: string]: string;
+            };
+            node_ids: string[];
+            /** @description Tag keys to remove from every named node. A key a node does not carry is not an error. */
+            remove?: string[];
+        };
+        /** @description What a bulk tag edit actually did. */
+        BulkTagResult: {
+            /**
+             * Format: int64
+             * @description Rows that were actually written. **Lower than `requested` is normal**: an id can name a node
+             *     that has since been deleted, or one outside the caller's scope. The two are not
+             *     distinguished — saying which would confirm that a node the caller may not see exists.
+             */
+            applied: number;
+            /** @description Distinct ids the request named, after de-duplication. */
+            requested: number;
         };
         /** @description One note, with the table it concerns and how many rows it covers. */
         BundleNote: {
@@ -8258,14 +8312,40 @@ export interface components {
             pool_source_group_id?: string | null;
         };
         /**
-         * @description Set/clear a node's profile + bound credential and its descriptive maker/model, and optionally
-         *     move it to a different poll-pool. The node-edit UI loads the current values and resends them, so
-         *     an unchanged field is preserved.
+         * @description One "Edit node" save: the node's own name and note, its profile + bound credential and
+         *     descriptive maker/model, and optionally a move to a different poll-pool.
+         *
+         *     🚨 **Two different readings of "absent" live in this one body, and the split is deliberate.**
+         *     `profile_id`/`credential_id`/`vendor`/`model` are **replaced**: the node-edit UI loads the
+         *     current values and resends them, so omitting one CLEARS it. `pool`/`name`/`notes` are
+         *     **three-state**: omitting one LEAVES IT ALONE.
+         *
+         *     The asymmetry is not history, it is what the columns can survive. A blanked `vendor`/`model` is
+         *     refilled from the next poll's `sysDescr` (`fill_node_identity_batch`). **Nothing refills a name
+         *     or a note** — so an older client that has never heard of those fields must not be able to
+         *     destroy them by saving a form (ADR-135 decision 4; the trap `026e1ef8` paid for).
          */
         NodeBindings: {
             /** Format: uuid */
             credential_id?: string | null;
             model?: string | null;
+            /**
+             * @description The node's display name. **Absent** = leave it unchanged; otherwise rename the node.
+             *     `""` (or whitespace) is **400**, not a clear — `nodes.name` is `NOT NULL`.
+             *
+             *     Renaming is safe for everything downstream: `Node::id` is the identity every store is keyed
+             *     by, so metric series and alert history follow the node across a rename. Nothing else in the
+             *     product writes this column — no poll, no sweep, no classifier — so a hand-edited name stays.
+             */
+            name?: string | null;
+            /**
+             * @description The operator's free-text note about this node. **Absent** = leave it unchanged; `""` (or
+             *     whitespace) = clear it; otherwise set it. At most 2,000 characters.
+             *
+             *     Spelled `notes` rather than `description` on purpose: in this product "Description" already
+             *     means what a *device* reports about one of its ports (`interfaces.if_alias`).
+             */
+            notes?: string | null;
             /**
              * @description Poll-pool assignment (ADR-009). **Absent** = leave the pool unchanged; `""` (or whitespace)
              *     = clear it to the `default` pool; otherwise move the node to that pool (validated as a
@@ -8274,6 +8354,22 @@ export interface components {
             pool?: string | null;
             /** Format: uuid */
             profile_id?: string | null;
+            /**
+             * @description The node's grouping tags. **Absent** = leave them unchanged; otherwise **the whole map is
+             *     replaced** by what is sent — the edit dialog shows every tag and resends every tag, so a
+             *     replacement is what the operator sees. `{}` clears them all.
+             *
+             *     ⚠️ To add one tag to many nodes without knowing what else they carry, use
+             *     `POST /api/v1/nodes/tags`, which **merges**. Replacing from a bulk caller would silently
+             *     wipe labels it never saw.
+             *
+             *     🚨 A tag's **value** is what a `ScopeLevel::Group` threshold and a `WindowScope::Group`
+             *     maintenance window match on; the **key is discarded** by both. So `region=JAPAN` is matched
+             *     by a rule scoped to `JAPAN`, never by one scoped to `region=JAPAN` (ADR-135 decision 6).
+             */
+            tags?: {
+                [key: string]: string;
+            } | null;
             vendor?: string | null;
         };
         /**
@@ -8313,6 +8409,14 @@ export interface components {
             meraki_device?: null | components["schemas"]["MerakiDeviceConfig"];
             model?: string | null;
             name: string;
+            /**
+             * @description The operator's free-text note about this node; `null` ⇒ none (ADR-135).
+             *
+             *     ⚠️ **Detail only — deliberately not on `NodeSummary`.** The inventory tree fetches one
+             *     summary per node and ADR-133 had just made that response smaller; a note is up to 2,000
+             *     characters that the tree does not draw.
+             */
+            notes?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
             /**
@@ -8338,6 +8442,15 @@ export interface components {
              *     `PollDispatcher::snmp_configured_for`, which is the one place the rule lives.
              */
             snmp_configured: boolean;
+            /**
+             * @description The node's grouping tags (ADR-135). Empty when it has none.
+             *
+             *     Also detail-only, and for a second reason beyond size: the tree does not display them, and
+             *     `NodeSummaryDto` on the MCP side has carried them since before any writer existed.
+             */
+            tags: {
+                [key: string]: string;
+            };
             url_check?: null | components["schemas"]["UrlCheckConfig"];
             /** @description Descriptive maker/model, editable from the node detail. */
             vendor?: string | null;
@@ -8482,6 +8595,11 @@ export interface components {
             id: string;
             model?: string | null;
             name: string;
+            /**
+             * @description The operator's free-text note (ADR-135). Absent in a bundle written by an older
+             *     deployment, which reads as "no note" rather than failing the import.
+             */
+            notes?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
             pool?: string | null;
@@ -8489,7 +8607,21 @@ export interface components {
             profile_id?: string | null;
             /** Format: double */
             sort_order: number;
-            tags: unknown;
+            /**
+             * @description The node's grouping tags.
+             *
+             *     🚨 **Typed, not `serde_json::Value`, since ADR-135 — and the loose version was a live
+             *     hazard.** `nodes.tags` is read back as `Json<BTreeMap<String, String>>` by
+             *     `repo::node_from_row`, so a bundle carrying any other JSON shape made that `try_get` fail
+             *     — and it fails for *every* reader of that row, which is the node list, the alert engine's
+             *     config rebuild and the scheduler's sweep. This module's own test fixture wrote
+             *     `json!(["core"])`, an array, so the shape was not hypothetical. Typing it moves the failure
+             *     to the import's deserialization, where it is one rejected bundle instead of one unreadable
+             *     node.
+             */
+            tags?: {
+                [key: string]: string;
+            };
             vendor?: string | null;
         };
         /**
@@ -19670,6 +19802,66 @@ export interface operations {
             };
         };
     };
+    bulk_tag_nodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNodeTags"];
+            };
+        };
+        responses: {
+            /** @description How many of the named nodes were relabelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTagResult"];
+                };
+            };
+            /** @description An illegal tag key or value, or more ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     get_node: {
         parameters: {
             query?: never;
@@ -19859,7 +20051,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Illegal pool name */
+            /** @description Illegal pool name, an empty name, or a note over 2,000 characters */
             400: {
                 headers: {
                     [name: string]: unknown;

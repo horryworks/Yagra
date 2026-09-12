@@ -930,6 +930,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/nodes/tags",
+        // Scoped for the same reason `/nodes/move` above is, and deliberately not `ADMIN_CFG`:
+        // this route relabels many nodes at once, so an unscoped claim would let one site's
+        // group-scoped Operator label another site's inventory (ADR-135 decision 7).
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/nodes/move-preview",
         GroupFiltered,
         Exempt(

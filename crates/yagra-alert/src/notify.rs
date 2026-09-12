@@ -25,10 +25,21 @@ pub struct Notification {
     pub summary: String,
     /// Rendered payload (JSON/text) for the channel.
     pub payload: String,
+    /// The subject node's tags (ADR-135), for the channels that carry them in a field of their
+    /// own: PagerDuty's `custom_details` and JSM's native `tags`.
+    ///
+    /// ⚠️ **Beside the payload rather than inside it.** The payload is whatever the operator's
+    /// template produced — or the built-in alert JSON — and rewriting it here would mean editing
+    /// text somebody else authored. These go into the *envelope* each vendor already provides.
+    /// Empty for a poller-pool alert, and on a deployment with neither vendor configured.
+    pub tags: std::collections::BTreeMap<String, String>,
 }
 
 impl Notification {
-    /// Build a notification for an alert with a pre-rendered summary/payload.
+    /// Build a notification for an alert with a pre-rendered summary/payload and no tags.
+    ///
+    /// Tag-carrying callers use [`Self::with_tags`]; this stays the plain constructor so the
+    /// dispatcher's own tests are not made to care about a field they do not exercise.
     #[must_use]
     pub fn for_alert(
         alert: &Alert,
@@ -40,7 +51,15 @@ impl Notification {
             severity: alert.severity,
             summary: summary.into(),
             payload: payload.into(),
+            tags: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// The same notification carrying the subject node's tags.
+    #[must_use]
+    pub fn with_tags(mut self, tags: std::collections::BTreeMap<String, String>) -> Self {
+        self.tags = tags;
+        self
     }
 }
 

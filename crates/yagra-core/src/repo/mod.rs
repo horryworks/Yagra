@@ -92,6 +92,7 @@ pub use migrate::embedded_migrations;
 pub use migrate::MIGRATIONS;
 #[allow(unused_imports)]
 pub use nodes::TopologyRow;
+pub use nodes::{NodeBindingUpdate, NodeWithNotes};
 // Re-exported for `TopologyRow`'s reason above, not by oversight: both are the return type of a
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping
 // them would make `list_pools` and `pool_references` unnameable from outside `repo`.
@@ -164,6 +165,13 @@ pub struct NodeFacts {
     pub group: Option<String>,
     /// Monitoring profile name.
     pub profile: Option<String>,
+    /// The node's grouping tags (ADR-135).
+    ///
+    /// ⚠️ **`group` above is the inventory FOLDER's name; this is something else entirely.** A tag
+    /// is a label an operator hung on the node, and a node carries any number of them — which is
+    /// what makes it usable as the routing dimension a folder cannot be, since a node sits in
+    /// exactly one folder.
+    pub tags: BTreeMap<String, String>,
 }
 
 /// One pre-validated node to bulk-import (borrows from the request to avoid copies).

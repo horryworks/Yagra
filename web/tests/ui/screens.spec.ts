@@ -61,7 +61,10 @@ test('the contract still declines to describe exactly these fields', () => {
     'GET /api/v1/analysis/schedules[0].params',
     'GET /api/v1/config/bundle.analysis_schedules[0].params',
     'GET /api/v1/config/bundle.forward_destinations[0].filter',
-    'GET /api/v1/config/bundle.nodes[0].tags',
+    // `…bundle.nodes[0].tags` left this list in ADR-135: it was a `serde_json::Value`, which meant
+    // a bundle could carry any JSON shape there — and an array is one `repo::node_from_row` cannot
+    // read back, so importing one made the node unreadable to every query in the product. Typing
+    // it as a string map both describes it here and refuses the shape.
     'GET /api/v1/config/bundle.report_definitions[0].spec',
     'GET /api/v1/config/bundle.url_checks[0].expected_status',
     'GET /api/v1/reports/definitions[0].spec',

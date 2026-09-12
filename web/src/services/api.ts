@@ -1121,8 +1121,28 @@ export const api = {
       vendor?: string | null;
       model?: string | null;
       pool?: string;
+      /** `undefined` leaves the name unchanged; `''` is a 400 (the column is NOT NULL). */
+      name?: string;
+      /** `undefined` leaves the note unchanged; `''` clears it. Same three-state as `pool`, and
+       *  for a sharper reason — nothing refills a note the way a poll refills vendor/model. */
+      notes?: string;
+      /** `undefined` leaves the tags unchanged; otherwise **replaces the whole map**. To add one
+       *  label to many nodes without knowing what else they carry, use `bulkTagNodes` below. */
+      tags?: Record<string, string>;
     },
   ): Promise<void> => apiPut('/api/v1/nodes/{node_id}/bindings', { path: { node_id: id }, body }),
+
+  /** Add and/or remove tags across many nodes at once (ADR-135).
+   *
+   *  🚨 **Merges.** `add` overwrites only the keys it names and `remove` deletes only the keys it
+   *  names; every other label on every named node survives. That is the difference from
+   *  `setNodeBindings` above, which replaces the whole map because the edit dialog knows it. */
+  bulkTagNodes: (
+    nodeIds: string[],
+    add: Record<string, string>,
+    remove: string[] = [],
+  ): Promise<{ requested: number; applied: number }> =>
+    apiPost('/api/v1/nodes/tags', { body: { node_ids: nodeIds, add, remove } }),
 
   /** Which pool a node effectively belongs to (own > folder > default) and which poller currently
    *  polls it. Separate from `getNode` because it reads the live coordinator, not the inventory. */

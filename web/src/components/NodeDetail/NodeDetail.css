@@ -327,6 +327,70 @@ html[data-viewport='mobile'] .nd-extract-row {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Tag rows in "Edit node": key = value, plus the button that drops the row. Same shape as the
+   JSON-extraction rows above, including the mobile stack — two 44px-tall inputs side by side on a
+   phone leaves neither wide enough to read what is in it. */
+.nd-tags {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.nd-tag-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.4fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.nd-tag-eq {
+  color: var(--text-tertiary);
+}
+
+html[data-viewport='mobile'] .nd-tag-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The `=` reads as a separator between two boxes on one line; stacked, it is noise. */
+html[data-viewport='mobile'] .nd-tag-eq {
+  display: none;
+}
+
+/* The tag block's own label sits above the rows, so the add button needs a line of its own rather
+   than being stretched by the flex column. */
+.nd-tag-add {
+  display: flex;
+}
+
+/* Operator-written prose: the newlines they typed are the formatting they meant. */
+.nd-notes {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}
+
+.nd-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.nd-tag-chip {
+  padding: 2px 8px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.nd-tag-chip b {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 /* ---------------- Overview ---------------- */
 .nd-overview {
   padding: 16px 20px 22px;

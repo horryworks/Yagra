@@ -133,6 +133,10 @@ pub fn context_for(
         node_address: node.map(|f| f.address.clone()),
         group: node.and_then(|f| f.group.clone()),
         profile: node.and_then(|f| f.profile.clone()),
+        // Empty rather than absent when the node could not be resolved, or when the subject is a
+        // poller pool rather than a node — the field is declared `always_present`, and an
+        // `Option` here would make `{{ tags.x }}` an error on exactly those alerts.
+        tags: node.map(|f| f.tags.clone()).unwrap_or_default(),
         check_id: alert.check.as_uuid().to_string(),
         dedup_key: crate::alerts::dedup_string(&alert.dedup_key()),
         severity: alert.severity.as_str().to_owned(),
@@ -211,6 +215,10 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
             address: declared.node_address.clone().unwrap_or_default(),
             group: declared.group.clone(),
             profile: declared.profile.clone(),
+            // From the declared sample, so the preview shows the same tags the variable palette
+            // documents — this whole function exists to render the *declared* facts back through
+            // the real `context_for`.
+            tags: declared.tags.clone(),
         },
     );
     resolved.insert(
@@ -220,6 +228,7 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
             address: String::new(),
             group: None,
             profile: None,
+            tags: std::collections::BTreeMap::new(),
         },
     );
     (alert, resolved)
@@ -269,6 +278,11 @@ pub(crate) mod tests {
                     address: "192.0.2.7".to_owned(),
                     group: Some("Tokyo".to_owned()),
                     profile: Some("Cisco switch".to_owned()),
+                    // A real one, so a template test that reads a tag has something to read.
+                    tags: std::collections::BTreeMap::from([(
+                        "region".to_owned(),
+                        "JAPAN".to_owned(),
+                    )]),
                 },
             );
             Self {
@@ -397,6 +411,7 @@ pub(crate) mod tests {
                 address: "192.0.2.1".to_owned(),
                 group: None,
                 profile: None,
+                tags: std::collections::BTreeMap::new(),
             },
         );
         let alert = Alert {

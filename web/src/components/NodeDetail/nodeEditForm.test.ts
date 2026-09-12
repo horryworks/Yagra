@@ -36,6 +36,14 @@ import {
   sendNodeEdit,
   visibleNodeEditFields,
   visibleNodeEditSections,
+  isValidNodeName,
+  isValidNotes,
+  tagRowProblem,
+  tagsAreValid,
+  NOTES_MAX,
+  TAGS_MAX,
+  TAG_KEY_MAX,
+  TAG_VALUE_MAX,
   type NodeEditRequest,
 } from './nodeEditForm';
 
@@ -53,6 +61,8 @@ const node = (over: Partial<NodeDetail> = {}): NodeDetail =>
     vendor: 'Cisco',
     model: 'C9300',
     pool: 'site-a',
+    notes: 'in the ceiling void',
+    tags: { role: 'core', region: 'JAPAN' },
     ...over,
   }) as NodeDetail;
 
@@ -93,14 +103,38 @@ describe('node edit field registry', () => {
   // a NEW KIND get a considered answer for each field. Do not replace these with a derivation.
   it('pins the per-kind field lists', () => {
     expect([...visibleNodeEditFields('device')]).toEqual([
+      'name',
       'profile',
       'snmpCredential',
       'identity',
       'pool',
+      'tags',
+      'notes',
     ]);
-    expect([...visibleNodeEditFields('meraki')]).toEqual(['profile', 'identity', 'pool']);
-    expect([...visibleNodeEditFields('url')]).toEqual(['urlCheck', 'profile', 'pool']);
-    expect([...visibleNodeEditFields('dns')]).toEqual(['dnsCheck', 'profile', 'pool']);
+    expect([...visibleNodeEditFields('meraki')]).toEqual([
+      'name',
+      'profile',
+      'identity',
+      'pool',
+      'tags',
+      'notes',
+    ]);
+    expect([...visibleNodeEditFields('url')]).toEqual([
+      'urlCheck',
+      'name',
+      'profile',
+      'pool',
+      'tags',
+      'notes',
+    ]);
+    expect([...visibleNodeEditFields('dns')]).toEqual([
+      'dnsCheck',
+      'name',
+      'profile',
+      'pool',
+      'tags',
+      'notes',
+    ]);
   });
 
   it('keeps each section contiguous, and heads a dialog only when it has two', () => {
@@ -230,8 +264,11 @@ describe('nodeEditRequest bindings', () => {
       expect(Object.keys(bindings).sort(), kind).toEqual([
         'credential_id',
         'model',
+        'name',
+        'notes',
         'pool',
         'profile_id',
+        'tags',
         'vendor',
       ]);
       expect(bindings, kind).toEqual({
@@ -240,6 +277,9 @@ describe('nodeEditRequest bindings', () => {
         vendor: 'Cisco',
         model: 'C9300',
         pool: 'site-a',
+        name: 'edge-1',
+        notes: 'in the ceiling void',
+        tags: { role: 'core', region: 'JAPAN' },
       });
     }
   });
@@ -267,6 +307,83 @@ describe('nodeEditRequest bindings', () => {
   it('reads absent bindings as empty rather than undefined', () => {
     const draft = nodeEditDraftFrom(node({ profile_id: null, credential_id: null, pool: null }));
     expect(draft).toMatchObject({ profileId: '', credentialId: '', pool: '' });
+  });
+
+  it('reads an absent note and absent tags as empty rather than undefined', () => {
+    const draft = nodeEditDraftFrom(node({ notes: null, tags: {} }));
+    expect(draft.notes).toBe('');
+    expect(draft.tags).toEqual([]);
+  });
+
+  // Same reason the pool is always a string: the server reads an absent `notes` as "leave it
+  // alone", so blanking the box has to arrive as `''` or the operator's delete silently does
+  // nothing. `name` has no clear at all — the dialog refuses to submit an empty one.
+  it('sends the note as a string so blanking it means delete', () => {
+    for (const kind of NODE_KINDS) {
+      const draft = { ...nodeEditDraftFrom(node()), notes: '   ' };
+      expect(req(nodeEditRequest(kind, draft)).bindings.notes, kind).toBe('');
+    }
+    const kept = { ...nodeEditDraftFrom(node()), notes: '  two\nlines  ' };
+    expect(req(nodeEditRequest('device', kept)).bindings.notes).toBe('two\nlines');
+  });
+
+  it('sends the tag map even when it is empty, so removing the last tag lands', () => {
+    // An omitted `tags` reads server-side as "leave them alone", which would make deleting the
+    // final tag look like it worked and then come back on the next load.
+    const draft = { ...nodeEditDraftFrom(node()), tags: [] };
+    expect(req(nodeEditRequest('device', draft)).bindings.tags).toEqual({});
+  });
+
+  it('drops half-finished tag rows instead of refusing the form', () => {
+    // The editor adds a blank row on every "+" click, so a blank row is the normal state of the
+    // control rather than an error. A key with no value goes too: neither matcher that reads tags
+    // can do anything with one.
+    const draft = {
+      ...nodeEditDraftFrom(node()),
+      tags: [
+        { key: ' region ', value: ' JAPAN ' },
+        { key: '', value: '' },
+        { key: 'orphan', value: '  ' },
+      ],
+    };
+    expect(req(nodeEditRequest('device', draft)).bindings.tags).toEqual({ region: 'JAPAN' });
+  });
+});
+
+describe('node name and note limits', () => {
+  it('refuses a blank name and accepts one with content', () => {
+    expect(isValidNodeName('')).toBe(false);
+    expect(isValidNodeName('   ')).toBe(false);
+    expect(isValidNodeName(' edge-1 ')).toBe(true);
+  });
+
+  // Counted in code points, as the backend counts it. `.length` counts UTF-16 units, so a note of
+  // astral characters would pass here and be refused by the server — a disagreement the operator
+  // would experience as "Save did nothing".
+  it('measures the note in code points, not UTF-16 units', () => {
+    expect(isValidNotes('a'.repeat(NOTES_MAX))).toBe(true);
+    expect(isValidNotes('a'.repeat(NOTES_MAX + 1))).toBe(false);
+    expect(isValidNotes('🙂'.repeat(NOTES_MAX))).toBe(true);
+    expect(isValidNotes(`  ${'a'.repeat(NOTES_MAX)}  `)).toBe(true);
+  });
+
+  it('names the reason a tag row cannot be saved, and leaves a blank row alone', () => {
+    expect(tagRowProblem({ key: '', value: '' })).toBeNull();
+    expect(tagRowProblem({ key: 'region', value: 'JAPAN' })).toBeNull();
+    expect(tagRowProblem({ key: 'has space', value: 'x' })).toBe('keyCharset');
+    expect(tagRowProblem({ key: 'a'.repeat(TAG_KEY_MAX + 1), value: 'x' })).toBe('keyTooLong');
+    expect(tagRowProblem({ key: 'k', value: 'v'.repeat(TAG_VALUE_MAX + 1) })).toBe('valueTooLong');
+    // The four punctuation marks the backend accepts.
+    expect(tagRowProblem({ key: 'a_b-c.d:e', value: 'x' })).toBeNull();
+  });
+
+  it('refuses more tags than a node may carry, counting only the filled rows', () => {
+    const rows = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ key: `k${i}`, value: 'v' }));
+    expect(tagsAreValid(rows(TAGS_MAX))).toBe(true);
+    expect(tagsAreValid(rows(TAGS_MAX + 1))).toBe(false);
+    // Blank rows are not tags, so they do not count toward the ceiling.
+    expect(tagsAreValid([...rows(TAGS_MAX), { key: '', value: '' }])).toBe(true);
   });
 });
 

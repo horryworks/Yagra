@@ -10,8 +10,37 @@
 
 ## Unreleased
 
+### New Features
+
+- **A node can be renamed.** Until now `Edit node` could change everything about a node except what
+  it is called — there was no API for it either — so fixing a typo or following a renamed device
+  meant deleting the node and creating it again, which changes its id and therefore leaves its
+  metric history and its alert history behind. The name is now a field in that dialog, and nothing
+  in the product overwrites it: no poll, no discovery sweep, no classifier.
+- **A node can carry Notes.** Free text an operator writes for whoever touches the device next —
+  "in the ceiling void above the east corridor, needs a ladder", "replacement scheduled". Shown at
+  the top of the node's Overview tab, and readable over `/mcp` through `get_node_status`, so an AI
+  assistant diagnosing an incident reads the standing context before calling anything a fault.
+- **A node can carry tags, and they reach PagerDuty and Jira Service Management.** Tags are
+  `key=value` labels; unlike an inventory folder, of which a node has exactly one, a node can carry
+  as many as it needs. They are edited per node in `Edit node`, or applied to many at once from the
+  inventory tree's right-click menu (`Tag N selected…`), which **adds to** what each node already
+  carries rather than replacing it. On the way out they ride in PagerDuty's
+  `payload.custom_details.yagra_tags` and in JSM's own `tags` field, so "page the Japan rota for
+  anything tagged `region=JAPAN`" is written once in those tools' own routing rules. A
+  `{{ tags }}` variable is also available in notification templates.
+
 ### Improvements
 
+- **`nodes.tags` finally has a way to be filled in.** The column, its index and three readers have
+  existed since the first migration, but nothing except a config-bundle import could write to it —
+  so the threshold and maintenance-window scopes that match on a tag could never match anything on
+  a deployment that had not imported one. Those two scopes are still not offered for *new* rules
+  (a folder group supersedes them there), but existing tag-scoped rules now have tags to find.
+- **Editing a node from the split view updates the row beside it.** On `Nodes ▸ All nodes`, saving
+  the edit dialog from the right-hand pane refreshed the pane and left the tree on the left showing
+  the previous values. Already true for the poll pool; it would have been far more visible for a
+  name.
 - **A section tab returns to the screen you left, not to its first page.** Pressing **Dashboard**
   always opened Shared dashboard even if you had spent the morning on your own board, and
   **Settings** always opened Yagra health out of sixteen screens. Each tab now goes back to the
@@ -59,6 +88,11 @@
 
 ### Bug Fixes
 
+- **A config bundle can no longer carry a node tag map that makes the node unreadable.** The
+  bundle's `nodes[].tags` was an untyped JSON value, so a bundle could declare it as an array — a
+  shape the node reader cannot decode, which would have failed every query that touches that row
+  (the node list, the alert engine's config rebuild, the scheduler's sweep) rather than just the
+  tags. It is now typed as a string map and a wrong shape is refused at import.
 - **Fixed: the node's Flow tab ignored the time window every other pane shares.** Picking 24h on
   Overview or Interfaces and then opening Flow silently went back to the default hour, because that
   one pane kept its own window. Flow now reads the same window as Overview, Interfaces, Collection

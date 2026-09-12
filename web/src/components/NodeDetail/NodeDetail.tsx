@@ -65,6 +65,14 @@ interface Props {
   onOpenDetail?: () => void;
   /** Page only: navigate away after a delete. */
   onDeleted?: () => void;
+  /** 🚨 **Something about this node changed and the surrounding page shows it too.**
+   *
+   *  The inline variant sits beside the inventory tree, whose rows carry the node's **name** and
+   *  **pool** — both editable from this pane's own dialog. Without this, an edit refreshed the
+   *  right-hand pane and left the row on the left saying what it said before, until something
+   *  else happened to refetch. That was already true for the pool; ADR-135 made it true for the
+   *  name, which nobody would read as anything but a broken save. */
+  onChanged?: () => void;
 }
 
 export function NodeDetail({
@@ -78,6 +86,7 @@ export function NodeDetail({
   onMove,
   onOpenDetail,
   onDeleted,
+  onChanged,
 }: Props) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
@@ -400,6 +409,9 @@ export function NodeDetail({
           onDone={() => {
             setEditingBindings(false);
             setRefreshNonce((v) => v + 1);
+            // Both, not either: the nonce refetches this pane, `onChanged` tells the page that the
+            // row it is drawing on the left is now stale too.
+            onChanged?.();
           }}
         />
       )}

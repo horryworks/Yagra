@@ -10,7 +10,7 @@
 //! channel and routing rows, [`crate::notify_facts`] the facts a template may reference,
 //! [`crate::notify_render`] the rendering itself. This module is the dispatcher over them.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -22,7 +22,7 @@ use yagra_alert::{
 };
 use yagra_common::{is_ssrf_blocked, AlertFacts, CheckId, NodeId, NotifyEvent, Severity};
 
-use crate::notifications::{ChannelConfig, OpenChannel, RoutingRule};
+use crate::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
 use crate::notify_facts::{context_for, node_ids_for, AlertFactsSource};
 use crate::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
 
@@ -216,8 +216,23 @@ fn pagerduty_body(
     });
     if with_payload {
         // custom_details carries the full alert JSON (payload is pre-rendered JSON text).
-        let details: serde_json::Value =
+        let mut details: serde_json::Value =
             serde_json::from_str(&notification.payload).unwrap_or(serde_json::Value::Null);
+        // The node's tags, under a namespaced key so a PagerDuty event rule can match on
+        // `custom_details.yagra_tags.region` (ADR-135).
+        //
+        // ⚠️ **Only when the body is a JSON object.** The body may be an operator's template
+        // output, which is theirs; inserting into a scalar or an array would mean replacing what
+        // they wrote rather than adding beside it. A template that wants tags in some other shape
+        // already has the `{{ tags }}` variable.
+        if !notification.tags.is_empty() {
+            if let Some(obj) = details.as_object_mut() {
+                obj.insert(
+                    "yagra_tags".to_owned(),
+                    serde_json::json!(notification.tags),
+                );
+            }
+        }
         body["payload"] = serde_json::json!({
             "summary": truncate_chars(&notification.summary, 1024),
             "source": notification.dedup_key.subject.to_string(),
@@ -310,13 +325,28 @@ fn jsm_create_body(notification: &Notification) -> serde_json::Value {
         Severity::Warning => "P3",
         Severity::Info => "P5",
     };
-    serde_json::json!({
+    let mut body = serde_json::json!({
         "message": truncate_chars(&notification.summary, 130),
         "alias": dedup_string(&notification.dedup_key),
         "priority": priority,
         "description": notification.payload,
         "source": "yagra",
-    })
+    });
+    // JSM's own `tags` field, which its alert policies and routing rules match on natively — so
+    // "page the Japan rota for anything tagged region=JAPAN" is written over there, where the
+    // on-call rota already lives (ADR-015, ADR-135 decision 8). The field was simply empty until
+    // there was a way to put a tag on a node.
+    //
+    // `key=value` strings because Opsgenie tags are a flat list, not a map. Omitted entirely when
+    // there are none: an empty array is a field the API has to be told to ignore.
+    if !notification.tags.is_empty() {
+        body["tags"] = serde_json::json!(notification
+            .tags
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>());
+    }
+    body
 }
 
 /// The JSM/Opsgenie close-by-alias URL.
@@ -567,6 +597,10 @@ struct BuiltChannel {
     id: Uuid,
     channel: Option<Arc<dyn NotifyChannel>>,
     over: Option<ChannelOverride>,
+    /// Whether this channel puts the node's tags on the wire without being told to (ADR-135) —
+    /// PagerDuty into `custom_details`, JSM into its native `tags` field. Resolved here because
+    /// it reads the stored config kind, which `install_routing` no longer has.
+    carries_tags: bool,
 }
 
 /// The live routing snapshot: the always-on env default route, the DB-configured channels
@@ -693,6 +727,16 @@ pub struct Notifier {
     /// is every deployment until someone writes one — does exactly what it did before this feature
     /// landed, including issuing no extra query to resolve names nobody is going to interpolate.
     any_templates: AtomicBool,
+    /// Whether *any* channel puts the node's tags on the wire by itself (ADR-135) — i.e. a
+    /// PagerDuty or a JSM channel exists.
+    ///
+    /// 🚨 **This exists so tag-based paging works without anyone writing a template.** The facts
+    /// lookup below is gated on [`Self::any_templates`], so a variable alone would have reached
+    /// only the channels an operator had already customized — shipping the feature inert for
+    /// everyone else, which is the failure mode ADR-135 was opened to fix rather than repeat.
+    ///
+    /// A deployment with only webhook and email channels still issues no extra query.
+    any_vendor_channel: AtomicBool,
 }
 
 impl Notifier {
@@ -740,6 +784,7 @@ impl Notifier {
             mutes: RwLock::new(Arc::new(Vec::new())),
             facts: RwLock::new(None),
             any_templates: AtomicBool::new(false),
+            any_vendor_channel: AtomicBool::new(false),
         }
     }
 
@@ -779,6 +824,10 @@ impl Notifier {
                     id: ch.id,
                     channel: build_channel(&ch.config),
                     over,
+                    carries_tags: matches!(
+                        ch.config.kind(),
+                        ChannelKind::PagerDuty | ChannelKind::Jsm
+                    ),
                 }
             })
             .collect();
@@ -799,9 +848,13 @@ impl Notifier {
             .expect("notifier routing lock poisoned");
         let mut next = HashMap::new();
         let mut overrides = HashMap::new();
+        let mut tag_channels = HashSet::new();
         for built in channels {
             if let Some(over) = built.over {
                 overrides.insert(built.id, over);
+            }
+            if built.carries_tags {
+                tag_channels.insert(built.id);
             }
             if let Some(existing) = slot.channels.get(&built.id) {
                 next.insert(built.id, Arc::clone(existing)); // preserve dedup
@@ -815,8 +868,11 @@ impl Notifier {
         // Only keep an override for a channel that actually has a live dispatcher, so the flag
         // below cannot be set by a channel whose config failed to build.
         overrides.retain(|id, _| next.contains_key(id));
+        tag_channels.retain(|id| next.contains_key(id));
         self.any_templates
             .store(!overrides.is_empty(), Ordering::Relaxed);
+        self.any_vendor_channel
+            .store(!tag_channels.is_empty(), Ordering::Relaxed);
         *slot = Arc::new(Routing {
             default: slot.default.clone(),
             channels: next,
@@ -839,12 +895,19 @@ impl Notifier {
         Arc::clone(&self.routing.read().expect("notifier routing lock poisoned"))
     }
 
-    /// Resolve the template context for an alert, or `None` when no channel has a template.
+    /// Resolve the template context for an alert, or `None` when nothing would read it.
     ///
     /// Deliberately **before** the routing snapshot is read: this is the one part of delivery that
     /// touches the database, and there is no reason for it to be inside anything.
+    ///
+    /// ⚠️ **Two things read it, not one.** A channel template interpolates it, and — since
+    /// ADR-135 — a PagerDuty or JSM channel puts its `tags` on the wire whether or not anyone
+    /// wrote a template. A deployment with neither still issues no query at all, which is the
+    /// property this gate has always been for.
     async fn context(&self, alert: &Alert, event: NotifyEvent) -> Option<AlertFacts> {
-        if !self.any_templates.load(Ordering::Relaxed) {
+        if !self.any_templates.load(Ordering::Relaxed)
+            && !self.any_vendor_channel.load(Ordering::Relaxed)
+        {
             return None;
         }
         // Every subject renders through a template now. The vocabulary carries `subject_kind` and
@@ -901,7 +964,10 @@ impl Notifier {
                     tracing::debug!(subject = %alert.subject, "suppressing muted alert notification");
                     return;
                 }
-                let notification = builtin_notification(&alert, NotifyEvent::Fire);
+                let notification = with_subject_tags(
+                    builtin_notification(&alert, NotifyEvent::Fire),
+                    facts.as_ref(),
+                );
                 let matched = routing.matched(alert.severity);
                 if let Some(d) = routing.default.as_ref() {
                     let started = std::time::Instant::now();
@@ -979,7 +1045,7 @@ impl Notifier {
         message: &'static str,
     ) {
         let key = alert.dedup_key();
-        let notification = builtin_notification(alert, event);
+        let notification = with_subject_tags(builtin_notification(alert, event), facts);
         let matched = routing.matched(alert.severity);
         if let Some(d) = routing.default.as_ref() {
             let started = std::time::Instant::now();
@@ -1009,6 +1075,21 @@ impl Notifier {
 /// also the reason the wording lives in exactly one place: the three lifecycle points used to
 /// spell it out at three separate call sites inside `handle`, which is how two of them would
 /// eventually stop agreeing.
+/// Hang the subject node's tags on a notification (ADR-135).
+///
+/// Applied to the **built-in** notification, before `for_channel` renders any template, because
+/// `for_channel` carries every field it does not rewrite through from the built-in — so doing it
+/// here means the tags reach a templated channel and an untemplated one identically.
+///
+/// `None` facts is the ordinary case on a deployment with no PagerDuty or JSM channel and no
+/// template: nothing is resolved, so there is nothing to hang.
+fn with_subject_tags(n: Notification, facts: Option<&AlertFacts>) -> Notification {
+    match facts {
+        Some(f) if !f.tags.is_empty() => n.with_tags(f.tags.clone()),
+        _ => n,
+    }
+}
+
 pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notification {
     let summary = match (&alert.subject, event) {
         (Subject::Node(node), NotifyEvent::Fire) => format!("node {node} is {}", alert.state),
@@ -1127,6 +1208,45 @@ mod template_tests {
             assert_eq!(n.payload, serde_json::to_string(&alert).unwrap());
             assert_eq!(n.dedup_key, alert.dedup_key());
             assert_eq!(n.severity, alert.severity);
+        }
+    }
+
+    /// 🚨 **A PagerDuty or JSM channel makes the notifier resolve node facts even with no
+    /// template anywhere** — which is what makes tag-based paging work out of the box (ADR-135
+    /// decision 9). Without this, a `tags` variable would have reached only the deployments that
+    /// had already written a template, i.e. almost none.
+    ///
+    /// Both directions, because the interesting failure is the gate being stuck open (a fact
+    /// query per alert on every webhook-only deployment) as much as stuck shut.
+    #[test]
+    fn a_vendor_channel_opens_the_facts_gate_and_a_webhook_does_not() {
+        use crate::notifications::ChannelConfig;
+        let pagerduty = ChannelConfig::PagerDuty {
+            routing_key: "rk".to_owned(),
+            api_url: None,
+        };
+        let webhook = ChannelConfig::Webhook {
+            url: "https://example.invalid/hook".to_owned(),
+        };
+        for (config, want) in [(&webhook, false), (&pagerduty, true)] {
+            let n = Notifier::with_default(None);
+            n.set_routing(
+                vec![OpenChannel {
+                    id: Uuid::new_v4(),
+                    // No template: this is the whole point — the gate must open on the channel
+                    // KIND, not on anyone having customized it.
+                    template: ChannelTemplate::default(),
+                    config: config.clone(),
+                }],
+                Vec::new(),
+            );
+            assert!(!n.any_templates.load(Ordering::Relaxed), "no template");
+            assert_eq!(
+                n.any_vendor_channel.load(Ordering::Relaxed),
+                want,
+                "{config:?} should {} open the facts gate",
+                if want { "" } else { "not" }
+            );
         }
     }
 
@@ -1372,6 +1492,59 @@ mod tests {
         assert_eq!(resolve["event_action"], "resolve");
         assert_eq!(resolve["dedup_key"], body["dedup_key"]);
         assert!(resolve.get("payload").is_none());
+        // No tags on this node, so nothing is added — the key must be absent rather than an
+        // empty object, since a PagerDuty event rule testing for it would then always match.
+        assert!(body["payload"]["custom_details"]
+            .get("yagra_tags")
+            .is_none());
+    }
+
+    /// The node's tags reach PagerDuty in `custom_details`, which is what an event rule can route
+    /// on (ADR-135 decision 9) — and the operator's own body is added to, never rewritten.
+    #[test]
+    fn pagerduty_carries_the_nodes_tags_without_disturbing_the_body() {
+        let tags = std::collections::BTreeMap::from([("region".to_owned(), "JAPAN".to_owned())]);
+        let n = vendor_notification(Severity::Critical).with_tags(tags.clone());
+        let body = pagerduty_body("rk-secret", "trigger", &n, true);
+        assert_eq!(
+            body["payload"]["custom_details"]["yagra_tags"]["region"],
+            "JAPAN"
+        );
+        // What the body already said is still there, untouched.
+        assert_eq!(body["payload"]["custom_details"]["metric"], "event:test");
+
+        // 🚨 A body that is not a JSON object is left completely alone: it belongs to whoever
+        // wrote the template, and there is nowhere to add a key without replacing what they said.
+        let mut scalar = n.clone();
+        scalar.payload = r#""just a string""#.to_owned();
+        let body = pagerduty_body("rk-secret", "trigger", &scalar, true);
+        assert_eq!(body["payload"]["custom_details"], "just a string");
+    }
+
+    /// The node's tags reach JSM through **its own** `tags` field, the one its alert policies
+    /// route on. It stays absent when there are none.
+    #[test]
+    fn jsm_carries_the_nodes_tags_in_its_native_field() {
+        let tags = std::collections::BTreeMap::from([
+            ("region".to_owned(), "JAPAN".to_owned()),
+            ("role".to_owned(), "core".to_owned()),
+        ]);
+        let n = vendor_notification(Severity::Critical).with_tags(tags);
+        let body = jsm_create_body(&n);
+        let sent: Vec<&str> = body["tags"]
+            .as_array()
+            .expect("tags is an array")
+            .iter()
+            .map(|v| v.as_str().expect("a string"))
+            .collect();
+        assert_eq!(sent, vec!["region=JAPAN", "role=core"]);
+
+        assert!(
+            jsm_create_body(&vendor_notification(Severity::Critical))
+                .get("tags")
+                .is_none(),
+            "an untagged node must not send an empty tag list"
+        );
     }
 
     #[test]
@@ -1552,6 +1725,7 @@ mod tests {
             severity: Severity::Critical,
             summary: String::new(),
             payload: String::new(),
+            tags: std::collections::BTreeMap::new(),
         };
         let node = NodeId::from(Uuid::from_u128(1));
         let url = jsm_close_url("https://api.example/v2", &notification(Subject::Node(node)));
@@ -1720,6 +1894,7 @@ mod delivery_tests {
             id,
             channel: Some(Arc::new(channel)),
             over: None,
+            carries_tags: false,
         }
     }
 

@@ -27,6 +27,24 @@
     "polledByPending": "未割り当て",
     "polledByMeraki": "Meraki コレクタ",
     "polledByUnknown": "不明",
+    "nameRequired": "名前は必須です。",
+    "notes": "メモ",
+    "notesPlaceholder": "例: 東側廊下の天井裏。脚立が必要",
+    "notesHint": "この機器に触る前に次の人が知っておくべきことを書きます。概要タブに表示され、アラートと一緒に PagerDuty と Jira Service Management にも送られます。",
+    "notesTooLong": "メモは最大 {{max}} 文字です。",
+    "tags": "タグ",
+    "tagKey": "タグ名",
+    "tagValue": "タグの値",
+    "tagKeyPlaceholder": "region",
+    "tagValuePlaceholder": "JAPAN",
+    "tagAdd": "タグを追加",
+    "tagRemove": "タグ {{key}} を削除",
+    "tagHint": "このノードを束ねるためのラベルです。アラートと一緒に送られるので、PagerDuty や Jira Service Management 側の振り分けに使えます。1 ノードにつき最大 {{max}} 個。",
+    "tagErr": {
+      "keyTooLong": "このタグ名は長すぎます。",
+      "keyCharset": "タグ名に使えるのは英数字と '_'、'-'、'.'、':' だけです。",
+      "valueTooLong": "このタグの値は長すぎます。"
+    },
     "resolver": "リゾルバ"
   },
   "kind": {
@@ -492,6 +510,17 @@
     "noDirectMembers": "直接のメンバーノードはありません — サブグループを参照してください。",
     "prefixes": "IP プレフィックス"
   },
+  "bulkTag": {
+    "title": "{{count}} 件のノードにタグを付ける",
+    "note": "選んだ {{count}} 件が既に持っているタグに、ここで指定したタグを追加します。他のタグは消えません。",
+    "add": "追加・上書き",
+    "remove": "削除するタグ",
+    "removePlaceholder": "region, owner",
+    "removeHint": "選んだノードすべてから外すタグ名を、カンマ区切りで指定します。そのタグを持っていないノードはそのままです。",
+    "apply": "選択したノードに適用",
+    "partial": "{{requested}} 件中 {{applied}} 件にタグを付けました。残りは削除済みか、操作できるフォルダの外にあります。",
+    "err": "選択したノードにタグを付けられませんでした"
+  },
   "tree": {
     "suppression": {
       "markMaint": "メンテナンス中 — クリックで詳細",
@@ -551,6 +580,7 @@
     "removeFromSelection": "選択から外す",
     "moveSelected": "選択した {{count}} 件を移動…",
     "moveSelectedByPrefix": "選択した {{count}} 件を IP レンジで移動…",
+    "tagSelected": "選択した {{count}} 件にタグを付ける…",
     "moveNodeToGroup": "「{{name}}」をグループへ移動…",
     "moveNodeByPrefix": "「{{name}}」を IP レンジで移動…",
     "menuFor": "{{name}} の操作",

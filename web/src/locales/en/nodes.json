@@ -27,6 +27,24 @@
     "polledByPending": "Not yet assigned",
     "polledByMeraki": "Meraki collector",
     "polledByUnknown": "Unknown",
+    "nameRequired": "A name is required.",
+    "notes": "Notes",
+    "notesPlaceholder": "e.g. in the ceiling void above the east corridor — needs a ladder",
+    "notesHint": "Anything the next person should know before touching this device. Shown on its Overview tab, and sent to PagerDuty and Jira Service Management with its alerts.",
+    "notesTooLong": "Notes may be at most {{max}} characters.",
+    "tags": "Tags",
+    "tagKey": "Tag name",
+    "tagValue": "Tag value",
+    "tagKeyPlaceholder": "region",
+    "tagValuePlaceholder": "JAPAN",
+    "tagAdd": "Add tag",
+    "tagRemove": "Remove the tag {{key}}",
+    "tagHint": "Labels for grouping this node — they ride along with its alerts, so PagerDuty and Jira Service Management can route on them. Up to {{max}} per node.",
+    "tagErr": {
+      "keyTooLong": "This tag name is too long.",
+      "keyCharset": "A tag name may use only letters, digits, '_', '-', '.' and ':'.",
+      "valueTooLong": "This tag value is too long."
+    },
     "resolver": "Resolver"
   },
   "kind": {
@@ -492,6 +510,17 @@
     "noDirectMembers": "No direct member nodes — see subgroups.",
     "prefixes": "IP prefixes"
   },
+  "bulkTag": {
+    "title": "Tag {{count}} nodes",
+    "note": "These tags are added to what each of the {{count}} selected nodes already carries — nothing else is removed.",
+    "add": "Add or set",
+    "remove": "Remove tags",
+    "removePlaceholder": "region, owner",
+    "removeHint": "Tag names to take off every selected node, separated by commas. A node that does not have one is left alone.",
+    "apply": "Apply to selected",
+    "partial": "Tagged {{applied}} of {{requested}} nodes. The rest were deleted, or are outside the folders you can act on.",
+    "err": "failed to tag the selected nodes"
+  },
   "tree": {
     "suppression": {
       "markMaint": "In maintenance — click for details",
@@ -551,6 +580,7 @@
     "removeFromSelection": "Remove from selection",
     "moveSelected": "Move {{count}} selected…",
     "moveSelectedByPrefix": "Move {{count}} selected by IP range…",
+    "tagSelected": "Tag {{count}} selected…",
     "moveNodeToGroup": "Move \"{{name}}\" to group…",
     "moveNodeByPrefix": "Move \"{{name}}\" by IP range…",
     "menuFor": "Actions for {{name}}",

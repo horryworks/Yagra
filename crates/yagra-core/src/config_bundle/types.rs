@@ -8,6 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// How secrets appear in a bundle. See the module docs for why there is only one variant.
@@ -184,7 +185,22 @@ pub struct NodeRow {
     #[serde(default)]
     pub model: Option<String>,
     pub sort_order: f64,
-    pub tags: serde_json::Value,
+    /// The node's grouping tags.
+    ///
+    /// 🚨 **Typed, not `serde_json::Value`, since ADR-135 — and the loose version was a live
+    /// hazard.** `nodes.tags` is read back as `Json<BTreeMap<String, String>>` by
+    /// `repo::node_from_row`, so a bundle carrying any other JSON shape made that `try_get` fail
+    /// — and it fails for *every* reader of that row, which is the node list, the alert engine's
+    /// config rebuild and the scheduler's sweep. This module's own test fixture wrote
+    /// `json!(["core"])`, an array, so the shape was not hypothetical. Typing it moves the failure
+    /// to the import's deserialization, where it is one rejected bundle instead of one unreadable
+    /// node.
+    #[serde(default)]
+    pub tags: BTreeMap<String, String>,
+    /// The operator's free-text note (ADR-135). Absent in a bundle written by an older
+    /// deployment, which reads as "no note" rather than failing the import.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// A threshold rule.

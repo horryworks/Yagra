@@ -254,13 +254,14 @@ pub(super) async fn write<'a>(
         );
         sqlx::query(
             "INSERT INTO nodes (id, name, address, profile_id, group_id, credential_id, pool, \
-                                    vendor, model, sort_order, tags) \
-                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, $10, $11) \
+                                    vendor, model, sort_order, tags, notes) \
+                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
                  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, address = EXCLUDED.address, \
                      profile_id = EXCLUDED.profile_id, group_id = EXCLUDED.group_id, \
                      credential_id = EXCLUDED.credential_id, pool = EXCLUDED.pool, \
                      vendor = EXCLUDED.vendor, model = EXCLUDED.model, \
-                     sort_order = EXCLUDED.sort_order, tags = EXCLUDED.tags, updated_at = now()",
+                     sort_order = EXCLUDED.sort_order, tags = EXCLUDED.tags, \
+                     notes = EXCLUDED.notes, updated_at = now()",
         )
         .bind(n.id)
         .bind(&n.name)
@@ -272,7 +273,8 @@ pub(super) async fn write<'a>(
         .bind(&n.vendor)
         .bind(&n.model)
         .bind(n.sort_order)
-        .bind(&n.tags)
+        .bind(sqlx::types::Json(&n.tags))
+        .bind(&n.notes)
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, n.id);

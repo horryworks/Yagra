@@ -379,6 +379,16 @@ pub struct NodeStatusDto {
     /// carries no credential field at all. `PollDispatcher::snmp_configured_for` is the one place
     /// the rule lives; it over-reports rather than under-reports.
     pub snmp_configured: bool,
+    /// The operator's free-text note about this node; `null` ⇒ none (ADR-135).
+    ///
+    /// Mirrors `NodeDetail.notes` on `GET /api/v1/nodes/{node_id}`, the route this tool folds —
+    /// read parity is the rule (`api-conventions.md`), and a note is exactly the standing context
+    /// a diagnosis should have ("this link flaps on purpose", "replacement scheduled").
+    ///
+    /// ⚠️ A **sibling of `node`, not a field on it**, for the same reason `snmp_configured` is:
+    /// `NodeSummaryDto` is also what `list_nodes` returns one of per fleet row, and the note is
+    /// detail-only. Same split the REST side makes between `NodeDetail` and `NodeSummary`.
+    pub notes: Option<String>,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -910,6 +920,7 @@ mod tests {
             node: summary.clone(),
             alerts: vec![],
             snmp_configured: true,
+            notes: Some("reachable only from the jump host".to_owned()),
             interfaces: vec![InterfaceDto {
                 ifindex: 1,
                 name: Some("Gig0/1".to_owned()),
