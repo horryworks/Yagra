@@ -38,7 +38,8 @@ use uuid::Uuid;
     sort_group_children,
     set_node_group_pool,
     set_node_group_geo,
-    set_node_group_prefixes
+    set_node_group_prefixes,
+    set_node_group_tags
 ))]
 pub(super) struct Doc;
 
@@ -61,6 +62,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/node-groups/:id/prefixes",
             put(set_node_group_prefixes),
         )
+        .route("/api/v1/node-groups/:id/tags", put(set_node_group_tags))
 }
 
 /// How many hand-made ranges one folder may carry.
@@ -535,6 +537,77 @@ async fn delete_node_group(
             "delete node group",
             "failed to delete group",
         )),
+    }
+}
+
+/// The folder's labels, in full (ADR-135 inc. 2).
+///
+/// ⚠️ **Whole value, not a diff**, and **a sub-resource rather than a field on `GroupBody`** — the
+/// same shape `geo` and `prefixes` chose, for three reasons and the first settles it:
+///
+/// 1. **Scoping.** This is `GroupFiltered` + `require_visible_group`, because a folder's labels
+///    reach every node under it and `manage_config` is held by Operator, who can be group-scoped
+///    (ADR-131 決定 8). `PUT /node-groups/{id}` claims `ADMIN_CFG` and takes no `Scoped`; putting
+///    labels on its body would mean either widening that route's claim — changing rename, move and
+///    re-pool for everyone — or shipping a scope-blind label write.
+/// 2. **Three-state cost.** `GroupBody.pool` is already an `Option<String>` whose doc has to
+///    explain that absent means unchanged, and `GroupModal` always sends it for exactly that
+///    reason. A second such field doubles the trap ADR-135 決定 4 exists for.
+/// 3. **The dialog.** A per-label `DELETE` would act the moment ✕ is clicked — before Save, and
+///    with no way back. Clearing every label is `{"tags": []}`.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupTags {
+    /// Labels this folder supplies to its whole subtree. Same rules as a node's: free-form, at
+    /// most 64 characters each, at most 32 of them.
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Labels this folder refuses to inherit from its own ancestors — and therefore takes away
+    /// from everything beneath it too. Not length- or character-checked, for the reason
+    /// `api::nodes::normalized_removals` records.
+    #[serde(default)]
+    tags_excluded: Vec<String>,
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/tags", tag = "groups",
+    params(("id" = String, Path, description = "Folder id")),
+    request_body = GroupTags,
+    responses(
+        (status = 204, description = "The folder's labels were replaced"),
+        (status = 400, description = "An empty label, one over 64 characters, one carrying a control character, or more than 32", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such folder, or not one this caller may act on", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_node_group_tags(
+    _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GroupTags>,
+) -> ApiResult<StatusCode> {
+    // Before anything is read or written, exactly as `set_node_group_prefixes` does: a folder this
+    // caller may not act on is a 404, not a silent no-op.
+    super::scope::require_visible_group(&scope, id)?;
+    let tags = super::nodes::validated_labels(body.tags)?;
+    let excluded = super::nodes::normalized_removals(body.tags_excluded);
+    let found = admin
+        .groups
+        .set_tags(id, &tags, &excluded)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set node group tags",
+                "failed to update node group",
+            )
+        })?;
+    if found {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("group_not_found", "no such node group"))
     }
 }
 
@@ -1063,6 +1136,194 @@ mod tests {
             parent_row["prefixes"][0]["prefix"], "192.168.1.0/24",
             "unscoped, the ancestor's prefixes are there"
         );
+    }
+
+    // ── ADR-135 inc. 2: a folder's labels, and what inherits them ───────────────────────
+
+    /// 🚨 An accepted write (ADR-115), asserted on the **row** and on what the row implies.
+    ///
+    /// A 204 says the handler returned. What matters is that the labels reached the folder *and*
+    /// that every folder under it now reports them as effective — that second half is the whole
+    /// feature, and it is resolved on read, so a write that stored correctly and resolved wrongly
+    /// would pass a status check and fail the operator.
+    ///
+    /// ⚠️ The documented status is named, not `is_success()`: 200 and 204 are both successes and
+    /// only one of them is this route's contract.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folders_labels_are_stored_and_reach_its_whole_subtree(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+
+        let mk = |name: &'static str, parent: Option<uuid::Uuid>| {
+            let admin = admin.clone();
+            let st = &st;
+            async move {
+                let mut body = serde_json::json!({ "name": name, "group_type": "site" });
+                if let Some(p) = parent {
+                    body["parent_id"] = serde_json::json!(p);
+                }
+                let (_, row) = send(st, "POST", "/api/v1/node-groups", &admin, Some(body)).await;
+                row["id"]
+                    .as_str()
+                    .expect("id")
+                    .parse::<uuid::Uuid>()
+                    .expect("uuid")
+            }
+        };
+        let region = mk("Japan", None).await;
+        let site = mk("Matsuyama", Some(region)).await;
+        let rack = mk("Rack 1", Some(site)).await;
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{region}/tags"),
+            &admin,
+            Some(serde_json::json!({ "tags": ["  JAPAN  ", "core"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        let (_, list) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        let rows = list.as_array().expect("a list");
+        let of = |id: uuid::Uuid| {
+            rows.iter()
+                .find(|g| g["id"] == id.to_string())
+                .unwrap_or_else(|| panic!("row {id} present"))
+                .clone()
+        };
+        // Trimmed and sorted by the validator, and stored on the folder that was named.
+        assert_eq!(of(region)["tags"], serde_json::json!(["JAPAN", "core"]));
+        assert_eq!(of(site)["tags"], serde_json::json!([]));
+        // …and effective everywhere beneath it, two levels down.
+        assert_eq!(
+            of(site)["effective_tags"],
+            serde_json::json!(["JAPAN", "core"])
+        );
+        assert_eq!(
+            of(rack)["effective_tags"],
+            serde_json::json!(["JAPAN", "core"]),
+            "a grandchild inherits through the folder between it and the label"
+        );
+
+        // A refusal partway down takes the label away from that folder and everything under it.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{site}/tags"),
+            &admin,
+            Some(serde_json::json!({ "tags": ["matsuyama"], "tags_excluded": ["core"] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let (_, list) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        let rows = list.as_array().expect("a list");
+        let of = |id: uuid::Uuid| {
+            rows.iter()
+                .find(|g| g["id"] == id.to_string())
+                .unwrap_or_else(|| panic!("row {id} present"))
+                .clone()
+        };
+        assert_eq!(
+            of(site)["effective_tags"],
+            serde_json::json!(["JAPAN", "matsuyama"])
+        );
+        assert_eq!(
+            of(rack)["effective_tags"],
+            serde_json::json!(["JAPAN", "matsuyama"]),
+            "an exclusion applies to the whole subtree below it, not only to the folder that set it"
+        );
+        assert_eq!(
+            of(region)["effective_tags"],
+            serde_json::json!(["JAPAN", "core"]),
+            "and never upwards"
+        );
+
+        // The validator is reached: a label over the limit is a 400, not a truncated row.
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{region}/tags"),
+            &admin,
+            Some(serde_json::json!({ "tags": ["x".repeat(65)] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    /// 🚨 A group-scoped caller cannot label a folder outside its scope.
+    ///
+    /// This route claims `GroupFiltered` in the ledger rather than the `ADMIN_CFG` its `geo` and
+    /// `pool` siblings claim, and the claim is only worth anything if the handler acts on it. Both
+    /// directions on purpose: a test that only sees the refusal would pass on a handler that
+    /// refuses everyone.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn labelling_a_folder_outside_the_callers_scope_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+
+        let mut ids = Vec::new();
+        for name in ["Mine", "Theirs"] {
+            let (_, row) = send(
+                &st,
+                "POST",
+                "/api/v1/node-groups",
+                &admin,
+                Some(serde_json::json!({ "name": name, "group_type": "site" })),
+            )
+            .await;
+            ids.push(
+                row["id"]
+                    .as_str()
+                    .expect("id")
+                    .parse::<uuid::Uuid>()
+                    .expect("uuid"),
+            );
+        }
+        let (mine, theirs) = (ids[0], ids[1]);
+        let scoped = scoped_token(&st, &[mine]);
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{mine}/tags"),
+            &scoped,
+            Some(serde_json::json!({ "tags": ["JAPAN"] })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::NO_CONTENT,
+            "the folder in scope is writable: {body}"
+        );
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{theirs}/tags"),
+            &scoped,
+            Some(serde_json::json!({ "tags": ["JAPAN"] })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::NOT_FOUND,
+            "a folder this caller cannot see is a 404, not a silent no-op"
+        );
+        // And nothing was written to it.
+        let (_, list) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        let their_row = list
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|g| g["id"] == theirs.to_string())
+            .expect("row")
+            .clone();
+        assert_eq!(their_row["tags"], serde_json::json!([]));
     }
 
     // ── ADR-131: the hand-made IP ranges ────────────────────────────────────────────────

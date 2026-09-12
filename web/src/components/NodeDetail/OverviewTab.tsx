@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { rootCause, type HasSubject } from '../../lib/alertSubject';
+import { Badge } from '../ui/Badge';
 import { EntityName, useEntityNames } from '../ui/EntityName';
 import { api } from '../../services/api';
 import {
@@ -110,18 +111,30 @@ export function OverviewTab({
         </section>
       )}
 
-      {Object.keys(node.tags ?? {}).length > 0 && (
+      {/* Own labels and inherited ones as two marked groups, never one merged row: "why does this
+          node carry JAPAN" has a different answer for each, and the answer for the second is a
+          folder the operator has to go to in order to change it. The inherited group says which
+          folder in words rather than only in a tooltip (ui-conventions R4). */}
+      {((node.tags ?? []).length > 0 || (node.inherited_tags ?? []).length > 0) && (
         <section>
           <div className="nd-section-t">{t('field.tags')}</div>
-          <div className="nd-tag-chips">
-            {Object.entries(node.tags)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([key, value]) => (
-                <span className="nd-tag-chip" key={key}>
-                  <b>{key}</b>={value}
-                </span>
+          {(node.tags ?? []).length > 0 && (
+            <div className="nd-tag-chips">
+              {[...node.tags].sort((a, b) => a.localeCompare(b)).map((label) => (
+                <Badge key={label}>{label}</Badge>
               ))}
-          </div>
+            </div>
+          )}
+          {(node.inherited_tags ?? []).length > 0 && (
+            <>
+              <div className="nd-tag-inherited-t">{t('field.tagsInheritedFrom')}</div>
+              <div className="nd-tag-chips">
+                {[...node.inherited_tags].sort((a, b) => a.localeCompare(b)).map((label) => (
+                  <Badge key={label}>{label}</Badge>
+                ))}
+              </div>
+            </>
+          )}
         </section>
       )}
 

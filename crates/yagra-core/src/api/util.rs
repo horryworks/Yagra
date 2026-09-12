@@ -305,6 +305,26 @@ pub(crate) async fn pool_resolver(admin: &super::AdminState) -> crate::poolres::
     }
 }
 
+/// Build a [`TagResolver`](crate::tagres::TagResolver) from the folder tree (ADR-135 inc. 2).
+///
+/// The exact twin of [`pool_resolver`] above, including the degradation: a read error becomes "no
+/// folder inheritance" with a warning, because every caller is a read-only view where missing
+/// labels are a display inaccuracy rather than a decision.
+///
+/// ⚠️ **The alert-config rebuild deliberately does NOT degrade this way** — it propagates the same
+/// failure, because there a missing label narrows a threshold rule's scope and a check that stops
+/// resolving closes its open alerts (ADR-080). The two treatments look like each other's bug; each
+/// has its reason written at the site.
+pub(crate) async fn tag_resolver(admin: &super::AdminState) -> crate::tagres::TagResolver {
+    match admin.groups.tag_rows().await {
+        Ok(rows) => crate::tagres::TagResolver::build(rows),
+        Err(e) => {
+            tracing::warn!(error = %e, "loading folder labels failed; resolving without inheritance");
+            crate::tagres::TagResolver::empty()
+        }
+    }
+}
+
 /// Rate window for interface utilization, in seconds.
 ///
 /// Matches the TSDB query-time rate() derivation (ADR-012); five minutes covers a few poll

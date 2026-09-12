@@ -47,12 +47,10 @@
 //! Every public name is re-exported below, so the thirty files that say `crate::repo::X` did not
 //! change when this became a directory (ADR-094).
 
-use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::types::Json;
 use sqlx::Row;
 use uuid::Uuid;
 use yagra_common::{CredentialId, GroupId, Node, NodeId, ProfileId};
@@ -113,7 +111,10 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
     let vendor: Option<String> = row.try_get("vendor")?;
     let model: Option<String> = row.try_get("model")?;
     let group: Option<Uuid> = row.try_get("group_id")?;
-    let tags: Json<BTreeMap<String, String>> = row.try_get("tags")?;
+    // `text[]` since 0109 — sqlx decodes it straight into `Vec<String>`, so there is no `Json<>`
+    // wrapper here any more (ADR-135 inc. 2).
+    let tags: Vec<String> = row.try_get("tags")?;
+    let tags_excluded: Vec<String> = row.try_get("tags_excluded")?;
     let address: IpAddr = address
         .parse()
         .map_err(|e| anyhow::anyhow!("node {id} has unparseable address {address:?}: {e}"))?;
@@ -128,7 +129,8 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
         vendor,
         model,
         group: group.map(GroupId::from),
-        tags: tags.0,
+        tags,
+        tags_excluded,
     })
 }
 
@@ -165,13 +167,32 @@ pub struct NodeFacts {
     pub group: Option<String>,
     /// Monitoring profile name.
     pub profile: Option<String>,
-    /// The node's grouping tags (ADR-135).
+    /// The node's labels (ADR-135), as stored on the node itself.
     ///
-    /// ⚠️ **`group` above is the inventory FOLDER's name; this is something else entirely.** A tag
-    /// is a label an operator hung on the node, and a node carries any number of them — which is
-    /// what makes it usable as the routing dimension a folder cannot be, since a node sits in
-    /// exactly one folder.
-    pub tags: BTreeMap<String, String>,
+    /// ⚠️ **`group` above is the inventory FOLDER's name; this is something else.** A label is a
+    /// word an operator hung on something, and a node carries any number of them.
+    ///
+    /// 🚨 **This field used to argue that a label is "the routing dimension a folder cannot be,
+    /// since a node sits in exactly one folder". ADR-135 inc. 2 inverted that.** A folder carries
+    /// labels now, and every folder and node beneath it inherits them — so the two are no longer
+    /// opposed, and the reason to reach for a label over a folder is that a node can carry several
+    /// from different places at once, not that folders are unreachable. What arrives in a
+    /// notification is the **effective** set, resolved by `TagResolver` before it gets here; this
+    /// field is the raw half and the resolution happens in `CachedNodeFacts`.
+    ///
+    /// 🚨 **This field means two things at two moments, and the boundary is one type.** As
+    /// [`NodeRepo::node_facts`] returns it, it is the node's OWN labels. The only production
+    /// [`crate::notify_facts::AlertFactsSource`] replaces it with the effective set before any
+    /// caller sees it, so everything downstream — the template context, PagerDuty, JSM — reads the
+    /// resolved one. Do not add a second reader of the repository method that skips that step.
+    pub tags: Vec<String>,
+    /// Labels the node refuses to inherit. Carried only so the label resolution above can run;
+    /// nothing downstream of `CachedNodeFacts` reads it.
+    pub tags_excluded: Vec<String>,
+    /// The node's folder id — the entry point into the chain whose labels it inherits. `group`
+    /// above is that folder's *name*, which is what a template renders; this is what a resolver
+    /// needs.
+    pub group_id: Option<Uuid>,
 }
 
 /// One pre-validated node to bulk-import (borrows from the request to avoid copies).
@@ -289,7 +310,7 @@ impl NodeRepo {
     /// Column list shared by the full and paged node queries (`host(address)` strips any
     /// netmask so the INET parses straight to IpAddr).
     const NODE_COLUMNS: &'static str = "id, name, parent_id, host(address) AS address, \
-         profile_id, pool, credential_id, vendor, model, group_id, tags";
+         profile_id, pool, credential_id, vendor, model, group_id, tags, tags_excluded";
 
     /// The RBAC group-visibility predicate (ADR-014), **always bound as `$1`** in the queries that
     /// use it. A `NULL` array means unrestricted; an empty array matches nothing.

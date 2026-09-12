@@ -7,7 +7,6 @@
 //! file is excluded from the text the guards read.
 
 use chrono::Utc;
-use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use super::*;
@@ -129,6 +128,10 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 latitude: Some(35.68),
                 longitude: Some(139.76),
                 pool: None,
+                // A folder label, so the round-trip covers the half of ADR-135 inc. 2 that only
+                // exists on a folder.
+                tags: vec!["JAPAN".to_owned()],
+                tags_excluded: Vec::new(),
             },
             NodeGroupRow {
                 id: group_child,
@@ -139,6 +142,10 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 latitude: None,
                 longitude: None,
                 pool: Some("east".to_owned()),
+                tags: Vec::new(),
+                // A refusal on a child folder, so an import that dropped this column would be
+                // visible rather than merely untested.
+                tags_excluded: vec!["JAPAN".to_owned()],
             },
         ],
         nodes: vec![
@@ -154,10 +161,12 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 vendor: Some("acme".to_owned()),
                 model: Some("x100".to_owned()),
                 sort_order: 1.0,
-                // ⚠️ This was `json!(["core"])` until ADR-135 typed the field. An array is not what
-                // `repo::node_from_row` can read back, so the fixture was authoring a bundle that
-                // would have made the imported node unreadable by every query in the product.
-                tags: BTreeMap::from([("role".to_owned(), "core".to_owned())]),
+                // ⚠️ This was `json!(["core"])` until ADR-135 typed the field, then a
+                // `BTreeMap` — and since inc. 2 the array is the right answer after all. The
+                // history is worth keeping: the untyped version authored a bundle that would have
+                // made the imported node unreadable by every query in the product.
+                tags: vec!["core".to_owned()],
+                tags_excluded: Vec::new(),
                 notes: Some("scheduled for replacement in Q3".to_owned()),
             },
             NodeRow {
@@ -172,7 +181,8 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 vendor: None,
                 model: None,
                 sort_order: 2.0,
-                tags: BTreeMap::new(),
+                tags: Vec::new(),
+                tags_excluded: Vec::new(),
                 notes: None,
             },
         ],

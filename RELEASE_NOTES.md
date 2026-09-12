@@ -21,22 +21,33 @@
   "in the ceiling void above the east corridor, needs a ladder", "replacement scheduled". Shown at
   the top of the node's Overview tab, and readable over `/mcp` through `get_node_status`, so an AI
   assistant diagnosing an incident reads the standing context before calling anything a fault.
-- **A node can carry tags, and they reach PagerDuty and Jira Service Management.** Tags are
-  `key=value` labels; unlike an inventory folder, of which a node has exactly one, a node can carry
-  as many as it needs. They are edited per node in `Edit node`, or applied to many at once from the
-  inventory tree's right-click menu (`Tag N selected…`), which **adds to** what each node already
-  carries rather than replacing it. On the way out they ride in PagerDuty's
-  `payload.custom_details.yagra_tags` and in JSM's own `tags` field, so "page the Japan rota for
-  anything tagged `region=JAPAN`" is written once in those tools' own routing rules. A
-  `{{ tags }}` variable is also available in notification templates.
+- **Nodes and folders can carry tags, and they reach PagerDuty and Jira Service Management.** A tag
+  is a single label — `JAPAN`, `core`, `松山本社` — not a `key=value` pair, and a node can carry as
+  many as it needs, unlike an inventory folder of which it has exactly one. They are edited per node
+  in `Edit node`, and applied to many at once from the inventory tree's right-click menu
+  (`Tag N selected…`), which **adds to** what each node already carries rather than replacing it.
+  On the way out they ride in PagerDuty's `payload.custom_details.yagra_tags` (a list) and in JSM's
+  own `tags` field, so "page the Japan rota for anything tagged `JAPAN`" is written once in those
+  tools' own routing rules. A `{{ tags }}` variable is available in notification templates —
+  `{{ tags | join(', ') }}` to print them, `{% if 'JAPAN' in tags %}` to branch on one.
+- **A tag on a folder reaches every folder and node inside it.** Put `JAPAN` on the Japan site and
+  every device under it carries it — including ones discovered next month, which is what a one-time
+  bulk edit cannot do. It is resolved on every read rather than copied onto each node, so moving a
+  folder or editing a parent takes effect immediately instead of leaving stale copies behind. A
+  device that should be the exception can refuse an inherited tag from its own `Edit node` dialog,
+  and refusing one on a folder takes it away from that folder's whole subtree. The node's Overview
+  tab and the folder's detail pane both show which tags are the thing's own and which came from
+  above.
 
 ### Improvements
 
-- **`nodes.tags` finally has a way to be filled in.** The column, its index and three readers have
-  existed since the first migration, but nothing except a config-bundle import could write to it —
-  so the threshold and maintenance-window scopes that match on a tag could never match anything on
-  a deployment that had not imported one. Those two scopes are still not offered for *new* rules
-  (a folder group supersedes them there), but existing tag-scoped rules now have tags to find.
+- **`nodes.tags` finally has a way to be filled in.** The column and three readers have existed
+  since the first migration, but nothing except a config-bundle import could write to it — so the
+  threshold and maintenance-window scopes that match on a tag could never match anything on a
+  deployment that had not imported one. Those two scopes are still not offered for *new* rules
+  (a folder group supersedes them there), but existing tag-scoped rules now have tags to find, and
+  they match what a node **effectively** carries — its own plus everything its folder chain
+  supplies.
 - **Editing a node from the split view updates the row beside it.** On `Nodes ▸ All nodes`, saving
   the edit dialog from the right-hand pane refreshed the pane and left the tree on the left showing
   the previous values. Already true for the poll pool; it would have been far more visible for a

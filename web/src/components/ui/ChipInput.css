@@ -1,0 +1,56 @@
+/* Removable value chips plus an entry box (ADR-135 inc. 2).
+ *
+ * These rules are `.thresholds-chip`'s, moved here when the third copy of the same control was
+ * about to be written. Every value is a token — the one literal in the block it came from
+ * (`1px solid`) became `--border-width` on the way. */
+
+.chipinput {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.chipinput-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--space-1) / 2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chipinput-chip {
+  align-items: center;
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  font-size: var(--font-sm);
+  gap: calc(var(--space-1) / 2);
+  padding: 2px var(--space-1);
+  /* A label may be a phrase; let the row wrap rather than the word. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* A chip the save rules refuse — one migration 0109 can hand back, longer than the limit that now
+ * applies. Marked rather than hidden: the operator has to be able to see the thing they must
+ * delete. Paired with a `title`, so it is never colour alone. */
+.chipinput-chip-bad {
+  border-color: var(--status-critical);
+  color: var(--status-critical);
+}
+
+.chipinput-chip button {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: var(--font-md);
+  line-height: 1;
+  padding: 0;
+}
+
+.chipinput-chip button:hover {
+  color: var(--status-critical);
+}

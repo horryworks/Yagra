@@ -835,7 +835,11 @@ async fn coverage_facts(
             "failed to load groups",
         )
     })?;
-    Ok(CoverageFacts::of(&node, &edges))
+    Ok(CoverageFacts::of(
+        &node,
+        &edges,
+        &super::util::tag_resolver(admin).await,
+    ))
 }
 
 /// Re-derive every release against the coverage that is left, after this request removed some.

@@ -57,6 +57,9 @@ const group = (id: string, parent_id: string | null = null, pin?: string): NodeG
   effective_latitude: pin ? 35 : null,
   effective_longitude: pin ? 139 : null,
   geo_source: pin == null ? 'unset' : pin === id ? 'own' : 'inherited',
+  tags: [],
+  tags_excluded: [],
+  effective_tags: [],
   geo_group: pin ?? null,
   pool: null,
 });

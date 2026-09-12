@@ -327,39 +327,12 @@ html[data-viewport='mobile'] .nd-extract-row {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* Tag rows in "Edit node": key = value, plus the button that drops the row. Same shape as the
-   JSON-extraction rows above, including the mobile stack — two 44px-tall inputs side by side on a
-   phone leaves neither wide enough to read what is in it. */
+/* The tag block in "Edit node". One column now: the key/value grid and its mobile stack went with
+   the key (ADR-135 inc. 2), and a chip row wraps on its own at any width. */
 .nd-tags {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-}
-
-.nd-tag-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.4fr) auto;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.nd-tag-eq {
-  color: var(--text-tertiary);
-}
-
-html[data-viewport='mobile'] .nd-tag-row {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* The `=` reads as a separator between two boxes on one line; stacked, it is noise. */
-html[data-viewport='mobile'] .nd-tag-eq {
-  display: none;
-}
-
-/* The tag block's own label sits above the rows, so the add button needs a line of its own rather
-   than being stretched by the flex column. */
-.nd-tag-add {
-  display: flex;
 }
 
 /* Operator-written prose: the newlines they typed are the formatting they meant. */
@@ -377,18 +350,55 @@ html[data-viewport='mobile'] .nd-tag-eq {
   gap: var(--space-2);
 }
 
-.nd-tag-chip {
-  padding: 2px 8px;
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+/* `.nd-tag-chip` lived here and was deleted with the key=value shape (ADR-135 inc. 2). It was the
+   third independent implementation of one control — `.thresholds-chip` was the second — so the
+   display side is now `ui/Badge` (neutral outline: design-system.md's categorical type chip, never
+   a status colour) and the editable side is `ui/ChipInput`. */
+
+/* The heading over the inherited group in the overview. Said in words, not only in a tooltip:
+   ui-conventions R4 — an explanation available on hover alone is an explanation half the readers
+   never get. */
+.nd-tag-inherited-t {
+  margin-top: var(--space-2);
   font-size: var(--font-xs);
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
 }
 
-.nd-tag-chip b {
-  font-weight: 600;
-  color: var(--text-primary);
+/* The inherited/excluded block inside the Edit node dialog. */
+.nd-inherited-tags {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.nd-tag-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--space-1) / 2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nd-tag-badges li {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--space-1) / 2);
+}
+
+.nd-tag-badges button {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: var(--font-md);
+  line-height: 1;
+  padding: 0;
+}
+
+.nd-tag-badges button:hover {
+  color: var(--status-critical);
 }
 
 /* ---------------- Overview ---------------- */

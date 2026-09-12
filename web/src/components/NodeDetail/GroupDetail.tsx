@@ -8,6 +8,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { StatusDot } from '../ui/StatusDot';
+import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { HealthBar } from '../HealthBar/HealthBar';
 import { GroupIcon } from '../NodeTree/GroupIcon';
@@ -123,6 +124,37 @@ export function GroupDetail({
             {tally.total === 0 && <span className="nd-muted">{t('groupDetail.noNodes')}</span>}
           </div>
         </section>
+
+        {/* The folder's labels (ADR-135 inc. 2). Two marked groups, same as a node's overview: its
+            own and the ones it inherits from above. Hidden entirely when it carries neither — an
+            empty section would claim the operator had decided something they have not. The
+            inherited half is `effective_tags` minus `tags`, both resolved on the row by the
+            server, so nothing here walks the folder tree. */}
+        {group.effective_tags.length > 0 && (
+          <section>
+            <div className="nd-section-t">{t('groupDetail.tags')}</div>
+            {group.tags.length > 0 && (
+              <div className="nd-tag-chips">
+                {[...group.tags].sort((a, b) => a.localeCompare(b)).map((label) => (
+                  <Badge key={label}>{label}</Badge>
+                ))}
+              </div>
+            )}
+            {group.effective_tags.some((l) => !group.tags.includes(l)) && (
+              <>
+                <div className="nd-tag-inherited-t">{t('field.tagsInheritedFrom')}</div>
+                <div className="nd-tag-chips">
+                  {group.effective_tags
+                    .filter((l) => !group.tags.includes(l))
+                    .sort((a, b) => a.localeCompare(b))
+                    .map((label) => (
+                      <Badge key={label}>{label}</Badge>
+                    ))}
+                </div>
+              </>
+            )}
+          </section>
+        )}
 
         {/* The site's IP prefixes (ADR-100 decision 10). Drawn only when the folder has some,
             which for a Region — and for every folder on a deployment with no NetBox — is never.

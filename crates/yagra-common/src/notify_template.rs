@@ -24,7 +24,6 @@
 //! the context by the tests below.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fmt;
 
 /// Which point in an alert's life produced this notification.
@@ -141,12 +140,13 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
     },
     TemplateVariable {
         name: "tags",
-        description: "The node's tags, as an object — write `{{ tags.region }}` for one, or \
-                      `{{ tags | tojson }}` to put them all into a JSON body. Empty when the node \
-                      carries none, so reading a tag it does not have gives empty text rather \
-                      than an error. Unlike `group` (one inventory folder) a node may carry any \
-                      number of tags, which is what makes them usable for deciding who a page \
-                      should reach.",
+        description: "The node's tags, as a list of labels — write `{{ tags | join(', ') }}` to \
+                      print them, `{% if 'JAPAN' in tags %}` to branch on one, or \
+                      `{{ tags | tojson }}` to put them all into a JSON body. Includes the labels \
+                      the node inherits from its inventory folder and everything above it, so a \
+                      label hung on one folder reaches every alert raised beneath it. Empty when \
+                      the node carries none, and empty rather than absent when the alert is not \
+                      about a node at all.",
         always_present: true,
     },
     TemplateVariable {
@@ -304,20 +304,27 @@ pub struct AlertFacts {
     /// That upstream node's display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_cause_name: Option<String>,
-    /// The node's tags (ADR-135). Empty when it has none, or when the subject is not a node.
+    /// The node's **effective** labels (ADR-135 inc. 2): its own plus every one it inherits from
+    /// its inventory folder and that folder's ancestors, minus any it excludes. Empty when it
+    /// carries none, or when the subject is not a node.
     ///
-    /// 🚨 **The one nested value in this otherwise flat type, and the exception is principled.**
-    /// The rule above guards against a template reaching into a *Yagra-owned* shape that then
-    /// cannot change. The keys inside this map are the **operator's own**, and Yagra never renames
-    /// them — so the hazard the rule exists for is not present here.
+    /// A flat list, so the "flat by design" rule above is no longer bent here at all — the map
+    /// this used to be was the one nested value in this type, and its justification (the keys are
+    /// the operator's own, so Yagra can never rename them) went away with the keys.
     ///
     /// 🚨 **Always present, never `Option`.** The renderer runs minijinja in `Lenient` mode, where
-    /// an undefined *name* renders as empty text but an **attribute access on undefined is an
-    /// error** — so an `Option` would make `{{ tags.region }}` blow up the whole template (and
-    /// fall back to the built-in text) on every node that has no tags, which is most of them.
-    /// An empty map makes the same expression render empty, which is what a reader expects.
+    /// an undefined *name* renders as empty text but **iterating or indexing undefined is an
+    /// error** — so an `Option` would make `{% for t in tags %}` blow up the whole template (and
+    /// fall back to the built-in text) on every node that has no labels, which is most of them.
+    /// An empty list makes the same expression render nothing, which is what a reader expects.
+    ///
+    /// ⚠️ **A template written against the old map shape fails *quietly* rather than loudly.**
+    /// `{{ tags.region }}` was an attribute access on a map; against a sequence Lenient resolves
+    /// it to undefined and renders **empty text**. So an operator who wrote one gets a blank where
+    /// a value used to be, with nothing in the logs. That is why this shipped with a release note
+    /// rather than only a type change.
     #[serde(default)]
-    pub tags: BTreeMap<String, String>,
+    pub tags: Vec<String>,
 }
 
 /// A representative alert for previewing a template before it is saved.
@@ -364,13 +371,10 @@ pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
         flapping: false,
         root_cause_id: Some("d41f8b06-7c25-4e93-b0a8-5f6c2d19e874".to_owned()),
         root_cause_name: Some("edge-rtr-01".to_owned()),
-        // Two, not one: a template that writes `{{ tags | tojson }}` into a JSON body renders
-        // differently for a one-entry map than for a real one (the comma), and the preview exists
-        // so the operator sees what will actually be sent.
-        tags: BTreeMap::from([
-            ("region".to_owned(), "JAPAN".to_owned()),
-            ("role".to_owned(), "core".to_owned()),
-        ]),
+        // Two, not one: a template that writes `{{ tags | join(', ') }}` or `{{ tags | tojson }}`
+        // renders differently for a one-element list than for a real one (the separator), and the
+        // preview exists so the operator sees what will actually be sent.
+        tags: vec!["JAPAN".to_owned(), "core".to_owned()],
     }
 }
 
@@ -390,10 +394,10 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
         root_cause_id: None,
         root_cause_name: None,
         // Empty rather than inherited from the sample. `tags` is always *present*, so this is not
-        // an "optional fact" in the serialization sense — but a node with no folder and no profile
-        // is exactly the node that has no labels either, and this fixture is what proves
-        // `{{ tags.region }}` renders empty instead of erroring on one (see the field's doc).
-        tags: BTreeMap::new(),
+        // an "optional fact" in the serialization sense — but a node with no folder is exactly the
+        // node that inherits no labels either, and this fixture is what proves
+        // `{% for t in tags %}` renders nothing instead of erroring on one (see the field's doc).
+        tags: Vec::new(),
         ..sample_facts(event)
     }
 }

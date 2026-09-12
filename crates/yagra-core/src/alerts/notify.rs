@@ -218,8 +218,14 @@ fn pagerduty_body(
         // custom_details carries the full alert JSON (payload is pre-rendered JSON text).
         let mut details: serde_json::Value =
             serde_json::from_str(&notification.payload).unwrap_or(serde_json::Value::Null);
-        // The node's tags, under a namespaced key so a PagerDuty event rule can match on
-        // `custom_details.yagra_tags.region` (ADR-135).
+        // The node's effective labels, under a namespaced key so a PagerDuty event rule can match
+        // on them — `custom_details.yagra_tags contains JAPAN` (ADR-135 inc. 2).
+        //
+        // 🚨 **This was an object keyed by tag name until ADR-135 inc. 2 and is now an array.**
+        // A rule written against `custom_details.yagra_tags.region` stops matching, the incident
+        // is still created, and it routes to the default — no error anywhere. Nothing in this
+        // repository can detect that, which is why it is in the release notes; the lab has no
+        // PagerDuty channel to observe it on (ADR-083's remnant).
         //
         // ⚠️ **Only when the body is a JSON object.** The body may be an operator's template
         // output, which is theirs; inserting into a scalar or an array would mean replacing what
@@ -333,18 +339,19 @@ fn jsm_create_body(notification: &Notification) -> serde_json::Value {
         "source": "yagra",
     });
     // JSM's own `tags` field, which its alert policies and routing rules match on natively — so
-    // "page the Japan rota for anything tagged region=JAPAN" is written over there, where the
-    // on-call rota already lives (ADR-015, ADR-135 decision 8). The field was simply empty until
-    // there was a way to put a tag on a node.
+    // "page the Japan rota for anything tagged JAPAN" is written over there, where the on-call
+    // rota already lives (ADR-015, ADR-135 decision 8). The field was simply empty until there was
+    // a way to put a label on a node.
     //
-    // `key=value` strings because Opsgenie tags are a flat list, not a map. Omitted entirely when
-    // there are none: an empty array is a field the API has to be told to ignore.
+    // ✅ **This is the one surface the inc. 2 reshape makes simpler rather than more awkward.**
+    // Opsgenie tags have always been a flat list of strings, so the old shape had to flatten a map
+    // into `region=JAPAN` first; a label goes in as itself. ⚠️ A JSM policy matching the literal
+    // `region=JAPAN` must be changed to match `JAPAN`.
+    //
+    // Omitted entirely when there are none: an empty array is a field the API has to be told to
+    // ignore.
     if !notification.tags.is_empty() {
-        body["tags"] = serde_json::json!(notification
-            .tags
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>());
+        body["tags"] = serde_json::json!(notification.tags);
     }
     body
 }
@@ -1499,16 +1506,25 @@ mod tests {
             .is_none());
     }
 
-    /// The node's tags reach PagerDuty in `custom_details`, which is what an event rule can route
-    /// on (ADR-135 decision 9) — and the operator's own body is added to, never rewritten.
+    /// The node's labels reach PagerDuty in `custom_details`, which is what an event rule can
+    /// route on (ADR-135 decision 9) — and the operator's own body is added to, never rewritten.
+    ///
+    /// 🚨 **This test is the only evidence the shape is right.** The lab has no PagerDuty channel
+    /// (ADR-083's remnant), so nothing downstream of here has ever been observed.
     #[test]
     fn pagerduty_carries_the_nodes_tags_without_disturbing_the_body() {
-        let tags = std::collections::BTreeMap::from([("region".to_owned(), "JAPAN".to_owned())]);
-        let n = vendor_notification(Severity::Critical).with_tags(tags.clone());
+        let n = vendor_notification(Severity::Critical).with_tags(vec!["JAPAN".to_owned()]);
         let body = pagerduty_body("rk-secret", "trigger", &n, true);
+        // An ARRAY since ADR-135 inc. 2, not an object keyed by tag name. An event rule matches it
+        // with `contains`.
         assert_eq!(
-            body["payload"]["custom_details"]["yagra_tags"]["region"],
-            "JAPAN"
+            body["payload"]["custom_details"]["yagra_tags"]
+                .as_array()
+                .expect("yagra_tags is an array")
+                .iter()
+                .map(|v| v.as_str().expect("a string"))
+                .collect::<Vec<_>>(),
+            vec!["JAPAN"]
         );
         // What the body already said is still there, untouched.
         assert_eq!(body["payload"]["custom_details"]["metric"], "event:test");
@@ -1521,15 +1537,16 @@ mod tests {
         assert_eq!(body["payload"]["custom_details"], "just a string");
     }
 
-    /// The node's tags reach JSM through **its own** `tags` field, the one its alert policies
+    /// The node's labels reach JSM through **its own** `tags` field, the one its alert policies
     /// route on. It stays absent when there are none.
+    ///
+    /// Since ADR-135 inc. 2 they go in as themselves rather than as flattened `key=value` strings,
+    /// which is what Opsgenie's field wanted all along. ⚠️ A policy matching `region=JAPAN` has to
+    /// be changed to match `JAPAN`.
     #[test]
     fn jsm_carries_the_nodes_tags_in_its_native_field() {
-        let tags = std::collections::BTreeMap::from([
-            ("region".to_owned(), "JAPAN".to_owned()),
-            ("role".to_owned(), "core".to_owned()),
-        ]);
-        let n = vendor_notification(Severity::Critical).with_tags(tags);
+        let n = vendor_notification(Severity::Critical)
+            .with_tags(vec!["JAPAN".to_owned(), "core".to_owned()]);
         let body = jsm_create_body(&n);
         let sent: Vec<&str> = body["tags"]
             .as_array()
@@ -1537,13 +1554,13 @@ mod tests {
             .iter()
             .map(|v| v.as_str().expect("a string"))
             .collect();
-        assert_eq!(sent, vec!["region=JAPAN", "role=core"]);
+        assert_eq!(sent, vec!["JAPAN", "core"]);
 
         assert!(
             jsm_create_body(&vendor_notification(Severity::Critical))
                 .get("tags")
                 .is_none(),
-            "an untagged node must not send an empty tag list"
+            "an unlabelled node must not send an empty tag list"
         );
     }
 
@@ -1725,7 +1742,7 @@ mod tests {
             severity: Severity::Critical,
             summary: String::new(),
             payload: String::new(),
-            tags: std::collections::BTreeMap::new(),
+            tags: Vec::new(),
         };
         let node = NodeId::from(Uuid::from_u128(1));
         let url = jsm_close_url("https://api.example/v2", &notification(Subject::Node(node)));

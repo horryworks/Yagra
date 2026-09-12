@@ -250,13 +250,7 @@ fn render_node(n: &NodeFacts) -> String {
         let _ = write!(s, ", poller pool {pool}");
     }
     if !n.tags.is_empty() {
-        let tags = n
-            .tags
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let _ = write!(s, ", tags: {tags}");
+        let _ = write!(s, ", tags: {}", n.tags.join(" "));
     }
     s.push('\n');
     s
@@ -353,7 +347,7 @@ mod tests {
             vendor: Some("Cisco".to_owned()),
             model: Some("C9300".to_owned()),
             pool: Some("branch-osaka".to_owned()),
-            tags: vec![("role".to_owned(), "core".to_owned())],
+            tags: vec!["core".to_owned()],
         }
     }
 

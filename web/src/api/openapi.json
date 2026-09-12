@@ -10307,6 +10307,90 @@
         }
       }
     },
+    "/api/v1/node-groups/{id}/tags": {
+      "put": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "set_node_group_tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupTags"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The folder's labels were replaced"
+          },
+          "400": {
+            "description": "An empty label, one over 64 characters, one carrying a control character, or more than 32",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder, or not one this caller may act on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-names": {
       "post": {
         "tags": [
@@ -23208,14 +23292,11 @@
         ],
         "properties": {
           "add": {
-            "type": "object",
-            "description": "Tags to set on every named node. An existing key is overwritten; a key not named here is\nleft alone. Same validation as the single-node edit.",
-            "additionalProperties": {
+            "type": "array",
+            "items": {
               "type": "string"
             },
-            "propertyNames": {
-              "type": "string"
-            }
+            "description": "Labels to add to every named node. One a node already carries is a no-op, and one not named\nhere is left alone. Same validation as the single-node edit.\n\n⚠️ Adds to each node's **own** labels. A label a node inherits from its folder is not\ntouched by this, and cannot be removed by it."
           },
           "node_ids": {
             "type": "array",
@@ -23229,7 +23310,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Tag keys to remove from every named node. A key a node does not carry is not an error."
+            "description": "Labels to take off every named node. One a node does not carry is not an error.\n\n⚠️ Not length- or character-checked, for the reason `normalized_removals` records: a label\nalready stored may predate the rules that now apply to new ones."
           }
         }
       },
@@ -27622,6 +27703,9 @@
           "group_type",
           "sort_order",
           "geo_source",
+          "tags",
+          "tags_excluded",
+          "effective_tags",
           "prefixes"
         ],
         "properties": {
@@ -27639,6 +27723,13 @@
               "null"
             ],
             "format": "double"
+          },
+          "effective_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "This folder's labels **plus every ancestor's, minus its exclusions** — what it effectively\ncarries, and therefore what everything beneath it inherits. Resolved on every read and\nnever stored, the same call `effective_latitude`/`effective_longitude` above make and for\nthe same reason.\n\n🚨 **Shipped resolved on the row, following geo rather than pool.** `pool` is *not*\nresolved here, and the cost of that is visible: `web/src/lib/pool.ts` has to re-walk the\nfolder tree client-side, carrying a warning that it is only safe for form previews. A\nclient walk is also wrong for a group-scoped caller, whose breadcrumb ancestors arrive as\nnames with their content cleared.\n\nThere is deliberately no `tag_source` beside this: unlike a pin or a pool, a label has no\nsingle supplier, and the one question a screen asks — *which of these are mine* — is\n`effective_tags` minus `tags`, on the row, with no walk."
           },
           "geo_group": {
             "type": [
@@ -27702,6 +27793,40 @@
             "type": "number",
             "format": "double",
             "description": "Manual order within the parent scope (the UI sorts siblings by this, then by name)."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels stored **on this folder** (ADR-135 inc. 2, migration 0110). Every folder and node\nbeneath it carries them too — see `effective_tags`."
+          },
+          "tags_excluded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels this folder refuses to inherit from its own ancestors. Shown in full, including\nentries naming a label nothing currently supplies: an exclusion that cannot be seen cannot\nbe undone."
+          }
+        }
+      },
+      "GroupTags": {
+        "type": "object",
+        "description": "The folder's labels, in full (ADR-135 inc. 2).\n\n⚠️ **Whole value, not a diff**, and **a sub-resource rather than a field on `GroupBody`** — the\nsame shape `geo` and `prefixes` chose, for three reasons and the first settles it:\n\n1. **Scoping.** This is `GroupFiltered` + `require_visible_group`, because a folder's labels\n   reach every node under it and `manage_config` is held by Operator, who can be group-scoped\n   (ADR-131 決定 8). `PUT /node-groups/{id}` claims `ADMIN_CFG` and takes no `Scoped`; putting\n   labels on its body would mean either widening that route's claim — changing rename, move and\n   re-pool for everyone — or shipping a scope-blind label write.\n2. **Three-state cost.** `GroupBody.pool` is already an `Option<String>` whose doc has to\n   explain that absent means unchanged, and `GroupModal` always sends it for exactly that\n   reason. A second such field doubles the trap ADR-135 決定 4 exists for.\n3. **The dialog.** A per-label `DELETE` would act the moment ✕ is clicked — before Save, and\n   with no way back. Clearing every label is `{\"tags\": []}`.",
+        "properties": {
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels this folder supplies to its whole subtree. Same rules as a node's: free-form, at\nmost 64 characters each, at most 32 of them."
+          },
+          "tags_excluded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels this folder refuses to inherit from its own ancestors — and therefore takes away\nfrom everything beneath it too. Not length- or character-checked, for the reason\n`api::nodes::normalized_removals` records."
           }
         }
       },
@@ -30353,16 +30478,23 @@
           },
           "tags": {
             "type": [
-              "object",
+              "array",
               "null"
             ],
-            "description": "The node's grouping tags. **Absent** = leave them unchanged; otherwise **the whole map is\nreplaced** by what is sent — the edit dialog shows every tag and resends every tag, so a\nreplacement is what the operator sees. `{}` clears them all.\n\n⚠️ To add one tag to many nodes without knowing what else they carry, use\n`POST /api/v1/nodes/tags`, which **merges**. Replacing from a bulk caller would silently\nwipe labels it never saw.\n\n🚨 A tag's **value** is what a `ScopeLevel::Group` threshold and a `WindowScope::Group`\nmaintenance window match on; the **key is discarded** by both. So `region=JAPAN` is matched\nby a rule scoped to `JAPAN`, never by one scoped to `region=JAPAN` (ADR-135 decision 6).",
-            "additionalProperties": {
+            "items": {
               "type": "string"
             },
-            "propertyNames": {
+            "description": "The node's own labels. **Absent** = leave them unchanged; otherwise **the whole list is\nreplaced** by what is sent — the edit dialog shows every label and resends every label, so\na replacement is what the operator sees. `[]` clears them all.\n\nFree-form strings of at most 64 characters, at most 32 of them; trimmed, de-duplicated and\nsorted by the server. A label is what a `ScopeLevel::Group` threshold and a\n`WindowScope::Group` maintenance window match on.\n\n⚠️ This sets only what the node itself carries. Labels it inherits from its folder are\nchanged on the folder (`PUT /api/v1/node-groups/{id}/tags`) or refused here with\n`tags_excluded`.\n\n⚠️ To add one label to many nodes without knowing what else they carry, use\n`POST /api/v1/nodes/tags`, which **merges**. Replacing from a bulk caller would silently\nwipe labels it never saw."
+          },
+          "tags_excluded": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
               "type": "string"
-            }
+            },
+            "description": "Labels this node refuses to inherit from its folder chain. Same three-state and\nwhole-value contract as `tags`; `[]` clears the refusals.\n\n⚠️ **Not length- or character-checked**, unlike `tags`. A label already in the database may\npredate those rules, and refusing to let one be excluded because it is too long would make\nexactly the wrong labels unrefusable. Only trimmed and de-duplicated.\n\nAn entry naming a label no folder currently supplies is kept, not dropped: if an ancestor\nre-adds it later, the refusal still holds."
           },
           "vendor": {
             "type": [
@@ -30400,7 +30532,9 @@
           "address",
           "kind",
           "snmp_configured",
-          "tags"
+          "tags",
+          "inherited_tags",
+          "tags_excluded"
         ],
         "properties": {
           "address": {
@@ -30434,6 +30568,13 @@
           },
           "id": {
             "$ref": "#/components/schemas/NodeId"
+          },
+          "inherited_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The labels this node gets from its inventory folder and that folder's ancestors, already\nminus the ones it excludes and minus anything it carries itself (ADR-135 inc. 2). Sorted.\n\nResolved on every read and never stored — a copy written onto the node row would go stale\nthe moment a parent is edited or a folder is moved, which is the same call folder-pool and\nmap-coordinate inheritance already made.\n\nThe screen draws `tags` and these as two marked groups; a chip here is removed by adding it\nto `tags_excluded`, not by editing `tags`."
           },
           "kind": {
             "$ref": "#/components/schemas/NodeKind",
@@ -30492,14 +30633,18 @@
             "description": "Whether SNMP polling is **configured** for this node — not whether it is answering.\n\n🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the\ndeployment-wide `YAGRA_SNMP_COMMUNITY` for every node with no bound credential, so on such a\ndeployment a `credential_id` of `null` still means a device that is walked, has interface\nrows and has neighbours. The WebUI uses this to hide the tabs whose only data source is an\nSNMP walk (Interfaces, Neighbors — ADR-119); deriving it client-side would hide them on\nexactly the nodes that have the data.\n\n⚠️ Over-reports rather than under-reports — see\n`PollDispatcher::snmp_configured_for`, which is the one place the rule lives."
           },
           "tags": {
-            "type": "object",
-            "description": "The node's grouping tags (ADR-135). Empty when it has none.\n\nAlso detail-only, and for a second reason beyond size: the tree does not display them, and\n`NodeSummaryDto` on the MCP side has carried them since before any writer existed.",
-            "additionalProperties": {
+            "type": "array",
+            "items": {
               "type": "string"
             },
-            "propertyNames": {
+            "description": "The labels stored **on this node** (ADR-135). Empty when it has none, sorted.\n\nAlso detail-only, and for a second reason beyond size: the tree does not display them, and\n`NodeSummaryDto` on the MCP side has carried them since before any writer existed.\n\n⚠️ This is what the edit dialog writes back, so it is the node's OWN set — not what it\neffectively carries. The inherited half is `inherited_tags` below."
+          },
+          "tags_excluded": {
+            "type": "array",
+            "items": {
               "type": "string"
-            }
+            },
+            "description": "Labels this node refuses to inherit (ADR-135 inc. 2). Sorted.\n\nShown in full, including entries naming a label nothing currently supplies: an exclusion\nthat cannot be seen cannot be undone, and it stays meaningful because an ancestor may\nre-add that label later."
           },
           "url_check": {
             "oneOf": [
@@ -30552,18 +30697,9 @@
           "tags": {
             "type": "array",
             "items": {
-              "type": "array",
-              "items": false,
-              "prefixItems": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "string"
-                }
-              ]
+              "type": "string"
             },
-            "description": "Operator-set grouping attributes, capped and sorted for a deterministic prompt."
+            "description": "Operator-set labels, capped for a deterministic prompt.\n\n🚨 **Capped at [`MAX_TAGS`], and the ORDER decides what survives.** `TagResolver::effective`\nreturns the node's own labels first and its inherited ones second, precisely so that a node\nsitting under three labelled folders cannot have its own labels pushed out of its own\nincident prompt. Sorting the union before capping would do exactly that, silently."
           },
           "vendor": {
             "type": [
@@ -30636,6 +30772,20 @@
           "sort_order": {
             "type": "number",
             "format": "double"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels this folder supplies to everything beneath it (ADR-135 inc. 2). Absent in a bundle\nwritten by an older deployment."
+          },
+          "tags_excluded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels this folder refuses to inherit from its own ancestors."
           }
         }
       },
@@ -30876,14 +31026,18 @@
             "format": "double"
           },
           "tags": {
-            "type": "object",
-            "description": "The node's grouping tags.\n\n🚨 **Typed, not `serde_json::Value`, since ADR-135 — and the loose version was a live\nhazard.** `nodes.tags` is read back as `Json<BTreeMap<String, String>>` by\n`repo::node_from_row`, so a bundle carrying any other JSON shape made that `try_get` fail\n— and it fails for *every* reader of that row, which is the node list, the alert engine's\nconfig rebuild and the scheduler's sweep. This module's own test fixture wrote\n`json!([\"core\"])`, an array, so the shape was not hypothetical. Typing it moves the failure\nto the import's deserialization, where it is one rejected bundle instead of one unreadable\nnode.",
-            "additionalProperties": {
+            "type": "array",
+            "items": {
               "type": "string"
             },
-            "propertyNames": {
+            "description": "The node's own labels.\n\n🚨 **Typed, not `serde_json::Value`, since ADR-135 — and the loose version was a live\nhazard.** `nodes.tags` is decoded into a fixed shape by `repo::node_from_row`, so a bundle\ncarrying any other JSON made that `try_get` fail — for *every* reader of that row, which is\nthe node list, the alert engine's config rebuild and the scheduler's sweep. This module's\nown test fixture wrote `json!([\"core\"])`, so the shape was not hypothetical.\n\n🚨 **Read leniently, and this is the ONE compatibility promise ADR-135 inc. 2 keeps.**\nEverything else about labels was free to change because no release ever carried one — but a\nbundle is a *file*, and one written by v0.3.16 or earlier holds `\"tags\": {}` or a whole\nkey→value object. [`de_labels`] accepts both that and the list this version writes."
+          },
+          "tags_excluded": {
+            "type": "array",
+            "items": {
               "type": "string"
-            }
+            },
+            "description": "Labels this node refuses to inherit from its folder chain (ADR-135 inc. 2). Absent in a\nbundle written by an older deployment, which reads as \"refuses nothing\"."
           },
           "vendor": {
             "type": [

@@ -323,6 +323,12 @@ impl YagraMcp {
             Some(admin) => crate::api::nodes::node_kinds(admin, &uuids).await,
             None => HashMap::new(),
         };
+        // Built once for the whole page, like `kinds` above — a resolver per node would be one
+        // whole-table read per row.
+        let tags = match self.state.admin.as_ref() {
+            Some(admin) => crate::api::util::tag_resolver(admin).await,
+            None => crate::tagres::TagResolver::empty(),
+        };
         let out: Vec<NodeSummaryDto> = nodes
             .iter()
             .map(|n| {
@@ -333,6 +339,7 @@ impl YagraMcp {
                         .get(&n.id.as_uuid())
                         .copied()
                         .unwrap_or(NodeKind::Device),
+                    &tags,
                 )
             })
             .collect();
@@ -444,7 +451,12 @@ impl YagraMcp {
             .copied()
             .unwrap_or(NodeKind::Device);
         let dto = NodeStatusDto {
-            node: NodeSummaryDto::from_node(&node, Some(state), kind),
+            node: NodeSummaryDto::from_node(
+                &node,
+                Some(state),
+                kind,
+                &crate::api::util::tag_resolver(admin).await,
+            ),
             // The same one rule the REST detail view reads, from the same holder — never
             // `node.credential`, which misses the deployment-wide community fallback (ADR-119).
             snmp_configured: admin.dispatcher.snmp_configured_for(&node),

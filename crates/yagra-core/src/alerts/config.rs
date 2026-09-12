@@ -97,6 +97,12 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     async fn nodes(&self) -> anyhow::Result<Vec<yagra_common::Node>>;
     /// `(group, parent, pool)` for every folder group — folder-pool inheritance (migration 0054).
     async fn folder_pools(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>>;
+    /// `(group, parent, tags, tags_excluded)` for every folder group — label inheritance
+    /// (migration 0110). A second scan of `node_groups` beside `folder_pools`, and left that way
+    /// deliberately: the table is hundreds of rows read every 30s, and a combined
+    /// "everything inheritable about a folder" method would be one seam answering two unrelated
+    /// questions, which is what makes a fake hard to reason about.
+    async fn folder_tags(&self) -> anyhow::Result<Vec<crate::groups::LabelRow>>;
     /// `(group, parent)` for every folder group, for the ancestor walk.
     async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>>;
     /// Metric names that publish one series per interface (ADR-076).
@@ -128,6 +134,9 @@ impl AlertConfigSources for LiveConfigSources {
     }
     async fn folder_pools(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
         self.groups.pool_rows().await
+    }
+    async fn folder_tags(&self) -> anyhow::Result<Vec<crate::groups::LabelRow>> {
+        self.groups.tag_rows().await
     }
     async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
         self.groups.edges().await
@@ -183,6 +192,22 @@ pub(crate) async fn load_alert_config_base(
             .await
             .map_err(|e| anyhow::anyhow!("load folder pools: {e}"))?,
     );
+    // Folder-label inheritance (ADR-135 inc. 2): a label on a folder reaches every folder and node
+    // beneath it, so `ScopeLevel::Group` matches on what a node EFFECTIVELY carries, not on its
+    // own column.
+    //
+    // 🚨 **A failed read is propagated, never treated as "no labels".** Narrowing `tag_groups` is
+    // not a display inaccuracy here — a threshold rule that stops resolving takes its check's open
+    // alerts down with it (ADR-080), so the whole rebuild must fail and leave the last good
+    // snapshot in place. ⚠️ `notify_facts.rs` treats the identical failure the *opposite* way and
+    // is also right: there the labels ride along on a notification that has to go out regardless.
+    // Each site reads like a bug from the other's perspective; both have their reason written down.
+    let tags = crate::tagres::TagResolver::build(
+        sources
+            .folder_tags()
+            .await
+            .map_err(|e| anyhow::anyhow!("load folder tags: {e}"))?,
+    );
     // Folder-group threshold scope (ADR-075 増分 3): a rule on a group covers every group inside
     // it, so each node needs its group plus every group above it. Read the edges once — the walk
     // is per-node and `group_ancestors` is a linear scan of this slice.
@@ -212,9 +237,15 @@ pub(crate) async fn load_alert_config_base(
             node.id,
             NodeMeta {
                 profile: node.profile.as_ref().map(ToString::to_string),
-                // Tag values (threshold scope) and the folder group (RBAC visibility) are two
+                // Labels (threshold scope) and the folder group (RBAC visibility) are two
                 // different things — see the `NodeMeta` docs before touching either.
-                tag_groups: node.tags.values().cloned().collect(),
+                //
+                // The EFFECTIVE set since ADR-135 inc. 2: what the node carries plus what its
+                // folder chain supplies. ⚠️ That widens every stored `ScopeLevel::Group` rule the
+                // first time somebody labels a folder. Safe exactly once, and this was the once:
+                // no released version could write a label at all, so no such rule can be matching
+                // anything today.
+                tag_groups: tags.effective_set(node),
                 folder_group: node.group.map(|g| g.as_uuid()),
                 folder_chain: node.group.map_or_else(Vec::new, |g| {
                     let own = g.as_uuid();
@@ -271,8 +302,20 @@ async fn resolve_maintenance(
         tracing::warn!(error = %e, "failed to load maintenance windows");
         Vec::new()
     });
+    // Best-effort, matching the two reads around it: `active_scopes` above and `groups.edges()`
+    // below both warn and carry on rather than failing the refresh. ⚠️ The direction of that
+    // degradation is worth naming — losing folder labels *narrows* maintenance coverage, so a node
+    // inside a window could be alerted on. It is the pre-existing call for this function (the
+    // folder-group half already behaves this way), not a new one made here.
+    let tags = match groups.tag_rows().await {
+        Ok(rows) => crate::tagres::TagResolver::build(rows),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load folder labels for maintenance scopes");
+            crate::tagres::TagResolver::empty()
+        }
+    };
     let named = maintenance::nodes_named_by_a_window(&scopes, nodes);
-    let mut inherited = maintenance::nodes_covered_by_a_class_window(&scopes, nodes);
+    let mut inherited = maintenance::nodes_covered_by_a_class_window(&scopes, nodes, &tags);
     let folder_groups: Vec<Uuid> = scopes
         .iter()
         .filter(|(level, _)| *level == maintenance::WindowScope::FolderGroup)
@@ -532,16 +575,18 @@ mod tests {
         Thresholds,
         Nodes,
         FolderPools,
+        FolderTags,
         GroupEdges,
         PerInterface,
     }
 
-    /// Every fallible read. A seventh added to the trait makes this list wrong in a way the
+    /// Every fallible read. An eighth added to the trait makes this list wrong in a way the
     /// compiler cannot see, which is why the walk below also counts against the trait's own text.
-    const FALLIBLE: [Fails; 5] = [
+    const FALLIBLE: [Fails; 6] = [
         Fails::Thresholds,
         Fails::Nodes,
         Fails::FolderPools,
+        Fails::FolderTags,
         Fails::GroupEdges,
         Fails::PerInterface,
     ];
@@ -586,6 +631,10 @@ mod tests {
         }
         async fn folder_pools(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
             self.refuse(Fails::FolderPools)?;
+            Ok(Vec::new())
+        }
+        async fn folder_tags(&self) -> anyhow::Result<Vec<crate::groups::LabelRow>> {
+            self.refuse(Fails::FolderTags)?;
             Ok(Vec::new())
         }
         async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {

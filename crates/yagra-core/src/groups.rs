@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use uuid::Uuid;
 
@@ -135,6 +135,28 @@ pub struct GroupSummary {
     /// from the nearest ancestor that sets one, else the default pool. A node's own `pool` still
     /// wins — see [`crate::poolres`].
     pub pool: Option<String>,
+    /// Labels stored **on this folder** (ADR-135 inc. 2, migration 0110). Every folder and node
+    /// beneath it carries them too — see `effective_tags`.
+    pub tags: Vec<String>,
+    /// Labels this folder refuses to inherit from its own ancestors. Shown in full, including
+    /// entries naming a label nothing currently supplies: an exclusion that cannot be seen cannot
+    /// be undone.
+    pub tags_excluded: Vec<String>,
+    /// This folder's labels **plus every ancestor's, minus its exclusions** — what it effectively
+    /// carries, and therefore what everything beneath it inherits. Resolved on every read and
+    /// never stored, the same call `effective_latitude`/`effective_longitude` above make and for
+    /// the same reason.
+    ///
+    /// 🚨 **Shipped resolved on the row, following geo rather than pool.** `pool` is *not*
+    /// resolved here, and the cost of that is visible: `web/src/lib/pool.ts` has to re-walk the
+    /// folder tree client-side, carrying a warning that it is only safe for form previews. A
+    /// client walk is also wrong for a group-scoped caller, whose breadcrumb ancestors arrive as
+    /// names with their content cleared.
+    ///
+    /// There is deliberately no `tag_source` beside this: unlike a pin or a pool, a label has no
+    /// single supplier, and the one question a screen asks — *which of these are mine* — is
+    /// `effective_tags` minus `tags`, on the row, with no walk.
+    pub effective_tags: Vec<String>,
     /// The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a
     /// folder nothing has attached one to, which is every folder in a deployment with no NetBox.
     ///
@@ -435,6 +457,101 @@ pub fn resolve_nearest_ancestor<T: Clone>(
     resolved
 }
 
+/// One folder's label row as every reader of the folder tree sees it:
+/// `(id, parent_id, labels added here, labels refused here)`.
+///
+/// An alias rather than the tuple spelled out, because it crosses four boundaries —
+/// [`GroupRepo::tag_rows`], the `AlertConfigSources` seam, [`crate::tagres::TagResolver::build`]
+/// and [`accumulate_ancestor_labels`] — and a four-element tuple written four times is four places
+/// to get the order wrong with no compiler help (the last two elements are the same type).
+pub type LabelRow = (Uuid, Option<Uuid>, Vec<String>, Vec<String>);
+
+/// For every group, the labels it and **every** ancestor supply, minus the ones each level
+/// excludes — the accumulating twin of [`resolve_nearest_ancestor`] (ADR-135 inc. 2).
+///
+/// `rows` are `(id, parent_id, labels added here, labels refused here)`. The result maps every
+/// group to the set it effectively carries, including groups whose whole chain is empty.
+///
+/// 🚨 **A second function rather than a flag on the first, and the reason is structural.**
+/// [`resolve_nearest_ancestor`] stops walking at the first group carrying a value, and that stop
+/// *is* "nearest wins" — there is no argument that makes one function also accumulate. What must
+/// not be written twice is the part that is easy to get subtly wrong, so the cycle guard, the
+/// [`MAX_GROUP_DEPTH`] bound and the memoization are written the same way here, and
+/// `the_two_resolvers_disagree_about_a_farther_ancestor` runs both over one forest so the reason
+/// two exist is executable rather than asserted in this comment.
+///
+/// **The fold at each level is `(what came from above − excluded here) ∪ added here`** — remove
+/// first, add second. That ordering is what makes "exclude a label and also set it here" mean the
+/// obvious thing instead of being a contradiction, and it is why a group cannot exclude its own
+/// label (it would be re-added immediately; the way to drop one is to stop adding it).
+///
+/// Memoization is by **unwind** rather than path compression: every group on a chain resolves to a
+/// *different* set, so the walk goes up to the first memoized ancestor and then fills back down,
+/// which is one walk amortized per group. Every group is inserted **including the empty set** —
+/// an all-empty forest is the state every deployment starts in, and skipping empties there would
+/// re-walk every chain (the cost `resolve_nearest_ancestor`'s doc admits to).
+///
+/// 🚨 **A cycle or an over-deep chain keeps what was collected below it** and warns, rather than
+/// degrading to "nothing inherited" the way pool resolution does. Deliberate: a label decides
+/// which threshold rules and which maintenance windows apply to a node, so silently dropping a
+/// site's labels because somebody made a loop three levels up is the *narrowing* failure ADR-080
+/// names — while inventing labels nobody set would be the widening one. Keeping exactly what the
+/// bounded walk saw does neither.
+pub fn accumulate_ancestor_labels(
+    rows: impl IntoIterator<Item = LabelRow>,
+) -> HashMap<Uuid, BTreeSet<String>> {
+    /// One row, keyed out of its id: the parent to walk to, and the two lists to fold.
+    type Own = (Option<Uuid>, Vec<String>, Vec<String>);
+    let own: HashMap<Uuid, Own> = rows
+        .into_iter()
+        .map(|(id, parent, add, remove)| (id, (parent, add, remove)))
+        .collect();
+
+    let mut resolved: HashMap<Uuid, BTreeSet<String>> = HashMap::new();
+    for &start in own.keys() {
+        if resolved.contains_key(&start) {
+            continue; // already answered while unwinding an earlier group's chain
+        }
+        // Walk up, recording the path, until a memoized ancestor or the top.
+        let mut chain: Vec<Uuid> = Vec::new();
+        let mut seen: HashSet<Uuid> = HashSet::new();
+        let mut acc: BTreeSet<String> = BTreeSet::new();
+        let mut cur = Some(start);
+        let mut depth = 0usize;
+        while let Some(id) = cur {
+            if let Some(found) = resolved.get(&id) {
+                acc = found.clone();
+                break;
+            }
+            if !seen.insert(id) || depth > MAX_GROUP_DEPTH {
+                tracing::warn!(
+                    group = %id,
+                    "node group ancestry is cyclic or deeper than the supported bound — \
+                     resolving labels from the part of the chain already walked"
+                );
+                break;
+            }
+            let Some((parent, _, _)) = own.get(&id) else {
+                break; // dangling parent_id: nothing more to inherit from
+            };
+            chain.push(id);
+            cur = *parent;
+            depth += 1;
+        }
+        // Shallowest first, so each group sees everything above it before its own turn.
+        for id in chain.into_iter().rev() {
+            if let Some((_, add, remove)) = own.get(&id) {
+                for r in remove {
+                    acc.remove(r);
+                }
+                acc.extend(add.iter().cloned());
+            }
+            resolved.insert(id, acc.clone());
+        }
+    }
+    resolved
+}
+
 /// Where a group's effective map position came from.
 // The geo twin of `crate::poolres::PoolSource`, minus a node level (nodes have no coordinates)
 // and minus a default (there is no implicit place on Earth).
@@ -492,6 +609,29 @@ pub fn resolve_group_geo(groups: &mut [GroupSummary]) {
     }
 }
 
+/// Fill every row's `effective_tags` from its own labels plus every ancestor's (ADR-135 inc. 2).
+///
+/// The label twin of [`resolve_group_geo`], and it follows that one rather than `pool` on purpose:
+/// resolving here means every client gets the answer on the row and none of them has to walk the
+/// folder tree. `pool` did not, and `web/src/lib/pool.ts` is the cost — a second implementation of
+/// the inheritance rule, in another language, that is only safe for form previews.
+///
+/// Pure, and resolved on read rather than materialized, for the same reason: a stored copy goes
+/// stale the moment a parent is edited or a folder is moved.
+pub fn resolve_group_tags(groups: &mut [GroupSummary]) {
+    let resolved = accumulate_ancestor_labels(
+        groups
+            .iter()
+            .map(|g| (g.id, g.parent_id, g.tags.clone(), g.tags_excluded.clone())),
+    );
+    for g in groups.iter_mut() {
+        g.effective_tags = resolved
+            .get(&g.id)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default();
+    }
+}
+
 /// A placement is both coordinates or neither — a row with only one is unplaced, not half-placed.
 /// The write path (`PUT /node-groups/{id}/geo`) sets and clears them together, so a lone value is
 /// legacy or hand-edited data; treating it as placed would put a pin on the prime meridian.
@@ -522,7 +662,8 @@ impl GroupRepo {
     /// whole table, which is precisely what this query already returns.
     pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
         let rows = sqlx::query(
-            "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool \
+            "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool, \
+                    tags, tags_excluded \
              FROM node_groups ORDER BY sort_order, name, id",
         )
         .fetch_all(&self.pool)
@@ -545,6 +686,10 @@ impl GroupRepo {
                     geo_source: GeoSource::Unset,
                     geo_group: None,
                     pool: row.try_get("pool")?,
+                    tags: row.try_get("tags")?,
+                    tags_excluded: row.try_get("tags_excluded")?,
+                    // Overwritten wholesale by `resolve_group_tags` below, like the geo pair.
+                    effective_tags: Vec::new(),
                     // Filled from the second query below: one round trip for the whole tree
                     // rather than a lateral join, because most deployments have no rows here at
                     // all and the empty answer is then a single index-less scan of nothing.
@@ -553,6 +698,7 @@ impl GroupRepo {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         resolve_group_geo(&mut groups);
+        resolve_group_tags(&mut groups);
         self.attach_prefixes(&mut groups).await?;
         Ok(groups)
     }
@@ -894,6 +1040,46 @@ impl GroupRepo {
             .collect()
     }
 
+    /// The `(id, parent_id, tags, tags_excluded)` rows, for building a
+    /// [`crate::tagres::TagResolver`] — the twin of [`Self::pool_rows`], read whole for the same
+    /// reason (ADR-135 inc. 2).
+    pub async fn tag_rows(&self) -> anyhow::Result<Vec<LabelRow>> {
+        let rows = sqlx::query("SELECT id, parent_id, tags, tags_excluded FROM node_groups")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("id")?,
+                    row.try_get("parent_id")?,
+                    row.try_get("tags")?,
+                    row.try_get("tags_excluded")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Replace a folder's own labels and the ones it refuses to inherit, as one whole value
+    /// (ADR-135 inc. 2). Returns whether the folder exists.
+    ///
+    /// A whole-value write for the reason `set_prefixes` records: the editor is a dialog with a
+    /// Save button, so a per-label `DELETE` would act the moment ✕ is clicked — before Save, and
+    /// with no way back.
+    pub async fn set_tags(
+        &self,
+        id: Uuid,
+        tags: &[String],
+        excluded: &[String],
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE node_groups SET tags = $2, tags_excluded = $3 WHERE id = $1")
+            .bind(id)
+            .bind(tags)
+            .bind(excluded)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// The `(id, parent_id, pool)` rows, for building a [`crate::poolres::PoolResolver`]. Read
     /// whole (the table is small) so effective-pool resolution costs one query, not one per node.
     pub async fn pool_rows(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
@@ -1161,6 +1347,9 @@ mod tests {
             geo_source: GeoSource::Unset,
             geo_group: None,
             pool: None,
+            tags: Vec::new(),
+            tags_excluded: Vec::new(),
+            effective_tags: Vec::new(),
             prefixes: Vec::new(),
         }
     }

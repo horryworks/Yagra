@@ -13,6 +13,10 @@ import { asGroupType, groupOptions, subtreeGroupIds } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
 import { inheritedGroupPool, isValidPoolName } from '../../lib/pool';
 import { geoBodyFrom, geoChanged, geoDraftFrom, inheritedPin } from './geoFields';
+import { tagDraftFrom, tagsChanged } from './tagFields';
+import { ChipInput } from '../ui/ChipInput';
+import { labelsAreValid } from '../ui/labelRules';
+import { Badge } from '../ui/Badge';
 import {
   prefixBodyFrom,
   prefixDraftFrom,
@@ -22,6 +26,7 @@ import {
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { TextInput, Select, RequiredMark } from '../ui/Field';
+import { IconButton } from '../ui/IconButton';
 import './GroupModal.css';
 
 /** Add/edit a group: name, type, and parent (parent doubles as 'move'). */
@@ -58,6 +63,9 @@ export function GroupModal({
   /** The folder's hand-made IP ranges (ADR-131). Same shape as the pin: a sub-resource with its
    *  own endpoint, saved after the group body, and skipped entirely when untouched. */
   const [prefixRows, setPrefixRows] = useState(() => prefixDraftFrom(state.group));
+  /** The folder's labels (ADR-135 inc. 2). The third sub-resource, saved on the same terms as the
+   *  pin and the ranges: its own endpoint, after the group body, skipped when untouched. */
+  const [tagDraft, setTagDraft] = useState(() => tagDraftFrom(state.group));
   /** Ranges a NetBox sync maintains — shown, never editable. */
   const syncRows = syncOwnedRows(state.group);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +79,13 @@ export function GroupModal({
   // would let the dialog and the map disagree.
   const pinnedAtId = inheritedPin(state.group, geo, parent || null);
   const pinnedAt = pinnedAtId ? groups.find((g) => g.id === pinnedAtId) : undefined;
+  // What the chosen parent supplies, minus this draft's own labels and refusals. Taken from the
+  // parent's server-resolved `effective_tags`, so the folder tree is walked once on the server and
+  // never here — and so re-parenting the folder in this dialog updates the preview at once.
+  const tagsInvalid = !labelsAreValid(tagDraft.tags);
+  const inheritedTags = (groups.find((g) => g.id === parent)?.effective_tags ?? []).filter(
+    (l) => !tagDraft.tagsExcluded.includes(l) && !tagDraft.tags.includes(l),
+  );
 
   // For an edit, a group cannot be parented under itself or any of its descendants.
   //
@@ -123,6 +138,12 @@ export function GroupModal({
         if (prefixesChanged(prefixRows, state.group)) {
           await api.setNodeGroupPrefixes(id, ranges.body);
         }
+        // Same again for the labels. ⚠️ The changed-check is order-insensitive (`tagFields.ts`):
+        // the chip input appends, so a label removed and re-added would otherwise read as a change
+        // and put an audit row in for a write that alters nothing.
+        if (tagsChanged(tagDraft, state.group)) {
+          await api.setNodeGroupTags(id, tagDraft.tags, tagDraft.tagsExcluded);
+        }
       })
       .then(onSaved)
       .catch((e: unknown) => {
@@ -140,7 +161,11 @@ export function GroupModal({
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t('common:actions.cancel')}
           </Button>
-          <Button variant="primary" onClick={save} disabled={!name.trim() || busy || poolInvalid}>
+          <Button
+            variant="primary"
+            onClick={save}
+            disabled={!name.trim() || busy || poolInvalid || tagsInvalid}
+          >
             {t('common:actions.save')}
           </Button>
         </>
@@ -184,6 +209,56 @@ export function GroupModal({
             {poolInvalid ? t('field.poolInvalid') : t('group.poolHint')}
           </span>
         </label>
+        {/* Not wrapped in a `<label>`: that gives every control inside it the same accessible name
+            and sends a click on the text to whichever came first. The chip input carries its own
+            `aria-label`. */}
+        <div className="modal-field">
+          <span className="modal-field-label">{t('group.tags')}</span>
+          <ChipInput
+            value={tagDraft.tags}
+            onChange={(next) => setTagDraft((prev) => ({ ...prev, tags: next }))}
+            placeholder={t('field.tagPlaceholder')}
+            inputLabel={t('group.tags')}
+          />
+          <span className="form-hint">{t('group.tagsHint')}</span>
+          {/* What this folder itself inherits, and what it refuses. Server-resolved on the row
+              (`effective_tags` minus `tags`), so there is no client-side walk of the tree here —
+              the thing `web/src/lib/pool.ts` has to do for the pool, with a warning attached. */}
+          {inheritedTags.length > 0 && (
+            <>
+              <span className="modal-field-label">{t('field.tagsInherited')}</span>
+              <ul className="nd-tag-badges">
+                {inheritedTags.map((label) => (
+                  <li key={label}>
+                    <Badge>{label}</Badge>
+                    <IconButton
+                      title={t('field.tagExclude', { label })}
+                      onClick={() =>
+                        setTagDraft((prev) => ({
+                          ...prev,
+                          tagsExcluded: [...prev.tagsExcluded, label],
+                        }))
+                      }
+                    >
+                      ✕
+                    </IconButton>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {tagDraft.tagsExcluded.length > 0 && (
+            <>
+              <span className="modal-field-label">{t('field.tagsExcluded')}</span>
+              <ChipInput
+                value={tagDraft.tagsExcluded}
+                onChange={(next) => setTagDraft((prev) => ({ ...prev, tagsExcluded: next }))}
+                inputLabel={t('field.tagsExcluded')}
+                lenient
+              />
+            </>
+          )}
+        </div>
         {/* The folder's IP ranges (ADR-131). A sub-resource with its own endpoint, saved after the
             group body exactly as the pin is. Ranges a sync maintains are listed above the editable
             ones and are disabled rather than hidden: the value is worth reading, and only the

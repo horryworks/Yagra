@@ -121,6 +121,9 @@ mod stored_enum;
 // Diagnostic snapshot for a deployment nobody can open a shell on (ADR-045). Named apart from
 // `config_bundle`, which moves configuration *between* deployments; this one describes one.
 mod support_bundle;
+/// Effective label resolution (own + every ancestor folder's − excluded). The accumulating
+/// counterpart to `poolres`, which resolves one value from the nearest folder that carries it.
+mod tagres;
 mod thresholds;
 mod tls;
 mod token;
@@ -701,7 +704,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // an `Alert` carries. Wired once, here, because it needs the write side; a skeleton-mode core
     // never reaches this and renders ids instead. It is only consulted when a channel actually has
     // a template, so a deployment with none issues no extra query.
-    notifier.set_facts_source(Arc::new(notify_facts::CachedNodeFacts::new(repo.clone())));
+    notifier.set_facts_source(Arc::new(notify_facts::CachedNodeFacts::new(
+        repo.clone(),
+        group_repo.clone(),
+    )));
 
     // Notification routing + mutes priming: load the DB channels/rules into the notifier now (env
     // channels stay always-on). The periodic refresh loop is leader-only (`leader_work`).
@@ -841,6 +847,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         alerts.clone(),
         analysis.clone(),
         audit_repo.clone(),
+        group_repo.clone(),
     )));
 
     let admin = Some(Arc::new(AdminState {

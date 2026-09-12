@@ -1126,20 +1126,29 @@ export const api = {
       /** `undefined` leaves the note unchanged; `''` clears it. Same three-state as `pool`, and
        *  for a sharper reason — nothing refills a note the way a poll refills vendor/model. */
       notes?: string;
-      /** `undefined` leaves the tags unchanged; otherwise **replaces the whole map**. To add one
-       *  label to many nodes without knowing what else they carry, use `bulkTagNodes` below. */
-      tags?: Record<string, string>;
+      /** `undefined` leaves the labels unchanged; otherwise **replaces the whole list**, which is
+       *  the node's OWN labels — never the ones it inherits from its folder. To add one label to
+       *  many nodes without knowing what else they carry, use `bulkTagNodes` below; to label a
+       *  whole subtree at once, put it on the folder with `setNodeGroupTags`. */
+      tags?: string[];
+      /** `undefined` leaves them unchanged; otherwise replaces the whole list of labels this node
+       *  refuses to inherit from its folder chain. Not length-checked server-side — a stored label
+       *  may predate the rules a new one follows. */
+      tags_excluded?: string[];
     },
   ): Promise<void> => apiPut('/api/v1/nodes/{node_id}/bindings', { path: { node_id: id }, body }),
 
-  /** Add and/or remove tags across many nodes at once (ADR-135).
+  /** Add and/or remove labels across many nodes at once (ADR-135).
    *
-   *  🚨 **Merges.** `add` overwrites only the keys it names and `remove` deletes only the keys it
+   *  🚨 **Merges.** `add` adds only the labels it names and `remove` deletes only the labels it
    *  names; every other label on every named node survives. That is the difference from
-   *  `setNodeBindings` above, which replaces the whole map because the edit dialog knows it. */
+   *  `setNodeBindings` above, which replaces the whole list because the edit dialog knows it.
+   *
+   *  ⚠️ Writes each node's OWN labels. A label a node inherits from its folder cannot be taken off
+   *  it here — that is either a folder edit or an exclusion on the node. */
   bulkTagNodes: (
     nodeIds: string[],
-    add: Record<string, string>,
+    add: string[],
     remove: string[] = [],
   ): Promise<{ requested: number; applied: number }> =>
     apiPost('/api/v1/nodes/tags', { body: { node_ids: nodeIds, add, remove } }),
@@ -1406,6 +1415,20 @@ export const api = {
     prefixes: { prefix: string; description: string }[],
   ): Promise<void> =>
     apiPut('/api/v1/node-groups/{id}/prefixes', { path: { id }, body: { prefixes } }),
+
+  /** Replace a folder's labels (ADR-135 inc. 2).
+   *
+   *  🚨 **Every folder and node beneath it carries these**, including ones discovered later — that
+   *  is the difference from `bulkTagNodes`, which copies onto the rows that exist right now. A
+   *  descendant that does not want one refuses it with its own `tags_excluded`.
+   *
+   *  Whole value, both lists: `{ tags: [], tags_excluded: [] }` clears them. A sub-resource rather
+   *  than a field on `updateNodeGroup` because this write is group-scoped and that one is not. */
+  setNodeGroupTags: (id: string, tags: string[], tagsExcluded: string[] = []): Promise<void> =>
+    apiPut('/api/v1/node-groups/{id}/tags', {
+      path: { id },
+      body: { tags, tags_excluded: tagsExcluded },
+    }),
 
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>

@@ -140,15 +140,15 @@ impl IncidentContext {
     }
 }
 
-/// One node's identity for [`IncidentContext::fingerprint`]. Tags are already sorted by the
-/// `BTreeMap` they came from, so this is stable.
+/// One node's identity for [`IncidentContext::fingerprint`]. The labels arrive in a deterministic
+/// order (own sorted, then inherited sorted — see `TagResolver::effective`), so this is stable.
+///
+/// ⚠️ **ADR-135 inc. 2 changed every fingerprint once.** The labels used to render as `k=v` pairs;
+/// a stored RCA result from before that no longer matches a new one for the same incident, so an
+/// incident already explained is explained — and paid for — a second time. One-off, and there is
+/// no migration for it: the fingerprint is a cache key, not a record.
 fn fp_node(n: &NodeFacts) -> String {
-    let tags = n
-        .tags
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join(",");
+    let tags = n.tags.join(",");
     format!(
         "{} {} {:?} {:?} {:?} [{}]",
         n.name, n.address, n.vendor, n.model, n.pool, tags
@@ -170,8 +170,13 @@ pub struct NodeFacts {
     pub model: Option<String>,
     /// Poller pool — usually the site, which is often the diagnosis ("everything in branch-osaka").
     pub pool: Option<String>,
-    /// Operator-set grouping attributes, capped and sorted for a deterministic prompt.
-    pub tags: Vec<(String, String)>,
+    /// Operator-set labels, capped for a deterministic prompt.
+    ///
+    /// 🚨 **Capped at [`MAX_TAGS`], and the ORDER decides what survives.** `TagResolver::effective`
+    /// returns the node's own labels first and its inherited ones second, precisely so that a node
+    /// sitting under three labelled folders cannot have its own labels pushed out of its own
+    /// incident prompt. Sorting the union before capping would do exactly that, silently.
+    pub tags: Vec<String>,
 }
 
 impl NodeFacts {
@@ -180,26 +185,27 @@ impl NodeFacts {
     /// Written as an explicit field list rather than a struct update so that adding a field to
     /// [`Node`] cannot silently widen what a prompt contains — see the module docs.
     #[must_use]
-    pub fn from_node(node: &Node) -> Self {
+    pub fn from_node(node: &Node, tags: &crate::tagres::TagResolver) -> Self {
         Self {
             name: node.name.clone(),
             address: node.address,
             vendor: node.vendor.clone(),
             model: node.model.clone(),
             pool: node.pool.clone(),
-            tags: cap_tags(&node.tags),
+            tags: cap_tags(&tags.effective(node)),
         }
     }
 }
 
-/// Take the first [`MAX_TAGS`] tags. `BTreeMap` iteration is already sorted, so the same node
-/// renders the same way every time — a prompt that changes between calls for no reason is a
-/// prompt-cache miss and an unexplainable diff.
-fn cap_tags(tags: &BTreeMap<String, String>) -> Vec<(String, String)> {
-    tags.iter()
-        .take(MAX_TAGS)
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+/// Take the first [`MAX_TAGS`] labels. The order they arrive in is deterministic (own sorted, then
+/// inherited sorted), so the same node renders the same way every time — a prompt that changes
+/// between calls for no reason is a prompt-cache miss and an unexplainable diff.
+///
+/// 🚨 **Which ones get dropped is decided by that order, not here.** Own-before-inherited is what
+/// keeps a node under several labelled folders from losing its own labels to the cap; see
+/// `TagResolver::effective`.
+fn cap_tags(tags: &[String]) -> Vec<String> {
+    tags.iter().take(MAX_TAGS).cloned().collect()
 }
 
 /// The alert being explained.
@@ -253,6 +259,13 @@ pub struct Sources<'a> {
     pub alerts: &'a AlertManager,
     pub analysis: &'a AnalysisRunner,
     pub audit: &'a AuditRepo,
+    /// The folder tree, for resolving each node's inherited labels (ADR-135 inc. 2).
+    ///
+    /// Here rather than resolved by the caller because the prompt describes several nodes — the
+    /// root and its upstream chain — and the label a site folder carries is often the single most
+    /// useful thing in the prompt ("everything in branch-osaka"). Reading the node's own column
+    /// alone would leave exactly that out.
+    pub groups: &'a crate::groups::GroupRepo,
 }
 
 /// Assemble the context for the incident containing `node`/`check`.
@@ -324,8 +337,17 @@ pub async fn gather(
         |a| alert_facts(a, symptom_name.clone()),
     );
 
+    // Best-effort, like every other source here: a folder read that fails costs the prompt its
+    // inherited labels, not the whole explanation.
+    let tags = match src.groups.tag_rows().await {
+        Ok(rows) => crate::tagres::TagResolver::build(rows),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load folder labels for the RCA prompt");
+            crate::tagres::TagResolver::empty()
+        }
+    };
     let dependents = roll_up_dependents(&active, root_id, &names_of(src, &active).await);
-    let upstream = upstream_chain(src.nodes, &root_node).await;
+    let upstream = upstream_chain(src.nodes, &root_node, &tags).await;
     let timeline = src
         .analysis
         .incident_signals(
@@ -342,7 +364,7 @@ pub async fn gather(
         generated_at_s: now_s,
         window_secs,
         root_node_id: uuid_of(root_id),
-        node: NodeFacts::from_node(&root_node),
+        node: NodeFacts::from_node(&root_node, &tags),
         alert,
         dependents,
         upstream,
@@ -425,7 +447,11 @@ fn roll_up_dependents(
 ///
 /// Depth-capped rather than cycle-detected: the inventory is a tree, and the cap keeps a bad edit
 /// from turning an operator's click into an unbounded query loop.
-async fn upstream_chain(nodes: &NodeRepo, node: &Node) -> Vec<NodeFacts> {
+async fn upstream_chain(
+    nodes: &NodeRepo,
+    node: &Node,
+    tags: &crate::tagres::TagResolver,
+) -> Vec<NodeFacts> {
     let mut chain = Vec::new();
     let mut next = node.parent;
     for _ in 0..MAX_UPSTREAM_DEPTH {
@@ -434,7 +460,7 @@ async fn upstream_chain(nodes: &NodeRepo, node: &Node) -> Vec<NodeFacts> {
             break;
         };
         next = parent.parent;
-        chain.push(NodeFacts::from_node(&parent));
+        chain.push(NodeFacts::from_node(&parent, tags));
     }
     chain
 }
@@ -515,7 +541,7 @@ mod tests {
         let mut node = a_node();
         node.name = format!("sw-{CANARY}"); // copied — the canary must appear
         node.credential = Some(yagra_common::CredentialId::from(Uuid::from_u128(7))); // never copied
-        let facts = NodeFacts::from_node(&node);
+        let facts = NodeFacts::from_node(&node, &crate::tagres::TagResolver::empty());
 
         let rendered = format!("{facts:?}");
         assert!(
@@ -534,16 +560,42 @@ mod tests {
     fn tags_are_sorted_and_capped() {
         let mut node = a_node();
         for i in 0..20 {
-            node.tags.insert(format!("k{i:02}"), format!("v{i}"));
+            node.tags.push(format!("k{i:02}"));
         }
-        let facts = NodeFacts::from_node(&node);
+        let facts = NodeFacts::from_node(&node, &crate::tagres::TagResolver::empty());
         assert_eq!(facts.tags.len(), MAX_TAGS);
         // Deterministic order: the same node renders identically on every call, so the prompt is
         // cacheable and two RCAs of the same incident are diffable.
-        assert_eq!(facts.tags[0].0, "k00");
-        assert_eq!(facts.tags[MAX_TAGS - 1].0, format!("k{:02}", MAX_TAGS - 1));
-        let again = NodeFacts::from_node(&node);
+        assert_eq!(facts.tags[0], "k00");
+        assert_eq!(facts.tags[MAX_TAGS - 1], format!("k{:02}", MAX_TAGS - 1));
+        let again = NodeFacts::from_node(&node, &crate::tagres::TagResolver::empty());
         assert_eq!(facts.tags, again.tags);
+    }
+
+    /// 🚨 **The cap drops INHERITED labels first, never the node's own** (ADR-135 inc. 2).
+    ///
+    /// Without this the failure is silent and specific: a node under a few labelled folders has
+    /// its own labels sorted out of its own incident prompt, and the operator reading the
+    /// explanation has no way to tell that happened.
+    #[test]
+    fn the_prompt_cap_keeps_the_nodes_own_labels_over_inherited_ones() {
+        let group = Uuid::from_u128(42);
+        let mut node = a_node();
+        node.group = Some(yagra_common::GroupId::from(group));
+        // A label that sorts after everything the folder supplies, so a naive sort-then-cap over
+        // the union would drop exactly this one.
+        node.tags = vec!["zzz-own".to_owned()];
+        let folder: Vec<String> = (0..20).map(|i| format!("a{i:02}-inherited")).collect();
+        let resolver = crate::tagres::TagResolver::build(vec![(group, None, folder, Vec::new())]);
+
+        let facts = NodeFacts::from_node(&node, &resolver);
+        assert_eq!(facts.tags.len(), MAX_TAGS);
+        assert_eq!(
+            facts.tags.first().map(String::as_str),
+            Some("zzz-own"),
+            "the node's own label must survive a cap the folder caused: {:?}",
+            facts.tags
+        );
     }
 
     // ── Rule 3: everything is bounded, and truncation is visible ─────────────────────────────

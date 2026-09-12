@@ -40,18 +40,74 @@ pub trait AlertFactsSource: Send + Sync {
 /// [`NodeRepo`]-backed source with a short TTL cache.
 pub struct CachedNodeFacts {
     repo: Arc<NodeRepo>,
+    /// The folder tree, for resolving each node's inherited labels (ADR-135 inc. 2).
+    groups: Arc<crate::groups::GroupRepo>,
+    /// The label map, rebuilt at most once per [`FACTS_TTL`] — a few hundred rows, and the same
+    /// staleness window a rename already has.
+    ///
+    /// 🚨 **A read failure keeps the LAST KNOWN resolver, and falls back to an empty one only when
+    /// there has never been one.** That is the opposite of what `alerts/config.rs` does with the
+    /// identical failure, and both are right: there a missing label narrows a threshold rule's
+    /// scope, a check loses its rule, and its open alerts resolve (ADR-080). Here the labels ride
+    /// on a notification that has to go out regardless — the same call `node_facts` above already
+    /// makes when it degrades to raw ids. Each site reads like a bug from the other's perspective,
+    /// which is why both say so.
+    tags: Mutex<Option<(Arc<crate::tagres::TagResolver>, Instant)>>,
     // A plain Mutex, not an async one: every critical section here is a map lookup with no await
     // inside it, so holding it across a scheduling point is impossible by construction.
     cache: Mutex<HashMap<Uuid, (NodeFacts, Instant)>>,
 }
 
 impl CachedNodeFacts {
-    /// Wrap the node repository.
+    /// Wrap the node repository and the folder tree.
     #[must_use]
-    pub fn new(repo: Arc<NodeRepo>) -> Self {
+    pub fn new(repo: Arc<NodeRepo>, groups: Arc<crate::groups::GroupRepo>) -> Self {
         Self {
             repo,
+            groups,
+            tags: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The label resolver, rebuilt at most once per [`FACTS_TTL`].
+    ///
+    /// ⚠️ The coherency window is worth naming: because this caches a *resolved* answer, re-labelling
+    /// a folder takes up to one TTL to reach a page. That is the same window a rename already has —
+    /// but it is now true of a value the operator did not edit on the node itself.
+    async fn tag_resolver(&self) -> Arc<crate::tagres::TagResolver> {
+        let now = Instant::now();
+        if let Some((r, at)) = self
+            .tags
+            .lock()
+            .expect("notify tag cache poisoned")
+            .as_ref()
+        {
+            if now.duration_since(*at) < FACTS_TTL {
+                return Arc::clone(r);
+            }
+        }
+        match self.groups.tag_rows().await {
+            Ok(rows) => {
+                let built = Arc::new(crate::tagres::TagResolver::build(rows));
+                *self.tags.lock().expect("notify tag cache poisoned") =
+                    Some((Arc::clone(&built), now));
+                built
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load folder labels for a notification");
+                // Keep the last known answer rather than silently dropping every inherited label
+                // from every page — see the field's doc for why this differs from the config
+                // rebuild's treatment of the same failure.
+                self.tags
+                    .lock()
+                    .expect("notify tag cache poisoned")
+                    .as_ref()
+                    .map_or_else(
+                        || Arc::new(crate::tagres::TagResolver::empty()),
+                        |(r, _)| Arc::clone(r),
+                    )
+            }
         }
     }
 }
@@ -78,10 +134,20 @@ impl AlertFactsSource for CachedNodeFacts {
         }
         // A failure here degrades to ids in the rendered notification. It must never stop the
         // notification: the alert is the point, the name is a courtesy.
-        let fetched = self.repo.node_facts(&missing).await.unwrap_or_else(|e| {
+        let mut fetched = self.repo.node_facts(&missing).await.unwrap_or_else(|e| {
             tracing::warn!(error = %e, "failed to resolve node facts for a notification");
             HashMap::new()
         });
+        // 🚨 Resolve the labels BEFORE anything is cached or returned, so `NodeFacts::tags` means
+        // "effective" everywhere downstream — the template context, PagerDuty, JSM. The repository
+        // hands back the node's own column; this is the only place that difference exists.
+        if !fetched.is_empty() {
+            let tags = self.tag_resolver().await;
+            for facts in fetched.values_mut() {
+                facts.tags =
+                    tags.effective_parts(facts.group_id, &facts.tags, &facts.tags_excluded);
+            }
+        }
         {
             let mut cache = self.cache.lock().expect("notify facts cache poisoned");
             if cache.len().saturating_add(fetched.len()) > FACTS_CAPACITY {
@@ -135,7 +201,7 @@ pub fn context_for(
         profile: node.and_then(|f| f.profile.clone()),
         // Empty rather than absent when the node could not be resolved, or when the subject is a
         // poller pool rather than a node — the field is declared `always_present`, and an
-        // `Option` here would make `{{ tags.x }}` an error on exactly those alerts.
+        // `Option` here would make `{% for t in tags %}` an error on exactly those alerts.
         tags: node.map(|f| f.tags.clone()).unwrap_or_default(),
         check_id: alert.check.as_uuid().to_string(),
         dedup_key: crate::alerts::dedup_string(&alert.dedup_key()),
@@ -215,10 +281,13 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
             address: declared.node_address.clone().unwrap_or_default(),
             group: declared.group.clone(),
             profile: declared.profile.clone(),
-            // From the declared sample, so the preview shows the same tags the variable palette
+            // From the declared sample, so the preview shows the same labels the variable palette
             // documents — this whole function exists to render the *declared* facts back through
-            // the real `context_for`.
+            // the real `context_for`. Already effective, like everything downstream of
+            // `CachedNodeFacts`, so the two resolution fields below carry nothing.
             tags: declared.tags.clone(),
+            tags_excluded: Vec::new(),
+            group_id: None,
         },
     );
     resolved.insert(
@@ -228,7 +297,9 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
             address: String::new(),
             group: None,
             profile: None,
-            tags: std::collections::BTreeMap::new(),
+            tags: Vec::new(),
+            tags_excluded: Vec::new(),
+            group_id: None,
         },
     );
     (alert, resolved)
@@ -278,11 +349,10 @@ pub(crate) mod tests {
                     address: "192.0.2.7".to_owned(),
                     group: Some("Tokyo".to_owned()),
                     profile: Some("Cisco switch".to_owned()),
-                    // A real one, so a template test that reads a tag has something to read.
-                    tags: std::collections::BTreeMap::from([(
-                        "region".to_owned(),
-                        "JAPAN".to_owned(),
-                    )]),
+                    // A real one, so a template test that reads a label has something to read.
+                    tags: vec!["JAPAN".to_owned()],
+                    tags_excluded: Vec::new(),
+                    group_id: None,
                 },
             );
             Self {
@@ -411,7 +481,9 @@ pub(crate) mod tests {
                 address: "192.0.2.1".to_owned(),
                 group: None,
                 profile: None,
-                tags: std::collections::BTreeMap::new(),
+                tags: Vec::new(),
+                tags_excluded: Vec::new(),
+                group_id: None,
             },
         );
         let alert = Alert {

@@ -152,6 +152,8 @@ pub struct RcaOrchestrator {
     alerts: Arc<AlertManager>,
     analysis: Arc<AnalysisRunner>,
     audit: Arc<AuditRepo>,
+    /// The folder tree, read once per gathered context to resolve inherited labels.
+    groups: Arc<crate::groups::GroupRepo>,
     slots: Arc<Semaphore>,
     max_concurrent: usize,
     recent_starts: Mutex<VecDeque<Instant>>,
@@ -170,6 +172,7 @@ impl RcaOrchestrator {
         alerts: Arc<AlertManager>,
         analysis: Arc<AnalysisRunner>,
         audit: Arc<AuditRepo>,
+        groups: Arc<crate::groups::GroupRepo>,
     ) -> Self {
         let max_concurrent = env_cap("YAGRA_RCA_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
         let max_per_window = env_cap("YAGRA_RCA_RATE_PER_MIN", DEFAULT_RATE_PER_MIN);
@@ -195,6 +198,7 @@ impl RcaOrchestrator {
             alerts,
             analysis,
             audit,
+            groups,
             slots: Arc::new(Semaphore::new(max_concurrent)),
             max_concurrent,
             recent_starts: Mutex::new(VecDeque::new()),
@@ -235,6 +239,7 @@ impl RcaOrchestrator {
             alerts: &self.alerts,
             analysis: &self.analysis,
             audit: &self.audit,
+            groups: &self.groups,
         };
         let ctx = context::gather(&sources, req.node, req.check, window, SENSITIVITY, now_s)
             .await

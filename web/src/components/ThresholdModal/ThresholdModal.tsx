@@ -160,8 +160,10 @@ function ScopeIdField({
           <input type="hidden" value={single} readOnly />
         </>
       ) : (
-        // The legacy tag scope. Free text because a tag value *is* free text, and no list of the
-        // ones in use exists — nothing in the product writes `nodes.tags` but a bundle import.
+        // The legacy tag scope. Free text because a tag *is* free text, and because no list of the
+        // ones in use is reachable from here: since ADR-135 増分 2 a node's tags are partly its
+        // folder chain's, so "every tag in use" is a server-side question, not one this screen can
+        // answer from the rule it is editing.
         <TextInput
           className="mono"
           placeholder={t('thresholds.addModal.scopeIdPlaceholder.group')}
@@ -220,9 +222,11 @@ export function ThresholdModal({
 
   const ready = isThresholdReady(form);
 
-  // The legacy tag-based `group` level is not offered for a *new* rule — nothing in the product
-  // writes `nodes.tags`, so a rule created at it cannot match anything (ADR-075 増分 3, the same
-  // move the maintenance-window form already made). ⚠️ It must still appear while editing a rule
+  // The legacy tag-based `group` level is not offered for a *new* rule — a folder group says the
+  // same thing with a type on it, recursively, and is the unit RBAC already scopes by (ADR-075
+  // 増分 3, the same move the maintenance-window form already made). ⚠️ The reason used to be
+  // "nothing writes `nodes.tags`", which ADR-135 made false; the decision did not change with it.
+  // ⚠️ It must still appear while editing a rule
   // that already sits at it: a `<select>` whose value is absent from its options renders blank,
   // and the next save would silently move the rule to whichever level rendered first.
   const levels = useMemo(

@@ -8,7 +8,6 @@
 
 use crate::ids::{CredentialId, GroupId, NodeId, ProfileId};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::net::IpAddr;
 
 /// A monitored node (device or server).
@@ -39,9 +38,32 @@ pub struct Node {
     /// The hierarchical group (folder) this node belongs to, if any. `None` ⇒ ungrouped
     /// (shown at the tree root). A node belongs to at most one group.
     pub group: Option<GroupId>,
-    /// Arbitrary grouping attributes (site, region, role, …) used for filtering
-    /// and group-scoped thresholds/visibility. Sorted for deterministic output.
-    pub tags: BTreeMap<String, String>,
+    /// Labels an operator hung on this node — free-form single words or phrases
+    /// (`JAPAN`, `core`, `松山本社`), not key=value pairs (ADR-135 inc. 2). Sorted and
+    /// de-duplicated, for deterministic output.
+    ///
+    /// ⚠️ **This is the node's OWN set, not what it effectively carries.** Since ADR-135
+    /// inc. 2 a folder carries labels too, and every folder and node beneath it inherits
+    /// them; the union is resolved at read time by `TagResolver` in core and is
+    /// deliberately never stored here — a written-down copy goes stale the moment a
+    /// parent is edited or a folder is moved (the same argument pool and geo inheritance
+    /// record). Anything deciding behaviour from a label wants the resolved set.
+    pub tags: Vec<String>,
+    /// Labels this node refuses to inherit from its folder chain (ADR-135 inc. 2). Almost always
+    /// empty.
+    ///
+    /// ⚠️ **On `Node` for a reason `notes` is not.** The argument that kept a note out of this
+    /// type was its size — up to 2,000 characters carried fleet-wide so one page could show it.
+    /// An empty `Vec` is 24 bytes, and unlike a note this is read by the same fleet-wide passes
+    /// that read `tags`: resolving what a node effectively carries is exactly
+    /// `(inherited − this) ∪ tags`, so a resolver that could not see it would have to go back to
+    /// the database once per node.
+    ///
+    /// ⚠️ Only *inherited* labels can be excluded. A label in `tags` is removed by dropping it
+    /// from `tags`; naming it here does nothing, because the exclusion is applied before a node's
+    /// own labels are added.
+    #[serde(default)]
+    pub tags_excluded: Vec<String>,
 }
 
 impl Node {
@@ -59,14 +81,9 @@ impl Node {
             vendor: None,
             model: None,
             group: None,
-            tags: BTreeMap::new(),
+            tags: Vec::new(),
+            tags_excluded: Vec::new(),
         }
-    }
-
-    /// Look up a grouping tag value.
-    #[must_use]
-    pub fn tag(&self, key: &str) -> Option<&str> {
-        self.tags.get(key).map(String::as_str)
     }
 }
 
@@ -111,11 +128,9 @@ mod tests {
         assert!(n6.address.is_ipv6());
     }
 
-    #[test]
-    fn tags_are_looked_up_by_key() {
-        let mut n = v4("a");
-        n.tags.insert("site".into(), "tokyo".into());
-        assert_eq!(n.tag("site"), Some("tokyo"));
-        assert_eq!(n.tag("region"), None);
-    }
+    // `tags_are_looked_up_by_key` lived here and was deleted with the key (ADR-135 inc. 2).
+    // `Node::tag(key)` had exactly one caller in the whole workspace — that test — because both
+    // readers of this field (`ScopeLevel::Group` thresholds, `WindowScope::Group` maintenance)
+    // matched on `tags.values()` and threw the key away. A set of labels is what they were both
+    // already treating it as.
 }

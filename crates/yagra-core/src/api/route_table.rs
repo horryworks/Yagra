@@ -902,6 +902,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "PUT",
+        "/api/v1/node-groups/:id/tags",
+        // `GroupFiltered`, the same call `/prefixes` above makes and deliberately not the
+        // `ADMIN_CFG` its `geo` / `pool` / `placement` siblings claim (ADR-131 決定 8).
+        // `manage_config` is held by Operator too, an Operator can be group-scoped, and a folder's
+        // labels reach every node beneath it — so an unscoped claim would let one site's operator
+        // change another site's alert routing and maintenance coverage (ADR-135 inc. 2).
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
         "POST",
         "/api/v1/node-groups/:id/sort",
         ADMIN_CFG,

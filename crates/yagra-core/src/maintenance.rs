@@ -542,12 +542,21 @@ impl MaintenanceRepo {
 /// falling into a wildcard. The hierarchical [`WindowScope::FolderGroup`] scope is resolved
 /// separately by the caller (it needs the group edges + DB membership, via
 /// [`crate::groups::group_subtree`] + `NodeRepo::nodes_in_groups`), so it is never covered here.
+///
+/// `labels` is the node's **effective** label set (its own plus everything its folder chain
+/// supplies, ADR-135 inc. 2), passed in rather than read off `node` because the caller resolves it
+/// once per node and asks about many windows.
 #[must_use]
-fn scope_covers(level: WindowScope, scope_id: &str, node: &Node) -> bool {
+fn scope_covers(
+    level: WindowScope,
+    scope_id: &str,
+    node: &Node,
+    labels: &BTreeSet<String>,
+) -> bool {
     match level {
         WindowScope::Node => scope_id == node.id.to_string(),
         WindowScope::Profile => node.profile.map(|p| p.to_string()).as_deref() == Some(scope_id),
-        WindowScope::Group => node.tags.values().any(|v| v == scope_id),
+        WindowScope::Group => labels.contains(scope_id),
         WindowScope::FolderGroup => false,
         // No id to match: the deployment itself is out of service, so every node is.
         WindowScope::System => true,
@@ -565,12 +574,16 @@ pub fn nodes_named_by_a_window(
     scopes: &[(WindowScope, String)],
     nodes: &[Node],
 ) -> BTreeSet<NodeId> {
+    // The filter admits only `WindowScope::Node`, which reads no label — so an empty set is the
+    // whole truth here, not a shortcut. `scope_covers` stays exhaustive over `WindowScope`, so a
+    // new scope still has to decide what it means on both of these paths.
+    let no_labels = BTreeSet::new();
     nodes
         .iter()
         .filter(|node| {
-            scopes
-                .iter()
-                .any(|(level, id)| *level == WindowScope::Node && scope_covers(*level, id, node))
+            scopes.iter().any(|(level, id)| {
+                *level == WindowScope::Node && scope_covers(*level, id, node, &no_labels)
+            })
         })
         .map(|node| node.id)
         .collect()
@@ -585,13 +598,17 @@ pub fn nodes_named_by_a_window(
 pub fn nodes_covered_by_a_class_window(
     scopes: &[(WindowScope, String)],
     nodes: &[Node],
+    tags: &crate::tagres::TagResolver,
 ) -> BTreeSet<NodeId> {
     nodes
         .iter()
         .filter(|node| {
-            scopes
-                .iter()
-                .any(|(level, id)| *level != WindowScope::Node && scope_covers(*level, id, node))
+            // Resolved once per node, then asked about every window — the other way round would
+            // rebuild the same set once per (node, window) pair.
+            let labels = tags.effective_set(node);
+            scopes.iter().any(|(level, id)| {
+                *level != WindowScope::Node && scope_covers(*level, id, node, &labels)
+            })
         })
         .map(|node| node.id)
         .collect()
@@ -617,7 +634,8 @@ fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
 /// A node's coverage-relevant facts, resolved once so the decisions over them are pure.
 pub(crate) struct CoverageFacts {
     profile: Option<String>,
-    /// Tag *values* — a window's `group` scope matches any of them (ADR-013).
+    /// The node's **effective** labels — a window's `group` scope matches any of them (ADR-013),
+    /// and since ADR-135 inc. 2 that includes the ones its folder chain supplies.
     tags: Vec<String>,
     /// This node's folder group plus every group above it.
     ///
@@ -631,7 +649,11 @@ pub(crate) struct CoverageFacts {
 impl CoverageFacts {
     /// Resolve them for one already-loaded node. `edges` is the whole `(id, parent_id)` set, so a
     /// caller checking several nodes loads it once.
-    pub(crate) fn of(node: &Node, edges: &[(Uuid, Option<Uuid>)]) -> Self {
+    pub(crate) fn of(
+        node: &Node,
+        edges: &[(Uuid, Option<Uuid>)],
+        tags: &crate::tagres::TagResolver,
+    ) -> Self {
         let mut containing_groups = Vec::new();
         if let Some(group) = node.group {
             let gid = group.as_uuid();
@@ -640,7 +662,7 @@ impl CoverageFacts {
         }
         Self {
             profile: node.profile.map(|p| p.to_string()),
-            tags: node.tags.values().cloned().collect(),
+            tags: tags.effective(node),
             containing_groups,
         }
     }
@@ -752,6 +774,10 @@ pub(crate) async fn reconcile_exemptions(
     let windows = maintenance.active_windows().await?;
     let mutes = maintenance.list_mutes().await?;
     let edges = groups.edges().await?;
+    // Propagated, not degraded: this decides whether a node's release from a window is still
+    // justified, and resolving it from an empty label map would re-apply coverage an operator
+    // deliberately cancelled. The two reads above already fail the whole reconcile the same way.
+    let tags = crate::tagres::TagResolver::build(groups.tag_rows().await?);
     let mut changed = 0;
     for row in rows {
         let Some(stored_until) = parse_ts(&row.until_at) else {
@@ -764,7 +790,7 @@ pub(crate) async fn reconcile_exemptions(
             changed += 1;
             continue;
         };
-        let facts = CoverageFacts::of(&node, &edges);
+        let facts = CoverageFacts::of(&node, &edges, &tags);
         let in_force = match row.kind {
             ExemptionKind::Maintenance => inherited_maintenance_end(&windows, &facts),
             ExemptionKind::Mute => inherited_mute_end(&mutes, &facts),
@@ -874,13 +900,16 @@ mod tests {
     /// about the *rule* rather than about that split, so they read over the union — and
     /// [`a_direct_window_and_a_class_window_are_told_apart`] is what pins the split itself.
     fn covered(scopes: &[(WindowScope, String)], nodes: &[Node]) -> BTreeSet<NodeId> {
+        // An empty resolver: these nodes carry their labels directly, and folder inheritance has
+        // its own tests in `tagres.rs`. What is under test here is the scope matching.
+        let tags = crate::tagres::TagResolver::empty();
         nodes_named_by_a_window(scopes, nodes)
-            .union(&nodes_covered_by_a_class_window(scopes, nodes))
+            .union(&nodes_covered_by_a_class_window(scopes, nodes, &tags))
             .copied()
             .collect()
     }
 
-    fn node(profile: Option<ProfileId>, tags: &[(&str, &str)]) -> Node {
+    fn node(profile: Option<ProfileId>, tags: &[&str]) -> Node {
         Node {
             id: NodeId::new(),
             name: "n".to_owned(),
@@ -892,10 +921,8 @@ mod tests {
             vendor: None,
             model: None,
             group: None,
-            tags: tags
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            tags_excluded: Vec::new(),
         }
     }
 
@@ -922,8 +949,8 @@ mod tests {
 
     #[test]
     fn group_scope_matches_tag_values() {
-        let a = node(None, &[("site", "tokyo")]);
-        let b = node(None, &[("site", "osaka")]);
+        let a = node(None, &["tokyo"]);
+        let b = node(None, &["osaka"]);
         let scopes = vec![(WindowScope::Group, "tokyo".to_owned())];
         let set = covered(&scopes, &[a.clone(), b.clone()]);
         assert!(set.contains(&a.id));
@@ -935,7 +962,7 @@ mod tests {
         // FolderGroup needs the group tree + DB membership, so the in-memory, tag-only resolution
         // must ignore it — the caller unions the resolved node set. A folder-group scope alone
         // therefore yields nothing here, even for a node that happens to carry the id as a tag.
-        let a = node(None, &[("site", "tokyo")]);
+        let a = node(None, &["tokyo"]);
         let scopes = vec![(WindowScope::FolderGroup, Uuid::new_v4().to_string())];
         assert!(covered(&scopes, &[a]).is_empty());
     }
@@ -972,7 +999,7 @@ mod tests {
 
     #[test]
     fn no_active_scopes_means_no_maintenance() {
-        let a = node(None, &[("site", "tokyo")]);
+        let a = node(None, &["tokyo"]);
         assert!(covered(&[], &[a]).is_empty());
     }
 
@@ -1002,8 +1029,8 @@ mod tests {
         let profile = ProfileId::new();
         let named = node(Some(profile), &[]);
         let by_profile = node(Some(profile), &[]);
-        let by_tag = node(None, &[("site", "tokyo")]);
-        let untouched = node(None, &[("site", "osaka")]);
+        let by_tag = node(None, &["tokyo"]);
+        let untouched = node(None, &["osaka"]);
         let nodes = [named.clone(), by_profile.clone(), by_tag.clone(), untouched];
         let scopes = vec![
             (WindowScope::Node, named.id.to_string()),
@@ -1014,7 +1041,8 @@ mod tests {
         let direct = nodes_named_by_a_window(&scopes, &nodes);
         assert_eq!(direct, BTreeSet::from([named.id]));
 
-        let class = nodes_covered_by_a_class_window(&scopes, &nodes);
+        let class =
+            nodes_covered_by_a_class_window(&scopes, &nodes, &crate::tagres::TagResolver::empty());
         assert_eq!(class, BTreeSet::from([named.id, by_profile.id, by_tag.id]));
 
         // `named` is in both — it is named *and* a member of the covered profile — which is the
@@ -1035,7 +1063,7 @@ mod tests {
         let scopes = vec![(WindowScope::System, UPGRADE_SCOPE_ID.to_owned())];
         assert!(nodes_named_by_a_window(&scopes, one).is_empty());
         assert_eq!(
-            nodes_covered_by_a_class_window(&scopes, one),
+            nodes_covered_by_a_class_window(&scopes, one, &crate::tagres::TagResolver::empty()),
             BTreeSet::from([a.id])
         );
     }

@@ -161,6 +161,44 @@ pub struct NodeGroupRow {
     pub longitude: Option<f64>,
     #[serde(default)]
     pub pool: Option<String>,
+    /// Labels this folder supplies to everything beneath it (ADR-135 inc. 2). Absent in a bundle
+    /// written by an older deployment.
+    #[serde(default, deserialize_with = "de_labels")]
+    pub tags: Vec<String>,
+    /// Labels this folder refuses to inherit from its own ancestors.
+    #[serde(default, deserialize_with = "de_labels")]
+    pub tags_excluded: Vec<String>,
+}
+
+/// Accept both shapes a bundle can carry for a label list: the key→value **object** every release
+/// up to v0.3.16 could export, and the array this one writes (ADR-135 inc. 2).
+///
+/// An object contributes its **values** — the keys are what inc. 2 removed, and a bundle file is
+/// the only place they still exist. Both shapes are trimmed, de-duplicated and sorted, so a
+/// round-trip is stable whichever one it started from.
+///
+/// 🚨 **`#[serde(default)]` is load-bearing beside every use of this.** `deserialize_with` is
+/// **not called for an absent field**, so without the default a bundle written before the field
+/// existed fails the whole import rather than reading as "no labels".
+fn de_labels<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Shape {
+        List(Vec<String>),
+        Map(BTreeMap<String, String>),
+    }
+    let mut out: Vec<String> = match Option::<Shape>::deserialize(d)? {
+        None => Vec::new(),
+        Some(Shape::List(v)) => v,
+        Some(Shape::Map(m)) => m.into_values().collect(),
+    };
+    for s in &mut out {
+        *s = s.trim().to_owned();
+    }
+    out.retain(|s| !s.is_empty());
+    out.sort();
+    out.dedup();
+    Ok(out)
 }
 
 /// A monitored node. `credential_id` is a reference only — see the module docs.
@@ -185,18 +223,24 @@ pub struct NodeRow {
     #[serde(default)]
     pub model: Option<String>,
     pub sort_order: f64,
-    /// The node's grouping tags.
+    /// The node's own labels.
     ///
     /// 🚨 **Typed, not `serde_json::Value`, since ADR-135 — and the loose version was a live
-    /// hazard.** `nodes.tags` is read back as `Json<BTreeMap<String, String>>` by
-    /// `repo::node_from_row`, so a bundle carrying any other JSON shape made that `try_get` fail
-    /// — and it fails for *every* reader of that row, which is the node list, the alert engine's
-    /// config rebuild and the scheduler's sweep. This module's own test fixture wrote
-    /// `json!(["core"])`, an array, so the shape was not hypothetical. Typing it moves the failure
-    /// to the import's deserialization, where it is one rejected bundle instead of one unreadable
-    /// node.
-    #[serde(default)]
-    pub tags: BTreeMap<String, String>,
+    /// hazard.** `nodes.tags` is decoded into a fixed shape by `repo::node_from_row`, so a bundle
+    /// carrying any other JSON made that `try_get` fail — for *every* reader of that row, which is
+    /// the node list, the alert engine's config rebuild and the scheduler's sweep. This module's
+    /// own test fixture wrote `json!(["core"])`, so the shape was not hypothetical.
+    ///
+    /// 🚨 **Read leniently, and this is the ONE compatibility promise ADR-135 inc. 2 keeps.**
+    /// Everything else about labels was free to change because no release ever carried one — but a
+    /// bundle is a *file*, and one written by v0.3.16 or earlier holds `"tags": {}` or a whole
+    /// key→value object. [`de_labels`] accepts both that and the list this version writes.
+    #[serde(default, deserialize_with = "de_labels")]
+    pub tags: Vec<String>,
+    /// Labels this node refuses to inherit from its folder chain (ADR-135 inc. 2). Absent in a
+    /// bundle written by an older deployment, which reads as "refuses nothing".
+    #[serde(default, deserialize_with = "de_labels")]
+    pub tags_excluded: Vec<String>,
     /// The operator's free-text note (ADR-135). Absent in a bundle written by an older
     /// deployment, which reads as "no note" rather than failing the import.
     #[serde(default)]
@@ -577,5 +621,57 @@ mod tests {
             let json = serde_json::to_string(&c).unwrap();
             assert_eq!(serde_json::from_str::<NoteCode>(&json).unwrap(), c);
         }
+    }
+
+    /// 🚨 **A bundle written before ADR-135 増分 2 still imports.**
+    ///
+    /// This is the one compatibility promise that change keeps, and it is worth exactly one test.
+    /// Everything else about labels was free to change because no released version ever carried
+    /// one — but a bundle is a **file** that travels between deployments, so a v0.3.16 export can
+    /// arrive at a core built today.
+    ///
+    /// Four shapes, and the fourth is the one that fails without `#[serde(default)]`:
+    /// `deserialize_with` is **not called for an absent field**, so a bundle written before the
+    /// field existed would be refused outright rather than reading as "no labels".
+    #[test]
+    fn a_bundle_written_before_the_labels_change_still_imports() {
+        let row = |json: &str| -> NodeRow {
+            let full = format!(
+                r#"{{"id":"00000000-0000-4000-8000-000000000001","name":"n",
+                     "address":"10.0.0.1","sort_order":1.0{json}}}"#
+            );
+            serde_json::from_str(&full).unwrap_or_else(|e| panic!("{json} did not decode: {e}"))
+        };
+
+        // The key→value object every release up to v0.3.16 could export: keep the VALUES, sorted
+        // and de-duplicated. The keys were already discarded by both readers of this column.
+        assert_eq!(
+            row(r#","tags":{"role":"core","region":"JAPAN"}"#).tags,
+            vec!["JAPAN".to_owned(), "core".to_owned()]
+        );
+        // The empty object, which is what every node on every real deployment actually holds.
+        assert!(row(r#","tags":{}"#).tags.is_empty());
+        // The list this version writes.
+        assert_eq!(row(r#","tags":["JAPAN"]"#).tags, vec!["JAPAN".to_owned()]);
+        // 🚨 Absent entirely — the `#[serde(default)]` case.
+        assert!(row("").tags.is_empty());
+        assert!(row("").tags_excluded.is_empty());
+
+        // Blank entries are dropped rather than stored, so a hand-edited bundle cannot create a
+        // label no validator would have accepted.
+        assert_eq!(
+            row(r#","tags":["  JAPAN  ","","  "]"#).tags,
+            vec!["JAPAN".to_owned()]
+        );
+
+        // A folder's two lists take the same treatment, including the absent case: a bundle from
+        // before folders carried labels has neither field.
+        let group: NodeGroupRow = serde_json::from_str(
+            r#"{"id":"00000000-0000-4000-8000-000000000002","name":"Tokyo",
+                "group_type":"site","sort_order":1.0}"#,
+        )
+        .expect("a pre-inc.2 folder row decodes");
+        assert!(group.tags.is_empty());
+        assert!(group.tags_excluded.is_empty());
     }
 }

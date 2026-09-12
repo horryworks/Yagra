@@ -67,6 +67,7 @@ import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
 import { PREFIX_PROBLEMS } from './components/GroupModal/prefixFields';
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
+import { LABEL_PROBLEMS } from './components/ui/labelRules';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
 import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
 import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundle';
@@ -1051,6 +1052,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enNodes, ja: jaNodes },
       'checkEdit.err.',
       CHECK_FORM_PROBLEMS,
+    );
+    // 🚨 ADR-135 shipped `t(`field.tagErr.${problem}`)` with **no** entry here, so its three codes
+    // were held up by EN/JA parity alone — which cannot see a code missing from both. Adding a
+    // fourth would have rendered a raw key in every language. ADR-135 増分 2 closes that while
+    // replacing the codes.
+    expectKeys(
+      'node label problem',
+      { en: enNodes, ja: jaNodes },
+      'field.tagErr.',
+      [...LABEL_PROBLEMS],
     );
     expectKeys('ai form problem', { en: enSettingsAi, ja: jaSettingsAi }, 'err.', AI_FORM_PROBLEMS);
     expectKeys(

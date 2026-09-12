@@ -34,7 +34,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, UrlCheckConfig};
@@ -1034,11 +1034,30 @@ pub(crate) struct NodeDetail {
     /// summary per node and ADR-133 had just made that response smaller; a note is up to 2,000
     /// characters that the tree does not draw.
     notes: Option<String>,
-    /// The node's grouping tags (ADR-135). Empty when it has none.
+    /// The labels stored **on this node** (ADR-135). Empty when it has none, sorted.
     ///
     /// Also detail-only, and for a second reason beyond size: the tree does not display them, and
     /// `NodeSummaryDto` on the MCP side has carried them since before any writer existed.
-    tags: BTreeMap<String, String>,
+    ///
+    /// ⚠️ This is what the edit dialog writes back, so it is the node's OWN set — not what it
+    /// effectively carries. The inherited half is `inherited_tags` below.
+    tags: Vec<String>,
+    /// The labels this node gets from its inventory folder and that folder's ancestors, already
+    /// minus the ones it excludes and minus anything it carries itself (ADR-135 inc. 2). Sorted.
+    ///
+    /// Resolved on every read and never stored — a copy written onto the node row would go stale
+    /// the moment a parent is edited or a folder is moved, which is the same call folder-pool and
+    /// map-coordinate inheritance already made.
+    ///
+    /// The screen draws `tags` and these as two marked groups; a chip here is removed by adding it
+    /// to `tags_excluded`, not by editing `tags`.
+    inherited_tags: Vec<String>,
+    /// Labels this node refuses to inherit (ADR-135 inc. 2). Sorted.
+    ///
+    /// Shown in full, including entries naming a label nothing currently supplies: an exclusion
+    /// that cannot be seen cannot be undone, and it stays meaningful because an ancestor may
+    /// re-add that label later.
+    tags_excluded: Vec<String>,
 }
 
 #[utoipa::path(
@@ -1078,8 +1097,12 @@ async fn get_node(
     // Asked of the dispatcher, which is the only holder of the environment community — before the
     // struct literal below moves `node`'s fields out.
     let snmp_configured = admin.dispatcher.snmp_configured_for(&node);
+    // One whole-table read of `node_groups` per detail GET — the same profile the pool fact beside
+    // it already accepts, against a table of hundreds of rows.
+    let inherited_tags = super::util::tag_resolver(admin).await.inherited(&node);
     // Taken before the literal below moves the node's fields out.
     let tags = std::mem::take(&mut node.tags);
+    let tags_excluded = std::mem::take(&mut node.tags_excluded);
     Ok(Json(NodeDetail {
         kind: NodeKind::resolve(NodeRows {
             meraki: meraki_device.is_some(),
@@ -1102,6 +1125,8 @@ async fn get_node(
         snmp_configured,
         notes,
         tags,
+        inherited_tags,
+        tags_excluded,
     }))
 }
 
@@ -1188,69 +1213,88 @@ fn validated_name(raw: &str) -> ApiResult<&str> {
     Ok(name)
 }
 
-/// Tag limits (ADR-135). This endpoint is the **first validator `nodes.tags` has ever had** — the
-/// column is raw JSONB with no constraint, and its only previous writer was a config-bundle import
+/// Label limits (ADR-135). This endpoint is the **first validator `nodes.tags` has ever had** —
+/// the column carried no constraint, and its only writer before ADR-135 was a config-bundle import
 /// that checked nothing.
 ///
-/// ⚠️ `TAGS_MAX` is 32 while the RCA prompt silently keeps only the first **8**
-/// (`rca/context.rs::MAX_TAGS`). That is not a contradiction to fix here: a node may legitimately
-/// carry more labels than an LLM prompt should be spent on. It is written down because "the AI did
-/// not see my tag" otherwise has no discoverable cause.
-pub(crate) const TAG_KEY_MAX: usize = 64;
-pub(crate) const TAG_VALUE_MAX: usize = 128;
-pub(crate) const TAGS_MAX: usize = 32;
+/// ⚠️ `LABELS_MAX` is 32 *per node and per folder*, while the RCA prompt silently keeps only the
+/// first **8** (`rca/context.rs::MAX_TAGS`) and a node's effective set is capped at
+/// `tagres::EFFECTIVE_LABELS_MAX`. None of those are contradictions to fix here: a node may
+/// legitimately carry more labels than an LLM prompt should be spent on. They are written down
+/// because "the AI did not see my label" otherwise has no discoverable cause.
+pub(crate) const LABEL_MAX: usize = 64;
+pub(crate) const LABELS_MAX: usize = 32;
 
-/// Validate and normalize one node's whole tag map.
+/// Validate and normalize one whole label set.
 ///
-/// Keys are restricted to `[A-Za-z0-9_.:-]` because a tag key is a name an operator types twice —
-/// once here and once when reading it back — and whitespace or punctuation makes the two silently
-/// different. **Values are deliberately unrestricted** beyond length: a value is prose
-/// (`site=Matsuyama 本社`), and it is also what a `ScopeLevel::Group` threshold matches on, so
-/// narrowing it would invalidate rules that already exist.
+/// **Deliberately unrestricted in character** beyond the length and a ban on control characters: a
+/// label is a word a person reads off a badge (`JAPAN`, `松山本社`, `spare parts`), and it is also
+/// what a `ScopeLevel::Group` threshold and a `WindowScope::Group` window match on. The old
+/// key/value shape restricted the *key* to `[A-Za-z0-9_.:-]` and left the *value* free; with one
+/// string, the free rule is the one that survives — a badge is prose.
 ///
-/// ⚠️ Both sides are trimmed and an entry with an empty key **or** an empty value is dropped rather
-/// than refused: the editor sends a blank row for every "add tag" click the operator has not filled
-/// in yet, and rejecting the form for that would make the control unusable.
-fn validated_tags(raw: BTreeMap<String, String>) -> ApiResult<BTreeMap<String, String>> {
-    let mut out = BTreeMap::new();
-    for (k, v) in raw {
-        let (k, v) = (k.trim().to_owned(), v.trim().to_owned());
-        if k.is_empty() || v.is_empty() {
-            continue;
-        }
-        if k.chars().count() > TAG_KEY_MAX {
+/// 🚨 **An empty entry is refused, where the key/value validator silently dropped one.** That drop
+/// existed because the old editor sent a blank row for every unfilled "add tag" click. The chip
+/// input cannot produce one, so a blank arriving here means a client built a bad request, and
+/// swallowing it is how "my label did not save" becomes unexplainable.
+///
+/// ⚠️ **Do not route a *removal* list through this.** A label longer than [`LABEL_MAX`] can exist
+/// in the database — migration 0109 converts from a column whose values could be 128 characters —
+/// and length-checking a removal would make exactly the labels somebody wants gone impossible to
+/// remove. See [`normalized_removals`].
+pub(super) fn validated_labels(raw: Vec<String>) -> ApiResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for label in raw {
+        let label = label.trim().to_owned();
+        if label.is_empty() {
             return Err(ApiError::bad_request(
                 "invalid_tag",
-                format!("tag key {k:?} is longer than {TAG_KEY_MAX} characters"),
+                "a tag cannot be empty".to_owned(),
             ));
         }
-        if !k
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
-        {
+        if label.chars().count() > LABEL_MAX {
             return Err(ApiError::bad_request(
                 "invalid_tag",
-                format!("tag key {k:?} may use only letters, digits, '_', '-', '.' and ':'"),
+                format!("tag {label:?} is longer than {LABEL_MAX} characters"),
             ));
         }
-        if v.chars().count() > TAG_VALUE_MAX {
+        if label.chars().any(char::is_control) {
             return Err(ApiError::bad_request(
                 "invalid_tag",
-                format!("the value of tag {k:?} is longer than {TAG_VALUE_MAX} characters"),
+                format!("tag {label:?} contains a control character"),
             ));
         }
-        out.insert(k, v);
+        if !out.contains(&label) {
+            out.push(label);
+        }
     }
-    if out.len() > TAGS_MAX {
+    if out.len() > LABELS_MAX {
         return Err(ApiError::bad_request(
             "invalid_tag",
-            format!(
-                "a node may carry at most {TAGS_MAX} tags, got {}",
-                out.len()
-            ),
+            format!("at most {LABELS_MAX} tags are allowed, got {}", out.len()),
         ));
     }
+    out.sort();
     Ok(out)
+}
+
+/// Trim and de-duplicate a list of labels to *remove* or to *exclude*, with **no** length or
+/// character check.
+///
+/// 🚨 The asymmetry with [`validated_labels`] is the point. Those rules police what can be
+/// created; a label already in the database may predate them (0109 converts values that could be
+/// twice as long, from a column that never rejected a control character). Applying them here would
+/// mean the only labels an operator cannot delete are the ones they most want to.
+pub(super) fn normalized_removals(raw: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for label in raw {
+        let label = label.trim().to_owned();
+        if !label.is_empty() && !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out.sort();
+    out
 }
 
 /// A three-state free-text update: `None` = leave the column alone, `Some(None)` = clear it,
@@ -1395,19 +1439,34 @@ pub(super) struct NodeBindings {
     /// means what a *device* reports about one of its ports (`interfaces.if_alias`).
     #[serde(default)]
     notes: Option<String>,
-    /// The node's grouping tags. **Absent** = leave them unchanged; otherwise **the whole map is
-    /// replaced** by what is sent — the edit dialog shows every tag and resends every tag, so a
-    /// replacement is what the operator sees. `{}` clears them all.
+    /// The node's own labels. **Absent** = leave them unchanged; otherwise **the whole list is
+    /// replaced** by what is sent — the edit dialog shows every label and resends every label, so
+    /// a replacement is what the operator sees. `[]` clears them all.
     ///
-    /// ⚠️ To add one tag to many nodes without knowing what else they carry, use
+    /// Free-form strings of at most 64 characters, at most 32 of them; trimmed, de-duplicated and
+    /// sorted by the server. A label is what a `ScopeLevel::Group` threshold and a
+    /// `WindowScope::Group` maintenance window match on.
+    ///
+    /// ⚠️ This sets only what the node itself carries. Labels it inherits from its folder are
+    /// changed on the folder (`PUT /api/v1/node-groups/{id}/tags`) or refused here with
+    /// `tags_excluded`.
+    ///
+    /// ⚠️ To add one label to many nodes without knowing what else they carry, use
     /// `POST /api/v1/nodes/tags`, which **merges**. Replacing from a bulk caller would silently
     /// wipe labels it never saw.
-    ///
-    /// 🚨 A tag's **value** is what a `ScopeLevel::Group` threshold and a `WindowScope::Group`
-    /// maintenance window match on; the **key is discarded** by both. So `region=JAPAN` is matched
-    /// by a rule scoped to `JAPAN`, never by one scoped to `region=JAPAN` (ADR-135 decision 6).
     #[serde(default)]
-    tags: Option<BTreeMap<String, String>>,
+    tags: Option<Vec<String>>,
+    /// Labels this node refuses to inherit from its folder chain. Same three-state and
+    /// whole-value contract as `tags`; `[]` clears the refusals.
+    ///
+    /// ⚠️ **Not length- or character-checked**, unlike `tags`. A label already in the database may
+    /// predate those rules, and refusing to let one be excluded because it is too long would make
+    /// exactly the wrong labels unrefusable. Only trimmed and de-duplicated.
+    ///
+    /// An entry naming a label no folder currently supplies is kept, not dropped: if an ancestor
+    /// re-adds it later, the refusal still holds.
+    #[serde(default)]
+    tags_excluded: Option<Vec<String>>,
 }
 
 #[utoipa::path(
@@ -1439,7 +1498,8 @@ async fn set_node_bindings(
         .transpose()?
         .map(Some);
     let notes_update = free_text_update(body.notes.as_ref(), NOTES_MAX, "invalid_notes", "notes")?;
-    let tags_update = body.tags.map(validated_tags).transpose()?;
+    let tags_update = body.tags.map(validated_labels).transpose()?;
+    let excluded_update = body.tags_excluded.map(normalized_removals);
     let found = admin
         .repo
         .set_node_bindings(
@@ -1452,7 +1512,8 @@ async fn set_node_bindings(
                 pool: pool_update.as_ref().map(|inner| inner.as_deref()),
                 name: name_update,
                 notes: notes_update,
-                tags: tags_update.as_ref(),
+                tags: tags_update.as_deref(),
+                tags_excluded: excluded_update.as_deref(),
             },
         )
         .await
@@ -1597,11 +1658,17 @@ fn node_prefix_dtos(
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct BulkNodeTags {
     node_ids: Vec<Uuid>,
-    /// Tags to set on every named node. An existing key is overwritten; a key not named here is
-    /// left alone. Same validation as the single-node edit.
+    /// Labels to add to every named node. One a node already carries is a no-op, and one not named
+    /// here is left alone. Same validation as the single-node edit.
+    ///
+    /// ⚠️ Adds to each node's **own** labels. A label a node inherits from its folder is not
+    /// touched by this, and cannot be removed by it.
     #[serde(default)]
-    add: BTreeMap<String, String>,
-    /// Tag keys to remove from every named node. A key a node does not carry is not an error.
+    add: Vec<String>,
+    /// Labels to take off every named node. One a node does not carry is not an error.
+    ///
+    /// ⚠️ Not length- or character-checked, for the reason `normalized_removals` records: a label
+    /// already stored may predate the rules that now apply to new ones.
     #[serde(default)]
     remove: Vec<String>,
 }
@@ -1655,10 +1722,11 @@ async fn bulk_tag_nodes(
             ),
         ));
     }
-    let add = validated_tags(body.add)?;
+    let add = validated_labels(body.add)?;
+    let remove = normalized_removals(body.remove);
     let (requested, applied) = admin
         .repo
-        .merge_node_tags(&body.node_ids, &add, &body.remove, scope.group_filter())
+        .merge_node_tags(&body.node_ids, &add, &remove, scope.group_filter())
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "bulk tag nodes", "failed to tag nodes")
@@ -1669,7 +1737,7 @@ async fn bulk_tag_nodes(
         requested,
         applied,
         added = add.len(),
-        removed = body.remove.len(),
+        removed = remove.len(),
         "bulk node tag"
     );
     Ok(Json(BulkTagResult { requested, applied }))

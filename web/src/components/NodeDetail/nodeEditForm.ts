@@ -98,10 +98,9 @@ export const NODE_EDIT_FIELD_META: Record<
 
 /** The longest note the API accepts (ADR-135). Mirrors `api/nodes.rs::NOTES_MAX`. */
 export const NOTES_MAX = 2000;
-/** Tag limits, mirroring `api/nodes.rs`. Checked here so the operator is told before the save. */
-export const TAG_KEY_MAX = 64;
-export const TAG_VALUE_MAX = 128;
-export const TAGS_MAX = 32;
+// Label limits and the rules over them live in `components/ui/labelRules.ts` since ADR-135 inc. 2 —
+// the same control is used by this dialog, the bulk dialog and the folder dialog, so the judgement
+// belongs beside the component rather than here.
 
 /** A node name the API will accept: non-empty once trimmed. The column is `NOT NULL`, so there is
  *  no "clear the name" — an empty box is a mistake to report, not an instruction. */
@@ -114,48 +113,6 @@ export function isValidNodeName(name: string): boolean {
  *  here, which is the worst place to disagree. */
 export function isValidNotes(notes: string): boolean {
   return [...notes.trim()].length <= NOTES_MAX;
-}
-
-/** One row of the tag editor. Kept as a list rather than a map so the operator can type a key and
- *  a value independently, and so two half-finished rows do not collapse into one. */
-export interface TagRow {
-  key: string;
-  value: string;
-}
-
-/** Why a tag row cannot be saved, or `null`. Blank rows are **not** an error — the editor adds one
- *  on every "+" click and the request builder drops them, so refusing the form for an empty row
- *  would make the control unusable. */
-export function tagRowProblem(row: TagRow): 'keyTooLong' | 'keyCharset' | 'valueTooLong' | null {
-  const key = row.key.trim();
-  const value = row.value.trim();
-  if (key === '' && value === '') return null;
-  if ([...key].length > TAG_KEY_MAX) return 'keyTooLong';
-  if (key !== '' && !/^[A-Za-z0-9_.:-]+$/.test(key)) return 'keyCharset';
-  if ([...value].length > TAG_VALUE_MAX) return 'valueTooLong';
-  return null;
-}
-
-/** The tag rows as the request carries them: trimmed, blanks dropped, later keys winning.
- *
- *  ⚠️ A row with a key and no value is dropped too, matching the backend — a key alone has no
- *  meaning to either matcher that reads tags. */
-export function tagsFromRows(rows: readonly TagRow[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const row of rows) {
-    const key = row.key.trim();
-    const value = row.value.trim();
-    if (key !== '' && value !== '') out[key] = value;
-  }
-  return out;
-}
-
-/** Whether every tag row is savable and there are not too many of them. */
-export function tagsAreValid(rows: readonly TagRow[]): boolean {
-  return (
-    rows.every((r) => tagRowProblem(r) === null) &&
-    Object.keys(tagsFromRows(rows)).length <= TAGS_MAX
-  );
 }
 
 /** Facts owned by the kind rather than by a field. */
@@ -259,7 +216,8 @@ export interface NodeEditDraft {
   model: string;
   pool: string;
   notes: string;
-  tags: TagRow[];
+  tags: string[];
+  tagsExcluded: string[];
   url: UrlCheckDraft | null;
   dns: DnsCheckDraft | null;
 }
@@ -280,10 +238,11 @@ export function nodeEditDraftFrom(node: NodeDetail): NodeEditDraft {
     model: node.model ?? '',
     pool: node.pool ?? '',
     notes: node.notes ?? '',
-    // Sorted, so the rows do not reshuffle between two openings of the same dialog.
-    tags: Object.entries(node.tags ?? {})
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => ({ key, value })),
+    // Sorted, so the chips do not reshuffle between two openings of the same dialog. ⚠️ The
+    // node's OWN labels only — what it inherits from its folder is read-only here, and is refused
+    // by adding to `tagsExcluded` rather than by editing this list (ADR-135 inc. 2).
+    tags: [...(node.tags ?? [])].sort((a, b) => a.localeCompare(b)),
+    tagsExcluded: [...(node.tags_excluded ?? [])].sort((a, b) => a.localeCompare(b)),
     url: node.url_check ? urlDraftFrom(node.url_check) : null,
     dns: node.dns_check ? dnsDraftFrom(node.dns_check) : null,
   };
@@ -304,9 +263,13 @@ export interface NodeEditBindings {
   /** Always a string, never null, for the same reason `pool` is: `''` is how an operator deletes
    *  the note, and a JSON `null` would read server-side as "leave it alone". */
   notes: string;
-  /** Always sent, because the dialog shows every tag and therefore knows the whole map. Omitting
-   *  it would read as "leave them alone", so removing the last tag would silently do nothing. */
-  tags: Record<string, string>;
+  /** Always sent, because the dialog shows every label and therefore knows the whole list.
+   *  Omitting it would read as "leave them alone", so removing the last one would silently do
+   *  nothing. The node's **own** labels — never the inherited ones. */
+  tags: string[];
+  /** Always sent, on the same terms as `tags`: the labels this node refuses to inherit from its
+   *  folder chain. */
+  tags_excluded: string[];
 }
 
 /** Everything one Save writes. `check` is null for the kinds that have no check row of their own. */
@@ -344,7 +307,8 @@ export function nodeEditRequest(
         pool: d.pool.trim(),
         name: d.name.trim(),
         notes: d.notes.trim(),
-        tags: tagsFromRows(d.tags),
+        tags: d.tags,
+        tags_excluded: d.tagsExcluded,
       },
     },
   };

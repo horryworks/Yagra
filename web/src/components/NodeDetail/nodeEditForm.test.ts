@@ -38,12 +38,7 @@ import {
   visibleNodeEditSections,
   isValidNodeName,
   isValidNotes,
-  tagRowProblem,
-  tagsAreValid,
   NOTES_MAX,
-  TAGS_MAX,
-  TAG_KEY_MAX,
-  TAG_VALUE_MAX,
   type NodeEditRequest,
 } from './nodeEditForm';
 
@@ -62,7 +57,9 @@ const node = (over: Partial<NodeDetail> = {}): NodeDetail =>
     model: 'C9300',
     pool: 'site-a',
     notes: 'in the ceiling void',
-    tags: { role: 'core', region: 'JAPAN' },
+    tags: ['core', 'JAPAN'],
+    tags_excluded: [],
+    inherited_tags: [],
     ...over,
   }) as NodeDetail;
 
@@ -269,6 +266,7 @@ describe('nodeEditRequest bindings', () => {
         'pool',
         'profile_id',
         'tags',
+        'tags_excluded',
         'vendor',
       ]);
       expect(bindings, kind).toEqual({
@@ -279,7 +277,9 @@ describe('nodeEditRequest bindings', () => {
         pool: 'site-a',
         name: 'edge-1',
         notes: 'in the ceiling void',
-        tags: { role: 'core', region: 'JAPAN' },
+        // Sorted by the draft seeder, so the order here is the order that goes out.
+        tags: ['core', 'JAPAN'],
+        tags_excluded: [],
       });
     }
   });
@@ -310,9 +310,10 @@ describe('nodeEditRequest bindings', () => {
   });
 
   it('reads an absent note and absent tags as empty rather than undefined', () => {
-    const draft = nodeEditDraftFrom(node({ notes: null, tags: {} }));
+    const draft = nodeEditDraftFrom(node({ notes: null, tags: [] }));
     expect(draft.notes).toBe('');
     expect(draft.tags).toEqual([]);
+    expect(draft.tagsExcluded).toEqual([]);
   });
 
   // Same reason the pool is always a string: the server reads an absent `notes` as "leave it
@@ -327,26 +328,26 @@ describe('nodeEditRequest bindings', () => {
     expect(req(nodeEditRequest('device', kept)).bindings.notes).toBe('two\nlines');
   });
 
-  it('sends the tag map even when it is empty, so removing the last tag lands', () => {
+  it('sends both label lists even when they are empty, so removing the last one lands', () => {
     // An omitted `tags` reads server-side as "leave them alone", which would make deleting the
-    // final tag look like it worked and then come back on the next load.
-    const draft = { ...nodeEditDraftFrom(node()), tags: [] };
-    expect(req(nodeEditRequest('device', draft)).bindings.tags).toEqual({});
+    // final label look like it worked and then come back on the next load. `tags_excluded` is the
+    // same contract, and gets the same treatment.
+    const draft = { ...nodeEditDraftFrom(node()), tags: [], tagsExcluded: [] };
+    const bindings = req(nodeEditRequest('device', draft)).bindings;
+    expect(bindings.tags).toEqual([]);
+    expect(bindings.tags_excluded).toEqual([]);
   });
 
-  it('drops half-finished tag rows instead of refusing the form', () => {
-    // The editor adds a blank row on every "+" click, so a blank row is the normal state of the
-    // control rather than an error. A key with no value goes too: neither matcher that reads tags
-    // can do anything with one.
+  it('sends the node’s own labels and its refusals as two separate lists', () => {
+    // 🚨 They must not be merged on the way out. `tags` is what this node carries; `tags_excluded`
+    // is what it refuses from its folder — sending a refusal as a label would *add* the thing the
+    // operator just said they did not want.
     const draft = {
-      ...nodeEditDraftFrom(node()),
-      tags: [
-        { key: ' region ', value: ' JAPAN ' },
-        { key: '', value: '' },
-        { key: 'orphan', value: '  ' },
-      ],
+      ...nodeEditDraftFrom(node({ tags: ['spare'], tags_excluded: ['JAPAN'] })),
     };
-    expect(req(nodeEditRequest('device', draft)).bindings.tags).toEqual({ region: 'JAPAN' });
+    const bindings = req(nodeEditRequest('device', draft)).bindings;
+    expect(bindings.tags).toEqual(['spare']);
+    expect(bindings.tags_excluded).toEqual(['JAPAN']);
   });
 });
 
@@ -367,24 +368,9 @@ describe('node name and note limits', () => {
     expect(isValidNotes(`  ${'a'.repeat(NOTES_MAX)}  `)).toBe(true);
   });
 
-  it('names the reason a tag row cannot be saved, and leaves a blank row alone', () => {
-    expect(tagRowProblem({ key: '', value: '' })).toBeNull();
-    expect(tagRowProblem({ key: 'region', value: 'JAPAN' })).toBeNull();
-    expect(tagRowProblem({ key: 'has space', value: 'x' })).toBe('keyCharset');
-    expect(tagRowProblem({ key: 'a'.repeat(TAG_KEY_MAX + 1), value: 'x' })).toBe('keyTooLong');
-    expect(tagRowProblem({ key: 'k', value: 'v'.repeat(TAG_VALUE_MAX + 1) })).toBe('valueTooLong');
-    // The four punctuation marks the backend accepts.
-    expect(tagRowProblem({ key: 'a_b-c.d:e', value: 'x' })).toBeNull();
-  });
-
-  it('refuses more tags than a node may carry, counting only the filled rows', () => {
-    const rows = (n: number) =>
-      Array.from({ length: n }, (_, i) => ({ key: `k${i}`, value: 'v' }));
-    expect(tagsAreValid(rows(TAGS_MAX))).toBe(true);
-    expect(tagsAreValid(rows(TAGS_MAX + 1))).toBe(false);
-    // Blank rows are not tags, so they do not count toward the ceiling.
-    expect(tagsAreValid([...rows(TAGS_MAX), { key: '', value: '' }])).toBe(true);
-  });
+  // The label rules moved to `ui/labelRules.test.ts` with the control (ADR-135 inc. 2): three
+  // dialogs share one chip input, so the boundary cases belong beside it rather than beside this
+  // one form.
 });
 
 describe('nodeEditRequest check half', () => {

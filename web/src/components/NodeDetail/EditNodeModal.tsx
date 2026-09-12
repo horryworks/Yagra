@@ -34,16 +34,16 @@ import {
   visibleNodeEditSections,
   isValidNodeName,
   isValidNotes,
-  tagRowProblem,
-  tagsAreValid,
   NODE_EDIT_FIELD_META,
   NODE_EDIT_KIND_SPEC,
   NOTES_MAX,
   PARTIAL_SAVE_KEY,
-  TAGS_MAX,
   type NodeEditDraft,
   type NodeEditField,
 } from './nodeEditForm';
+import { ChipInput } from '../ui/ChipInput';
+import { LABELS_MAX, labelsAreValid } from '../ui/labelRules';
+import { Badge } from '../ui/Badge';
 
 export function EditNodeModal({
   node,
@@ -70,12 +70,14 @@ export function EditNodeModal({
   const poolInvalid = !isValidPoolName(d.pool);
   const nameInvalid = !isValidNodeName(d.name);
   const notesTooLong = !isValidNotes(d.notes);
-  const tagsInvalid = !tagsAreValid(d.tags);
+  const tagsInvalid = !labelsAreValid(d.tags);
+  // What the folder chain still supplies after this draft's refusals — recomputed from the draft
+  // rather than from `node.inherited_tags` alone, so ✕-ing a chip removes it from this list at
+  // once instead of after a round trip.
+  const inherited = (node.inherited_tags ?? []).filter((l) => !d.tagsExcluded.includes(l));
 
   const set = <K extends keyof NodeEditDraft>(k: K, v: NodeEditDraft[K]) =>
     setD((prev) => ({ ...prev, [k]: v }));
-  const setTagRow = (i: number, row: NodeEditDraft['tags'][number]) =>
-    setD((prev) => ({ ...prev, tags: prev.tags.map((r, j) => (j === i ? row : r)) }));
 
   const showsCredential = fields.includes('snmpCredential');
 
@@ -210,50 +212,55 @@ export function EditNodeModal({
     tags: (
       <div className="modal-field nd-tags">
         <span className="modal-field-label">{t('field.tags')}</span>
-        {d.tags.map((row, i) => {
-          const problem = tagRowProblem(row);
-          return (
-            <div className="nd-tag-row" key={i}>
-              <TextInput
-                className="mono"
-                value={row.key}
-                placeholder={t('field.tagKeyPlaceholder')}
-                aria-label={t('field.tagKey')}
-                onChange={(e) => setTagRow(i, { ...row, key: e.target.value })}
-              />
-              <span className="nd-tag-eq" aria-hidden="true">
-                =
-              </span>
-              <TextInput
-                value={row.value}
-                placeholder={t('field.tagValuePlaceholder')}
-                aria-label={t('field.tagValue')}
-                onChange={(e) => setTagRow(i, { ...row, value: e.target.value })}
-              />
-              <IconButton
-                title={t('field.tagRemove', { key: row.key || t('field.tagKey') })}
-                onClick={() =>
-                  set(
-                    'tags',
-                    d.tags.filter((_, j) => j !== i),
-                  )
-                }
-              >
-                ✕
-              </IconButton>
-              {problem && <FieldHint error>{t(`field.tagErr.${problem}`)}</FieldHint>}
-            </div>
-          );
-        })}
-        <div className="nd-tag-add">
-          <Button
-            onClick={() => set('tags', [...d.tags, { key: '', value: '' }])}
-            disabled={d.tags.length >= TAGS_MAX}
-          >
-            ＋ {t('field.tagAdd')}
-          </Button>
-        </div>
-        <FieldHint error={tagsInvalid}>{t('field.tagHint', { max: TAGS_MAX })}</FieldHint>
+        <ChipInput
+          value={d.tags}
+          onChange={(next) => set('tags', next)}
+          placeholder={t('field.tagPlaceholder')}
+          inputLabel={t('field.tags')}
+        />
+        {/* What the folder chain supplies, and the refusals over it. Hidden entirely when this
+            node inherits nothing and refuses nothing — an empty section would be a claim nobody
+            made. */}
+        {(inherited.length > 0 || d.tagsExcluded.length > 0) && (
+          <div className="nd-inherited-tags">
+            {inherited.length > 0 && (
+              <>
+                <span className="modal-field-label">{t('field.tagsInherited')}</span>
+                <ul className="nd-tag-badges">
+                  {inherited.map((label) => (
+                    <li key={label}>
+                      <Badge>{label}</Badge>
+                      {/* ✕ here EXCLUDES rather than deletes: the label lives on the folder, and
+                          this node cannot edit it — only refuse it. */}
+                      <IconButton
+                        title={t('field.tagExclude', { label })}
+                        onClick={() => set('tagsExcluded', [...d.tagsExcluded, label])}
+                      >
+                        ✕
+                      </IconButton>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {d.tagsExcluded.length > 0 && (
+              <>
+                <span className="modal-field-label">{t('field.tagsExcluded')}</span>
+                {/* Every refusal, including ones naming a label no folder currently supplies: an
+                    exclusion that cannot be seen cannot be undone, and it stays meaningful because
+                    an ancestor may re-add that label later. `lenient`, because a stored label may
+                    predate the rules new ones follow. */}
+                <ChipInput
+                  value={d.tagsExcluded}
+                  onChange={(next) => set('tagsExcluded', next)}
+                  inputLabel={t('field.tagsExcluded')}
+                  lenient
+                />
+              </>
+            )}
+          </div>
+        )}
+        <FieldHint error={tagsInvalid}>{t('field.tagHint', { max: LABELS_MAX })}</FieldHint>
       </div>
     ),
     notes: (

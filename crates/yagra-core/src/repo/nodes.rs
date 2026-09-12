@@ -93,9 +93,18 @@ pub struct NodeBindingUpdate<'a> {
     /// three shapes.
     pub name: Option<Option<&'a str>>,
     pub notes: Option<Option<&'a str>>,
-    /// The node's whole tag map, **replaced**. `None` leaves the column alone; an empty map clears
-    /// it. Merging one tag into many nodes is [`NodeRepo::merge_node_tags`], a different question.
-    pub tags: Option<&'a BTreeMap<String, String>>,
+    /// The node's whole label set, **replaced**. `None` leaves the column alone; an empty slice
+    /// clears it. Merging one label into many nodes is [`NodeRepo::merge_node_tags`], a different
+    /// question.
+    pub tags: Option<&'a [String]>,
+    /// Labels the node refuses to inherit from its folder chain, **replaced** on the same terms
+    /// (ADR-135 inc. 2). `None` leaves the column alone; an empty slice clears it.
+    ///
+    /// ⚠️ Only inherited labels can be excluded — a label the node carries itself is removed by
+    /// dropping it from `tags`, not by adding it here. An entry naming a label nothing currently
+    /// supplies is inert and kept deliberately: if an ancestor re-adds it later, the operator's
+    /// "not here" still holds.
+    pub tags_excluded: Option<&'a [String]>,
 }
 
 impl NodeRepo {
@@ -324,7 +333,8 @@ impl NodeRepo {
              pool  = CASE WHEN $6::boolean  THEN $7::text  ELSE pool  END, \
              name  = CASE WHEN $8::boolean  THEN $9::text  ELSE name  END, \
              notes = CASE WHEN $10::boolean THEN $11::text ELSE notes END, \
-             tags  = CASE WHEN $12::boolean THEN $13::jsonb ELSE tags  END, \
+             tags  = CASE WHEN $12::boolean THEN $13::text[] ELSE tags END, \
+             tags_excluded = CASE WHEN $14::boolean THEN $15::text[] ELSE tags_excluded END, \
              updated_at = now() WHERE id = $1",
         )
         .bind(id)
@@ -340,7 +350,9 @@ impl NodeRepo {
         .bind(u.notes.is_some())
         .bind(u.notes.flatten())
         .bind(u.tags.is_some())
-        .bind(sqlx::types::Json(u.tags.cloned().unwrap_or_default()))
+        .bind(u.tags.unwrap_or(&[]))
+        .bind(u.tags_excluded.is_some())
+        .bind(u.tags_excluded.unwrap_or(&[]))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -351,8 +363,29 @@ impl NodeRepo {
     ///
     /// 🚨 **Merge, not replace, and the difference is the whole reason this is its own method.**
     /// The caller selected nodes in the tree and knows one label it wants on all of them; it does
-    /// **not** know what else each of them carries. `jsonb ||` adds and overwrites only the keys
-    /// named, and `- text[]` removes only the keys named, so a node's other labels are untouched.
+    /// **not** know what else each of them carries. Only the labels named are added or taken away.
+    ///
+    /// 🚨 **The three things `jsonb` gave for free and `text[]` does not** (ADR-135 inc. 2):
+    ///
+    /// * `COALESCE(array_agg(…), '{}')` — `array_agg` over zero rows returns **NULL**, so removing
+    ///   a node's last label would otherwise write NULL into a `NOT NULL` column. It fails loudly
+    ///   *because* the column is `NOT NULL`; on a nullable one it would silently make every
+    ///   reader's `try_get::<Vec<String>>` fail instead.
+    /// * `DISTINCT … ORDER BY` — `array ||` concatenates, where `jsonb ||` merged by key. Without
+    ///   it, adding a label a node already carries stores it twice, and every badge, every
+    ///   `contains` and every RCA fingerprint then sees the duplicate.
+    /// * `t <> ALL($3)` — correct on an empty array (removes nothing) and cannot see a NULL,
+    ///   because the bind is a `Vec<String>`.
+    ///
+    /// ⚠️ **Do not add `AND tags IS DISTINCT FROM (the new value)` to skip no-ops.**
+    /// `rows_affected()` *is* the `applied` count the API reports, so suppressing a no-op would
+    /// make `applied < requested` for a node that already carried the label — which reads to the
+    /// operator as a partial failure.
+    ///
+    /// ⚠️ **This path cannot enforce the per-node label cap** and does not try: it does not know
+    /// what each node already carries, and enforcing it in SQL would silently skip some rows,
+    /// which would give `applied` two meanings. The edit dialog can always save a node back under
+    /// the cap, so an over-cap node is never stuck.
     ///
     /// `scope` narrows which nodes may be written: a caller restricted to some folders cannot
     /// label a node they cannot see. The predicate is written out rather than reusing
@@ -367,7 +400,7 @@ impl NodeRepo {
     pub async fn merge_node_tags(
         &self,
         ids: &[Uuid],
-        add: &BTreeMap<String, String>,
+        add: &[String],
         remove: &[String],
         scope: GroupFilter<'_>,
     ) -> anyhow::Result<(usize, u64)> {
@@ -377,11 +410,15 @@ impl NodeRepo {
             return Ok((0, 0));
         }
         let res = sqlx::query(
-            "UPDATE nodes SET tags = (tags || $2::jsonb) - $3::text[], updated_at = now() \
+            "UPDATE nodes SET tags = ( \
+                   SELECT COALESCE(array_agg(DISTINCT t ORDER BY t), '{}') \
+                     FROM unnest(tags || $2::text[]) AS t \
+                    WHERE t <> ALL ($3::text[])), \
+                 updated_at = now() \
              WHERE id = ANY($1) AND ($4::uuid[] IS NULL OR group_id = ANY($4))",
         )
         .bind(&ids)
-        .bind(sqlx::types::Json(add))
+        .bind(add)
         .bind(remove)
         .bind(Self::scope_bind(scope))
         .execute(&self.pool)
@@ -796,8 +833,11 @@ impl NodeRepo {
             return Ok(HashMap::new());
         }
         let rows = sqlx::query(
+            // `group_id` and `tags_excluded` ride along for the label resolution the caller does:
+            // a node's effective labels are `(what its folder chain supplies - tags_excluded) +
+            // tags`, and the folder chain is not reachable from this query (ADR-135 inc. 2).
             "SELECT n.id, n.name, host(n.address) AS address, g.name AS group_name, \
-                    p.name AS profile_name, n.tags \
+                    p.name AS profile_name, n.tags, n.tags_excluded, n.group_id \
                FROM nodes n \
                LEFT JOIN node_groups g ON g.id = n.group_id \
                LEFT JOIN profiles p ON p.id = n.profile_id \
@@ -815,9 +855,9 @@ impl NodeRepo {
                         address: row.try_get("address")?,
                         group: row.try_get("group_name")?,
                         profile: row.try_get("profile_name")?,
-                        tags: row
-                            .try_get::<sqlx::types::Json<BTreeMap<String, String>>, _>("tags")?
-                            .0,
+                        tags: row.try_get("tags")?,
+                        tags_excluded: row.try_get("tags_excluded")?,
+                        group_id: row.try_get("group_id")?,
                     },
                 ))
             })
@@ -1055,6 +1095,66 @@ mod tests {
         assert_eq!(cleared.notes, None);
     }
 
+    /// The same three-state reading, for the two label lists (ADR-135 inc. 2).
+    ///
+    /// 🚨 Both directions, for the reason the note's twin above states: a test with only the "leave
+    /// alone" half passes against an implementation that ignores the field, and one with only the
+    /// "clear it" half passes against one that clears on every write. `tags` is the field most
+    /// exposed to the second — every save the edit dialog makes carries it, and a caller that omits
+    /// it (an older WebUI tab mid-upgrade) must not strip a node bare.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn unmentioned_labels_survive_a_save_and_an_empty_list_clears_them(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "sw-1", 1, None).await;
+        let repo = pgtest::repo(pool);
+        let tags = vec!["JAPAN".to_owned(), "core".to_owned()];
+        let excluded = vec!["noisy".to_owned()];
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    tags: Some(&tags),
+                    tags_excluded: Some(&excluded),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set labels"));
+
+        // A save that mentions neither — the shape a pool-only edit takes.
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    pool: Some(Some("edge")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("pool only"));
+        let kept = repo.get_node(id).await.expect("read").expect("the node");
+        assert_eq!(kept.tags, tags, "an unmentioned label list was destroyed");
+        assert_eq!(kept.tags_excluded, excluded);
+        assert_eq!(kept.pool.as_deref(), Some("edge"));
+
+        // …and an empty list is a clear, not a no-op: otherwise removing the last label would look
+        // like it worked and come back on the next read.
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    tags: Some(&[]),
+                    tags_excluded: Some(&[]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("clear labels"));
+        let cleared = repo.get_node(id).await.expect("read").expect("the node");
+        assert!(cleared.tags.is_empty());
+        assert!(cleared.tags_excluded.is_empty());
+    }
+
     /// 🚨 **A bulk tag edit MERGES. The label a caller never mentioned must survive it.**
     ///
     /// This is the whole reason `merge_node_tags` exists beside the replacing path: the tree gives
@@ -1064,16 +1164,17 @@ mod tests {
     ///
     /// Removal is asserted too, and in the same run: a merge that could only add would make the ✕
     /// in the bulk dialog do nothing, silently.
+    ///
+    /// 🚨 Since ADR-135 inc. 2 it also asserts **de-duplication** and **that the last label leaves
+    /// an empty array rather than NULL**. `jsonb ||` merged by key and gave both for free; `text[]`
+    /// `||` concatenates, and `array_agg` over no rows returns NULL into a `NOT NULL` column.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_tag_merges_and_leaves_unmentioned_labels_alone(pool: sqlx::PgPool) {
         let a = pgtest::node(&pool, "a", 1, None).await;
         let b = pgtest::node(&pool, "b", 2, None).await;
         let repo = pgtest::repo(pool);
-        let existing = BTreeMap::from([
-            ("role".to_owned(), "core".to_owned()),
-            ("owner".to_owned(), "neteng".to_owned()),
-        ]);
+        let existing = vec!["core".to_owned(), "neteng".to_owned()];
         assert!(repo
             .set_node_bindings(
                 a,
@@ -1085,7 +1186,8 @@ mod tests {
             .await
             .expect("seed tags"));
 
-        let add = BTreeMap::from([("region".to_owned(), "JAPAN".to_owned())]);
+        // `core` is deliberately re-added: on `text[]` the concat would store it twice.
+        let add = vec!["JAPAN".to_owned(), "core".to_owned()];
         let (requested, applied) = repo
             .merge_node_tags(&[a, b, a], &add, &[], None)
             .await
@@ -1094,27 +1196,88 @@ mod tests {
         assert_eq!(applied, 2);
 
         let tagged = repo.get_node(a).await.expect("read").expect("a");
-        assert_eq!(tagged.tags.get("region").map(String::as_str), Some("JAPAN"));
         assert_eq!(
-            tagged.tags.get("role").map(String::as_str),
-            Some("core"),
-            "a label nobody mentioned was destroyed by a bulk add"
+            tagged.tags,
+            vec!["JAPAN".to_owned(), "core".to_owned(), "neteng".to_owned()],
+            "a label nobody mentioned was destroyed, or a re-added one was stored twice"
         );
-        assert_eq!(tagged.tags.get("owner").map(String::as_str), Some("neteng"));
-        // The node that started empty got exactly the one label.
+        // The node that started empty got exactly the two labels, once each.
         let fresh = repo.get_node(b).await.expect("read").expect("b");
-        assert_eq!(fresh.tags.len(), 1);
+        assert_eq!(fresh.tags, vec!["JAPAN".to_owned(), "core".to_owned()]);
 
-        // Removing names keys, and touches only those.
+        // Removing names labels, and touches only those.
         let (_, applied) = repo
-            .merge_node_tags(&[a], &BTreeMap::new(), &["role".to_owned()], None)
+            .merge_node_tags(&[a], &[], &["core".to_owned()], None)
             .await
             .expect("remove");
         assert_eq!(applied, 1);
         let after = repo.get_node(a).await.expect("read").expect("a");
-        assert_eq!(after.tags.get("role"), None);
-        assert_eq!(after.tags.get("region").map(String::as_str), Some("JAPAN"));
-        assert_eq!(after.tags.get("owner").map(String::as_str), Some("neteng"));
+        assert_eq!(
+            after.tags,
+            vec!["JAPAN".to_owned(), "neteng".to_owned()],
+            "removal took a label it was not asked to"
+        );
+
+        // 🚨 The last one out must leave `{}`, not NULL. A NULL here is a `NOT NULL` violation that
+        // would surface as a 500 from a handler nobody would connect to this statement.
+        let (_, applied) = repo
+            .merge_node_tags(&[b], &[], &["JAPAN".to_owned(), "core".to_owned()], None)
+            .await
+            .expect("remove every label");
+        assert_eq!(applied, 1);
+        let emptied = repo.get_node(b).await.expect("read").expect("b");
+        assert!(emptied.tags.is_empty());
+    }
+
+    /// 🚨 **A group-scoped caller cannot relabel a node outside its folders.**
+    ///
+    /// ADR-135's own remnant recorded that this was never written: the predicate was copied from
+    /// `move_nodes` and believed. A scope test that only ever checks the *unscoped* call proves
+    /// nothing — this one drives the same statement twice, once with a scope that admits the node
+    /// and once with one that does not, so "the predicate is ignored" and "the predicate refuses
+    /// everything" are both visible.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_tag_leaves_nodes_outside_the_scope_alone(pool: sqlx::PgPool) {
+        let mine = uuid::Uuid::new_v4();
+        let theirs = uuid::Uuid::new_v4();
+        for (id, name) in [(mine, "mine"), (theirs, "theirs")] {
+            sqlx::query("INSERT INTO node_groups (id, name, group_type) VALUES ($1, $2, 'site')")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("seed group");
+        }
+        let a = pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let b = pgtest::node(&pool, "b", 2, Some(theirs)).await;
+        let repo = pgtest::repo(pool);
+
+        let add = vec!["JAPAN".to_owned()];
+        let (requested, applied) = repo
+            .merge_node_tags(&[a, b], &add, &[], Some(&[mine]))
+            .await
+            .expect("scoped merge");
+        assert_eq!(requested, 2, "both ids were asked for");
+        assert_eq!(applied, 1, "the node outside the scope must not be written");
+        assert_eq!(repo.get_node(a).await.expect("read").expect("a").tags, add);
+        assert!(
+            repo.get_node(b)
+                .await
+                .expect("read")
+                .expect("b")
+                .tags
+                .is_empty(),
+            "a caller scoped to one folder relabelled a node in another"
+        );
+
+        // And the accept side: unscoped, the same call reaches both. Without this the test would
+        // pass on an implementation that refuses everything.
+        let (_, applied) = repo
+            .merge_node_tags(&[a, b], &add, &[], None)
+            .await
+            .expect("unscoped merge");
+        assert_eq!(applied, 2);
     }
 
     /// Every setter reports whether it found the row — and says `false` for one that is not there.

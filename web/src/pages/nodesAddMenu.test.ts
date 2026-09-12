@@ -13,6 +13,9 @@ const group = (id: string, name: string, parent: string | null = null): NodeGrou
   latitude: null,
   longitude: null,
   geo_source: 'unset',
+  tags: [],
+  tags_excluded: [],
+  effective_tags: [],
   pool: null,
 });
 

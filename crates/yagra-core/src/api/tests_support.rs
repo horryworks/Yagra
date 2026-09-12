@@ -300,7 +300,7 @@ async fn live_state_with(
         maintenance: Arc::new(crate::maintenance::MaintenanceRepo::new(pool.clone())),
         classification: Arc::new(crate::classification::ClassificationRepo::new(pool.clone())),
         classifier,
-        groups: group_repo,
+        groups: group_repo.clone(),
         audit: audit_repo.clone(),
         dashboards: Arc::new(crate::dashboard::DashboardRepo::new(pool.clone())),
         shared_dashboard: Arc::new(crate::dashboard::SharedDashboardRepo::new(pool.clone())),
@@ -392,7 +392,7 @@ async fn live_state_with(
         oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
         enable_mcp: false,
         rca: Some(Arc::new(crate::rca::orchestrator::RcaOrchestrator::new(
-            llm_repo, repo, alerts, analysis, audit_repo,
+            llm_repo, repo, alerts, analysis, audit_repo, group_repo,
         ))),
         webtls: Some(crate::webtls::open(pool.clone(), kek.clone())),
         bus_tls: Some(crate::bus_cert::open(pool.clone(), kek)),

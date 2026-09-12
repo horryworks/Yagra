@@ -1,0 +1,42 @@
+-- 0110_folder_tags — a folder carries labels its whole subtree inherits (ADR-135 inc. 2).
+--
+-- reversible: additive only — three columns with a NOT NULL default and nothing narrowed.
+-- `GroupRepo::list` and `NodeRepo::NODE_COLUMNS` both project explicit column lists, so an older
+-- core simply never selects these: rolling the binary back leaves the labels in place, unread, and
+-- rolling forward again finds them. No `schema_compat` floor of its own — 0109 (which ships in the
+-- same image) already raises the floor past every core that could be confused by this, and 0080's
+-- floor covers the "database carries migrations I do not embed" half.
+--
+-- WHY A FOLDER AND NOT JUST A BULK COPY ONTO ITS NODES
+-- The operator's question was "tag this site". A bulk copy answers it for the nodes that exist at
+-- that moment and silently fails for every node discovered afterwards, which on a monitored fleet
+-- is most of them. It also could not be driven from the tree at all: the inventory tree is lazily
+-- loaded, so the members of a folder nobody has scrolled to are not in the browser, and "select
+-- everything in this folder" would have been quietly partial. Inheritance answers both.
+--
+-- WHY THE INHERITED SET IS NOT STORED ON EACH NODE
+-- The same argument `node_groups.pool` (0054) and the map coordinates (0025) already record, in
+-- `groups.rs` and `poolres.rs`: a written-down copy goes stale the moment a parent is edited or a
+-- folder is moved. Resolution happens in core, over the whole `node_groups` table read once —
+-- hundreds of rows, not tens of thousands.
+--
+-- 🚨 WHY THERE IS AN `tags_excluded` AND WHY IT IS NOT JUST "REMOVE THE LABEL"
+-- Inheritance with no way out makes one folder's decision unappealable for every node under it.
+-- So a node (or a subfolder) can refuse a label that is coming down to it. The fold is, at every
+-- level, `(what came from above - excluded here) + own here`: **remove first, add second**, so a
+-- folder that both excludes and re-adds a label is not a contradiction, and a label a node carries
+-- itself is dropped by editing `tags`, never by naming it here.
+--
+-- An entry naming a label nothing currently supplies is inert, and kept on purpose: if an ancestor
+-- re-adds that label next month, the operator's "not on this one" still holds. The edit dialog
+-- therefore shows every entry, not only the ones currently biting — an exclusion that cannot be
+-- seen cannot be undone.
+--
+-- NO INDEX ON EITHER TABLE
+-- `node_groups` is read whole, once per resolver build, by design (`pool_rows` already does). The
+-- `nodes` columns are projected per row and never searched — and cannot usefully be, since the
+-- inherited half of a node's labels is not in its row at all. 0109's header has the longer version
+-- of why the JSONB GIN index went rather than being re-created.
+ALTER TABLE node_groups ADD COLUMN tags          TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE node_groups ADD COLUMN tags_excluded TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE nodes       ADD COLUMN tags_excluded TEXT[] NOT NULL DEFAULT '{}';

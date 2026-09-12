@@ -153,7 +153,8 @@ impl ConfigBundleRepo {
 
         let mut node_groups = Vec::new();
         for row in sqlx::query(
-            "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool \
+            "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool, \
+                    tags, tags_excluded \
              FROM node_groups ORDER BY sort_order, name",
         )
         .fetch_all(&mut *conn)
@@ -168,6 +169,8 @@ impl ConfigBundleRepo {
                 latitude: row.try_get("latitude")?,
                 longitude: row.try_get("longitude")?,
                 pool: row.try_get("pool")?,
+                tags: row.try_get("tags")?,
+                tags_excluded: row.try_get("tags_excluded")?,
             });
         }
         cap("node_groups", node_groups.len())?;
@@ -175,7 +178,7 @@ impl ConfigBundleRepo {
         let mut nodes = Vec::new();
         for row in sqlx::query(
             "SELECT id, name, parent_id, host(address) AS address, profile_id, group_id, \
-                    credential_id, pool, vendor, model, sort_order, tags, notes \
+                    credential_id, pool, vendor, model, sort_order, tags, tags_excluded, notes \
              FROM nodes ORDER BY sort_order, name",
         )
         .fetch_all(&mut *conn)
@@ -193,12 +196,11 @@ impl ConfigBundleRepo {
                 vendor: row.try_get("vendor")?,
                 model: row.try_get("model")?,
                 sort_order: row.try_get("sort_order")?,
-                // Through `Json`, exactly as `repo::node_from_row` reads the same column — the
-                // bundle's row type is now the same `BTreeMap` the rest of the product uses, so
-                // this is the one decode that has to agree with it.
-                tags: row
-                    .try_get::<sqlx::types::Json<BTreeMap<String, String>>, _>("tags")?
-                    .0,
+                // Plain `text[]` since 0109, exactly as `repo::node_from_row` reads the same
+                // column — the bundle's row type is the same `Vec<String>` the rest of the product
+                // uses, so this is the one decode that has to agree with it.
+                tags: row.try_get("tags")?,
+                tags_excluded: row.try_get("tags_excluded")?,
                 notes: row.try_get("notes")?,
             });
         }

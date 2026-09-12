@@ -468,7 +468,10 @@ export type ProfileInput = components['schemas']['ProfileBody'];
 /** Every threshold scope level, broadest → most specific. `global` is every node and carries no
  *  scope id (ADR-075); the server pins its `scope_id` to the empty string. `group_id` is a folder
  *  group in the inventory tree and covers every group inside it; the older `group` matches a node
- *  **tag value** and is legacy (ADR-075 増分 3). */
+ *  **tag** and is legacy (ADR-075 増分 3).
+ *
+ *  ⚠️ Since ADR-135 増分 2 a `group` rule matches a node's **effective** tags — the ones it
+ *  carries plus every one its folder chain supplies. */
 export const SCOPE_LEVELS = [
   'global',
   'profile',
@@ -482,8 +485,14 @@ export const SCOPE_LEVELS = [
  *
  *  Two are excluded, for different reasons.
  *
- *  `group` (a node **tag value**) is legacy: nothing in the product writes `nodes.tags` except a
- *  config-bundle import, so offering it in the add dialog offers a rule that cannot match anything.
+ *  `group` (a node **tag**) is legacy because a folder group is the better-typed axis: it is
+ *  recursive, it is the unit RBAC scopes by, and since ADR-135 増分 2 it is also what carries tags.
+ *  Two ways to say "the Tokyo site" is one more than the screen should offer.
+ *
+ *  ⚠️ **The reason used to be "nothing writes `nodes.tags`", and that stopped being true in
+ *  ADR-135.** It was written as a justification for a decision that survives its own argument —
+ *  exactly the shape that rots, since a comment giving a reason does not update itself when the
+ *  reason does. The decision (ADR-075 増分 3 決定 10) is unchanged; only this text is.
  *
  *  `interface` (one port of one node, ADR-076) is excluded because this screen has nowhere to pick
  *  a port from — a fleet-wide interface picker does not exist, and building one is its own piece of
@@ -502,7 +511,7 @@ export type ScopeLevel = (typeof SCOPE_LEVELS)[number];
 
 /** Maintenance-window scope. The threshold scopes plus `group_id` — a hierarchical folder group
  *  (the All Nodes tree), resolved recursively incl. subgroups (ADR-022). Distinct from the legacy
- *  tag-based `group` scope (`scope_id` is a group UUID, not a tag value). */
+ *  tag-based `group` scope (`scope_id` is a group UUID, not a tag). */
 export type MaintenanceScopeLevel = components['schemas']['WindowScope'];
 
 /** Every breach direction. */

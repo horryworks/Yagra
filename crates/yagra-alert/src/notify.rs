@@ -25,14 +25,17 @@ pub struct Notification {
     pub summary: String,
     /// Rendered payload (JSON/text) for the channel.
     pub payload: String,
-    /// The subject node's tags (ADR-135), for the channels that carry them in a field of their
-    /// own: PagerDuty's `custom_details` and JSM's native `tags`.
+    /// The subject node's effective labels (ADR-135), for the channels that carry them in a field
+    /// of their own: PagerDuty's `custom_details` and JSM's native `tags`.
     ///
     /// ⚠️ **Beside the payload rather than inside it.** The payload is whatever the operator's
     /// template produced — or the built-in alert JSON — and rewriting it here would mean editing
     /// text somebody else authored. These go into the *envelope* each vendor already provides.
     /// Empty for a poller-pool alert, and on a deployment with neither vendor configured.
-    pub tags: std::collections::BTreeMap<String, String>,
+    ///
+    /// Already resolved when it gets here: the node's own labels plus everything its inventory
+    /// folder chain supplies, minus what it excludes (ADR-135 inc. 2).
+    pub tags: Vec<String>,
 }
 
 impl Notification {
@@ -51,13 +54,13 @@ impl Notification {
             severity: alert.severity,
             summary: summary.into(),
             payload: payload.into(),
-            tags: std::collections::BTreeMap::new(),
+            tags: Vec::new(),
         }
     }
 
-    /// The same notification carrying the subject node's tags.
+    /// The same notification carrying the subject node's labels.
     #[must_use]
-    pub fn with_tags(mut self, tags: std::collections::BTreeMap<String, String>) -> Self {
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
     }

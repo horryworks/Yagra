@@ -203,12 +203,13 @@ pub(super) async fn write<'a>(
     for g in &bundle.node_groups {
         sqlx::query(
             "INSERT INTO node_groups (id, name, group_type, sort_order, latitude, longitude, \
-                                          pool) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                                          pool, tags, tags_excluded) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, \
                      group_type = EXCLUDED.group_type, sort_order = EXCLUDED.sort_order, \
                      latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude, \
-                     pool = EXCLUDED.pool",
+                     pool = EXCLUDED.pool, tags = EXCLUDED.tags, \
+                     tags_excluded = EXCLUDED.tags_excluded",
         )
         .bind(g.id)
         .bind(&g.name)
@@ -217,6 +218,10 @@ pub(super) async fn write<'a>(
         .bind(g.latitude)
         .bind(g.longitude)
         .bind(&g.pool)
+        // ⚠️ Positional. Adding a column name above without its `.bind` here compiles and then
+        // binds the wrong value into the wrong column at runtime.
+        .bind(&g.tags)
+        .bind(&g.tags_excluded)
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, g.id);
@@ -254,13 +259,14 @@ pub(super) async fn write<'a>(
         );
         sqlx::query(
             "INSERT INTO nodes (id, name, address, profile_id, group_id, credential_id, pool, \
-                                    vendor, model, sort_order, tags, notes) \
-                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+                                    vendor, model, sort_order, tags, tags_excluded, notes) \
+                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
                  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, address = EXCLUDED.address, \
                      profile_id = EXCLUDED.profile_id, group_id = EXCLUDED.group_id, \
                      credential_id = EXCLUDED.credential_id, pool = EXCLUDED.pool, \
                      vendor = EXCLUDED.vendor, model = EXCLUDED.model, \
                      sort_order = EXCLUDED.sort_order, tags = EXCLUDED.tags, \
+                     tags_excluded = EXCLUDED.tags_excluded, \
                      notes = EXCLUDED.notes, updated_at = now()",
         )
         .bind(n.id)
@@ -273,7 +279,8 @@ pub(super) async fn write<'a>(
         .bind(&n.vendor)
         .bind(&n.model)
         .bind(n.sort_order)
-        .bind(sqlx::types::Json(&n.tags))
+        .bind(&n.tags)
+        .bind(&n.tags_excluded)
         .bind(&n.notes)
         .execute(&mut *tx)
         .await?;

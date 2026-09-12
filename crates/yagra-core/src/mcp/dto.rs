@@ -58,7 +58,10 @@ pub struct NodeSummaryDto {
     pub group: Option<Uuid>,
     pub vendor: Option<String>,
     pub model: Option<String>,
-    pub tags: BTreeMap<String, String>,
+    /// The node's **effective** labels: its own plus everything its inventory folder chain
+    /// supplies, minus what it refuses (ADR-135 inc. 2). This is what the WebUI shows on the node,
+    /// so MCP read parity means the resolved set rather than the raw column.
+    pub tags: Vec<String>,
 }
 
 impl NodeSummaryDto {
@@ -66,8 +69,14 @@ impl NodeSummaryDto {
     ///
     /// The kind is passed in rather than derived here: it comes from `NodeKind::resolve` over the
     /// side-table rows, which is a database read the caller has already batched over the page.
+    /// `tags` likewise: the resolver is built once per request, never once per node.
     #[must_use]
-    pub fn from_node(node: &Node, state: Option<NodeState>, kind: NodeKind) -> Self {
+    pub fn from_node(
+        node: &Node,
+        state: Option<NodeState>,
+        kind: NodeKind,
+        tags: &crate::tagres::TagResolver,
+    ) -> Self {
         Self {
             id: node.id.0,
             name: node.name.clone(),
@@ -82,7 +91,7 @@ impl NodeSummaryDto {
             group: node.group.map(|g| g.0),
             vendor: node.vendor.clone(),
             model: node.model.clone(),
-            tags: node.tags.clone(),
+            tags: tags.effective(node),
         }
     }
 }
@@ -486,6 +495,17 @@ pub struct NodeGroupDto {
     /// `list_nodes`. And the scope filter that clears this for a breadcrumb ancestor runs before
     /// the projection, so a scoped caller sees here exactly what the WebUI shows them.
     pub prefixes: Vec<crate::groups::GroupPrefix>,
+    /// Labels stored on this folder (ADR-135 inc. 2).
+    pub tags: Vec<String>,
+    /// This folder's labels plus every ancestor's, minus its refusals — what everything beneath it
+    /// inherits, and therefore what a threshold rule or a maintenance window scoped to a label
+    /// will match down here.
+    ///
+    /// Kept for the reason geo and the prefixes are kept: "which labels route this site's alerts"
+    /// is an incident question, and read parity (ADR-042) is about which questions can be
+    /// answered. Not a new exposure either — the same labels already arrive on every `list_nodes`
+    /// row once inheritance resolves.
+    pub effective_tags: Vec<String>,
 }
 
 impl NodeGroupDto {
@@ -505,6 +525,8 @@ impl NodeGroupDto {
             geo_source: g.geo_source,
             geo_group: g.geo_group,
             prefixes: g.prefixes.clone(),
+            tags: g.tags.clone(),
+            effective_tags: g.effective_tags.clone(),
             state_counts: None,
         }
     }
@@ -851,14 +873,19 @@ mod tests {
         node.credential = Some(CredentialId::from(uuid::Uuid::new_v4()));
         node.pool = Some("tokyo".to_owned());
         node.group = Some(GroupId::from(uuid::Uuid::new_v4()));
-        node.tags.insert("site".to_owned(), "tokyo".to_owned());
+        node.tags.push("tokyo".to_owned());
         node
     }
 
     #[test]
     fn node_summary_dto_omits_credential_and_pool() {
         let node = sample_node_with_secret();
-        let dto = NodeSummaryDto::from_node(&node, Some(NodeState::Warning), NodeKind::Url);
+        let dto = NodeSummaryDto::from_node(
+            &node,
+            Some(NodeState::Warning),
+            NodeKind::Url,
+            &crate::tagres::TagResolver::empty(),
+        );
         let json = serde_json::to_value(&dto).expect("serialize");
         // Sanity: it carries the safe fields…
         assert_eq!(json["name"], "edge-router-1");
@@ -866,7 +893,7 @@ mod tests {
         // The kind is the serde token, not the Debug spelling — a model reads this string and the
         // REST `kind` field must be the same word.
         assert_eq!(json["kind"], "url");
-        assert_eq!(json["tags"]["site"], "tokyo");
+        assert_eq!(json["tags"][0], "tokyo");
         // …and not the secret/internal ones.
         assert!(json.get("credential").is_none());
         assert!(json.get("pool").is_none());
@@ -913,7 +940,12 @@ mod tests {
             "UrlCheck",
         );
 
-        let summary = NodeSummaryDto::from_node(&node, Some(NodeState::Ok), NodeKind::Device);
+        let summary = NodeSummaryDto::from_node(
+            &node,
+            Some(NodeState::Ok),
+            NodeKind::Device,
+            &crate::tagres::TagResolver::empty(),
+        );
         assert_inventory_dto_is_clean(&serde_json::to_value(&summary).unwrap(), "NodeSummary");
 
         let status = NodeStatusDto {
@@ -1112,6 +1144,9 @@ mod tests {
             geo_source: crate::groups::GeoSource::Own,
             geo_group: None,
             pool: Some("tokyo".to_owned()),
+            tags: vec!["JAPAN".to_owned()],
+            tags_excluded: Vec::new(),
+            effective_tags: vec!["JAPAN".to_owned()],
             prefixes: vec![crate::groups::GroupPrefix {
                 prefix: "192.168.1.0/24".to_owned(),
                 description: "Tokyo LAN".to_owned(),

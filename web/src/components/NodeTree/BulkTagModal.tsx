@@ -3,28 +3,26 @@
 //
 // 🚨 **This MERGES and the dialog has to say so.** The operator picked rows in the tree and knows
 // one label they want on all of them; they have no idea what else each of those nodes carries.
-// `POST /api/v1/nodes/tags` adds and removes only the keys it names — unlike the single-node Edit
-// dialog, which replaces the whole map because it is *showing* the whole map. Saying "adds to what
-// each node already has" in the dialog is what stops someone reading this as "set the tags to".
+// `POST /api/v1/nodes/tags` adds and removes only the labels it names — unlike the single-node
+// Edit dialog, which replaces the whole list because it is *showing* the whole list. Saying "adds
+// to what each node already has" in the dialog is what stops someone reading this as "set the
+// tags to".
 //
-// The judgement (what a legal key is, what an empty row means) lives in `nodeEditForm.ts` beside
-// the single-node editor's, because it is the same rule and the API applies one validator to both.
+// ⚠️ **This is now the second way to label several nodes, and the weaker one.** Since ADR-135
+// inc. 2 a folder carries labels that every node beneath it inherits, which keeps applying to
+// nodes discovered later — something a copy onto today's rows cannot do. This dialog is for the
+// case a folder cannot express: a handful of nodes spread across folders.
+//
+// The judgement lives in `ui/labelRules.ts`, shared with every other label control.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import type { NodeSummary } from '../../types/api';
 import { Button } from '../ui/Button';
-import { IconButton } from '../ui/IconButton';
 import { Modal } from '../ui/Modal';
-import { FieldHint, TextInput } from '../ui/Field';
-import {
-  tagRowProblem,
-  tagsAreValid,
-  tagsFromRows,
-  TAGS_MAX,
-  type TagRow,
-} from '../NodeDetail/nodeEditForm';
+import { ChipInput } from '../ui/ChipInput';
+import { labelsAreValid } from '../ui/labelRules';
 
 export function BulkTagModal({
   targets,
@@ -36,22 +34,18 @@ export function BulkTagModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('nodes');
-  const [rows, setRows] = useState<TagRow[]>([{ key: '', value: '' }]);
-  /** Keys to strip from every selected node. Separate from `rows` because removing is keyed by
-   *  name alone — an operator taking `region` off a rack does not know, or care, what value each
-   *  node had for it. */
-  const [remove, setRemove] = useState('');
+  const [add, setAdd] = useState<string[]>([]);
+  /** Labels to strip from every selected node. A separate list from `add` because the two are
+   *  independent instructions, and because this one is `lenient`: a label already stored may
+   *  predate the rules a new one follows, and refusing to let it be typed would make exactly the
+   *  labels somebody wants gone impossible to name. */
+  const [remove, setRemove] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   // In flight. The call is idempotent, so a double click is harmless to the data — but it would
   // report twice and close on the first answer.
   const [busy, setBusy] = useState(false);
 
-  const add = tagsFromRows(rows);
-  const removeKeys = remove
-    .split(',')
-    .map((k) => k.trim())
-    .filter((k) => k !== '');
-  const nothingToDo = Object.keys(add).length === 0 && removeKeys.length === 0;
+  const nothingToDo = add.length === 0 && remove.length === 0;
 
   const submit = () => {
     setBusy(true);
@@ -60,7 +54,7 @@ export function BulkTagModal({
       .bulkTagNodes(
         targets.map((n) => n.id),
         add,
-        removeKeys,
+        remove,
       )
       .then((r) => {
         // `applied < requested` is normal, not an error — a node can have been deleted, or lie
@@ -91,7 +85,7 @@ export function BulkTagModal({
           <Button
             variant="primary"
             onClick={submit}
-            disabled={busy || nothingToDo || !tagsAreValid(rows)}
+            disabled={busy || nothingToDo || !labelsAreValid(add)}
           >
             {t('bulkTag.apply')}
           </Button>
@@ -103,64 +97,25 @@ export function BulkTagModal({
 
         <div className="modal-field nd-tags">
           <span className="modal-field-label">{t('bulkTag.add')}</span>
-          {rows.map((row, i) => {
-            const problem = tagRowProblem(row);
-            return (
-              <div className="nd-tag-row" key={i}>
-                <TextInput
-                  className="mono"
-                  value={row.key}
-                  placeholder={t('field.tagKeyPlaceholder')}
-                  aria-label={t('field.tagKey')}
-                  onChange={(e) =>
-                    setRows((prev) =>
-                      prev.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)),
-                    )
-                  }
-                />
-                <span className="nd-tag-eq" aria-hidden="true">
-                  =
-                </span>
-                <TextInput
-                  value={row.value}
-                  placeholder={t('field.tagValuePlaceholder')}
-                  aria-label={t('field.tagValue')}
-                  onChange={(e) =>
-                    setRows((prev) =>
-                      prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)),
-                    )
-                  }
-                />
-                <IconButton
-                  title={t('field.tagRemove', { key: row.key || t('field.tagKey') })}
-                  onClick={() => setRows((prev) => prev.filter((_, j) => j !== i))}
-                >
-                  ✕
-                </IconButton>
-                {problem && <FieldHint error>{t(`field.tagErr.${problem}`)}</FieldHint>}
-              </div>
-            );
-          })}
-          <div className="nd-tag-add">
-            <Button
-              onClick={() => setRows((prev) => [...prev, { key: '', value: '' }])}
-              disabled={rows.length >= TAGS_MAX}
-            >
-              ＋ {t('field.tagAdd')}
-            </Button>
-          </div>
+          <ChipInput
+            value={add}
+            onChange={setAdd}
+            placeholder={t('field.tagPlaceholder')}
+            inputLabel={t('bulkTag.add')}
+          />
         </div>
 
-        <label className="form-label">
-          {t('bulkTag.remove')}
-          <TextInput
-            className="mono"
+        <div className="modal-field nd-tags">
+          <span className="modal-field-label">{t('bulkTag.remove')}</span>
+          <ChipInput
             value={remove}
-            onChange={(e) => setRemove(e.target.value)}
+            onChange={setRemove}
             placeholder={t('bulkTag.removePlaceholder')}
+            inputLabel={t('bulkTag.remove')}
+            lenient
           />
           <span className="form-hint">{t('bulkTag.removeHint')}</span>
-        </label>
+        </div>
 
         {error && <p className="form-error">{error}</p>}
       </div>
