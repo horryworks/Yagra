@@ -14,7 +14,7 @@
 // A `.ts` on purpose: Vitest runs `environment: 'node'` with `include: ['src/**/*.test.ts']`, so
 // judgement left in the `.tsx` is judgement nothing tests.
 
-import { metricView } from '../../lib/metricInventory';
+import { metricView, rangeOptsFor, type MetricRangeOpts } from '../../lib/metricInventory';
 import type { NodeMetricEntry } from '../../types/api';
 import type { WidgetSettings } from '../types';
 
@@ -60,13 +60,6 @@ export function chartableMetrics(entries: readonly NodeMetricEntry[]): NodeMetri
   });
 }
 
-/** The range query this widget may issue for one metric. Never both keys: the server refuses
- *  `rate` together with `agg`, because a per-entity counter has no node-level rate. */
-export interface MetricChartQueryOpts {
-  agg?: 'max';
-  rate?: true;
-}
-
 /** What the widget body should render this pass. */
 export type MetricChartPlan =
   /** Nothing picked yet. */
@@ -82,7 +75,7 @@ export type MetricChartPlan =
       kind: 'chart';
       nodeId: string;
       metric: string;
-      query: MetricChartQueryOpts;
+      query: MetricRangeOpts;
       /** The values are a per-second rate, so the axis must say so. */
       perSecond: boolean;
     };
@@ -106,13 +99,11 @@ export function metricChartPlan(
   if (!entry) return { kind: 'unavailable', metric: sel.metric };
 
   const chart = metricView(entry.metric_kind, entry.dimension).chart;
-  const query: MetricChartQueryOpts =
-    chart.kind === 'rate' ? { rate: true } : chart.kind === 'aggregate' ? { agg: 'max' } : {};
   return {
     kind: 'chart',
     nodeId: sel.nodeId,
     metric: sel.metric,
-    query,
+    query: rangeOptsFor(chart),
     perSecond: chart.kind === 'rate',
   };
 }

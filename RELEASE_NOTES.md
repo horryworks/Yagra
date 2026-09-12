@@ -29,6 +29,21 @@
 
 ### New Features
 
+- **A dashboard widget for VPN sessions.** Dashboard ▸ Customize ▸ Add widget ▸ Performance ▸
+  **VPN sessions** plots up to six VPN concentrators side by side: the connections on each right
+  now, and the last hour (or 6h / 24h / 7d) under them.
+  You do not pick a metric — the widget reads whichever one each device reports, trying
+  `cisco_ra_sessions` (Cisco ASA and Firepower), then `fortinet_sslvpn_users` (FortiGate), then
+  `panos_gp_active_tunnels` (Palo Alto).
+  ⚠️ **Those three do not measure quite the same thing**, so each number carries its own unit —
+  `148 sessions` beside `74 users` — rather than being presented as one measurement taken twice.
+  A selected device that reports none of them is named under the chart instead of being dropped from
+  it, and so is one whose metric list could not be read: "reports no VPN session count" and "could
+  not be read" are different sentences, because they are different facts.
+  **No new collection is involved.** These metrics have shipped in the built-in
+  `Cisco remote-access VPN`, `Fortinet VPN` and `Palo Alto sessions/VPN` templates for some time,
+  and an ASA is bound to the first of those automatically from its sysDescr — so on an existing
+  deployment the numbers are already there and this is the screen that shows them.
 - **A node whose SNMP walk is being cut short now says so, instead of reading green.** A device with
   many ports can be slow enough that the interface walk spends its whole budget before it asks for
   the metric columns at all — the oper status, the traffic counters, the error counters. Nothing

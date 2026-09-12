@@ -32,8 +32,13 @@ import {
   type LinkSeries,
   type RosterState,
 } from './interfaceTraffic';
-import { WIDGET_RANGES, refreshMsFor } from './util';
-import { deltaBarRows as toRows, timeColLabels, trailingSecs } from './util';
+import {
+  WIDGET_RANGES,
+  deltaBarRows as toRows,
+  refreshMsFor,
+  timeColLabels,
+  trailingSecs,
+} from './util';
 
 export function TrafficSpikesWidget() {
   const { t } = useTranslation('dashboard');

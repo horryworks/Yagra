@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// 03 · The two widgets whose subject the catalog does not know in advance (ADR-046 Inc.2 + Inc.3):
-// a chart of any metric of any node, and a fleet ranking by any metric name.
+// 03 · The widgets built on a node's metric inventory rather than on a fixed question.
+//
+// Two of them do not know their subject until the operator names it (ADR-046 Inc.2 + Inc.3): a chart
+// of any metric of any node, and a fleet ranking by any metric name. The third knows the *question*
+// and lets the inventory answer which metric carries it (ADR-136): VPN sessions, where the name
+// differs per vendor and nobody should have to know that.
 //
 // The rest of the catalog answers fixed questions (top CPU, busiest links). These answer the question
 // the catalog cannot enumerate: an operator collects `juniper_temp_c` or a value lifted out of a
@@ -18,10 +22,11 @@
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MetricChart } from '../../components/MetricChart/MetricChart';
+import { MetricChart, PALETTE } from '../../components/MetricChart/MetricChart';
 import { NodePicker } from '../../components/NodePicker/NodePicker';
+import { Button } from '../../components/ui/Button';
 import { Select, TextInput } from '../../components/ui/Field';
-import { formatSi, pointsToSeries } from '../../lib/format';
+import { formatCount, formatSi, metricUnitSuffix, pointsToSeries } from '../../lib/format';
 import {
   INVENTORY_TTL_MS,
   fetchNodeMetrics,
@@ -31,11 +36,23 @@ import {
 import { api } from '../../services/api';
 import type { NodeMetricEntry } from '../../types/api';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
-import type { WidgetProps } from '../types';
+import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
 import { chartableMetrics, metricChartPlan, readSelection } from './metricChart';
 import { metricSuggestions, metricTopPlan, readTopSelection } from './metricTop';
-import { trailingSecs } from './util';
+import { WIDGET_RANGES, refreshMsFor, trailingSecs } from './util';
+import {
+  MAX_VPN_NODES,
+  armedKey,
+  buildVpnSeries,
+  currentReadings,
+  everyNodeFailed,
+  readVpnSettings,
+  vpnSessionsPlan,
+  type VpnInventory,
+  type VpnNodeRef,
+  type VpnNodeSeries,
+} from './vpnSessions';
 
 /** Trailing window for the chart (last 6 hours).
  *
@@ -257,5 +274,276 @@ export function MetricTopWidget({ instance }: WidgetProps) {
       empty={t('widgets.metricTop.empty', { metric: plan.metric })}
       partial={data?.partial}
     />
+  );
+}
+
+// ── VPN sessions (ADR-136) ───────────────────────────────────────────────────
+
+/**
+ * The metric inventories of the given nodes, re-fetched only when the set of nodes changes.
+ *
+ * Deliberately not on the polling tick: a device's inventory changes when someone edits a collection
+ * set, not every fifteen seconds. The session history is what polls.
+ *
+ * The plural twin of {@link useNodeInventory}, and it keeps one thing that one does not: each node
+ * is marked per node so `vpnSessionsPlan` can tell "still loading" from "reports none" from "the
+ * request failed" — three states it renders three different ways. `Promise.allSettled` is what makes
+ * the third reachable; `Promise.all` would turn one unreachable device into six blank cards.
+ */
+function useNodeInventories(nodeIds: readonly string[]): Record<string, VpnInventory> {
+  // The dependency is the joined key, not the array: a fresh array is derived on every render, and
+  // passing it would re-fetch every inventory on every keystroke elsewhere in the card.
+  const key = nodeIds.join(',');
+  const [inv, setInv] = useState<Record<string, VpnInventory>>({});
+  useEffect(() => {
+    const ids = key === '' ? [] : key.split(',');
+    if (ids.length === 0) {
+      setInv({});
+      return;
+    }
+    let cancelled = false;
+    // Mark every node as loading up front, so a newly added node does not read as "reports none"
+    // for the one render before its inventory lands.
+    setInv(Object.fromEntries(ids.map((id) => [id, null])));
+    void Promise.allSettled(ids.map((id) => fetchNodeMetrics(id, INVENTORY_TTL_MS))).then(
+      (results) => {
+        if (cancelled) return;
+        const next: Record<string, VpnInventory> = {};
+        ids.forEach((id, i) => {
+          const r = results[i];
+          next[id] = r.status === 'fulfilled' ? r.value : 'failed';
+        });
+        setInv(next);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return inv;
+}
+
+/** View-mode header: the time window.
+ *
+ *  Which devices are plotted is not decided here (ADR-072): adding one changes what the card is
+ *  about, so it lives in {@link VpnSessionsSettings} behind the ⚙ the frame draws while the board is
+ *  being customized. There is no unit toggle — a session count has one unit, and it is the metric's
+ *  own (ADR-136 決定 3), not a lens the operator picks. */
+export function VpnSessionsActions({ instance, setSettings }: ViewActionProps) {
+  const { t } = useTranslation('dashboard');
+  const sel = readVpnSettings(instance.settings);
+
+  return (
+    <span className="vpnsess-actions">
+      <Select
+        value={String(sel.rangeSecs)}
+        onChange={(e) => setSettings({ rangeSecs: Number(e.target.value) })}
+        aria-label={t('widgets.vpnSessions.rangeAria')}
+        title={t('widgets.vpnSessions.rangeAria')}
+      >
+        {WIDGET_RANGES.map((r) => (
+          <option key={r.secs} value={r.secs}>
+            {r.label}
+          </option>
+        ))}
+      </Select>
+    </span>
+  );
+}
+
+/** Customize-mode settings: which devices this card plots.
+ *
+ *  Rendered inside the frame's ⚙ popover, so it owns no trigger and no popover of its own — it is
+ *  the panel body. There is no second control beside the node picker, which is the whole point of
+ *  ADR-136: the metric is resolved from what the device reports, not chosen. */
+export function VpnSessionsSettings({ instance, setSettings }: WidgetProps) {
+  const { t } = useTranslation('dashboard');
+  const sel = readVpnSettings(instance.settings);
+  const [pickNode, setPickNode] = useState<{ id: string; name: string } | null>(null);
+  const full = sel.nodes.length >= MAX_VPN_NODES;
+
+  const add = () => {
+    if (!pickNode || full) return;
+    if (sel.nodes.some((n) => n.nodeId === pickNode.id)) return;
+    setSettings({
+      nodes: [...sel.nodes, { nodeId: pickNode.id, nodeName: pickNode.name } satisfies VpnNodeRef],
+    });
+    setPickNode(null);
+  };
+
+  const remove = (n: VpnNodeRef) =>
+    setSettings({ nodes: sel.nodes.filter((x) => x.nodeId !== n.nodeId) });
+
+  const already = pickNode != null && sel.nodes.some((n) => n.nodeId === pickNode.id);
+
+  return (
+    <div className="vpnsess-body">
+      {/* How many of the six are in use. The cap is otherwise invisible until you hit it — the same
+          reason Interface traffic carries this line. */}
+      <p className="vpnsess-count">
+        {t('widgets.vpnSessions.pickCount', { n: sel.nodes.length, max: MAX_VPN_NODES })}
+      </p>
+      {sel.nodes.length === 0 ? (
+        <p className="muted vpnsess-note">{t('widgets.vpnSessions.noneYet')}</p>
+      ) : (
+        <ul className="vpnsess-list">
+          {sel.nodes.map((n, i) => (
+            <li key={n.nodeId} className="vpnsess-item">
+              {/* The swatch takes its colour from the same palette index the chart does, so the
+                  list and the lines cannot name different colours. */}
+              <span
+                className="vpnsess-sw"
+                style={{ background: PALETTE[i % PALETTE.length] }}
+                aria-hidden="true"
+              />
+              <span className="vpnsess-name">{n.nodeName ?? n.nodeId}</span>
+              <button
+                type="button"
+                className="vpnsess-rm"
+                aria-label={t('widgets.vpnSessions.removeAria')}
+                title={t('widgets.vpnSessions.removeAria')}
+                onClick={() => remove(n)}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {full ? (
+        <p className="muted vpnsess-note">
+          {t('widgets.vpnSessions.full', { max: MAX_VPN_NODES })}
+        </p>
+      ) : (
+        <div className="vpnsess-add">
+          <NodePicker
+            value={pickNode?.id ?? null}
+            valueLabel={pickNode?.name}
+            placeholder={t('widgets.vpnSessions.pickNodePlaceholder')}
+            className="vpnsess-node"
+            onChange={setPickNode}
+          />
+          {/* Add is disabled rather than hidden for a device already on the card: the picker is a
+              text search, so "nothing happened" would otherwise be the whole feedback. */}
+          {already && <p className="muted vpnsess-note">{t('widgets.vpnSessions.already')}</p>}
+          <Button variant="primary" disabled={!pickNode || already} onClick={add}>
+            {t('common:actions.add')}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The current session count per device and its history, or the reason there isn't one. */
+export function VpnSessionsWidget({ instance }: WidgetProps) {
+  const { t } = useTranslation('dashboard');
+  const sel = readVpnSettings(instance.settings);
+  const inventory = useNodeInventories(sel.nodes.map((n) => n.nodeId));
+  const plan = vpnSessionsPlan(sel, inventory);
+
+  // Hooks run unconditionally, so the fetch is armed for every plan and asks for nothing when there
+  // is nothing to ask for.
+  const armed = plan.kind === 'chart' && plan.nodes.length > 0 ? plan.nodes : null;
+  // `error` is deliberately not destructured: the fetcher below is a `Promise.allSettled`, so it
+  // never rejects and this hook can never populate it. See the note at the render branch.
+  const { data, loading } = usePolled(
+    () => {
+      if (!armed) return Promise.resolve(null);
+      // One window for every device, resolved once per poll: the series are only comparable if they
+      // were asked the same question, and `buildVpnSeries` places values by timestamp on top of
+      // that rather than trusting the axes to match.
+      const win = trailingSecs(sel.rangeSecs);
+      return Promise.allSettled(
+        armed.map((n) => api.getNodeMetricRange(n.nodeId, n.metric, { ...win, ...n.query })),
+      ).then((results) => ({
+        win: [win.from, win.to] as [number, number],
+        entries: armed.map((node, i): VpnNodeSeries => {
+          const r = results[i];
+          return { node, range: r.status === 'fulfilled' ? r.value : null };
+        }),
+      }));
+    },
+    [armed ? armedKey(armed) : '', sel.rangeSecs],
+    refreshMsFor(sel.rangeSecs),
+  );
+
+  if (plan.kind === 'empty') return <p className="muted">{t('widgets.vpnSessions.pickSome')}</p>;
+  if (plan.kind === 'loading') return <p className="muted">{t('common:loading')}</p>;
+
+  // Two separate sentences, because they are two separate claims. "Reports no VPN metric" is a fact
+  // about the device; "could not be read" is a fact about the request, and saying the first when we
+  // learned the second tells the operator their firewall is not a VPN head.
+  const notes = (
+    <>
+      {plan.unsupported.length > 0 && (
+        <p className="rankedbars-partial">
+          {t('widgets.vpnSessions.unsupported', { nodes: plan.unsupported.join(', ') })}
+        </p>
+      )}
+      {plan.unreadable.length > 0 && (
+        <p className="rankedbars-partial">
+          {t('widgets.vpnSessions.unreadable', { nodes: plan.unreadable.join(', ') })}
+        </p>
+      )}
+    </>
+  );
+
+  if (plan.nodes.length === 0) return notes;
+  // ⚠️ No `error` branch, deliberately: the fetcher above is a `Promise.allSettled`, which never
+  // rejects, so `usePolled` can only ever hand back `error: null` here. One on this line would read
+  // as handled failure — which is how a `401` on every request looked like quiet ports on the
+  // sibling widget for the whole of ADR-123 増分 1. What a failure is reported as comes from
+  // `everyNodeFailed`, below.
+  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
+
+  const entries = data?.entries ?? [];
+  const readings = currentReadings(entries, PALETTE);
+  const { timestamps, series } = buildVpnSeries(entries, PALETTE);
+
+  return (
+    <>
+      {notes}
+      {/* The numbers. Each carries its own unit noun, which is what makes plotting a Cisco session
+          count beside a FortiGate user count honest rather than merely compact (ADR-136 決定 3). */}
+      <ul className="vpnsess-chips">
+        {readings.map((r) => (
+          <li key={r.nodeId} className="vpnsess-chip">
+            <span
+              className="vpnsess-sw"
+              style={{ background: r.color }}
+              aria-hidden="true"
+            />
+            <span className="vpnsess-chip-node">{r.label}</span>
+            <span className="vpnsess-chip-val">
+              {r.value == null ? '—' : formatCount(r.value)}
+            </span>
+            {r.value != null && (
+              <span className="vpnsess-chip-unit">{metricUnitSuffix(r.metric)}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {timestamps.length === 0 ? (
+        <p className="muted">
+          {everyNodeFailed(entries)
+            ? t('widgets.vpnSessions.seriesFailed')
+            : t('widgets.vpnSessions.empty')}
+        </p>
+      ) : (
+        <MetricChart
+          title=""
+          timestamps={timestamps}
+          series={series}
+          xRange={data?.win}
+          fill
+          // The axis is compact (`1.2k`); the cursor readout is the exact count with thousands
+          // separators, the same pair `formatCount`'s own doc describes.
+          yFormat={formatSi}
+          legendFormat={(v) => formatCount(v)}
+        />
+      )}
+    </>
   );
 }

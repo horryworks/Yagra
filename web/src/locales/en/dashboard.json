@@ -278,6 +278,10 @@
       "metric-top": {
         "title": "Top nodes by metric",
         "blurb": "The highest-value nodes for any metric name you type — including metrics no other card covers."
+      },
+      "vpn-sessions": {
+        "title": "VPN sessions",
+        "blurb": "Up to six VPN concentrators you pick, with the connections on each right now and over time."
       }
     }
   },
@@ -371,6 +375,20 @@
       "axisIn": "IN",
       "axisOut": "OUT",
       "rangeAria": "Time window"
+    },
+    "vpnSessions": {
+      "pickCount": "Devices ({{n}}/{{max}})",
+      "pickSome": "Pick one or more VPN devices to plot — press Customize, then the ⚙ on this card.",
+      "noneYet": "Nothing plotted yet. Choose a device that terminates VPN connections.",
+      "pickNodePlaceholder": "Node…",
+      "already": "Already on this card.",
+      "full": "{{max}} is the maximum — the chart has {{max}} colours, and a seventh line would reuse one.",
+      "removeAria": "Stop plotting this device",
+      "rangeAria": "Time window",
+      "unsupported": "Reports no VPN session count: {{nodes}}",
+      "unreadable": "Couldn’t read what these devices collect: {{nodes}}",
+      "seriesFailed": "Couldn’t read VPN sessions for any of these devices",
+      "empty": "No sessions recorded in this window"
     },
     "mostErrors": {
       "empty": "No interface errors. 🎉"

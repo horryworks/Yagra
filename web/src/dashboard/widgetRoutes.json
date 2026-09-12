@@ -151,5 +151,9 @@
   ],
   "traffic-spikes": [
     "GET /api/v1/metrics/interface-delta"
+  ],
+  "vpn-sessions": [
+    "GET /api/v1/nodes/{node_id}/metrics",
+    "GET /api/v1/nodes/{node_id}/metrics/{metric}/range"
   ]
 }

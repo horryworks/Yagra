@@ -77,6 +77,41 @@ export function metricView(kind: MetricKind, dimension: MetricDimension): Metric
   };
 }
 
+/** The request options `getNodeMetricRange` takes. Never both keys: the server refuses `rate`
+ *  together with `agg`, because a per-entity counter has no node-level rate. */
+export interface MetricRangeOpts {
+  agg?: 'max';
+  rate?: true;
+}
+
+/**
+ * The request options a chartable [`MetricChartQuery`] implies.
+ *
+ * The other half of this file's job. `metricView` says *which* query a metric takes; this turns that
+ * answer into the object the API client is handed, and it lives here for the same reason the table
+ * does — **a second surface spelling this ternary out is the second entrance to the ADR-012
+ * accident**, and it is a ternary over a closed union, so the way it goes wrong is that a new
+ * variant lands in one copy and not the other.
+ *
+ * The two unchartable cells (`interfaces`, `none`) return `{}` rather than throwing: a caller must
+ * have refused them before asking (`chartableMetrics` and its siblings do), and a throw here would
+ * turn a caller's bug into a blank widget instead of a type error at the place that skipped the
+ * filter. ⚠️ Reaching this with either of them means the filter above it is missing, not that the
+ * default is wrong.
+ */
+export function rangeOptsFor(chart: MetricChartQuery): MetricRangeOpts {
+  switch (chart.kind) {
+    case 'rate':
+      return { rate: true };
+    case 'aggregate':
+      return { agg: 'max' };
+    case 'range':
+    case 'interfaces':
+    case 'none':
+      return {};
+  }
+}
+
 /** [`metricView`] for an inventory entry. */
 export function viewOf(entry: NodeMetricEntry): MetricView {
   return metricView(entry.metric_kind, entry.dimension);

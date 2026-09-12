@@ -796,3 +796,222 @@ test('the rename box is wide enough for a long name', async ({ page }) => {
   );
   expect(fits, 'the typed name is clipped by the box').toBe(true);
 });
+
+// ── VPN sessions (ADR-136) ───────────────────────────────────────────────────
+//
+// Two seams, and the second is the one nothing else in this repo can reach.
+//
+// The first is the standard one this file exists for: the card renders from the registry and the
+// placed widget mounts. The second is ADR-136 決定 3 — three vendor metrics that do NOT mean the
+// same thing are plotted on one chart, and the only thing making that honest is that each number
+// carries its own unit noun. `vpnSessions.test.ts` can prove every candidate *has* a unit; it
+// cannot prove the noun reaches the screen, because that crosses `metricUnitSuffix`, i18n and the
+// component — and Vitest never executes the `.tsx`. If the noun is dropped in rendering, a Cisco
+// session count and a FortiGate user count become two bare numbers side by side, which reads as
+// one measurement taken twice.
+
+/** A second device, so the mixed-unit assertion has something to mix. */
+const VPN_NODE_B = '00000000-0000-4000-8000-0000000000bb';
+
+/** A board already plotting both devices, so the assertions are about the chart rather than about
+ *  the picker. */
+const VPN_BOARD = {
+  version: 3,
+  boards: [
+    {
+      id: 'b1',
+      name: 'Board',
+      widgets: [
+        {
+          instanceId: 'w1',
+          type: 'vpn-sessions',
+          span: 12,
+          // `rowSpan: 2` for the same reason `NARROW_BOARD` gives: `MIN_PLOT_HEIGHT` floors the
+          // plot's TOTAL height, and this card spends some of the standard 240px on the readings
+          // strip above the chart.
+          rowSpan: 2,
+          settings: {
+            nodes: [
+              { nodeId: NODE_ID, nodeName: 'asa-tokyo' },
+              { nodeId: VPN_NODE_B, nodeName: 'fgt-osaka' },
+            ],
+            rangeSecs: 3600,
+          },
+        },
+      ],
+    },
+  ],
+};
+
+/** A node's inventory with neither VPN metric — what a switch looks like, and the state every
+ *  device on a fleet with no VPN head is in. */
+const NO_VPN_INVENTORY = [
+  { metric: 'icmp_rtt_ms', metric_kind: 'gauge', dimension: 'none', series_count: 1, status: 'ok' },
+] as unknown as Json;
+
+/** Each device reports a different vendor's metric — which is the whole point. The generated mock
+ *  invents a metric name of its own, so without this the widget correctly reports that neither
+ *  device is a VPN head and the interesting half never renders. */
+function vpnInventory(url: URL): Json {
+  const nodeId = /\/nodes\/([^/]+)\/metrics$/.exec(url.pathname)?.[1] ?? '';
+  const forti = nodeId === VPN_NODE_B;
+  return [
+    ...(NO_VPN_INVENTORY as unknown as Json[]),
+    {
+      metric: forti ? 'fortinet_sslvpn_users' : 'cisco_ra_sessions',
+      metric_kind: 'gauge',
+      // FortiGate's is a per-VDOM table, so it collapses with `agg=max`; the Cisco one is a plain
+      // scalar. Both shapes go through the widget here rather than only the easy one.
+      dimension: forti ? 'entity' : 'none',
+      series_count: 1,
+      status: 'ok',
+    },
+  ] as unknown as Json;
+}
+
+/** A series covering the window the client actually asked for, ending on a value distinct per
+ *  device — so "148" and "74" can only have come from the right node's response. */
+function vpnRange(url: URL): Json {
+  const m = /\/nodes\/([^/]+)\/metrics\/([^/]+)\/range$/.exec(url.pathname);
+  const nodeId = m?.[1] ?? '';
+  const from = Number(url.searchParams.get('from'));
+  const to = Number(url.searchParams.get('to'));
+  const n = 8;
+  const last = nodeId === VPN_NODE_B ? 74 : 148;
+  return {
+    metric: m?.[2] ?? '',
+    node_id: nodeId,
+    points: Array.from({ length: n }, (_, i) => ({
+      t: Math.round(from + ((to - from) * i) / (n - 1)),
+      // The final sample differs from the rest, so the headline is provably the LAST point rather
+      // than the first one the reader happened to reach.
+      v: i === n - 1 ? last : last - 20,
+    })),
+  } as unknown as Json;
+}
+
+test.describe('VPN sessions, on devices that report one', () => {
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/dashboard': () => VPN_BOARD,
+        '/api/v1/nodes/{node_id}/metrics': (url: URL) => vpnInventory(url),
+        '/api/v1/nodes/{node_id}/metrics/{metric}/range': (url: URL) => vpnRange(url),
+      },
+    },
+  });
+
+  test('shows each device its own count and unit, and draws both lines', async ({
+    page,
+    errors,
+  }) => {
+    await page.goto('/dashboard/my');
+    const cell = page.locator('.mydash-cell').first();
+    const chips = cell.locator('.vpnsess-chip');
+    await expect(chips).toHaveCount(2, { timeout: 15_000 });
+
+    // 🚨 The assertion ADR-136 決定 3 turns on. Both halves matter: the number proves the right
+    // node's series was read, and the noun proves the unit survived `metricUnitSuffix` → i18n →
+    // render. Two bare numbers here would be a plausible, wrong card — "148 and 74 of the same
+    // thing" — and nothing else in the repo looks at this.
+    await expect(chips.nth(0)).toContainText('asa-tokyo');
+    await expect(chips.nth(0)).toContainText('148');
+    await expect(chips.nth(1)).toContainText('fgt-osaka');
+    await expect(chips.nth(1)).toContainText('74');
+
+    // 🚨 The unit is asserted on its own element, EXACTLY, and the first version of this test was
+    // wrong in a way worth keeping: it read `toContainText('sessions')` over the whole chip. Broken
+    // deliberately — rendering `r.metric` where the unit belongs — that version stayed green,
+    // because `cisco_ra_sessions` contains "sessions" and `fortinet_sslvpn_users` contains "users".
+    // A substring of the metric name is exactly what a dropped unit would leave behind, so the
+    // loose assertion could not see the only failure it existed for.
+    await expect(chips.nth(0).locator('.vpnsess-chip-unit')).toHaveText('sessions');
+    await expect(chips.nth(1).locator('.vpnsess-chip-unit')).toHaveText('users');
+
+    // One line per device: uPlot's legend carries the x series plus one row per plotted series.
+    await expect(cell.locator('.u-legend .u-series')).toHaveCount(3);
+
+    // …and there is somewhere to draw them. The legend row count above is equally true of a card
+    // whose plot has collapsed to nothing, which is the failure the readings strip makes newly
+    // possible by taking height off the chart.
+    const plot = await cell.locator('.u-over').first().boundingBox();
+    expect(plot, 'the plot box has no geometry').not.toBeNull();
+    expect(plot!.height, 'the plot collapsed under the readings strip').toBeGreaterThan(100);
+
+    expect(errors.uncaught, 'the widget threw while rendering').toEqual([]);
+  });
+});
+
+test.describe('VPN sessions, on devices that report none', () => {
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/dashboard': () => VPN_BOARD,
+        '/api/v1/nodes/{node_id}/metrics': () => NO_VPN_INVENTORY,
+        '/api/v1/nodes/{node_id}/metrics/{metric}/range': (url: URL) => vpnRange(url),
+      },
+    },
+  });
+
+  test('names the devices rather than drawing an empty chart', async ({ page, errors }) => {
+    await page.goto('/dashboard/my');
+    const cell = page.locator('.mydash-cell').first();
+    await expect(cell).toContainText('Reports no VPN session count', { timeout: 15_000 });
+
+    // Both devices are named. A sentence that mentions one of two is worse than none: it reads as
+    // "the other one is fine".
+    await expect(cell).toContainText('asa-tokyo');
+    await expect(cell).toContainText('fgt-osaka');
+
+    // And nothing is drawn — a chart with no lines under that sentence would invite the operator
+    // to read the flat nothing as "zero sessions".
+    await expect(cell.locator('.u-legend')).toHaveCount(0);
+    await expect(cell.locator('.vpnsess-chip')).toHaveCount(0);
+
+    expect(errors.uncaught, 'the widget threw while rendering').toEqual([]);
+  });
+});
+
+test('the VPN-sessions widget is in the catalogue and mounts when placed', async ({
+  page,
+  errors,
+}) => {
+  await openCatalog(page);
+
+  const item = card(page, 'VPN sessions');
+  await expect(item).toHaveCount(1);
+
+  // Filed with the other inventory-driven widgets rather than under Capacity — a widget in the
+  // wrong section is found by nobody and reported by nothing.
+  const section = item.locator('xpath=ancestor::div[contains(@class,"catalog-section")]');
+  await expect(section.locator('.catalog-section-title')).toHaveText(/performance/i);
+
+  // The card's own copy, not a raw i18n key.
+  const blurb = await item.locator('.catalog-item-blurb').innerText();
+  expect(blurb.length).toBeGreaterThan(10);
+  expect(blurb, 'raw i18n key rendered instead of copy').not.toMatch(/^registry\./);
+
+  await item.click();
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+  const cell = page.locator('.mydash-cell').first();
+  await expect(cell).toBeVisible({ timeout: 15_000 });
+
+  // Mounted and in its no-selection state, naming where the control it asks for lives — it is not
+  // on this screen (ADR-055 R6).
+  await expect(cell).toContainText('Pick one or more VPN devices to plot');
+  await expect(cell).toContainText('press Customize, then the ⚙ on this card');
+
+  // The ⚙ is offered while customizing: the device list is the subject, so that is where it goes.
+  await expect(cell.locator('.widgetframe-gear')).toHaveCount(1);
+
+  // Header actions only render in view mode. Exactly one view control — the window. A second one
+  // here would mean a subject control had been drawn in the header, which is the thing ADR-072
+  // forbids and the type system cannot see.
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(cell.locator('.vpnsess-actions select')).toHaveCount(1);
+  await expect(cell.locator('.widgetframe-gear')).toHaveCount(0);
+
+  expect(errors.uncaught, 'the widget threw while rendering').toEqual([]);
+});

@@ -306,7 +306,8 @@ html[data-viewport='mobile'] .iftraffic-actions select {
 /* ⚠️ `NodePicker` puts `min-width: 180px` on its own control — a floor sized for a page toolbar,
    not for a popover. Without this override it spills out of the track it is given here and covers
    whatever sits to its right, which is how the interface name became unreadable. The identical
-   override exists on `.metricchart-settings`; a third call site will need it too. */
+   override exists on `.metricchart-settings` and, since ADR-136, on `.vpnsess-add` — the third call
+   site this line predicted. A fourth will need it too. */
 .iftraffic-add .iftraffic-node,
 .iftraffic-add .iftraffic-node .nodepick-control {
   min-width: 0;
@@ -335,3 +336,163 @@ html[data-viewport='mobile'] .iftraffic-rm {
   height: 40px;
 }
 
+/* ── VPN sessions (ADR-136) ──────────────────────────────────────────────────
+   Deliberately its own class prefix rather than reusing `.iftraffic-*`: those names belong to one
+   widget, Tier1 locates that widget's controls by them (`.iftraffic-actions select` is asserted to
+   have exactly two), and a second card answering to the same selector would make those assertions
+   say something other than what they read as. The layout rules below are similar because two card
+   headers look alike, which is ordinary CSS — not a fact stored twice. */
+
+.vpnsess-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.vpnsess-actions select {
+  max-width: 110px;
+}
+
+html[data-viewport='mobile'] .vpnsess-actions select {
+  max-width: none;
+}
+
+/* The numbers, above the chart. One chip per selected device, wrapping — six of them fit one row at
+   12 columns and stack at 4, which is why this is a wrap rather than a grid with a track count. */
+.vpnsess-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.vpnsess-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The swatch is the only thing tying a number to its line, so it is the same palette index the
+   chart strokes use. `align-self` because the row is baseline-aligned for the numbers. */
+.vpnsess-sw {
+  flex: none;
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.vpnsess-chip-node {
+  overflow: hidden;
+  max-width: 12ch;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The headline. Tabular figures so six counts of different widths still line up when they wrap onto
+   two rows — a session count is read by comparing it with the one beside it. */
+.vpnsess-chip-val {
+  color: var(--text-primary);
+  font-size: var(--font-md);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* The unit noun is the whole reason a Cisco session count may sit beside a FortiGate user count
+   (ADR-136 決定 3), so it is quieter than the number but never hidden. */
+.vpnsess-chip-unit {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+/* The ⚙ panel body. The surface (chrome, padding, viewport clamp) is the frame's
+   `.widgetframe-settings-pop`; only the width this list wants lives here. */
+.vpnsess-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 300px;
+  max-width: 100%;
+}
+
+.vpnsess-count {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.vpnsess-note {
+  margin: 0;
+  font-size: var(--font-xs);
+}
+
+.vpnsess-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vpnsess-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.vpnsess-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vpnsess-rm {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.vpnsess-rm:hover {
+  color: var(--status-critical);
+}
+
+.vpnsess-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+/* ⚠️ The third call site of the `NodePicker` override the `.iftraffic-add` rule predicted. That
+   component puts `min-width: 180px` on its own control — a floor sized for a page toolbar, not for
+   a popover — and without this it spills out of the track it is given here. */
+.vpnsess-add .vpnsess-node,
+.vpnsess-add .vpnsess-node .nodepick-control {
+  min-width: 0;
+}
+
+/* Touch targets stay at the 40px floor for in-row controls under the mobile shell. */
+html[data-viewport='mobile'] .vpnsess-rm {
+  width: 40px;
+  height: 40px;
+}

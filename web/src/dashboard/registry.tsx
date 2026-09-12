@@ -46,6 +46,9 @@ import {
   MetricChartWidget,
   MetricTopSettings,
   MetricTopWidget,
+  VpnSessionsActions,
+  VpnSessionsSettings,
+  VpnSessionsWidget,
 } from './widgets/metrics';
 import { GeoMapWidget, RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
 import { DependencyWidget } from './widgets/topology';
@@ -305,6 +308,29 @@ export const REGISTRY: WidgetDefinition[] = [
     // The window is a view control and stays in the header; the metric name is the subject.
     Actions: TopAggActions,
     Settings: MetricTopSettings,
+  },
+  {
+    // The third widget built on the metric inventory, and the one that does not ask the operator to
+    // know a metric name (ADR-136): it knows the question — how many remote-access VPN connections
+    // — and reads whichever of three vendor metrics each device actually reports. `reads` is the
+    // same pair as `metric-chart` because it asks the same two questions, six times over.
+    type: 'vpn-sessions',
+    title: 'registry.widgets.vpn-sessions.title',
+    section: SECTION.performance,
+    blurb: 'registry.widgets.vpn-sessions.blurb',
+    backing: 'live',
+    defaultSpan: 8,
+    allowedSpans: [4, 6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
+    reads: [
+      'GET /api/v1/nodes/{node_id}/metrics',
+      'GET /api/v1/nodes/{node_id}/metrics/{metric}/range',
+    ],
+    Component: VpnSessionsWidget,
+    // The window is a lens on the devices already chosen; which devices those are is the subject
+    // and sits behind the ⚙ (ADR-072).
+    Actions: VpnSessionsActions,
+    Settings: VpnSessionsSettings,
   },
   {
     type: 'busiest-interfaces',
