@@ -325,6 +325,7 @@
   "interfaces": {
     "emptyDiscovered": "No interfaces discovered yet. They appear after an SNMP table walk runs — the node needs a bound SNMP credential and a table metric in its collection set.",
     "ofUp": "/ {{total}} up",
+    "unknownCount": " · {{count}} unknown",
     "sparklineHint": " · sparklines show last 1h",
     "filterPlaceholder": "Filter interfaces…",
     "colInterface": "Interface",

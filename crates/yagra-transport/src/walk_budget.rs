@@ -91,7 +91,7 @@ pub(crate) enum ColumnOutcome {
 /// the mechanism working (an unreachable device, established cheaply), while [`Self::Deadline`] on
 /// a healthy fleet means [`WALK_BUDGET_TIMEOUTS`] is too small.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Truncation {
+pub enum Truncation {
     /// The device failed [`MAX_CONSECUTIVE_COLUMN_FAILURES`] columns in a row.
     Silent,
     /// The whole call's deadline passed.
@@ -100,7 +100,7 @@ pub(crate) enum Truncation {
 
 impl Truncation {
     /// The `reason` label this appears under in [`note_truncation`]'s counter.
-    pub(crate) fn reason(self) -> &'static str {
+    pub fn reason(self) -> &'static str {
         match self {
             Self::Silent => "silent",
             Self::Deadline => "deadline",

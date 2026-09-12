@@ -102,7 +102,7 @@ type DefaultThreshold = (
     i32,
 );
 
-pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 31] = [
+pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 32] = [
     // ── Fleet-wide (ADR-075 + `icmp_rtt_ms`) ───────────────────────────────────
     // These four really do apply to every node, which is why the ADR-075 argument for
     // `global` holds for them and not for the vendor rows below.
@@ -410,6 +410,34 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 31] = [
     // Dwell 3 because the transient states are exactly what a session walks through while coming
     // back, and one poll of `active` during a normal reconvergence is not an incident.
     (30, BGP, "bgp_peer_state", "below", None, Some(5.5), 3),
+    // ── Fleet-wide, appended after the vendor block (ADR-110 Increment 6) ──────
+    //
+    // The interface walk ran out of budget before it asked for the columns this node is
+    // configured to collect. Warning, not critical: the device is answering — ICMP, the
+    // scalar GET and the optical probe are all fine — and what is broken is the
+    // *collection*, so paging someone at 3am would be wrong. But leaving it silent is
+    // what this increment exists to stop: measured on a 229-port switch, 17 of 18
+    // configured columns went unasked for 14 days while the node read `ok`.
+    //
+    // 🚨 **0.5, not 1.0.** `below` is inclusive (`value <= bound`), so 1.0 would fire on
+    // every healthy node in the fleet — the bug migration 0030 fixed for `http_up`.
+    //
+    // ⚠️ **`FLEET`, and it has no choice.** A profile-scoped default must name profiles
+    // that actually collect the metric, and this one is emitted by the poller with no
+    // catalogue row behind it — exactly like `snmp_up` two rows above.
+    //
+    // Dwell 3 rather than `snmp_up`'s 2: one truncated walk can be a transient load spike
+    // on the device, and unlike a scalar GET this is a long conversation with many ways to
+    // lose a single round trip. Three consecutive polls is the device, not the moment.
+    (
+        31,
+        FLEET,
+        yagra_common::METRIC_SNMP_WALK_COMPLETE,
+        "below",
+        Some(0.5),
+        None,
+        3,
+    ),
 ];
 
 #[cfg(test)]
@@ -512,6 +540,10 @@ mod tests {
                 yagra_common::METRIC_SNMP_UP,
                 "icmp_loss_pct",
                 "icmp_rtt_ms",
+                // Appended after the vendor block, so it is last here rather than fifth — the
+                // offset is a primary key and inserting it beside its neighbours would re-key
+                // every vendor rule (ADR-110 Increment 6).
+                yagra_common::METRIC_SNMP_WALK_COMPLETE,
             ]
         );
     }

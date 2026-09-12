@@ -27,6 +27,27 @@
   upgrades replace.
   The `Host`-header allowlist is unchanged and still empty by default (`YAGRA_MCP_ALLOWED_HOSTS`).
 
+### New Features
+
+- **A node whose SNMP walk is being cut short now says so, instead of reading green.** A device with
+  many ports can be slow enough that the interface walk spends its whole budget before it asks for
+  the metric columns at all — the oper status, the traffic counters, the error counters. Nothing
+  reported that: the poll returned successfully, the node stayed `Ok`, and the missing metrics were
+  indistinguishable from metrics the agent does not implement. Measured on a 229-port switch, 17 of
+  its 18 configured columns went unasked for 14 days while its Interfaces tab read **"0 / 229 up"**.
+  Pollers now emit **`snmp_walk_complete`** (1 = every column was asked for, 0 = the walk ran out of
+  time first), and a new built-in rule raises a **Warning** after three consecutive incomplete polls.
+  ⚠️ **On upgrade, any deployment that already has such a device will see this Warning appear.**
+  That is the point — it was always true, just invisible. `0` does not mean the device is down;
+  it usually means the device answers SNMP too slowly for the number of ports it has, and the fix
+  is on the device. The rule is a normal threshold rule and can be retuned or deleted like any
+  other (Settings ▸ Alert rules).
+- **The Interfaces tab no longer reports "unknown" as "down".** The header counted ports whose
+  `ifOperStatus` is 1 and printed everything else as the denominator, so a node with no oper-status
+  data read "0 / 229 up" — identical to a switch with every port dead. Ports with no answer are now
+  counted separately and shown as "· N unknown". A node where every port has a known state looks
+  exactly as it did.
+
 ### Improvements
 
 - **A node's Overview now says why it is in Warning.** The Active alerts list on node detail

@@ -239,8 +239,11 @@ async fn walk_simple_optical(
             l.tx_high_oid.to_owned(),
         ]);
     }
+    // The truncation verdict is ignored here on purpose: this walk is observational (ADR-110
+    // Increment 6 reports completeness for the interface table walk, which carries the node's
+    // configured collection set; a short optical or sensor walk costs a gap in an optional reading).
     let rows = match walker.walk(transport, job.target, &columns, timeout).await {
-        Ok(rows) => rows,
+        Ok((rows, _truncated)) => rows,
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "optical walk failed");
             return (Vec::new(), HashMap::new());
@@ -332,8 +335,11 @@ async fn walk_entity_sensor_optical(
         dialect.precision_oid.to_owned(),
         dialect.value_oid.to_owned(),
     ];
+    // The truncation verdict is ignored here on purpose: this walk is observational (ADR-110
+    // Increment 6 reports completeness for the interface table walk, which carries the node's
+    // configured collection set; a short optical or sensor walk costs a gap in an optional reading).
     let rows = match walker.walk(transport, job.target, &columns, timeout).await {
-        Ok(rows) => rows,
+        Ok((rows, _truncated)) => rows,
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity-sensor walk failed");
             return (Vec::new(), Vec::new());

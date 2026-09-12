@@ -474,7 +474,8 @@ mod tests {
                 c: &str,
                 o: &[String],
                 to: Duration,
-            ) -> Result<Vec<SnmpTableSample>, TransportError> {
+            ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
+            {
                 self.0.snmp_walk(t, c, o, to).await
             }
             async fn snmp_walk_strings(
@@ -492,7 +493,8 @@ mod tests {
                 p: &SnmpV3Params,
                 o: &[String],
                 to: Duration,
-            ) -> Result<Vec<SnmpTableSample>, TransportError> {
+            ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
+            {
                 self.0.snmp_v3_walk(t, p, o, to).await
             }
             async fn snmp_v3_walk_strings(

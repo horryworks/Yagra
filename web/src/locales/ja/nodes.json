@@ -325,6 +325,7 @@
   "interfaces": {
     "emptyDiscovered": "インターフェースはまだ検出されていません。SNMP のテーブルウォークが走ると表示されます。そのためには、ノードに SNMP 認証情報が紐付いていることと、収集セットにテーブルメトリクスが入っていることが必要です。",
     "ofUp": "/ {{total}} 稼働",
+    "unknownCount": " · {{count}} 件が不明",
     "sparklineHint": " · スパークラインは直近 1 時間",
     "filterPlaceholder": "インターフェースを絞り込み…",
     "colInterface": "インターフェース",

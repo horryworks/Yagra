@@ -44,6 +44,27 @@ pub const METRIC_ICMP_RTT_MS: &str = "icmp_rtt_ms";
 /// [`METRIC_ICMP_RTT_MS`]; this says whether one *check* on it is answering.
 pub const METRIC_SNMP_UP: &str = "snmp_up";
 
+/// Whether this node's interface table walk got to ask for **every column it was configured to
+/// collect** — `1` when it did, `0` when the walk's budget ran out first (ADR-110 Increment 6).
+///
+/// 🚨 **This is not "did the device answer".** A device can answer every column it is asked and
+/// still produce nothing for most of a node's metrics, because the walk stopped sending. That is
+/// the state this exists to name, and before it there was no way to see it from outside the
+/// poller: the poll returns `Ok` with fewer samples, the node keeps reporting `Reachable`, and the
+/// missing metrics look exactly like metrics the agent does not implement. Measured on a
+/// 229-port switch, 17 of 18 configured columns went unasked for 14 days while the node read `ok`.
+///
+/// A 0/1 gauge for the reason [`METRIC_SNMP_UP`] is one — a single `below 0.5` rule covers it, and
+/// the seeded default does exactly that. ⚠️ **It must be emitted on every path of the table walk,
+/// including the one where the walk itself errored.** A rule is attached to it, and the freshness
+/// sweep resolves an alert whose metric stops arriving, so a path that skips it does not report
+/// "complete" — it silently retires the alert.
+///
+/// ⚠️ Like [`METRIC_SNMP_UP`], not a liveness metric and absent from
+/// [`crate::NodeKind::LIVENESS_METRICS`]: it says whether collection was complete, not whether the
+/// device is up.
+pub const METRIC_SNMP_WALK_COMPLETE: &str = "snmp_walk_complete";
+
 /// Whether `name` is a legal Prometheus/VictoriaMetrics metric name — `[a-zA-Z_:][a-zA-Z0-9_:]*`,
 /// non-empty. Series identity is the single biggest cardinality risk (ADR-011), so this is the
 /// shape check applied at every edge where a metric name enters series identity: the API (operator

@@ -53,6 +53,7 @@ export const CHECK_METRICS = [
   'icmp_rtt_ms',
   'icmp_loss_pct',
   'snmp_up',
+  'snmp_walk_complete',
   'snmp_neighbor_count',
   'snmp_l3_address_count',
   'snmp_routing_adjacency_count',

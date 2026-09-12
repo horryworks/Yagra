@@ -56,7 +56,7 @@ import {
   DOCK_MIN_PX,
   LIST_MIN_PX,
 } from './interfaceDockHeight';
-import { interfaceColumns } from './tabFilters';
+import { ifStateCounts, interfaceColumns } from './tabFilters';
 import { utilHeat } from '../../lib/utilHeat';
 import { duplexState } from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
@@ -206,7 +206,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         .join(' '),
     [colResize.widths],
   );
-  const up = rows.filter((r) => r.oper_status === 1).length;
+  const stateCounts = ifStateCounts(rows);
   const selectedRow = rows.find((r) => r.ifindex === selected) ?? null;
 
   // Opening the dock shrinks the list, which can push the just-clicked row behind/below the dock —
@@ -343,7 +343,14 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     <div className="nd-if" ref={setRootEl}>
       <div className="nd-if-toolbar">
         <span className="nd-if-summary">
-          <b>{up}</b> {t('interfaces.ofUp', { total: rows.length })}
+          <b>{stateCounts.up}</b> {t('interfaces.ofUp', { total: rows.length })}
+          {/* Only when there are any: a healthy node's header is unchanged, and the count only
+              appears on the nodes where "0 up" would otherwise be a lie (ADR-110 Increment 6). */}
+          {stateCounts.unknown > 0 && (
+            <span className="nd-if-summary-hint">
+              {t('interfaces.unknownCount', { count: stateCounts.unknown })}
+            </span>
+          )}
           <span className="nd-if-summary-hint">{t('interfaces.sparklineHint')}</span>
         </span>
         <FilterButton columns={columns} filters={filters} onOpen={() => setSheet(true)} />

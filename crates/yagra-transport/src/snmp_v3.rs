@@ -175,13 +175,17 @@ pub async fn snmp_walk_v3(
     params: &SnmpV3Params,
     column_oids: &[String],
     timeout: Duration,
-) -> Result<Vec<SnmpTableSample>, TransportError> {
+) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut rows = Vec::new();
     let mut budget = WalkBudget::new(timeout);
+    // Kept rather than dropped, for the reason `snmp_walk_v2c` gives: a `Deadline` here means the
+    // caller's configured metric columns were never asked for (ADR-110 Increment 6).
+    let mut stopped: Option<Truncation> = None;
     for (asked, base_str) in column_oids.iter().enumerate() {
         if let Some(reason) = budget.spent() {
             note_truncation(reason, target, column_oids.len() - asked);
+            stopped = Some(reason);
             break;
         }
         let outcome = walk_column_v3(
@@ -202,7 +206,9 @@ pub async fn snmp_walk_v3(
         .await;
         budget.record(outcome);
     }
-    Ok(rows)
+    // The budget is only consulted at the top of an iteration, so a walk whose last columns failed
+    // ends by running out of columns rather than by tripping. Ask once more.
+    Ok((rows, stopped.or_else(|| budget.spent())))
 }
 
 /// Walk string-valued table columns (e.g. `ifName`, `ifAlias`) from `target` via SNMP v3 (USM)

@@ -103,13 +103,19 @@ pub async fn snmp_walk_v2c(
     community: &str,
     column_oids: &[String],
     timeout: Duration,
-) -> Result<Vec<SnmpTableSample>, TransportError> {
+) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
     let mut budget = WalkBudget::new(timeout);
+    // Why the walk stopped, kept rather than dropped. `snmp_walk_instances_v2c` keeps it to spare a
+    // caller a second walk at a silent device; this one keeps it for the opposite reason — the
+    // caller is the interface table walk, and a `Deadline` there means the node's configured metric
+    // columns were never asked for at all (ADR-110 Increment 6).
+    let mut stopped: Option<Truncation> = None;
     for (asked, base_str) in column_oids.iter().enumerate() {
         if let Some(reason) = budget.spent() {
             note_truncation(reason, target, column_oids.len() - asked);
+            stopped = Some(reason);
             break;
         }
         let Some(base) = parse_oid(base_str) else {
@@ -136,7 +142,10 @@ pub async fn snmp_walk_v2c(
             }
         }
     }
-    Ok(rows)
+    // The loop only consults the budget at the *top* of an iteration, so a walk whose last two
+    // columns both failed ends by running out of columns rather than by tripping. Ask once more —
+    // the question is about the device, not about where the loop stopped.
+    Ok((rows, stopped.or_else(|| budget.spent())))
 }
 
 /// Walk string table columns (e.g. `ifName`, `ifAlias`) for interface metadata. Same

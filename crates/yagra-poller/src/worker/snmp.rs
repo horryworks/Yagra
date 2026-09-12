@@ -78,13 +78,17 @@ impl SnmpWalker {
     }
 
     /// Walk numeric table columns via the appropriate protocol.
+    ///
+    /// The second half of the answer is whether the walk got to ask for every column — see
+    /// [`Transport::snmp_walk`]. Passed straight through rather than consumed here: this type is
+    /// the shared funnel, and what a truncation *means* differs per caller (ADR-110 Increment 6).
     pub(super) async fn walk(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         columns: &[String],
         timeout: Duration,
-    ) -> Result<Vec<SnmpTableSample>, TransportError> {
+    ) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
         match self {
             SnmpWalker::V2c(community) => {
                 transport

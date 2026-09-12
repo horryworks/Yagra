@@ -110,12 +110,22 @@ async fn execute_table_walk(
     // `samples.is_empty()`: a device can answer the speed and duplex columns while matching no
     // *metric* column at all, and that device has still spoken.
     let mut answered = false;
+    // Whether this walk got to ask for every column. `None` means it did; `Some(_)` means the
+    // budget ran out and the columns after that point were never sent (ADR-110 Increment 6).
+    //
+    // 🚨 **A walk that errors outright counts as incomplete, not as unknown.** The sample below is
+    // emitted on every path for the reason `snmp_up` is: a rule is attached to it, and the
+    // freshness sweep resolves an alert whose metric stops arriving — so a path that emits nothing
+    // does not report "complete", it silently retires the alert. Seeding it here is what makes the
+    // `Err` arm fall the safe way without a second push.
+    let mut truncated = Some(Truncation::Silent);
     match walker
         .walk(transport, job.target, &numeric_oids, timeout)
         .await
     {
-        Ok(rows) => {
+        Ok((rows, stopped)) => {
             answered = !rows.is_empty();
+            truncated = stopped;
             for row in rows {
                 // 🚨 `ifHighSpeed` is TWO things at once and must feed both.
                 //
@@ -181,11 +191,37 @@ async fn execute_table_walk(
     };
 
     // Reachable iff the agent returned at least one value (matches the scalar SNMP arm).
+    //
+    // 🚨 **Decided before the completeness sample is pushed, and the order is the whole point.**
+    // This reads "did the device say anything", so it may only see values that came *from the
+    // device*. `snmp_walk_complete` is Yagra's own statement about the poll and is present on every
+    // path — folding it in would make `samples` unconditionally non-empty and this branch
+    // unreachable, which is a silent way to delete the unreachable-device signal.
+    //
+    // ⚠️ **And it is deliberately not the fix for a truncated walk.** A device that answers its
+    // first columns and then runs out of budget *is* reachable, and reporting otherwise would be
+    // false: ICMP, the scalar GET and the optical probe are all still answering. It would also
+    // change nothing — every check on a node shares one `__liveness__` check id, so an
+    // `Unreachable` here arrives interleaved with the other checks' `Reachable` and the dwell
+    // window never commits. The truncation is reported as a metric for that reason
+    // (ADR-110 Increment 6).
     let outcome = if samples.is_empty() {
         CheckOutcome::Unreachable
     } else {
         CheckOutcome::Reachable
     };
+
+    // 🚨 **The one sample that says whether the rest of them were even asked for.**
+    //
+    // Everything else in `samples` is evidence about the device; this is evidence about the *poll*.
+    // Without it a truncated walk is indistinguishable from a device that implements nothing —
+    // both are "fewer rows came back" — and nothing downstream could tell them apart: the poll
+    // returns `Ok`, `outcome` reads `Reachable`, and the node stays green while none of its
+    // configured metrics arrive. Measured on a 229-port switch, that state held for 14 days.
+    samples.push(Sample::gauge(
+        METRIC_SNMP_WALK_COMPLETE,
+        if truncated.is_some() { 0.0 } else { 1.0 },
+    ));
 
     PollResult {
         job_id: job.job_id,
@@ -473,6 +509,7 @@ fn resolve_if_speed(if_speed: Option<f64>, if_high_speed: Option<f64>) -> Option
 
 #[cfg(test)]
 mod tests {
+    use super::super::testkit::sample;
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     use uuid::Uuid;
@@ -1074,8 +1111,88 @@ mod tests {
         let t = FakeTransport::reachable(0.0); // no canned table rows
         let r = execute(&snmp_table_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
-        assert!(r.samples.is_empty());
+        // 🚨 **`Unreachable` is decided from the DEVICE's rows, and `snmp_walk_complete` is not
+        // one of them.** This assertion used to read `samples.is_empty()`, which is exactly the
+        // shape that would hide ADR-110 Increment 6's own bug: the completeness gauge is emitted
+        // on every path, so folding it into the emptiness test would make this branch unreachable
+        // and delete the unreachable-device signal without failing anything.
+        assert_eq!(
+            r.samples
+                .iter()
+                .filter(|s| s.metric != METRIC_SNMP_WALK_COMPLETE)
+                .count(),
+            0,
+            "the device produced no values of its own"
+        );
         assert!(r.interfaces.is_empty());
+    }
+
+    /// A walk that answered everything it was asked reports itself complete.
+    ///
+    /// The healthy half of the pair below. Without it, "the gauge is 0" would be satisfied by a
+    /// gauge that is *always* 0, which is the `break-test-that-passes-has-three-meanings` shape.
+    #[tokio::test]
+    async fn a_walk_that_asked_for_every_column_reports_complete() {
+        let t = FakeTransport::reachable(1.0).with_snmp_table(vec![SnmpTableSample {
+            oid_base: "1.3.6.1.2.1.2.2.1.8".to_owned(),
+            ifindex: 1,
+            value: 1.0,
+        }]);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(1.0));
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+    }
+
+    /// 🚨 **The fault this increment exists for, in the shape it actually took.**
+    ///
+    /// The device answers its metadata columns and the walk then runs out of budget, so the
+    /// configured metric columns are never sent. Every signal Yagra had before said this node was
+    /// fine: the poll returns `Ok`, `outcome` is `Reachable`, and `if_high_speed` — which is walked
+    /// as *metadata* and happens to also be a catalogue metric — keeps arriving, so even
+    /// `samples.is_empty()` is false. Measured on a 229-port switch, 17 of 18 configured columns
+    /// went unasked for 14 days while the node read `ok`.
+    ///
+    /// So the assertions are deliberately three: the gauge says 0, the node still reads
+    /// `Reachable` (it *is* reachable — see the note on `outcome`), and the metric columns really
+    /// did produce nothing. Asserting only the first would pass against an implementation that
+    /// reported every walk as truncated.
+    #[tokio::test]
+    async fn a_walk_truncated_before_its_metric_columns_reports_incomplete_while_still_reachable() {
+        let t = FakeTransport::reachable(1.0)
+            // Only the metadata head answered — the shape a truncated walk leaves behind.
+            .with_snmp_table(vec![SnmpTableSample {
+                oid_base: OID_IF_HIGH_SPEED.to_owned(),
+                ifindex: 1,
+                value: 1000.0,
+            }])
+            .with_truncated_walks(Truncation::Deadline);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(0.0));
+        assert_eq!(
+            r.outcome,
+            CheckOutcome::Reachable,
+            "a device that answers slowly is reachable; the truncation is reported as a metric"
+        );
+        assert_eq!(
+            sample(&r, "if_oper_status"),
+            None,
+            "the metric columns were never asked for"
+        );
+    }
+
+    /// A walk that failed outright reports incomplete too.
+    ///
+    /// ⚠️ The `Err` arm is the one a `Some(_)`-shaped seed is easy to forget, and forgetting it is
+    /// worse than it looks: a rule is attached to this metric and the freshness sweep resolves an
+    /// alert whose metric stops arriving, so a silent path does not report "complete" — it retires
+    /// the alert on the very node that is failing.
+    #[tokio::test]
+    async fn a_walk_that_errored_reports_incomplete_rather_than_nothing() {
+        let t = FakeTransport::reachable(1.0).with_snmp_walk_error("connect refused");
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(0.0));
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
     }
 
     #[test]

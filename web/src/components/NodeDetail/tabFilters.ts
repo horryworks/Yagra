@@ -41,6 +41,23 @@ export function ifState(operStatus: number | null | undefined): IfState {
   return operStatus === 1 ? 'up' : 'down';
 }
 
+/** How many ports are in each bucket — what the Interfaces header counts.
+ *
+ *  🚨 **`unknown` is not `down`, and conflating them is what this function exists to stop.** The
+ *  header used to count `oper_status === 1` and print the rest as the denominator, so a node whose
+ *  oper-status column never arrived read **"0 / 229 up"** — indistinguishable from a switch with
+ *  every port dead. That is exactly the state a truncated SNMP walk leaves behind (ADR-110
+ *  Increment 6), and it held on a real device for 14 days while the node badge stayed green.
+ *
+ *  ⚠️ It goes through [`ifState`] rather than re-testing the integer, which is what that function's
+ *  own doc already promised ("shared by the filter and by anything that wants to count them") and
+ *  what the header was quietly not doing. */
+export function ifStateCounts(rows: { oper_status?: number | null }[]): Record<IfState, number> {
+  const counts: Record<IfState, number> = { up: 0, down: 0, unknown: 0 };
+  for (const r of rows) counts[ifState(r.oper_status)] += 1;
+  return counts;
+}
+
 /** The fields the interface filter reads — structural, so a test needs no full row. */
 export interface FilterableInterface {
   ifindex: number;

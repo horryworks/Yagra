@@ -151,7 +151,7 @@ impl Transport for SurgePingTransport {
         community: &str,
         column_oids: &[String],
         timeout: Duration,
-    ) -> Result<Vec<crate::SnmpTableSample>, TransportError> {
+    ) -> Result<(Vec<crate::SnmpTableSample>, Option<crate::Truncation>), TransportError> {
         crate::snmp::snmp_walk_v2c(target, community, column_oids, timeout).await
     }
 
@@ -171,7 +171,7 @@ impl Transport for SurgePingTransport {
         params: &crate::SnmpV3Params,
         column_oids: &[String],
         timeout: Duration,
-    ) -> Result<Vec<crate::SnmpTableSample>, TransportError> {
+    ) -> Result<(Vec<crate::SnmpTableSample>, Option<crate::Truncation>), TransportError> {
         crate::snmp_v3::snmp_walk_v3(target, params, column_oids, timeout).await
     }
 

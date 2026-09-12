@@ -6,6 +6,7 @@ import type { Neighbor, NodeMetricEntry } from '../../types/api';
 import {
   IF_STATES,
   ifState,
+  ifStateCounts,
   interfaceColumns,
   metricColumns,
   metricIsFlowing,
@@ -231,6 +232,38 @@ describe('the collection filter row', () => {
   it('flips isAnyFiltered for every column', () => {
     for (const c of M_COLS) {
       expect(isAnyFiltered(M_COLS, mf({ [c.key]: c.key === 'status' ? 'ok' : 'x' }))).toBe(true);
+    }
+  });
+});
+
+describe('ifStateCounts', () => {
+  it('counts each bucket and never folds unknown into down', () => {
+    // 🚨 The case the Interfaces header used to get wrong: no oper-status arrived for any port,
+    // which read as "0 / 3 up" — identical to a switch with every port dead. What makes the two
+    // distinguishable is that `down` stays 0 here.
+    expect(ifStateCounts([{ oper_status: null }, { oper_status: null }, {}])).toEqual({
+      up: 0,
+      down: 0,
+      unknown: 3,
+    });
+    expect(
+      ifStateCounts([{ oper_status: 1 }, { oper_status: 2 }, { oper_status: 7 }, {}]),
+    ).toEqual({ up: 1, down: 2, unknown: 1 });
+  });
+
+  it('always accounts for every row', () => {
+    const rows = [{ oper_status: 1 }, { oper_status: 2 }, { oper_status: null }, {}];
+    const counts = ifStateCounts(rows);
+    expect(IF_STATES.reduce((n, s) => n + counts[s], 0)).toBe(rows.length);
+  });
+
+  it('agrees with the filter about what up means', () => {
+    // The drift this replaces: the header tested `oper_status === 1` itself while the dropdown
+    // asked `ifState`, so the two could come to disagree with nothing to notice.
+    const rows = [{ oper_status: 1 }, { oper_status: 2 }, { oper_status: null }];
+    const counts = ifStateCounts(rows);
+    for (const s of IF_STATES) {
+      expect(counts[s]).toBe(rows.filter((r) => ifState(r.oper_status) === s).length);
     }
   });
 });

@@ -87,6 +87,7 @@
   "snmp_routing_adjacency_count": "How many OSPF/BGP adjacencies the last walk found.",
   "snmp_sys_uptime_ticks": "Time since the SNMP agent last restarted, in hundredths of a second (sysUpTime). ⚠️ Divide by 100 for seconds — one day is 8,640,000. It wraps after about 497 days.",
   "snmp_up": "Did the SNMP agent answer this poll. 1 = at least one value came back, 0 = nothing came back or the request failed.",
+  "snmp_walk_complete": "Did this node's interface walk get to ask for every metric it is configured to collect. 1 = yes, 0 = the walk ran out of time first and the remaining columns were never requested. ⚠️ 0 does not mean the device is down — it usually means the device answers SNMP too slowly for the number of ports it has, and the metrics that were never asked for will simply be missing.",
   "ssl_cert_days_to_expiry": "Days until the TLS certificate expires; negative once it already has.",
   "tcp_curr_estab": "TCP connections currently in the established state (tcpCurrEstab).",
   "ucd_cpu_idle_pct": "CPU idle time in percent (ssCpuIdle). This is the inverse of load, so alert *below* a bound, not above.",

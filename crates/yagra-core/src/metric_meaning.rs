@@ -33,11 +33,12 @@
 /// It has two readers: [`metric_source`], which reports where a number comes from, and the test
 /// that makes [`METRIC_MEANINGS`] checkable — without the list, a sentence for a metric nothing
 /// collects would look identical to a sentence for one that does.
-pub const CHECK_METRICS: [&str; 18] = [
+pub const CHECK_METRICS: [&str; 19] = [
     "__liveness__",
     "icmp_rtt_ms",
     "icmp_loss_pct",
     "snmp_up",
+    "snmp_walk_complete",
     "snmp_neighbor_count",
     "snmp_l3_address_count",
     "snmp_routing_adjacency_count",
@@ -58,7 +59,7 @@ pub const CHECK_METRICS: [&str; 18] = [
 ///
 /// Sorted, and pinned sorted by a test: the generated locale file is written in this order, so an
 /// out-of-order row would surface as a spurious diff on every unrelated regeneration.
-pub const METRIC_MEANINGS: [(&str, &str); 107] = [
+pub const METRIC_MEANINGS: [(&str, &str); 108] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node."),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB)."),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage."),
@@ -147,6 +148,7 @@ pub const METRIC_MEANINGS: [(&str, &str); 107] = [
     ("snmp_routing_adjacency_count", "How many OSPF/BGP adjacencies the last walk found."),
     ("snmp_sys_uptime_ticks", "Time since the SNMP agent last restarted, in hundredths of a second (sysUpTime). ⚠️ Divide by 100 for seconds — one day is 8,640,000. It wraps after about 497 days."),
     ("snmp_up", "Did the SNMP agent answer this poll. 1 = at least one value came back, 0 = nothing came back or the request failed."),
+    ("snmp_walk_complete", "Did this node's interface walk get to ask for every metric it is configured to collect. 1 = yes, 0 = the walk ran out of time first and the remaining columns were never requested. ⚠️ 0 does not mean the device is down — it usually means the device answers SNMP too slowly for the number of ports it has, and the metrics that were never asked for will simply be missing."),
     ("ssl_cert_days_to_expiry", "Days until the TLS certificate expires; negative once it already has."),
     ("tcp_curr_estab", "TCP connections currently in the established state (tcpCurrEstab)."),
     ("ucd_cpu_idle_pct", "CPU idle time in percent (ssCpuIdle). This is the inverse of load, so alert *below* a bound, not above."),
