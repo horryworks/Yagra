@@ -238,7 +238,7 @@ pub(crate) struct HostMetricRange {
         HostRangeQuery,
     ),
     responses(
-        (status = 200, description = "Scalar host trends plus a per-mount filesystem trend", body = HostMetricRange),
+        (status = 200, description = "Scalar host trends, a per-mount filesystem trend, and network traffic per step (interface and core⇄poller bus bytes)", body = HostMetricRange),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
         (status = 404, description = "No such instance — resolved against the known set before any selector is built", body = super::error::ErrorBody),

@@ -27,7 +27,6 @@ import {
   formatUtil,
   httpStatusLabel,
   httpStatusTone,
-  isPercentMetric,
   metricUnitSuffix,
   pointsToSeries,
   scalarLabel,
@@ -49,11 +48,13 @@ import type {
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
 import {
+  cardUnit,
   hasAnyHealth,
   lastValue,
   METRIC_CARDS,
   overviewScalarCards,
   resolveHealth,
+  uncuratedCardScale,
   type MetricScale,
   type ResolvedHealth,
   type ResolvedMem,
@@ -800,14 +801,9 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
                 nodeId={nodeId}
                 label={t(spec.labelKey)}
                 scale={spec.scale}
-                // The card's own unit wins, then the metric it resolved onto (ADR-046 Inc.7
-                // 決定 5). `setupRate` needs the first half: its `/s` is a property of how the
-                // card reads a counter, not of `huawei_usg_session_total`, which is a session
-                // total. Everything else needs the second, and the second is why the `vpnUsers`
-                // card reads "28 sessions" on a Cisco — it resolves onto `cisco_ra_sessions`
-                // while its label says users. That mismatch predates this and is deliberately
-                // left visible rather than papered over with a hardcoded `users` here.
-                unit={('unit' in spec ? spec.unit : undefined) ?? metricUnitSuffix(resolved.metric) ?? undefined}
+                // Which unit wins is `cardUnit`'s decision (ADR-046 Inc.7 決定 5), in a `.ts`
+                // where a test reaches it.
+                unit={cardUnit(spec, resolved.metric)}
                 resolved={resolved}
                 range={range}
               />
@@ -1099,7 +1095,7 @@ function SnmpScalars({ nodeId }: { nodeId: string }) {
               // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what a
               // curated card would have drawn for the same metric; `unit` is ignored on the
               // percent branch and by `format`, so none of the three can double up.
-              scale={isPercentMetric(c.metric) ? 'percent' : 'count'}
+              scale={uncuratedCardScale(c.metric)}
               unit={metricUnitSuffix(c.metric) ?? undefined}
               format={scalarValueFormat(c.metric)}
               resolved={c}

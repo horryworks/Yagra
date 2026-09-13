@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { metricView, overviewScalars, viewOf } from './metricInventory';
+import { metricView, overviewScalars, rangeOptsFor, viewOf } from './metricInventory';
+import type { MetricChartQuery } from './metricInventory';
 import { METRIC_DIMENSIONS, METRIC_KINDS } from '../types/api';
 import type { MetricDimension, MetricKind, NodeMetricEntry } from '../types/api';
 
@@ -11,6 +12,46 @@ const entry = (over: Partial<NodeMetricEntry> = {}): NodeMetricEntry => ({
   status: 'ok',
   series_count: 1,
   ...over,
+});
+
+describe('rangeOptsFor', () => {
+  // The object the API client is handed. `metricView` decides which query a metric takes and this
+  // turns the answer into request options — a surface spelling that ternary out again is the second
+  // entrance to the ADR-012 accident, so every cell is named here, including the two that must ask
+  // for nothing.
+  const cases: [MetricChartQuery['kind'], ReturnType<typeof rangeOptsFor>][] = [
+    ['range', {}],
+    ['rate', { rate: true }],
+    ['aggregate', { agg: 'max' }],
+    ['interfaces', {}],
+    ['none', {}],
+  ];
+
+  it.each(cases)('turns a %s query into %j', (kind, expected) => {
+    expect(rangeOptsFor({ kind })).toEqual(expected);
+  });
+
+  it('never asks for a rate and an aggregate together', () => {
+    // The server refuses `rate` with `agg`: a per-entity counter has no node-level rate.
+    for (const [kind] of cases) {
+      const opts = rangeOptsFor({ kind });
+      expect(opts.rate !== undefined && opts.agg !== undefined, kind).toBe(false);
+    }
+  });
+
+  it('has a row for every chart kind the decision table produces', () => {
+    // A kind added to the union and produced by `metricView` with no row above would be the one
+    // cell nothing pins.
+    for (const kind of METRIC_KINDS) {
+      for (const dimension of METRIC_DIMENSIONS) {
+        const chart = metricView(kind, dimension).chart.kind;
+        expect(
+          cases.some(([c]) => c === chart),
+          `${kind}/${dimension} → ${chart}`,
+        ).toBe(true);
+      }
+    }
+  });
 });
 
 describe('metricView', () => {

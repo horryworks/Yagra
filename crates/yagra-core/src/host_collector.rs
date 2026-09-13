@@ -22,9 +22,15 @@ pub(crate) const HOST_SAMPLE_SECS: u64 = 15;
 
 /// Start the sampler for the process lifetime.
 ///
-/// **Runs on every core, deliberately not leader-gated.** The series is labelled with the host, so
-/// two cores in an HA pair write two distinct series rather than racing one; and a standby whose
-/// CPU is pinned is exactly the thing an operator needs to see before promoting it.
+/// **Runs on every core, deliberately not leader-gated**: a standby whose CPU is pinned is exactly
+/// the thing an operator needs to see before promoting it.
+///
+/// 🚨 **But the two cores of an HA pair do NOT write two distinct series** — this comment used to
+/// say they did. Both write `instance="core", role="core"` (see `run_host_collector`), so their
+/// samples interleave on one series. For the gauges that reads as a value jumping between two
+/// hosts; for the ADR-137 traffic counters it is worse, because each core's smaller total reads as
+/// a counter reset and `increase()` counts the other core's whole total again. Recorded as
+/// ADR-137's remaining work; HA is off by default.
 ///
 /// `bus_bytes` is this core's own bus traffic (ADR-137). It rides in the host sample because the
 /// page draws it against the interface total, and the sample is the one thing both halves arrive in.

@@ -18,7 +18,7 @@
 // This is a `.ts` file on purpose: Vitest runs `environment: 'node'` with
 // `include: ['src/**/*.test.ts']`, so logic left in the `.tsx` is logic nothing tests.
 
-import type { MemId } from '../../lib/format';
+import { isPercentMetric, metricUnitSuffix, type MemId } from '../../lib/format';
 import {
   overviewScalars,
   viewOf,
@@ -45,6 +45,31 @@ export interface MetricCardSpec {
   readonly scale: MetricScale;
   /** Appended to the headline and hover value — `/s` for a rate. */
   readonly unit?: string;
+}
+
+/**
+ * The unit a Device-health card appends to its headline and hover value.
+ *
+ * The card's own `unit` wins, then the unit of the metric it resolved onto (ADR-046 Inc.7 決定 5).
+ * `setupRate` needs the first half: its `/s` is a property of how the card reads a counter, not of
+ * `huawei_usg_session_total`, which is a session total. Everything else needs the second, and the
+ * second is why the `vpnUsers` card reads "28 sessions" on a Cisco — it resolves onto
+ * `cisco_ra_sessions` while its label says users. That mismatch is deliberately left visible rather
+ * than papered over with a hardcoded `users` here.
+ */
+export function cardUnit(spec: MetricCardSpec, metric: string): string | undefined {
+  return spec.unit ?? metricUnitSuffix(metric) ?? undefined;
+}
+
+/**
+ * The scale a node-level metric Device health did not claim is drawn on.
+ *
+ * It has to agree with what a curated card would draw for the same metric, so it comes from the
+ * generated unit table (ADR-046 Inc.7) and never from the name — a `_pct` rule would miss
+ * `huawei_cpu_usage`, which is a percentage with no suffix at all.
+ */
+export function uncuratedCardScale(metric: string): MetricScale {
+  return isPercentMetric(metric) ? 'percent' : 'count';
 }
 
 export const METRIC_CARDS = [

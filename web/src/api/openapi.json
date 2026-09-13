@@ -19523,7 +19523,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Scalar host trends plus a per-mount filesystem trend",
+            "description": "Scalar host trends, a per-mount filesystem trend, and network traffic per step (interface and core⇄poller bus bytes)",
             "content": {
               "application/json": {
                 "schema": {

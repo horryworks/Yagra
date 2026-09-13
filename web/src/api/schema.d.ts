@@ -26990,7 +26990,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Scalar host trends plus a per-mount filesystem trend */
+            /** @description Scalar host trends, a per-mount filesystem trend, and network traffic per step (interface and core⇄poller bus bytes) */
             200: {
                 headers: {
                     [name: string]: unknown;

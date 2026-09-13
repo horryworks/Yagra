@@ -7,7 +7,9 @@
 // registry, and the resolution to the metric inventory.
 
 import { describe, expect, it } from 'vitest';
+import { metricUnitSuffix } from '../../lib/format';
 import {
+  cardUnit,
   claimedMetrics,
   hasAnyHealth,
   lastValue,
@@ -17,8 +19,51 @@ import {
   resolveCard,
   resolveHealth,
   resolveMem,
+  uncuratedCardScale,
 } from './metricCards';
 import type { NodeMetricEntry } from '../../types/api';
+
+describe('cardUnit', () => {
+  const card = (id: string) => {
+    const spec = METRIC_CARDS.find((c) => c.id === id);
+    if (!spec) throw new Error(`no card named ${id}`);
+    return spec;
+  };
+
+  it("keeps a card's own unit over the metric's", () => {
+    // `/s` is how the card reads a counter, not what `huawei_usg_session_total` is.
+    expect(cardUnit(card('setupRate'), 'huawei_usg_session_total')).toBe('/s');
+  });
+
+  it("takes the resolved metric's unit when the card names none", () => {
+    // Why `vpnUsers` reads "sessions" on a Cisco: the unit follows the metric, not the label.
+    const unit = cardUnit(card('vpnUsers'), 'cisco_ra_sessions');
+    expect(unit).toBeDefined();
+    expect(unit).toBe(metricUnitSuffix('cisco_ra_sessions'));
+  });
+
+  it('is undefined, never null, when neither has one', () => {
+    expect(cardUnit(card('vpnUsers'), 'not_a_metric_anything_knows')).toBeUndefined();
+  });
+});
+
+describe('uncuratedCardScale', () => {
+  it('reads the unit table, not the name', () => {
+    // No `_pct` suffix and still a percentage: the case a name rule gets wrong.
+    expect(uncuratedCardScale('huawei_cpu_usage')).toBe('percent');
+    expect(uncuratedCardScale('cisco_ra_sessions')).toBe('count');
+  });
+
+  it('draws every metric a percent card curates as a percentage too', () => {
+    // The uncurated card has to agree with what a curated one would have drawn for the same metric.
+    for (const spec of METRIC_CARDS) {
+      if (spec.scale !== 'percent') continue;
+      for (const m of spec.candidates) {
+        expect(uncuratedCardScale(m), `${spec.id}: ${m}`).toBe('percent');
+      }
+    }
+  });
+});
 
 const entry = (metric: string, over: Partial<NodeMetricEntry> = {}): NodeMetricEntry => ({
   metric,

@@ -4052,6 +4052,37 @@ mod tests {
         assert_eq!(back.mgmt_addrs, located.mgmt_addrs);
     }
     #[test]
+    fn a_heartbeats_host_sample_tolerates_missing_and_unknown_fields() {
+        // ADR-137 added four traffic counters to `HostSample`. An N-1 poller's host block carries
+        // none of them, and a host block that failed to decode would take the whole beat with it —
+        // core would read a poller with no traffic counters as a poller that is dead.
+        let json = r#"{
+            "poller_id": "edge-1",
+            "pool": "default",
+            "incarnation": "00000000-0000-0000-0000-000000000000",
+            "host": {
+                "cpu_pct": 12.5,
+                "mem_used_bytes": 2,
+                "mem_total_bytes": 8,
+                "disks": [],
+                "future_field": "ignored"
+            }
+        }"#;
+        let hb: HeartbeatMsg = serde_json::from_str(json).unwrap();
+        let host = hb.host.expect("an N-1 host block must still decode");
+        assert_eq!(host.mem_total_bytes, 8, "the fields it did send survive");
+        assert_eq!(
+            (host.net_rx_bytes, host.net_tx_bytes),
+            (0, 0),
+            "an N-1 poller reports no interface traffic"
+        );
+        assert_eq!(
+            (host.bus_rx_bytes, host.bus_tx_bytes),
+            (0, 0),
+            "an N-1 poller reports no bus traffic"
+        );
+    }
+    #[test]
     fn http_check_tolerates_missing_and_unknown_fields() {
         // N-1 producer: no `auth` at all. It must decode as an unauthenticated check rather than
         // failing — a failed decode inside a working-set chunk takes the whole chunk down.

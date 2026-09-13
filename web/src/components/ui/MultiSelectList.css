@@ -79,7 +79,7 @@
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
-  font-size: 10px;
+  font-size: var(--font-2xs);
   line-height: 1;
   color: var(--bg-primary);
 }
