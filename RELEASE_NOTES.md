@@ -60,6 +60,9 @@
   a `network` object, in which each point is the bytes moved during one step of `step_secs` seconds
   — not a per-second rate and not a running total. The series behind it are four new counters,
   `yagra_host_{net,bus}_{rx,tx}_bytes_total`.
+  ⚠️ **Known issue on an active/passive pair** (`docker-compose.ha.yml`): both cores write their
+  samples to the same `core` series, so the core section's two network cards overstate traffic.
+  A single-core deployment — the default — is unaffected. A later release separates the two.
 - **A node whose SNMP walk is being cut short now says so, instead of reading green.** A device with
   many ports can be slow enough that the interface walk spends its whole budget before it asks for
   the metric columns at all — the oper status, the traffic counters, the error counters. Nothing
@@ -73,6 +76,8 @@
   it usually means the device answers SNMP too slowly for the number of ports it has, and the fix
   is on the device. The rule is a normal threshold rule and can be retuned or deleted like any
   other (Settings ▸ Alert rules).
+  A node whose SNMP agent does not answer at all reports no value here, so it raises only the
+  existing SNMP-down alert — not this Warning beside it as a second incident for the same fault.
 - **The Interfaces tab no longer reports "unknown" as "down".** The header counted ports whose
   `ifOperStatus` is 1 and printed everything else as the denominator, so a node with no oper-status
   data read "0 / 229 up" — identical to a switch with every port dead. Ports with no answer are now

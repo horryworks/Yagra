@@ -112,13 +112,22 @@ async fn execute_table_walk(
     let mut answered = false;
     // Whether this walk got to ask for every column. `None` means it did; `Some(_)` means the
     // budget ran out and the columns after that point were never sent (ADR-110 Increment 6).
+    let mut truncated: Option<Truncation> = None;
+    // Whether the device said anything this walk could judge — and so whether the completeness
+    // sample below is emitted at all.
     //
-    // 🚨 **A walk that errors outright counts as incomplete, not as unknown.** The sample below is
-    // emitted on every path for the reason `snmp_up` is: a rule is attached to it, and the
-    // freshness sweep resolves an alert whose metric stops arriving — so a path that emits nothing
-    // does not report "complete", it silently retires the alert. Seeding it here is what makes the
-    // `Err` arm fall the safe way without a second push.
-    let mut truncated = Some(Truncation::Silent);
+    // 🚨 **A device that is not answering gets no completeness sample, and that is the point**
+    // (ADR-110 Increment 7). Increment 6 seeded "incomplete" so the `Err` arm would report `0`, but
+    // a table walk hands back a silent device as `Ok((empty, Some(Silent)))`, not as an error — so
+    // every SNMP-dead node read `0` and raised this Warning *beside* `snmp_up`'s Critical, two
+    // incidents for one fault. `snmp_up` already speaks for a silent agent. The price is accepted:
+    // a truncation alert that is open when SNMP then dies is closed by the freshness sweep, while
+    // `snmp_up` holds the incident.
+    //
+    // ⚠️ **A slow device that returned no rows still speaks.** `Deadline` with nothing collected is
+    // an agent that answers too slowly to finish a column, and `snmp_up` reads `1` for it — silencing
+    // that case would put back the 14 days nobody noticed.
+    let mut spoke = false;
     match walker
         .walk(transport, job.target, &numeric_oids, timeout)
         .await
@@ -126,6 +135,7 @@ async fn execute_table_walk(
         Ok((rows, stopped)) => {
             answered = !rows.is_empty();
             truncated = stopped;
+            spoke = answered || stopped != Some(Truncation::Silent);
             for row in rows {
                 // 🚨 `ifHighSpeed` is TWO things at once and must feed both.
                 //
@@ -194,9 +204,9 @@ async fn execute_table_walk(
     //
     // 🚨 **Decided before the completeness sample is pushed, and the order is the whole point.**
     // This reads "did the device say anything", so it may only see values that came *from the
-    // device*. `snmp_walk_complete` is Yagra's own statement about the poll and is present on every
-    // path — folding it in would make `samples` unconditionally non-empty and this branch
-    // unreachable, which is a silent way to delete the unreachable-device signal.
+    // device*. `snmp_walk_complete` is Yagra's own statement about the poll — folding it in would
+    // make `samples` non-empty for a slow device that returned no rows, and put this branch out of
+    // its reach, which is a silent way to delete the unreachable-device signal.
     //
     // ⚠️ **And it is deliberately not the fix for a truncated walk.** A device that answers its
     // first columns and then runs out of budget *is* reachable, and reporting otherwise would be
@@ -218,10 +228,15 @@ async fn execute_table_walk(
     // both are "fewer rows came back" — and nothing downstream could tell them apart: the poll
     // returns `Ok`, `outcome` reads `Reachable`, and the node stays green while none of its
     // configured metrics arrive. Measured on a 229-port switch, that state held for 14 days.
-    samples.push(Sample::gauge(
-        METRIC_SNMP_WALK_COMPLETE,
-        if truncated.is_some() { 0.0 } else { 1.0 },
-    ));
+    //
+    // Only when the device spoke (`spoke`, above — ADR-110 Increment 7): a silent agent is
+    // `snmp_up`'s to report, and a second incident for the same fault is what this must not add.
+    if spoke {
+        samples.push(Sample::gauge(
+            METRIC_SNMP_WALK_COMPLETE,
+            if truncated.is_some() { 0.0 } else { 1.0 },
+        ));
+    }
 
     PollResult {
         job_id: job.job_id,
@@ -1181,18 +1196,46 @@ mod tests {
         );
     }
 
-    /// A walk that failed outright reports incomplete too.
+    /// A walk that failed outright leaves completeness to `snmp_up`.
     ///
-    /// ⚠️ The `Err` arm is the one a `Some(_)`-shaped seed is easy to forget, and forgetting it is
-    /// worse than it looks: a rule is attached to this metric and the freshness sweep resolves an
-    /// alert whose metric stops arriving, so a silent path does not report "complete" — it retires
-    /// the alert on the very node that is failing.
+    /// ADR-110 Increment 7 reversed Increment 6 here, deliberately. A device that is not answering
+    /// SNMP already raises `snmp_up`; a `0` from this arm raised the walk Warning beside it — two
+    /// incidents for one fault. The price (a truncation alert that is open when SNMP then dies is
+    /// closed by the freshness sweep, while `snmp_up` holds the incident) is accepted in the ADR.
     #[tokio::test]
-    async fn a_walk_that_errored_reports_incomplete_rather_than_nothing() {
+    async fn a_walk_that_errored_emits_no_completeness_sample() {
         let t = FakeTransport::reachable(1.0).with_snmp_walk_error("connect refused");
         let r = execute(&catalog_table_job(), &t, 1_000).await;
-        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(0.0));
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), None);
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
+    }
+
+    /// 🚨 **The case that actually raised two incidents.** A table walk returns a silent agent as
+    /// `Ok((empty, Some(Silent)))`, not as an error — so the `Err` arm above was never the path an
+    /// SNMP-dead node took, and a fix that only touched that arm would have changed nothing.
+    #[tokio::test]
+    async fn a_silent_device_emits_no_completeness_sample() {
+        let t = FakeTransport::reachable(1.0).with_truncated_walks(Truncation::Silent);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), None);
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+    }
+
+    /// The accepting side of the two above. A device that answered some columns and then went
+    /// quiet *did* speak, so its walk is still reported incomplete — without this, a gauge that is
+    /// never emitted at all would satisfy both tests above.
+    #[tokio::test]
+    async fn a_device_that_went_quiet_mid_walk_still_reports_incomplete() {
+        let t = FakeTransport::reachable(1.0)
+            .with_snmp_table(vec![SnmpTableSample {
+                oid_base: OID_IF_HIGH_SPEED.to_owned(),
+                ifindex: 1,
+                value: 1000.0,
+            }])
+            .with_truncated_walks(Truncation::Silent);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(0.0));
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
     }
 
     #[test]
