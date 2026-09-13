@@ -54,9 +54,16 @@ const range = (nodeId: string, points: [number, number][]): MetricRange => ({
   points: points.map(([t, v]) => ({ t, v })),
 });
 
-const resolved = (nodeId: string, label: string, metric = 'cisco_ra_sessions'): ResolvedVpnNode => ({
+/** `slot` is the node's position in the selection, which is its palette index. */
+const resolved = (
+  nodeId: string,
+  label: string,
+  metric = 'cisco_ra_sessions',
+  slot = 0,
+): ResolvedVpnNode => ({
   nodeId,
   nodeName: label,
+  slot,
   label,
   metric,
   query: {},
@@ -363,8 +370,8 @@ describe('buildVpnSeries', () => {
 
   it('colours by position in the selection, so a failed device does not shift the others', () => {
     const entries: VpnNodeSeries[] = [
-      { node: resolved(NODE_A, 'a'), range: null },
-      { node: resolved(NODE_B, 'b'), range: range(NODE_B, [[10, 1]]) },
+      { node: resolved(NODE_A, 'a', 'cisco_ra_sessions', 0), range: null },
+      { node: resolved(NODE_B, 'b', 'cisco_ra_sessions', 1), range: range(NODE_B, [[10, 1]]) },
     ];
     const out = buildVpnSeries(entries, PALETTE);
     expect(out.series).toHaveLength(1);
@@ -408,8 +415,11 @@ describe('currentReadings', () => {
     // A device that silently vanished from a strip of six is indistinguishable from one nobody
     // selected.
     const entries: VpnNodeSeries[] = [
-      { node: resolved(NODE_A, 'asa-tokyo'), range: range(NODE_A, [[10, 5], [20, 148]]) },
-      { node: resolved(NODE_B, 'fw-osaka', 'fortinet_sslvpn_users'), range: null },
+      {
+        node: resolved(NODE_A, 'asa-tokyo', 'cisco_ra_sessions', 0),
+        range: range(NODE_A, [[10, 5], [20, 148]]),
+      },
+      { node: resolved(NODE_B, 'fw-osaka', 'fortinet_sslvpn_users', 1), range: null },
     ];
     expect(currentReadings(entries, PALETTE)).toEqual([
       { nodeId: NODE_A, label: 'asa-tokyo', metric: 'cisco_ra_sessions', value: 148, color: 'c1' },
@@ -425,12 +435,42 @@ describe('currentReadings', () => {
 
   it("carries the colour of that device's own line", () => {
     const entries: VpnNodeSeries[] = [
-      { node: resolved(NODE_A, 'a'), range: range(NODE_A, [[10, 1]]) },
-      { node: resolved(NODE_B, 'b'), range: range(NODE_B, [[10, 2]]) },
+      { node: resolved(NODE_A, 'a', 'cisco_ra_sessions', 0), range: range(NODE_A, [[10, 1]]) },
+      { node: resolved(NODE_B, 'b', 'cisco_ra_sessions', 1), range: range(NODE_B, [[10, 2]]) },
     ];
     const readings = currentReadings(entries, PALETTE);
     const series = buildVpnSeries(entries, PALETTE).series;
     expect(readings.map((r) => r.color)).toEqual(series.map((s) => s.color));
+  });
+
+  it('colours a device by its place among everything picked, as the settings list does', () => {
+    // The settings list numbers its swatches over the whole selection. Numbering only the devices
+    // that resolved gave every device after a non-VPN switch the colour of the one before it, so
+    // the list and the chart named different colours for the same firewall.
+    const plan = vpnSessionsPlan(
+      {
+        nodes: [
+          { nodeId: NODE_A, nodeName: 'switch-1' },
+          { nodeId: NODE_B, nodeName: 'fw-nagoya' },
+          { nodeId: NODE_C, nodeName: 'asa-tokyo' },
+        ],
+        rangeSecs: 3600,
+      },
+      {
+        [NODE_A]: [entry('icmp_rtt_ms')],
+        [NODE_B]: 'failed',
+        [NODE_C]: [entry('cisco_ra_sessions')],
+      },
+    );
+    if (plan.kind !== 'chart') throw new Error('expected a chart');
+    expect(plan.nodes.map((n) => n.slot)).toEqual([2]);
+    const entries: VpnNodeSeries[] = plan.nodes.map((node) => ({
+      node,
+      range: range(node.nodeId, [[10, 3]]),
+    }));
+    // `c3` — the third swatch in the list — and not `c1`, the first colour among what resolved.
+    expect(buildVpnSeries(entries, PALETTE).series.map((s) => s.color)).toEqual(['c3']);
+    expect(currentReadings(entries, PALETTE).map((r) => r.color)).toEqual(['c3']);
   });
 });
 

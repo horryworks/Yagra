@@ -145,6 +145,13 @@ export type VpnInventory = NodeMetricEntry[] | null | 'failed';
 
 /** A node that resolved against its current inventory: which metric to read, and how. */
 export interface ResolvedVpnNode extends VpnNodeRef {
+  /**
+   * This node's position in the **selection** — counting the picked nodes that did not resolve —
+   * and therefore its palette index. The settings list colours its swatches by that position, so
+   * the line and the chip have to as well: numbering only the nodes that resolved would give every
+   * device after a non-VPN switch the colour of the one before it.
+   */
+  slot: number;
   /** The chart series' label. The node's name — the metric is carried by the reading's unit. */
   label: string;
   metric: string;
@@ -191,7 +198,7 @@ export function vpnSessionsPlan(
   const nodes: ResolvedVpnNode[] = [];
   const unsupported: string[] = [];
   const unreadable: string[] = [];
-  for (const n of sel.nodes) {
+  for (const [slot, n] of sel.nodes.entries()) {
     const entries = inventory[n.nodeId];
     if (entries === 'failed') {
       unreadable.push(nameOf(n));
@@ -204,6 +211,7 @@ export function vpnSessionsPlan(
     }
     nodes.push({
       ...n,
+      slot,
       label: nameOf(n),
       metric: entry.metric,
       query: rangeOptsFor(metricView(entry.metric_kind, entry.dimension).chart),
@@ -248,7 +256,10 @@ export function everyNodeFailed(entries: readonly VpnNodeSeries[]): boolean {
  *
  *  1. **Colour comes from the position in the *selection*, not among the nodes that answered.** A
  *     device whose fetch failed this tick must not shift the remaining lines onto each other's
- *     colours, which would silently re-attribute every line in the legend.
+ *     colours, which would silently re-attribute every line in the legend. Nor may a device that
+ *     never resolved: the position is {@link ResolvedVpnNode.slot}, counted over every picked
+ *     device, because that is how the settings list numbers its swatches. Numbering `entries`
+ *     instead was how a non-VPN switch first in the list moved every line after it one colour down.
  *  2. **Each response carries its own `timestamps`.** The caller asks every node for the same
  *     `from`/`to`/`step`, so they normally agree — but "normally" is not a guarantee, and a mismatch
  *     would shift one device's history against the others while still drawing a plausible chart.
@@ -265,7 +276,7 @@ export function buildVpnSeries(
   const timestamps = axis.points.map((p) => p.t);
   const series: ChartSeries[] = [];
 
-  entries.forEach((entry, i) => {
+  entries.forEach((entry) => {
     const r = entry.range;
     if (r == null || r.points.length === 0) return;
     const byTs = new Map<number, number>();
@@ -275,7 +286,7 @@ export function buildVpnSeries(
       // A timestamp this device has no sample for is a gap, not a zero: drawing 0 would claim the
       // concentrator had nobody connected at a moment we simply did not measure.
       values: timestamps.map((ts) => byTs.get(ts) ?? null),
-      color: palette[i % palette.length],
+      color: palette[entry.node.slot % palette.length],
     });
   });
 
@@ -323,12 +334,12 @@ export function currentReadings(
   entries: readonly VpnNodeSeries[],
   palette: readonly string[],
 ): VpnReading[] {
-  return entries.map((e, i) => ({
+  return entries.map((e) => ({
     nodeId: e.node.nodeId,
     label: e.node.label,
     metric: e.node.metric,
     value: latestOf(e.range),
-    color: palette[i % palette.length],
+    color: palette[e.node.slot % palette.length],
   }));
 }
 
