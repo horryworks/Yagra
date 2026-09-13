@@ -8576,6 +8576,16 @@ export interface components {
              *     characters that the tree does not draw.
              */
             notes?: string | null;
+            /**
+             * @description The OS / software version the device last reported over SNMP (ADR-138), e.g. `15.0(2a)EX5`;
+             *     `null` ⇒ never read — the node is not SNMP-polled, the version table does not cover the
+             *     device, or the poller that owns it predates the field.
+             *
+             *     ⚠️ **Observed, not configured.** Nothing writes it but the poll path: the poller re-reads it
+             *     hourly, so it can trail an upgrade by up to an hour, and a poll that cannot read it leaves
+             *     the last value in place. Detail-only, like `notes`.
+             */
+            os_version?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
             /**

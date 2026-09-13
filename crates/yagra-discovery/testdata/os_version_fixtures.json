@@ -1,0 +1,2281 @@
+[
+ {
+  "name": "iosxe_c9800",
+  "os": "iosxe",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2861",
+  "sys_descr": "\"Cisco IOS Software [Cupertino], C9800 Software (C9800_IOSXE-K9), Version 17.9.4, RELEASE SOFTWARE (fc5)",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.4": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.24": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "C9800_IOSXE-K9 17.9.4"
+ },
+ {
+  "name": "junos_ex4600mp",
+  "os": "junos",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.4.63.9",
+  "sys_descr": "hostname.example.org",
+  "strings": {
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.0": "18.4R4",
+   "1.3.6.1.2.1.25.6.3.1.2.2": "JUNOS Base OS Software Suite [18.4R4]",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.1": "18.4R4",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.2": "18.4R4",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.3": "18.4R4",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.4": "18.4R4",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.5": "18.4R4",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.6": "18.4R4",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.7": "18.4R4"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "18.4R4"
+ },
+ {
+  "name": "arista_eos",
+  "os": "arista_eos",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.30065.1.3011.7050.1958.128",
+  "sys_descr": "Arista Networks EOS version 4.15.3F running on an Arista Networks DCS-7050TX-128",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "4.15.3F"
+ },
+ {
+  "name": "linux_powermon",
+  "os": "linux",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.8072.3.2.10",
+  "sys_descr": "Linux some.host.com 4.18.0-259.el8.x86_64 #1 SMP Mon Dec 21 21:05:36 UTC 2020 x86_64",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "4.18.0-259.el8.x86_64"
+ },
+ {
+  "name": "asa",
+  "os": "asa",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2404",
+  "sys_descr": "Cisco Adaptive Security Appliance Version 9.12(2)",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "9.12(3)",
+   "1.3.6.1.2.1.47.1.1.1.1.10.4": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.10": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.22": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.24": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "9.12(3)"
+ },
+ {
+  "name": "iosxr_asr9010",
+  "os": "iosxr",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1017",
+  "sys_descr": "Cisco IOS XR Software (Cisco ASR9K Series),  Version 6.4.2[Default]\nCopyright (c) 2018 by Cisco Systems, Inc.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.4.2"
+ },
+ {
+  "name": "nxos_n3k-3064pq",
+  "os": "nxos",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.12.3.1.3.1163",
+  "sys_descr": "Cisco NX-OS(tm) nxos.7.0.3.I7.8.bin, Software (nxos), Version 7.0(3)I7(8), RELEASE SOFTWARE Copyright (c) 2002-2020 by Cisco Systems, Inc. Compiled 3/3/2020 19:00:00",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.22": "7.0(3)I7(8)",
+   "1.3.6.1.2.1.47.1.1.1.1.10.10": ""
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "7.0(3)I7(8)"
+ },
+ {
+  "name": "fortigate_1500d",
+  "os": "fortigate",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.12356.101.1.15000",
+  "sys_descr": "our firewall",
+  "strings": {
+   "1.3.6.1.4.1.12356.101.4.1.1.0": "v6.4.8,build1914,211117 (GA)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "v6.4.8,build1914,211117 (GA)"
+ },
+ {
+  "name": "panos_5220",
+  "os": "panos",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.25461.2.3.24",
+  "sys_descr": "Palo Alto Networks PA-5200 series firewall",
+  "strings": {
+   "1.3.6.1.4.1.25461.2.1.2.1.1.0": "10.2.9-h1"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "10.2.9-h1"
+ },
+ {
+  "name": "vrp_5720",
+  "os": "vrp",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.23.291",
+  "sys_descr": "S5720-56C-PWR-EI-AC\nHuawei Versatile Routing Platform Software \r\n VRP (R) software,Version 5.170 (S5720 V200R010C00SPC600) \r\n Copyright (C) 2007 Huawei Technologies Co., Ltd.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "5.170 (V200R010C00SPC600) [unlocked]"
+ },
+ {
+  "name": "vrp_ne8000-m8",
+  "os": "vrp",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.360.1.9",
+  "sys_descr": "Huawei Versatile Routing Platform Software\nVRP (R) software, Version 8.200 (NetEngine 8000 V800R012C10SPC300) \r\nCopyright (C) 2012-2020 Huawei Technologies Co., Ltd. \r\nHUAWEI NetEngine 8000 M8",
+  "strings": {
+   "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.4.128.6": "V800R012SPH065"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "8.200 (V800R012C10SPC300) [V800R012SPH065]"
+ },
+ {
+  "name": "routeros_rb433gl",
+  "os": "routeros",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.14988.1",
+  "sys_descr": "RouterOS RB433GL",
+  "strings": {
+   "1.3.6.1.4.1.14988.1.1.4.4.0": "7.18.2"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "7.18.2"
+ },
+ {
+  "name": "comware",
+  "os": "comware",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.25506.11.1.172",
+  "sys_descr": "HP Comware Platform Software, Software Version 7.1.045, Release 2416 HP FF 5700-40XG-2QSFP  Switch Copyright (c) 2010-2014 Hewlett-Packard Development Company, L.P.",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "7.1.045"
+ },
+ {
+  "name": "eaton-mgeups_9pxle",
+  "os": "eaton-mgeups",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.705.1",
+  "sys_descr": "Eaton 9PX 1000i RT 2U",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "01.16.4638"
+ },
+ {
+  "name": "ricoh_mpc3002",
+  "os": "ricoh",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.367.1.1",
+  "sys_descr": "RICOH Aficio MP C3002 2.20 / RICOH Network Printer C model / RICOH Network Scanner C model / RICOH Network Facsimile C model",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "2.20"
+ },
+ {
+  "name": "junos_vmx",
+  "os": "junos",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.2.108",
+  "sys_descr": "Juniper Networks, Inc. vmx internet router, kernel JUNOS 18.2R1.9, Build date: 2018-06-28 04:23:52 UTC Copyright (c) 1996-2018 Juniper Networks, Inc.",
+  "strings": {
+   "1.3.6.1.2.1.25.6.3.1.2.2": "JUNOS Base OS Software Suite [18.2R1.9]"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "18.2R1.9"
+ },
+ {
+  "name": "iosxe_c9400",
+  "os": "iosxe",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1116",
+  "sys_descr": "Cisco IOS Software, ASR1000 Software (PPC_LINUX_IOSD-ADVENTERPRISEK9-M), Version 15.5(3)S1a, RELEASE SOFTWARE (fc1)\r\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2015 by Cisco Systems, Inc.\r\nCompiled Wed 04-Nov-15 17:40 by mcpre",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.4": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.10": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.22": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.24": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "15.5(3)S1a"
+ },
+ {
+  "name": "iosxe_c9500x-svl",
+  "os": "iosxe",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.1.3155",
+  "sys_descr": "\"Cisco IOS Software [IOSXE], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.15.1, RELEASE SOFTWARE (fc4)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2024 by Cisco Systems, Inc.\r\nCompiled Sun 11-Aug-24 22:16 by mcpre\"",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.4": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.10": "",
+   "1.3.6.1.2.1.47.1.1.1.1.10.24": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "CAT9K_IOSXE 17.15.1"
+ },
+ {
+  "name": "ios_2960x",
+  "os": "ios",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1208",
+  "sys_descr": "Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.0(2a)EX5, RELEASE SOFTWARE (fc3)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2015 by Cisco Systems, Inc.\r\nCompiled Mon 16-Feb-15 08:16 by prod_rel_team",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "15.0(2a)EX5"
+ },
+ {
+  "name": "ios_c3560",
+  "os": "ios",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.1.634",
+  "sys_descr": "\"Cisco IOS Software, C3560 Software (C3560-IPSERVICESK9-M), Version 12.2(55)SE12, RELEASE SOFTWARE (fc2)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2017 by Cisco Systems, Inc.\r\nCompiled Thu 28-Sep-17 02:04 by prod_rel_team\"",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "12.2(55)SE12"
+ },
+ {
+  "name": "nxos_n9k-c93180yc-fx3",
+  "os": "nxos",
+  "lab": true,
+  "sys_object_id": "1.3.6.1.4.1.9.12.3.1.3.2193",
+  "sys_descr": "Cisco NX-OS(tm) Nexus9000 C93180YC-FX3, Software (NXOS 64-bit), Version 10.5(2), RELEASE SOFTWARE Copyright (c) 2002-2024 by Cisco Systems, Inc. Compiled 11/30/2024 12:00:00",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.22": "10.5(2)",
+   "1.3.6.1.2.1.47.1.1.1.1.10.10": ""
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "10.5(2)"
+ },
+ {
+  "name": "nxos",
+  "os": "nxos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.12.3.1.3.1008",
+  "sys_descr": "Cisco NX-OS(tm) n5000, Software (n5000-uk9), Version 7.0(8)N1(1), RELEASE SOFTWARE Copyright (c) 2002-2012 by Cisco Systems, Inc. Device Manager Version 6.0(2)N1(1),  Compiled 2/20/2016 21:00:00",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "nxos_n5548-7.3.3",
+  "os": "nxos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.12.3.1.3.1084",
+  "sys_descr": "Cisco NX-OS(tm) n5000, Software (n5000-uk9), Version 7.3(3)N1(1), RELEASE SOFTWARE Copyright (c) 2002-2012, 2016-2017 by Cisco Systems, Inc. Device Manager Version 6.0(2)N1(1),Compiled 4/27/2018 9:00:00",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "nxos_n9000-9.3.9",
+  "os": "nxos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.12.3.1.3.2193",
+  "sys_descr": "Cisco NX-OS(tm) Nexus9000 C93180YC-FX3, Software (NXOS 32-bit), Version 9.3(9), RELEASE SOFTWARE Copyright (c) 2002-2022 by Cisco Systems, Inc. Compiled 2/4/2022 7:00:00",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "nxos_n9340-10.2.2",
+  "os": "nxos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.12.3.1.3.2010",
+  "sys_descr": "Cisco NX-OS(tm) Nexus9000 C93240YC-FX2, Software (NXOS 64-bit), Version 10.2(2), RELEASE SOFTWARE Copyright (c) 2002-2021 by Cisco Systems, Inc. Compiled 12/14/2021 23:00:00",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "nxos_n9504-7.0",
+  "os": "nxos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.12.3.1.3.1507",
+  "sys_descr": "Cisco NX-OS(tm) nxos.7.0.3.I7.7.bin, Software (nxos), Version 7.0(3)I7(7), RELEASE SOFTWARE Copyright (c) 2002-2019 by Cisco Systems, Inc. Compiled 8/28/2019 15:00:00",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "ftd",
+  "os": "ftd",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2409",
+  "sys_descr": "Cisco FirePOWER Threat Defense, Version 6.2.0.4 (Build 85), ASA Version 9.7(1)19",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.2.0.4 (Build 85)"
+ },
+ {
+  "name": "ftd_1140",
+  "os": "ftd",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2662",
+  "sys_descr": "Cisco Firepower Threat Defense, Version 6.4.0 (Build 102), ASA Version 9.12(1)6",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.4.0 (Build 102)"
+ },
+ {
+  "name": "ftd_3130",
+  "os": "ftd",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.3055",
+  "sys_descr": "Cisco Firepower Threat Defense, Version 7.4.1.1 (Build 12), ASA Version 9.20(2)201",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.10": ""
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "7.4.1.1 (Build 12)"
+ },
+ {
+  "name": "ftd_4115",
+  "os": "ftd",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2774",
+  "sys_descr": "Cisco Firepower Threat Defense, Version 6.6.1 (Build 90), ASA Version 9.14(1)27",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.6.1 (Build 90)"
+ },
+ {
+  "name": "ftd_fpr-4215",
+  "os": "ftd",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.3043",
+  "sys_descr": "Cisco Firepower Threat Defense, Version 7.6.2 (Build 329), ASA Version 9.22(1)127",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.10": ""
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "7.6.2 (Build 329)"
+ },
+ {
+  "name": "ftd_ftd1150",
+  "os": "ftd",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2870",
+  "sys_descr": "Cisco Firepower Threat Defense, Version 7.6.2.1 (Build 3), ASA Version 9.22(1)128",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "7.6.2.1 (Build 3)"
+ },
+ {
+  "name": "iosxr",
+  "os": "iosxr",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1018",
+  "sys_descr": "Cisco IOS XR Software (Cisco ASR9K Series),  Version 5.3.4[Default]\r\nCopyright (c) 2017 by Cisco Systems, Inc.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "5.3.4"
+ },
+ {
+  "name": "iosxr_asr9001",
+  "os": "iosxr",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1639",
+  "sys_descr": "Cisco IOS XR Software (Cisco ASR9K Series),  Version 6.6.3[Default]\nCopyright (c) 2019 by Cisco Systems, Inc.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.6.3"
+ },
+ {
+  "name": "iosxr_asr9901",
+  "os": "iosxr",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2658",
+  "sys_descr": "Cisco IOS XR Software (ASR9K), Version 6.6.3  Copyright (c) 2013-2019 by Cisco Systems, Inc.",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "6.6.3",
+   "1.3.6.1.2.1.47.1.1.1.1.10.4": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 8384602,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 9
+  },
+  "checked": true,
+  "expected": "6.6.3"
+ },
+ {
+  "name": "iosxr_asr9904",
+  "os": "iosxr",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1018",
+  "sys_descr": "\"Cisco IOS XR Software (Cisco ASR9K Series),  Version 5.3.4[Default]\nCopyright (c) 2017 by Cisco Systems, Inc.\"",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "5.3.4"
+ },
+ {
+  "name": "iosxr_c8200-400g",
+  "os": "iosxr",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.3006",
+  "sys_descr": "Cisco IOS XR Software (8000), Version 24.1.2 Copyright (c) 2013-2024 by Cisco Systems, Inc.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "24.1.2"
+ },
+ {
+  "name": "ciscowlc",
+  "os": "ciscowlc",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1069",
+  "sys_descr": "Cisco Controller",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "ciscowlc_cbw240ac",
+  "os": "ciscowlc",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.6.1.37.240.1",
+  "sys_descr": "Cisco Business Wireless",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "10.7.1.0",
+   "1.3.6.1.2.1.47.1.1.1.1.10.24": "10.7.1.0"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0
+  },
+  "checked": true,
+  "expected": "10.7.1.0"
+ },
+ {
+  "name": "ciscowlc_1",
+  "os": "ciscowlc",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1279",
+  "sys_descr": "Cisco Controller",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "ciscowlc_2",
+  "os": "ciscowlc",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14179.1.1.4.3",
+  "sys_descr": "Cisco Controller",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "ios",
+  "os": "ios",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.359",
+  "sys_descr": "Cisco Internetwork Operating System Software \r\nIOS (tm) C2950 Software (C2950-I6K2L2Q4-M), Version 12.1(22)EA14, RELEASE SOFTWARE (fc1)\r\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2010 by cisco Systems, Inc.\r\nCompiled Tue 26-O",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "12.1(22)EA14"
+ },
+ {
+  "name": "ios_3560g",
+  "os": "ios",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.615",
+  "sys_descr": "Cisco IOS Software, C3560 Software (C3560-IPSERVICESK9-M), Version 15.0(2)SE11, RELEASE SOFTWARE (fc3)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2017 by Cisco Systems, Inc.\r\nCompiled Sat 19-Aug-17 09:21 by prod_rel_team",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "15.0(2)SE11"
+ },
+ {
+  "name": "ios_4506",
+  "os": "ios",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.875",
+  "sys_descr": "\"Cisco IOS Software, Catalyst 4500 L3 Switch Software (cat4500-IPBASE-M), Version 12.2(31)SGA8, RELEASE SOFTWARE (fc1)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2008 by Cisco Systems, Inc.\r\nCompiled Tue 29-Jul-08 12:23 by tin\"",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0
+  },
+  "checked": true,
+  "expected": "12.2(31)SGA8"
+ },
+ {
+  "name": "ios_4506e",
+  "os": "ios",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.875",
+  "sys_descr": "\"Cisco IOS Software, Catalyst 4500 L3 Switch  Software (cat4500e-IPBASEK9-M), Version 15.2(2)E8, RELEASE SOFTWARE (fc1)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2018 by Cisco Systems, Inc.\r\nCompiled Mon 22-Jan-18 06:32 by pr\"",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "15.2(2)E8"
+ },
+ {
+  "name": "ios_4948-10ge",
+  "os": "ios",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.659",
+  "sys_descr": "Cisco IOS Software, Catalyst 4500 L3 Switch Software (cat4500-IPBASEK9-M), Version 15.0(2)SG11, RELEASE SOFTWARE (fc2)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2016 by Cisco Systems, Inc.\r\nCompiled Mon 24-Oct-16 10:00 by pr",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": ""
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0
+  },
+  "checked": true,
+  "expected": "15.0(2)SG11"
+ },
+ {
+  "name": "iosxe",
+  "os": "iosxe",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.1116",
+  "sys_descr": "Cisco IOS Software, ASR1000 Software (PPC_LINUX_IOSD-ADVENTERPRISEK9-M), Version 15.5(3)S1a, RELEASE SOFTWARE (fc1)\r\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2015 by Cisco Systems, Inc.\r\nCompiled Wed 04-Nov-15 17:40 by mcpre",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "15.5(3)S1a"
+ },
+ {
+  "name": "iosxe_asr920",
+  "os": "iosxe",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2102",
+  "sys_descr": "\"Cisco IOS Software [Bengaluru], ASR920 Software (PPC_LINUX_IOSD-UNIVERSALK9_NPE-M), Version 17.6.2, RELEASE SOFTWARE (fc7)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2021 by Cisco Systems, Inc.\r\nCompiled Tue 23-Nov-21 10:17 b\"",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "PPC_LINUX_IOSD-UNIVERSALK9_NPE-M 17.6.2"
+ },
+ {
+  "name": "iosxe_c1100tgx",
+  "os": "iosxe",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2973",
+  "sys_descr": "\"Cisco IOS Software [IOSXE], ISR Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Experimental Version 26.01.20260120:071730 [BLD_V261_THROTTLE_LATEST_20260120_043354-0-gca6c109769327:/nobackup/mcpre/s2c-build-ws 101]\nCopyright (c) 1986-2026 by Cisco Systems, \"",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "iosxe_c3650",
+  "os": "iosxe",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2066",
+  "sys_descr": "Cisco IOS Software, IOS-XE Software, Catalyst L3 Switch Software (CAT3K_CAA-UNIVERSALK9-M), Version 03.07.05E RELEASE SOFTWARE (fc1)\nTechnical Support: http://www.cisco.com/techsupport\r\nCopyright (c) 1986-2017 by Cisco Systems, Inc.\r\nCompiled Fri 10-Feb-",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "03.07.05E"
+ },
+ {
+  "name": "iosxe_c8300",
+  "os": "iosxe",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.2989",
+  "sys_descr": "Cisco IOS Software [Dublin], c8000be Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.12.3, RELEASE SOFTWARE (fc7)",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "X86_64_LINUX_IOSD-UNIVERSALK9-M 17.12.3"
+ },
+ {
+  "name": "iosxe_c8500-20x6c",
+  "os": "iosxe",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.9.1.3085",
+  "sys_descr": "\"Cisco IOS Software [IOSXE], c8000aep Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Experimental Version 17.17.20240828:191717 [BLD_POLARIS_DEV_LATEST_20240828_181437:/nobackup/mcpre/s2c-build-ws 102]\nCopyright (c) 1986-2024 by Cisco Systems, Inc.\r\nCompiled\"",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "junos",
+  "os": "junos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.2.41",
+  "sys_descr": "Juniper Networks, Inc. srx100h2 internet router, kernel JUNOS 12.3X48-D35.7, Build date: 2016-08-05 04:10:06 UTC Copyright (c) 1996-2016 Juniper Networks, Inc.",
+  "strings": {
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.0": "12.3R11.2",
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.1": "12.3R11.2"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "12.3R11.2"
+ },
+ {
+  "name": "junos_ber",
+  "os": "junos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.2.108",
+  "sys_descr": "Juniper Networks, Inc. vmx internet router, kernel JUNOS 18.2R1.9, Build date: 2018-06-28 04:23:52 UTC Copyright (c) 1996-2018 Juniper Networks, Inc.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "18.2R1.9"
+ },
+ {
+  "name": "junos_ex",
+  "os": "junos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.4.131.2",
+  "sys_descr": "Juniper Networks, Inc. ex3400-48t Ethernet Switch, kernel JUNOS 15.1X53-D59.4, Build date: 2018-09-14 21:00:55 UTC Copyright (c) 1996-2018 Juniper Networks, Inc.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "15.1X53-D59.4"
+ },
+ {
+  "name": "junos_ex3300-12.3r4.6",
+  "os": "junos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.2.76",
+  "sys_descr": "Juniper Networks, Inc. ex3300-48t Ethernet Switch, kernel JUNOS 12.3R4.6, Build date: 2013-09-13 02:52:21 UTC Copyright (c) 1996-2013 Juniper Networks, Inc.",
+  "strings": {
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.0": "12.3R4.6",
+   "1.3.6.1.2.1.25.6.3.1.2.2": "JUNOS Base OS Software Suite [12.3R4.6]"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "12.3R4.6"
+ },
+ {
+  "name": "junos_ex3400-15.1x53-d55.5",
+  "os": "junos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.4.131.2",
+  "sys_descr": "Juniper Networks, Inc. ex3400-48t Ethernet Switch, kernel JUNOS 15.1X53-D55.5, Build date: 2016-12-30 12:42:20 UTC Copyright (c) 1996-2016 Juniper Networks, Inc.",
+  "strings": {
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.0": "15.1X53-D55.5",
+   "1.3.6.1.2.1.25.6.3.1.2.2": "JUNOS daemons [20161230.114620_builder_junos_151_x53_d55]"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "15.1X53-D55.5"
+ },
+ {
+  "name": "junos_ex4200-vc-12.3r11.2",
+  "os": "junos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2636.1.1.1.2.31",
+  "sys_descr": "Juniper Networks, Inc. ex4200-48t Ethernet Switch, kernel JUNOS 12.3R11.2, Build date: 2015-09-24 13:01:13 UTC Copyright (c) 1996-2015 Juniper Networks, Inc.",
+  "strings": {
+   "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.5.0": "12.3R11.2",
+   "1.3.6.1.2.1.25.6.3.1.2.2": "JUNOS Base OS Software Suite [12.3R11.2]"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "12.3R11.2"
+ },
+ {
+  "name": "vrp",
+  "os": "vrp",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.224.1",
+  "sys_descr": "Huawei AR1220 Huawei Versatile Routing Platform Software  VRP (R) software,Version 5.120 (AR1220 V200R003C01SPC900) Copyright (C) 2011-2013 Huawei Technologies Co., Ltd",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "5.120 (V200R003C01SPC900)"
+ },
+ {
+  "name": "vrp_5720-32x-ei",
+  "os": "vrp",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.23.294",
+  "sys_descr": "S5720-32X-EI-24S-AC\nHuawei Versatile Routing Platform Software \r\n VRP (R) software,Version 5.170 (S5720 V200R010C00SPC600) \r\n Copyright (C) 2007 Huawei Technologies Co., Ltd.",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "5.170 (V200R010C00SPC600) [unlocked]"
+ },
+ {
+  "name": "vrp_ac6605-26",
+  "os": "vrp",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.240.6",
+  "sys_descr": "Huawei AC6605-26-PWR Huawei Versatile Routing Platform Software  VRP (R) software,Version 5.170 (AC6605-26-PWR V200R010C00SPC500) Copyright (C) 2011-2019 Huawei Technologies Co., Ltd",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "5.170 (V200R010C00SPC500) [unlocked]"
+ },
+ {
+  "name": "vrp_ne",
+  "os": "vrp",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.62.30",
+  "sys_descr": "Huawei Versatile Routing Platform Software",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "vrp_ne05e",
+  "os": "vrp",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.297.14",
+  "sys_descr": "\"Huawei Versatile Routing Platform Software\nVRP (R) software, Version 8.220 (NE05E-SQ V800R022C00SPC600) \r\nCopyright (C) 2012-2022 Huawei Technologies Co., Ltd. \r\nHUAWEI NE05E-SQ \r\n\"",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "fortigate",
+  "os": "fortigate",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.12356.15",
+  "sys_descr": "",
+  "strings": {
+   "1.3.6.1.4.1.12356.101.4.1.1.0": "v5.6.4,build1575,180425 (GA)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "v5.6.4,build1575,180425 (GA)"
+ },
+ {
+  "name": "fortigate_100e",
+  "os": "fortigate",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.12356.101.1.1041",
+  "sys_descr": "Gecom",
+  "strings": {
+   "1.3.6.1.4.1.12356.101.4.1.1.0": "v5.4.4,build7650,170529 (GA)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "v5.4.4,build7650,170529 (GA)"
+ },
+ {
+  "name": "fortigate_500d",
+  "os": "fortigate",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.12356.101.1.5004",
+  "sys_descr": "",
+  "strings": {
+   "1.3.6.1.4.1.12356.101.4.1.1.0": "v5.6.6,build1630,180913 (GA)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "v5.6.6,build1630,180913 (GA)"
+ },
+ {
+  "name": "fortigate_60f",
+  "os": "fortigate",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.12356.101.1.644",
+  "sys_descr": "",
+  "strings": {
+   "1.3.6.1.4.1.12356.101.4.1.1.0": "v7.2.6,build1575,230926 (GA.F)"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "v7.2.6,build1575,230926 (GA.F)"
+ },
+ {
+  "name": "fortigate_60f3g4g",
+  "os": "fortigate",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.12356.101.1.648",
+  "sys_descr": "",
+  "strings": {
+   "1.3.6.1.4.1.12356.101.4.1.1.0": "v6.4.8,build1914,211117 (GA)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "v6.4.8,build1914,211117 (GA)"
+ },
+ {
+  "name": "arista_eos_7280r",
+  "os": "arista_eos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.30065.1.3011.7280.3735.2.3648.48.1654.6.972",
+  "sys_descr": "Arista Networks EOS version 4.33.6M running on an Arista Networks DCS-7280SR2A-48YC6-M",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "4.33.6M"
+ },
+ {
+  "name": "arista_eos_vrf",
+  "os": "arista_eos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.30065.1.3011.7150.3282.24",
+  "sys_descr": "Arista Networks EOS version 4.20.12.1M running on an Arista Networks DCS-7150S-24",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "4.20.12.1M"
+ },
+ {
+  "name": "routeros",
+  "os": "routeros",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14988.1",
+  "sys_descr": "router",
+  "strings": {
+   "1.3.6.1.4.1.14988.1.1.4.4.0": "6.40.5"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "6.40.5"
+ },
+ {
+  "name": "routeros_crs317",
+  "os": "routeros",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14988.1",
+  "sys_descr": "RouterOS CRS317-1G-16S+",
+  "strings": {
+   "1.3.6.1.4.1.14988.1.1.4.4.0": "6.44.2"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "6.44.2"
+ },
+ {
+  "name": "routeros_ltap-mini",
+  "os": "routeros",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14988.1",
+  "sys_descr": "RouterOS RB912R-2nD",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "routeros_rb2011il",
+  "os": "routeros",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14988.1",
+  "sys_descr": "RouterOS RB2011iL",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "routeros_rb5009upr+s+",
+  "os": "routeros",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14988.1",
+  "sys_descr": "RouterOS RB5009UPr+S+",
+  "strings": {
+   "1.3.6.1.4.1.14988.1.1.4.4.0": "7.20.6"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "7.20.6"
+ },
+ {
+  "name": "panos",
+  "os": "panos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25461",
+  "sys_descr": "Palo Alto Networks PA-3000 series firewall",
+  "strings": {
+   "1.3.6.1.4.1.25461.2.1.2.1.1.0": "9.0.7"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "9.0.7"
+ },
+ {
+  "name": "panos_440",
+  "os": "panos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25461.2.3.54",
+  "sys_descr": "Palo Alto Networks PA-400 series firewall",
+  "strings": {
+   "1.3.6.1.4.1.25461.2.1.2.1.1.0": "10.1.14-h6"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "10.1.14-h6"
+ },
+ {
+  "name": "panos_gp-vpn-sessions-limit",
+  "os": "panos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25461.2.3.54",
+  "sys_descr": "Palo Alto Networks PA-400 series firewall",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "panos_gp-vpn-unconfigured",
+  "os": "panos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25461.2.3.54",
+  "sys_descr": "Palo Alto Networks PA-400 series firewall",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "panos_sensors_1",
+  "os": "panos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25461.2.3.57",
+  "sys_descr": "Palo Alto Networks PA-5400 series firewall",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "gaia",
+  "os": "gaia",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2620.1.6.123.1.49",
+  "sys_descr": "Linux hostname 2.6.18-92cpx86_64 #1 SMP Tue Sep 20 14:57:58 IDT 2016 x86_64",
+  "strings": {
+   "1.3.6.1.4.1.2620.1.6.4.1.0": "R80.10"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "R80.10"
+ },
+ {
+  "name": "gaia_1",
+  "os": "gaia",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2620.1.6.123.1.49",
+  "sys_descr": "Linux gw1-ckp-gaia 2.6.18-92cpx86_64 #1 SMP Tue Sep 4 13:46:30 IDT 2018 x86_64",
+  "strings": {
+   "1.3.6.1.4.1.2620.1.6.4.1.0": "R80.20"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "R80.20"
+ },
+ {
+  "name": "gaia_1100",
+  "os": "gaia",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.8072.3.2.10",
+  "sys_descr": "Linux CP1100 2.6.22.18 #1 Thu May 10 14:36:02 IDT 2018 armv5tejl",
+  "strings": {
+   "1.3.6.1.4.1.2620.1.6.4.1.0": "R77.20"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "R77.20"
+ },
+ {
+  "name": "gaia_1430",
+  "os": "gaia",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.8072.3.2.10",
+  "sys_descr": "Linux A-10144014 3.10.20-al-5.0-pr2 #1 SMP Sun May 21 15:23:45 IDT 2017 armv7l",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "gaia_1450",
+  "os": "gaia",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2620.1.1",
+  "sys_descr": "Linux CP1450 3.10.20-al-5.0-pr2 #1 SMP Thu Aug 13 09:13:03 IDT 2020 armv7l",
+  "strings": {
+   "1.3.6.1.4.1.2620.1.6.4.1.0": "R77.20"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "R77.20"
+ },
+ {
+  "name": "gaia_1490",
+  "os": "gaia",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2620.1.1",
+  "sys_descr": "Linux CP1490 3.10.20-al-5.0-pr2 #1 SMP Thu Aug 13 09:13:03 IDT 2020 armv7l",
+  "strings": {
+   "1.3.6.1.4.1.2620.1.6.4.1.0": "R77.20"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "R77.20"
+ },
+ {
+  "name": "f5",
+  "os": "f5",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.3375.2.1.3.4.94",
+  "sys_descr": "Linux F5_device 2.6.32-431.56.1.el6.f5.x86_64 #1 SMP Thu Dec 13 14:25:45 PST 2018 x86_64",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "f5_ve-14.1.5.1",
+  "os": "f5",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.3375.2.1.3.4.43",
+  "sys_descr": "BIG-IP Virtual Edition : Linux 3.10.0-862.14.4.el7.ve.x86_64 : BIG-IP software release 14.1.5.1, build 0.0.6",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "f5_ve",
+  "os": "f5",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.3375.2.1.3.4.43",
+  "sys_descr": "Linux bigip1.lab 2.6.32-279.19.1.el6.f5.x86_64 #1 SMP Wed Mar 12 15:01:03 PDT 2014 x86_64",
+  "strings": {
+   "1.3.6.1.4.1.3375.2.1.4.2.0": "11.5.1"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "11.5.1"
+ },
+ {
+  "name": "netscaler",
+  "os": "netscaler",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.5951.1",
+  "sys_descr": "NetScaler NS11.1: Build 51.26.nc, Date: Jan 31 2017, 00:12:01",
+  "strings": {
+   "1.3.6.1.4.1.5951.4.1.1.1.0": "NetScaler NS12.0: Build 57.19.nc, Date: Feb 26 2018, 07:24:38"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "NS12.0"
+ },
+ {
+  "name": "netscaler_sdx",
+  "os": "netscaler",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.5951.6",
+  "sys_descr": "FreeBSD examplehost 8.4-NETSCALER-11.1 FreeBSD 8.4-NETSCALER-11.1 #6: Thu Dec 22 14:25:33 PST 2016     root@sjcdbldbsd8405.eng.citrite.net:/usr/obj/usr/home/build/rs_111_51_11_RTM/usr.src/sys/NSSVM amd64",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "acos",
+  "os": "acos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.22610.1.3.28",
+  "sys_descr": "Thunder Series Unified Application Service Gateway TH5630, ACOS 4.1.0-P5,",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "4.1.0-P5"
+ },
+ {
+  "name": "acos_vthunder",
+  "os": "acos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.22610.1.3.13",
+  "sys_descr": "AX Series Advanced Traffic Manager AXvThunder, ACOS 2.7.2-P4-SP1,",
+  "strings": {
+   "1.3.6.1.4.1.22610.2.4.1.1.1.0": "2.7.2-P4-SP1(build: 9)"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "2.7.2-P4-SP1(build: 9)"
+ },
+ {
+  "name": "arubaos",
+  "os": "arubaos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14823.1.1.9999",
+  "sys_descr": "ArubaOS Version 6.4.4.4-4.2.3.1",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.4.4.4-4.2.3.1"
+ },
+ {
+  "name": "arubaos_aosw",
+  "os": "arubaos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6486.800.1.1.2.2.2.1.1.4",
+  "sys_descr": "AOS-W (MODEL: OAW-6000), Version 6.3.1.23 (56687)",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.3.1.23"
+ },
+ {
+  "name": "arubaos_aruba7210",
+  "os": "arubaos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14823.1.1.32",
+  "sys_descr": "ArubaOS (MODEL: Aruba7210), Version 8.2.0.2 (62929)",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "8.2.0.2"
+ },
+ {
+  "name": "arubaos_powerconnect",
+  "os": "arubaos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.674.10895.5027",
+  "sys_descr": "ArubaOS (MODEL: Dell PowerConnect W-7210 Controller), Version 6.4.4.8 (55228)",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.4.4.8"
+ },
+ {
+  "name": "arubaos_vmc",
+  "os": "arubaos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14823.1.1.9999",
+  "sys_descr": "ArubaOS (MODEL: ArubaMC-VA), Version 8.10.0.12-FIPS LSR (89862)",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "8.10.0.12-FIPS"
+ },
+ {
+  "name": "arubaos_aos65",
+  "os": "arubaos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.14823.1.1.41",
+  "sys_descr": "ArubaOS (MODEL: Aruba7030-US), Version 6.5.4.16 (74160)",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "arubaos-cx",
+  "os": "arubaos-cx",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.47196.4.1.1.1.50",
+  "sys_descr": "Aruba JL635A 8325 GL.10.04.2000",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "GL.10.04.2000"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "GL.10.04.2000"
+ },
+ {
+  "name": "arubaos-cx_10.06",
+  "os": "arubaos-cx",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.47196.4.1.1.1.50",
+  "sys_descr": "Aruba JL635A 8325 GL.10.06.0110",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "GL.10.06.0110"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "GL.10.06.0110"
+ },
+ {
+  "name": "arubaos-cx_10.07",
+  "os": "arubaos-cx",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.47196.4.1.1.1.303",
+  "sys_descr": "Aruba JL727A 6200F 48G CL4 4SFP+370W Swch ML.10.07.0005",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "ML.10.07.0005",
+   "1.3.6.1.2.1.47.1.1.1.1.10.101001": "ML.10.07.0005"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "ML.10.07.0005"
+ },
+ {
+  "name": "arubaos-cx_10.10",
+  "os": "arubaos-cx",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.47196.4.1.1.1.254",
+  "sys_descr": "PL.10.10.0002",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "PL.10.10.0002"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "PL.10.10.0002"
+ },
+ {
+  "name": "arubaos-cx_10.16",
+  "os": "arubaos-cx",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.47196.4.1.1.1.100",
+  "sys_descr": "HPE ANW JL658A 6300M 24SFP+ 4SFP56 Swch FL.10.16.1006",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "FL.10.16.1006",
+   "1.3.6.1.2.1.47.1.1.1.1.10.101001": "FL.10.16.1006"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "FL.10.16.1006"
+ },
+ {
+  "name": "arubaos-cx_100gb",
+  "os": "arubaos-cx",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.47196.4.1.1.1.420",
+  "sys_descr": "HPE ANW JL717C 8360-32Y4C v2 Switch LL.10.16.1006",
+  "strings": {
+   "1.3.6.1.2.1.47.1.1.1.1.10.1": "LL.10.16.1006"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "LL.10.16.1006"
+ },
+ {
+  "name": "comware_a5500",
+  "os": "comware",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25506.11.1.24",
+  "sys_descr": "HP Comware Platform Software, Software Version 5.20.99 Release 2222P08\nHP A5500-24G EI Switch with 2 Interface Slots\r\nCopyright (c) 2010-2017 Hewlett Packard Enterprise Development LP",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "5.20.99"
+ },
+ {
+  "name": "comware_hpe5900",
+  "os": "comware",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25506.11.1.120",
+  "sys_descr": "HPE Comware Platform Software, Software Version 7.1.045, Release 2422P01\nHPE 5900AF-48G-4XG-2QSFP+ Switch\r\nCopyright (c) 2010-2015 Hewlett Packard Enterprise Development LP",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "7.1.045"
+ },
+ {
+  "name": "comware_1",
+  "os": "comware",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25506.1.244",
+  "sys_descr": "Hangzhou H3C Comware Platform Software, Software Version 3.10, Release 2211P06",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "comware_h3c",
+  "os": "comware",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25506.11.1.85",
+  "sys_descr": "HP V1910-48G Switch Software Version 5.20 Release 1111P01",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "dnos",
+  "os": "dnos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6027.1.3.20",
+  "sys_descr": "Dell Networking OS Operating System Version: 2.0 Application Software Version: 9.9(0.0P9) Series: S4048-ON Copyright (c) 1999-2015 by Dell Inc. All Rights Reserved. Build Time: Thu Feb  4 06:57:34 2016",
+  "strings": {
+   "1.3.6.1.4.1.6027.3.26.1.3.4.1.10.1": "9.14(0.1)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "9.9(0.0P9)"
+ },
+ {
+  "name": "dnos_c",
+  "os": "dnos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6027.1.2.",
+  "sys_descr": "Dell Networking OS Operating System ...",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "dnos_m",
+  "os": "dnos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6027.1.4.3",
+  "sys_descr": "Dell Networking OS\nOperating System Version: 2.0\nApplication Software Version: 9.11(2.6)\nSeries: PE-FN-2210S-IOM\nCopyright (c) 1999-2017 by Dell Inc. All Rights Reserved.\nBuild Time: Mon Nov 13 02:08:55 2017",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "9.11(2.6)"
+ },
+ {
+  "name": "dnos_s4048",
+  "os": "dnos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6027.1.3.20",
+  "sys_descr": "Dell Networking OS Operating System Version: 2.0 Application Software Version: 9.9(0.0P9) Series: S4048-ON Copyright (c) 1999-2015 by Dell Inc. All Rights Reserved. Build Time: Thu Feb  4 06:57:34 2016",
+  "strings": {
+   "1.3.6.1.4.1.6027.3.26.1.3.4.1.10.1": "9.14(0.1)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "9.9(0.0P9)"
+ },
+ {
+  "name": "dnos_z",
+  "os": "dnos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6027.1.5.",
+  "sys_descr": "Dell Networking OS Operating System ...",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "dnos_z9100-on",
+  "os": "dnos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6027.1.5.2",
+  "sys_descr": "Dell EMC Networking OS\nOperating System Version: 2.0\r\nApplication Software Version: 9.14(1.5)\r\nSeries: Z9100-ON\r\nCopyright (c) 1999-2018 by Dell Inc. All Rights Reserved.\r\nBuild Time: Mon May 20 22:33:28 2019",
+  "strings": {
+   "1.3.6.1.4.1.674.10895.3000.1.2.100.4.0": "9.14(1.5)",
+   "1.3.6.1.4.1.6027.3.26.1.3.4.1.10.1": "9.14(1.5)"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 11
+  },
+  "checked": true,
+  "expected": "9.14(1.5)"
+ },
+ {
+  "name": "powerconnect_2824",
+  "os": "powerconnect",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.674.10895.3028",
+  "sys_descr": "24-port 10/100/1000 Gigabit Switch",
+  "strings": {
+   "1.3.6.1.4.1.674.10895.3000.1.2.100.4.0": "1.0.0.45"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "1.0.0.45"
+ },
+ {
+  "name": "powerconnect_3011",
+  "os": "powerconnect",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.674.10895.3011",
+  "sys_descr": "PowerConnect 6248, 3.3.7.3, VxWorks 6.5",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "3.3.7.3"
+ },
+ {
+  "name": "powerconnect_3020",
+  "os": "powerconnect",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.674.10895.3020",
+  "sys_descr": "PowerConnect 5424",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "powerconnect_3021",
+  "os": "powerconnect",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.674.10895.3021",
+  "sys_descr": "PowerConnect 5448",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "powerconnect_3024",
+  "os": "powerconnect",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.674.10895.3024",
+  "sys_descr": "Powerconnect 8024F, 5.1.8.2, VxWorks 6.6",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "5.1.8.2"
+ },
+ {
+  "name": "powerconnect_3030",
+  "os": "powerconnect",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.674.10895.3030",
+  "sys_descr": "24G Ethernet Switch",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "xos",
+  "os": "xos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.1916.2.175",
+  "sys_descr": "ExtremeXOS (X440-24p) version 15.5.1.6 v1551b6 by release-manager on Fri Apr 25 20:47:26 EDT 2014",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "15.5.1.6"
+ },
+ {
+  "name": "xos_x480",
+  "os": "xos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.1916.2.139",
+  "sys_descr": "ExtremeXOS (X480-24x(10G4X)) version 15.3.5.2 v1535b2-patch1-13 by release-manager on Thu Dec 15 11:08:24 EST 2016",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "15.3.5.2"
+ },
+ {
+  "name": "xos_x650",
+  "os": "xos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.1916.2.118",
+  "sys_descr": "ExtremeXOS (X650-24x(SSns)) version 15.3.5.2 v1535b2-patch1-14 by release-manager on Fri Jun 16 08:43:13 EDT 2017",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "15.3.5.2"
+ },
+ {
+  "name": "xos_sfp",
+  "os": "xos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.1916.2.248",
+  "sys_descr": "ExtremeXOS (X690-48x-2q-4c) version 22.6.1.4 22.6.1.4 by release-manager on Thu Sep 6 12:57:06 EDT 2018",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "22.6.1.4"
+ },
+ {
+  "name": "ironware",
+  "os": "ironware",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.1991.1.3.51.7",
+  "sys_descr": "Extreme Networks NetIron CER, Extended route scalability, IronWare Version V6.2.0eT183 Compiled on Sep 30 2019 at 06:59:54 labeled as V6.2.00e",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 3
+  },
+  "checked": true,
+  "expected": "6.2.0eT183"
+ },
+ {
+  "name": "ironware_stack-temp",
+  "os": "ironware",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.1991.1.3.48.11.1",
+  "sys_descr": "Ruckus Wireless, Inc. ICX7650-48F, IronWare Version 09.0.10j_cd7T231 Compiled on Feb 19 2025 at 21:24:30 labeled as TNS09010j_cd7",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "ruckuswireless_zd1100",
+  "os": "ruckuswireless",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25053.3.1.5.2",
+  "sys_descr": "Ruckus Wireless ZD1106",
+  "strings": {
+   "1.3.6.1.4.1.25053.1.2.1.1.1.1.18.0": "9.7.2.0 build 20",
+   "1.3.6.1.4.1.25053.1.2.1.1.1.1.20.0": "US"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "9.7.2.0 build 20 (US)"
+ },
+ {
+  "name": "ruckuswireless_zd1200",
+  "os": "ruckuswireless",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25053.3.1.5.15",
+  "sys_descr": "Ruckus Wireless ZD1200",
+  "strings": {
+   "1.3.6.1.4.1.25053.1.2.1.1.1.1.18.0": "9.13.3.0 build 145",
+   "1.3.6.1.4.1.25053.1.2.1.1.1.1.20.0": "US"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "9.13.3.0 build 145 (US)"
+ },
+ {
+  "name": "ruckuswireless-unleashed",
+  "os": "ruckuswireless-unleashed",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25053.3.1.5.20",
+  "sys_descr": "Ruckus Wireless T300",
+  "strings": {
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.18.0": "200.15.6.112 build 54",
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.20.0": "US"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "200.15.6.112 build 54 (US)"
+ },
+ {
+  "name": "ruckuswireless-unleashed_legacy-unleashed",
+  "os": "ruckuswireless-unleashed",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25053.3.1.5.15",
+  "sys_descr": "Ruckus Wireless R850",
+  "strings": {
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.18.0": "200.14.6.1 build 203",
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.20.0": "US"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "200.14.6.1 build 203 (US)"
+ },
+ {
+  "name": "ruckuswireless-unleashed_r650",
+  "os": "ruckuswireless-unleashed",
+  "lab": false,
+  "sys_object_id": "0.0.0",
+  "sys_descr": "Ruckus Wireless R650",
+  "strings": {
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.18.0": "200.19.7.11 build 283",
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.20.0": "BG"
+  },
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "ruckuswireless-unleashed_r770",
+  "os": "ruckuswireless-unleashed",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.25053.3.1.4.125",
+  "sys_descr": "Ruckus Wireless R770",
+  "strings": {
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.18.0": "200.19.7.112 build 238",
+   "1.3.6.1.4.1.25053.1.15.1.1.1.1.20.0": "US"
+  },
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "timos",
+  "os": "timos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6527.6.2.1.2.6.1",
+  "sys_descr": "TiMOS-C-10.0.R4 cpm/hops Nokia SAS-R 7210 Copyright (c) 2000-2018 Nokia.\nAll rights reserved. All use subject to applicable license agreements.\r\nBuilt on Mon Apr 30 12:30:30 IST 2018 by sasbuild in /home/sasbuild/10.0B1/R4/panos/main",
+  "strings": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.7.0": "R4"
+  },
+  "integers": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.5.0": 10,
+   "1.3.6.1.4.1.6527.3.1.2.1.1.6.0": 0
+  },
+  "checked": true,
+  "expected": "10.0.R4"
+ },
+ {
+  "name": "timos_7705-pmc",
+  "os": "timos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6527.6.1.1.2.1",
+  "sys_descr": "\"TiMOS-B-9.0.R9 both/hops Nokia 7705 SAR Copyright (c) 2000-2020 Nokia.\nAll rights reserved. All use subject to applicable license agreements.\r\nBuilt on Tue Mar 24 11:26:44 EDT 2020 by builder in /builds/F90B/R9/panos/main\r\n\"",
+  "strings": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.7.0": "R9"
+  },
+  "integers": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.5.0": 9,
+   "1.3.6.1.4.1.6527.3.1.2.1.1.6.0": 0
+  },
+  "checked": true,
+  "expected": "9.0.R9"
+ },
+ {
+  "name": "timos_7705",
+  "os": "timos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6527.6.1.1.2.1",
+  "sys_descr": "TiMOS-B-9.0.R11 both/hops Nokia 7705 SAR Copyright (c) 2000-2020 Nokia.\nAll rights reserved. All use subject to applicable license agreements.\r\nBuilt on Tue Jul 14 11:11:26 EDT 2020 by builder in /builds/F90B/R11/panos/main",
+  "strings": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.7.0": "R11"
+  },
+  "integers": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.5.0": 9,
+   "1.3.6.1.4.1.6527.3.1.2.1.1.6.0": 0
+  },
+  "checked": true,
+  "expected": "9.0.R11"
+ },
+ {
+  "name": "timos_7750",
+  "os": "timos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6527.1.3.17",
+  "sys_descr": "\"TiMOS-C-23.10.R3 cpm/hops64 Nokia 7750 SR Copyright (c) 2000-2024 Nokia.\nAll rights reserved. All use subject to applicable license agreements.\r\nBuilt on Thu Feb 15 16:43:14 UTC 2024 by builder in /builds/2310B/R3/panos/main/sros\r\n\"",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "timos_ixr-s",
+  "os": "timos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6527.1.3.23",
+  "sys_descr": "\"TiMOS-C-21.10.R2 cpm/x86hops64 Nokia 7250 IXR Copyright (c) 2000-2021 Nokia.\nAll rights reserved. All use subject to applicable license agreements.\r\nBuilt on Wed Dec 15 14:15:11 PST 2021 by builder in /builds/c/2110B/R2/panos/main/sros\r\n\"",
+  "strings": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.7.0": "R2"
+  },
+  "integers": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.5.0": 21,
+   "1.3.6.1.4.1.6527.3.1.2.1.1.6.0": 10
+  },
+  "checked": true,
+  "expected": "21.10.R2"
+ },
+ {
+  "name": "timos_ixr",
+  "os": "timos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6527.1.3.25",
+  "sys_descr": "\"TiMOS-C-22.10.R11 cpm/x86hops64 Nokia 7250 IXR Copyright (c) 2000-2024 Nokia.\nAll rights reserved. All use subject to applicable license agreements.\r\nBuilt on Thu Dec 5 08:11:03 PST 2024 by builder in /builds/2210B/R11/panos/main/sros\r\n\"",
+  "strings": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.7.0": "R11"
+  },
+  "integers": {
+   "1.3.6.1.4.1.6527.3.1.2.1.1.5.0": 22,
+   "1.3.6.1.4.1.6527.3.1.2.1.1.6.0": 10
+  },
+  "checked": true,
+  "expected": "22.10.R11"
+ },
+ {
+  "name": "aos6",
+  "os": "aos6",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6486.800.1.1.2.1.13.1.2",
+  "sys_descr": "Alcatel-Lucent OS6350-P24 6.7.1.108.R04 Service Release, January 04, 2017.",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 569,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 9
+  },
+  "checked": true,
+  "expected": "6.7.1.108.R04"
+ },
+ {
+  "name": "aos6_aos6",
+  "os": "aos6",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6486.800.1.1.2.1.12.1.8",
+  "sys_descr": "Alcatel-Lucent OS6450-48 6.6.4.177.R01 GA, May 24, 2013.",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "aos7",
+  "os": "aos7",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6486.801.1.1.2.1.11.1.9",
+  "sys_descr": "Alcatel-Lucent Enterprise OS6860E-U28 8.5.255.R02 GA, August 29, 2018.",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 209,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 9
+  },
+  "checked": true,
+  "expected": "8.5.255.R02"
+ },
+ {
+  "name": "edgeos",
+  "os": "edgeos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.41112.1.5",
+  "sys_descr": "EdgeOS v1.8.0.4853089.160219.1607",
+  "strings": {},
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 10
+  },
+  "checked": true,
+  "expected": "1.8.0"
+ },
+ {
+  "name": "edgeos_erl",
+  "os": "edgeos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.41112.1.5",
+  "sys_descr": "EdgeRouter Lite",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "edgeos_er",
+  "os": "edgeos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.41112.1.5",
+  "sys_descr": "EdgeOS",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "zynos",
+  "os": "zynos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.890.1.15",
+  "sys_descr": "XGS4600-32F",
+  "strings": {
+   "1.3.6.1.4.1.890.1.15.3.1.6.0": "V4.70(ABBI.2) | 12/17/2021"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "V4.70(ABBI.2)"
+ },
+ {
+  "name": "zynos_es",
+  "os": "zynos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.890.1.5.8.27",
+  "sys_descr": "ES-2024PWR",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "zynos_ges1316",
+  "os": "zynos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.890.1.5.18.7",
+  "sys_descr": "GES1316-FSA",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "zynos_gs1900",
+  "os": "zynos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.890.1.15",
+  "sys_descr": "GS1900-8",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "zynos_gs2200",
+  "os": "zynos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.890.1.5.8.55",
+  "sys_descr": "GS2200-24",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "zynos_gs4012",
+  "os": "zynos",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.890.1.5.8.20",
+  "sys_descr": "GS-4012F",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "netgear",
+  "os": "netgear",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.4526.100.4.32",
+  "sys_descr": "GS724Tv4 ProSafe 24-port Gigabit Ethernet Smart Switch, 6.3.1.11, B1.0.0.4",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.3.1.11"
+ },
+ {
+  "name": "netgear_3",
+  "os": "netgear",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.4526.100.11.22",
+  "sys_descr": "M4100-D12G ProSafe 12-port Gigabit L2+ Intelligent Edge Desktop Managed Switch, 10.0.2.26, B1.0.1.1",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "10.0.2.26"
+ },
+ {
+  "name": "netgear_1",
+  "os": "netgear",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.4526.100.4.32",
+  "sys_descr": "GS724Tv4 ProSafe 24-port Gigabit Ethernet Smart Switch, 6.3.1.11, B1.0.0.4",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "netgear_2",
+  "os": "netgear",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.89.1.1.1.3.6.1.4.1.4526.100.4.25",
+  "sys_descr": "24-Port Gigabit Smart Switch with PoE and 4 SFP uplinks",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "dlink",
+  "os": "dlink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.171.10.153.7.1",
+  "sys_descr": "WS6-DGS-1210-52/F1 6.10.007",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.10.007"
+ },
+ {
+  "name": "dlink_des-3526",
+  "os": "dlink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.171.10.64.1",
+  "sys_descr": "DES-3526 Fast-Ethernet Switch",
+  "strings": {
+   "1.3.6.1.2.1.16.19.2.0": "Build 5.01.B65"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "Build 5.01.B65"
+ },
+ {
+  "name": "dlink_des-3528",
+  "os": "dlink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.171.10.105.1",
+  "sys_descr": "DES-3528 Fast Ethernet Switch",
+  "strings": {
+   "1.3.6.1.2.1.16.19.2.0": "3.00.012"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "3.00.012"
+ },
+ {
+  "name": "dlink_des-3550",
+  "os": "dlink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.171.10.64.2",
+  "sys_descr": "DES-3550 Fast-Ethernet Switch",
+  "strings": {
+   "1.3.6.1.2.1.16.19.2.0": "Build 5.01.B65"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "Build 5.01.B65"
+ },
+ {
+  "name": "dlink_des",
+  "os": "dlink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.171.10.113.1.2",
+  "sys_descr": "D-Link DES-3200-18 Fast Ethernet Switch",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "dlink_dgs-1210-52mp",
+  "os": "dlink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.171.10.153.10.1",
+  "sys_descr": "WS6-DGS-1210-52MP/F1 6.10.007",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "6.10.007"
+ },
+ {
+  "name": "tplink_sg2008",
+  "os": "tplink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.1.1.25",
+  "sys_descr": "8-Port Gigabit Smart Switch",
+  "strings": {
+   "1.3.6.1.2.1.16.19.2.0": "1.0.5 Build 20160401 Rel.43046"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "1.0.5 Build 20160401 Rel.43046"
+ },
+ {
+  "name": "tplink",
+  "os": "tplink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.1.1.26",
+  "sys_descr": "8-Port Gigabit Smart PoE Switch with 2 SFP Slots",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "tplink_1",
+  "os": "tplink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.1.1.5",
+  "sys_descr": "10G Managed Switch",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "tplink_dsl",
+  "os": "tplink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.16972",
+  "sys_descr": "3.16.0 0.9.1 v600c.0 Build 191107 Rel.15316n",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "tplink_td-w9970",
+  "os": "tplink",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.16972",
+  "sys_descr": "0.9.1 0.2 v0076.0 Build 170919 Rel.61201n",
+  "strings": {},
+  "integers": {},
+  "checked": false,
+  "expected": null
+ },
+ {
+  "name": "jetstream",
+  "os": "jetstream",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.5.34",
+  "sys_descr": "JetStream 48-Port Gigabit L2 Managed Switch with 4 SFP Slots",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "jetstream_sg2218p",
+  "os": "jetstream",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.5.190",
+  "sys_descr": "Omada 18-Port Gigabit Smart Switch with 16-Port PoE+",
+  "strings": {
+   "1.3.6.1.4.1.11863.6.1.1.6.0": "1.20.4 Build 20241205 Rel.64944"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "1.20.4 Build 20241205 Rel.64944"
+ },
+ {
+  "name": "jetstream_t1600g-18ts",
+  "os": "jetstream",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.5.86",
+  "sys_descr": "JetStream 16-Port Gigabit Smart Switch with 2 SFP Slots",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "jetstream_t1600g-28ts",
+  "os": "jetstream",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.5.28",
+  "sys_descr": "JetStream 24-Port Gigabit Smart Switch with 4 SFP Slots",
+  "strings": {
+   "1.3.6.1.4.1.11863.6.1.1.6.0": "3.0.6 Build 20200805 Rel.55968"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "3.0.6 Build 20200805 Rel.55968"
+ },
+ {
+  "name": "jetstream_t2600g-28ts",
+  "os": "jetstream",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.5.33",
+  "sys_descr": "JetStream 24-Port Gigabit L2 Managed Switch with 4 SFP Slots",
+  "strings": {
+   "1.3.6.1.4.1.11863.6.1.1.6.0": "3.0.3 Build 20181101 Rel.42543(s)"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "3.0.3 Build 20181101 Rel.42543(s)"
+ },
+ {
+  "name": "jetstream_ipv6+route",
+  "os": "jetstream",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.11863.5.190",
+  "sys_descr": "Omada 18-Port Gigabit Smart Switch with 16-Port PoE+",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "vmware-esxi",
+  "os": "vmware-esxi",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.6876.4.1",
+  "sys_descr": "VMware ESXi 7.0.0 build-15843807 VMware, Inc. x86_64",
+  "strings": {
+   "1.3.6.1.4.1.6876.1.2.0": "7.0.0"
+  },
+  "integers": {
+   "1.3.6.1.2.1.47.1.1.1.1.4.1": 0,
+   "1.3.6.1.2.1.47.1.1.1.1.5.1": 4
+  },
+  "checked": true,
+  "expected": "7.0.0"
+ },
+ {
+  "name": "dsm",
+  "os": "dsm",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.8072.3.2.10",
+  "sys_descr": "Linux hostname 3.10.77 #8451 SMP Wed Jan 4 00:31:32 CST 2017 x86_64",
+  "strings": {
+   "1.3.6.1.4.1.6574.1.5.3.0": "DSM 6.1-15217"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "6.1-15217"
+ },
+ {
+  "name": "dsm_ds214se-dsm6",
+  "os": "dsm",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.8072.3.2.10",
+  "sys_descr": "Linux Nas 3.2.40 #25426 Wed Jul 8 03:15:48 CST 2020 armv7l",
+  "strings": {
+   "1.3.6.1.4.1.6574.1.5.3.0": "DSM 6.2-25426"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "6.2-25426"
+ },
+ {
+  "name": "dsm_ds214se-dsm7",
+  "os": "dsm",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.8072.3.2.10",
+  "sys_descr": "Linux nas0 3.2.101 #42962 Mon May 29 14:34:16 CST 2023 armv7l",
+  "strings": {
+   "1.3.6.1.4.1.6574.1.5.3.0": "DSM 7.1-42962"
+  },
+  "integers": {},
+  "checked": true,
+  "expected": "7.1-42962"
+ },
+ {
+  "name": "dsm_ds916",
+  "os": "dsm",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.8072.3.2.10",
+  "sys_descr": "Linux Syno 3.10.77 #8451 SMP Wed Nov 9 13:45:59 CST 2016 x86_6",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "netapp_e2700",
+  "os": "netapp",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.789.1123.2",
+  "sys_descr": "NETAPP   INF-01-00        0852",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": null
+ },
+ {
+  "name": "netapp",
+  "os": "netapp",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.789.2.5",
+  "sys_descr": "NetApp Release 9.0: Fri Aug 19 11:04:54 UTC 2016",
+  "strings": {
+   "1.3.6.1.4.1.789.1.1.2.0": "NetApp Release 8.1.2P3 7-Mode: Wed Feb 20 19:56:22 PST 2013"
+  },
+  "integers": {},
+  "checked": false,
+  "expected": null
+ }
+]

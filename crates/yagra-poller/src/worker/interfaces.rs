@@ -246,6 +246,7 @@ async fn execute_table_walk(
         samples,
         interfaces,
         sys_descr: None,
+        os_version: None,
         dns_chain: None,
         neighbors: None,
         l3: None,

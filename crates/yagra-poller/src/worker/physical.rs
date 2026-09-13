@@ -202,6 +202,7 @@ pub(super) async fn execute_optical(
             })
             .collect(),
         sys_descr: None,
+        os_version: None,
         dns_chain: None,
         neighbors: None,
         l3: None,
@@ -615,6 +616,7 @@ fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterfac
         samples: Vec::new(),
         interfaces,
         sys_descr: None,
+        os_version: None,
         dns_chain: None,
         neighbors: None,
         l3: None,

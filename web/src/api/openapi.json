@@ -30673,6 +30673,13 @@
             ],
             "description": "The operator's free-text note about this node; `null` ⇒ none (ADR-135).\n\n⚠️ **Detail only — deliberately not on `NodeSummary`.** The inventory tree fetches one\nsummary per node and ADR-133 had just made that response smaller; a note is up to 2,000\ncharacters that the tree does not draw."
           },
+          "os_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The OS / software version the device last reported over SNMP (ADR-138), e.g. `15.0(2a)EX5`;\n`null` ⇒ never read — the node is not SNMP-polled, the version table does not cover the\ndevice, or the poller that owns it predates the field.\n\n⚠️ **Observed, not configured.** Nothing writes it but the poll path: the poller re-reads it\nhourly, so it can trail an upgrade by up to an hour, and a poll that cannot read it leaves\nthe last value in place. Detail-only, like `notes`."
+          },
           "parent_id": {
             "type": [
               "string",

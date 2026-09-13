@@ -169,6 +169,10 @@ fn make_result(
         samples,
         interfaces,
         sys_descr: sys_descr.map(str::to_owned),
+        // None: a real poller sends a version only on the hourly identity probe (ADR-138), and
+        // `update_os_version_batch` writes only a changed one — so a firehose that sent the same
+        // version on every result would exercise a no-op, not the fleet's real write load.
+        os_version: None,
         dns_chain: None,
         neighbors: None,
         l3: None,

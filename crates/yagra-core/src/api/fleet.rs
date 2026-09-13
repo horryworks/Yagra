@@ -586,6 +586,7 @@ mod tests {
             samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 1.5)],
             interfaces: Vec::new(),
             sys_descr: None,
+            os_version: None,
             dns_chain: None,
             neighbors: None,
             l3: None,

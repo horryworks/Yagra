@@ -77,6 +77,7 @@ mod tests {
             samples: vec![Sample::gauge(metric, value)],
             interfaces: Vec::new(),
             sys_descr: None,
+            os_version: None,
             dns_chain: None,
             neighbors: None,
             l3: None,

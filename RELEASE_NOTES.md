@@ -10,6 +10,18 @@
 
 ## Unreleased
 
+### New Features
+
+- **A device's OS version on its node Overview.** Nodes ▸ a device ▸ Overview has a new
+  **OS version** row under Model — `15.0(2a)EX5` on a Catalyst, `v7.2.6,build1575,230926 (GA.F)` on
+  a FortiGate. The poller reads it over SNMP from wherever that vendor keeps it — a vendor MIB,
+  ENTITY-MIB, or the `sysDescr` string — using a table copied from LibreNMS's OS definitions, and
+  re-reads it once an hour, so an upgrade shows up within the hour. A device the table does not
+  cover, or one that reports no version, shows `—`; a version that has been read stays in place if
+  a later read fails. The same value is `os_version` on `GET /api/v1/nodes/{node_id}` and on the
+  MCP `get_node_status` tool.
+  ⚠️ Nodes polled by a poller older than this release show `—` until that poller is upgraded.
+
 ## v0.3.18 — MCP is served by default, a VPN sessions widget, network traffic on Yagra health, a truncated SNMP walk raises a Warning, and metrics carry their units
 
 ### Breaking changes

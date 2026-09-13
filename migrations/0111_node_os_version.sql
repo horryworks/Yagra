@@ -1,0 +1,33 @@
+-- 0111_node_os_version — the OS / software version a device reports over SNMP (ADR-138).
+--
+-- reversible: additive only — one nullable column on `nodes`, nothing narrowed and nothing
+-- rewritten. An older core projects a node row through an explicit column list
+-- (`NodeRepo::NODE_COLUMNS`), so it never selects this column: rolling the binary back leaves the
+-- value in place, unread, and rolling forward again finds it. No `schema_compat` floor, for the
+-- reason 0108 records: every release from 0.2.2 on tolerates a database carrying migrations it does
+-- not embed, and the floor 0080 recorded covers this one.
+--
+-- WHY `os_version` AND NOT `firmware_version`
+-- The row it fills on the node Overview is labelled "OS version". Cisco IOS, Junos OS, FortiOS,
+-- PAN-OS and EOS are all named as operating systems by their own vendors, and the same column
+-- carries an ESXi release, which "firmware" would misname (ui-conventions R1).
+--
+-- WHY IT IS NOT A FIELD ON `yagra_common::Node`
+-- The argument 0108 makes for `notes`, at a smaller size: `Node` is materialized fleet-wide by the
+-- alert engine's config snapshot, the scheduler's sweep and maintenance-window matching, and none of
+-- them read a version. So it stays out of `NODE_COLUMNS`, and `NodeRepo::get_node_with_notes` is the
+-- only reader — for the REST node detail and the MCP `get_node_status` tool that mirrors it.
+--
+-- WHO WRITES IT
+-- Only the result-ingest metadata writer, from `PollResult.os_version`, and only when the value
+-- actually differs (`IS DISTINCT FROM`). The poller re-reads the version hourly, and ADR-110
+-- Increment 1 has already removed the no-op writes to this table once. A poll that finds no version
+-- writes nothing, so a transient SNMP failure never blanks a value that was read before.
+-- It is observed state, not configuration: no API route writes it, and the configuration bundle
+-- (ADR-040) does not carry it.
+--
+-- NO LENGTH CHECK CONSTRAINT, deliberately
+-- The 128-character cap is applied where the value is resolved and again at ingest. A CHECK here
+-- would turn one over-long value from an older or misbehaving poller into a failed batch UPDATE for
+-- every node in it.
+ALTER TABLE nodes ADD COLUMN os_version TEXT;

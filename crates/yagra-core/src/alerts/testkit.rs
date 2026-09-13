@@ -57,6 +57,7 @@ pub(crate) fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult
         samples: Vec::new(),
         interfaces: Vec::new(),
         sys_descr: None,
+        os_version: None,
         dns_chain: None,
         neighbors: None,
         l3: None,

@@ -13,8 +13,12 @@
 //!  - `credential_finder` — the per-device rate limiter for the **Credential Finder**, which
 //!    probes candidate credentials to find the one a device accepts. Enforced by the poller's
 //!    sweep; rate limiting is what keeps probing from tripping device account lockout.
+//!  - [`os_version`] — where each OS family keeps its version and how to read it out of what an
+//!    identity probe returned (ADR-138). The poller asks it which OIDs to read and what they mean;
+//!    core asks it only to [`os_version::sanitize`] what arrived.
 
 mod credential_finder;
+pub mod os_version;
 
 pub use credential_finder::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 

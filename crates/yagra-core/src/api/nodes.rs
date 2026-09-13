@@ -995,6 +995,14 @@ pub(crate) struct NodeDetail {
     /// Descriptive maker/model, editable from the node detail.
     vendor: Option<String>,
     model: Option<String>,
+    /// The OS / software version the device last reported over SNMP (ADR-138), e.g. `15.0(2a)EX5`;
+    /// `null` ⇒ never read — the node is not SNMP-polled, the version table does not cover the
+    /// device, or the poller that owns it predates the field.
+    ///
+    /// ⚠️ **Observed, not configured.** Nothing writes it but the poll path: the poller re-reads it
+    /// hourly, so it can trail an upgrade by up to an hour, and a poll that cannot read it leaves
+    /// the last value in place. Detail-only, like `notes`.
+    os_version: Option<String>,
     /// The group this node belongs to; `null` ⇒ ungrouped.
     group_id: Option<Uuid>,
     /// The node's **own** poll-pool (ADR-009/020); `null` ⇒ it inherits from its folder, else the
@@ -1082,7 +1090,11 @@ async fn get_node(
     let admin = st.admin.as_ref().ok_or_else(missing)?;
     // `get_node_with_notes`, not `get_node`: the note is not in `NODE_COLUMNS` and this is one of
     // the two surfaces allowed to ask for it (ADR-135 decision 2).
-    let crate::repo::NodeWithNotes { mut node, notes } = admin
+    let crate::repo::NodeWithNotes {
+        mut node,
+        notes,
+        os_version,
+    } = admin
         .repo
         .get_node_with_notes(node_id)
         .await
@@ -1120,6 +1132,7 @@ async fn get_node(
         parent_id: node.parent.map(|p| p.as_uuid()),
         vendor: node.vendor,
         model: node.model,
+        os_version,
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
         snmp_configured,
@@ -2426,6 +2439,7 @@ mod tests {
             samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 1.5)],
             interfaces: Vec::new(),
             sys_descr: None,
+            os_version: None,
             dns_chain: None,
             neighbors: None,
             l3: None,
@@ -2980,6 +2994,36 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
         let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
         assert_eq!(detail["notes"], serde_json::Value::Null, "{detail}");
+    }
+
+    /// The node detail shows the OS version the poll path recorded (ADR-138), to a caller holding
+    /// only View.
+    ///
+    /// 🚨 The `null` before the write proves only that the field exists; the value after it is what
+    /// separates a detail that reads the column from one that does not.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_detail_shows_the_os_version_the_poll_path_recorded(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Viewer);
+        let id = crate::pgtest::node(&pool, "fw-1", 1, None).await;
+        let path = format!("/api/v1/nodes/{id}");
+
+        let (status, detail) = send(&st, "GET", &path, &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
+        assert_eq!(detail["os_version"], serde_json::Value::Null, "{detail}");
+
+        crate::pgtest::repo(pool.clone())
+            .update_os_version_batch(&[(id, "v7.2.6,build1575,230926 (GA.F)".to_owned())])
+            .await
+            .expect("record a version");
+        let (status, detail) = send(&st, "GET", &path, &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
+        assert_eq!(
+            detail["os_version"], "v7.2.6,build1575,230926 (GA.F)",
+            "{detail}"
+        );
     }
 
     /// A bulk tag edit is **accepted**, it **merges**, and the node detail shows the result.

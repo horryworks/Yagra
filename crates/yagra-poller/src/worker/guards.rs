@@ -67,6 +67,9 @@ const SPEC_OWNERSHIP: &[(&str, &[&str])] = &[
     ),
     // The loop, and the two kinds whose *scheduling* differs — see the doc above.
     ("stream.rs", &["MerakiCollect", "Dns"]),
+    // Which kinds can carry the identity probe (ADR-138). The scalar GET is the one conversation
+    // that runs it, and `stream.rs` asks this file rather than naming the two itself.
+    ("identity.rs", &["Snmp", "SnmpV3"]),
     // Destructures the job it was handed; one job, many results.
     ("meraki.rs", &["MerakiCollect"]),
     // Handed an already-destructured payload. Naming a kind here would mean deciding twice.

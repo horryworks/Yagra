@@ -5182,6 +5182,8 @@ dependencies = [
 name = "yagra-discovery"
 version = "0.3.18"
 dependencies = [
+ "regex",
+ "serde_json",
  "yagra-common",
 ]
 

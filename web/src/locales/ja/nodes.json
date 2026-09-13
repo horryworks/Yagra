@@ -9,6 +9,7 @@
     "snmpCredential": "SNMP 認証情報",
     "maker": "メーカー",
     "model": "モデル",
+    "osVersion": "OS バージョン",
     "group": "グループ",
     "parentNode": "親ノード",
     "uptime": "稼働時間",

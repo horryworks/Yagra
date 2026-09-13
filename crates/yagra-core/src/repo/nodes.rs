@@ -47,7 +47,11 @@ pub struct OrderedNode {
     pub sort_order: f64,
 }
 
-/// A node row plus the operator's own free-text note (ADR-135 decision 2).
+/// A node row plus the operator's own free-text note (ADR-135 decision 2), and — since ADR-138 — the
+/// OS version its device reports: the two `nodes` columns only the detail surfaces read.
+///
+/// ⚠️ The name predates the second column and was kept: migration 0108 cites
+/// `get_node_with_notes` by name, and an applied migration cannot be edited to follow a rename.
 ///
 /// 🚨 **A wrapper here rather than a field on `Node`, for the reason [`OrderedNode`] gives one
 /// paragraph up — and the number is worse.** `Node` is materialized *fleet-wide* by the alert
@@ -65,6 +69,10 @@ pub struct NodeWithNotes {
     /// `None` ⇒ no note. The API edge maps a whitespace-only string to `None`, so there is one
     /// spelling of "no note" and no reader needs a second case.
     pub notes: Option<String>,
+    /// The OS / software version the device last reported over SNMP (ADR-138); `None` ⇒ never
+    /// read. Written only by [`NodeRepo::update_os_version_batch`] — observed state, which no API
+    /// route writes and the configuration bundle does not carry.
+    pub os_version: Option<String>,
 }
 
 /// What one "Edit node" save writes (ADR-135).
@@ -135,7 +143,7 @@ impl NodeRepo {
     /// interpolated from the same constant, so the two cannot disagree about the node half.
     pub async fn get_node_with_notes(&self, id: Uuid) -> anyhow::Result<Option<NodeWithNotes>> {
         let row = sqlx::query(&format!(
-            "SELECT {}, notes FROM nodes WHERE id = $1",
+            "SELECT {}, notes, os_version FROM nodes WHERE id = $1",
             Self::NODE_COLUMNS
         ))
         .bind(id)
@@ -146,6 +154,7 @@ impl NodeRepo {
                 Ok(NodeWithNotes {
                     node: node_from_row(row)?,
                     notes: row.try_get("notes")?,
+                    os_version: row.try_get("os_version")?,
                 })
             })
             .transpose()
@@ -753,6 +762,39 @@ impl NodeRepo {
         Ok(())
     }
 
+    /// Record the OS version each node's device reported (ADR-138), for MANY nodes in one
+    /// `UPDATE` (the async ingest writer, ADR-025). Returns how many rows actually changed.
+    ///
+    /// ⚠️ **Only a value that differs is written** (`IS DISTINCT FROM`). The poller re-reads the
+    /// version hourly for every SNMP node, so without the predicate this would be a fleet-wide
+    /// write every hour that almost never changes anything — the no-op-write shape ADR-110
+    /// Increment 1 already removed from [`Self::fill_node_identity_batch`].
+    ///
+    /// There is no "clear" row: a poll that found no version sends nothing, so a transient failure
+    /// never blanks a version that was read before (ADR-138 decision 10). Dedups keeping the last
+    /// occurrence per node, so two polls of one node in a batch write the newer answer.
+    pub async fn update_os_version_batch(&self, rows: &[(Uuid, String)]) -> anyhow::Result<u64> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let mut by_node: BTreeMap<Uuid, String> = BTreeMap::new();
+        for (node, version) in rows {
+            by_node.insert(*node, version.clone());
+        }
+        let ids: Vec<Uuid> = by_node.keys().copied().collect();
+        let versions: Vec<String> = by_node.into_values().collect();
+        let res = sqlx::query(
+            "UPDATE nodes SET os_version = t.os_version, updated_at = now() \
+             FROM unnest($1::uuid[], $2::text[]) AS t(id, os_version) \
+             WHERE nodes.id = t.id AND nodes.os_version IS DISTINCT FROM t.os_version",
+        )
+        .bind(&ids)
+        .bind(&versions)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// The `sort_order` of each of the given node ids (for the inventory tree, which orders nodes
     /// within their group). Ids absent from the map default to 0 at the call site. One query.
     pub async fn node_sort_orders(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, f64>> {
@@ -1025,6 +1067,49 @@ mod tests {
     ///
     /// The same is asserted for `name`, where "leave alone" is the only safe reading of absence
     /// because the column is `NOT NULL`.
+    /// An OS version is written when it changes, and only then (ADR-138).
+    ///
+    /// 🚨 **The repeated write is the assertion that matters.** A version read back after the first
+    /// write passes against an implementation with no `IS DISTINCT FROM` at all — and that one
+    /// rewrites every SNMP node's row every hour. Only the second call's `0` tells the two apart.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_os_version_is_written_only_when_it_changes(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "sw-1", 1, None).await;
+        let repo = pgtest::repo(pool);
+        async fn read(repo: &NodeRepo, id: uuid::Uuid) -> Option<String> {
+            repo.get_node_with_notes(id)
+                .await
+                .expect("read")
+                .expect("the node")
+                .os_version
+        }
+        assert_eq!(read(&repo, id).await, None, "a fresh node has no version");
+
+        let first = repo
+            .update_os_version_batch(&[(id, "15.0(2a)EX5".to_owned())])
+            .await
+            .expect("write");
+        assert_eq!(first, 1);
+        assert_eq!(read(&repo, id).await.as_deref(), Some("15.0(2a)EX5"));
+
+        let again = repo
+            .update_os_version_batch(&[(id, "15.0(2a)EX5".to_owned())])
+            .await
+            .expect("rewrite");
+        assert_eq!(again, 0, "an unchanged version must not be written");
+
+        // Two polls of one node in the same batch: the later answer wins, and it is one write.
+        let upgraded = repo
+            .update_os_version_batch(&[(id, "15.2(7)E8".to_owned()), (id, "15.2(7)E9".to_owned())])
+            .await
+            .expect("upgrade");
+        assert_eq!(upgraded, 1);
+        assert_eq!(read(&repo, id).await.as_deref(), Some("15.2(7)E9"));
+
+        assert_eq!(repo.update_os_version_batch(&[]).await.expect("empty"), 0);
+    }
+
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unmentioned_note_survives_a_save_and_an_empty_one_clears_it(pool: sqlx::PgPool) {

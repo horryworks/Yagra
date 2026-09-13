@@ -10,3 +10,11 @@ repository.workspace = true
 
 [dependencies]
 yagra-common = { path = "../yagra-common" }
+# The OS-version table's `sysDescr` patterns (ADR-138). Linear-time, so a device-supplied sysDescr
+# cannot make a pattern backtrack.
+regex = { workspace = true }
+
+[dev-dependencies]
+# Reads `testdata/os_version_fixtures.json` — LibreNMS's recorded device answers and the versions it
+# derived from them, which the version table is tested against (ADR-138).
+serde_json = { workspace = true }

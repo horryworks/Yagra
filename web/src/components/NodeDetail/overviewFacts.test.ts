@@ -39,6 +39,7 @@ describe('overview fact rows', () => {
       'address',
       'maker',
       'model',
+      'osVersion',
       'profile',
       'credential',
       'parent',
@@ -85,6 +86,10 @@ describe('overview fact rows', () => {
     }
     // A Meraki device has a real management address and reported maker/model, but no sysUpTime.
     expect(visibleFactRows('meraki')).not.toContain('uptime');
+    // The OS version comes from the SNMP identity probe (ADR-138), which only a device runs.
+    for (const kind of NODE_KINDS) {
+      expect(visibleFactRows(kind).includes('osVersion'), kind).toBe(kind === 'device');
+    }
     expect(visibleFactRows('meraki')).toContain('address');
     // Only the DNS monitor names its resolver.
     for (const kind of NODE_KINDS) {

@@ -420,8 +420,8 @@ impl YagraMcp {
         };
         // `get_node_with_notes`, not `get_node`: this tool folds `GET /api/v1/nodes/{node_id}`, so
         // it owes the same answer that route gives — the note included (ADR-135).
-        let (node, notes) = match admin.repo.get_node_with_notes(p.node_id).await {
-            Ok(Some(n)) => (n.node, n.notes),
+        let (node, notes, os_version) = match admin.repo.get_node_with_notes(p.node_id).await {
+            Ok(Some(n)) => (n.node, n.notes, n.os_version),
             Ok(None) => return tool_unavailable(TOOL, "no node with that id"),
             Err(e) => return tool_error(TOOL, "load node", &e),
         };
@@ -461,6 +461,7 @@ impl YagraMcp {
             // `node.credential`, which misses the deployment-wide community fallback (ADR-119).
             snmp_configured: admin.dispatcher.snmp_configured_for(&node),
             notes,
+            os_version,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()
@@ -1014,6 +1015,48 @@ mod tests {
         let tool = json_of(&r);
         assert_eq!(
             tool["notes"], NOTE,
+            "get_node_status folds GET /nodes/:node_id and must answer the same: {tool}"
+        );
+    }
+
+    /// Both surfaces report the same OS version (ADR-138), because this tool folds
+    /// `GET /nodes/:node_id`.
+    ///
+    /// 🚨 Same shape as the note test above and for the same reason: `null` on both sides before
+    /// anything is recorded is true of a tool that never learned the column, so the pair after the
+    /// write is the one that proves the fold.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_surfaces_agree_on_a_nodes_os_version(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node_id = crate::pgtest::node(&pool, "sw-1", 1, None).await;
+
+        let r = YagraMcp::new(st.clone())
+            .node_status_in(NodeIdParams { node_id }, &unrestricted())
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["os_version"], serde_json::Value::Null);
+
+        const VERSION: &str = "10.5(2)";
+        crate::pgtest::repo(pool.clone())
+            .update_os_version_batch(&[(node_id, VERSION.to_owned())])
+            .await
+            .expect("record a version");
+
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{node_id}"), &tok, None).await;
+        assert_eq!(
+            detail["os_version"], VERSION,
+            "REST lost the version: {detail}"
+        );
+        let r = YagraMcp::new(st.clone())
+            .node_status_in(NodeIdParams { node_id }, &unrestricted())
+            .await
+            .expect("ok result");
+        let tool = json_of(&r);
+        assert_eq!(
+            tool["os_version"], VERSION,
             "get_node_status folds GET /nodes/:node_id and must answer the same: {tool}"
         );
     }

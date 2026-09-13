@@ -109,7 +109,10 @@ pub async fn run_stream<S>(
 ) where
     S: Stream<Item = PollJob> + Unpin,
 {
-    while let Some(job) = jobs.next().await {
+    // When each node's identity is read again (ADR-138). One map for the loop's lifetime: the loop
+    // claims a due probe before the spawn, and the task reports back only when it got an answer.
+    let cadence = Arc::new(std::sync::Mutex::new(identity::IdentityCadence::default()));
+    while let Some(mut job) = jobs.next().await {
         // Meraki org collectors share a sentinel target (0.0.0.0) and are single-flighted per org
         // by core, so they use only the global concurrency cap (not per-device single-flight, which
         // would wrongly drop concurrent collects for different orgs) and fan out to many results.
@@ -197,6 +200,22 @@ pub async fn run_stream<S>(
         // word or one poll would land in two kinds.
         let kind = job.check.kind_label();
         record_phase(kind, "wait_admit", queued_at);
+        // The hourly identity re-probe (ADR-138). Decided here because every job — a working-set
+        // one, a legacy per-job one, an operator's "poll now" — passes this point, and before the
+        // spawn because the task takes the job by value. Core's own `probe_identity` (a node whose
+        // maker is still unknown) is kept as it came: this can add a probe, never remove one.
+        if identity::carries_identity_probe(&job.check) {
+            let due = cadence
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .claim(
+                    job.node_id,
+                    Instant::now(),
+                    identity::first_offset(job.node_id),
+                );
+            job.probe_identity |= due;
+        }
+        let task_cadence = cadence.clone();
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
@@ -265,6 +284,14 @@ pub async fn run_stream<S>(
                 let probed_at = Instant::now();
                 let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
                 record_phase(kind, "execute", probed_at);
+                // Answered ⇒ not due again for a period. Unanswered (or shed above, which returned
+                // before reaching this) keeps the short retry `claim` already set.
+                if job.probe_identity && result.sys_descr.is_some() {
+                    task_cadence
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .succeeded(job.node_id, Instant::now());
+                }
                 stamp_poller_id(&mut result, &poller_id);
                 // Carry the poll span's context so core's result-ingest span joins this trace.
                 result.trace_context = yagra_telemetry::current_trace_context();

@@ -22,6 +22,7 @@ export const FACT_ROWS = [
   'address',
   'maker',
   'model',
+  'osVersion',
   'profile',
   'credential',
   'parent',
@@ -42,7 +43,10 @@ const PLACEMENT: readonly FactRow[] = ['group', 'pool', 'polledBy', 'profile', '
 const DEVICE_IDENTITY: readonly FactRow[] = ['address', 'maker', 'model', 'credential'];
 
 export const FACT_ROWS_BY_KIND: Record<NodeKind, readonly FactRow[]> = {
-  device: [...PLACEMENT, ...DEVICE_IDENTITY, 'uptime'],
+  // `osVersion` is read by the SNMP identity probe (ADR-138), so only a device has one. A Meraki
+  // node is not SNMP-polled and its org collector reports no version, so the row would be a dash
+  // on every one of them.
+  device: [...PLACEMENT, ...DEVICE_IDENTITY, 'osVersion', 'uptime'],
   meraki: [...PLACEMENT, ...DEVICE_IDENTITY],
   // The URL itself is the header's sub line, so it is not repeated here.
   url: PLACEMENT,

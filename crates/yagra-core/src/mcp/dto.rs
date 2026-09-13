@@ -398,6 +398,12 @@ pub struct NodeStatusDto {
     /// `NodeSummaryDto` is also what `list_nodes` returns one of per fleet row, and the note is
     /// detail-only. Same split the REST side makes between `NodeDetail` and `NodeSummary`.
     pub notes: Option<String>,
+    /// The OS / software version the device last reported over SNMP (ADR-138); `null` ⇒ never read.
+    ///
+    /// Mirrors `NodeDetail.os_version` on `GET /api/v1/nodes/{node_id}`, and is a sibling of `node`
+    /// for the reason `notes` is. ⚠️ Observed state: up to an hour behind an upgrade, and left in
+    /// place when a later poll cannot read it — so treat it as "last known", not "confirmed now".
+    pub os_version: Option<String>,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -953,6 +959,7 @@ mod tests {
             alerts: vec![],
             snmp_configured: true,
             notes: Some("reachable only from the jump host".to_owned()),
+            os_version: Some("15.0(2a)EX5".to_owned()),
             interfaces: vec![InterfaceDto {
                 ifindex: 1,
                 name: Some("Gig0/1".to_owned()),

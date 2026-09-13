@@ -10,11 +10,28 @@
 //! rule must not depend on *how* the agent failed.
 
 use super::*;
+use yagra_discovery::os_version;
 
-const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
+/// Identity probes run, by what they found: `version`, `no_version` (the device answered but the
+/// table does not cover it or it reports none) or `no_answer` (not even `sysDescr` came back).
+/// The ratio of the first two is the table's real coverage of a fleet (ADR-138).
+pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_total";
 
-/// sysDescr column base — walking it yields the `.0` instance (the v2c path).
-const SYSDESCR_BASE: &str = "1.3.6.1.2.1.1.1";
+/// What one identity probe learned (ADR-138).
+pub(super) struct IdentityProbe {
+    pub(super) sys_descr: Option<String>,
+    pub(super) os_version: Option<String>,
+}
+
+impl IdentityProbe {
+    fn outcome(&self) -> &'static str {
+        match (&self.os_version, &self.sys_descr) {
+            (Some(_), _) => "version",
+            (None, Some(_)) => "no_version",
+            (None, None) => "no_answer",
+        }
+    }
+}
 
 /// The credential half of an SNMP check that differs between v2c and v3 (community vs USM params).
 /// Capturing it here lets everything above it — the scalar GET, the column walk, the interface
@@ -42,39 +59,116 @@ impl SnmpWalker {
         }
     }
 
-    /// Fetch `sysDescr.0` for the identity probe, so core can fill the node's maker/model.
-    /// Best-effort: `None` on any transport error or an empty/missing value. The two protocols
-    /// reach it differently — v2c walks the column base (its GET path returns numerics only),
-    /// v3 does a scalar string GET.
-    async fn fetch_sys_descr(
+    /// The identity probe: `sysDescr` (so core can fill the node's maker/model) and the OS version
+    /// (ADR-138).
+    ///
+    /// Two reads at most. The first takes `sysDescr` and `sysObjectID` together, because which OIDs
+    /// hold the version depends on what the device is; the second takes those, and is skipped when
+    /// the table keeps this device's version in `sysDescr` or does not know the device at all.
+    /// Best-effort throughout: an error or a missing value is simply absent.
+    async fn fetch_identity(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         timeout: Duration,
-    ) -> Option<String> {
-        let value = match self {
+    ) -> IdentityProbe {
+        let first = self
+            .read_strings(
+                transport,
+                target,
+                &[os_version::OID_SYS_DESCR, os_version::OID_SYS_OBJECT_ID],
+                timeout,
+            )
+            .await;
+        let sys_descr = first
+            .get(os_version::OID_SYS_DESCR)
+            .filter(|v| !v.is_empty())
+            .cloned();
+        let sys_object_id = first.get(os_version::OID_SYS_OBJECT_ID).map(String::as_str);
+        let reads = os_version::oids_to_read(sys_object_id, sys_descr.as_deref());
+        let mut answers = os_version::Answers::default();
+        if !reads.strings.is_empty() {
+            answers.strings = self
+                .read_strings(transport, target, &reads.strings, timeout)
+                .await;
+        }
+        if !reads.integers.is_empty() {
+            answers.integers = self
+                .read_integers(transport, target, &reads.integers, timeout)
+                .await;
+        }
+        IdentityProbe {
+            os_version: os_version::resolve(sys_object_id, sys_descr.as_deref(), &answers),
+            sys_descr,
+        }
+    }
+
+    /// Read integer-valued instance OIDs, keyed by the instance OID — the scalar GET, which both
+    /// protocols already carry. The version table needs it for the values its string readers drop:
+    /// Cisco's `entPhysicalContainedIn.1` gate and TiMOS's Gauge32 version numbers.
+    async fn read_integers(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        oids: &[&str],
+        timeout: Duration,
+    ) -> HashMap<String, i64> {
+        let asked: Vec<String> = oids.iter().map(|oid| (*oid).to_owned()).collect();
+        let Ok(samples) = self.get(transport, target, &asked, timeout).await else {
+            return HashMap::new();
+        };
+        samples
+            .into_iter()
+            .filter(|s| oids.contains(&s.oid.as_str()))
+            // An SNMP integer, counter or gauge is whole; the transport widened it to `f64`.
+            .map(|s| (s.oid, s.value as i64))
+            .collect()
+    }
+
+    /// Read string-valued **instance** OIDs, keyed by the instance OID.
+    ///
+    /// The two protocols reach a string scalar differently: v2c walks each OID's column (its GET
+    /// path returns numbers only) and keeps just the instances asked for — an ENTITY-MIB column can
+    /// return hundreds of rows to find one — while v3 GETs them directly. A value the agent types as
+    /// something other than a string or an OID is dropped by both readers, which is why the version
+    /// table has no integer-valued sources (`os_version`'s module doc).
+    async fn read_strings(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        oids: &[&str],
+        timeout: Duration,
+    ) -> HashMap<String, String> {
+        match self {
             SnmpWalker::V2c(community) => {
-                let bases = [SYSDESCR_BASE.to_owned()];
-                transport
-                    .snmp_walk_strings(target, community, &bases, timeout)
+                let mut columns: Vec<String> = Vec::new();
+                for (column, _) in oids.iter().filter_map(|oid| os_version::walk_column(oid)) {
+                    if !columns.iter().any(|c| c == column) {
+                        columns.push(column.to_owned());
+                    }
+                }
+                let Ok(rows) = transport
+                    .snmp_walk_strings(target, community, &columns, timeout)
                     .await
-                    .ok()?
-                    .into_iter()
-                    .find(|r| r.oid_base == SYSDESCR_BASE)
-                    .map(|r| r.value)
+                else {
+                    return HashMap::new();
+                };
+                rows.into_iter()
+                    .map(|r| (format!("{}.{}", r.oid_base, r.ifindex), r.value))
+                    .filter(|(instance, _)| oids.contains(&instance.as_str()))
+                    .collect()
             }
             SnmpWalker::V3(params) => {
-                let oids = [SYSDESCR_OID.to_owned()];
-                transport
-                    .snmp_v3_get_strings(target, params, &oids, timeout)
+                let asked: Vec<String> = oids.iter().map(|oid| (*oid).to_owned()).collect();
+                let Ok(rows) = transport
+                    .snmp_v3_get_strings(target, params, &asked, timeout)
                     .await
-                    .ok()?
-                    .into_iter()
-                    .find(|r| r.oid == SYSDESCR_OID)
-                    .map(|r| r.value)
+                else {
+                    return HashMap::new();
+                };
+                rows.into_iter().map(|r| (r.oid, r.value)).collect()
             }
-        };
-        value.filter(|v| !v.is_empty())
+        }
     }
 
     /// Walk numeric table columns via the appropriate protocol.
@@ -209,7 +303,10 @@ pub(super) async fn execute_scalar_get(
             mapped.push(Sample::gauge(METRIC_SNMP_UP, answered));
             let mut r = result(job, at_unix_ms, outcome, mapped);
             if job.probe_identity && outcome == CheckOutcome::Reachable {
-                r.sys_descr = walker.fetch_sys_descr(transport, job.target, timeout).await;
+                let probe = walker.fetch_identity(transport, job.target, timeout).await;
+                metrics::counter!(IDENTITY_PROBES_METRIC, "result" => probe.outcome()).increment(1);
+                r.sys_descr = probe.sys_descr;
+                r.os_version = probe.os_version;
             }
             r
         }
@@ -385,6 +482,136 @@ mod tests {
         let r = execute(&snmp_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Reachable);
         assert!(r.sys_descr.is_none());
+        assert!(r.os_version.is_none());
+    }
+
+    fn string_row(column: &str, index: u32, value: &str) -> yagra_transport::SnmpTableString {
+        yagra_transport::SnmpTableString {
+            oid_base: column.to_owned(),
+            ifindex: index,
+            value: value.to_owned(),
+        }
+    }
+
+    /// The identity probe reads the OS version from where the table says this device keeps it
+    /// (ADR-138) — a FortiGate's is only in its vendor MIB, so this is the two-read path.
+    ///
+    /// 🚨 The `asked` assertion is not decoration: a probe that resolved the version out of rows it
+    /// happened to be handed would pass the first assertion without ever asking the device.
+    #[tokio::test]
+    async fn the_identity_probe_reads_the_os_version_from_the_vendor_mib() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row("1.3.6.1.2.1.1.1", 0, "FGT_1500D"),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.12356.101.1.15000"),
+                string_row(
+                    "1.3.6.1.4.1.12356.101.4.1.1",
+                    0,
+                    "v7.2.6,build1575,230926 (GA.F)",
+                ),
+            ]);
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.sys_descr.as_deref(), Some("FGT_1500D"));
+        assert_eq!(
+            r.os_version.as_deref(),
+            Some("v7.2.6,build1575,230926 (GA.F)")
+        );
+        let asked = t.asked();
+        assert!(
+            asked
+                .iter()
+                .any(|call| call.iter().any(|o| o == "1.3.6.1.4.1.12356.101.4.1.1")),
+            "the vendor column was never walked: {asked:?}"
+        );
+    }
+
+    /// A device the table does not cover costs what the identity probe always cost — the second
+    /// read is not made — and reports its `sysDescr` with no version.
+    #[tokio::test]
+    async fn an_unknown_device_is_not_asked_a_second_time() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row("1.3.6.1.2.1.1.1", 0, "Acme Widget Controller rev B"),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.99999.1.7"),
+            ]);
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.os_version, None);
+        assert_eq!(r.sys_descr.as_deref(), Some("Acme Widget Controller rev B"));
+        // The scalar GET, then one identity walk — nothing else.
+        assert_eq!(t.asked().len(), 2, "{:?}", t.asked());
+    }
+
+    /// Over v3 the version instance is fetched with a GET, not by walking its column, and a value
+    /// longer than the cap is cut rather than refused.
+    #[tokio::test]
+    async fn the_v3_identity_probe_gets_the_version_instance_directly() {
+        use yagra_bus::SnmpV3Check;
+        use yagra_transport::SnmpStringSample;
+        let mut job = PollJob::snmp_v3(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+            SnmpV3Check {
+                auth: SnmpV3Auth {
+                    user: "monitor".to_owned(),
+                    security_level: "authpriv".to_owned(),
+                    auth_protocol: Some("sha256".to_owned()),
+                    auth_key: Some("auth-pass".to_owned()),
+                    priv_protocol: Some("aes256".to_owned()),
+                    priv_key: Some("priv-pass".to_owned()),
+                },
+                oids: vec!["1.3.6.1.2.1.1.3.0".to_owned()],
+                columns: Vec::new(),
+                timeout_ms: 2000,
+            },
+            30,
+        );
+        job.probe_identity = true;
+        let long = format!("v7.4.1,{}", "b".repeat(300));
+        let mut t = FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+            value: 1.0,
+        }]);
+        t.snmp_v3_strings = vec![
+            SnmpStringSample {
+                oid: "1.3.6.1.2.1.1.1.0".to_owned(),
+                value: "FGT_60F".to_owned(),
+            },
+            SnmpStringSample {
+                oid: "1.3.6.1.2.1.1.2.0".to_owned(),
+                value: "1.3.6.1.4.1.12356.101.1.60".to_owned(),
+            },
+            SnmpStringSample {
+                oid: "1.3.6.1.4.1.12356.101.4.1.1.0".to_owned(),
+                value: long,
+            },
+        ];
+        let r = execute(&job, &t, 1_000).await;
+        let version = r.os_version.expect("a version");
+        assert!(version.starts_with("v7.4.1,"), "{version}");
+        assert_eq!(
+            version.chars().count(),
+            yagra_discovery::os_version::OS_VERSION_MAX_CHARS
+        );
+        let asked = t.asked();
+        assert!(
+            asked
+                .iter()
+                .any(|call| call.iter().any(|o| o == "1.3.6.1.4.1.12356.101.4.1.1.0")),
+            "v3 must GET the instance: {asked:?}"
+        );
     }
 
     #[tokio::test]

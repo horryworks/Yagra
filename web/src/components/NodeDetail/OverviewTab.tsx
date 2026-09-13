@@ -725,6 +725,9 @@ function useFacts(
     address: { label: t('field.ipAddress'), value: node.address, mono: true },
     maker: { label: t('field.maker'), value: node.vendor || '—' },
     model: { label: t('field.model'), value: node.model || '—', mono: true },
+    // Observed, not configured (ADR-138): the poller re-reads it hourly, so it can trail an upgrade
+    // by up to an hour, and a dash means the version table does not know this device.
+    osVersion: { label: t('field.osVersion'), value: node.os_version || '—', mono: true },
     profile: { label: t('field.deviceProfile'), value: profileName ?? '—' },
     credential: { label: t('field.snmpCredential'), value: credentialName ?? '—' },
     parent: { label: t('field.parentNode'), value: parentName ?? '—', mono: !!parentName },

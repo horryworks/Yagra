@@ -696,6 +696,7 @@ mod tests {
             samples: vec![Sample::gauge("icmp_rtt_ms", 1.0)],
             interfaces: Vec::new(),
             sys_descr: None,
+            os_version: None,
             dns_chain: None,
             neighbors: None,
             l3: None,

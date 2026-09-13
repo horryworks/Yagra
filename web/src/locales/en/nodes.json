@@ -9,6 +9,7 @@
     "snmpCredential": "SNMP credential",
     "maker": "Maker",
     "model": "Model",
+    "osVersion": "OS version",
     "group": "Group",
     "parentNode": "Parent node",
     "uptime": "Uptime",

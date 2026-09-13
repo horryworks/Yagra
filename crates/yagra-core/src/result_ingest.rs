@@ -484,6 +484,10 @@ pub(crate) struct MetaRecord {
     node_id: Uuid,
     interfaces: Vec<OwnedIface>,
     identity: Option<(Option<String>, Option<String>)>,
+    /// The OS version the device reported on this poll, sanitized again here (ADR-138) — the poller
+    /// already caps it, but this is the edge a value from an older or misbehaving poller crosses.
+    /// `None` means nothing was read and nothing is written, never "the device has no version".
+    os_version: Option<String>,
     /// The DNS resolution chain observed on this poll (DNS monitors only, ADR-033). Same tier as
     /// the fields above: poller-returned structured strings that belong in PostgreSQL, never in the
     /// TSDB.
@@ -627,6 +631,10 @@ fn persist_metrics_and_meta(
         let id = yagra_discovery::identify(descr);
         (id.vendor.is_some() || id.model.is_some()).then_some((id.vendor, id.model))
     });
+    let os_version = result
+        .os_version
+        .as_deref()
+        .and_then(yagra_discovery::os_version::sanitize);
     // A DNS chain rides the same shed-able meta tier. Dropping one only defers recording a change
     // by a poll — the next observation re-reports the current chain — so the only thing genuinely
     // lost is a transient change that reverts before the next poll.
@@ -644,6 +652,7 @@ fn persist_metrics_and_meta(
     let routing = result.routing.clone();
     if !interfaces.is_empty()
         || identity.is_some()
+        || os_version.is_some()
         || dns_chain.is_some()
         || neighbors.is_some()
         || l3.is_some()
@@ -654,6 +663,7 @@ fn persist_metrics_and_meta(
             node_id: result.node_id.as_uuid(),
             interfaces,
             identity,
+            os_version,
             dns_chain,
             neighbors,
             l3,
@@ -1014,6 +1024,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let count = buf.len() as u64;
     let mut iface_rows: Vec<repo::InterfaceBatchRow> = Vec::new();
     let mut ident_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
+    let mut os_version_rows: Vec<(Uuid, String)> = Vec::new();
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
@@ -1025,6 +1036,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if let Some((vendor, model)) = rec.identity {
             ident_rows.push((rec.node_id, vendor, model));
+        }
+        if let Some(version) = rec.os_version {
+            os_version_rows.push((rec.node_id, version));
         }
         if let Some(chain) = rec.dns_chain {
             dns_rows.push((rec.node_id, chain));
@@ -1050,6 +1064,11 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !ident_rows.is_empty() {
         if let Err(e) = repo.fill_node_identity_batch(&ident_rows).await {
             tracing::warn!(error = %e, "batch node-identity fill failed");
+        }
+    }
+    if !os_version_rows.is_empty() {
+        if let Err(e) = repo.update_os_version_batch(&os_version_rows).await {
+            tracing::warn!(error = %e, "batch node os-version update failed");
         }
     }
     // One statement per observation, in arrival order. Deliberately NOT coalesced per node the way
@@ -1165,6 +1184,7 @@ mod tests {
                 tx_power_high_dbm: None,
             }],
             sys_descr: None,
+            os_version: None,
             dns_chain: None,
             neighbors: None,
             l3: None,
@@ -1252,6 +1272,7 @@ mod tests {
             samples: Vec::new(),
             interfaces: Vec::new(),
             sys_descr: None,
+            os_version: None,
             dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
             l3: None,
@@ -1441,6 +1462,7 @@ mod tests {
             samples: vec![Sample::gauge("icmp_rtt_ms", 9.0)],
             interfaces: Vec::new(),
             sys_descr: None,
+            os_version: None,
             dns_chain: None,
             neighbors: None,
             l3: None,
