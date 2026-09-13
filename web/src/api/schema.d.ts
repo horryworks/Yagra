@@ -9828,6 +9828,11 @@ export interface components {
         /** @description What Nodes ▸ Reclassify shows. */
         ReclassifyView: {
             /**
+             * @description Device nodes the rules were run for, whatever they chose. With `proposals` empty, `0` here
+             *     means nothing has been compared yet — not that every node matches.
+             */
+            identified: number;
+            /**
              * @description Locked nodes the rules would move. Counted and never listed: a person fixed their profile.
              *     A lock is cleared from the node's edit dialog.
              */

@@ -41,6 +41,9 @@ pub struct ProposalSet<'a> {
     pub total: usize,
     /// Locked nodes the rules would move. Counted, never listed: a person said to leave them.
     pub locked: usize,
+    /// Nodes the rules were run for — whatever the answer. The screen needs it to tell "nothing
+    /// differs" from "nothing has been compared yet", which an empty list says in the same words.
+    pub identified: usize,
     /// Nodes the rules cannot be run for yet — no stored `sysObjectID`.
     pub unidentified: usize,
 }
@@ -73,6 +76,7 @@ pub fn propose<'a>(
             set.unidentified += 1;
             continue;
         };
+        set.identified += 1;
         if node.profile_id == Some(suggestion.profile_id) {
             continue;
         }
@@ -199,6 +203,8 @@ mod tests {
             Uuid::from_u128(CISCO_WLC)
         );
         assert_eq!((set.locked, set.unidentified), (0, 0));
+        // The node the rules agree with is identified too: it was compared, and nothing differed.
+        assert_eq!(set.identified, 3);
     }
 
     #[test]
@@ -231,6 +237,7 @@ mod tests {
         let set = propose(&nodes, &classifier(), PROPOSAL_LIMIT);
         assert!(set.proposals.is_empty());
         assert_eq!((set.total, set.unidentified), (0, 1));
+        assert_eq!(set.identified, 0);
     }
 
     #[test]

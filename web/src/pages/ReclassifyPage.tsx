@@ -20,7 +20,7 @@ import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
-import { applyItems, pruneSelection, ruleSignature } from './reclassify';
+import { applyItems, emptyState, pruneSelection, ruleSignature } from './reclassify';
 import './ReclassifyPage.css';
 
 export function ReclassifyPage() {
@@ -251,7 +251,7 @@ export function ReclassifyPage() {
             columns={columns}
             rowKey={(r) => r.node_id}
             loading={loading}
-            empty={t('reclassify.empty')}
+            empty={t(emptyState(view).key, { count: emptyState(view).count })}
           />
           <p className="muted reclassify-hint">
             {t('reclassify.lockedHint')} {t('reclassify.unidentifiedHint')}

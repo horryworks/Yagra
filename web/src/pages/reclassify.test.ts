@@ -1,7 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { ReclassifyProposal } from '../types/api';
-import { applyItems, pruneSelection, ruleSignature } from './reclassify';
+import { applyItems, emptyState, pruneSelection, ruleSignature } from './reclassify';
+
+describe('emptyState', () => {
+  it('says nothing has been compared yet when no node is identified', () => {
+    expect(emptyState({ identified: 0, unidentified: 27 })).toEqual({
+      key: 'reclassify.emptyUnidentified',
+      count: 27,
+    });
+  });
+
+  it('says every identified node matches once any node is identified', () => {
+    // Some nodes are never identified (ping-only, Meraki API), so a count of them must not keep the
+    // "not collected yet" sentence up for ever once others have been compared.
+    expect(emptyState({ identified: 20, unidentified: 7 }).key).toBe('reclassify.empty');
+  });
+
+  it('falls back to the ordinary sentence before the first read and on an empty inventory', () => {
+    expect(emptyState(null).key).toBe('reclassify.empty');
+    expect(emptyState({ identified: 0, unidentified: 0 }).key).toBe('reclassify.empty');
+  });
+});
 
 const proposal = (over: Partial<ReclassifyProposal> = {}): ReclassifyProposal =>
   ({

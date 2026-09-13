@@ -51,6 +51,9 @@ pub(crate) struct ReclassifyView {
     /// Locked nodes the rules would move. Counted and never listed: a person fixed their profile.
     /// A lock is cleared from the node's edit dialog.
     locked: usize,
+    /// Device nodes the rules were run for, whatever they chose. With `proposals` empty, `0` here
+    /// means nothing has been compared yet — not that every node matches.
+    identified: usize,
     /// Device nodes the rules cannot be run for yet, because no `sysObjectID` is stored for them.
     /// The poller reads it on its hourly identity probe, so a new or just-upgraded deployment fills
     /// this in within the hour; a node that is not SNMP-polled never has one.
@@ -149,6 +152,7 @@ pub(crate) async fn reclassify_view(
         proposals,
         total: set.total,
         locked: set.locked,
+        identified: set.identified,
         unidentified: set.unidentified,
     })
 }
@@ -408,6 +412,7 @@ mod tests {
         let (status, view) = send(&st, "GET", "/api/v1/reclassify", &tok, None).await;
         assert_eq!(status, StatusCode::OK, "{view}");
         assert_eq!(view["total"], 1, "{view}");
+        assert_eq!(view["identified"], 1, "{view}");
         let p = &view["proposals"][0];
         assert_eq!(p["node_id"], id.to_string());
         assert_eq!(p["current_profile_name"], "Nokia SR router");

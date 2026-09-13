@@ -33218,9 +33218,15 @@
           "proposals",
           "total",
           "locked",
+          "identified",
           "unidentified"
         ],
         "properties": {
+          "identified": {
+            "type": "integer",
+            "description": "Device nodes the rules were run for, whatever they chose. With `proposals` empty, `0` here\nmeans nothing has been compared yet — not that every node matches.",
+            "minimum": 0
+          },
           "locked": {
             "type": "integer",
             "description": "Locked nodes the rules would move. Counted and never listed: a person fixed their profile.\nA lock is cleared from the node's edit dialog.",

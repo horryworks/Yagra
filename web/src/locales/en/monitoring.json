@@ -164,6 +164,7 @@
       "sysDescr": "sysDescr"
     },
     "empty": "Every identified node already has the profile its rules choose.",
+    "emptyUnidentified": "No node has been identified yet ({{count}} waiting). For a node polled over SNMP, the poller reads what the device is within the hour.",
     "lockedHint": "A locked node keeps its profile and is not listed; unlock it from the node's Edit dialog.",
     "unidentifiedHint": "The poller reads what each device is on its hourly SNMP identity probe, so a node that is not polled over SNMP is never identified.",
     "confirm": {

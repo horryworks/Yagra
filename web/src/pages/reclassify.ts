@@ -2,7 +2,23 @@
 // The judgement behind Nodes ▸ Reclassify (ADR-140), in a `.ts` so a test can reach it — Vitest never
 // runs a `.tsx` (`testing.md`). `ReclassifyPage.tsx` is layout plus the calls.
 
-import type { ReclassifyProposal } from '../types/api';
+import type { ReclassifyProposal, ReclassifyView } from '../types/api';
+
+/** What the empty list says, and the number it says it with.
+ *
+ *  An empty list means two different things. With nodes identified, it means every one of them
+ *  already has the profile its rules choose. With **none** identified — the hour after an upgrade, or
+ *  a fleet that is not polled over SNMP — nothing has been compared at all, and the first sentence
+ *  would read as "all clear" about nodes nobody looked at. */
+export function emptyState(view: Pick<ReclassifyView, 'identified' | 'unidentified'> | null): {
+  key: 'reclassify.empty' | 'reclassify.emptyUnidentified';
+  count: number;
+} {
+  if (view && view.identified === 0 && view.unidentified > 0) {
+    return { key: 'reclassify.emptyUnidentified', count: view.unidentified };
+  }
+  return { key: 'reclassify.empty', count: 0 };
+}
 
 /** One change for `POST /api/v1/reclassify/apply`. */
 export interface ReclassifyApplyItem {
