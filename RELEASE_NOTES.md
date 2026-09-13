@@ -23,6 +23,30 @@
   MCP `get_node_status` tool.
   ⚠️ Nodes polled by a poller older than this release show `—` until that poller is upgraded.
 
+### Improvements
+
+- **Discovery greys out devices that are already in the node tree.** In Nodes ▸ Discovery, a
+  candidate whose address is already a device node is shown muted with an **In tree** badge. It
+  cannot be ticked, and its Folder column names the node it already is, linked to that node. A node
+  in a folder you cannot see is shown as "Monitored in a folder you can't see", without its name.
+  URL and DNS monitors at the same address do not count — they store a resolved address, and the
+  device itself can still be imported. The *Seen on the network* card no longer offers **Monitor**
+  on an endpoint that is already monitored.
+  API: `GET /api/v1/discovery/scan/{id}` gains `existing`, one entry per candidate already in the
+  inventory, with `nodes` (the id and name of each one you can see) and `outside_scope`. The MCP
+  `get_config(kind="discovery_scan")` tool returns the same list. The import responses gain
+  `skipped_existing`.
+
+### Bug Fixes
+
+- **Importing the same sweep twice no longer creates duplicate nodes.** `POST /api/v1/discovery/import`
+  used to insert a second node at an address already in the inventory, and one of the two never
+  received syslog or flow attribution. It now skips those rows, still answers `201`, and reports how
+  many in `skipped_existing`; `created` counts only what was added, and `filed` counts only rows that
+  were created. A request whose every row is already in the tree is `201` with `created: 0`.
+  Adding a node by hand (`POST /api/v1/nodes`) is unchanged, and duplicates created earlier are left
+  as they are.
+
 ## v0.3.18 — MCP is served by default, a VPN sessions widget, network traffic on Yagra health, a truncated SNMP walk raises a Warning, and metrics carry their units
 
 ### Breaking changes

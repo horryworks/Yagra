@@ -68,7 +68,19 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ("defaults.rs", &[]),
     // The two joins are for display names (`node_facts` answers "what is this node called, in
     // which folder, on which profile"), not a second file's worth of `profiles` logic.
-    ("nodes.rs", &["nodes", "node_groups", "profiles"]),
+    // `url_checks` / `dns_checks` are named only by `DEVICE_NODE_PREDICATE` (ADR-139): a URL or DNS
+    // monitor stores a resolved address in `nodes.address`, so "is a device already at this
+    // address" has to exclude them, and the exclusion is a fact about the `nodes` row.
+    (
+        "nodes.rs",
+        &[
+            "nodes",
+            "node_groups",
+            "profiles",
+            "url_checks",
+            "dns_checks",
+        ],
+    ),
     // `NodeListing for NodeRepo`. Separate from `nodes.rs` because this file is the *mirror*:
     // the SQL scope predicate and `StaticNodeList`'s in-memory twin, with the tests that pin them.
     ("listing.rs", &["nodes"]),

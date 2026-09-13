@@ -798,7 +798,8 @@ impl YagraMcp {
                        the dictionary behind a bare metric name); **per-node checks** — \
                        url_check, dns_check (both need `node_id`); **discovery** — \
                        discovery_candidates (`limit` 1–50, default 10), discovery_scan (needs \
-                       `scan_id`), discovery_scans (the sweeps this core is holding, newest \
+                       `scan_id`; its `existing` list names the candidates that are already device nodes), \
+                       discovery_scans (the sweeps this core is holding, newest \
                        first, `limit` 1–50, default 20 — this is how to find a `scan_id`); \
                        **Meraki** — meraki_orgs, meraki_networks (needs `org_id`), \
                        meraki_polling; **NetBox** — netbox_servers (the configured NetBox \
@@ -1029,10 +1030,16 @@ impl YagraMcp {
                     &crate::api::discovery::recent_candidates(&self.state, limit),
                 )
             }
-            ConfigKind::DiscoveryScan => match a.discovery.get(id) {
-                Some(status) => ok_json(TOOL, &status),
-                None => tool_unavailable(TOOL, "no scan with that id"),
-            },
+            // Through the same `scan_view` the REST route calls (ADR-042 read parity), so the
+            // `existing` list — and the name it withholds for a node outside the caller's folders —
+            // is decided once (ADR-139).
+            ConfigKind::DiscoveryScan => {
+                match crate::api::discovery::scan_view(a, scope, id).await {
+                    Ok(Some(view)) => ok_json(TOOL, &view),
+                    Ok(None) => tool_unavailable(TOOL, "no scan with that id"),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
             ConfigKind::DiscoveryScans => {
                 let limit = p.limit.and_then(|n| usize::try_from(n).ok());
                 ok_json(TOOL, &a.discovery.list(limit.unwrap_or(20).clamp(1, 50)))

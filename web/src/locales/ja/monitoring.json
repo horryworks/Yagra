@@ -340,9 +340,13 @@
     "importSelectedCount": "{{count}} 件をインポート",
     "importSelectedNone": "選択項目をインポート",
     "badge": {
-      "imported": "インポート済み",
+      "inTree": "登録済み",
       "ping": "ping",
       "noPing": "ping 応答なし"
+    },
+    "existing": {
+      "as": "監視中:",
+      "outsideScope": "見えないフォルダで監視中"
     },
     "cols": {
       "address": "アドレス",

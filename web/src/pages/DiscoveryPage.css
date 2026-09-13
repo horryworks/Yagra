@@ -149,6 +149,16 @@ html[data-viewport='mobile'] .disco-actions .btn {
   color: var(--text-secondary);
 }
 
+/* A device already in the node tree (ADR-139). Muted through colour rather than `opacity: 0.5`,
+   which is the disabled-control look: the badge and the link to the node are the explanation for
+   why the row cannot be picked, so they have to stay readable. The inputs are disabled and take
+   that look on their own. */
+.disco-row.existing .disco-identity,
+.disco-row.existing .disco-identity .disco-makermodel,
+.disco-row.existing > .mono {
+  color: var(--text-tertiary);
+}
+
 /* sysObjectID — the authoritative device-type OID, shown small + monospace under identity. */
 .disco-sysoid {
   font-size: var(--font-xs);

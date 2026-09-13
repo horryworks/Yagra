@@ -304,21 +304,35 @@ impl DiscoveredRepo {
         Ok(res.rows_affected())
     }
 
-    /// Point every row whose address is now an inventory node at that node.
+    /// Point every row whose address is now an inventory **device** node at that node.
     ///
     /// Called by the sweep **and** by the import handler, which is the point: an endpoint can become
     /// a node either way, and a rule expressed once cannot disagree with itself. Without it an
     /// operator who added the host by hand would keep reading it in the unmonitored list for a week.
+    ///
+    /// ⚠️ **A URL or DNS monitor at the same address does not count** (ADR-139 決定 1). Both store a
+    /// resolved address in `nodes.address`, and matching on the address alone marked a router
+    /// "monitored" because its web page was — while the scan table beside this one, which asks
+    /// the same question through [`crate::repo::NodeRepo::DEVICE_NODE_PREDICATE`], said it was not.
     pub async fn reconcile_promotions(&self) -> anyhow::Result<u64> {
-        let res = sqlx::query(
-            "UPDATE l3_discovered d SET promoted_node_id = n.id \
-             FROM nodes n \
-             WHERE d.ip = n.address AND d.promoted_node_id IS DISTINCT FROM n.id",
-        )
-        .execute(&self.pool)
-        .await?;
+        let res = sqlx::query(Self::RECONCILE_PROMOTIONS)
+            .execute(&self.pool)
+            .await?;
         Ok(res.rows_affected())
     }
+
+    /// The statement [`Self::reconcile_promotions`] runs.
+    ///
+    /// ⚠️ **Its last clause is a second spelling of `NodeRepo::DEVICE_NODE_PREDICATE`**, written out
+    /// rather than interpolated because this module refuses `format!` in production code — a check
+    /// that cannot tell a constant from a value. `the_promotion_statement_ends_in_the_device_predicate`
+    /// pins the two together, so changing one without the other fails the build.
+    const RECONCILE_PROMOTIONS: &'static str =
+        "UPDATE l3_discovered d SET promoted_node_id = n.id \
+         FROM nodes n \
+         WHERE d.ip = n.address AND d.promoted_node_id IS DISTINCT FROM n.id \
+         AND NOT EXISTS (SELECT 1 FROM url_checks uc WHERE uc.node_id = n.id) \
+         AND NOT EXISTS (SELECT 1 FROM dns_checks dc WHERE dc.node_id = n.id)";
 
     /// Drop endpoints not seen inside the retention window, then enforce the fleet ceiling.
     ///
@@ -602,6 +616,19 @@ mod tests {
         assert!(
             !production_source().contains("OFFSET"),
             "OFFSET paging — rows shift under the reader as the sweep updates last_seen"
+        );
+    }
+
+    /// The promotion statement spells out the device predicate instead of interpolating it (this
+    /// module refuses `format!`), so the two copies are compared here — a URL monitor excluded on
+    /// the scan table but not on this one is the disagreement ADR-139 決定 1 exists to prevent.
+    #[test]
+    fn the_promotion_statement_ends_in_the_device_predicate() {
+        let tail = format!("AND {}", crate::repo::NodeRepo::DEVICE_NODE_PREDICATE);
+        assert!(
+            DiscoveredRepo::RECONCILE_PROMOTIONS.ends_with(&tail),
+            "RECONCILE_PROMOTIONS no longer ends in NodeRepo::DEVICE_NODE_PREDICATE:\n{}\n--- expected tail ---\n{tail}",
+            DiscoveredRepo::RECONCILE_PROMOTIONS
         );
     }
 
@@ -940,6 +967,42 @@ mod tests {
             repo.get(Uuid::new_v4()).await.expect("get").is_none(),
             "an unknown id returned an endpoint"
         );
+    }
+
+    /// A URL monitor at the endpoint's address does not make the endpoint "monitored"; a device
+    /// node at it does (ADR-139 決定 1). The scan table on the same screen asks through the same
+    /// predicate, so the two cannot disagree about one address.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_url_monitor_at_the_address_does_not_promote_the_endpoint(pool: sqlx::PgPool) {
+        let via = pgtest::node(&pool, "rtr", 1, None).await;
+        let repo = DiscoveredRepo::new(pool.clone());
+        repo.upsert_batch(&[observation("192.168.60.10", via, 8)])
+            .await
+            .expect("upsert");
+
+        let page = node_at(&pool, "web-page", "192.168.60.10").await;
+        sqlx::query("INSERT INTO url_checks (node_id, url) VALUES ($1, 'https://192.168.60.10/')")
+            .bind(page)
+            .execute(&pool)
+            .await
+            .expect("url check");
+        assert_eq!(
+            repo.reconcile_promotions().await.expect("reconcile"),
+            0,
+            "a URL monitor's resolved address promoted the device behind it"
+        );
+
+        let device = node_at(&pool, "device", "192.168.60.10").await;
+        assert_eq!(repo.reconcile_promotions().await.expect("reconcile"), 1);
+        let row = repo
+            .list_page(None, None, true, None, 10)
+            .await
+            .expect("list")
+            .into_iter()
+            .find(|e| e.ip == ip("192.168.60.10"))
+            .expect("the endpoint");
+        assert_eq!(row.promoted_node_id, Some(NodeId(device)));
     }
 
     /// Pruning drops what aged out, then enforces the ceiling by dropping the **oldest seen** —

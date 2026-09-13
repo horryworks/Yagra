@@ -649,8 +649,13 @@ export type ClassificationRule = components['schemas']['ClassificationRule'];
 /** Create/update body for a classification rule. */
 export type ClassificationRuleInput = components['schemas']['ClassificationRuleBody'];
 
-/** A discovery scan's status (`GET /api/v1/discovery/scan/:id`). */
-export type DiscoveryScan = components['schemas']['ScanStatus'];
+/** A discovery scan's status (`GET /api/v1/discovery/scan/:id`), with the candidates that are
+ *  already device nodes listed beside them (ADR-139). */
+export type DiscoveryScan = components['schemas']['ScanView'];
+
+/** One scan candidate whose address a device node already stands at (ADR-139). `nodes` is what the
+ *  caller may see; `outside_scope` says one stands in a folder they cannot, name withheld. */
+export type InventoryMatch = components['schemas']['InventoryMatch'];
 
 /** One curated OID-catalog entry (`GET /api/v1/mib-catalog`). A reference metric_name → (oid, kind)
  *  so the collection editor can pick by name. */

@@ -64,8 +64,9 @@ import { Button } from '../components/ui/Button';
 import { TextInput, Select, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
-import { EntityName } from '../components/ui/EntityName';
-import { coverageOf } from './discoveredEndpoints';
+import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { coverageOf, isUnmonitored } from './discoveredEndpoints';
+import { existingByAddress, importableCandidates, selectedForImport } from './discoveryExisting';
 import {
   candidateColumns,
   candidateLabels,
@@ -187,7 +188,9 @@ export function DiscoveryPage() {
   const [stopOutcome, setStopOutcome] = useState<'requested' | 'unsupported' | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
-  const [imported, setImported] = useState<Record<string, boolean>>({});
+  /** An import is on its way. The button used to stay live, so a double click sent the batch twice —
+   *  which the server now answers by skipping the second, but a second request is still wrong. */
+  const [importing, setImporting] = useState(false);
   const [importNote, setImportNote] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -214,6 +217,9 @@ export function DiscoveryPage() {
    *  collapse into; everything below reads `shown`, never `status`. */
   const shown = statusFor(scanId, status);
   const candidates = shown?.candidates ?? NO_CANDIDATES;
+  /** The candidates a device node already stands at, as the server answered with this scan
+   *  (ADR-139). Read from `shown` like everything else, so it cannot describe another sweep. */
+  const existing = useMemo(() => existingByAddress(shown?.existing), [shown]);
 
   /** Point the page at a scan — or at none — and clear everything that described the last one.
    *
@@ -230,7 +236,6 @@ export function DiscoveryPage() {
     setScanId(id);
     setStatus(null);
     setRowState({});
-    setImported({});
     setFailures(0);
     setJustStarted(false);
     setUnknownScan(false);
@@ -566,7 +571,9 @@ export function DiscoveryPage() {
   useEffect(() => {
     if (!canConfig) return;
     let live = true;
-    const pending = pendingAddresses(destinations, candidates);
+    // A device already in the tree is not going to be imported, so where it would land is not a
+    // question worth a request (ADR-139).
+    const pending = pendingAddresses(destinations, importableCandidates(candidates, existing));
     if (pending.length === 0) return;
     api
       .previewDiscoveryImport(pending)
@@ -580,13 +587,12 @@ export function DiscoveryPage() {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates.length, canConfig]);
+  }, [candidates.length, existing.size, canConfig]);
 
   const importSelected = () => {
     setImportNote(null);
     setImportError(null);
-    const nodes = candidates
-      .filter((c) => rowState[c.address]?.selected && !imported[c.address])
+    const nodes = selectedForImport(candidates, rowState, existing)
       .map((c) => {
         const r = rowState[c.address];
         return {
@@ -606,6 +612,7 @@ export function DiscoveryPage() {
       setImportError(t('discovery.err.selectOne'));
       return;
     }
+    setImporting(true);
     api
       // The folder the sweep was aimed at, so a site's devices arrive filed rather than in a heap
       // at the tree root. Empty when the operator typed a range instead of picking a site, which
@@ -619,24 +626,22 @@ export function DiscoveryPage() {
             .map((p) => t(p.key, p.args))
             .join(' '),
         );
-        // Mark the imported rows and clear their selection (no double-import).
-        setImported((cur) => {
-          const next = { ...cur };
-          for (const n of nodes) next[n.address] = true;
-          return next;
-        });
         setRowState((cur) => {
           const next = { ...cur };
           for (const n of nodes) if (next[n.address]) next[n.address].selected = false;
           return next;
         });
+        // Read the scan once more, so the rows just imported — and any the server skipped as
+        // already in the tree — come back marked by the server (ADR-139). A finished sweep is no
+        // longer polled, so without this they would stay offered until the page was reloaded.
+        // `statusFor` makes a reply harmless if the operator has moved to another sweep meanwhile.
+        if (scanId) void poll(scanId, () => true);
       })
-      .catch((e: unknown) => setImportError(errMsg(e, t('discovery.err.import'))));
+      .catch((e: unknown) => setImportError(errMsg(e, t('discovery.err.import'))))
+      .finally(() => setImporting(false));
   };
 
-  const selectedCount = candidates.filter(
-    (c) => rowState[c.address]?.selected && !imported[c.address],
-  ).length;
+  const selectedCount = selectedForImport(candidates, rowState, existing).length;
 
   /** The chosen site's path, for the sentence that says where an import lands. */
   const siteLabel = siteOptions.find((o) => o.id === siteId)?.label ?? '';
@@ -1095,23 +1100,25 @@ export function DiscoveryPage() {
             {shownCandidates.map((c) => {
               const r = rowState[c.address];
               if (!r) return null;
-              const isImported = !!imported[c.address];
+              // A device node already stands at this address (ADR-139). The row stays — it is part
+              // of what the sweep found — but it cannot be picked, and it says which node it is.
+              const inTree = existing.get(c.address);
               return (
-                <div className="disco-row" key={c.address}>
+                <div className={inTree ? 'disco-row existing' : 'disco-row'} key={c.address}>
                   {/* Wrapper is display:contents on desktop (input stays the grid cell) and a real
                       sticky cell on mobile so the select column stays pinned during h-scroll. */}
                   <div className="disco-check">
                     <input
                       type="checkbox"
-                      checked={r.selected}
-                      disabled={isImported}
+                      checked={r.selected && !inTree}
+                      disabled={!!inTree}
                       onChange={(e) => patchRow(c.address, { selected: e.target.checked })}
                     />
                   </div>
                   <span className="mono">
                     {c.address}{' '}
-                    {isImported ? (
-                      <Badge tone="up">{t('discovery.badge.imported')}</Badge>
+                    {inTree ? (
+                      <Badge tone="neutral">{t('discovery.badge.inTree')}</Badge>
                     ) : c.reachable ? (
                       <Badge tone="up">{t('discovery.badge.ping')}</Badge>
                     ) : (
@@ -1142,13 +1149,43 @@ export function DiscoveryPage() {
                       by one rule for the whole request, never chosen per row — which is what keeps
                       ADR-100 decision 10 intact. Drawn with the option off too, because then it
                       answers "where does this land" before the button rather than afterwards. */}
-                  <span className="disco-dest">{destinationCell(c.address, r)}</span>
+                  <span className="disco-dest">
+                    {inTree ? (
+                      // Where it already is, rather than where it would go: a folder picker on a row
+                      // that cannot be imported would offer a choice that leads nowhere (ADR-139).
+                      <>
+                        {inTree.nodes.length > 0 && (
+                          <span
+                            className="disco-dest-to"
+                            title={inTree.nodes.map((n) => n.name).join(', ')}
+                          >
+                            <span className="muted">{t('discovery.existing.as')}</span>{' '}
+                            {inTree.nodes.map((n, i) => (
+                              <span key={n.id}>
+                                {i > 0 && ', '}
+                                <Link to={`/nodes/${n.id}`}>{n.name}</Link>
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        {inTree.outside_scope && (
+                          <span className="muted disco-dest-why">
+                            {t('discovery.existing.outsideScope')}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      destinationCell(c.address, r)
+                    )}
+                  </span>
                   <TextInput
                     value={r.name}
+                    disabled={!!inTree}
                     onChange={(e) => patchRow(c.address, { name: e.target.value })}
                   />
                   <Select
                     value={r.profile_id}
+                    disabled={!!inTree}
                     onChange={(e) => patchRow(c.address, { profile_id: e.target.value })}
                   >
                     <option value="">{t('discovery.none')}</option>
@@ -1160,6 +1197,7 @@ export function DiscoveryPage() {
                   </Select>
                   <Select
                     value={r.credential_id}
+                    disabled={!!inTree}
                     onChange={(e) => patchRow(c.address, { credential_id: e.target.value })}
                   >
                     <option value="">{t('discovery.none')}</option>
@@ -1178,7 +1216,11 @@ export function DiscoveryPage() {
             <div className="disco-import">
               {importNote && <span className="disco-import-ok">✓ {importNote}</span>}
               {importError && <span className="disco-import-err">{importError}</span>}
-              <Button variant="primary" onClick={importSelected} disabled={selectedCount === 0}>
+              <Button
+                variant="primary"
+                onClick={importSelected}
+                disabled={selectedCount === 0 || importing}
+              >
                 {selectedCount > 0
                   ? t('discovery.importSelectedCount', { count: selectedCount })
                   : t('discovery.importSelectedNone')}
@@ -1212,6 +1254,9 @@ function SeenOnNetworkCard({
   creds: CredentialSummary[];
 }) {
   const { t } = useTranslation('monitoring');
+  // The node an endpoint was seen by, and the one it already is, as names. `EntityName` renders a
+  // name it is handed and resolves nothing, so passing it the id showed a raw UUID.
+  const { nodeName } = useEntityNames();
   const [page, setPage] = useState<DiscoveredEndpointPage | null>(null);
   const [rows, setRows] = useState<Record<string, { profile_id: string; credential_id: string }>>(
     {},
@@ -1362,7 +1407,7 @@ function SeenOnNetworkCard({
                 <span className="mono muted">{e.mac ?? t('discovery.seen.noMac')}</span>
                 <span className="disco-seen-via">
                   {e.via_node ? (
-                    <EntityName name={e.via_node} id={e.via_node} />
+                    <EntityName name={nodeName(e.via_node)} id={e.via_node} />
                   ) : (
                     <span className="muted">{t('discovery.seen.viaGone')}</span>
                   )}
@@ -1370,41 +1415,62 @@ function SeenOnNetworkCard({
                     <span className="muted mono"> · {t('discovery.seen.port', { n: e.via_ifindex })}</span>
                   )}
                 </span>
-                <Select
-                  value={r.profile_id}
-                  disabled={!canConfig || busyId != null}
-                  onChange={(ev) =>
-                    setRows((cur) => ({ ...cur, [e.id]: { ...r, profile_id: ev.target.value } }))
-                  }
-                >
-                  <option value="">{t('discovery.none')}</option>
-                  {profiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-                <Select
-                  value={r.credential_id}
-                  disabled={!canConfig || busyId != null}
-                  onChange={(ev) =>
-                    setRows((cur) => ({ ...cur, [e.id]: { ...r, credential_id: ev.target.value } }))
-                  }
-                >
-                  <option value="">{t('discovery.none')}</option>
-                  {creds.map((cr) => (
-                    <option key={cr.id} value={cr.id}>
-                      {cr.name}
-                    </option>
-                  ))}
-                </Select>
-                <Button
-                  variant="primary"
-                  disabled={!canConfig || busyId != null}
-                  onClick={() => promote(e)}
-                >
-                  {t('discovery.seen.monitor')}
-                </Button>
+                {isUnmonitored(e) ? (
+                  <>
+                    <Select
+                      value={r.profile_id}
+                      disabled={!canConfig || busyId != null}
+                      onChange={(ev) =>
+                        setRows((cur) => ({ ...cur, [e.id]: { ...r, profile_id: ev.target.value } }))
+                      }
+                    >
+                      <option value="">{t('discovery.none')}</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Select
+                      value={r.credential_id}
+                      disabled={!canConfig || busyId != null}
+                      onChange={(ev) =>
+                        setRows((cur) => ({ ...cur, [e.id]: { ...r, credential_id: ev.target.value } }))
+                      }
+                    >
+                      <option value="">{t('discovery.none')}</option>
+                      {creds.map((cr) => (
+                        <option key={cr.id} value={cr.id}>
+                          {cr.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      variant="primary"
+                      disabled={!canConfig || busyId != null}
+                      onClick={() => promote(e)}
+                    >
+                      {t('discovery.seen.monitor')}
+                    </Button>
+                  </>
+                ) : (
+                  // Already a device node (ADR-139). The form and the button are not drawn: pressing
+                  // Monitor here could only be refused, and the list offers this row only when the
+                  // operator asked to see monitored endpoints too. Three cells, because the grid
+                  // has three tracks here — the node takes the profile's, the badge the button's.
+                  <>
+                    <span className="disco-dest-to">
+                      <span className="muted">{t('discovery.existing.as')}</span>{' '}
+                      {/* Non-null here: `isUnmonitored` is exactly `promoted_node_id == null`. */}
+                      <EntityName
+                        name={nodeName(e.promoted_node_id ?? '')}
+                        id={e.promoted_node_id ?? undefined}
+                      />
+                    </span>
+                    <span />
+                    <Badge tone="neutral">{t('discovery.badge.inTree')}</Badge>
+                  </>
+                )}
               </div>
             );
           })}

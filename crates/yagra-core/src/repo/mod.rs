@@ -196,6 +196,9 @@ pub struct NodeFacts {
 }
 
 /// One pre-validated node to bulk-import (borrows from the request to avoid copies).
+///
+/// The caller does **not** need to check whether the address is already monitored:
+/// [`NodeRepo::import_nodes`] skips it and says so (ADR-139).
 pub struct NewNode<'a> {
     pub name: &'a str,
     pub address: IpAddr,
@@ -209,6 +212,33 @@ pub struct NewNode<'a> {
     /// aborts the whole import transaction — which is why `api/discovery.rs` answers 400 rather
     /// than letting the insert answer 500.
     pub group: Option<Uuid>,
+}
+
+/// What [`NodeRepo::import_nodes`] did with a batch (ADR-139).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportOutcome {
+    /// Rows inserted.
+    pub created: u32,
+    /// Positions in the batch of the rows not inserted, ascending: a device node already stands at
+    /// that address, or an earlier row of the same batch has just put one there.
+    ///
+    /// Positions rather than addresses because a caller reporting on the batch needs to know
+    /// *which row* went — with one address listed twice, the address alone cannot say whether the
+    /// first row was created or both were refused.
+    pub skipped: Vec<usize>,
+}
+
+/// One device node standing at an address a caller asked about ([`NodeRepo::device_nodes_at`]).
+///
+/// `visible` is the caller's scope applied to the node's folder. A node the caller cannot see is
+/// still returned — importing its address is refused either way, so that the address is taken is
+/// disclosed regardless — and it is the API layer that withholds the name and id (ADR-139 決定 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressMatch {
+    pub address: IpAddr,
+    pub id: Uuid,
+    pub name: String,
+    pub visible: bool,
 }
 
 /// The folder groups a query is restricted to, or `None` for no restriction at all (ADR-014).

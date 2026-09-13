@@ -3968,11 +3968,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Progress and the candidates found so far",
+            "description": "Progress, the candidates found so far, and which of them are already device nodes",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScanStatus"
+                  "$ref": "#/components/schemas/ScanView"
                 }
               }
             }
@@ -28255,7 +28255,8 @@
         "type": "object",
         "description": "How many nodes an import created, and — when filing by IP range was asked for — how.",
         "required": [
-          "created"
+          "created",
+          "skipped_existing"
         ],
         "properties": {
           "created": {
@@ -28270,9 +28271,15 @@
               },
               {
                 "$ref": "#/components/schemas/PrefixFiling",
-                "description": "Present only when the request set `file_by_prefix`. `null` otherwise, which is every\nendpoint promotion and every scan import with the option off.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct, for two reasons. This type is\nshared with `import_discovered_endpoint`, where filing by range never happens and zeros\nwould be a lie; and with the field absent the wire shape is byte-identical to what every\nexisting client already parses. `created == matched + ambiguous + unmatched`."
+                "description": "Present when the request set `file_by_prefix`, or named a folder for any row itself. Absent\notherwise, which is every endpoint promotion and every scan import that decided nothing per\nrow.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct, for two reasons. This type is\nshared with `import_discovered_endpoint`, where filing by range never happens and zeros\nwould be a lie; and with the field absent the wire shape is what every existing client\nalready parses. It counts the rows that were **created** — a skipped row was filed nowhere.\nWith `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it\noff, only `chosen` is counted and the rest went to `group_id`."
               }
             ]
+          },
+          "skipped_existing": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows not created because a device node already stands at that address — or because an\nearlier row of the same request has just put one there. `created + skipped_existing` is the\nnumber of rows the request carried. `0` when nothing was skipped.\n\nA URL or DNS monitor at the same address does not count: those store a resolved address,\nand the device itself is still importable.",
+            "minimum": 0
           }
         }
       },
@@ -28722,6 +28729,49 @@
             "type": "number",
             "format": "double",
             "description": "bits/sec for throughput metrics, errors|discards per second otherwise."
+          }
+        }
+      },
+      "InventoryMatch": {
+        "type": "object",
+        "description": "One candidate address that is already a device node.\n\nA URL or DNS monitor pointed at the same address does not count: those store a resolved\naddress, and the device itself can still be imported.",
+        "required": [
+          "address",
+          "nodes",
+          "outside_scope"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The candidate's address, spelled exactly as the candidate spells it."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryNode"
+            },
+            "description": "The device nodes at this address that the caller can see. More than one means the address\nwas imported twice before this check existed; nothing is merged."
+          },
+          "outside_scope": {
+            "type": "boolean",
+            "description": "A device node in a folder the caller cannot see also stands here. Its name and id are\nwithheld. That the address is taken is not, because importing it is refused either way."
+          }
+        }
+      },
+      "InventoryNode": {
+        "type": "object",
+        "description": "A device node an address already belongs to.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -34043,6 +34093,29 @@
             "type": "string"
           }
         }
+      },
+      "ScanView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ScanStatus"
+          },
+          {
+            "type": "object",
+            "required": [
+              "existing"
+            ],
+            "properties": {
+              "existing": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/InventoryMatch"
+                },
+                "description": "The candidates already in the inventory, in candidate order. A candidate absent from this\nlist is not a device node. Read when the scan is read, so a node added or removed after\nthe sweep is reflected."
+              }
+            }
+          }
+        ],
+        "description": "A scan's status, and which of its candidates a device node already stands at.\n\nA view over the scan rather than a field on each candidate: the candidate type is also what the\ndiscovery-queue widget serves, where there is no scan read to hang the lookup on and the field\nwould always be empty — which would be untrue."
       },
       "SchedulerStatsSnapshot": {
         "type": "object",

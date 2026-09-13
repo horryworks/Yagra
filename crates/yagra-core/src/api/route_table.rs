@@ -523,7 +523,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "GET",
         "/api/v1/discovery/scan/:id",
-        ADMIN_CFG,
+        // `GroupFiltered` since ADR-139, where it used to claim `ADMIN_CFG`. The scan itself is the
+        // caller's own sweep and needs no scope, but the response now says which candidates are
+        // already device nodes — and a node outside the caller's folders is reported as taken with
+        // its name and id withheld. `manage_config` is Operator-held and an Operator can be scoped,
+        // the same reason `POST /discovery/import` gives below.
+        GroupFiltered,
         Tool("get_config"),
     ),
     (

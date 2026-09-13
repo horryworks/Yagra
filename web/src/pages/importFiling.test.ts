@@ -170,18 +170,39 @@ describe('destinationLabel', () => {
 describe('importMessage', () => {
   const filed = (m: number, a: number, u: number, c = 0): ImportResult => ({
     created: m + a + u + c,
+    skipped_existing: 0,
     filed: { matched: m, ambiguous: a, unmatched: u, chosen: c },
   });
 
   it('says nothing about filing when the option was off', () => {
-    expect(importMessage({ created: 3 }, 'Matsuyama Home')).toEqual([
+    expect(importMessage({ created: 3, skipped_existing: 0 }, 'Matsuyama Home')).toEqual([
       { key: 'discovery.msg.importedInto', args: { count: 3, site: 'Matsuyama Home' } },
     ]);
   });
 
   it('names the root when no folder was chosen and filing was off', () => {
-    expect(importMessage({ created: 3 }, null)).toEqual([
+    expect(importMessage({ created: 3, skipped_existing: 0 }, null)).toEqual([
       { key: 'discovery.msg.imported', args: { count: 3 } },
+    ]);
+  });
+
+  // ADR-139: an address already in the tree is skipped, and the operator is told how many.
+  it('adds how many were already in the tree, after what was created', () => {
+    expect(importMessage({ created: 3, skipped_existing: 2 }, null)).toEqual([
+      { key: 'discovery.msg.imported', args: { count: 3 } },
+      { key: 'discovery.msg.skippedExisting', args: { count: 2 } },
+    ]);
+    const withFiling = importMessage({ ...filed(1, 0, 1), skipped_existing: 1 }, null);
+    expect(withFiling.at(-1)).toEqual({ key: 'discovery.msg.skippedExisting', args: { count: 1 } });
+    expect(
+      importMessage(filed(2, 0, 0), null).some((p) => p.key === 'discovery.msg.skippedExisting'),
+    ).toBe(false);
+  });
+
+  // 🚨 "Imported 0 nodes — they will start polling shortly" would describe work that did not happen.
+  it('says only that they were already in the tree when nothing was created', () => {
+    expect(importMessage({ created: 0, skipped_existing: 4 }, 'Matsuyama Home')).toEqual([
+      { key: 'discovery.msg.skippedExisting', args: { count: 4 } },
     ]);
   });
 

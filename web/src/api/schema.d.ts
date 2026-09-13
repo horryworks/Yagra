@@ -7452,6 +7452,16 @@ export interface components {
             /** Format: int32 */
             created: number;
             filed?: null | components["schemas"]["PrefixFiling"];
+            /**
+             * Format: int32
+             * @description Rows not created because a device node already stands at that address — or because an
+             *     earlier row of the same request has just put one there. `created + skipped_existing` is the
+             *     number of rows the request carried. `0` when nothing was skipped.
+             *
+             *     A URL or DNS monitor at the same address does not count: those store a resolved address,
+             *     and the device itself is still importable.
+             */
+            skipped_existing: number;
         };
         /**
          * @description Exactly what the model was shown about the incident, so an answer can be checked rather than
@@ -7652,6 +7662,32 @@ export interface components {
              * @description bits/sec for throughput metrics, errors|discards per second otherwise.
              */
             value: number;
+        };
+        /**
+         * @description One candidate address that is already a device node.
+         *
+         *     A URL or DNS monitor pointed at the same address does not count: those store a resolved
+         *     address, and the device itself can still be imported.
+         */
+        InventoryMatch: {
+            /** @description The candidate's address, spelled exactly as the candidate spells it. */
+            address: string;
+            /**
+             * @description The device nodes at this address that the caller can see. More than one means the address
+             *     was imported twice before this check existed; nothing is merged.
+             */
+            nodes: components["schemas"]["InventoryNode"][];
+            /**
+             * @description A device node in a folder the caller cannot see also stands here. Its name and id are
+             *     withheld. That the address is taken is not, because importing it is refused either way.
+             */
+            outside_scope: boolean;
+        };
+        /** @description A device node an address already belongs to. */
+        InventoryNode: {
+            /** Format: uuid */
+            id: string;
+            name: string;
         };
         /** @description One number to lift out of a JSON response body and record as a metric. */
         JsonExtract: {
@@ -10203,6 +10239,21 @@ export interface components {
             /** Format: int32 */
             total: number;
             updated_at: string;
+        };
+        /**
+         * @description A scan's status, and which of its candidates a device node already stands at.
+         *
+         *     A view over the scan rather than a field on each candidate: the candidate type is also what the
+         *     discovery-queue widget serves, where there is no scan read to hang the lookup on and the field
+         *     would always be empty — which would be untrue.
+         */
+        ScanView: components["schemas"]["ScanStatus"] & {
+            /**
+             * @description The candidates already in the inventory, in candidate order. A candidate absent from this
+             *     list is not a device node. Read when the scan is read, so a node added or removed after
+             *     the sweep is reflected.
+             */
+            existing: components["schemas"]["InventoryMatch"][];
         };
         /** @description A point-in-time view of [`SchedulerStats`] for the API. */
         SchedulerStatsSnapshot: {
@@ -14688,13 +14739,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Progress and the candidates found so far */
+            /** @description Progress, the candidates found so far, and which of them are already device nodes */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScanStatus"];
+                    "application/json": components["schemas"]["ScanView"];
                 };
             };
             /** @description No valid bearer token */

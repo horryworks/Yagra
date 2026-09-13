@@ -151,13 +151,23 @@ pub(crate) struct PrefixFiling {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ImportResult {
     created: u32,
-    /// Present only when the request set `file_by_prefix`. `null` otherwise, which is every
-    /// endpoint promotion and every scan import with the option off.
+    /// Rows not created because a device node already stands at that address — or because an
+    /// earlier row of the same request has just put one there. `created + skipped_existing` is the
+    /// number of rows the request carried. `0` when nothing was skipped.
+    ///
+    /// A URL or DNS monitor at the same address does not count: those store a resolved address,
+    /// and the device itself is still importable.
+    skipped_existing: u32,
+    /// Present when the request set `file_by_prefix`, or named a folder for any row itself. Absent
+    /// otherwise, which is every endpoint promotion and every scan import that decided nothing per
+    /// row.
     ///
     /// ⚠️ `skip_serializing_if` rather than a zero-filled struct, for two reasons. This type is
     /// shared with `import_discovered_endpoint`, where filing by range never happens and zeros
-    /// would be a lie; and with the field absent the wire shape is byte-identical to what every
-    /// existing client already parses. `created == matched + ambiguous + unmatched`.
+    /// would be a lie; and with the field absent the wire shape is what every existing client
+    /// already parses. It counts the rows that were **created** — a skipped row was filed nowhere.
+    /// With `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it
+    /// off, only `chosen` is counted and the rest went to `group_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
     filed: Option<PrefixFiling>,
 }
@@ -302,11 +312,120 @@ async fn start_discovery_scan(
     Ok((StatusCode::ACCEPTED, Json(StartedScan { scan_id })))
 }
 
+/// A scan's status, and which of its candidates a device node already stands at.
+///
+/// A view over the scan rather than a field on each candidate: the candidate type is also what the
+/// discovery-queue widget serves, where there is no scan read to hang the lookup on and the field
+/// would always be empty — which would be untrue.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct ScanView {
+    #[serde(flatten)]
+    status: crate::discovery::ScanStatus,
+    /// The candidates already in the inventory, in candidate order. A candidate absent from this
+    /// list is not a device node. Read when the scan is read, so a node added or removed after
+    /// the sweep is reflected.
+    existing: Vec<InventoryMatch>,
+}
+
+/// One candidate address that is already a device node.
+///
+/// A URL or DNS monitor pointed at the same address does not count: those store a resolved
+/// address, and the device itself can still be imported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct InventoryMatch {
+    /// The candidate's address, spelled exactly as the candidate spells it.
+    address: String,
+    /// The device nodes at this address that the caller can see. More than one means the address
+    /// was imported twice before this check existed; nothing is merged.
+    nodes: Vec<InventoryNode>,
+    /// A device node in a folder the caller cannot see also stands here. Its name and id are
+    /// withheld. That the address is taken is not, because importing it is refused either way.
+    outside_scope: bool,
+}
+
+/// A device node an address already belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct InventoryNode {
+    id: Uuid,
+    name: String,
+}
+
+/// Fold what the inventory holds into one entry per candidate address (ADR-139 決定 2/3).
+///
+/// Pure, so the part a test can get wrong without a database — the join on the parsed address, the
+/// withheld name, one entry for a candidate listed twice — is tested without one.
+fn inventory_matches(
+    candidates: &[crate::discovery::Candidate],
+    found: &[crate::repo::AddressMatch],
+) -> Vec<InventoryMatch> {
+    let mut by_address: HashMap<IpAddr, Vec<&crate::repo::AddressMatch>> = HashMap::new();
+    for f in found {
+        by_address.entry(f.address).or_default().push(f);
+    }
+    let mut seen: HashSet<IpAddr> = HashSet::new();
+    let mut out = Vec::new();
+    for c in candidates {
+        // Joined on the parsed address, never the string: `::1` and `0:0:0:0:0:0:0:1` are one host.
+        let Ok(addr) = c.address.parse::<IpAddr>() else {
+            continue;
+        };
+        if !seen.insert(addr) {
+            continue;
+        }
+        let Some(hits) = by_address.get(&addr) else {
+            continue;
+        };
+        out.push(InventoryMatch {
+            address: c.address.clone(),
+            nodes: hits
+                .iter()
+                .filter(|h| h.visible)
+                .map(|h| InventoryNode {
+                    id: h.id,
+                    name: h.name.clone(),
+                })
+                .collect(),
+            outside_scope: hits.iter().any(|h| !h.visible),
+        });
+    }
+    out
+}
+
+/// One scan as the caller may see it, or `None` for a scan this core does not hold — the seam REST
+/// and MCP share, so the two surfaces cannot answer differently (ADR-042 read parity).
+pub(crate) async fn scan_view(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    id: Uuid,
+) -> ApiResult<Option<ScanView>> {
+    let Some(status) = admin.discovery.get(id) else {
+        return Ok(None);
+    };
+    let addresses: Vec<IpAddr> = status
+        .candidates
+        .iter()
+        .filter_map(|c| c.address.parse().ok())
+        .collect();
+    let found = admin
+        .repo
+        .device_nodes_at(&addresses, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match scan candidates to device nodes",
+                "failed to read the inventory",
+            )
+        })?;
+    let existing = inventory_matches(&status.candidates, &found);
+    Ok(Some(ScanView { status, existing }))
+}
+
 #[utoipa::path(
     get, path = "/api/v1/discovery/scan/{id}", tag = "discovery",
     params(("id" = Uuid, Path, description = "Scan id returned when the sweep was accepted")),
     responses(
-        (status = 200, description = "Progress and the candidates found so far", body = crate::discovery::ScanStatus),
+        (status = 200, description = "Progress, the candidates found so far, and which of them are already device nodes", body = ScanView),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such scan", body = super::error::ErrorBody),
@@ -315,12 +434,12 @@ async fn start_discovery_scan(
 )]
 async fn get_discovery_scan(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<crate::discovery::ScanStatus>> {
-    admin
-        .discovery
-        .get(id)
+) -> ApiResult<Json<ScanView>> {
+    scan_view(&admin, &scope, id)
+        .await?
         .map(Json)
         .ok_or_else(|| ApiError::not_found("scan_not_found", format!("no scan {id}")))
 }
@@ -615,7 +734,36 @@ async fn import_discovered(
         .map(|(_, row)| row.address)
         .collect();
 
-    let filed = if body.file_by_prefix {
+    /// Which part of the filing report one row counts towards.
+    ///
+    /// Decided per row before the insert and **counted after it** (ADR-139): a row the import skips
+    /// because its address is already a device node was filed nowhere, and counting the fold
+    /// instead would report it as filed.
+    enum Bucket {
+        /// The operator named this row's folder.
+        Chosen,
+        /// One folder's range claimed it.
+        Matched,
+        /// Two folders claimed it equally well; it fell back.
+        Ambiguous,
+        /// No range claimed it; it fell back.
+        Unmatched,
+        /// The rule was off, so nothing was decided about it.
+        Undecided,
+    }
+    let mut buckets: Vec<Bucket> = body
+        .nodes
+        .iter()
+        .map(|n| {
+            if n.group_id.is_some() {
+                Bucket::Chosen
+            } else {
+                Bucket::Undecided
+            }
+        })
+        .collect();
+
+    if body.file_by_prefix {
         let addrs: Vec<IpAddr> = prepared
             .iter()
             .filter(|n| !chosen.contains(&n.address))
@@ -638,40 +786,61 @@ async fn import_discovered(
             .iter()
             .map(|(addr, group, _)| (*addr, *group))
             .collect();
-        for row in prepared.iter_mut() {
+        let contested: HashSet<IpAddr> = fold.ambiguous.iter().map(|(addr, _)| *addr).collect();
+        for (row, bucket) in prepared.iter_mut().zip(buckets.iter_mut()) {
             // `chosen` rows keep what the operator gave them; nothing here can reach them, because
             // their addresses were never handed to the matcher.
+            if matches!(bucket, Bucket::Chosen) {
+                continue;
+            }
             if let Some(group) = by_address.get(&row.address) {
                 row.group = Some(*group);
+                *bucket = Bucket::Matched;
+            } else if contested.contains(&row.address) {
+                *bucket = Bucket::Ambiguous;
+            } else {
+                *bucket = Bucket::Unmatched;
             }
         }
-        Some(PrefixFiling {
-            matched: fold.matched.len() as u32,
-            ambiguous: fold.ambiguous.len() as u32,
-            unmatched: fold.unmatched.len() as u32,
-            chosen: chosen.len() as u32,
-        })
-    } else if !chosen.is_empty() {
-        // The rule is off but the operator still directed some rows. Reporting that is the honest
-        // answer; `None` here would say "nothing was decided per row", which is untrue.
-        Some(PrefixFiling {
-            matched: 0,
-            ambiguous: 0,
-            unmatched: 0,
-            chosen: chosen.len() as u32,
-        })
-    } else {
-        None
-    };
+    }
 
-    let created = admin.repo.import_nodes(&prepared).await.map_err(|e| {
+    let outcome = admin.repo.import_nodes(&prepared).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "import discovered nodes",
             "failed to import discovered nodes",
         )
     })?;
-    Ok((StatusCode::CREATED, Json(ImportResult { created, filed })))
+    let skipped: HashSet<usize> = outcome.skipped.iter().copied().collect();
+    let mut counts = PrefixFiling {
+        matched: 0,
+        ambiguous: 0,
+        unmatched: 0,
+        chosen: 0,
+    };
+    for (i, bucket) in buckets.iter().enumerate() {
+        if skipped.contains(&i) {
+            continue;
+        }
+        match bucket {
+            Bucket::Chosen => counts.chosen += 1,
+            Bucket::Matched => counts.matched += 1,
+            Bucket::Ambiguous => counts.ambiguous += 1,
+            Bucket::Unmatched => counts.unmatched += 1,
+            Bucket::Undecided => {}
+        }
+    }
+    // Reported when the rule was asked for, and also when it was off but the operator still
+    // directed some rows — `None` there would say "nothing was decided per row", which is untrue.
+    let filed = (body.file_by_prefix || !chosen.is_empty()).then_some(counts);
+    Ok((
+        StatusCode::CREATED,
+        Json(ImportResult {
+            created: outcome.created,
+            skipped_existing: u32::try_from(outcome.skipped.len()).unwrap_or(u32::MAX),
+            filed,
+        }),
+    ))
 }
 
 /// Body for the import preview: the candidate addresses about to be imported.
@@ -1127,7 +1296,7 @@ async fn import_discovered_endpoint(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(address.as_str());
-    let created = admin
+    let outcome = admin
         .repo
         .import_nodes(&[crate::repo::NewNode {
             name,
@@ -1155,15 +1324,29 @@ async fn import_discovered_endpoint(
         })?;
     // Runs the same reconcile the sweep does rather than stamping the column here — one rule, one
     // place. Best-effort: the sweep repeats it, so a failure costs a stale row for one cycle.
+    //
+    // Before the 409 below as well as after a success: a skip means the row's
+    // `promoted_node_id` was stale (the sweep had not yet seen a node added by hand), and
+    // reconciling is what stops the list offering it again.
     if let Err(e) = admin.discovered.reconcile_promotions().await {
         tracing::warn!(error = %e, "reconciling the promoted endpoint failed");
+    }
+    // The repository is the authority, not the column checked above (ADR-139 決定 5): the column
+    // is only as fresh as the last sweep, and the insert is where the existing-address read runs
+    // under the import lock.
+    if !outcome.skipped.is_empty() {
+        return Err(ApiError::conflict(
+            "already_monitored",
+            format!("{} is already a monitored node", endpoint.ip),
+        ));
     }
     Ok((
         StatusCode::CREATED,
         // Filing by IP range is a scan-import concept: this promotes one address a router
         // mentioned, with no sweep and no folder behind it (see `group: None` above).
         Json(ImportResult {
-            created,
+            created: outcome.created,
+            skipped_existing: 0,
             filed: None,
         }),
     ))
@@ -1936,5 +2119,267 @@ mod tests {
             0,
             "the good row must not have landed either"
         );
+    }
+
+    fn candidate(address: &str) -> crate::discovery::Candidate {
+        crate::discovery::Candidate {
+            address: address.to_owned(),
+            reachable: true,
+            sysdescr: None,
+            sysname: None,
+            sysobjectid: None,
+            suggested_profile_id: None,
+            vendor: None,
+            model: None,
+            matched_credential_id: None,
+        }
+    }
+
+    fn device(address: &str, name: &str, visible: bool) -> crate::repo::AddressMatch {
+        crate::repo::AddressMatch {
+            address: address.parse().expect("address"),
+            id: Uuid::new_v4(),
+            name: name.to_owned(),
+            visible,
+        }
+    }
+
+    /// The join names what the caller may see, withholds the rest, and answers each address once
+    /// (ADR-139 決定 2/3). The not-matched candidate is asserted absent, so a join that listed every
+    /// candidate could not pass.
+    #[test]
+    fn inventory_matches_names_what_the_caller_may_see_and_withholds_the_rest() {
+        let visible = device("10.0.0.1", "core-sw01", true);
+        let dup_a = device("10.0.0.4", "dup-a", true);
+        let dup_b = device("10.0.0.4", "dup-b", true);
+        // Spelled differently from the candidate on purpose: the join is on the parsed address.
+        let v6 = device("0:0:0:0:0:0:0:1", "loopback", true);
+        let found = vec![
+            visible.clone(),
+            device("10.0.0.2", "hidden", false),
+            dup_a.clone(),
+            dup_b.clone(),
+            device("10.0.0.4", "hidden-dup", false),
+            v6.clone(),
+        ];
+        let candidates = [
+            candidate("10.0.0.1"),
+            candidate("10.0.0.2"),
+            candidate("10.0.0.3"),
+            candidate("10.0.0.4"),
+            candidate("::1"),
+            candidate("10.0.0.1"),
+            candidate("not-an-address"),
+        ];
+        let node = |m: &crate::repo::AddressMatch| InventoryNode {
+            id: m.id,
+            name: m.name.clone(),
+        };
+        assert_eq!(
+            inventory_matches(&candidates, &found),
+            vec![
+                InventoryMatch {
+                    address: "10.0.0.1".to_owned(),
+                    nodes: vec![node(&visible)],
+                    outside_scope: false,
+                },
+                InventoryMatch {
+                    address: "10.0.0.2".to_owned(),
+                    nodes: vec![],
+                    outside_scope: true,
+                },
+                InventoryMatch {
+                    address: "10.0.0.4".to_owned(),
+                    nodes: vec![node(&dup_a), node(&dup_b)],
+                    outside_scope: true,
+                },
+                InventoryMatch {
+                    address: "::1".to_owned(),
+                    nodes: vec![node(&v6)],
+                    outside_scope: false,
+                },
+            ]
+        );
+    }
+
+    /// The view is the scan's own fields plus `existing`, flat — so a client that read the scan
+    /// before this existed reads it unchanged — and a withheld node carries no id or name.
+    #[test]
+    fn a_scan_view_is_the_scan_with_existing_beside_it() {
+        let view = ScanView {
+            status: crate::discovery::ScanStatus {
+                scan_id: Uuid::nil(),
+                done: true,
+                state: crate::discovery::DiscoveryScanState::Done,
+                probed: 2,
+                total: 2,
+                scanning: None,
+                started_at: "2026-09-13T00:00:00+00:00".to_owned(),
+                updated_at: "2026-09-13T00:00:00+00:00".to_owned(),
+                pool: None,
+                candidates: vec![candidate("10.0.0.2")],
+            },
+            existing: vec![InventoryMatch {
+                address: "10.0.0.2".to_owned(),
+                nodes: vec![],
+                outside_scope: true,
+            }],
+        };
+        let json = serde_json::to_value(&view).expect("serialize");
+        assert_eq!(json["state"], "done");
+        assert_eq!(json["candidates"][0]["address"], "10.0.0.2");
+        assert_eq!(
+            json["existing"],
+            serde_json::json!([{ "address": "10.0.0.2", "nodes": [], "outside_scope": true }])
+        );
+        assert!(json.get("status").is_none(), "the scan must be flattened");
+    }
+
+    /// An import skips an address a device node already stands at, lands the rest, and says how
+    /// many it skipped — and a request whose every row is skipped is still 201 (ADR-139 決定 4).
+    ///
+    /// The rows are read back, not only the counts: an import that reported a skip and inserted
+    /// the duplicate anyway would pass a status-and-body check.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_import_skips_an_address_that_is_already_a_device_node(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        crate::pgtest::node_at(
+            &pool,
+            "core-sw01",
+            "192.168.1.10".parse().expect("addr"),
+            None,
+        )
+        .await;
+
+        let batch = serde_json::json!({
+            "nodes": [
+                { "address": "192.168.1.10", "name": "again" },
+                { "address": "192.168.1.11", "name": "new" },
+            ],
+        });
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(batch.clone()),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(body["created"], 1, "{body}");
+        assert_eq!(body["skipped_existing"], 1, "{body}");
+        assert!(
+            body.get("filed").is_none(),
+            "nothing was filed per row: {body}"
+        );
+        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM nodes ORDER BY name")
+            .fetch_all(&pool)
+            .await
+            .expect("names");
+        assert_eq!(names, vec!["core-sw01".to_owned(), "new".to_owned()]);
+
+        let (status, body) = send(&st, "POST", "/api/v1/discovery/import", &tok, Some(batch)).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::CREATED,
+            "a request whose every row is already in the tree is still accepted: {body}"
+        );
+        assert_eq!(body["created"], 0, "{body}");
+        assert_eq!(body["skipped_existing"], 2, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 2);
+    }
+
+    /// The filing report counts the rows that were created. A skipped row was filed nowhere, so
+    /// counting the range match instead would report a device filed that never landed.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_filing_report_counts_only_the_rows_created(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let site = crate::pgtest::group(&pool, "Matsuyama Home").await;
+        crate::pgtest::prefix(&pool, site, "192.168.1.0/24").await;
+        crate::pgtest::node_at(
+            &pool,
+            "core-sw01",
+            "192.168.1.10".parse().expect("addr"),
+            Some(site),
+        )
+        .await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(serde_json::json!({
+                "file_by_prefix": true,
+                "nodes": [
+                    { "address": "192.168.1.10", "name": "again" },
+                    { "address": "192.168.1.11", "name": "new" },
+                    { "address": "10.99.0.1", "name": "elsewhere" },
+                ],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        assert_eq!(body["created"], 2, "{body}");
+        assert_eq!(body["skipped_existing"], 1, "{body}");
+        assert_eq!(
+            body["filed"],
+            serde_json::json!({ "matched": 1, "ambiguous": 0, "unmatched": 1, "chosen": 0 }),
+            "created == matched + ambiguous + unmatched + chosen"
+        );
+    }
+
+    /// Promoting an endpoint whose address a node was added at by hand since the last sweep is
+    /// refused with 409, and the row is reconciled on the way out (ADR-139 決定 5). The column
+    /// still said "unmonitored"; the repository is what knew better.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn promoting_an_endpoint_a_node_now_stands_at_is_refused_and_reconciled(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let endpoint: Uuid = sqlx::query_scalar(
+            "INSERT INTO l3_discovered (ip) VALUES ('192.168.70.10') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("endpoint");
+        let node = crate::pgtest::node_at(
+            &pool,
+            "added-by-hand",
+            "192.168.70.10".parse().expect("addr"),
+            None,
+        )
+        .await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{endpoint}/import"),
+            &tok,
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "nodes").await,
+            1,
+            "nothing was added"
+        );
+        let promoted: Option<Uuid> =
+            sqlx::query_scalar("SELECT promoted_node_id FROM l3_discovered WHERE id = $1")
+                .bind(endpoint)
+                .fetch_one(&pool)
+                .await
+                .expect("the endpoint row");
+        assert_eq!(promoted, Some(node), "the stale row was not reconciled");
     }
 }

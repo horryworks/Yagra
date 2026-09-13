@@ -163,6 +163,18 @@ export function importMessage(
   result: ImportResult,
   sitePath: string | null,
 ): ImportMessagePart[] {
+  // Addresses a device node already stood at were not added (ADR-139). Said as its own sentence,
+  // and **on its own** when nothing was created — "Imported 0 nodes — they will start polling
+  // shortly" over a request the server skipped entirely would describe work that did not happen.
+  const skipped = result.skipped_existing;
+  const skippedPart: ImportMessagePart[] =
+    skipped > 0 ? [{ key: 'discovery.msg.skippedExisting', args: { count: skipped } }] : [];
+  if (result.created === 0 && skipped > 0) return skippedPart;
+  return [...filingMessage(result, sitePath), ...skippedPart];
+}
+
+/** The sentences about what was created and where it went. */
+function filingMessage(result: ImportResult, sitePath: string | null): ImportMessagePart[] {
   const created = result.created;
   const filed = result.filed;
   if (!filed) {

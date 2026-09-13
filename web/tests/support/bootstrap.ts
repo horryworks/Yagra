@@ -305,4 +305,22 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     for (const row of body) row.revoked_at = null;
     return body as unknown as Json;
   },
+
+  // ADR-139. The generator answers a list with one item, so a scan comes back with one candidate
+  // and one "already in the tree" match — and nothing ties the match to the candidate, or keeps
+  // them apart. Either way the walk sees only one kind of row: every row greyed out (the checkbox,
+  // name input and pickers of an importable row never rendered), or no greyed row at all (the badge
+  // and the link to the node never measured). So two candidates, and the match names the first.
+  '/api/v1/discovery/scan/{id}': (url) => {
+    const body = defaultBodyFor(url.pathname) as unknown as Schemas['ScanView'];
+    const [first] = body.candidates;
+    body.candidates = [
+      first,
+      { ...first, address: '192.0.2.20', sysname: `${MOCK_PREFIX}importable` },
+    ];
+    body.existing = body.existing
+      .slice(0, 1)
+      .map((m) => ({ ...m, address: first.address, outside_scope: false }));
+    return body as unknown as Json;
+  },
 };

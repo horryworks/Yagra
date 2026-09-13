@@ -348,9 +348,13 @@
     "importSelectedCount": "Import {{count}} selected",
     "importSelectedNone": "Import selected",
     "badge": {
-      "imported": "imported",
+      "inTree": "In tree",
       "ping": "ping",
       "noPing": "no ping"
+    },
+    "existing": {
+      "as": "Monitored as",
+      "outsideScope": "Monitored in a folder you can't see"
     },
     "cols": {
       "address": "Address",

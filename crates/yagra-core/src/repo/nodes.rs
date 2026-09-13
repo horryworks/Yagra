@@ -7,7 +7,7 @@
 //! their whole life and read a **per-node column**, so they belong beside the other node
 //! reads — see [`super`] for the rule and why it is the SQL that decides.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
 use sqlx::Row;
@@ -286,12 +286,119 @@ impl NodeRepo {
         Ok(id)
     }
 
-    /// Bulk-import nodes **atomically**: all rows insert in a single transaction, so a failure
-    /// partway (e.g. a duplicate name hitting the unique constraint) rolls back the whole batch
-    /// instead of leaving a partial import. Returns how many were inserted. Caller pre-validates.
-    pub async fn import_nodes(&self, nodes: &[NewNode<'_>]) -> anyhow::Result<u32> {
+    /// "This `nodes n` row is a **device**": no URL monitor and no DNS monitor is bound to it
+    /// (ADR-139 決定 1). Interpolated after an `AND`; the row must be aliased `n`.
+    ///
+    /// 🚨 **Why an address match alone is wrong.** A URL monitor stores the address its host
+    /// resolved to, and a DNS monitor the resolver it asks (`api/checks.rs::display_address`). A
+    /// router whose web page is URL-checked therefore "stands at" its own address twice, and a rule
+    /// matching on the address alone would refuse to import the router itself — with no way round
+    /// it. A Meraki device is a device and does count.
+    ///
+    /// One copy, read by [`Self::device_nodes_at`], [`Self::import_nodes`] and
+    /// `DiscoveredRepo::reconcile_promotions`, so the Discovery screen's two tables cannot
+    /// disagree about the same address.
+    pub(crate) const DEVICE_NODE_PREDICATE: &'static str =
+        "NOT EXISTS (SELECT 1 FROM url_checks uc WHERE uc.node_id = n.id) \
+         AND NOT EXISTS (SELECT 1 FROM dns_checks dc WHERE dc.node_id = n.id)";
+
+    /// The advisory lock [`Self::import_nodes`] serialises on.
+    ///
+    /// 🚨 **Never [`crate::leader`]'s key.** The leader holds that one as a *session* lock for its
+    /// whole life, so an import taking it on the leader core would wait forever. Transaction-scoped
+    /// (`pg_advisory_xact_lock`), so a failed import cannot leave it held.
+    const IMPORT_LOCK_KEY: i64 = 0x5941_4752_494d_5054;
+
+    /// The device nodes standing at any of `addresses`, each marked with whether `groups` can see it
+    /// (ADR-139 決定 2/3). Several rows for one address mean duplicates an earlier release created.
+    ///
+    /// The scope is **projected, not filtered**: a node outside the caller's folders is still
+    /// returned, because the import refuses its address either way. Withholding its name and id is
+    /// the API layer's decision, taken on `visible`.
+    pub async fn device_nodes_at(
+        &self,
+        addresses: &[IpAddr],
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<AddressMatch>> {
+        if addresses.is_empty() {
+            return Ok(Vec::new());
+        }
+        let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        let sql = format!(
+            "SELECT host(n.address) AS address, n.id, n.name, {scope} AS visible \
+             FROM nodes n \
+             WHERE n.address = ANY($2::text[]::inet[]) AND {device} \
+             ORDER BY n.name, n.id",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let rows = sqlx::query(&sql)
+            .bind(Self::scope_bind(groups))
+            .bind(&text)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|row| {
+                let address: String = row.try_get("address")?;
+                Ok(AddressMatch {
+                    address: address.parse().map_err(|e| {
+                        anyhow::anyhow!("node has unparseable address {address:?}: {e}")
+                    })?,
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    visible: row.try_get("visible")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Bulk-import nodes **atomically**, skipping every address a device node already stands at
+    /// (ADR-139). All rows insert in a single transaction, so a failure partway rolls back the whole
+    /// batch instead of leaving a partial import. Caller pre-validates.
+    ///
+    /// **Skipped, not refused.** An address that is already a device node — or that an earlier row
+    /// of this same batch has just made one — is reported in [`ImportOutcome::skipped`] and the rest
+    /// of the batch still lands. Refusing the whole request because somebody added one device a few
+    /// seconds earlier would throw away the other forty-nine.
+    ///
+    /// The existing-address read and the inserts sit under [`Self::IMPORT_LOCK_KEY`], so two
+    /// concurrent imports of one address leave one row. ⚠️ **Only imports are serialised**: a
+    /// hand-added node, a URL/DNS monitor, a Meraki sync or a configuration bundle can still race
+    /// one, briefly (ADR-139 決定 8). `nodes.address` carries no `UNIQUE`, deliberately — a
+    /// deployment that already holds duplicates would fail that migration and not start.
+    pub async fn import_nodes(&self, nodes: &[NewNode<'_>]) -> anyhow::Result<ImportOutcome> {
         let mut tx = self.pool.begin().await?;
-        for n in nodes {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(Self::IMPORT_LOCK_KEY)
+            .execute(&mut *tx)
+            .await?;
+        // One read for the whole batch, inside the lock: a per-row `NOT EXISTS` would be up to 1024
+        // statements, and reading before the lock would let two imports both see an address free.
+        let wanted: Vec<String> = nodes.iter().map(|n| n.address.to_string()).collect();
+        let taken_sql = format!(
+            "SELECT DISTINCT host(n.address) AS address FROM nodes n \
+             WHERE n.address = ANY($1::text[]::inet[]) AND {}",
+            Self::DEVICE_NODE_PREDICATE
+        );
+        let mut taken: HashSet<IpAddr> = HashSet::new();
+        for row in sqlx::query(&taken_sql)
+            .bind(&wanted)
+            .fetch_all(&mut *tx)
+            .await?
+        {
+            let address: String = row.try_get("address")?;
+            if let Ok(addr) = address.parse::<IpAddr>() {
+                taken.insert(addr);
+            }
+        }
+        let mut outcome = ImportOutcome::default();
+        for (i, n) in nodes.iter().enumerate() {
+            // `insert` returning false is the second row of this batch at an address the first one
+            // has just taken — the same fact as an address that was taken before the call.
+            if !taken.insert(n.address) {
+                outcome.skipped.push(i);
+                continue;
+            }
             // `sort_order` is computed the same way `set_node_group` does, rather than left at
             // the column default: every imported node would otherwise share one value and sort
             // ahead of whatever the operator had already placed in that folder. Inside the
@@ -313,9 +420,10 @@ impl NodeRepo {
             .bind(n.group)
             .execute(&mut *tx)
             .await?;
+            outcome.created += 1;
         }
         tx.commit().await?;
-        Ok(nodes.len() as u32)
+        Ok(outcome)
     }
 
     /// Apply one "Edit node" save. Returns whether the node exists.
@@ -1447,55 +1555,210 @@ mod tests {
         assert_eq!(orders.get(&second).copied(), Some(20.0));
     }
 
-    /// 🚨 An import creates a row per entry, **even for an address already monitored**.
+    /// A pre-validated row at `addr`, for the import tests below.
+    fn new_node<'a>(name: &'a str, addr: &str) -> NewNode<'a> {
+        NewNode {
+            name,
+            address: addr.parse().expect("address"),
+            profile: None,
+            credential: None,
+            vendor: None,
+            model: None,
+            group: None,
+        }
+    }
+
+    /// Importing the same sweep twice creates each address **once**, and says what it skipped.
     ///
-    /// Written expecting the opposite, and pinned to what is true. The statement carries no
-    /// `ON CONFLICT` and `nodes.address` has no `UNIQUE`, so nothing between
-    /// `POST /api/v1/discovery/import` and the table refuses a second import of the same sweep.
-    ///
-    /// What that costs is not cosmetic: [`NodeRepo::address_map`] is a `HashMap` keyed by
-    /// address, and it is how a syslog line and a flow record find the node they belong to. With
-    /// two nodes at one address, one of them silently wins and the other is never attributed.
-    ///
-    /// Behaviour is unchanged here on purpose — de-duplicating is a decision about *which*
-    /// existing node an import should adopt, and about what the UI should offer instead.
+    /// 🚨 This test used to assert the opposite — four rows — and said so in its doc: ADR-115
+    /// 決定 3 pinned the duplicate rather than deciding what to do about it. ADR-139 decided. The
+    /// cost it names is still the reason: [`NodeRepo::address_map`] is keyed by address, so of two
+    /// nodes at one address one is silently never attributed a syslog line or a flow.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn importing_the_same_addresses_twice_creates_them_once(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
         let rows = vec![
-            NewNode {
-                name: "imported-1",
-                address: "10.9.0.1".parse().expect("address"),
-                profile: None,
-                credential: None,
-                vendor: None,
-                model: None,
-                group: None,
-            },
-            NewNode {
-                name: "imported-2",
-                address: "10.9.0.2".parse().expect("address"),
-                profile: None,
-                credential: None,
-                vendor: None,
-                model: None,
-                group: None,
-            },
+            new_node("imported-1", "10.9.0.1"),
+            new_node("imported-2", "10.9.0.2"),
         ];
-        assert_eq!(repo.import_nodes(&rows).await.expect("first"), 2);
+        let first = repo.import_nodes(&rows).await.expect("first");
+        assert_eq!(first.created, 2);
+        assert!(first.skipped.is_empty(), "{first:?}");
         assert_eq!(pgtest::rows(&pool, "nodes").await, 2);
 
-        assert_eq!(repo.import_nodes(&rows).await.expect("second"), 2);
-        assert_eq!(
-            pgtest::rows(&pool, "nodes").await,
-            4,
-            "importing the same addresses twice no longer duplicates them — good, but the doc\n\
-             above and `address_map`'s callers were written against the old behaviour"
-        );
-        // And this is the consequence, stated as an assertion rather than as prose: two nodes,
-        // one entry in the map every attribution path reads.
+        let second = repo.import_nodes(&rows).await.expect("second");
+        assert_eq!(second.created, 0);
+        assert_eq!(second.skipped, vec![0, 1], "both rows, by position");
+        assert_eq!(pgtest::rows(&pool, "nodes").await, 2, "nothing duplicated");
         assert_eq!(repo.address_map().await.expect("map").len(), 2);
+    }
+
+    /// A URL or DNS monitor at an address does not stop the device there from being imported —
+    /// both store a resolved address — while a device node at an address does (ADR-139 決定 1).
+    ///
+    /// Both directions, so a predicate that refused everything, or nothing, cannot pass.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_url_or_dns_monitor_at_an_address_does_not_block_the_device(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let ip = |s: &str| s.parse::<IpAddr>().expect("address");
+        let page = pgtest::node_at(&pool, "web-page", ip("10.9.4.1"), None).await;
+        sqlx::query("INSERT INTO url_checks (node_id, url) VALUES ($1, 'https://10.9.4.1/')")
+            .bind(page)
+            .execute(&pool)
+            .await
+            .expect("url check");
+        let resolver = pgtest::node_at(&pool, "resolver", ip("10.9.4.2"), None).await;
+        sqlx::query(
+            "INSERT INTO dns_checks (node_id, name, resolver_ip) \
+             VALUES ($1, 'example.com', '10.9.4.2')",
+        )
+        .bind(resolver)
+        .execute(&pool)
+        .await
+        .expect("dns check");
+        pgtest::node_at(&pool, "switch", ip("10.9.4.3"), None).await;
+
+        let seen = repo
+            .device_nodes_at(&[ip("10.9.4.1"), ip("10.9.4.2"), ip("10.9.4.3")], None)
+            .await
+            .expect("read");
+        let names: Vec<&str> = seen.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["switch"], "only the device node counts");
+
+        let outcome = repo
+            .import_nodes(&[
+                new_node("router", "10.9.4.1"),
+                new_node("dns-box", "10.9.4.2"),
+                new_node("switch-again", "10.9.4.3"),
+            ])
+            .await
+            .expect("import");
+        assert_eq!(outcome.created, 2, "{outcome:?}");
+        assert_eq!(outcome.skipped, vec![2]);
+    }
+
+    /// One batch naming an address twice lands it once — the second row meets the node the first
+    /// row has just created, which is the same fact as meeting one that was there before the call.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_batch_naming_one_address_twice_creates_it_once(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let outcome = repo
+            .import_nodes(&[
+                new_node("twin-1", "10.9.1.1"),
+                new_node("other", "10.9.1.2"),
+                new_node("twin-2", "10.9.1.1"),
+            ])
+            .await
+            .expect("import");
+        assert_eq!(outcome.created, 2);
+        assert_eq!(outcome.skipped, vec![2], "the third row, not the first");
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM nodes WHERE address = '10.9.1.1'::inet")
+                .fetch_all(&pool)
+                .await
+                .expect("names");
+        assert_eq!(names, vec!["twin-1".to_owned()], "the first row wins");
+    }
+
+    /// Two imports of one address racing each other leave one row: the existing-address read and
+    /// the insert sit under one advisory lock.
+    ///
+    /// ⚠️ This passes when the lock works *and* when the two happen not to overlap. It cannot fail
+    /// for a lock that is present; what it guards against is the lock being removed, which leaves
+    /// both reads seeing the address free often enough to trip it across the loop.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn two_imports_of_one_address_at_once_leave_one_row(pool: sqlx::PgPool) {
+        for i in 0..20u8 {
+            let addr = format!("10.9.2.{i}");
+            let a = pgtest::repo(pool.clone());
+            let b = pgtest::repo(pool.clone());
+            let (addr_a, addr_b) = (addr.clone(), addr.clone());
+            let ta = tokio::spawn(async move {
+                a.import_nodes(&[new_node("racer-a", &addr_a)])
+                    .await
+                    .expect("a")
+            });
+            let tb = tokio::spawn(async move {
+                b.import_nodes(&[new_node("racer-b", &addr_b)])
+                    .await
+                    .expect("b")
+            });
+            let (oa, ob) = (ta.await.expect("join a"), tb.await.expect("join b"));
+            assert_eq!(oa.created + ob.created, 1, "round {i}: {oa:?} {ob:?}");
+            let at: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes WHERE address = $1::inet")
+                .bind(&addr)
+                .fetch_one(&pool)
+                .await
+                .expect("count");
+            assert_eq!(at, 1, "round {i}");
+        }
+    }
+
+    /// The scope is projected onto each match, never used to drop one (ADR-139 決定 3).
+    ///
+    /// A node in a folder the caller cannot see — including one at the tree root, which no scoped
+    /// caller sees — still comes back, marked invisible, so the import can refuse its address. Both
+    /// sides are asserted: a query that returned nothing would satisfy "hides the other folder".
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn device_nodes_at_marks_what_the_scope_can_see(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let ip = |s: &str| s.parse::<IpAddr>().expect("address");
+        let in_mine = pgtest::node_at(&pool, "in-mine", ip("10.9.3.1"), Some(mine)).await;
+        pgtest::node_at(&pool, "in-theirs", ip("10.9.3.2"), Some(theirs)).await;
+        pgtest::node_at(&pool, "at-root", ip("10.9.3.3"), None).await;
+        pgtest::node_at(&pool, "dup-a", ip("10.9.3.4"), Some(mine)).await;
+        pgtest::node_at(&pool, "dup-b", ip("10.9.3.4"), Some(mine)).await;
+        let asked = [
+            ip("10.9.3.1"),
+            ip("10.9.3.2"),
+            ip("10.9.3.3"),
+            ip("10.9.3.4"),
+            ip("10.9.3.9"),
+        ];
+
+        let scoped = repo
+            .device_nodes_at(&asked, Some(&[mine]))
+            .await
+            .expect("scoped");
+        let view: Vec<(&str, bool)> = scoped
+            .iter()
+            .map(|m| (m.name.as_str(), m.visible))
+            .collect();
+        assert_eq!(
+            view,
+            vec![
+                ("at-root", false),
+                ("dup-a", true),
+                ("dup-b", true),
+                ("in-mine", true),
+                ("in-theirs", false),
+            ],
+            "every device at an asked address, ordered by name; nothing at 10.9.3.9"
+        );
+        assert_eq!(
+            scoped.iter().find(|m| m.name == "in-mine").map(|m| m.id),
+            Some(in_mine)
+        );
+
+        let all = repo.device_nodes_at(&asked, None).await.expect("all");
+        assert_eq!(all.len(), 5);
+        assert!(
+            all.iter().all(|m| m.visible),
+            "unrestricted sees everything"
+        );
+
+        assert!(repo
+            .device_nodes_at(&[], None)
+            .await
+            .expect("empty")
+            .is_empty());
     }
 
     /// Deleting reports whether it removed anything, and the row is gone afterwards.

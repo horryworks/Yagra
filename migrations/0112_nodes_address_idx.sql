@@ -1,0 +1,23 @@
+-- 0112_nodes_address_idx — look a device node up by its address (ADR-139).
+--
+-- reversible: additive only — one index, nothing narrowed and nothing rewritten. An older core
+-- never names the index, so rolling the binary back leaves it in place and unused, and rolling
+-- forward again finds it. No `schema_compat` floor, for the reason 0108 records: every release from
+-- 0.2.2 on tolerates a database carrying migrations it does not embed.
+--
+-- WHY AN INDEX AND NOT `UNIQUE`
+-- Discovery now refuses to import an address that is already a device node. Two reads ask that
+-- question: the scan status the Discovery screen polls every two seconds while a sweep runs, and
+-- the import itself, which checks up to 1024 addresses at once. Both are one statement over
+-- `nodes.address`, which had no index — a full scan of the inventory per poll at 50k nodes.
+--
+-- `UNIQUE` would make the rule airtight and is deliberately not added. Earlier releases let the
+-- same address be imported twice, so a deployment may already hold duplicates, and a migration
+-- that fails on them is a core that will not start. It would also be wrong on its own terms: a URL
+-- monitor and a DNS monitor store a resolved address in this column too, and may legitimately
+-- share it with the device they point at.
+--
+-- Plain `CREATE INDEX` rather than `CONCURRENTLY`: sqlx runs each migration in a transaction, where
+-- `CONCURRENTLY` is refused, and at 50k rows the build takes well under a second.
+
+CREATE INDEX IF NOT EXISTS nodes_address_idx ON nodes (address);
