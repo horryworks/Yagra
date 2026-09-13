@@ -324,8 +324,13 @@ impl NodeRepo {
             return Ok(Vec::new());
         }
         let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        // 🚨 `COALESCE`, because the predicate is a *projection* here and not a filter. For a scoped
+        // caller and a node at the tree root it evaluates `false OR (NULL = ANY(...))`, which is
+        // NULL — harmless in a `WHERE`, where NULL drops the row, and fatal in a column read as
+        // `bool`: the whole read failed, so a scoped operator's scan answered 500 whenever it had
+        // found a device the tree root already held. Invisible is the answer NULL means here.
         let sql = format!(
-            "SELECT host(n.address) AS address, n.id, n.name, {scope} AS visible \
+            "SELECT host(n.address) AS address, n.id, n.name, COALESCE({scope}, false) AS visible \
              FROM nodes n \
              WHERE n.address = ANY($2::text[]::inet[]) AND {device} \
              ORDER BY n.name, n.id",
