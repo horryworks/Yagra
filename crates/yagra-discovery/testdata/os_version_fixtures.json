@@ -2277,5 +2277,43 @@
   "integers": {},
   "checked": false,
   "expected": null
+ },
+ {
+  "name": "yunshan",
+  "os": "yunshan",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.23.1247",
+  "sys_descr": "\"Huawei YunShan OS\nVersion 1.24.0.1 (S6700 V600R024C00SPC100) \r\nCopyright (C) 2021-2024 Huawei Technologies Co., Ltd. \r\nHUAWEI CloudEngine S6750-H \r\n\"",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "V600R024C00SPC100"
+ },
+ {
+  "name": "yunshan_s5735-v2",
+  "os": "yunshan",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.23.1097",
+  "sys_descr": "\"Huawei YunShan OS\nVersion 1.22.0.1 (S5700 V600R022C01SPC500) \r\nCopyright (C) 2021-2022 Huawei Technologies Co., Ltd. \r\nHUAWEI CloudEngine S5735-L-V2 \r\n\"",
+  "strings": {},
+  "integers": {},
+  "checked": true,
+  "expected": "V600R022C01SPC500"
+ },
+ {
+  "name": "yunshan_usg6530f-d_real_device",
+  "os": "yunshan",
+  "lab": false,
+  "sys_object_id": "1.3.6.1.4.1.2011.2.321.1.406",
+  "sys_descr": "Huawei YunShan OS \r\nVersion 1.24.0.1 (USG V600R024C00SPC100) \r\nCopyright (C) 2021-2024 Huawei Technologies Co., Ltd. \r\nHUAWEI USG6530F-D \r\n",
+  "strings": {
+   "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.4.128.2": "V600R024SPH120"
+  },
+  "integers": {
+   "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.14.128.2": 1
+  },
+  "checked": true,
+  "expected": "V600R024C00SPC100 [V600R024SPH120]",
+  "note": "Not a LibreNMS recording: a real USG6530F-D read over SNMP on 2026-09-13 (ADR-138 Inc.2). Its version matches the device's own web UI."
  }
 ]

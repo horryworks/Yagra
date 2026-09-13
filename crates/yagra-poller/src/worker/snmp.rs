@@ -17,6 +17,11 @@ use yagra_discovery::os_version;
 /// The ratio of the first two is the table's real coverage of a fleet (ADR-138).
 pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_total";
 
+/// The most rows the identity probe takes from the table columns it walks whole. A patch table
+/// holds a handful per slot; the cap is what stops a device that answers with thousands of rows
+/// from turning an hourly probe into a table dump.
+const IDENTITY_COLUMN_ROWS: usize = 256;
+
 /// What one identity probe learned (ADR-138).
 pub(super) struct IdentityProbe {
     pub(super) sys_descr: Option<String>,
@@ -62,9 +67,10 @@ impl SnmpWalker {
     /// The identity probe: `sysDescr` (so core can fill the node's maker/model) and the OS version
     /// (ADR-138).
     ///
-    /// Two reads at most. The first takes `sysDescr` and `sysObjectID` together, because which OIDs
-    /// hold the version depends on what the device is; the second takes those, and is skipped when
-    /// the table keeps this device's version in `sysDescr` or does not know the device at all.
+    /// The first read takes `sysDescr` and `sysObjectID` together, because which OIDs hold the
+    /// version depends on what the device is; the next ones take those, and are skipped when the
+    /// table keeps this device's version in `sysDescr` or does not know the device at all. Only a
+    /// Huawei adds a walk of whole columns, for the patch that is running (ADR-138 Inc.2).
     /// Best-effort throughout: an error or a missing value is simply absent.
     async fn fetch_identity(
         &self,
@@ -97,6 +103,13 @@ impl SnmpWalker {
                 .read_integers(transport, target, &reads.integers, timeout)
                 .await;
         }
+        if !reads.columns.is_empty() {
+            let (strings, integers) = self
+                .read_columns(transport, target, &reads.columns, timeout)
+                .await;
+            answers.strings.extend(strings);
+            answers.integers.extend(integers);
+        }
         IdentityProbe {
             os_version: os_version::resolve(sys_object_id, sys_descr.as_deref(), &answers),
             sys_descr,
@@ -123,6 +136,44 @@ impl SnmpWalker {
             // An SNMP integer, counter or gauge is whole; the transport widened it to `f64`.
             .map(|s| (s.oid, s.value as i64))
             .collect()
+    }
+
+    /// Walk whole table columns for the version table, keyed `column.instance` with the instance
+    /// left **unfolded**: Huawei's `hwPatchTable` is indexed by slot and patch (`128.2`), and the
+    /// version row is chosen by the state row at the same index — which a folded index could not
+    /// pair (ADR-138 Inc.2). Strings and integers go to separate maps, as the table reads them.
+    async fn read_columns(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        columns: &[&str],
+        timeout: Duration,
+    ) -> (HashMap<String, String>, HashMap<String, i64>) {
+        let mut strings = HashMap::new();
+        let mut integers = HashMap::new();
+        let asked: Vec<String> = columns.iter().map(|c| (*c).to_owned()).collect();
+        let Ok(rows) = self
+            .walk_instances(transport, target, &asked, timeout, IDENTITY_COLUMN_ROWS)
+            .await
+        else {
+            return (strings, integers);
+        };
+        for row in rows {
+            let instance: Vec<String> = row.instance.iter().map(u32::to_string).collect();
+            let key = format!("{}.{}", row.oid_base, instance.join("."));
+            match row.value {
+                yagra_transport::SnmpValue::Int(value) => {
+                    integers.insert(key, value);
+                }
+                yagra_transport::SnmpValue::Bytes(bytes) => {
+                    strings.insert(key, String::from_utf8_lossy(&bytes).into_owned());
+                }
+                yagra_transport::SnmpValue::Oid(oid) => {
+                    strings.insert(key, oid);
+                }
+            }
+        }
+        (strings, integers)
     }
 
     /// Read string-valued **instance** OIDs, keyed by the instance OID.
@@ -551,6 +602,63 @@ mod tests {
         assert_eq!(r.sys_descr.as_deref(), Some("Acme Widget Controller rev B"));
         // The scalar GET, then one identity walk — nothing else.
         assert_eq!(t.asked().len(), 2, "{:?}", t.asked());
+    }
+
+    /// A Huawei on YunShan OS keeps its version in `sysDescr` and its running patch in
+    /// `hwPatchTable`, whose row index (`128.2`) is the device's own. So the probe walks the version
+    /// and state columns whole, pairs them by the unfolded index, and shows only the running patch —
+    /// not the loaded one beside it (ADR-138 Inc.2).
+    #[tokio::test]
+    async fn the_identity_probe_appends_the_running_huawei_patch() {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let mut t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row(
+                    "1.3.6.1.2.1.1.1",
+                    0,
+                    "Huawei YunShan OS \r\nVersion 1.24.0.1 (USG V600R024C00SPC100) \r\nHUAWEI USG6530F-D \r\n",
+                ),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.2011.2.321.1.406"),
+            ]);
+        let version = "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.4";
+        let state = "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.14";
+        let cell = |column: &str, instance: &[u32], value: SnmpValue| SnmpInstanceRow {
+            oid_base: column.to_owned(),
+            instance: instance.to_vec(),
+            value,
+        };
+        t.snmp_instances = vec![
+            cell(
+                version,
+                &[128, 1],
+                SnmpValue::Bytes(b"V600R023SPH120".to_vec()),
+            ),
+            cell(
+                version,
+                &[128, 2],
+                SnmpValue::Bytes(b"V600R024SPH120".to_vec()),
+            ),
+            cell(state, &[128, 1], SnmpValue::Int(3)),
+            cell(state, &[128, 2], SnmpValue::Int(1)),
+        ];
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.os_version.as_deref(),
+            Some("V600R024C00SPC100 [V600R024SPH120]")
+        );
+        let asked = t.asked();
+        assert!(
+            asked
+                .iter()
+                .any(|call| call.iter().any(|o| o == version) && call.iter().any(|o| o == state)),
+            "the patch table was never walked: {asked:?}"
+        );
     }
 
     /// Over v3 the version instance is fetched with a GET, not by walking its column, and a value

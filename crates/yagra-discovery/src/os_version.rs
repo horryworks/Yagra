@@ -3,8 +3,9 @@
 //!
 //! Pure: the poller holds the SNMP session, this module decides. Three questions, one function each:
 //!
-//!  - [`oids_to_read`] — having read `sysDescr` and `sysObjectID`, which further instance OIDs this
-//!    device's version may be in (often none: many vendors put it in `sysDescr`);
+//!  - [`oids_to_read`] — having read `sysDescr` and `sysObjectID`, which further instance OIDs (and,
+//!    for Huawei's patch table, whole columns) this device's version may be in (often none: many
+//!    vendors put it in `sysDescr`);
 //!  - [`resolve`] — given those values, the version string, or `None`;
 //!  - [`sanitize`] — the one cap every version passes, applied on **both** sides of the bus.
 //!
@@ -14,8 +15,9 @@
 //! `LibreNMS/OS/*.php`) — and, better, a recorded device answer for each (`tests/snmpsim/*.snmprec`)
 //! with the version LibreNMS derived from it (`tests/data/*.json`). Every row below names the file it
 //! was copied from, and `every_librenms_fixture_resolves_to_the_version_librenms_derived` holds the
-//! table to those answers — 179 recordings, taken at LibreNMS `5b81b470` (2026-09-13). What is
-//! copied is OIDs, short patterns and version strings, which are facts about devices, never code.
+//! table to those answers — 179 recordings taken at LibreNMS `5b81b470` (2026-09-13), its two
+//! YunShan OS recordings from `master`, and one real Huawei USG read by hand (ADR-138 Inc.2). What
+//! is copied is OIDs, short patterns and version strings, which are facts about devices, never code.
 //!
 //! ## Row order is the precedence, and it is load-bearing
 //!
@@ -37,7 +39,9 @@
 //!
 //! Anything that walks *past* the object it names. LibreNMS appends a Huawei patch version with a
 //! GETNEXT on `hwPatchVersion`, and on a device with no patch table that returns whatever object comes
-//! next — its own recordings show `… [unlocked]`. Also left out: an index spelled from a serial
+//! next — its own recordings show `… [unlocked]`. The patch is read here instead by walking
+//! `hwPatchTable` whole and keeping only a row whose own state says it is running
+//! (`Source::PlusRunningPatch`, ADR-138 Inc.2). Also left out: an index spelled from a serial
 //! number (Ruckus SmartZone), Windows build-number naming, and APC's composed display. ADR-138
 //! decision 5 has the list.
 //!
@@ -63,17 +67,22 @@ pub const OS_VERSION_MAX_CHARS: usize = 128;
 pub struct Reads {
     pub strings: Vec<&'static str>,
     pub integers: Vec<&'static str>,
+    /// Table columns read whole — every row, whatever its type. For a table whose row index is the
+    /// device's own and whose wanted row is chosen by another column's value (Huawei's
+    /// `hwPatchTable`, ADR-138 Inc.2), so no instance can be named in advance.
+    pub columns: Vec<&'static str>,
 }
 
 impl Reads {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.strings.is_empty() && self.integers.is_empty()
+        self.strings.is_empty() && self.integers.is_empty() && self.columns.is_empty()
     }
 }
 
 /// What came back for a [`Reads`], keyed by instance OID. A value the device did not return is
-/// simply absent.
+/// simply absent. The rows of a walked column land here too, as `column.instance` with the
+/// instance unfolded, in whichever map their type belongs to.
 #[derive(Debug, Default, Clone)]
 pub struct Answers {
     pub strings: HashMap<String, String>,
@@ -130,6 +139,11 @@ enum Source {
     /// release (`LibreNMS/OS/Vrp.php`). Its own variant because it composes two patterns and is
     /// **nothing** when the first misses, even if the second hits.
     HuaweiVrp,
+    /// The inner source's version followed by ` [<patch>]`, when HUAWEI-SYS-MAN-MIB's
+    /// `hwPatchTable` has a row whose `hwPatchOperateState` is `patchRunning(1)`. A patch that is
+    /// loaded but not running is not shown, and nothing from the inner source means nothing at
+    /// all, patch or not (ADR-138 Inc.2).
+    PlusRunningPatch(&'static Source),
 }
 
 const VRP_VERSION: &str = r"Version (\S+)";
@@ -165,6 +179,13 @@ macro_rules! ent_software_rev {
         concat!("1.3.6.1.2.1.47.1.1.1.1.10.", $index)
     };
 }
+
+/// `hwPatchVersion` — column 4 of HUAWEI-SYS-MAN-MIB's `hwPatchTable`, indexed by slot and patch.
+const HW_PATCH_VERSION: &str = ent!("2011.5.25.19.1.8.5.1.1.4");
+/// `hwPatchOperateState` — column 14 of the same table.
+const HW_PATCH_OPERATE_STATE: &str = ent!("2011.5.25.19.1.8.5.1.1.14");
+/// `hwPatchOperateState`'s `patchRunning(1)`.
+const HW_PATCH_RUNNING: i64 = 1;
 
 /// Cisco's four `sysDescr` patterns (`LibreNMS/OS/Shared/Cisco.php:112-121`), tried in order.
 const CISCO_IOS_1: &str =
@@ -330,7 +351,7 @@ static ROWS: &[Row] = &[
     },
     Row {
         os: &["vrp"],
-        origin: "resources/definitions/os_discovery/vrp.yaml + LibreNMS/OS/Vrp.php (without the patch GETNEXT)",
+        origin: "resources/definitions/os_discovery/vrp.yaml + LibreNMS/OS/Vrp.php (the patch from the running hwPatchTable row, not its GETNEXT)",
         when: &[
             Match::Descr("VRP (R) Software"),
             Match::Descr("VRP Software Version"),
@@ -338,7 +359,24 @@ static ROWS: &[Row] = &[
             Match::Descr("Versatile Routing Platform Software"),
         ],
         unless: &[],
-        sources: &[Source::HuaweiVrp],
+        sources: &[Source::PlusRunningPatch(&Source::HuaweiVrp)],
+    },
+    Row {
+        os: &["yunshan"],
+        origin: "resources/definitions/os_detection/yunshan.yaml + os_discovery/yunshan.yaml (sysDescr_regex); the patch as for vrp",
+        // Below VRP on purpose: `2011.2.23` is also where VRP switches name themselves (`vrp_5720`
+        // is `2011.2.23.291`), and that row claims them by `sysDescr`. The `sysDescr` match is
+        // Yagra's own — a USG firewall on YunShan OS is `2011.2.321…`, outside LibreNMS's prefix,
+        // so LibreNMS would not recognise it at all (ADR-138 Inc.2).
+        when: &[
+            Match::ObjectId(ent!("2011.2.23")),
+            Match::Descr("Huawei YunShan OS"),
+        ],
+        unless: &[],
+        sources: &[Source::PlusRunningPatch(&Source::Descr(
+            VRP_RELEASE,
+            "${version}",
+        ))],
     },
     Row {
         os: &["fortigate"],
@@ -707,14 +745,19 @@ fn all_patterns() -> impl Iterator<Item = &'static str> {
     let sources = ROWS
         .iter()
         .flat_map(|row| row.sources.iter())
-        .flat_map(|source| match *source {
-            Source::StrCut(_, pattern, _)
-            | Source::Descr(pattern, _)
-            | Source::DescrFirstLine(pattern, _) => vec![pattern],
-            Source::HuaweiVrp => vec![VRP_VERSION, VRP_RELEASE],
-            Source::Str(_) | Source::StrGated { .. } | Source::Joined(..) => Vec::new(),
-        });
+        .flat_map(|source| source_patterns(*source));
     detection.chain(sources)
+}
+
+fn source_patterns(source: Source) -> Vec<&'static str> {
+    match source {
+        Source::StrCut(_, pattern, _)
+        | Source::Descr(pattern, _)
+        | Source::DescrFirstLine(pattern, _) => vec![pattern],
+        Source::HuaweiVrp => vec![VRP_VERSION, VRP_RELEASE],
+        Source::PlusRunningPatch(inner) => source_patterns(*inner),
+        Source::Str(_) | Source::StrGated { .. } | Source::Joined(..) => Vec::new(),
+    }
 }
 
 /// `sysDescr` as LibreNMS stores it: a trailing CR/LF and the surrounding quotes removed.
@@ -757,38 +800,49 @@ fn row_for(sys_object_id: Option<&str>, sys_descr: Option<&str>) -> Option<&'sta
     })
 }
 
-/// The instance OIDs, beyond `sysDescr` and `sysObjectID`, that this device's version may be in —
-/// empty when the table does not know the device or keeps its version in `sysDescr`.
+/// The instance OIDs and whole columns, beyond `sysDescr` and `sysObjectID`, that this device's
+/// version may be in — empty when the table does not know the device or keeps its version in
+/// `sysDescr`.
 #[must_use]
 pub fn oids_to_read(sys_object_id: Option<&str>, sys_descr: Option<&str>) -> Reads {
     let mut reads = Reads::default();
     let Some(row) = row_for(sys_object_id, sys_descr) else {
         return reads;
     };
-    let add = |list: &mut Vec<&'static str>, oid: &'static str| {
+    for source in row.sources {
+        add_reads(*source, &mut reads);
+    }
+    reads
+}
+
+/// What one source needs read, added to `reads` without naming anything twice.
+fn add_reads(source: Source, reads: &mut Reads) {
+    fn add(list: &mut Vec<&'static str>, oid: &'static str) {
         if !list.contains(&oid) {
             list.push(oid);
         }
-    };
-    for source in row.sources {
-        match *source {
-            Source::Str(oid) | Source::StrCut(oid, ..) => add(&mut reads.strings, oid),
-            Source::StrGated { oid, gate, .. } => {
-                add(&mut reads.strings, oid);
-                add(&mut reads.integers, gate);
-            }
-            Source::Joined(parts, _) => {
-                for part in parts {
-                    match *part {
-                        Part::Str(oid) => add(&mut reads.strings, oid),
-                        Part::Int(oid) => add(&mut reads.integers, oid),
-                    }
+    }
+    match source {
+        Source::Str(oid) | Source::StrCut(oid, ..) => add(&mut reads.strings, oid),
+        Source::StrGated { oid, gate, .. } => {
+            add(&mut reads.strings, oid);
+            add(&mut reads.integers, gate);
+        }
+        Source::Joined(parts, _) => {
+            for part in parts {
+                match *part {
+                    Part::Str(oid) => add(&mut reads.strings, oid),
+                    Part::Int(oid) => add(&mut reads.integers, oid),
                 }
             }
-            Source::Descr(..) | Source::DescrFirstLine(..) | Source::HuaweiVrp => {}
         }
+        Source::PlusRunningPatch(inner) => {
+            add_reads(*inner, reads);
+            add(&mut reads.columns, HW_PATCH_VERSION);
+            add(&mut reads.columns, HW_PATCH_OPERATE_STATE);
+        }
+        Source::Descr(..) | Source::DescrFirstLine(..) | Source::HuaweiVrp => {}
     }
-    reads
 }
 
 /// The device's OS version, from its `sysDescr`, `sysObjectID` and the [`Answers`] to
@@ -864,7 +918,49 @@ fn from_source(source: Source, descr: &str, answers: &Answers) -> Option<String>
                 None => sanitize(version),
             }
         }
+        Source::PlusRunningPatch(inner) => {
+            let version = from_source(*inner, descr, answers)?;
+            match running_patch(answers) {
+                Some(patch) => sanitize(&format!("{version} [{patch}]")),
+                None => Some(version),
+            }
+        }
     }
+}
+
+/// The version of every `hwPatchTable` row whose state is running — in row order, each version
+/// once, joined by `, `. `None` when no row is running, or the table was not read. A row whose state
+/// did not come back is not running: nothing else says so.
+fn running_patch(answers: &Answers) -> Option<String> {
+    let version_prefix = format!("{HW_PATCH_VERSION}.");
+    let mut rows: Vec<(Vec<u32>, &str)> = answers
+        .strings
+        .iter()
+        .filter_map(|(oid, value)| {
+            let index = oid.strip_prefix(&version_prefix)?;
+            let state = answers
+                .integers
+                .get(&format!("{HW_PATCH_OPERATE_STATE}.{index}"));
+            if state != Some(&HW_PATCH_RUNNING) || php_empty(value) {
+                return None;
+            }
+            // Ordered by the numbers, not the text: slot 128's patch 10 comes after its patch 2.
+            let key = index
+                .split('.')
+                .map(str::parse)
+                .collect::<Result<Vec<u32>, _>>()
+                .ok()?;
+            Some((key, value.as_str()))
+        })
+        .collect();
+    rows.sort_unstable();
+    let mut patches: Vec<&str> = Vec::new();
+    for (_, value) in rows {
+        if !patches.contains(&value) {
+            patches.push(value);
+        }
+    }
+    (!patches.is_empty()).then(|| patches.join(", "))
 }
 
 fn expand(pattern: &str, template: &str, text: &str, first_line: bool) -> Option<String> {
@@ -1034,34 +1130,58 @@ mod tests {
         }
         // Every instance OID a source names can be reached by the v2c walk.
         for row in ROWS {
-            let reads = oids_for_row(row);
+            let mut reads = Reads::default();
+            for source in row.sources {
+                add_reads(*source, &mut reads);
+            }
             for oid in reads.strings.iter().chain(&reads.integers) {
                 assert!(walk_column(oid).is_some(), "{:?}: {oid}", row.os);
             }
         }
     }
 
-    fn oids_for_row(row: &Row) -> Reads {
-        let mut reads = Reads::default();
-        for source in row.sources {
-            match *source {
-                Source::Str(oid) | Source::StrCut(oid, ..) => reads.strings.push(oid),
-                Source::StrGated { oid, gate, .. } => {
-                    reads.strings.push(oid);
-                    reads.integers.push(gate);
-                }
-                Source::Joined(parts, _) => {
-                    for part in parts {
-                        match *part {
-                            Part::Str(oid) => reads.strings.push(oid),
-                            Part::Int(oid) => reads.integers.push(oid),
-                        }
-                    }
-                }
-                Source::Descr(..) | Source::DescrFirstLine(..) | Source::HuaweiVrp => {}
+    /// The patch suffix comes only from a row that says it is running. A loaded-but-idle patch, a
+    /// row whose state did not come back, and a table that was not read all leave the version bare
+    /// — and a patch never stands in for a version the inner source did not find (ADR-138 Inc.2).
+    #[test]
+    fn a_huawei_patch_is_appended_only_from_a_running_row() {
+        let oid = Some("1.3.6.1.4.1.2011.2.321.1.406");
+        let descr = Some(
+            "Huawei YunShan OS \r\nVersion 1.24.0.1 (USG V600R024C00SPC100) \r\nHUAWEI USG6530F-D \r\n",
+        );
+        assert_eq!(
+            oids_to_read(oid, descr).columns,
+            vec![HW_PATCH_VERSION, HW_PATCH_OPERATE_STATE]
+        );
+        fn row(answers: &mut Answers, index: &str, version: &str, state: Option<i64>) {
+            answers
+                .strings
+                .insert(format!("{HW_PATCH_VERSION}.{index}"), version.to_owned());
+            if let Some(state) = state {
+                answers
+                    .integers
+                    .insert(format!("{HW_PATCH_OPERATE_STATE}.{index}"), state);
             }
         }
-        reads
+        let bare = Some("V600R024C00SPC100");
+        assert_eq!(resolve(oid, descr, &Answers::default()).as_deref(), bare);
+
+        let mut idle = Answers::default();
+        row(&mut idle, "128.1", "V600R024SPH110", Some(3)); // patchDeactive
+        row(&mut idle, "128.3", "V600R024SPH130", None);
+        assert_eq!(resolve(oid, descr, &idle).as_deref(), bare);
+
+        let mut running = idle.clone();
+        row(&mut running, "129.2", "V600R024SPH120", Some(1));
+        row(&mut running, "128.10", "V600R024SPH121", Some(1));
+        row(&mut running, "128.2", "V600R024SPH120", Some(1));
+        assert_eq!(
+            resolve(oid, descr, &running).as_deref(),
+            Some("V600R024C00SPC100 [V600R024SPH120, V600R024SPH121]")
+        );
+
+        let no_release = Some("Huawei YunShan OS \r\nHUAWEI USG6530F-D");
+        assert_eq!(resolve(oid, no_release, &running), None);
     }
 
     #[test]
@@ -1151,9 +1271,10 @@ mod tests {
     /// Where this table knowingly answers differently from LibreNMS, and why.
     fn deviation(f: &Fixture) -> Option<(Option<String>, &'static str)> {
         match f.os.as_str() {
-            // `Vrp.php` appends `[<patch>]` from a GETNEXT on `hwPatchVersion`. On a device with
-            // no patch table that GETNEXT returns the next object instead (`[unlocked]`), so the
-            // suffix is not read at all (ADR-138 decision 5).
+            // `Vrp.php` appends `[<patch>]` from a GETNEXT on `hwPatchVersion`, which on a device
+            // with no patch table returns the next object instead (`[unlocked]`). Here the patch
+            // comes only from a `hwPatchTable` row whose state says it is running, and none of
+            // these recordings carries the state column, so each is expected bare (ADR-138 Inc.2).
             "vrp" => f
                 .expected
                 .as_deref()
@@ -1190,16 +1311,24 @@ mod tests {
 
             // The device answers only what it is asked, and only what it holds.
             let reads = oids_to_read(oid, descr);
+            let in_a_walked_column = |key: &str| {
+                reads.columns.iter().any(|column| {
+                    key.strip_prefix(column)
+                        .is_some_and(|rest| rest.starts_with('.'))
+                })
+            };
             let answers = Answers {
-                strings: reads
+                strings: f
                     .strings
                     .iter()
-                    .filter_map(|o| f.strings.get(*o).map(|v| ((*o).to_owned(), v.clone())))
+                    .filter(|(k, _)| reads.strings.contains(&k.as_str()) || in_a_walked_column(k))
+                    .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                integers: reads
+                integers: f
                     .integers
                     .iter()
-                    .filter_map(|o| f.integers.get(*o).map(|v| ((*o).to_owned(), *v)))
+                    .filter(|(k, _)| reads.integers.contains(&k.as_str()) || in_a_walked_column(k))
+                    .map(|(k, v)| (k.clone(), *v))
                     .collect(),
             };
             let got = resolve(oid, descr, &answers);

@@ -14,7 +14,8 @@
 
 - **A device's OS version on its node Overview.** Nodes ▸ a device ▸ Overview has a new
   **OS version** row under Model — `15.0(2a)EX5` on a Catalyst, `v7.2.6,build1575,230926 (GA.F)` on
-  a FortiGate. The poller reads it over SNMP from wherever that vendor keeps it — a vendor MIB,
+  a FortiGate, `V600R024C00SPC100 [V600R024SPH120]` on a Huawei firewall running YunShan OS, where
+  the bracketed part is the patch that is running. The poller reads it over SNMP from wherever that vendor keeps it — a vendor MIB,
   ENTITY-MIB, or the `sysDescr` string — using a table copied from LibreNMS's OS definitions, and
   re-reads it once an hour, so an upgrade shows up within the hour. A device the table does not
   cover, or one that reports no version, shows `—`; a version that has been read stays in place if
