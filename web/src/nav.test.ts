@@ -122,6 +122,7 @@ describe('nav IA', () => {
       '/nodes/collection-templates',
       '/nodes/profiles',
       '/nodes/classification-rules',
+      '/nodes/reclassify',
     ]);
   });
 

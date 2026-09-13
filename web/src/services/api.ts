@@ -29,6 +29,9 @@ import type {
   ChannelConfigInput,
   ClassificationRule,
   ClassificationRuleInput,
+  ReclassifyApplied,
+  ReclassifyLocked,
+  ReclassifyView,
   CollectionKind,
   CollectionTemplate,
   ConfigBundle,
@@ -1757,6 +1760,20 @@ export const api = {
   /** Delete a classification rule. */
   deleteClassificationRule: (id: string): Promise<void> =>
     apiDelete('/api/v1/classification-rules/{id}', { path: { id } }),
+
+  /** Nodes ▸ Reclassify (ADR-140): the device nodes whose profile differs from the one the current
+   *  classification rules choose. Computed on the server on every read; nothing is stored. */
+  getReclassify: (): Promise<ReclassifyView> => apiGet('/api/v1/reclassify'),
+
+  /** Move nodes to the profile the rules choose. Each item echoes the profile the screen showed, so
+   *  the server skips — and counts — a node someone re-profiled or locked since. */
+  applyReclassify: (
+    items: { node_id: string; from_profile_id: string | null; to_profile_id: string }[],
+  ): Promise<ReclassifyApplied> => apiPost('/api/v1/reclassify/apply', { body: { items } }),
+
+  /** Fix (or release) the profile of the given nodes against reclassification. */
+  lockReclassify: (nodeIds: string[], locked: boolean): Promise<ReclassifyLocked> =>
+    apiPost('/api/v1/reclassify/lock', { body: { node_ids: nodeIds, locked } }),
 
   /** The metrics in a template. */
   listTemplateItems: (id: string): Promise<StoredCollectionItem[]> =>

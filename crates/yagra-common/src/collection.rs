@@ -1028,9 +1028,11 @@ fn optical_template(flavor: OpticalFlavor) -> BuiltinTemplate {
 }
 
 /// The built-in device profiles: split by **functional role (category) × vendor-NOS family**,
-/// each composing reusable templates (role-base + optional vendor-health + role-KPI). The
-/// catalog is rebuilt cleanly (the migration reseeds it), so unlike before there is no
-/// append-only constraint — order is by category for readability. Major vendors carry real
+/// each composing reusable templates (role-base + optional vendor-health + role-KPI).
+/// 🚨 **Append only.** A profile's seed id is its index here (`SeedRange::Profiles`), so inserting
+/// one mid-array re-keys every later profile and breaks node→profile bindings in production. The
+/// entries up to "Generic ping" are ordered by category; everything after it is in the order it was
+/// added, and the UI groups by `category`, not by array order. Major vendors carry real
 /// vendor-health/role-KPI OIDs; long-tail devices carry the standard-MIB base, with vendor OIDs
 /// added later as data. Every SNMP profile attaches "Standard SNMP" so it graphs out of the box.
 ///
@@ -1535,6 +1537,26 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
         // the profile only exists to group these nodes and host their default threshold (`dns_up`).
         // Kept at the array end for seed-id stability (see the note above).
         prof("DNS name resolution", C::DnsCheck, None, Vec::new()),
+        // Alcatel-Lucent Enterprise OmniSwitch (AOS 6/7/8, enterprise 6486). Until ADR-140 the 6486.
+        // rule sent these to "Nokia SR router", whose BGP-peers set an OmniSwitch does not answer.
+        // Standard SNMP only: LibreNMS's aos6, aos6_aos6 and aos7 walks hold no ENTITY-SENSOR row,
+        // so Entity sensors would be a set that always comes back empty.
+        prof(
+            "Alcatel-Lucent OmniSwitch",
+            C::L3Switch,
+            Some("Alcatel-Lucent"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        // Ruckus wireless — ZoneDirector, Unleashed and SmartZone (enterprise 25053). Until ADR-140
+        // they shared "Brocade / Ruckus switch" with the ICX switches, which answer under 1991.
+        // Standard SNMP only, like the Cisco and Aruba controllers: AP and client counts are not
+        // collected yet.
+        prof(
+            "Ruckus wireless controller",
+            C::WirelessController,
+            Some("Ruckus"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
     ]
 }
 
@@ -1574,11 +1596,11 @@ mod tests {
     fn newest_builtin_profile_stays_at_the_array_end() {
         // Seed ids are Uuid::from_u128(BASE + index), so inserting a profile mid-array silently
         // re-keys every profile after it. New profiles must be appended; this pins the most
-        // recently added one (DNS, ADR-033) so a future insertion trips here instead of in prod.
+        // recently added one (Ruckus, ADR-140) so a future insertion trips here instead of in prod.
         let profiles = builtin_profiles();
         assert_eq!(
             profiles.last().map(|p| p.name),
-            Some("DNS name resolution"),
+            Some("Ruckus wireless controller"),
             "append new built-in profiles; never insert mid-array"
         );
     }
@@ -2054,6 +2076,14 @@ mod tests {
         assert_eq!(a10.category, ProfileCategory::LoadBalancer);
         assert_eq!(a10.vendor, Some("A10 Networks"));
         assert!(a10.templates.contains(&T_HOST_RESOURCES));
+
+        // ADR-140: generic sets only, by decision — no vendor health set exists for either yet.
+        let ale = by_name("Alcatel-Lucent OmniSwitch").expect("OmniSwitch profile present");
+        assert_eq!(ale.category, ProfileCategory::L3Switch);
+        assert_eq!(ale.templates, vec![TEMPLATE_STANDARD_SNMP]);
+        let ruckus = by_name("Ruckus wireless controller").expect("Ruckus controller present");
+        assert_eq!(ruckus.category, ProfileCategory::WirelessController);
+        assert_eq!(ruckus.templates, vec![TEMPLATE_STANDARD_SNMP]);
     }
 
     #[test]

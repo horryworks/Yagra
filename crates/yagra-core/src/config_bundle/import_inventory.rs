@@ -259,15 +259,17 @@ pub(super) async fn write<'a>(
         );
         sqlx::query(
             "INSERT INTO nodes (id, name, address, profile_id, group_id, credential_id, pool, \
-                                    vendor, model, sort_order, tags, tags_excluded, notes) \
-                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                                    vendor, model, sort_order, tags, tags_excluded, notes, \
+                                    profile_locked) \
+                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
                  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, address = EXCLUDED.address, \
                      profile_id = EXCLUDED.profile_id, group_id = EXCLUDED.group_id, \
                      credential_id = EXCLUDED.credential_id, pool = EXCLUDED.pool, \
                      vendor = EXCLUDED.vendor, model = EXCLUDED.model, \
                      sort_order = EXCLUDED.sort_order, tags = EXCLUDED.tags, \
                      tags_excluded = EXCLUDED.tags_excluded, \
-                     notes = EXCLUDED.notes, updated_at = now()",
+                     notes = EXCLUDED.notes, profile_locked = EXCLUDED.profile_locked, \
+                     updated_at = now()",
         )
         .bind(n.id)
         .bind(&n.name)
@@ -282,6 +284,7 @@ pub(super) async fn write<'a>(
         .bind(&n.tags)
         .bind(&n.tags_excluded)
         .bind(&n.notes)
+        .bind(n.profile_locked)
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, n.id);

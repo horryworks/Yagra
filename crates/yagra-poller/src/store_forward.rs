@@ -697,6 +697,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            sys_object_id: None,
             dns_chain: None,
             neighbors: None,
             l3: None,

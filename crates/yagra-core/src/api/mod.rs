@@ -72,6 +72,7 @@ mod profiles;
 /// `dashboard` on purpose: this board is an access-control list, not presentation state.
 mod public_dashboard;
 pub(crate) mod rca;
+pub(crate) mod reclassify;
 /// Moving this whole deployment to another server (ADR-121). Named apart from `config_bundle`,
 /// which moves a configuration and carries no secret.
 pub(crate) mod relocation;
@@ -457,6 +458,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(support::routes())
         .merge(collection::routes())
         .merge(classification::routes())
+        .merge(reclassify::routes())
         // The generated OpenAPI document itself (ADR-035) — unauthenticated, see `api/openapi.rs`.
         .merge(openapi::routes())
         .merge(discovery::routes())
@@ -845,6 +847,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            sys_object_id: None,
             dns_chain: None,
             neighbors: None,
             l3: None,

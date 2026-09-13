@@ -22,6 +22,21 @@
   消えません。同じ値は `GET /api/v1/nodes/{node_id}` と MCP の `get_node_status` に `os_version`
   として載ります。
   ⚠️ このリリースより古いポーラーが担当するノードは、そのポーラーを上げるまで `—` のままです。
+- **Nodes ▸ 分類のかけ直し: 登録済みのノードに分類ルールをもう一度当てられるようになりました。**
+  これまで分類ルールが働くのは、Discovery が取り込み時に勧めるプロファイルを選ぶときだけでした。
+  直したルールを、既にあるノードに当てる手段はありませんでした。新しい画面には、今のルールが選ぶ
+  プロファイルと実際のプロファイルが違う機器ノードが並びます。選んだルールと、判定に使った
+  sysObjectID・sysDescr も出ます。ノードを選んで **選んだノードに当てる** を押すと移ります（プロファイルと
+  一緒に何が変わるかを確認のダイアログで示します）。**今のプロファイルで固定** を押すと、以後は一覧に
+  出ません。ノードの編集画面で別のプロファイルを選ぶと、新しい
+  **分類ルールが変わってもこのプロファイルのままにする** に自動でチェックが入ります。自動で当てることは
+  なく、既存のノードは固定なしから始まります。機器の判定材料はポーラーが 1 時間ごとの SNMP の問い合わせで
+  読むため、アップグレード後 1 時間以内に一覧が埋まります。古いポーラーが担当するノードは「判定材料なし」の
+  ままです。
+  API: `GET /api/v1/reclassify`・`POST /api/v1/reclassify/apply`・`POST /api/v1/reclassify/lock`
+  （ManageConfig、呼び手のフォルダーに限る）。`GET /api/v1/nodes/{node_id}`、
+  `PUT /api/v1/nodes/{node_id}/bindings`（省略すると変えない）、設定バンドルのノードに `profile_locked`。
+  MCP: `get_config(kind="reclassify")` と、`get_node_status` の `profile_locked`。
 
 ### 改善
 
@@ -43,6 +58,17 @@
   今後はその行を飛ばし、`201` のまま、飛ばした数を `skipped_existing` で返します。`created` は
   実際に追加した数だけを、`filed` は作った行だけを数えます。全部の行が登録済みでも `201`（`created: 0`）です。
   手動のノード追加（`POST /api/v1/nodes`）は変わりません。これまでに作られた重複はそのまま残ります。
+- **組み込みの分類ルールが、機器を違うプロファイルに振らなくなりました。** LibreNMS が記録した 182 台を
+  分類ルールに通すと、次の誤りが見つかりました。Cisco FTD が ASA に、AireOS と Catalyst 9800 の
+  コントローラ、ASR・ISR・Catalyst 8000 のルーターが Catalyst スイッチに、Juniper SRX と vMX が EX に、
+  NE8000 が CloudEngine スイッチに、Aruba と Ruckus の無線コントローラがスイッチに、Alcatel-Lucent
+  OmniSwitch が Nokia SR ルーターに、ArubaOS-CX・Dell Networking OS・Eaton の UPS が Generic SNMP に
+  入っていました。ルールを 9 本直し、7 本足し、プロファイルを 2 つ足しました
+  （**Alcatel-Lucent OmniSwitch** と **Ruckus wireless controller**。Standard SNMP のみ）。sysObjectID が
+  ちょうど `1.3.6.1.4.1.25461` の PAN-OS も、そのルールに当たるようになりました。変わるのは Discovery の
+  勧めるプロファイルで、登録済みのノードは動きません（Nodes ▸ 分類のかけ直し を参照）。
+  ⚠️ 編集または無効にした組み込みルールは、そのまま残り、直りません。古いリリースに戻すと古いルールに戻り、
+  もう一度上げても直し直しはされません。
 
 ## v0.3.18 — MCP が既定で有効になり、VPN セッションのウィジェットが加わり、Yagra ヘルスにネットワーク通信量が出て、打ち切られた SNMP walk が Warning を上げ、メトリクスが単位付きで表示される
 

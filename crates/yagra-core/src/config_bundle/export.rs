@@ -178,7 +178,8 @@ impl ConfigBundleRepo {
         let mut nodes = Vec::new();
         for row in sqlx::query(
             "SELECT id, name, parent_id, host(address) AS address, profile_id, group_id, \
-                    credential_id, pool, vendor, model, sort_order, tags, tags_excluded, notes \
+                    credential_id, pool, vendor, model, sort_order, tags, tags_excluded, notes, \
+                    profile_locked \
              FROM nodes ORDER BY sort_order, name",
         )
         .fetch_all(&mut *conn)
@@ -202,6 +203,7 @@ impl ConfigBundleRepo {
                 tags: row.try_get("tags")?,
                 tags_excluded: row.try_get("tags_excluded")?,
                 notes: row.try_get("notes")?,
+                profile_locked: row.try_get("profile_locked")?,
             });
         }
         cap("nodes", nodes.len())?;

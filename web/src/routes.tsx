@@ -30,6 +30,7 @@ import { NodesPage } from './pages/NodesPage';
 import { NodeDetailPage } from './pages/NodeDetailPage';
 import { ProfilesPage } from './pages/ProfilesPage';
 import { ClassificationRulesPage } from './pages/ClassificationRulesPage';
+import { ReclassifyPage } from './pages/ReclassifyPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
 import { MibRepositoryPage } from './pages/MibRepositoryPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
@@ -108,6 +109,7 @@ export function AppRoutes() {
         />
         <Route path="nodes/profiles" element={<ProfilesPage />} />
         <Route path="nodes/classification-rules" element={<ClassificationRulesPage />} />
+        <Route path="nodes/reclassify" element={<ReclassifyPage />} />
         <Route path="nodes/collection-templates" element={<CollectionTemplatesPage />} />
         <Route path="nodes/mib" element={<MibRepositoryPage />} />
         <Route path="nodes/:nodeId" element={<NodeDetailPage />} />

@@ -94,6 +94,7 @@ mod preferences;
 mod public_access;
 mod ratelimit;
 mod rca;
+mod reclassify;
 /// Moving this whole deployment to another host (ADR-121). Named apart from `config_bundle`,
 /// which moves a *configuration* between deployments and carries no secret; this one carries the
 /// KEK and every sealed row, which is why it is Admin-only and audited.
@@ -1538,6 +1539,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         interfaces: Vec::new(),
         sys_descr: None,
         os_version: None,
+        sys_object_id: None,
         dns_chain: None,
         neighbors: None,
         l3: None,

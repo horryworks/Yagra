@@ -73,6 +73,33 @@ pub struct NodeWithNotes {
     /// read. Written only by [`NodeRepo::update_os_version_batch`] — observed state, which no API
     /// route writes and the configuration bundle does not carry.
     pub os_version: Option<String>,
+    /// Whether a person fixed this node's profile, so Nodes ▸ Reclassify never offers to change it
+    /// (ADR-140). Read here because the edit dialog shows it and writes it back.
+    pub profile_locked: bool,
+}
+
+/// One device node as Nodes ▸ Reclassify weighs it (ADR-140) — see [`NodeRepo::reclassify_inputs`].
+#[derive(Debug, Clone)]
+pub struct ReclassifyInput {
+    pub id: Uuid,
+    pub name: String,
+    pub profile_id: Option<Uuid>,
+    /// What the device last said it is; `None` ⇒ never read (see `migrations/0113`).
+    pub sys_object_id: Option<String>,
+    pub sys_descr: Option<String>,
+    pub profile_locked: bool,
+}
+
+/// One accepted reclassification — see [`NodeRepo::apply_reclassification`].
+#[derive(Debug, Clone)]
+pub struct ReclassifyWrite {
+    pub node: Uuid,
+    /// The profile the caller saw the node on; the write is skipped if it is no longer there.
+    pub from: Option<Uuid>,
+    pub to: Uuid,
+    /// The rule's vendor and model. `None` leaves the node's own.
+    pub vendor: Option<String>,
+    pub model: Option<String>,
 }
 
 /// What one "Edit node" save writes (ADR-135).
@@ -113,6 +140,9 @@ pub struct NodeBindingUpdate<'a> {
     /// supplies is inert and kept deliberately: if an ancestor re-adds it later, the operator's
     /// "not here" still holds.
     pub tags_excluded: Option<&'a [String]>,
+    /// Whether a person fixed the node's profile (ADR-140). `None` leaves the column alone — an older
+    /// client that has never heard of the field must not unlock a node by saving a form.
+    pub profile_locked: Option<bool>,
 }
 
 impl NodeRepo {
@@ -143,7 +173,7 @@ impl NodeRepo {
     /// interpolated from the same constant, so the two cannot disagree about the node half.
     pub async fn get_node_with_notes(&self, id: Uuid) -> anyhow::Result<Option<NodeWithNotes>> {
         let row = sqlx::query(&format!(
-            "SELECT {}, notes, os_version FROM nodes WHERE id = $1",
+            "SELECT {}, notes, os_version, profile_locked FROM nodes WHERE id = $1",
             Self::NODE_COLUMNS
         ))
         .bind(id)
@@ -155,6 +185,7 @@ impl NodeRepo {
                     node: node_from_row(row)?,
                     notes: row.try_get("notes")?,
                     os_version: row.try_get("os_version")?,
+                    profile_locked: row.try_get("profile_locked")?,
                 })
             })
             .transpose()
@@ -457,6 +488,7 @@ impl NodeRepo {
              notes = CASE WHEN $10::boolean THEN $11::text ELSE notes END, \
              tags  = CASE WHEN $12::boolean THEN $13::text[] ELSE tags END, \
              tags_excluded = CASE WHEN $14::boolean THEN $15::text[] ELSE tags_excluded END, \
+             profile_locked = CASE WHEN $16::boolean THEN $17::boolean ELSE profile_locked END, \
              updated_at = now() WHERE id = $1",
         )
         .bind(id)
@@ -475,6 +507,8 @@ impl NodeRepo {
         .bind(u.tags.unwrap_or(&[]))
         .bind(u.tags_excluded.is_some())
         .bind(u.tags_excluded.unwrap_or(&[]))
+        .bind(u.profile_locked.is_some())
+        .bind(u.profile_locked.unwrap_or(false))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -908,6 +942,158 @@ impl NodeRepo {
         Ok(res.rows_affected())
     }
 
+    /// Record what each node's device says it is — `sysObjectID` and `sysDescr` (ADR-140) — for MANY
+    /// nodes in one `UPDATE` (the async ingest writer). Returns how many rows actually changed.
+    ///
+    /// ⚠️ **A column is written only when a value arrived and differs from the stored one.** The
+    /// poller re-reads both hourly for every SNMP node, so without the predicate this is a
+    /// fleet-wide hourly write that changes nothing — the shape ADR-110 Increment 1 removed from
+    /// [`Self::fill_node_identity_batch`]. A `None` leaves that column alone, so a probe that read one
+    /// value and not the other never blanks the other. Two polls of one node in a batch merge, the
+    /// later value winning column by column.
+    pub async fn update_snmp_identity_batch(
+        &self,
+        rows: &[(Uuid, Option<String>, Option<String>)],
+    ) -> anyhow::Result<u64> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let mut by_node: BTreeMap<Uuid, (Option<String>, Option<String>)> = BTreeMap::new();
+        for (node, oid, descr) in rows {
+            let slot = by_node.entry(*node).or_default();
+            if oid.is_some() {
+                slot.0.clone_from(oid);
+            }
+            if descr.is_some() {
+                slot.1.clone_from(descr);
+            }
+        }
+        let ids: Vec<Uuid> = by_node.keys().copied().collect();
+        let oids: Vec<Option<String>> = by_node.values().map(|v| v.0.clone()).collect();
+        let descrs: Vec<Option<String>> = by_node.values().map(|v| v.1.clone()).collect();
+        let res = sqlx::query(
+            "UPDATE nodes SET \
+                sys_object_id = COALESCE(t.sys_object_id, nodes.sys_object_id), \
+                sys_descr = COALESCE(t.sys_descr, nodes.sys_descr), \
+                updated_at = now() \
+             FROM unnest($1::uuid[], $2::text[], $3::text[]) AS t(id, sys_object_id, sys_descr) \
+             WHERE nodes.id = t.id \
+               AND ((t.sys_object_id IS NOT NULL \
+                     AND nodes.sys_object_id IS DISTINCT FROM t.sys_object_id) \
+                 OR (t.sys_descr IS NOT NULL AND nodes.sys_descr IS DISTINCT FROM t.sys_descr))",
+        )
+        .bind(&ids)
+        .bind(&oids)
+        .bind(&descrs)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Every device node the caller may see, with what Nodes ▸ Reclassify weighs it on (ADR-140),
+    /// ordered by name.
+    ///
+    /// Device nodes only ([`Self::DEVICE_NODE_PREDICATE`]): a URL or DNS monitor has a profile of its
+    /// own kind and never an SNMP identity, so counting it as "not identified yet" would be noise. A
+    /// Meraki node and a ping-only one are counted — they are devices that simply sent none.
+    pub async fn reclassify_inputs(
+        &self,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<ReclassifyInput>> {
+        let sql = format!(
+            "SELECT n.id, n.name, n.profile_id, n.sys_object_id, n.sys_descr, n.profile_locked \
+             FROM nodes n WHERE {scope} AND {device} ORDER BY n.name, n.id",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let rows = sqlx::query(&sql)
+            .bind(Self::scope_bind(groups))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(ReclassifyInput {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    profile_id: row.try_get("profile_id")?,
+                    sys_object_id: row.try_get("sys_object_id")?,
+                    sys_descr: row.try_get("sys_descr")?,
+                    profile_locked: row.try_get("profile_locked")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Move each node to the profile the rules chose for it — **only while it is still on the
+    /// profile the caller saw and nobody has locked it** (ADR-140). Returns the ids actually moved.
+    ///
+    /// 🚨 The guard is the point, not a nicety. The screen was read seconds or hours ago; in between,
+    /// a person may have picked a profile by hand or locked the node, and a write that lost that race
+    /// must not land over the newer human decision. A vendor or model the rule names replaces the
+    /// node's; one it does not name leaves the node's alone. Callers de-duplicate `writes` by node.
+    pub async fn apply_reclassification(
+        &self,
+        writes: &[ReclassifyWrite],
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<Uuid>> {
+        if writes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<Uuid> = writes.iter().map(|w| w.node).collect();
+        let from: Vec<Option<Uuid>> = writes.iter().map(|w| w.from).collect();
+        let to: Vec<Uuid> = writes.iter().map(|w| w.to).collect();
+        let vendors: Vec<Option<String>> = writes.iter().map(|w| w.vendor.clone()).collect();
+        let models: Vec<Option<String>> = writes.iter().map(|w| w.model.clone()).collect();
+        let sql = format!(
+            "UPDATE nodes n SET profile_id = t.to_profile, \
+                 vendor = COALESCE(t.vendor, n.vendor), model = COALESCE(t.model, n.model), \
+                 updated_at = now() \
+             FROM unnest($2::uuid[], $3::uuid[], $4::uuid[], $5::text[], $6::text[]) \
+                  AS t(id, from_profile, to_profile, vendor, model) \
+             WHERE n.id = t.id AND n.profile_id IS NOT DISTINCT FROM t.from_profile \
+               AND NOT n.profile_locked AND {scope} AND {device} \
+             RETURNING n.id",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let moved: Vec<Uuid> = sqlx::query_scalar(&sql)
+            .bind(Self::scope_bind(groups))
+            .bind(&ids)
+            .bind(&from)
+            .bind(&to)
+            .bind(&vendors)
+            .bind(&models)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(moved)
+    }
+
+    /// Lock or unlock the profile of each node the caller may see (ADR-140). Returns the ids written;
+    /// an id outside the caller's folders, or not a device node, is simply not among them.
+    pub async fn set_profile_locks(
+        &self,
+        ids: &[Uuid],
+        locked: bool,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<Uuid>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "UPDATE nodes n SET profile_locked = $2, updated_at = now() \
+             WHERE n.id = ANY($3) AND {scope} AND {device} RETURNING n.id",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let written: Vec<Uuid> = sqlx::query_scalar(&sql)
+            .bind(Self::scope_bind(groups))
+            .bind(locked)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(written)
+    }
+
     /// The `sort_order` of each of the given node ids (for the inventory tree, which orders nodes
     /// within their group). Ids absent from the map default to 0 at the call site. One query.
     pub async fn node_sort_orders(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, f64>> {
@@ -1221,6 +1407,182 @@ mod tests {
         assert_eq!(read(&repo, id).await.as_deref(), Some("15.2(7)E9"));
 
         assert_eq!(repo.update_os_version_batch(&[]).await.expect("empty"), 0);
+    }
+
+    /// What the device says it is is written when it changes and only then, one column at a time
+    /// (ADR-140).
+    ///
+    /// 🚨 The repeated write's `0` is the assertion that matters, for the reason the OS-version test
+    /// above gives. The half-`None` write is the other one: an implementation that wrote both
+    /// columns from every row would blank the stored `sysDescr` here and still pass the rest.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_snmp_identity_is_written_only_when_it_changes(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "sw-1", 1, None).await;
+        let repo = pgtest::repo(pool.clone());
+        async fn read(pool: &sqlx::PgPool, id: uuid::Uuid) -> (Option<String>, Option<String>) {
+            sqlx::query_as("SELECT sys_object_id, sys_descr FROM nodes WHERE id = $1")
+                .bind(id)
+                .fetch_one(pool)
+                .await
+                .expect("read")
+        }
+        let oid = || Some("1.3.6.1.4.1.9.1.516".to_owned());
+        let descr = || Some("Cisco IOS Software, C3750".to_owned());
+
+        assert_eq!(read(&pool, id).await, (None, None), "a fresh node has none");
+        let first = repo
+            .update_snmp_identity_batch(&[(id, oid(), descr())])
+            .await
+            .expect("write");
+        assert_eq!(first, 1);
+        assert_eq!(read(&pool, id).await, (oid(), descr()));
+
+        let again = repo
+            .update_snmp_identity_batch(&[(id, oid(), descr())])
+            .await
+            .expect("rewrite");
+        assert_eq!(again, 0, "an unchanged identity must not be written");
+
+        // Only the sysObjectID arrives: it changes, and the stored sysDescr stays.
+        let moved = repo
+            .update_snmp_identity_batch(&[(id, Some("1.3.6.1.4.1.9.1.2066".to_owned()), None)])
+            .await
+            .expect("half write");
+        assert_eq!(moved, 1);
+        assert_eq!(
+            read(&pool, id).await,
+            (Some("1.3.6.1.4.1.9.1.2066".to_owned()), descr())
+        );
+
+        assert_eq!(
+            repo.update_snmp_identity_batch(&[]).await.expect("empty"),
+            0
+        );
+    }
+
+    /// A save that names `profile_locked` sets it, and one that does not leaves it (ADR-140) — both
+    /// directions, because an implementation that ignores the field passes the second half alone.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_profile_lock_is_set_by_naming_it_and_kept_by_not(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "sw-1", 1, None).await;
+        let repo = pgtest::repo(pool);
+        async fn is_locked(repo: &NodeRepo, id: uuid::Uuid) -> bool {
+            repo.get_node_with_notes(id)
+                .await
+                .expect("read")
+                .expect("the node")
+                .profile_locked
+        }
+        assert!(!is_locked(&repo, id).await, "a node starts unlocked");
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    profile_locked: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("lock"));
+        assert!(is_locked(&repo, id).await);
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    name: Some(Some("sw-1b")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("rename"));
+        assert!(
+            is_locked(&repo, id).await,
+            "an unmentioned lock must survive a save"
+        );
+        assert!(repo
+            .set_node_bindings(
+                id,
+                NodeBindingUpdate {
+                    profile_locked: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("unlock"));
+        assert!(!is_locked(&repo, id).await);
+    }
+
+    /// A reclassification lands only on a node still on the profile the caller saw and not locked
+    /// (ADR-140) — the race its guard exists for, in both of its shapes, beside a node that moves.
+    ///
+    /// 🚨 The node that does move is the half that proves the statement writes at all; without it an
+    /// UPDATE whose `WHERE` matched nothing would pass both skips.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_reclassification_skips_a_node_that_moved_or_was_locked(pool: sqlx::PgPool) {
+        use crate::seed_ids::SeedRange;
+        let repo = pgtest::repo(pool.clone());
+        repo.seed_builtin_profiles().await.expect("seed");
+        let (seen, by_hand, chosen) = (
+            SeedRange::Profiles.id(0),
+            SeedRange::Profiles.id(1),
+            SeedRange::Profiles.id(2),
+        );
+        let moved = pgtest::node(&pool, "moved", 1, None).await;
+        let locked = pgtest::node(&pool, "locked", 2, None).await;
+        let ready = pgtest::node(&pool, "ready", 3, None).await;
+        for id in [moved, locked, ready] {
+            sqlx::query("UPDATE nodes SET profile_id = $2 WHERE id = $1")
+                .bind(id)
+                .bind(seen)
+                .execute(&pool)
+                .await
+                .expect("the profile the screen showed");
+        }
+        // Between the read and the apply, someone picked a profile by hand and locked another node.
+        sqlx::query("UPDATE nodes SET profile_id = $2 WHERE id = $1")
+            .bind(moved)
+            .bind(by_hand)
+            .execute(&pool)
+            .await
+            .expect("moved by hand");
+        sqlx::query("UPDATE nodes SET profile_locked = true WHERE id = $1")
+            .bind(locked)
+            .execute(&pool)
+            .await
+            .expect("locked");
+
+        let write = |node| ReclassifyWrite {
+            node,
+            from: Some(seen),
+            to: chosen,
+            vendor: Some("Alcatel-Lucent".to_owned()),
+            model: None,
+        };
+        let applied = repo
+            .apply_reclassification(&[write(moved), write(locked), write(ready)], None)
+            .await
+            .expect("apply");
+        assert_eq!(applied, vec![ready]);
+
+        async fn profile_and_vendor(
+            pool: &sqlx::PgPool,
+            id: Uuid,
+        ) -> (Option<Uuid>, Option<String>) {
+            sqlx::query_as("SELECT profile_id, vendor FROM nodes WHERE id = $1")
+                .bind(id)
+                .fetch_one(pool)
+                .await
+                .expect("read")
+        }
+        assert_eq!(
+            profile_and_vendor(&pool, ready).await,
+            (Some(chosen), Some("Alcatel-Lucent".to_owned()))
+        );
+        assert_eq!(profile_and_vendor(&pool, moved).await.0, Some(by_hand));
+        assert_eq!(profile_and_vendor(&pool, locked).await.0, Some(seen));
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

@@ -259,6 +259,8 @@
       "node": "Node settings"
     },
     "profileOffKind": "This profile belongs to another kind of node. It is listed only because it is the one currently bound.",
+    "profileLock": "Keep this profile when classification rules change",
+    "profileLockHint": "Nodes ▸ Reclassify never offers to change a locked node. Choosing a different profile above ticks this for you.",
     "err": {
       "bindingsAfterCheck": "The monitor settings were saved, but the node settings were not: {{reason}}. Saving again is safe."
     }

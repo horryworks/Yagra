@@ -22,6 +22,20 @@
   a later read fails. The same value is `os_version` on `GET /api/v1/nodes/{node_id}` and on the
   MCP `get_node_status` tool.
   ⚠️ Nodes polled by a poller older than this release show `—` until that poller is upgraded.
+- **Nodes ▸ Reclassify: run the classification rules again on nodes already in the tree.** Until now
+  the rules only chose the profile Discovery suggests on import, and nothing could apply a corrected
+  rule to a node that already existed. The new screen lists every device node whose profile differs
+  from the one the rules now choose, with the rule that chose it and the sysObjectID and sysDescr it
+  ran on. Tick nodes and **Apply to selected** moves them — a confirmation says what changes with a
+  profile — or **Keep current profile** locks them so they are not listed again. Picking a different
+  profile in a node's Edit dialog ticks the new **Keep this profile when classification rules
+  change** box for you. Nothing is applied automatically, and no existing node starts locked.
+  Devices are identified by the poller's hourly SNMP probe, so the list fills in within an hour of
+  upgrading; nodes polled by an older poller stay "not identified yet".
+  API: `GET /api/v1/reclassify`, `POST /api/v1/reclassify/apply` and `POST /api/v1/reclassify/lock`
+  (ManageConfig, limited to the caller's folders); `profile_locked` on `GET /api/v1/nodes/{node_id}`,
+  on `PUT /api/v1/nodes/{node_id}/bindings` (absent leaves it unchanged) and on the configuration
+  bundle's nodes. MCP: `get_config(kind="reclassify")`, and `profile_locked` on `get_node_status`.
 
 ### Improvements
 
@@ -46,6 +60,17 @@
   were created. A request whose every row is already in the tree is `201` with `created: 0`.
   Adding a node by hand (`POST /api/v1/nodes`) is unchanged, and duplicates created earlier are left
   as they are.
+- **Built-in classification rules no longer file devices under the wrong profile.** Replaying
+  LibreNMS's 182 recorded devices through the rules found Cisco FTD filed as an ASA, AireOS and
+  Catalyst 9800 controllers and ASR, ISR and Catalyst 8000 routers filed as Catalyst switches,
+  Juniper SRX and vMX as EX, an NE8000 as a CloudEngine switch, Aruba and Ruckus wireless controllers
+  as switches, Alcatel-Lucent OmniSwitches as Nokia SR routers, and ArubaOS-CX, Dell Networking OS
+  and Eaton UPSes as Generic SNMP. Nine rules are corrected and seven added, with two new profiles:
+  **Alcatel-Lucent OmniSwitch** and **Ruckus wireless controller** (Standard SNMP only). A PAN-OS
+  device answering exactly `1.3.6.1.4.1.25461` now matches its rule. This changes what Discovery
+  suggests; nodes already in the tree are not moved — see Nodes ▸ Reclassify.
+  ⚠️ A built-in rule you edited or disabled is left as you left it, and is not corrected. Rolling back
+  to an older release restores the old rules, and upgrading again does not correct them a second time.
 
 ## v0.3.18 — MCP is served by default, a VPN sessions widget, network traffic on Yagra health, a truncated SNMP walk raises a Warning, and metrics carry their units
 

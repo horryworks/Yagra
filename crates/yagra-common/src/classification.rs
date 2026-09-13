@@ -112,24 +112,36 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "Cisco IOS-XR router",
             Some("Cisco"),
         ),
+        // FTD sorts ahead of the ASA rule (25 < 30): an FTD's sysDescr also carries
+        // "ASA Version 9.x", so at 50 the ASA rule claimed every FTD (ADR-140). The pattern names
+        // "Threat Defense" rather than "firepower", which an ASA on Firepower hardware may carry.
+        // ⚠️ Changing a shipped row needs migration 0114 on running deployments.
         (
-            50,
+            25,
             Some("1.3.6.1.4.1.9."),
-            Some(r"(?i)firepower|\bFTD\b"),
+            Some(r"(?i)firepower threat defense|\bFTD\b"),
             "Cisco Firepower (FTD)",
             Some("Cisco"),
         ),
+        // An AireOS controller's entire sysDescr is "Cisco Controller", a Cisco Business Wireless
+        // master AP says "Cisco Business Wireless", and a Catalyst 9800 says "C9800 Software"
+        // (ADR-140).
         (
             60,
             Some("1.3.6.1.4.1.9."),
-            Some(r"(?i)wireless lan controller|\bWLC\b|air-ct"),
+            Some(
+                r"(?i)wireless lan controller|\bWLC\b|air-ct|cisco controller|cisco business wireless|\bc9800\b",
+            ),
             "Cisco wireless controller",
             Some("Cisco"),
         ),
+        // The model number follows the family name directly — "ASR1000 Software", "ASR920
+        // Software" — so `\bASR\b` never matched one, and the Catalyst 8000 edge routers say
+        // "c8000be" / "c8000aep" (ADR-140). IOS-XR ASRs were already claimed at priority 40.
         (
             70,
             Some("1.3.6.1.4.1.9."),
-            Some(r"(?i)\bISR\b|\bASR\b|ios[ -]?xe.*router"),
+            Some(r"(?i)\bISR|\bASR|ios[ -]?xe.*router|\bc8000"),
             "Cisco IOS/IOS-XE router",
             Some("Cisco"),
         ),
@@ -141,17 +153,20 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             Some("Cisco"),
         ),
         // ── Juniper: role split on sysDescr, EX/QFX catch-all ──
+        // Junos puts the model straight into sysDescr — "srx100h2 internet router", "vmx internet
+        // router", "mx480" — so a pattern ending in `\b` missed every numbered model and every
+        // virtual one (ADR-140).
         (
             100,
             Some("1.3.6.1.4.1.2636."),
-            Some(r"(?i)\bsrx\b"),
+            Some(r"(?i)\bv?srx"),
             "Juniper SRX firewall",
             Some("Juniper"),
         ),
         (
             110,
             Some("1.3.6.1.4.1.2636."),
-            Some(r"(?i)\bmx\b|\bptx\b"),
+            Some(r"(?i)\bv?mx(\d|\b)|\bptx"),
             "Juniper MX router",
             Some("Juniper"),
         ),
@@ -170,10 +185,11 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "Huawei USG firewall",
             Some("Huawei"),
         ),
+        // An NE8000 says "NetEngine 8000", which `\bne\d` does not match (ADR-140).
         (
             150,
             Some("1.3.6.1.4.1.2011."),
-            Some(r"(?i)\bne\d|\bar\d|router"),
+            Some(r"(?i)\bne\d|\bar\d|router|netengine"),
             "Huawei NE/AR router",
             Some("Huawei"),
         ),
@@ -234,11 +250,14 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "Citrix ADC (NetScaler)",
             Some("Citrix"),
         ),
+        // 14823 is Aruba Networks' own enterprise number, which its mobility controllers and
+        // Instant APs answer under. Aruba's switches do not: ArubaOS-Switch is HP's 11. and
+        // ArubaOS-CX is 47196. (appended below). Until ADR-140 this row said "Aruba/HPE switch".
         (
             270,
             Some("1.3.6.1.4.1.14823."),
             None,
-            "Aruba/HPE switch",
+            "Aruba wireless controller",
             Some("Aruba"),
         ),
         (
@@ -269,11 +288,13 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "Brocade / Ruckus switch",
             Some("Brocade"),
         ),
+        // 25053 is Ruckus Wireless: ZoneDirector, Unleashed and SmartZone. The ICX switches answer
+        // under Foundry's 1991. (the row above). Until ADR-140 this row said "Brocade / Ruckus switch".
         (
             320,
             Some("1.3.6.1.4.1.25053."),
             None,
-            "Brocade / Ruckus switch",
+            "Ruckus wireless controller",
             Some("Ruckus"),
         ),
         (
@@ -283,11 +304,14 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "Nokia SR router",
             Some("Nokia"),
         ),
+        // 6486 is Alcatel-Lucent Enterprise — the OmniSwitch line and the OmniAccess WLAN
+        // controllers (the longer prefix appended below). Nokia's SR routers are 6527. above.
+        // Until ADR-140 this row said "Nokia SR router".
         (
             340,
             Some("1.3.6.1.4.1.6486."),
             None,
-            "Nokia SR router",
+            "Alcatel-Lucent OmniSwitch",
             Some("Alcatel-Lucent"),
         ),
         (
@@ -466,6 +490,68 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "Cisco Meraki MS switch",
             Some("Cisco Meraki"),
         ),
+        // ── ADR-140: gaps found by replaying LibreNMS's 182 test devices ──
+        // Each row names the recording that proves it; `yagra-core`'s classifier test replays them.
+        //
+        // ArubaOS-CX answers under HPE Aruba Networking's 47196, not 14823 (arubaos-cx ×6).
+        (
+            275,
+            Some("1.3.6.1.4.1.47196."),
+            None,
+            "Aruba/HPE switch",
+            Some("Aruba"),
+        ),
+        // Dell Networking OS (the Force10 line) answers under 6027, not 674 (dnos ×6).
+        (
+            295,
+            Some("1.3.6.1.4.1.6027."),
+            None,
+            "Dell switch",
+            Some("Dell"),
+        ),
+        // A Dell PowerConnect W controller is an Aruba OEM running ArubaOS under Dell's number
+        // (arubaos_powerconnect). 285 sorts it ahead of the 674. Dell-switch catch-all at 290.
+        (
+            285,
+            Some("1.3.6.1.4.1.674.10895."),
+            Some(r"(?i)arubaos"),
+            "Aruba wireless controller",
+            Some("Dell"),
+        ),
+        // An Alcatel-Lucent OmniAccess WLAN controller runs AOS-W under 6486.800.1.1.2.2.
+        // (arubaos_aosw). 335 sorts it ahead of the 6486. OmniSwitch row at 340.
+        (
+            335,
+            Some("1.3.6.1.4.1.6486.800.1.1.2.2."),
+            None,
+            "Aruba wireless controller",
+            Some("Alcatel-Lucent"),
+        ),
+        // AireOS controllers can still answer under Airespace's 14179 (ciscowlc_2).
+        (
+            65,
+            Some("1.3.6.1.4.1.14179."),
+            None,
+            "Cisco wireless controller",
+            Some("Cisco"),
+        ),
+        // Eaton/MGE UPSes answer under 705 and say only "Eaton 9PX …" (eaton-mgeups_9pxle).
+        (
+            445,
+            Some("1.3.6.1.4.1.705."),
+            None,
+            "Generic UPS (RFC1628)",
+            Some("Eaton"),
+        ),
+        // A Ruckus Unleashed AP can report sysObjectID 0.0.0, so only its sysDescr identifies it
+        // (ruckuswireless-unleashed_r650).
+        (
+            615,
+            None,
+            Some(r"(?i)^ruckus wireless"),
+            "Ruckus wireless controller",
+            Some("Ruckus"),
+        ),
     ];
     RULES
         .iter()
@@ -626,5 +712,90 @@ mod tests {
             "both Meraki rules need a model discriminator"
         );
         assert_eq!(mx.vendor, Some("Cisco Meraki"));
+    }
+
+    /// ⚠️ Load-bearing — do not tidy away. A rule's seed id is its index in this array
+    /// (`SeedRange::ClassificationRules`), and migration 0114 names seven of those ids. Inserting a
+    /// rule mid-array re-keys every later rule, and until ADR-140 nothing failed when that happened.
+    /// Each row pins (enterprise prefix after `1.3.6.1.4.1.`, profile) at its index; an edit that
+    /// changes either is a change to a shipped row and needs a migration like 0114.
+    #[test]
+    fn the_rule_order_is_the_one_seed_ids_were_issued_for() {
+        const EXPECTED: &[(Option<&str>, &str)] = &[
+            (Some("9.12.3."), "Cisco Nexus switch (NX-OS)"),
+            (Some("9."), "Cisco Nexus switch (NX-OS)"),
+            (Some("9."), "Cisco ASA firewall"),
+            (Some("9."), "Cisco IOS-XR router"),
+            (Some("9."), "Cisco Firepower (FTD)"),
+            (Some("9."), "Cisco wireless controller"),
+            (Some("9."), "Cisco IOS/IOS-XE router"),
+            (Some("9."), "Cisco Catalyst switch (IOS/IOS-XE)"),
+            (Some("2636."), "Juniper SRX firewall"),
+            (Some("2636."), "Juniper MX router"),
+            (Some("2636."), "Juniper EX/QFX switch"),
+            (Some("2011."), "Huawei USG firewall"),
+            (Some("2011."), "Huawei NE/AR router"),
+            (Some("2011."), "Huawei CloudEngine switch"),
+            (Some("12356."), "Fortinet FortiGate"),
+            (Some("30065."), "Arista EOS switch"),
+            (Some("14988."), "MikroTik RouterOS"),
+            (Some("25461."), "Palo Alto PAN-OS firewall"),
+            (Some("2620."), "Check Point firewall"),
+            (Some("3375."), "F5 BIG-IP"),
+            (Some("5951."), "Citrix ADC (NetScaler)"),
+            (Some("14823."), "Aruba wireless controller"),
+            (Some("25506."), "Aruba/HPE switch"),
+            (Some("674."), "Dell switch"),
+            (Some("1916."), "Extreme EXOS switch"),
+            (Some("1991."), "Brocade / Ruckus switch"),
+            (Some("25053."), "Ruckus wireless controller"),
+            (Some("6527."), "Nokia SR router"),
+            (Some("6486."), "Alcatel-Lucent OmniSwitch"),
+            (Some("41112."), "Ubiquiti switch/AP"),
+            (Some("890."), "Zyxel switch"),
+            (Some("4526."), "NETGEAR switch"),
+            (Some("171."), "D-Link switch"),
+            (Some("11863."), "TP-Link switch"),
+            (Some("6876."), "VMware ESXi host"),
+            (Some("6574."), "Synology NAS"),
+            (Some("24681."), "QNAP NAS"),
+            (Some("789."), "NetApp / generic storage"),
+            (Some("318."), "APC UPS"),
+            (Some("311."), "Windows server"),
+            (Some("8072."), "Linux server (Net-SNMP)"),
+            (Some("2021."), "Linux server (Net-SNMP)"),
+            (None, "Generic UPS (RFC1628)"),
+            (None, "Network printer"),
+            (None, "VMware ESXi host"),
+            (None, "Windows server"),
+            (None, "Linux server (Net-SNMP)"),
+            (None, "Juniper EX/QFX switch"),
+            (None, "Cisco Catalyst switch (IOS/IOS-XE)"),
+            (Some("2011."), "Huawei wireless controller"),
+            (Some("22610."), "A10 Thunder ADC"),
+            (Some("29671."), "Cisco Meraki MX"),
+            (Some("29671."), "Cisco Meraki MS switch"),
+            (Some("47196."), "Aruba/HPE switch"),
+            (Some("6027."), "Dell switch"),
+            (Some("674.10895."), "Aruba wireless controller"),
+            (Some("6486.800.1.1.2.2."), "Aruba wireless controller"),
+            (Some("14179."), "Cisco wireless controller"),
+            (Some("705."), "Generic UPS (RFC1628)"),
+            (None, "Ruckus wireless controller"),
+        ];
+        let actual: Vec<(Option<&str>, &str)> = builtin_classification_rules()
+            .into_iter()
+            .map(|r| {
+                let prefix = r.sysobjectid_prefix.map(|p| {
+                    p.strip_prefix("1.3.6.1.4.1.")
+                        .expect("every built-in prefix is under the enterprises arc")
+                });
+                (prefix, r.profile_name)
+            })
+            .collect();
+        assert_eq!(
+            actual, EXPECTED,
+            "append new built-in rules; never insert, remove or reorder"
+        );
     }
 }

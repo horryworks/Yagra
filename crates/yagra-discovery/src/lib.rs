@@ -16,6 +16,9 @@
 //!  - [`os_version`] — where each OS family keeps its version and how to read it out of what an
 //!    identity probe returned (ADR-138). The poller asks it which OIDs to read and what they mean;
 //!    core asks it only to [`os_version::sanitize`] what arrived.
+//!  - [`normalize_sys_object_id`] / [`sanitize_sys_descr`] — what a node keeps of the two values the
+//!    classification rules match on, so they can be re-run on a node that already exists (ADR-140).
+//!    Applied by the poller and again by core, which cannot assume which poller sent them.
 
 mod credential_finder;
 pub mod os_version;
@@ -93,9 +96,83 @@ fn extract_model(sysdescr: &str, prefixes: &[&str]) -> Option<String> {
     None
 }
 
+/// The longest `sysDescr` a node keeps (ADR-140). RFC 1213 caps it at 255 octets; the margin is for
+/// devices that ignore that, and the cap is what stops one from filling a row.
+pub const SYS_DESCR_MAX_CHARS: usize = 1024;
+
+/// A `sysObjectID` as the classification rules compare it — dotted decimal such as
+/// `1.3.6.1.4.1.9.1.516` — or `None` if what the device sent is not one (ADR-140).
+///
+/// Surrounding whitespace and net-snmp's leading-dot spelling (`.1.3.6…`) are dropped. Anything else
+/// that is not digits and single dots is refused rather than stored, because a rule matches it as a
+/// prefix and a mangled value would quietly match nothing. `0.0.0` is kept: some Ruckus APs really
+/// answer that, and only their `sysDescr` then identifies them.
+#[must_use]
+pub fn normalize_sys_object_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let oid = trimmed.strip_prefix('.').unwrap_or(trimmed);
+    let valid = !oid.is_empty()
+        && oid.len() <= SYS_DESCR_MAX_CHARS
+        && oid
+            .split('.')
+            .all(|arc| !arc.is_empty() && arc.bytes().all(|b| b.is_ascii_digit()));
+    valid.then(|| oid.to_owned())
+}
+
+/// A `sysDescr` as a node keeps it for the classification rules (ADR-140).
+///
+/// Control characters are dropped **except** `\r`, `\n` and `\t`: a VRP or YunShan description spans
+/// several lines, and a rule may match across them, so flattening it the way
+/// [`os_version::sanitize`] does would change what a rule sees. The result is cut at
+/// [`SYS_DESCR_MAX_CHARS`] and trimmed; `None` when nothing is left.
+#[must_use]
+pub fn sanitize_sys_descr(raw: &str) -> Option<String> {
+    let kept: String = raw
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\r' | '\n' | '\t'))
+        .take(SYS_DESCR_MAX_CHARS)
+        .collect();
+    let trimmed = kept.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::identify;
+    use super::{identify, normalize_sys_object_id, sanitize_sys_descr, SYS_DESCR_MAX_CHARS};
+
+    #[test]
+    fn a_sys_object_id_is_kept_only_as_dotted_decimal() {
+        assert_eq!(
+            normalize_sys_object_id(" .1.3.6.1.4.1.9.1.516 ").as_deref(),
+            Some("1.3.6.1.4.1.9.1.516")
+        );
+        assert_eq!(normalize_sys_object_id("0.0.0").as_deref(), Some("0.0.0"));
+        for bad in [
+            "",
+            "   ",
+            "1.3..6",
+            "1.3.6.",
+            "SNMPv2-SMI::enterprises.9.1.516",
+            "1.3.6\n1",
+        ] {
+            assert_eq!(normalize_sys_object_id(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_sys_descr_keeps_its_line_breaks_and_loses_other_controls() {
+        let vrp = "Huawei YunShan OS \r\nVersion 1.24.0.1 (USG V600R024C00SPC100)\u{0}\u{7} \r\n";
+        assert_eq!(
+            sanitize_sys_descr(vrp).as_deref(),
+            Some("Huawei YunShan OS \r\nVersion 1.24.0.1 (USG V600R024C00SPC100)")
+        );
+        assert_eq!(sanitize_sys_descr(" \u{1b}\t\r\n"), None);
+        let long = "x".repeat(SYS_DESCR_MAX_CHARS + 10);
+        assert_eq!(
+            sanitize_sys_descr(&long).map(|s| s.chars().count()),
+            Some(SYS_DESCR_MAX_CHARS)
+        );
+    }
 
     #[test]
     fn identify_extracts_vendor_and_model() {

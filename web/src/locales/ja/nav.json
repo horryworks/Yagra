@@ -19,6 +19,7 @@
     "discovery": "ディスカバリ",
     "profiles": "デバイスプロファイル",
     "classificationRules": "分類ルール",
+    "reclassify": "分類のかけ直し",
     "metricSets": "メトリクスセット",
     "mib": "MIB リポジトリ",
     "credentials": "認証情報とシークレット"
@@ -78,6 +79,7 @@
   "descriptions": {
     "nodesProfiles": "デバイスクラスごとに、ノードが何を収集するかをまとめた設定",
     "nodesClassificationRules": "検出したノードにプロファイルとフォルダを自動で割り当てるルール",
+    "nodesReclassify": "登録済みのノードのうち、分類ルールが今なら別のプロファイルを選ぶもの",
     "nodesMetricSets": "デバイスプロファイルに取り付ける、名前付きのメトリクスの束（OID → メトリクス）",
     "nodesMib": "MIB ファイルを取り込んで、OID を名前付きメトリクスに変換",
     "nodesCredentials": "監視対象の機器に接続するための認証情報（SNMP・API）。保存時に暗号化されます",

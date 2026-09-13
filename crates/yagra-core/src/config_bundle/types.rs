@@ -245,6 +245,11 @@ pub struct NodeRow {
     /// deployment, which reads as "no note" rather than failing the import.
     #[serde(default)]
     pub notes: Option<String>,
+    /// Whether a person fixed this node's profile against reclassification (ADR-140). Carried
+    /// because it is a decision, not an observation; absent in a bundle written by an older
+    /// deployment, which reads as unlocked — the state every node starts in.
+    #[serde(default)]
+    pub profile_locked: bool,
 }
 
 /// A threshold rule.

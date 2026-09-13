@@ -490,6 +490,110 @@ mod tests {
         );
     }
 
+    /// **Migration 0114 replaces a built-in classification rule only while it is still what Yagra
+    /// shipped** (ADR-140).
+    ///
+    /// The test database has already run 0114 — on an empty table, where it deletes nothing — so
+    /// three rules are wound back to their shipped content first. One is then left as shipped, one
+    /// gets an operator's regex, and one is switched off. After 0114's statement and a re-seed, only
+    /// the first may carry the corrected content.
+    ///
+    /// 🚨 All three halves are needed. A statement that deleted nothing would pass the two "kept"
+    /// assertions, and a range delete in the style of 0020 would pass the "fixed" one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0114_fixes_shipped_rules_and_leaves_edited_ones(pool: sqlx::PgPool) {
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.seed_builtin_profiles().await.expect("seed");
+        let profiles = yagra_common::builtin_profiles();
+        let profile = |name: &str| {
+            SeedRange::Profiles.id(profiles
+                .iter()
+                .position(|p| p.name == name)
+                .expect("a built-in profile"))
+        };
+        let ftd = SeedRange::ClassificationRules.id(4);
+        let wlc = SeedRange::ClassificationRules.id(5);
+        let alcatel = SeedRange::ClassificationRules.id(28);
+        for (id, priority, regex, shipped_profile) in [
+            (
+                ftd,
+                50,
+                Some(r"(?i)firepower|\bFTD\b"),
+                "Cisco Firepower (FTD)",
+            ),
+            (
+                wlc,
+                60,
+                Some(r"(?i)wireless lan controller|\bWLC\b|air-ct"),
+                "Cisco wireless controller",
+            ),
+            (alcatel, 340, None, "Nokia SR router"),
+        ] {
+            sqlx::query(
+                "UPDATE classification_rules \
+                 SET priority = $2, sysdescr_regex = $3, profile_id = $4 WHERE id = $1",
+            )
+            .bind(id)
+            .bind(priority)
+            .bind(regex)
+            .bind(profile(shipped_profile))
+            .execute(&pool)
+            .await
+            .expect("wind a rule back to what shipped");
+        }
+        sqlx::query("UPDATE classification_rules SET sysdescr_regex = $2 WHERE id = $1")
+            .bind(wlc)
+            .bind("(?i)our controllers")
+            .execute(&pool)
+            .await
+            .expect("an operator's edit");
+        sqlx::query("UPDATE classification_rules SET enabled = false WHERE id = $1")
+            .bind(alcatel)
+            .execute(&pool)
+            .await
+            .expect("an operator's switch-off");
+
+        sqlx::query(include_str!(
+            "../../../../migrations/0114_fix_builtin_classification_rules.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("0114");
+        repo.seed_builtin_profiles().await.expect("re-seed");
+
+        async fn rule(pool: &sqlx::PgPool, id: Uuid) -> (i32, Option<String>, Uuid, bool) {
+            sqlx::query_as(
+                "SELECT priority, sysdescr_regex, profile_id, enabled \
+                 FROM classification_rules WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("the rule is present")
+        }
+        assert_eq!(
+            rule(&pool, ftd).await,
+            (
+                25,
+                Some(r"(?i)firepower threat defense|\bFTD\b".to_owned()),
+                profile("Cisco Firepower (FTD)"),
+                true
+            ),
+            "the shipped FTD rule was not corrected"
+        );
+        assert_eq!(
+            rule(&pool, wlc).await.1.as_deref(),
+            Some("(?i)our controllers"),
+            "an operator's regex was overwritten"
+        );
+        assert_eq!(
+            rule(&pool, alcatel).await,
+            (340, None, profile("Nokia SR router"), false),
+            "a switched-off rule was replaced"
+        );
+    }
+
     /// 🚨 **Every seeded id is its entry's array position.**
     ///
     /// The landmine CLAUDE.md names by hand: `SeedRange::X.id(i)` takes `i` from the position in

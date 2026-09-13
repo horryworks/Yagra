@@ -2070,6 +2070,16 @@ pub struct PollResult {
     /// wire form is unchanged (ADR-017).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os_version: Option<String>,
+    /// The device's `sysObjectID.0`, read by the same identity probe as `sys_descr` (ADR-140), so
+    /// core can keep what the device says it is and re-run the classification rules on a node that
+    /// already exists. Normalized poller-side to dotted digits; `None` means "not probed or not
+    /// read", never "the device has none", and core leaves the stored value alone on `None`.
+    /// Descriptive — never a TSDB label.
+    ///
+    /// Defaulted so an N-1 poller stays compatible, and skipped when absent so every other result's
+    /// wire form is unchanged (ADR-017).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sys_object_id: Option<String>,
     /// The DNS resolution chain observed on this poll (DNS checks only, ADR-033). Structured
     /// metadata core persists into PostgreSQL — **never a TSDB label** (ADR-011), the same tier as
     /// `interfaces` and `sys_descr`. Defaulted so an older poller that doesn't send it stays N-1
@@ -3409,6 +3419,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            sys_object_id: None,
             dns_chain: None,
             neighbors: None,
             l3: None,
@@ -3448,6 +3459,30 @@ mod tests {
         let wire = serde_json::to_string(&result).unwrap();
         assert!(!wire.contains("neighbors"), "{wire}");
         assert!(!wire.contains("observational"), "{wire}");
+    }
+
+    /// ADR-140's identity field. An N-1 poller sends no `sys_object_id`; a result without one keeps
+    /// exactly the wire form it had; and a probed one survives the round trip.
+    #[test]
+    fn poll_result_sys_object_id_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "sys_descr": "Cisco IOS Software",
+            "some_future_field": 42
+        }"#;
+        let mut result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.sys_object_id.is_none());
+        assert_eq!(result.sys_descr.as_deref(), Some("Cisco IOS Software"));
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("sys_object_id"), "{wire}");
+
+        result.sys_object_id = Some("1.3.6.1.4.1.9.1.516".to_owned());
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        assert_eq!(back.sys_object_id.as_deref(), Some("1.3.6.1.4.1.9.1.516"));
     }
 
     /// `None` (no set observed) and `Some(empty)` (this device has no neighbours) must survive the

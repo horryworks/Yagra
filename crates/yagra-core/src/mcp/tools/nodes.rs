@@ -420,11 +420,12 @@ impl YagraMcp {
         };
         // `get_node_with_notes`, not `get_node`: this tool folds `GET /api/v1/nodes/{node_id}`, so
         // it owes the same answer that route gives — the note included (ADR-135).
-        let (node, notes, os_version) = match admin.repo.get_node_with_notes(p.node_id).await {
-            Ok(Some(n)) => (n.node, n.notes, n.os_version),
-            Ok(None) => return tool_unavailable(TOOL, "no node with that id"),
-            Err(e) => return tool_error(TOOL, "load node", &e),
-        };
+        let (node, notes, os_version, profile_locked) =
+            match admin.repo.get_node_with_notes(p.node_id).await {
+                Ok(Some(n)) => (n.node, n.notes, n.os_version, n.profile_locked),
+                Ok(None) => return tool_unavailable(TOOL, "no node with that id"),
+                Err(e) => return tool_error(TOOL, "load node", &e),
+            };
         let nid = NodeId::from(p.node_id);
         // Same fallback as `list_nodes` above and as the REST detail view: the engine's opinion, or
         // a recent RTT sample when it has none.
@@ -462,6 +463,7 @@ impl YagraMcp {
             snmp_configured: admin.dispatcher.snmp_configured_for(&node),
             notes,
             os_version,
+            profile_locked,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()

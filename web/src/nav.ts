@@ -148,6 +148,14 @@ export const NAV: NavSection[] = [
             path: '/nodes/classification-rules',
             implemented: true,
           },
+          // After the rules, because it is what a rule change leads to: the nodes already in the
+          // tree that the rules as they now stand would file under a different profile (ADR-140).
+          {
+            labelKey: 'nodes.reclassify',
+            descKey: 'descriptions.nodesReclassify',
+            path: '/nodes/reclassify',
+            implemented: true,
+          },
         ],
       },
     ],

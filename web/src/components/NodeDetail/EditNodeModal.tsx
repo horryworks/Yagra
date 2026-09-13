@@ -38,6 +38,7 @@ import {
   NODE_EDIT_KIND_SPEC,
   NOTES_MAX,
   PARTIAL_SAVE_KEY,
+  withProfileChoice,
   type NodeEditDraft,
   type NodeEditField,
 } from './nodeEditForm';
@@ -150,7 +151,13 @@ export function EditNodeModal({
             : undefined
         }
       >
-        <Select value={d.profileId} onChange={(e) => set('profileId', e.target.value)}>
+        <Select
+          value={d.profileId}
+          onChange={(e) => {
+            const next = e.target.value;
+            setD((prev) => withProfileChoice(prev, next));
+          }}
+        >
           <option value="">{t('add.none')}</option>
           {profileOptions(node.kind, profiles, d.profileId).map((p) => (
             <option key={p.id} value={p.id}>
@@ -159,6 +166,20 @@ export function EditNodeModal({
           ))}
         </Select>
       </Row>
+    ),
+    // Not a `Row`: its `<label>` would wrap the hint too. The checkbox carries its own label.
+    profileLock: (
+      <div className="modal-field nd-profile-lock">
+        <label className="nd-profile-lock-check">
+          <input
+            type="checkbox"
+            checked={d.profileLocked}
+            onChange={(e) => set('profileLocked', e.target.checked)}
+          />
+          <span>{t('editNode.profileLock')}</span>
+        </label>
+        <FieldHint>{t('editNode.profileLockHint')}</FieldHint>
+      </div>
     ),
     snmpCredential: (
       <Row label={t('field.snmpCredential')}>

@@ -173,6 +173,8 @@ fn make_result(
         // `update_os_version_batch` writes only a changed one — so a firehose that sent the same
         // version on every result would exercise a no-op, not the fleet's real write load.
         os_version: None,
+        // None for the same reason: identity rides the hourly probe (ADR-140).
+        sys_object_id: None,
         dns_chain: None,
         neighbors: None,
         l3: None,

@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Nodes ▸ Reclassify (ADR-140). The table itself is DataTable's; these are the toolbar's two
+   additions and the lines around the table. */
+
+.reclassify-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.reclassify-counts {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.reclassify-message {
+  color: var(--text-primary);
+  margin: 8px 0;
+}
+
+.reclassify-hint {
+  margin-top: 8px;
+}

@@ -144,6 +144,45 @@
       "allStatuses": "Enabled and disabled"
     }
   },
+  "reclassify": {
+    "note": "Nodes whose profile differs from the one the current classification rules choose. Nothing changes until you apply it.",
+    "unavailable": "Reclassification is unavailable in skeleton mode (no metadata store).",
+    "counts": "{{differ}} differ · {{locked}} locked · {{unidentified}} not identified yet",
+    "truncated": "Showing the first {{shown}} of {{total}}.",
+    "selectAll": "Select all",
+    "selectNode": "Select {{name}}",
+    "apply": "Apply to selected",
+    "lock": "Keep current profile",
+    "noRule": "No rule matched — Generic SNMP",
+    "cols": {
+      "select": "Select",
+      "node": "Node",
+      "current": "Current profile",
+      "suggested": "Suggested profile",
+      "rule": "Matched rule",
+      "sysObjectId": "sysObjectID",
+      "sysDescr": "sysDescr"
+    },
+    "empty": "Every identified node already has the profile its rules choose.",
+    "lockedHint": "A locked node keeps its profile and is not listed; unlock it from the node's Edit dialog.",
+    "unidentifiedHint": "The poller reads what each device is on its hourly SNMP identity probe, so a node that is not polled over SNMP is never identified.",
+    "confirm": {
+      "title_one": "Change the profile of {{count}} node?",
+      "title_other": "Change the profile of {{count}} nodes?",
+      "body": "Their metric sets, profile thresholds and maintenance windows will follow the new profile.",
+      "stops": "Metrics that only the old profile collected will stop.",
+      "submit": "Apply"
+    },
+    "result": {
+      "applied": "Applied to {{applied}}. Not applied: {{changed}} changed since this page loaded, {{locked}} locked, {{hidden}} not visible to you.",
+      "locked_one": "Locked {{count}} node.",
+      "locked_other": "Locked {{count}} nodes."
+    },
+    "err": {
+      "apply": "failed to apply the profiles",
+      "lock": "failed to lock the profiles"
+    }
+  },
   "sets": {
     "note": "Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it.",
     "unavailable": "Metric sets are unavailable in skeleton mode (no metadata store).",

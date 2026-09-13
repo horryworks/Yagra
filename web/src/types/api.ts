@@ -649,6 +649,19 @@ export type ClassificationRule = components['schemas']['ClassificationRule'];
 /** Create/update body for a classification rule. */
 export type ClassificationRuleInput = components['schemas']['ClassificationRuleBody'];
 
+/** Nodes ▸ Reclassify (`GET /api/v1/reclassify`, ADR-140): the device nodes whose profile differs
+ *  from the one the classification rules choose, with counts of locked and not-yet-identified ones. */
+export type ReclassifyView = components['schemas']['ReclassifyView'];
+
+/** One node the rules would move, with the rule that chose its new profile. */
+export type ReclassifyProposal = components['schemas']['ReclassifyProposal'];
+
+/** What `POST /api/v1/reclassify/apply` did, and why the rest were skipped. */
+export type ReclassifyApplied = components['schemas']['ReclassifyApplied'];
+
+/** What `POST /api/v1/reclassify/lock` did. */
+export type ReclassifyLocked = components['schemas']['ReclassifyLocked'];
+
 /** A discovery scan's status (`GET /api/v1/discovery/scan/:id`), with the candidates that are
  *  already device nodes listed beside them (ADR-139). */
 export type DiscoveryScan = components['schemas']['ScanView'];

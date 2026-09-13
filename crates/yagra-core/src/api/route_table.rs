@@ -384,6 +384,27 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/reclassify",
+        // `GroupFiltered`, not `ADMIN_CFG` like the rules beside it (ADR-140): every answer is a
+        // node, and `manage_config` is Operator-held and an Operator can be scoped — the reason
+        // `GET /discovery/scan/:id` gives.
+        GroupFiltered,
+        Tool("get_config"),
+    ),
+    (
+        "POST",
+        "/api/v1/reclassify/apply",
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/reclassify/lock",
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/collection-templates",
         ADMIN_CFG,
         Tool("get_config"),

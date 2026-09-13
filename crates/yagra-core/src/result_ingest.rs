@@ -488,6 +488,11 @@ pub(crate) struct MetaRecord {
     /// already caps it, but this is the edge a value from an older or misbehaving poller crosses.
     /// `None` means nothing was read and nothing is written, never "the device has no version".
     os_version: Option<String>,
+    /// What the device says it is — `sysObjectID` and `sysDescr` as the classification rules will see
+    /// them (ADR-140), normalized again here for the reason `os_version` is. Either may be `None`,
+    /// and a `None` writes nothing to that column.
+    sys_object_id: Option<String>,
+    sys_descr: Option<String>,
     /// The DNS resolution chain observed on this poll (DNS monitors only, ADR-033). Same tier as
     /// the fields above: poller-returned structured strings that belong in PostgreSQL, never in the
     /// TSDB.
@@ -635,6 +640,16 @@ fn persist_metrics_and_meta(
         .os_version
         .as_deref()
         .and_then(yagra_discovery::os_version::sanitize);
+    // What the device says it is (ADR-140), kept so the classification rules can be re-run on a node
+    // that already exists. It rides the identity probe, so it arrives hourly rather than per poll.
+    let sys_object_id = result
+        .sys_object_id
+        .as_deref()
+        .and_then(yagra_discovery::normalize_sys_object_id);
+    let sys_descr = result
+        .sys_descr
+        .as_deref()
+        .and_then(yagra_discovery::sanitize_sys_descr);
     // A DNS chain rides the same shed-able meta tier. Dropping one only defers recording a change
     // by a poll — the next observation re-reports the current chain — so the only thing genuinely
     // lost is a transient change that reverts before the next poll.
@@ -653,6 +668,8 @@ fn persist_metrics_and_meta(
     if !interfaces.is_empty()
         || identity.is_some()
         || os_version.is_some()
+        || sys_object_id.is_some()
+        || sys_descr.is_some()
         || dns_chain.is_some()
         || neighbors.is_some()
         || l3.is_some()
@@ -664,6 +681,8 @@ fn persist_metrics_and_meta(
             interfaces,
             identity,
             os_version,
+            sys_object_id,
+            sys_descr,
             dns_chain,
             neighbors,
             l3,
@@ -1025,6 +1044,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut iface_rows: Vec<repo::InterfaceBatchRow> = Vec::new();
     let mut ident_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
     let mut os_version_rows: Vec<(Uuid, String)> = Vec::new();
+    let mut snmp_identity_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
@@ -1039,6 +1059,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if let Some(version) = rec.os_version {
             os_version_rows.push((rec.node_id, version));
+        }
+        if rec.sys_object_id.is_some() || rec.sys_descr.is_some() {
+            snmp_identity_rows.push((rec.node_id, rec.sys_object_id, rec.sys_descr));
         }
         if let Some(chain) = rec.dns_chain {
             dns_rows.push((rec.node_id, chain));
@@ -1069,6 +1092,11 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !os_version_rows.is_empty() {
         if let Err(e) = repo.update_os_version_batch(&os_version_rows).await {
             tracing::warn!(error = %e, "batch node os-version update failed");
+        }
+    }
+    if !snmp_identity_rows.is_empty() {
+        if let Err(e) = repo.update_snmp_identity_batch(&snmp_identity_rows).await {
+            tracing::warn!(error = %e, "batch node snmp-identity update failed");
         }
     }
     // One statement per observation, in arrival order. Deliberately NOT coalesced per node the way
@@ -1185,6 +1213,7 @@ mod tests {
             }],
             sys_descr: None,
             os_version: None,
+            sys_object_id: None,
             dns_chain: None,
             neighbors: None,
             l3: None,
@@ -1273,6 +1302,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            sys_object_id: None,
             dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
             l3: None,
@@ -1463,6 +1493,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            sys_object_id: None,
             dns_chain: None,
             neighbors: None,
             l3: None,

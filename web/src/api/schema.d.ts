@@ -3285,6 +3285,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reclassify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_reclassify"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reclassify/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["apply_reclassify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reclassify/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["lock_reclassify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reports/definitions": {
         parameters: {
             query?: never;
@@ -7957,6 +8005,15 @@ export interface components {
             /** @description The bearer token for subsequent requests. */
             token: string;
         };
+        /** @description The rule behind a proposal, as the classification-rules screen shows it. */
+        MatchedRule: {
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            priority: number;
+            sysdescr_regex?: string | null;
+            sysobjectid_prefix?: string | null;
+        };
         /** @description One rule that reaches a port, and whether it is the one in force there. */
         MatchingThreshold: {
             /**
@@ -8524,6 +8581,12 @@ export interface components {
             /** Format: uuid */
             profile_id?: string | null;
             /**
+             * @description Whether a person fixed this node's profile, so Nodes ▸ Reclassify never offers to change it
+             *     (ADR-140). **Absent** = leave it unchanged. The edit dialog sets it when the operator picks a
+             *     different profile, and an older client must not unlock a node by saving a form.
+             */
+            profile_locked?: boolean | null;
+            /**
              * @description The node's own labels. **Absent** = leave them unchanged; otherwise **the whole list is
              *     replaced** by what is sent — the edit dialog shows every label and resends every label, so
              *     a replacement is what the operator sees. `[]` clears them all.
@@ -8633,6 +8696,11 @@ export interface components {
             pool?: string | null;
             /** Format: uuid */
             profile_id?: string | null;
+            /**
+             * @description Whether a person fixed this node's profile (ADR-140). A locked node is never offered on
+             *     Nodes ▸ Reclassify; the edit dialog is where it is set and cleared. Detail-only.
+             */
+            profile_locked: boolean;
             /**
              * @description Whether SNMP polling is **configured** for this node — not whether it is answering.
              *
@@ -8830,6 +8898,12 @@ export interface components {
             pool?: string | null;
             /** Format: uuid */
             profile_id?: string | null;
+            /**
+             * @description Whether a person fixed this node's profile against reclassification (ADR-140). Carried
+             *     because it is a decision, not an observation; absent in a bundle written by an older
+             *     deployment, which reads as unlocked — the state every node starts in.
+             */
+            profile_locked?: boolean;
             /** Format: double */
             sort_order: number;
             /**
@@ -9680,6 +9754,97 @@ export interface components {
             node_id: string;
             provider: string;
             summary: string;
+        };
+        /** @description What an apply did. The four counts add up to the number of distinct nodes named. */
+        ReclassifyApplied: {
+            /** @description Nodes moved to the profile the rules choose. */
+            applied: number;
+            /**
+             * @description Nodes no longer on the profile the screen showed, or for which the rules no longer choose
+             *     the profile the screen proposed.
+             */
+            skipped_changed: number;
+            /** @description Nodes the caller may not see, that are not device nodes, or that do not exist. */
+            skipped_hidden: number;
+            /** @description Nodes someone locked. */
+            skipped_locked: number;
+        };
+        /** @description The changes to make. */
+        ReclassifyApplyBody: {
+            /** @description At most 5,000. A node named twice counts once, and its last entry is the one used. */
+            items: components["schemas"]["ReclassifyItem"][];
+        };
+        /** @description One change to make, echoing what the screen showed. */
+        ReclassifyItem: {
+            /**
+             * Format: uuid
+             * @description The profile the screen showed the node on; `null` ⇒ it had none. The change is skipped if the
+             *     node has moved since.
+             */
+            from_profile_id?: string | null;
+            /** Format: uuid */
+            node_id: string;
+            /**
+             * Format: uuid
+             * @description The profile the screen proposed. The change is skipped if the rules no longer choose it.
+             */
+            to_profile_id: string;
+        };
+        /** @description Lock or unlock the profile of the named nodes. */
+        ReclassifyLockBody: {
+            /** @description `true` fixes each node's profile against reclassification; `false` releases it. */
+            locked: boolean;
+            /** @description At most 5,000. */
+            node_ids: string[];
+        };
+        /** @description What a lock did. The two counts add up to the number of distinct nodes named. */
+        ReclassifyLocked: {
+            /** @description Nodes the caller may not see, that are not device nodes, or that do not exist. */
+            skipped_hidden: number;
+            updated: number;
+        };
+        /** @description One node the rules would move. */
+        ReclassifyProposal: {
+            /**
+             * Format: uuid
+             * @description `null` ⇒ the node has no profile.
+             */
+            current_profile_id?: string | null;
+            current_profile_name?: string | null;
+            model?: string | null;
+            /** Format: uuid */
+            node_id: string;
+            node_name: string;
+            rule?: null | components["schemas"]["MatchedRule"];
+            /** Format: uuid */
+            suggested_profile_id: string;
+            suggested_profile_name?: string | null;
+            sys_descr?: string | null;
+            /** @description What the device last said it is — the input the rules ran on. */
+            sys_object_id: string;
+            /** @description The vendor and model applying writes onto the node; `null` leaves the node's own. */
+            vendor?: string | null;
+        };
+        /** @description What Nodes ▸ Reclassify shows. */
+        ReclassifyView: {
+            /**
+             * @description Locked nodes the rules would move. Counted and never listed: a person fixed their profile.
+             *     A lock is cleared from the node's edit dialog.
+             */
+            locked: number;
+            /**
+             * @description Unlocked device nodes whose profile differs from the one the classification rules choose,
+             *     ordered by node name. At most 5,000 — `total` says how many there are.
+             */
+            proposals: components["schemas"]["ReclassifyProposal"][];
+            /** @description How many unlocked device nodes differ. */
+            total: number;
+            /**
+             * @description Device nodes the rules cannot be run for yet, because no `sysObjectID` is stored for them.
+             *     The poller reads it on its hourly identity probe, so a new or just-upgraded deployment fills
+             *     this in within the hour; a node that is not SNMP-polled never has one.
+             */
+            unidentified: number;
         };
         /**
          * @description A release the operator could move to, with the direction and the verdict already decided by the
@@ -24430,6 +24595,173 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode, or no LLM provider configured / configured wrongly */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_reclassify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device nodes whose profile differs from the one the classification rules choose, with counts of locked and not-yet-identified nodes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReclassifyView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    apply_reclassify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReclassifyApplyBody"];
+            };
+        };
+        responses: {
+            /** @description How many nodes moved and why the rest did not */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReclassifyApplied"];
+                };
+            };
+            /** @description More than 5,000 items */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    lock_reclassify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReclassifyLockBody"];
+            };
+        };
+        responses: {
+            /** @description How many nodes were locked or unlocked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReclassifyLocked"];
+                };
+            };
+            /** @description More than 5,000 node ids */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

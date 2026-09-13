@@ -16484,6 +16484,196 @@
         }
       }
     },
+    "/api/v1/reclassify": {
+      "get": {
+        "tags": [
+          "classification"
+        ],
+        "operationId": "get_reclassify",
+        "responses": {
+          "200": {
+            "description": "The device nodes whose profile differs from the one the classification rules choose, with counts of locked and not-yet-identified nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReclassifyView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reclassify/apply": {
+      "post": {
+        "tags": [
+          "classification"
+        ],
+        "operationId": "apply_reclassify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReclassifyApplyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many nodes moved and why the rest did not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReclassifyApplied"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More than 5,000 items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reclassify/lock": {
+      "post": {
+        "tags": [
+          "classification"
+        ],
+        "operationId": "lock_reclassify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReclassifyLockBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many nodes were locked or unlocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReclassifyLocked"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More than 5,000 node ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/reports/definitions": {
       "get": {
         "tags": [
@@ -29435,6 +29625,36 @@
           }
         }
       },
+      "MatchedRule": {
+        "type": "object",
+        "description": "The rule behind a proposal, as the classification-rules screen shows it.",
+        "required": [
+          "id",
+          "priority"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sysdescr_regex": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sysobjectid_prefix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "MatchingThreshold": {
         "type": "object",
         "description": "One rule that reaches a port, and whether it is the one in force there.",
@@ -30592,6 +30812,13 @@
             ],
             "format": "uuid"
           },
+          "profile_locked": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether a person fixed this node's profile, so Nodes ▸ Reclassify never offers to change it\n(ADR-140). **Absent** = leave it unchanged. The edit dialog sets it when the operator picks a\ndifferent profile, and an older client must not unlock a node by saving a form."
+          },
           "tags": {
             "type": [
               "array",
@@ -30646,6 +30873,7 @@
           "id",
           "name",
           "address",
+          "profile_locked",
           "kind",
           "snmp_configured",
           "tags",
@@ -30750,6 +30978,10 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "profile_locked": {
+            "type": "boolean",
+            "description": "Whether a person fixed this node's profile (ADR-140). A locked node is never offered on\nNodes ▸ Reclassify; the edit dialog is where it is set and cleared. Detail-only."
           },
           "snmp_configured": {
             "type": "boolean",
@@ -31143,6 +31375,10 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "profile_locked": {
+            "type": "boolean",
+            "description": "Whether a person fixed this node's profile against reclassification (ADR-140). Carried\nbecause it is a decision, not an observation; absent in a bundle written by an older\ndeployment, which reads as unlocked — the state every node starts in."
           },
           "sort_order": {
             "type": "number",
@@ -32779,6 +33015,233 @@
           },
           "summary": {
             "type": "string"
+          }
+        }
+      },
+      "ReclassifyApplied": {
+        "type": "object",
+        "description": "What an apply did. The four counts add up to the number of distinct nodes named.",
+        "required": [
+          "applied",
+          "skipped_changed",
+          "skipped_locked",
+          "skipped_hidden"
+        ],
+        "properties": {
+          "applied": {
+            "type": "integer",
+            "description": "Nodes moved to the profile the rules choose.",
+            "minimum": 0
+          },
+          "skipped_changed": {
+            "type": "integer",
+            "description": "Nodes no longer on the profile the screen showed, or for which the rules no longer choose\nthe profile the screen proposed.",
+            "minimum": 0
+          },
+          "skipped_hidden": {
+            "type": "integer",
+            "description": "Nodes the caller may not see, that are not device nodes, or that do not exist.",
+            "minimum": 0
+          },
+          "skipped_locked": {
+            "type": "integer",
+            "description": "Nodes someone locked.",
+            "minimum": 0
+          }
+        }
+      },
+      "ReclassifyApplyBody": {
+        "type": "object",
+        "description": "The changes to make.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReclassifyItem"
+            },
+            "description": "At most 5,000. A node named twice counts once, and its last entry is the one used."
+          }
+        }
+      },
+      "ReclassifyItem": {
+        "type": "object",
+        "description": "One change to make, echoing what the screen showed.",
+        "required": [
+          "node_id",
+          "to_profile_id"
+        ],
+        "properties": {
+          "from_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The profile the screen showed the node on; `null` ⇒ it had none. The change is skipped if the\nnode has moved since."
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "to_profile_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The profile the screen proposed. The change is skipped if the rules no longer choose it."
+          }
+        }
+      },
+      "ReclassifyLockBody": {
+        "type": "object",
+        "description": "Lock or unlock the profile of the named nodes.",
+        "required": [
+          "node_ids",
+          "locked"
+        ],
+        "properties": {
+          "locked": {
+            "type": "boolean",
+            "description": "`true` fixes each node's profile against reclassification; `false` releases it."
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "At most 5,000."
+          }
+        }
+      },
+      "ReclassifyLocked": {
+        "type": "object",
+        "description": "What a lock did. The two counts add up to the number of distinct nodes named.",
+        "required": [
+          "updated",
+          "skipped_hidden"
+        ],
+        "properties": {
+          "skipped_hidden": {
+            "type": "integer",
+            "description": "Nodes the caller may not see, that are not device nodes, or that do not exist.",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ReclassifyProposal": {
+        "type": "object",
+        "description": "One node the rules would move.",
+        "required": [
+          "node_id",
+          "node_name",
+          "suggested_profile_id",
+          "sys_object_id"
+        ],
+        "properties": {
+          "current_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` ⇒ the node has no profile."
+          },
+          "current_profile_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "rule": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MatchedRule",
+                "description": "The rule that chose the profile; `null` ⇒ no rule matched and the device fell through to\n\"Generic SNMP\"."
+              }
+            ]
+          },
+          "suggested_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "suggested_profile_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sys_descr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sys_object_id": {
+            "type": "string",
+            "description": "What the device last said it is — the input the rules ran on."
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The vendor and model applying writes onto the node; `null` leaves the node's own."
+          }
+        }
+      },
+      "ReclassifyView": {
+        "type": "object",
+        "description": "What Nodes ▸ Reclassify shows.",
+        "required": [
+          "proposals",
+          "total",
+          "locked",
+          "unidentified"
+        ],
+        "properties": {
+          "locked": {
+            "type": "integer",
+            "description": "Locked nodes the rules would move. Counted and never listed: a person fixed their profile.\nA lock is cleared from the node's edit dialog.",
+            "minimum": 0
+          },
+          "proposals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReclassifyProposal"
+            },
+            "description": "Unlocked device nodes whose profile differs from the one the classification rules choose,\nordered by node name. At most 5,000 — `total` says how many there are."
+          },
+          "total": {
+            "type": "integer",
+            "description": "How many unlocked device nodes differ.",
+            "minimum": 0
+          },
+          "unidentified": {
+            "type": "integer",
+            "description": "Device nodes the rules cannot be run for yet, because no `sysObjectID` is stored for them.\nThe poller reads it on its hourly identity probe, so a new or just-upgraded deployment fills\nthis in within the hour; a node that is not SNMP-polled never has one.",
+            "minimum": 0
           }
         }
       },

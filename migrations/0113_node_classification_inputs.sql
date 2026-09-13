@@ -1,0 +1,33 @@
+-- 0113_node_classification_inputs — what a node's device says it is, and whether a person chose its
+-- profile (ADR-140).
+--
+-- reversible: additive only — three columns on `nodes`, nothing narrowed and nothing rewritten. An
+-- older core projects a node row through an explicit column list (`NodeRepo::NODE_COLUMNS`) and
+-- inserts nodes by naming its columns, so it never selects these and `profile_locked` takes its
+-- default on every row it creates. Rolling the binary back leaves the values in place, unread, and
+-- rolling forward again finds them. No `schema_compat` floor, for the reason 0108 records: every
+-- release from 0.2.2 on tolerates a database carrying migrations it does not embed.
+--
+-- `sys_object_id` / `sys_descr` — WHAT THE DEVICE SAYS IT IS
+-- The two values the classification rules match on. The poller's hourly identity probe has always
+-- read both and core threw them away, so nothing could re-run the rules on a node that already
+-- existed. They are observed state, not configuration: only the result-ingest metadata writer
+-- writes them, only when a value differs (`IS DISTINCT FROM`, the no-op-write rule ADR-110
+-- Increment 1 established for this table), and a poll that read nothing writes nothing. The
+-- configuration bundle (ADR-040) does not carry them. Like `os_version` (0111) they stay out of
+-- `NODE_COLUMNS`: the Reclassify read is their only reader.
+--
+-- `profile_locked` — A PERSON CHOSE THIS PROFILE
+-- Until now nothing recorded whether a node's profile was picked by a person or accepted from the
+-- classifier's suggestion — Discovery pre-selects the suggestion, so the server only ever saw the
+-- final value. A locked node is never offered for reclassification. Every existing row starts
+-- unlocked (the user's decision): there is no evidence to lock any of them with, and starting
+-- locked would hide every misclassification the corrected rules find. It is configuration, so the
+-- bundle does carry it.
+--
+-- NO LENGTH CHECK on `sys_descr`, deliberately: the 1,024-character cap is applied at ingest, and a
+-- CHECK here would turn one over-long value from a misbehaving poller into a failed batch UPDATE for
+-- every node in it.
+ALTER TABLE nodes ADD COLUMN sys_object_id TEXT;
+ALTER TABLE nodes ADD COLUMN sys_descr TEXT;
+ALTER TABLE nodes ADD COLUMN profile_locked BOOLEAN NOT NULL DEFAULT false;

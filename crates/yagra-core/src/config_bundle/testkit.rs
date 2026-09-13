@@ -168,6 +168,8 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 tags: vec!["core".to_owned()],
                 tags_excluded: Vec::new(),
                 notes: Some("scheduled for replacement in Q3".to_owned()),
+                // Locked, so a round trip that dropped the flag reads back as unlocked (ADR-140).
+                profile_locked: true,
             },
             NodeRow {
                 id: node_b,
@@ -184,6 +186,7 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 tags: Vec::new(),
                 tags_excluded: Vec::new(),
                 notes: None,
+                profile_locked: false,
             },
         ],
         thresholds: vec![ThresholdRow {

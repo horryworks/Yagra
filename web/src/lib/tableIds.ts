@@ -43,6 +43,7 @@ export const TABLE_IDS = [
   'nodes.collectionTemplates',
   'nodes.dependencies',
   'nodes.mib',
+  'nodes.reclassify',
   // Events
   'events.log',
   'events.sources',

@@ -1003,6 +1003,9 @@ pub(crate) struct NodeDetail {
     /// hourly, so it can trail an upgrade by up to an hour, and a poll that cannot read it leaves
     /// the last value in place. Detail-only, like `notes`.
     os_version: Option<String>,
+    /// Whether a person fixed this node's profile (ADR-140). A locked node is never offered on
+    /// Nodes ▸ Reclassify; the edit dialog is where it is set and cleared. Detail-only.
+    profile_locked: bool,
     /// The group this node belongs to; `null` ⇒ ungrouped.
     group_id: Option<Uuid>,
     /// The node's **own** poll-pool (ADR-009/020); `null` ⇒ it inherits from its folder, else the
@@ -1094,6 +1097,7 @@ async fn get_node(
         mut node,
         notes,
         os_version,
+        profile_locked,
     } = admin
         .repo
         .get_node_with_notes(node_id)
@@ -1133,6 +1137,7 @@ async fn get_node(
         vendor: node.vendor,
         model: node.model,
         os_version,
+        profile_locked,
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
         snmp_configured,
@@ -1480,6 +1485,11 @@ pub(super) struct NodeBindings {
     /// re-adds it later, the refusal still holds.
     #[serde(default)]
     tags_excluded: Option<Vec<String>>,
+    /// Whether a person fixed this node's profile, so Nodes ▸ Reclassify never offers to change it
+    /// (ADR-140). **Absent** = leave it unchanged. The edit dialog sets it when the operator picks a
+    /// different profile, and an older client must not unlock a node by saving a form.
+    #[serde(default)]
+    profile_locked: Option<bool>,
 }
 
 #[utoipa::path(
@@ -1527,6 +1537,7 @@ async fn set_node_bindings(
                 notes: notes_update,
                 tags: tags_update.as_deref(),
                 tags_excluded: excluded_update.as_deref(),
+                profile_locked: body.profile_locked,
             },
         )
         .await
@@ -2440,6 +2451,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            sys_object_id: None,
             dns_chain: None,
             neighbors: None,
             l3: None,

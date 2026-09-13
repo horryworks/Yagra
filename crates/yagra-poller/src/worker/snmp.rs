@@ -26,6 +26,9 @@ const IDENTITY_COLUMN_ROWS: usize = 256;
 pub(super) struct IdentityProbe {
     pub(super) sys_descr: Option<String>,
     pub(super) os_version: Option<String>,
+    /// Always read by the first GET, to pick the version rows; kept since ADR-140 so core can
+    /// re-run the classification rules on an existing node.
+    pub(super) sys_object_id: Option<String>,
 }
 
 impl IdentityProbe {
@@ -112,6 +115,7 @@ impl SnmpWalker {
         }
         IdentityProbe {
             os_version: os_version::resolve(sys_object_id, sys_descr.as_deref(), &answers),
+            sys_object_id: sys_object_id.and_then(yagra_discovery::normalize_sys_object_id),
             sys_descr,
         }
     }
@@ -358,6 +362,7 @@ pub(super) async fn execute_scalar_get(
                 metrics::counter!(IDENTITY_PROBES_METRIC, "result" => probe.outcome()).increment(1);
                 r.sys_descr = probe.sys_descr;
                 r.os_version = probe.os_version;
+                r.sys_object_id = probe.sys_object_id;
             }
             r
         }
@@ -569,6 +574,11 @@ mod tests {
             ]);
         let r = execute(&job, &t, 1_000).await;
         assert_eq!(r.sys_descr.as_deref(), Some("FGT_1500D"));
+        // ADR-140: the sysObjectID the first read already held now reaches core.
+        assert_eq!(
+            r.sys_object_id.as_deref(),
+            Some("1.3.6.1.4.1.12356.101.1.15000")
+        );
         assert_eq!(
             r.os_version.as_deref(),
             Some("v7.2.6,build1575,230926 (GA.F)")

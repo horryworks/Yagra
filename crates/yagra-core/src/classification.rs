@@ -33,10 +33,23 @@ pub struct ClassificationMatch {
     pub profile_id: Uuid,
     pub vendor: Option<String>,
     pub model: Option<String>,
+    /// The rule that matched, or `None` when the device fell through to "Generic SNMP" — so the
+    /// Reclassify screen can say *why* a profile was chosen (ADR-140 decision 11).
+    pub rule_id: Option<Uuid>,
+}
+
+/// Whether `oid` falls under a rule's `sysObjectID` prefix.
+///
+/// A prefix ending in `.` also matches the OID that is exactly the prefix without that dot: LibreNMS's
+/// PAN-OS recording answers `1.3.6.1.4.1.25461`, which `1.3.6.1.4.1.25461.` never matched (ADR-140
+/// decision 2). The dot still does its job — `…25461.` does not match `…254610`.
+fn prefix_matches(prefix: &str, oid: &str) -> bool {
+    oid.starts_with(prefix) || prefix.strip_suffix('.').is_some_and(|bare| oid == bare)
 }
 
 /// A rule with its `sysDescr` pattern pre-compiled, ready for hot-path matching.
 struct CompiledRule {
+    id: Uuid,
     sysobjectid_prefix: Option<String>,
     sysdescr_regex: Option<Regex>,
     profile_id: Uuid,
@@ -113,6 +126,7 @@ impl Classifier {
                     },
                 };
                 Some(CompiledRule {
+                    id: r.id,
                     sysobjectid_prefix: r.sysobjectid_prefix,
                     sysdescr_regex,
                     profile_id: r.profile_id.0,
@@ -154,7 +168,7 @@ impl Classifier {
         for rule in &snap.rules {
             if let Some(prefix) = &rule.sysobjectid_prefix {
                 match oid {
-                    Some(o) if o.starts_with(prefix.as_str()) => {}
+                    Some(o) if prefix_matches(prefix, o) => {}
                     _ => continue,
                 }
             }
@@ -175,6 +189,7 @@ impl Classifier {
                     profile_id: id,
                     vendor: None,
                     model: None,
+                    rule_id: None,
                 });
             }
         }
@@ -187,6 +202,7 @@ fn match_of(rule: &CompiledRule) -> ClassificationMatch {
         profile_id: rule.profile_id,
         vendor: rule.vendor.clone(),
         model: rule.model.clone(),
+        rule_id: Some(rule.id),
     }
 }
 
@@ -471,6 +487,114 @@ mod tests {
                     .unwrap_or_else(|e| panic!("builtin regex {re:?} does not compile: {e}"));
             }
         }
+    }
+
+    #[test]
+    fn a_dot_terminated_prefix_also_matches_the_bare_enterprise_oid() {
+        const PAN: u128 = 0x9A4;
+        let c = Classifier::from_rules(
+            vec![rule(230, Some("1.3.6.1.4.1.25461."), None, PAN)],
+            Some(Uuid::from_u128(GENERIC)),
+        );
+        // LibreNMS's `panos` recording answers the enterprise arc itself.
+        let bare = c.classify(Some("1.3.6.1.4.1.25461"), None).unwrap();
+        assert_eq!(bare.profile_id, Uuid::from_u128(PAN));
+        // The dot still separates enterprise numbers: 254610 is somebody else.
+        let other = c.classify(Some("1.3.6.1.4.1.254610"), None).unwrap();
+        assert_eq!(other.profile_id, Uuid::from_u128(GENERIC));
+        let longer = c.classify(Some("1.3.6.1.4.1.254610.1"), None).unwrap();
+        assert_eq!(longer.profile_id, Uuid::from_u128(GENERIC));
+    }
+
+    #[test]
+    fn a_match_names_its_rule_and_the_generic_fallback_names_none() {
+        let c = classifier();
+        let cisco = c.classify(Some("1.3.6.1.4.1.9.1.516"), None).unwrap();
+        assert_eq!(cisco.rule_id, Some(Uuid::from_u128(101)));
+        let generic = c.classify(Some("1.3.6.1.4.1.99999.1"), None).unwrap();
+        assert_eq!(generic.profile_id, Uuid::from_u128(GENERIC));
+        assert_eq!(generic.rule_id, None);
+    }
+
+    /// The built-in rules, seeded the way `repo/seed.rs` seeds them, as a classifier.
+    fn builtin_classifier() -> (Classifier, impl Fn(Uuid) -> Option<&'static str>) {
+        use crate::seed_ids::SeedRange;
+        let profiles = yagra_common::builtin_profiles();
+        let id_of = |name: &str| {
+            profiles
+                .iter()
+                .position(|p| p.name == name)
+                .map(|i| SeedRange::Profiles.id(i))
+        };
+        let rules = yagra_common::builtin_classification_rules()
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| ClassificationRule {
+                id: SeedRange::ClassificationRules.id(i),
+                priority: r.priority,
+                sysobjectid_prefix: r.sysobjectid_prefix.map(str::to_owned),
+                sysdescr_regex: r.sysdescr_regex.map(str::to_owned),
+                profile_id: id_of(r.profile_name)
+                    .unwrap_or_else(|| panic!("rule names unknown profile {}", r.profile_name))
+                    .into(),
+                vendor: r.vendor.map(str::to_owned),
+                model: r.model.map(str::to_owned),
+                enabled: true,
+            })
+            .collect();
+        let classifier = Classifier::from_rules(rules, id_of(GENERIC_SNMP_PROFILE));
+        let names: Vec<&'static str> = profiles.iter().map(|p| p.name).collect();
+        let name_of = move |id: Uuid| {
+            names
+                .iter()
+                .enumerate()
+                .find(|(i, _)| SeedRange::Profiles.id(*i) == id)
+                .map(|(_, n)| *n)
+        };
+        (classifier, name_of)
+    }
+
+    /// ADR-140: every LibreNMS recording `yagra-discovery` keeps for the OS-version table lands on
+    /// the built-in profile its `profile` field names.
+    ///
+    /// ⚠️ **Those names were written from each recording's LibreNMS `os`, before this test ran** —
+    /// a table filled in from the classifier's own output would pin whatever it gets wrong, which
+    /// is how FTD→ASA, WLC→Catalyst and Alcatel→Nokia SR shipped with every test green. A device the
+    /// rule model cannot tell apart (a Synology answering as net-snmp) carries a `profile_note` saying
+    /// so, and names where it really lands. A recording with no `profile` fails, so adding one
+    /// forces the question.
+    #[test]
+    fn every_librenms_fixture_lands_on_the_profile_it_names() {
+        let (classifier, name_of) = builtin_classifier();
+        let raw: serde_json::Value = serde_json::from_str(include_str!(
+            "../../yagra-discovery/testdata/os_version_fixtures.json"
+        ))
+        .expect("fixture JSON");
+        let mut failures = Vec::new();
+        let mut checked = 0;
+        for f in raw.as_array().expect("an array") {
+            let name = f["name"].as_str().expect("name");
+            let Some(expected) = f["profile"].as_str() else {
+                failures.push(format!("{name}: names no expected profile"));
+                continue;
+            };
+            let got = classifier
+                .classify(f["sys_object_id"].as_str(), f["sys_descr"].as_str())
+                .and_then(|m| name_of(m.profile_id));
+            checked += 1;
+            if got != Some(expected) {
+                failures.push(format!(
+                    "{name}: expected {expected:?}, classified as {got:?}"
+                ));
+            }
+        }
+        assert!(checked >= 182, "only {checked} fixtures were checked");
+        assert!(
+            failures.is_empty(),
+            "{} of {checked} fixtures land on the wrong profile:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]

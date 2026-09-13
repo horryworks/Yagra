@@ -39,6 +39,7 @@ import {
   isValidNodeName,
   isValidNotes,
   NOTES_MAX,
+  withProfileChoice,
   type NodeEditRequest,
 } from './nodeEditForm';
 
@@ -60,6 +61,7 @@ const node = (over: Partial<NodeDetail> = {}): NodeDetail =>
     tags: ['core', 'JAPAN'],
     tags_excluded: [],
     inherited_tags: [],
+    profile_locked: true,
     ...over,
   }) as NodeDetail;
 
@@ -102,6 +104,7 @@ describe('node edit field registry', () => {
     expect([...visibleNodeEditFields('device')]).toEqual([
       'name',
       'profile',
+      'profileLock',
       'snmpCredential',
       'identity',
       'pool',
@@ -111,6 +114,7 @@ describe('node edit field registry', () => {
     expect([...visibleNodeEditFields('meraki')]).toEqual([
       'name',
       'profile',
+      'profileLock',
       'identity',
       'pool',
       'tags',
@@ -265,12 +269,14 @@ describe('nodeEditRequest bindings', () => {
         'notes',
         'pool',
         'profile_id',
+        'profile_locked',
         'tags',
         'tags_excluded',
         'vendor',
       ]);
       expect(bindings, kind).toEqual({
         profile_id: 'prof-1',
+        profile_locked: true,
         credential_id: 'cred-1',
         vendor: 'Cisco',
         model: 'C9300',
@@ -282,6 +288,26 @@ describe('nodeEditRequest bindings', () => {
         tags_excluded: [],
       });
     }
+  });
+
+  // ADR-140. The lock rides every save, and a URL or DNS node — which never shows the box — still
+  // sends back what it loaded, on the same reasoning as the hidden bindings above.
+  it('seeds the profile lock from the node and reads an absent one as unlocked', () => {
+    expect(nodeEditDraftFrom(node({ profile_locked: true })).profileLocked).toBe(true);
+    expect(nodeEditDraftFrom(node({ profile_locked: undefined })).profileLocked).toBe(false);
+  });
+
+  it('locks a profile the operator picks by hand, and never unlocks it on their behalf', () => {
+    const start = nodeEditDraftFrom(node({ profile_locked: false }));
+    const picked = withProfileChoice(start, 'prof-2');
+    expect(picked).toMatchObject({ profileId: 'prof-2', profileLocked: true });
+    // Choosing the original again leaves the tick: the box is visible, and clearing it is theirs.
+    expect(withProfileChoice(picked, 'prof-1').profileLocked).toBe(true);
+    // Re-selecting the profile it already has is not a choice, so an unlocked node stays unlocked.
+    expect(withProfileChoice(start, 'prof-1').profileLocked).toBe(false);
+    // And the box, once cleared by hand, goes out cleared.
+    const cleared = { ...picked, profileLocked: false };
+    expect(req(nodeEditRequest('device', cleared)).bindings.profile_locked).toBe(false);
   });
 
   it('sends the pool as a string so blanking it means inherit', () => {

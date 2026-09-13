@@ -19,6 +19,7 @@
     "discovery": "Discovery",
     "profiles": "Device profiles",
     "classificationRules": "Classification rules",
+    "reclassify": "Reclassify",
     "metricSets": "Metric sets",
     "mib": "MIB repository",
     "credentials": "Credentials & secrets"
@@ -78,6 +79,7 @@
   "descriptions": {
     "nodesProfiles": "Device-class bundles that decide what each node collects",
     "nodesClassificationRules": "Auto-assign profiles and folders to discovered nodes",
+    "nodesReclassify": "Nodes already in the tree that the classification rules would now give another profile",
     "nodesMetricSets": "Named metric bundles (OID → metric) that device profiles attach",
     "nodesMib": "Upload MIB files to resolve OIDs into named metrics",
     "nodesCredentials": "Credentials Yagra uses to reach monitored devices — SNMP and API. Encrypted at rest.",

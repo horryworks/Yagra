@@ -335,6 +335,14 @@ html[data-viewport='mobile'] .nd-extract-row {
   gap: var(--space-2);
 }
 
+/* "Keep this profile when classification rules change" (ADR-140). */
+.nd-profile-lock-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
 /* Operator-written prose: the newlines they typed are the formatting they meant. */
 .nd-notes {
   margin: 0;

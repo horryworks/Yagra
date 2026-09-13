@@ -42,6 +42,7 @@ export const NODE_EDIT_FIELDS = [
   'dnsCheck',
   'name',
   'profile',
+  'profileLock',
   'snmpCredential',
   'identity',
   'pool',
@@ -82,6 +83,10 @@ export const NODE_EDIT_FIELD_META: Record<
   // Meaningful for every kind, though it means less for a monitor: a URL node never resolves a
   // collection set, so its profile carries only the poll interval and the inherited thresholds.
   profile: { kinds: NODE_KINDS, section: 'node' },
+  // "A person chose this profile" (ADR-140). Only for the kinds Nodes ▸ Reclassify can ever propose
+  // a change to — the ones described by a device. A URL or DNS monitor never has an SNMP identity,
+  // so a lock on one would guard against something that cannot happen. Still sent for every kind.
+  profileLock: { kinds: DESCRIBED_BY_A_DEVICE, section: 'node' },
   // The one that caused this file. `resolve_snmp_auth` is the only reader of `node.credential_id`
   // and is unreachable for the other three kinds. Note the URL form carries its own credential
   // picker (`http_auth`/`api_token`) — showing this one too would put two in a single dialog.
@@ -211,6 +216,8 @@ export function profileIsOffKind(
 export interface NodeEditDraft {
   name: string;
   profileId: string;
+  /** Whether the profile is fixed against reclassification (ADR-140). */
+  profileLocked: boolean;
   credentialId: string;
   vendor: string;
   model: string;
@@ -233,6 +240,7 @@ export function nodeEditDraftFrom(node: NodeDetail): NodeEditDraft {
   return {
     name: node.name,
     profileId: node.profile_id ?? '',
+    profileLocked: node.profile_locked ?? false,
     credentialId: node.credential_id ?? '',
     vendor: node.vendor ?? '',
     model: node.model ?? '',
@@ -245,6 +253,21 @@ export function nodeEditDraftFrom(node: NodeDetail): NodeEditDraft {
     tagsExcluded: [...(node.tags_excluded ?? [])].sort((a, b) => a.localeCompare(b)),
     url: node.url_check ? urlDraftFrom(node.url_check) : null,
     dns: node.dns_check ? dnsDraftFrom(node.dns_check) : null,
+  };
+}
+
+/** The draft after the operator picks a profile.
+ *
+ *  Picking a *different* profile locks it (ADR-140): a profile chosen by hand is exactly what
+ *  Nodes ▸ Reclassify must not propose to undo, and the server never infers that on its own. The
+ *  lock is only ever added here, never removed — choosing the old profile again leaves it ticked,
+ *  because the checkbox is visible and the person who ticked or saw it tick decides whether to clear
+ *  it. */
+export function withProfileChoice(d: NodeEditDraft, profileId: string): NodeEditDraft {
+  return {
+    ...d,
+    profileId,
+    profileLocked: d.profileLocked || profileId !== d.profileId,
   };
 }
 
@@ -270,6 +293,9 @@ export interface NodeEditBindings {
   /** Always sent, on the same terms as `tags`: the labels this node refuses to inherit from its
    *  folder chain. */
   tags_excluded: string[];
+  /** Always sent, because the dialog loaded it: the server reads an absent value as "leave it", so
+   *  omitting it would make unticking the box silently do nothing (ADR-140). */
+  profile_locked: boolean;
 }
 
 /** Everything one Save writes. `check` is null for the kinds that have no check row of their own. */
@@ -309,6 +335,7 @@ export function nodeEditRequest(
         notes: d.notes.trim(),
         tags: d.tags,
         tags_excluded: d.tagsExcluded,
+        profile_locked: d.profileLocked,
       },
     },
   };

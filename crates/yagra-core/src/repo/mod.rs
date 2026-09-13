@@ -90,7 +90,7 @@ pub use migrate::embedded_migrations;
 pub use migrate::MIGRATIONS;
 #[allow(unused_imports)]
 pub use nodes::TopologyRow;
-pub use nodes::{NodeBindingUpdate, NodeWithNotes};
+pub use nodes::{NodeBindingUpdate, NodeWithNotes, ReclassifyInput, ReclassifyWrite};
 // Re-exported for `TopologyRow`'s reason above, not by oversight: both are the return type of a
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping
 // them would make `list_pools` and `pool_references` unnameable from outside `repo`.

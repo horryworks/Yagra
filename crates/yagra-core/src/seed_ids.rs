@@ -200,6 +200,62 @@ mod tests {
         }
     }
 
+    /// Migration `0114` names nine classification-rule ids, and the profile each pointed at when it
+    /// shipped, as literals (ADR-140) — a hand-written copy of "seed id = array index" twice over.
+    ///
+    /// The row check is what matters: 0114 deletes a rule only when every column still holds the
+    /// shipped value, so a literal naming the wrong profile does not fail loudly — it simply never
+    /// matches, and that deployment keeps the broken rule with every test green. Each rule's prefix
+    /// is asserted too, because an insertion mid-array would move a *different* rule under the id.
+    #[test]
+    fn migration_0114_names_the_rules_the_catalog_issues_today() {
+        let sql = include_str!("../../../migrations/0114_fix_builtin_classification_rules.sql");
+        let rules = yagra_common::builtin_classification_rules();
+        let profiles = yagra_common::builtin_profiles();
+        // (index, the prefix the row still carries, the profile it pointed at when it shipped)
+        let shipped = [
+            (4, "1.3.6.1.4.1.9.", "Cisco Firepower (FTD)"),
+            (5, "1.3.6.1.4.1.9.", "Cisco wireless controller"),
+            (6, "1.3.6.1.4.1.9.", "Cisco IOS/IOS-XE router"),
+            (8, "1.3.6.1.4.1.2636.", "Juniper SRX firewall"),
+            (9, "1.3.6.1.4.1.2636.", "Juniper MX router"),
+            (12, "1.3.6.1.4.1.2011.", "Huawei NE/AR router"),
+            (21, "1.3.6.1.4.1.14823.", "Aruba/HPE switch"),
+            (26, "1.3.6.1.4.1.25053.", "Brocade / Ruckus switch"),
+            (28, "1.3.6.1.4.1.6486.", "Nokia SR router"),
+        ];
+        for (i, prefix, profile) in shipped {
+            assert_eq!(
+                rules[i].sysobjectid_prefix,
+                Some(prefix),
+                "rule {i} is no longer the {prefix} rule 0114 was written for"
+            );
+            let id = SeedRange::ClassificationRules.id(i).to_string();
+            let row = sql
+                .lines()
+                .find(|l| l.contains(&id))
+                .unwrap_or_else(|| panic!("0114 does not name rule {i} ({id})"));
+            let p = profiles
+                .iter()
+                .position(|p| p.name == profile)
+                .unwrap_or_else(|| panic!("built-in profile {profile} disappeared"));
+            let profile_id = SeedRange::Profiles.id(p).to_string();
+            assert!(
+                row.contains(&profile_id),
+                "0114's row for rule {i} does not name {profile} ({profile_id}): {row}"
+            );
+            assert!(
+                row.contains(&format!("'{prefix}'")),
+                "0114's row for rule {i} does not carry {prefix}: {row}"
+            );
+        }
+        assert_eq!(
+            sql.matches("-0000-00005eed80").count(),
+            shipped.len(),
+            "0114 names a rule this test does not account for"
+        );
+    }
+
     /// Migration `0091` names four profile ids and one template id as literals; this is what stops
     /// them from being a hand-written fifth copy of "seed id = array index".
     ///
