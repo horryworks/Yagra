@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.18 — MCP is served by default, a VPN sessions widget, network traffic on Yagra health, a truncated SNMP walk raises a Warning, and metrics carry their units
+
 ### Breaking changes
 
 - **The MCP tool surface at `/mcp` is now served by default** (ADR-028 Inc.3). `YAGRA_ENABLE_MCP`
@@ -78,11 +80,6 @@
   other (Settings ▸ Alert rules).
   A node whose SNMP agent does not answer at all reports no value here, so it raises only the
   existing SNMP-down alert — not this Warning beside it as a second incident for the same fault.
-- **The Interfaces tab no longer reports "unknown" as "down".** The header counted ports whose
-  `ifOperStatus` is 1 and printed everything else as the denominator, so a node with no oper-status
-  data read "0 / 229 up" — identical to a switch with every port dead. Ports with no answer are now
-  counted separately and shown as "· N unknown". A node where every port has a known state looks
-  exactly as it did.
 
 ### Improvements
 
@@ -122,6 +119,14 @@
   Japanese screen read `above 80`; it is now localized and follows Japanese word order
   (`80 を上回る`). This applies everywhere the text appears — node detail, Alerts ▸ Active and
   Alerts ▸ History.
+
+### Bug Fixes
+
+- **The Interfaces tab no longer reports "unknown" as "down".** The header counted ports whose
+  `ifOperStatus` is 1 and printed everything else as the denominator, so a node with no oper-status
+  data read "0 / 229 up" — identical to a switch with every port dead. Ports with no answer are now
+  counted separately and shown as "· N unknown". A node where every port has a known state looks
+  exactly as it did.
 
 ## v0.3.17 — A node can be renamed and carry Notes, nodes and folders carry tags that are inherited down the tree and reach PagerDuty and JSM, every section and node tab returns to where you left it, and the inventory tree paints without waiting
 

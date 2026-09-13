@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.17 — A node can be renamed and carry Notes, nodes and folders carry tags that are inherited down the tree and reach PagerDuty and JSM, every section and node tab returns to where you left it, and the inventory tree paints without waiting**
+> Status: **v0.3.18 — MCP is served by default, a VPN sessions widget, network traffic on Yagra health, a truncated SNMP walk raises a Warning, and metrics carry their units**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
@@ -42,7 +42,7 @@ polling**. Users access it through the WebUI.
 > with offline **IP→ASN enrichment** naming the autonomous systems behind the traffic; incoming
 > **SNMP traps are decoded to human-readable names** with built-in trap rules. Every
 > binary exports **OpenTelemetry traces** (opt-in) and now reports **host-resource trends** (CPU /
-> load / memory / disk) for the core and each poller in Yagra health, and shuts down gracefully on
+> load / memory / disk / network) for the core and each poller in Yagra health, and shuts down gracefully on
 > restart. The WebUI switches between **English and 日本語** on the fly across most screens, and
 > **SNMPv3** nodes collect per-interface metrics via a GETBULK table walk. Users can now sign in with
 > **single sign-on (OpenID Connect)** alongside local accounts, and the **core runs highly
