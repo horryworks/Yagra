@@ -28,7 +28,9 @@ import { useRangeStore } from '../store';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
-import { formatBps, formatBytes, formatUtil } from '../lib/format';
+import { formatBps, formatBytes, formatBytesAxis, formatSi, formatUtil } from '../lib/format';
+import type { MirrorAxis } from '../components/MetricChart/mirror';
+import { mirrorAxisLabels } from '../dashboard/widgets/interfaceTraffic';
 import { diskHeadline } from './diskHeadline';
 import { groupHosts, hostCharts } from './hostSections';
 import type { HostSection } from './hostSections';
@@ -108,6 +110,7 @@ function HostMetricCard({
   yFormat,
   yRange,
   legendFormat,
+  mirrored,
   win,
 }: {
   label: string;
@@ -118,6 +121,8 @@ function HostMetricCard({
   yFormat?: (v: number) => string;
   yRange?: [number, number];
   legendFormat?: (v: number) => string;
+  /** One direction above zero and the other below, with the gutter words (ADR-128). */
+  mirrored?: MirrorAxis;
   win: [number, number] | null;
 }) {
   const { t } = useTranslation('system');
@@ -137,6 +142,7 @@ function HostMetricCard({
           yFormat={yFormat}
           yRange={yRange}
           legendFormat={legendFormat}
+          mirrored={mirrored}
           xRange={win ?? undefined}
         />
       ) : (
@@ -272,14 +278,18 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
               value={diskHeadline(host.disks.find((c) => c.mount === d.mount))}
               timestamps={d.timestamps}
               series={d.series}
-              yFormat={d.known ? formatUtil : formatBytes}
+              // The axis gets the compact form: `214 MB` does not fit the 50 px gutter and loses its
+              // leading digit, which reads as a number ten times smaller (ADR-137 決定 10).
+              yFormat={d.known ? formatUtil : formatBytesAxis}
               yRange={d.known ? PCT_RANGE : undefined}
               legendFormat={d.known ? formatUtil : formatBytes}
               win={win}
             />
           ))}
-          {/* Received is drawn above the axis and sent below it, so every reading goes through
-              Math.abs before it is printed (ADR-137). */}
+          {/* One direction above zero and the other below (ADR-128), the same way up as the
+              Interface traffic widget: `mirrorAxisLabels` and the series signs both read its
+              `POSITIVE_HALF`. Every reading goes through Math.abs before it is printed, and the axis
+              takes the compact form so the gutter cannot clip a leading digit (ADR-137 決定 10). */}
           <HostMetricCard
             label={t('health.metric.network')}
             value={t('health.netHeadline', {
@@ -288,8 +298,9 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
             })}
             timestamps={charts.net.timestamps}
             series={charts.net.series}
-            yFormat={(v) => formatBps(Math.abs(v))}
+            yFormat={(v) => formatSi(Math.abs(v))}
             legendFormat={(v) => formatBps(Math.abs(v))}
+            mirrored={mirrorAxisLabels({ in: t('health.axisIn'), out: t('health.axisOut') })}
             win={win}
           />
           <HostMetricCard
@@ -300,8 +311,9 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
             })}
             timestamps={charts.netTotal.timestamps}
             series={charts.netTotal.series}
-            yFormat={(v) => formatBytes(Math.abs(v))}
+            yFormat={(v) => formatBytesAxis(Math.abs(v))}
             legendFormat={(v) => formatBytes(Math.abs(v))}
+            mirrored={mirrorAxisLabels({ in: t('health.axisIn'), out: t('health.axisOut') })}
             win={win}
           />
           <p className="muted host-net-note">{t('health.netNote')}</p>

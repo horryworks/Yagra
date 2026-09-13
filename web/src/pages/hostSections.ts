@@ -13,9 +13,12 @@
  *  > nothing competes with the host for a colour. On the load card the role is the window — `1m`,
  *  > `5m`, `15m` take the first three palette entries. On the two network cards it is the path —
  *  > Core ⇄ poller takes the first, everything else the second — and **direction is not a colour at
- *  > all**: received is drawn above the axis and sent below it (ADR-137, the shape ADR-069 decision 2
- *  > gave the interface-traffic widget). Four colours would have put the network cards at odds with
- *  > `SERIES_IN` / `SERIES_OUT`, where the first two palette entries mean in and out.
+ *  > all**: one direction is drawn above zero and the other below, on a `mirrored` chart (ADR-128).
+ *  > **Which one is on top is not this module's decision** — it reads the Interface traffic
+ *  > widget's `POSITIVE_HALF` (transmit, since ADR-069 決定 7), so the product's two traffic charts
+ *  > cannot disagree about which way is up (ADR-137 決定 10). Four colours would have put the
+ *  > network cards at odds with `SERIES_IN` / `SERIES_OUT`, where the first two palette entries
+ *  > mean in and out.
  *
  *  ⚠️ `overlaySeries` survived the split and is not vestigial: the load card still puts three
  *  series on one axis, the network cards four, and those point lists need not share timestamps.
@@ -33,6 +36,7 @@
  */
 
 import { alignTo, pctSeries } from '../lib/seriesMath';
+import { POSITIVE_HALF } from '../dashboard/widgets/interfaceTraffic';
 import type { HostDiskRange, HostInfo, HostMetricRange, MetricPoint } from '../types/api';
 
 /** One chart series, structurally the `ChartSeries` MetricChart consumes (declared here so this
@@ -172,7 +176,7 @@ export function cumulativePoints(points: MetricPoint[]): MetricPoint[] {
   });
 }
 
-/** Sent traffic is drawn below the axis. */
+/** Negate a direction so it is drawn below zero. Which direction that is, is `POSITIVE_HALF`'s call. */
 export function below(points: MetricPoint[]): MetricPoint[] {
   return points.map((p) => ({ t: p.t, v: -p.v }));
 }
@@ -213,11 +217,17 @@ function netSeries(
   const nicTx = n?.nic_tx_bytes ?? [];
   const busRx = n?.bus_rx_bytes ?? [];
   const busTx = n?.bus_tx_bytes ?? [];
+  // Which direction is on top is not decided here. It is the Interface traffic widget's answer
+  // (`POSITIVE_HALF`, transmit since ADR-069 決定 7), so the two traffic charts in the product
+  // cannot disagree about which way is up — and the gutter words the page passes to `mirrored`
+  // come from the same constant.
+  const sent = (points: MetricPoint[]) => (POSITIVE_HALF === 'out' ? points : below(points));
+  const received = (points: MetricPoint[]) => (POSITIVE_HALF === 'in' ? points : below(points));
   const parts = [
-    { label: labels.busIn, points: perStep(busRx), path: 0 },
-    { label: labels.busOut, points: below(perStep(busTx)), path: 0 },
-    { label: labels.otherIn, points: perStep(otherPoints(nicRx, busRx)), path: 1 },
-    { label: labels.otherOut, points: below(perStep(otherPoints(nicTx, busTx))), path: 1 },
+    { label: labels.busOut, points: sent(perStep(busTx)), path: 0 },
+    { label: labels.busIn, points: received(perStep(busRx)), path: 0 },
+    { label: labels.otherOut, points: sent(perStep(otherPoints(nicTx, busTx))), path: 1 },
+    { label: labels.otherIn, points: received(perStep(otherPoints(nicRx, busRx))), path: 1 },
   ];
   const { timestamps, series } = overlaySeries(parts, palette);
   return {
@@ -240,9 +250,9 @@ export interface HostCharts {
   mem: { timestamps: number[]; series: OverlaySeries[] };
   /** In the order the host reports its mounts, which is the order the collector writes them. */
   disks: DiskChart[];
-  /** Bits per second, per path; received above the axis and sent below. */
+  /** Bits per second, per path; one direction above zero and the other below (`POSITIVE_HALF`). */
   net: { timestamps: number[]; series: OverlaySeries[] };
-  /** Bytes since the start of the window, per path; received above the axis and sent below. */
+  /** Bytes since the start of the window, per path; signed the same way as {@link HostCharts.net}. */
   netTotal: { timestamps: number[]; series: OverlaySeries[] };
   /** The interface's most recent rate, in bits per second — the speed card's headline. */
   netRate: NetReading;

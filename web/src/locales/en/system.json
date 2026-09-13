@@ -348,7 +348,9 @@
       "otherOut": "Other · out"
     },
     "netHeadline": "In {{rx}} / Out {{tx}}",
-    "netNote": "Received above the line, sent below. Core ⇄ poller counts message contents only, so protocol and TLS overhead lands in Other. For a component running in a container, this is that container's own traffic, not the host's."
+    "axisIn": "IN",
+    "axisOut": "OUT",
+    "netNote": "Sent above the line, received below — the same way up as the Interface traffic widget. Core ⇄ poller counts message contents only, so protocol and TLS overhead lands in Other. For a component running in a container, this is that container's own traffic, not the host's."
   },
   "supportBundle": {
     "title": "Take a bundle",

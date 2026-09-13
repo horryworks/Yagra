@@ -47,8 +47,8 @@
 - **Yagra health now draws network traffic, and separates what core and the pollers send each
   other from everything else.** Every host section on Settings ▸ Yagra health gains two cards:
   **Network**, the traffic in bits per second, and **Cumulative traffic**, the bytes moved since the
-  start of the chosen window. Both draw received above the line and sent below it, and both split it
-  in two — **Core ⇄ poller**, the bus traffic between Yagra's own components, and **Other**,
+  start of the chosen window. Both draw sent above the line and received below it — the same way up
+  as the Interface traffic widget — and both split it in two — **Core ⇄ poller**, the bus traffic between Yagra's own components, and **Other**,
   everything else that crossed the interface.
   ⚠️ **What is counted.** The interface side counts the host's physical network interfaces when it
   has any, otherwise every interface except loopback — so for a component running in a container,

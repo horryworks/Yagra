@@ -24,6 +24,7 @@ import {
   overlaySeries,
 } from './hostSections';
 import type { HostInfo, HostMetricRange, MetricPoint } from '../types/api';
+import { POSITIVE_HALF } from '../dashboard/widgets/interfaceTraffic';
 
 const pts = (...pairs: [number, number][]): MetricPoint[] => pairs.map(([t, v]) => ({ t, v }));
 
@@ -189,7 +190,7 @@ describe('network arithmetic (ADR-137)', () => {
     expect(cumulativePoints(pts([1, 10], [2, 20], [4, 5]))).toEqual(pts([1, 10], [2, 30], [4, 35]));
   });
 
-  it('draws sent traffic below the axis', () => {
+  it('negates the direction that is drawn below the axis', () => {
     expect(below(pts([1, 7]))).toEqual(pts([1, -7]));
   });
 });
@@ -262,13 +263,22 @@ describe('hostCharts', () => {
       LABELS,
     );
     expect(charts.net.series.map((s) => [s.label, s.color])).toEqual([
-      ['bus↓', '#bus'],
       ['bus↑', '#bus'],
-      ['other↓', '#other'],
+      ['bus↓', '#bus'],
       ['other↑', '#other'],
+      ['other↓', '#other'],
     ]);
-    // 1,500 bytes in 15 s is 800 bps; the other half of the interface's 3,000 is the other 800.
-    expect(charts.net.series.map((s) => s.values[0])).toEqual([800, -400, 800, -400]);
+    // 750 bytes in 15 s is 400 bps; 1,500 is 800. "Other" is the interface minus the bus.
+    // The sign is derived from the widget's constant rather than written out, so swapping which
+    // half is on top moves this chart and the Interface traffic widget together — and a chart that
+    // ignored the constant fails here.
+    const tx = POSITIVE_HALF === 'out' ? 1 : -1;
+    expect(charts.net.series.map((s) => s.values[0])).toEqual([
+      400 * tx,
+      -800 * tx,
+      400 * tx,
+      -800 * tx,
+    ]);
   });
 
   it('runs the cumulative card as a total and leaves a missing step as a gap', () => {
@@ -283,11 +293,12 @@ describe('hostCharts', () => {
       LABELS,
     );
     const byLabel = Object.fromEntries(charts.netTotal.series.map((s) => [s.label, s.values]));
+    const rx = POSITIVE_HALF === 'in' ? 1 : -1;
     expect(charts.netTotal.timestamps).toEqual([1, 2, 3]);
-    expect(byLabel['bus↓']).toEqual([40, 80, 120]);
+    expect(byLabel['bus↓']).toEqual([40 * rx, 80 * rx, 120 * rx]);
     // t=2 has no interface reading, so "other" is unknown there — a gap, and the total after it
     // carries on from what was known rather than restarting.
-    expect(byLabel['other↓']).toEqual([60, null, 120]);
+    expect(byLabel['other↓']).toEqual([60 * rx, null, 120 * rx]);
   });
 
   it('heads the cards with the interface as a whole', () => {

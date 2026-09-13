@@ -10,6 +10,7 @@ import {
   formatAsn,
   formatBps,
   formatBytes,
+  formatBytesAxis,
   formatCount,
   formatDaysToExpiry,
   formatDbm,
@@ -266,6 +267,22 @@ describe('format', () => {
     expect(formatBytes(32 * 1024 ** 3)).toBe('32 GB');
     expect(formatBytes(1.5 * 1024 ** 3)).toBe('1.5 GB');
     expect(formatBytes(128 * 1024 ** 3)).toBe('128 GB');
+  });
+
+  it('shortens a byte count for a chart axis without changing its base', () => {
+    // Same 1024 base as the legend: 14,000,000 bytes is 13.4 MB there and must be 13.4M here, not
+    // formatSi's 14M (ADR-137 決定 10).
+    expect(formatBytesAxis(14_000_000)).toBe('13.4M');
+    expect(formatBytesAxis(214 * 1024 ** 2)).toBe('214M');
+    expect(formatBytesAxis(1024)).toBe('1K');
+    expect(formatBytesAxis(512)).toBe('512');
+    expect(formatBytesAxis(0)).toBe('0');
+    expect(formatBytesAxis(null)).toBe('—');
+    expect(formatBytesAxis(-1)).toBe('—');
+    // Short enough for a 50 px gutter at every scale the page reaches.
+    for (const n of [999, 1023 * 1024, 1000 * 1024 ** 2, 1023.9 * 1024 ** 3]) {
+      expect(formatBytesAxis(n).length).toBeLessThanOrEqual(5);
+    }
   });
 
   it('derives memory used/total bytes and % per source shape', () => {

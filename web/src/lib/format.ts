@@ -269,6 +269,18 @@ export function formatBytes(bytes: number | null): string {
   return `${v.toFixed(digits)} ${units[u]}`;
 }
 
+/** {@link formatBytes} without the space or the `B`, for a chart's value axis: `13.4M`, `214M`, `512`.
+ *
+ *  ⚠️ **The same 1024 base as the legend beside it, and that is the point.** `formatSi` is
+ *  1000-based, so an axis tick reading `14M` over a legend reading `13.4 MB` for the same value
+ *  looks like two different measurements. And the full form does not fit: uPlot's value axis is
+ *  50 px wide, `214 MB` is clipped at its leading digit, and a clipped leading digit reads as a
+ *  number ten times smaller (ADR-137 決定 10). */
+export function formatBytesAxis(bytes: number | null): string {
+  const full = formatBytes(bytes);
+  return full === '—' ? full : full.replace(' ', '').replace(/B$/, '');
+}
+
 /** The built-in memory sources. Declared here, next to the arithmetic that switches on it, and
  *  imported by the card registry that lists each source's inputs — it was written out twice, once
  *  as this function's parameter type and once as the registry's, which is two places to add a
