@@ -568,19 +568,65 @@ impl VmStore {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint> {
-        let url = format!("{}/api/v1/query_range", self.base);
-        let resp = match self
-            .http
-            .get(&url)
-            .query(&[
-                ("query", query),
-                ("start", from_s.to_string()),
-                ("end", to_s.to_string()),
-                ("step", format!("{step_s}s")),
-            ])
-            .send()
+        self.fetch_range_points(Self::range_params(query, from_s, to_s, step_s, None))
             .await
-        {
+    }
+
+    /// [`Self::query_range_points`], with the newest steps left as measured instead of filled in.
+    ///
+    /// 🚨 **VictoriaMetrics copies the last computed point into every step inside
+    /// `-search.latencyOffset`** (30 s by default) so that a graph does not end in a gap. On a gauge
+    /// that draws a flat tail. On a per-step counter increase it **repeats a real increase**, and
+    /// anything that adds the points up counts it once more for every repeat. Measured 2026-09-13
+    /// on 192.168.1.211 (v1.148.0): the last three 15 s steps of core's received bytes all read
+    /// 4,084,483, the points of a two-minute window summed to about 12.5 MB, and one
+    /// `increase(...[2m])` over the same window said 4.57 MB. The `latency_offset` query argument
+    /// overrides the flag for one query; the newest step then comes back as measured or not at
+    /// all, and the next refresh fills it in (ADR-137).
+    async fn query_range_points_measured(
+        &self,
+        query: String,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        self.fetch_range_points(Self::range_params(
+            query,
+            from_s,
+            to_s,
+            step_s,
+            Some(Self::MEASURED_LATENCY_OFFSET),
+        ))
+        .await
+    }
+
+    /// What [`Self::query_range_points_measured`] passes as `latency_offset`. Not zero: a sample
+    /// written in the same second it is read may not be searchable yet.
+    const MEASURED_LATENCY_OFFSET: &'static str = "1s";
+
+    /// The `query_range` arguments. Pure, so a test can see whether a read asked for measured steps.
+    fn range_params(
+        query: String,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+        latency_offset: Option<&'static str>,
+    ) -> Vec<(&'static str, String)> {
+        let mut params = vec![
+            ("query", query),
+            ("start", from_s.to_string()),
+            ("end", to_s.to_string()),
+            ("step", format!("{step_s}s")),
+        ];
+        if let Some(offset) = latency_offset {
+            params.push(("latency_offset", offset.to_owned()));
+        }
+        params
+    }
+
+    async fn fetch_range_points(&self, params: Vec<(&'static str, String)>) -> Vec<MetricPoint> {
+        let url = format!("{}/api/v1/query_range", self.base);
+        let resp = match self.http.get(&url).query(&params).send().await {
             Ok(resp) => resp,
             Err(e) => {
                 tracing::warn!(error = %e, "VictoriaMetrics query_range request failed");
@@ -1403,7 +1449,9 @@ impl MetricStore for VmStore {
             metric,
             promql_label_escape(instance)
         );
-        self.query_range_points(
+        // Measured, not filled: every point here is added up by the cumulative card, so a repeated
+        // tail is a repeated count rather than a flat line.
+        self.query_range_points_measured(
             host_counter_range_query(&selector, step_s),
             from_s,
             to_s,
@@ -2067,6 +2115,50 @@ mod tests {
         // The two readers are not interchangeable, in either direction.
         assert!(!host_counter_range_query(sel, 60).contains("avg"));
         assert!(!host_range_query(sel, 60).contains("increase"));
+    }
+
+    /// 🚨 A counter read asks VictoriaMetrics not to fill its newest steps, and a plain read does not.
+    ///
+    /// Filling is harmless on a gauge and a double count on a per-step increase, because the
+    /// cumulative card adds the points up (measured on 192.168.1.211: three repeated 4 MB steps
+    /// summed to 12.5 MB where one `increase` said 4.57 MB). The argument builder is pure, so its
+    /// half is checked directly; that the counter read *uses* it can only be held on the text.
+    #[test]
+    fn a_counter_range_asks_for_its_newest_steps_as_measured() {
+        let plain = VmStore::range_params("q".into(), 0, 60, 15, None);
+        assert!(
+            !plain.iter().any(|(k, _)| *k == "latency_offset"),
+            "{plain:?}"
+        );
+        let measured = VmStore::range_params(
+            "q".into(),
+            0,
+            60,
+            15,
+            Some(VmStore::MEASURED_LATENCY_OFFSET),
+        );
+        assert!(
+            measured.contains(&("latency_offset", "1s".to_owned())),
+            "{measured:?}"
+        );
+        assert_eq!(
+            &measured[..4],
+            &plain[..],
+            "nothing else about the query changes"
+        );
+
+        // The VmStore impl is the last `host_counter_range` in the file — the trait's default comes
+        // first — and test items are already gone from this text.
+        let src = crate::module_source::code("src", "store");
+        let body = src
+            .rsplit_once("async fn host_counter_range(")
+            .expect("VmStore implements host_counter_range")
+            .1;
+        let body = &body[..body.find("\n    }\n").unwrap_or(body.len())];
+        assert!(
+            body.contains("query_range_points_measured("),
+            "host_counter_range must read measured steps, got:\n{body}"
+        );
     }
 
     #[test]
