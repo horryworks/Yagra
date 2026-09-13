@@ -1,6 +1,6 @@
 [package]
 name = "yagra-hoststats"
-description = "Yagra-hoststats — host self-metrics collector (CPU/load/memory/disk) for self-observability."
+description = "Yagra-hoststats — host self-metrics collector (CPU/load/memory/disk/network) for self-observability."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

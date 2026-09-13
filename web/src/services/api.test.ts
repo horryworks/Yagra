@@ -1367,6 +1367,13 @@ describe('api client', () => {
         mem_used_bytes: [],
         mem_total_bytes: [],
         disks: [],
+        network: {
+          step_secs: 30,
+          nic_rx_bytes: [{ t: 1, v: 4096 }],
+          nic_tx_bytes: [],
+          bus_rx_bytes: [],
+          bus_tx_bytes: [],
+        },
       }),
     } as Response);
     globalThis.fetch = spy;

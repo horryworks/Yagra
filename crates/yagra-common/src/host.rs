@@ -74,6 +74,30 @@ pub struct HostSample {
     /// Per-watched-filesystem usage (plus any store-size proxies like `database`).
     #[serde(default)]
     pub disks: Vec<DiskUsage>,
+    /// Bytes received on the counted network interfaces **since this process started** — a counter,
+    /// not a reading (ADR-137). Counted means the physical interfaces when there are any, otherwise
+    /// every interface but loopback: inside a bridge-networked container that is the container's own
+    /// `eth0`, so for core this is the core container's traffic, not the host's.
+    ///
+    /// Built from positive per-interface deltas rather than by summing the kernel's counters, so an
+    /// interface appearing or disappearing cannot move it backwards — a sum that dropped would read
+    /// as a counter reset and draw the whole remaining total as one step's increase.
+    #[serde(default)]
+    pub net_rx_bytes: u64,
+    /// Bytes sent on the counted network interfaces since this process started. See [`Self::net_rx_bytes`].
+    #[serde(default)]
+    pub net_tx_bytes: u64,
+    /// Message-payload bytes **this process** received over the bus since it started (ADR-137).
+    ///
+    /// ⚠️ A different subject from the two `net_*` fields: those are the interface, this is one
+    /// process's share of what crossed it. It counts payloads only — no NATS protocol framing, no
+    /// TCP/IP, no TLS — so it runs a few percent below what the same messages cost on the wire.
+    /// `0` from a poller too old to count (N-1), which is indistinguishable from an idle bus.
+    #[serde(default)]
+    pub bus_rx_bytes: u64,
+    /// Message-payload bytes this process sent over the bus since it started. See [`Self::bus_rx_bytes`].
+    #[serde(default)]
+    pub bus_tx_bytes: u64,
 }
 
 impl HostSample {

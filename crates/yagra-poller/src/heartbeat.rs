@@ -57,8 +57,8 @@ pub(crate) fn start(
     listeners: Vec<String>,
     shutdown: &CancellationToken,
 ) -> JoinHandle<()> {
-    // The host collector rides the beat so this poller's CPU/load/mem/disk reach core even across
-    // NAT/FW (self-observability).
+    // The host collector rides the beat so this poller's CPU/load/memory/disk/network reach core
+    // even across NAT/FW (self-observability).
     let host_collector = Arc::new(yagra_hoststats::HostCollector::from_env());
     tokio::spawn(run_heartbeat_loop(
         bus.clone(),
@@ -71,6 +71,9 @@ pub(crate) fn start(
         inflight.clone(),
         listeners,
         host_collector,
+        // Taken here, where the bus is still the concrete `NatsBus`: the loop is generic over
+        // `SyncBus`, and the counter is a fact about this transport, not about the trait (ADR-137).
+        bus.byte_counters(),
         // Read once at startup rather than per beat: enumerating interfaces is a syscall, and an
         // address change on a poller host is a restart-level event in every deployment shape we
         // support (a container gets a new address by being recreated).
@@ -95,6 +98,7 @@ async fn run_heartbeat_loop<B>(
     inflight: Arc<AtomicU64>,
     listeners: Vec<String>,
     host_collector: Arc<yagra_hoststats::HostCollector>,
+    bus_bytes: Arc<yagra_bus::BusBytes>,
     mgmt_addrs: Vec<std::net::IpAddr>,
     shutdown: CancellationToken,
 ) where
@@ -191,7 +195,13 @@ async fn run_heartbeat_loop<B>(
             // core cannot distinguish from a deliberate one.
             .chain(log_ship_cap())
             .collect(),
-            host: Some(host_collector.sample()),
+            // The interface total comes from the collector; this process's share of it that crossed
+            // the bus comes from the bus itself, and the page subtracts one from the other (ADR-137).
+            host: Some({
+                let mut sample = host_collector.sample();
+                (sample.bus_rx_bytes, sample.bus_tx_bytes) = bus_bytes.snapshot();
+                sample
+            }),
             leaving,
             // Where this poller sits, so core can root the derived dependency graph (ADR-043).
             mgmt_addrs: mgmt_addrs.clone(),

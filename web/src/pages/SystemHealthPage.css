@@ -186,3 +186,11 @@ html[data-viewport='mobile'] .host-section-toggle {
   margin: 0;
 }
 
+/* The network cards' one sentence of explanation spans the whole grid rather than squeezing into a
+   column beside them — it is the only place the page says what "other" contains (ADR-137). */
+.host-net-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--font-sm);
+}
+

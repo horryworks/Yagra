@@ -121,7 +121,7 @@ struct PollerEntry {
     inflight: u32,
     /// Total results the poller last reported producing since its start.
     results_total: u64,
-    /// The poller host's latest resource sample (CPU/load/mem/disk), from its heartbeat. `None`
+    /// The poller host's latest resource sample (CPU/load/mem/disk/network), from its heartbeat. `None`
     /// until the first beat carrying host telemetry (an N-1 poller never sets it).
     host: Option<HostSample>,
     /// Passive-event listeners it has bound, e.g. `syslog:0.0.0.0:1514` (ADR-024). Used by the
@@ -188,7 +188,7 @@ pub struct PollerView {
     pub inflight: u32,
     /// Results core has consumed from it (via [`Coordinator::record_result`]).
     pub results_total: u64,
-    /// The poller host's latest resource sample (CPU/load/mem/disk), if it reports host telemetry.
+    /// The poller host's latest resource sample (CPU/load/mem/disk/network), if it reports host telemetry.
     pub host: Option<HostSample>,
     /// Passive-event listeners it has bound, e.g. `syslog:0.0.0.0:1514`.
     pub listeners: Vec<String>,

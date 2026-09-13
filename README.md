@@ -115,7 +115,7 @@ Each backend component is a workspace crate under `crates/`; the WebUI lives und
 | Yagra-secrets | Envelope encryption for monitoring credentials | `crates/yagra-secrets` |
 | Yagra-authz | Per-poller-scoped NATS credentials (Auth Callout) | `crates/yagra-authz` |
 | Yagra-telemetry | Structured logging + OpenTelemetry export | `crates/yagra-telemetry` |
-| Yagra-hoststats | Host CPU/load/memory/disk sampling for self-observability | `crates/yagra-hoststats` |
+| Yagra-hoststats | Host CPU/load/memory/disk/network sampling for self-observability | `crates/yagra-hoststats` |
 | Yagra-web | Dashboards & visualization | `web/` |
 
 Shared types live in `crates/yagra-common`.

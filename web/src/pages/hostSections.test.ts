@@ -7,9 +7,22 @@
 // `/system/hosts` there returns a single host — the browser walk cannot tell a page that splits two
 // pollers apart from one that overlays them. Multi-host behaviour is checked here or nowhere
 // (ADR-118); the rendered page is checked by a person on the two-poller box.
+//
+// 🚨 **The same is true of the network cards** (ADR-137). The generated mock fills every number with
+// 1, so the walk sees one point per series and an "other" of exactly zero — it proves the cards
+// render and says nothing about whether the subtraction, the sign or the running total is right.
 
 import { describe, expect, it } from 'vitest';
-import { groupHosts, hostCharts, memPctPoints, overlaySeries } from './hostSections';
+import {
+  below,
+  bpsPoints,
+  cumulativePoints,
+  groupHosts,
+  hostCharts,
+  memPctPoints,
+  otherPoints,
+  overlaySeries,
+} from './hostSections';
 import type { HostInfo, HostMetricRange, MetricPoint } from '../types/api';
 
 const pts = (...pairs: [number, number][]): MetricPoint[] => pairs.map(([t, v]) => ({ t, v }));
@@ -33,8 +46,23 @@ const range = (instance: string, over: Partial<HostMetricRange> = {}): HostMetri
   mem_used_bytes: [],
   mem_total_bytes: [],
   disks: [],
+  network: net(),
   ...over,
 });
+
+/** A network block with only the series a test names; `step_secs` defaults to the sample interval. */
+function net(over: Partial<HostMetricRange['network']> = {}): HostMetricRange['network'] {
+  return {
+    step_secs: 15,
+    nic_rx_bytes: [],
+    nic_tx_bytes: [],
+    bus_rx_bytes: [],
+    bus_tx_bytes: [],
+    ...over,
+  };
+}
+
+const LABELS = { busIn: 'bus↓', busOut: 'bus↑', otherIn: 'other↓', otherOut: 'other↑' };
 
 describe('groupHosts', () => {
   it('emits one section per host, never one per pool', () => {
@@ -130,6 +158,42 @@ describe('memPctPoints', () => {
   });
 });
 
+describe('network arithmetic (ADR-137)', () => {
+  it('takes the bus out of the interface total, step by step', () => {
+    expect(otherPoints(pts([1, 1_000], [2, 600]), pts([1, 400], [2, 100]))).toEqual(
+      pts([1, 600], [2, 500]),
+    );
+  });
+
+  it('leaves a gap where either side is missing, never a zero', () => {
+    // t=1 has no bus reading, t=3 no interface reading. Drawing either as 0 would say "no traffic"
+    // about a step nobody measured.
+    expect(otherPoints(pts([1, 900], [2, 800]), pts([2, 300], [3, 50]))).toEqual(pts([2, 500]));
+  });
+
+  it('floors a step where the bus came out above the interface at zero', () => {
+    // Payload bytes and wire bytes are sampled a moment apart, so a quiet step can invert.
+    expect(otherPoints(pts([1, 100]), pts([1, 130]))).toEqual(pts([1, 0]));
+  });
+
+  it('turns bytes per step into bits per second', () => {
+    expect(bpsPoints(pts([1, 1_500]), 15)).toEqual(pts([1, 800]));
+    expect(bpsPoints(pts([1, 1_500]), 60)).toEqual(pts([1, 200]));
+  });
+
+  it('draws nothing for a step it cannot divide by', () => {
+    expect(bpsPoints(pts([1, 1_500]), 0)).toEqual([]);
+  });
+
+  it('adds the steps up oldest first', () => {
+    expect(cumulativePoints(pts([1, 10], [2, 20], [4, 5]))).toEqual(pts([1, 10], [2, 30], [4, 35]));
+  });
+
+  it('draws sent traffic below the axis', () => {
+    expect(below(pts([1, 7]))).toEqual(pts([1, -7]));
+  });
+});
+
 describe('hostCharts', () => {
   it('always draws all three load averages, whatever pool the host is in', () => {
     // The per-pool layout collapsed to load1 as soon as a pool held two pollers, because the colour
@@ -181,6 +245,68 @@ describe('hostCharts', () => {
     expect(charts.disks[0].series[0].values).toEqual([2048]);
   });
 
+  it('colours the network series by path and draws direction with the sign', () => {
+    // Two colours, not four: the first two palette entries already mean in and out elsewhere, so
+    // here they mean bus and other, and up and down carry the direction (ADR-137).
+    const charts = hostCharts(
+      range('core', {
+        network: net({
+          step_secs: 15,
+          nic_rx_bytes: pts([1, 3_000]),
+          nic_tx_bytes: pts([1, 1_500]),
+          bus_rx_bytes: pts([1, 1_500]),
+          bus_tx_bytes: pts([1, 750]),
+        }),
+      }),
+      ['#bus', '#other', '#never'],
+      LABELS,
+    );
+    expect(charts.net.series.map((s) => [s.label, s.color])).toEqual([
+      ['bus↓', '#bus'],
+      ['bus↑', '#bus'],
+      ['other↓', '#other'],
+      ['other↑', '#other'],
+    ]);
+    // 1,500 bytes in 15 s is 800 bps; the other half of the interface's 3,000 is the other 800.
+    expect(charts.net.series.map((s) => s.values[0])).toEqual([800, -400, 800, -400]);
+  });
+
+  it('runs the cumulative card as a total and leaves a missing step as a gap', () => {
+    const charts = hostCharts(
+      range('core', {
+        network: net({
+          nic_rx_bytes: pts([1, 100], [3, 100]),
+          bus_rx_bytes: pts([1, 40], [2, 40], [3, 40]),
+        }),
+      }),
+      ['#bus', '#other'],
+      LABELS,
+    );
+    const byLabel = Object.fromEntries(charts.netTotal.series.map((s) => [s.label, s.values]));
+    expect(charts.netTotal.timestamps).toEqual([1, 2, 3]);
+    expect(byLabel['bus↓']).toEqual([40, 80, 120]);
+    // t=2 has no interface reading, so "other" is unknown there — a gap, and the total after it
+    // carries on from what was known rather than restarting.
+    expect(byLabel['other↓']).toEqual([60, null, 120]);
+  });
+
+  it('heads the cards with the interface as a whole', () => {
+    const charts = hostCharts(
+      range('core', {
+        network: net({
+          step_secs: 60,
+          nic_rx_bytes: pts([1, 600], [2, 1_200]),
+          nic_tx_bytes: pts([1, 300], [2, 150]),
+          bus_rx_bytes: pts([1, 1], [2, 1]),
+        }),
+      }),
+      ['#a', '#b'],
+    );
+    // The latest step's rate, and the whole window's total.
+    expect(charts.netRate).toEqual({ rx: 160, tx: 20 });
+    expect(charts.netSum).toEqual({ rx: 1_800, tx: 450 });
+  });
+
   it('draws empty cards while the fetch is outstanding, rather than none at all', () => {
     // A loading section has to stay distinguishable from a host that reports nothing: the cards are
     // there, the lines are not.
@@ -189,5 +315,11 @@ describe('hostCharts', () => {
     expect(charts.cpu.timestamps).toEqual([]);
     expect(charts.load.series.map((s) => s.label)).toEqual(['1m', '5m', '15m']);
     expect(charts.disks).toEqual([]);
+    expect(charts.net.series).toHaveLength(4);
+    expect(charts.net.timestamps).toEqual([]);
+    expect(charts.netTotal.series).toHaveLength(4);
+    // Nothing to report is `null`, which the page shows as a dash — never a confident zero.
+    expect(charts.netRate).toEqual({ rx: null, tx: null });
+    expect(charts.netSum).toEqual({ rx: null, tx: null });
   });
 });

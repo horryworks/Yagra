@@ -544,6 +544,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         store.clone(),
         core_host.clone(),
         repo.pool().clone(),
+        bus.byte_counters(),
         &shutdown,
     );
 

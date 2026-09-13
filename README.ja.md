@@ -110,7 +110,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 | Yagra-secrets | 監視資格情報のエンベロープ暗号 | `crates/yagra-secrets` |
 | Yagra-authz | ポーラ単位にスコープした NATS 資格情報（Auth Callout） | `crates/yagra-authz` |
 | Yagra-telemetry | 構造化ログ + OpenTelemetry エクスポート | `crates/yagra-telemetry` |
-| Yagra-hoststats | 自己観測用のホスト CPU/ロード/メモリ/ディスク採取 | `crates/yagra-hoststats` |
+| Yagra-hoststats | 自己観測用のホスト CPU/ロード/メモリ/ディスク/ネットワーク採取 | `crates/yagra-hoststats` |
 | Yagra-web | ダッシュボード・可視化 | `web/` |
 
 横断的な型は `crates/yagra-common` にあります。

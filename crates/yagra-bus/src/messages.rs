@@ -906,7 +906,7 @@ pub struct HeartbeatMsg {
     /// Empty from an N-1 poller.
     #[serde(default)]
     pub caps: Vec<String>,
-    /// The poller host's own resource sample (CPU/load/memory/disk) for self-observability. `None`
+    /// The poller host's own resource sample (CPU/load/memory/disk/network) for self-observability. `None`
     /// from an N-1 poller that predates host telemetry — core then simply shows no host data for
     /// it. Core is the single writer of the resulting `yagra_host_*` series to the TSDB (remote
     /// pollers can't reach it directly), so this heartbeat field is that path.

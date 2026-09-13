@@ -3940,7 +3940,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Host CPU/load/mem/disk trends for one instance over `[from,to]` at `step`. */
+        /** Host CPU/load/memory/disk/network trends for one instance over `[from,to]` at `step`. */
         get: operations["host_metric_range"];
         put?: never;
         post?: never;
@@ -7283,8 +7283,8 @@ export interface components {
             role: string;
         };
         /**
-         * @description The scalar host trends plus a per-mount filesystem trend, all over one window — one round trip
-         *     per instance/range change.
+         * @description The scalar host trends, a per-mount filesystem trend and the network traffic, all over one
+         *     window — one round trip per instance/range change.
          */
         HostMetricRange: {
             cpu_pct: components["schemas"]["MetricPoint"][];
@@ -7295,6 +7295,40 @@ export interface components {
             load5: components["schemas"]["MetricPoint"][];
             mem_total_bytes: components["schemas"]["MetricPoint"][];
             mem_used_bytes: components["schemas"]["MetricPoint"][];
+            /** @description Network traffic over the same window. */
+            network: components["schemas"]["HostNetworkRange"];
+        };
+        /**
+         * @description One host's network traffic over the window: what crossed the network interfaces it counts, and
+         *     this component's share of that which travelled over the Yagra bus.
+         *
+         *     Every point is the number of bytes moved during one step of `step_secs` seconds. It is neither a
+         *     per-second rate nor a running total: divide by `step_secs` for a rate, add the points up for a
+         *     total. A step with no point had no reading, which is not the same as no traffic.
+         */
+        HostNetworkRange: {
+            /**
+             * @description Message-payload bytes this component received over the bus during each step. Payload only:
+             *     protocol framing, TCP/IP and TLS overhead are not included, so this runs slightly below the
+             *     same messages as seen on the interface.
+             */
+            bus_rx_bytes: components["schemas"]["MetricPoint"][];
+            /** @description Message-payload bytes this component sent over the bus during each step. */
+            bus_tx_bytes: components["schemas"]["MetricPoint"][];
+            /**
+             * @description Bytes received on the counted network interfaces during each step. The counted interfaces
+             *     are the physical ones when the host has any, otherwise every interface except loopback — so
+             *     for a component running in a bridge-networked container, this is that container's traffic.
+             */
+            nic_rx_bytes: components["schemas"]["MetricPoint"][];
+            /** @description Bytes sent on the counted network interfaces during each step. */
+            nic_tx_bytes: components["schemas"]["MetricPoint"][];
+            /**
+             * Format: int64
+             * @description How many seconds each point covers. This is the step the server actually used, after
+             *     clamping, which can differ from the one requested.
+             */
+            step_secs: number;
         };
         /**
          * @description HTTP request method for a URL check. Stored as an UPPERCASE token (the `method` column).

@@ -19480,7 +19480,7 @@
         "tags": [
           "system"
         ],
-        "summary": "Host CPU/load/mem/disk trends for one instance over `[from,to]` at `step`.",
+        "summary": "Host CPU/load/memory/disk/network trends for one instance over `[from,to]` at `step`.",
         "operationId": "host_metric_range",
         "parameters": [
           {
@@ -27946,7 +27946,7 @@
       },
       "HostMetricRange": {
         "type": "object",
-        "description": "The scalar host trends plus a per-mount filesystem trend, all over one window — one round trip\nper instance/range change.",
+        "description": "The scalar host trends, a per-mount filesystem trend and the network traffic, all over one\nwindow — one round trip per instance/range change.",
         "required": [
           "instance",
           "cpu_pct",
@@ -27955,7 +27955,8 @@
           "load15",
           "mem_used_bytes",
           "mem_total_bytes",
-          "disks"
+          "disks",
+          "network"
         ],
         "properties": {
           "cpu_pct": {
@@ -28002,6 +28003,57 @@
             "items": {
               "$ref": "#/components/schemas/MetricPoint"
             }
+          },
+          "network": {
+            "$ref": "#/components/schemas/HostNetworkRange",
+            "description": "Network traffic over the same window."
+          }
+        }
+      },
+      "HostNetworkRange": {
+        "type": "object",
+        "description": "One host's network traffic over the window: what crossed the network interfaces it counts, and\nthis component's share of that which travelled over the Yagra bus.\n\nEvery point is the number of bytes moved during one step of `step_secs` seconds. It is neither a\nper-second rate nor a running total: divide by `step_secs` for a rate, add the points up for a\ntotal. A step with no point had no reading, which is not the same as no traffic.",
+        "required": [
+          "step_secs",
+          "nic_rx_bytes",
+          "nic_tx_bytes",
+          "bus_rx_bytes",
+          "bus_tx_bytes"
+        ],
+        "properties": {
+          "bus_rx_bytes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            },
+            "description": "Message-payload bytes this component received over the bus during each step. Payload only:\nprotocol framing, TCP/IP and TLS overhead are not included, so this runs slightly below the\nsame messages as seen on the interface."
+          },
+          "bus_tx_bytes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            },
+            "description": "Message-payload bytes this component sent over the bus during each step."
+          },
+          "nic_rx_bytes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            },
+            "description": "Bytes received on the counted network interfaces during each step. The counted interfaces\nare the physical ones when the host has any, otherwise every interface except loopback — so\nfor a component running in a bridge-networked container, this is that container's traffic."
+          },
+          "nic_tx_bytes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            },
+            "description": "Bytes sent on the counted network interfaces during each step."
+          },
+          "step_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many seconds each point covers. This is the step the server actually used, after\nclamping, which can differ from the one requested.",
+            "minimum": 0
           }
         }
       },

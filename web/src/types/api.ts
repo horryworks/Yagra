@@ -1024,7 +1024,7 @@ export type SystemHostsResponse = components['schemas']['SystemHostsResponse'];
  *  aligned on timestamps, or show a bare-bytes trend when `size_bytes` is empty/zero. */
 export type HostDiskRange = components['schemas']['HostDiskRange'];
 
-/** Host CPU/load/mem/disk trends for one instance over a window
+/** Host CPU/load/mem/disk/network trends for one instance over a window
  *  (`GET /api/v1/system/hosts/:instance/metrics/range`). One round trip per instance/range. */
 export type HostMetricRange = components['schemas']['HostMetricRange'];
 

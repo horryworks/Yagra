@@ -286,7 +286,7 @@ pub struct ApiState {
     /// then the flow top-AS endpoint resolves AS numbers to organization names; `None` leaves names
     /// unset.
     pub ipasn: crate::ipasn::IpAsnHandle,
-    /// Core's own latest host-resource sample (CPU/load/mem/disk), for the System Health page.
+    /// Core's own latest host-resource sample (CPU/load/mem/disk/network), for the System Health page.
     pub host_sample: CoreHostSample,
     /// Inventory read seam.
     pub nodes: Arc<dyn NodeListing>,
@@ -424,7 +424,7 @@ pub fn router(state: ApiState) -> Router {
         // Distributed poller pool (ADR-009/020): the fleet of registered pollers + per-pool summary.
         // Static `/pollers/:id/nodes` drill-down alongside the `:id` param route.
         // Store-and-forward (Phase 3): recent core↔poller visibility outages (monitoring gaps).
-        // Host self-observability: current CPU/load/mem/disk of core + each poller, and the trend
+        // Host self-observability: current CPU/load/mem/disk/network of core + each poller, and the trend
         // series behind the System Health "Host resources" charts.
         // Troubleshoot analysis jobs (ADR-022), in `api/analysis.rs`.
         .merge(analysis::routes())

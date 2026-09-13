@@ -20,6 +20,9 @@ use crate::subjects;
 use async_nats::Client;
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
+use serde::{de::DeserializeOwned, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Default poller pool for the single-pool MVP (ADR-009). Multi-pool dispatch routes by
 /// `Node::pool` later; today every job lands on this subject and the wildcard catches it.
@@ -132,10 +135,52 @@ pub fn split_userinfo(url: &str) -> (String, Option<String>, Option<String>) {
     (clean, user, password)
 }
 
+/// What this process has moved over the bus since it started, in message-payload bytes (ADR-137).
+///
+/// 🚨 **Not `async_nats::Client::statistics()`, deliberately.** async-nats 0.49 adds to `out_bytes`
+/// twice for every publish — once when the message is queued, again when it reaches the socket — so
+/// it reads about double what was sent, and the Yagra health page subtracts this from the interface
+/// total. Its `in_bytes` is honest, but a receive side with no trustworthy send side is nothing to
+/// subtract.
+///
+/// Payload only: no NATS protocol framing, TCP/IP or TLS, so a few percent under what the same
+/// messages cost on the wire. Traffic that does not travel through [`NatsBus`]'s own methods — core's
+/// Auth Callout responder, which holds [`NatsBus::client`] — is not counted either, and belongs under
+/// "other" because it is not traffic with a poller.
+#[derive(Debug, Default)]
+pub struct BusBytes {
+    rx: AtomicU64,
+    tx: AtomicU64,
+}
+
+impl BusBytes {
+    /// `(received, sent)` payload bytes since the process started.
+    #[must_use]
+    pub fn snapshot(&self) -> (u64, u64) {
+        (
+            self.rx.load(Ordering::Relaxed),
+            self.tx.load(Ordering::Relaxed),
+        )
+    }
+
+    fn add_rx(&self, n: usize) {
+        self.rx
+            .fetch_add(u64::try_from(n).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    fn add_tx(&self, n: usize) {
+        self.tx
+            .fetch_add(u64::try_from(n).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+}
+
 /// A [`Bus`] over NATS.
 pub struct NatsBus {
     client: Client,
     job_subject: String,
+    /// Counted in [`Self::publish_json`] and [`decoded`] — the only place a payload leaves and the
+    /// only place one arrives.
+    bytes: Arc<BusBytes>,
 }
 
 impl NatsBus {
@@ -171,6 +216,7 @@ impl NatsBus {
         Ok(Self {
             client,
             job_subject: subjects::jobs_for_pool(DEFAULT_POOL),
+            bytes: Arc::default(),
         })
     }
 
@@ -224,6 +270,7 @@ impl NatsBus {
         Ok(Self {
             client,
             job_subject: subjects::jobs_for_pool(DEFAULT_POOL),
+            bytes: Arc::default(),
         })
     }
 
@@ -256,6 +303,41 @@ impl NatsBus {
         self.client.clone()
     }
 
+    /// This process's bus traffic since it started — what the Yagra health page draws against the
+    /// interface total (ADR-137). A cheap `Arc` clone of the counters the bus itself increments.
+    #[must_use]
+    pub fn byte_counters(&self) -> Arc<BusBytes> {
+        Arc::clone(&self.bytes)
+    }
+
+    /// Encode `value` as JSON, publish it on `subject`, and count the payload once the client has
+    /// taken it.
+    ///
+    /// 🚨 **Every publish goes through here, and a test below holds that on the text** — a publish
+    /// that bypassed this would be traffic the page silently files under "other". `what` names the
+    /// message in both error texts; `dest` adds where it was going (`("to", poller)`,
+    /// `("for pool", pool)`) for the publishes addressed to one.
+    async fn publish_json<T: Serialize + Sync>(
+        &self,
+        subject: String,
+        value: &T,
+        what: &str,
+        dest: Option<(&str, &str)>,
+    ) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(value)
+            .map_err(|e| BusError::Publish(format!("encode {what}: {e}")))?;
+        let len = payload.len();
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(|e| match dest {
+                Some((prep, to)) => BusError::Publish(format!("publish {what} {prep} {to}: {e}")),
+                None => BusError::Publish(format!("publish {what}: {e}")),
+            })?;
+        self.bytes.add_tx(len);
+        Ok(())
+    }
+
     /// Subscribe to poll results — core side. Malformed messages are skipped.
     pub async fn subscribe_results(&self) -> Result<impl Stream<Item = PollResult>, BusError> {
         let sub = self
@@ -263,15 +345,11 @@ impl NatsBus {
             .subscribe(subjects::results())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe results: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<PollResult>(&msg.payload) {
-                Ok(result) => Some(result),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed PollResult from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<PollResult>(
+            Arc::clone(&self.bytes),
+            sub,
+            "PollResult",
+        ))
     }
 
     /// Subscribe to **backfilled** poll results — core side (store-and-forward, Phase 3). Plain
@@ -287,15 +365,11 @@ impl NatsBus {
             .subscribe(subjects::results_backfill())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe results backfill: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<PollResult>(&msg.payload) {
-                Ok(result) => Some(result),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed backfill PollResult from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<PollResult>(
+            Arc::clone(&self.bytes),
+            sub,
+            "backfill PollResult",
+        ))
     }
 
     /// Subscribe to passive events — core side (single consumer, no queue group, same as
@@ -306,15 +380,11 @@ impl NatsBus {
             .subscribe(subjects::events())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe events: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<EventMsg>(&msg.payload) {
-                Ok(event) => Some(event),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed EventMsg from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<EventMsg>(
+            Arc::clone(&self.bytes),
+            sub,
+            "EventMsg",
+        ))
     }
 
     /// Subscribe to edge-aggregated flow batches — core side (ADR-031, single consumer, mirrors
@@ -326,15 +396,11 @@ impl NatsBus {
             .subscribe(subjects::flows())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe flows: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<FlowBatch>(&msg.payload) {
-                Ok(batch) => Some(batch),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed FlowBatch from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<FlowBatch>(
+            Arc::clone(&self.bytes),
+            sub,
+            "FlowBatch",
+        ))
     }
 
     /// Subscribe to verbatim flow datagrams — core side (ADR-034 Increment 2, mirrors
@@ -348,15 +414,11 @@ impl NatsBus {
             .subscribe(subjects::flows_raw())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe raw flows: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<RawFlowDatagram>(&msg.payload) {
-                Ok(dg) => Some(dg),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed RawFlowDatagram from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<RawFlowDatagram>(
+            Arc::clone(&self.bytes),
+            sub,
+            "RawFlowDatagram",
+        ))
     }
 
     // ── Core⇄core control plane (ADR-016 Increment 2 — active/active API) ────────────
@@ -371,15 +433,11 @@ impl NatsBus {
             .subscribe(subjects::auth_revoke())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe auth revoke: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<AuthRevoke>(&msg.payload) {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed AuthRevoke from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<AuthRevoke>(
+            Arc::clone(&self.bytes),
+            sub,
+            "AuthRevoke",
+        ))
     }
 
     /// Subscribe to this poller's upgrade commands — poller side (ADR-051). A plain subscribe on a
@@ -397,15 +455,11 @@ impl NatsBus {
             .subscribe(subjects::upgrade_for(poller_id))
             .await
             .map_err(|e| BusError::Publish(format!("subscribe poller upgrades: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<PollerUpgradeMsg>(&msg.payload) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed PollerUpgradeMsg from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<PollerUpgradeMsg>(
+            Arc::clone(&self.bytes),
+            sub,
+            "PollerUpgradeMsg",
+        ))
     }
 
     /// Subscribe to this poller's support-log requests — poller side (ADR-045 Inc.4). A plain
@@ -424,15 +478,11 @@ impl NatsBus {
             .subscribe(subjects::poller_logs_for(poller_id))
             .await
             .map_err(|e| BusError::Publish(format!("subscribe poller log requests: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<PollerLogRequest>(&msg.payload) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed PollerLogRequest from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<PollerLogRequest>(
+            Arc::clone(&self.bytes),
+            sub,
+            "PollerLogRequest",
+        ))
     }
 
     /// Subscribe to support-log chunks from every poller — core side (ADR-045 Inc.4). One fan-in
@@ -446,15 +496,11 @@ impl NatsBus {
             .subscribe(subjects::poller_log_reply())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe poller log chunks: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<PollerLogChunk>(&msg.payload) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed PollerLogChunk from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<PollerLogChunk>(
+            Arc::clone(&self.bytes),
+            sub,
+            "PollerLogChunk",
+        ))
     }
 
     /// Subscribe (in a queue group) to discovery jobs — poller side. Malformed messages skipped.
@@ -467,15 +513,11 @@ impl NatsBus {
             .queue_subscribe(subjects::discovery_jobs(), queue.to_owned())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe discovery jobs: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<DiscoveryJob>(&msg.payload) {
-                Ok(job) => Some(job),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed DiscoveryJob from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<DiscoveryJob>(
+            Arc::clone(&self.bytes),
+            sub,
+            "DiscoveryJob",
+        ))
     }
 
     /// Subscribe to stop-this-sweep commands — poller side (ADR-068 Inc.2).
@@ -498,15 +540,11 @@ impl NatsBus {
             .subscribe(subject)
             .await
             .map_err(|e| BusError::Publish(format!("subscribe discovery cancels: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<DiscoveryCancel>(&msg.payload) {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed DiscoveryCancel from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<DiscoveryCancel>(
+            Arc::clone(&self.bytes),
+            sub,
+            "DiscoveryCancel",
+        ))
     }
 
     /// Subscribe to discovery results — core side. Malformed messages skipped.
@@ -518,15 +556,11 @@ impl NatsBus {
             .subscribe(subjects::discovery_results())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe discovery results: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<DiscoveryResult>(&msg.payload) {
-                Ok(result) => Some(result),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed DiscoveryResult from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<DiscoveryResult>(
+            Arc::clone(&self.bytes),
+            sub,
+            "DiscoveryResult",
+        ))
     }
 
     // ── Distributed poller pool (ADR-009/020) — control plane ───────────────────────
@@ -539,15 +573,11 @@ impl NatsBus {
             .subscribe(subjects::heartbeat())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe heartbeats: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<HeartbeatMsg>(&msg.payload) {
-                Ok(hb) => Some(hb),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed HeartbeatMsg from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<HeartbeatMsg>(
+            Arc::clone(&self.bytes),
+            sub,
+            "HeartbeatMsg",
+        ))
     }
 
     /// Subscribe to poller snapshot requests — core side (single consumer, no queue group).
@@ -560,15 +590,11 @@ impl NatsBus {
             .subscribe(subjects::sync_request())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe sync requests: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<SyncRequest>(&msg.payload) {
-                Ok(req) => Some(req),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed SyncRequest from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<SyncRequest>(
+            Arc::clone(&self.bytes),
+            sub,
+            "SyncRequest",
+        ))
     }
 
     /// Subscribe to this poller's working-set sync — poller side. A **plain** subscribe (no queue
@@ -583,15 +609,7 @@ impl NatsBus {
             .subscribe(subjects::assignment_for(poller_id))
             .await
             .map_err(|e| BusError::Publish(format!("subscribe sync: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<SyncMsg>(&msg.payload) {
-                Ok(sync) => Some(sync),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed SyncMsg from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<SyncMsg>(Arc::clone(&self.bytes), sub, "SyncMsg"))
     }
 
     /// Subscribe (in a queue group) to a specific pool's jobs — poller side. **The only job
@@ -610,15 +628,7 @@ impl NatsBus {
             .queue_subscribe(subjects::jobs_for_pool(pool), queue.to_owned())
             .await
             .map_err(|e| BusError::Publish(format!("subscribe jobs for pool {pool}: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<PollJob>(&msg.payload) {
-                Ok(job) => Some(job),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed PollJob from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<PollJob>(Arc::clone(&self.bytes), sub, "PollJob"))
     }
 
     /// Subscribe (in a queue group) to a specific pool's discovery jobs — poller side. Malformed
@@ -635,72 +645,73 @@ impl NatsBus {
             .map_err(|e| {
                 BusError::Publish(format!("subscribe discovery jobs for pool {pool}: {e}"))
             })?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<DiscoveryJob>(&msg.payload) {
-                Ok(job) => Some(job),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed DiscoveryJob from bus");
-                    None
-                }
-            }
-        }))
+        Ok(decoded::<DiscoveryJob>(
+            Arc::clone(&self.bytes),
+            sub,
+            "DiscoveryJob",
+        ))
     }
+}
+
+/// Decode a subscription's messages, counting every payload into `bytes` on the way (ADR-137).
+///
+/// Counted **before** decoding: a malformed message still crossed the wire, and the Yagra health
+/// page subtracts this counter from the interface total — leaving it out would move those bytes into
+/// "other". What does not decode is logged and skipped, as every subscription here always did.
+///
+/// A free function rather than a method so the stream it returns borrows nothing from the bus.
+fn decoded<T: DeserializeOwned>(
+    bytes: Arc<BusBytes>,
+    sub: async_nats::Subscriber,
+    what: &'static str,
+) -> impl Stream<Item = T> {
+    sub.filter_map(move |msg| {
+        bytes.add_rx(msg.payload.len());
+        std::future::ready(match serde_json::from_slice::<T>(&msg.payload) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                tracing::warn!(error = %e, "dropping malformed {what} from bus");
+                None
+            }
+        })
+    })
 }
 
 #[async_trait]
 impl Bus for NatsBus {
     async fn publish_job(&self, job: PollJob) -> Result<(), BusError> {
-        let payload =
-            serde_json::to_vec(&job).map_err(|e| BusError::Publish(format!("encode job: {e}")))?;
-        self.client
-            .publish(self.job_subject.clone(), payload.into())
+        self.publish_json(self.job_subject.clone(), &job, "job", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish job: {e}")))
     }
 
     async fn publish_result(&self, result: PollResult) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&result)
-            .map_err(|e| BusError::Publish(format!("encode result: {e}")))?;
-        self.client
-            .publish(subjects::results(), payload.into())
+        self.publish_json(subjects::results(), &result, "result", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish result: {e}")))
     }
 
     async fn publish_result_backfill(&self, result: PollResult) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&result)
-            .map_err(|e| BusError::Publish(format!("encode backfill result: {e}")))?;
-        self.client
-            .publish(subjects::results_backfill(), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish backfill result: {e}")))
+        self.publish_json(
+            subjects::results_backfill(),
+            &result,
+            "backfill result",
+            None,
+        )
+        .await
     }
 
     async fn publish_event(&self, event: EventMsg) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&event)
-            .map_err(|e| BusError::Publish(format!("encode event: {e}")))?;
-        self.client
-            .publish(subjects::events(), payload.into())
+        self.publish_json(subjects::events(), &event, "event", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish event: {e}")))
     }
 
     async fn publish_flows(&self, batch: FlowBatch) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&batch)
-            .map_err(|e| BusError::Publish(format!("encode flow batch: {e}")))?;
-        self.client
-            .publish(subjects::flows(), payload.into())
+        self.publish_json(subjects::flows(), &batch, "flow batch", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish flow batch: {e}")))
     }
 
     async fn publish_raw_flow(&self, datagram: RawFlowDatagram) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&datagram)
-            .map_err(|e| BusError::Publish(format!("encode raw flow datagram: {e}")))?;
-        self.client
-            .publish(subjects::flows_raw(), payload.into())
+        self.publish_json(subjects::flows_raw(), &datagram, "raw flow datagram", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish raw flow datagram: {e}")))
     }
 
     fn is_connected(&self) -> bool {
@@ -715,40 +726,34 @@ impl Bus for NatsBus {
 #[async_trait]
 impl SyncBus for NatsBus {
     async fn publish_sync(&self, poller_id: &str, msg: SyncMsg) -> Result<(), BusError> {
-        let payload =
-            serde_json::to_vec(&msg).map_err(|e| BusError::Publish(format!("encode sync: {e}")))?;
         // One subject per poller preserves the ordering seq gap-detection relies on (ADR-020).
-        self.client
-            .publish(subjects::assignment_for(poller_id), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish sync to {poller_id}: {e}")))
+        self.publish_json(
+            subjects::assignment_for(poller_id),
+            &msg,
+            "sync",
+            Some(("to", poller_id)),
+        )
+        .await
     }
 
     async fn publish_heartbeat(&self, hb: HeartbeatMsg) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&hb)
-            .map_err(|e| BusError::Publish(format!("encode heartbeat: {e}")))?;
-        self.client
-            .publish(subjects::heartbeat(), payload.into())
+        self.publish_json(subjects::heartbeat(), &hb, "heartbeat", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish heartbeat: {e}")))
     }
 
     async fn publish_sync_request(&self, req: SyncRequest) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&req)
-            .map_err(|e| BusError::Publish(format!("encode sync request: {e}")))?;
-        self.client
-            .publish(subjects::sync_request(), payload.into())
+        self.publish_json(subjects::sync_request(), &req, "sync request", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish sync request: {e}")))
     }
 
     async fn publish_job_for_pool(&self, pool: &str, job: PollJob) -> Result<(), BusError> {
-        let payload =
-            serde_json::to_vec(&job).map_err(|e| BusError::Publish(format!("encode job: {e}")))?;
-        self.client
-            .publish(subjects::jobs_for_pool(pool), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish job for pool {pool}: {e}")))
+        self.publish_json(
+            subjects::jobs_for_pool(pool),
+            &job,
+            "job",
+            Some(("for pool", pool)),
+        )
+        .await
     }
 
     async fn flush(&self) -> Result<(), BusError> {
@@ -762,49 +767,39 @@ impl SyncBus for NatsBus {
 #[async_trait]
 impl UpgradeBus for NatsBus {
     async fn publish_poller_upgrade(&self, msg: PollerUpgradeMsg) -> Result<(), BusError> {
-        let subject = subjects::upgrade_for(&msg.poller_id);
-        let poller = msg.poller_id.clone();
-        let payload = serde_json::to_vec(&msg)
-            .map_err(|e| BusError::Publish(format!("encode poller upgrade: {e}")))?;
-        self.client
-            .publish(subject, payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish upgrade to {poller}: {e}")))
+        self.publish_json(
+            subjects::upgrade_for(&msg.poller_id),
+            &msg,
+            "poller upgrade",
+            Some(("to", &msg.poller_id)),
+        )
+        .await
     }
 }
 
 #[async_trait]
 impl LogBus for NatsBus {
     async fn publish_poller_log_request(&self, msg: PollerLogRequest) -> Result<(), BusError> {
-        let subject = subjects::poller_logs_for(&msg.poller_id);
-        let poller = msg.poller_id.clone();
-        let payload = serde_json::to_vec(&msg)
-            .map_err(|e| BusError::Publish(format!("encode poller log request: {e}")))?;
-        self.client
-            .publish(subject, payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish log request to {poller}: {e}")))
+        self.publish_json(
+            subjects::poller_logs_for(&msg.poller_id),
+            &msg,
+            "poller log request",
+            Some(("to", &msg.poller_id)),
+        )
+        .await
     }
 
     async fn publish_poller_log_chunk(&self, msg: PollerLogChunk) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&msg)
-            .map_err(|e| BusError::Publish(format!("encode poller log chunk: {e}")))?;
-        self.client
-            .publish(subjects::poller_log_reply(), payload.into())
+        self.publish_json(subjects::poller_log_reply(), &msg, "poller log chunk", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish poller log chunk: {e}")))
     }
 }
 
 #[async_trait]
 impl DiscoveryBus for NatsBus {
     async fn publish_discovery_job(&self, job: DiscoveryJob) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&job)
-            .map_err(|e| BusError::Publish(format!("encode discovery job: {e}")))?;
-        self.client
-            .publish(subjects::discovery_jobs(), payload.into())
+        self.publish_json(subjects::discovery_jobs(), &job, "discovery job", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish discovery job: {e}")))
     }
 
     async fn publish_discovery_job_for_pool(
@@ -812,21 +807,23 @@ impl DiscoveryBus for NatsBus {
         pool: &str,
         job: DiscoveryJob,
     ) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&job)
-            .map_err(|e| BusError::Publish(format!("encode discovery job: {e}")))?;
-        self.client
-            .publish(subjects::discovery_jobs_for_pool(pool), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish discovery job for pool {pool}: {e}")))
+        self.publish_json(
+            subjects::discovery_jobs_for_pool(pool),
+            &job,
+            "discovery job",
+            Some(("for pool", pool)),
+        )
+        .await
     }
 
     async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&result)
-            .map_err(|e| BusError::Publish(format!("encode discovery result: {e}")))?;
-        self.client
-            .publish(subjects::discovery_results(), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish discovery result: {e}")))
+        self.publish_json(
+            subjects::discovery_results(),
+            &result,
+            "discovery result",
+            None,
+        )
+        .await
     }
 
     async fn publish_discovery_cancel(
@@ -834,35 +831,77 @@ impl DiscoveryBus for NatsBus {
         pool: Option<&str>,
         msg: DiscoveryCancel,
     ) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&msg)
-            .map_err(|e| BusError::Publish(format!("encode discovery cancel: {e}")))?;
         // The route the sweep was published on, so a job that fell back to the global subject is
         // cancelled there — see `subjects::discovery_cancel_for_pool`.
         let subject = pool.map_or_else(subjects::discovery_cancel, |p| {
             subjects::discovery_cancel_for_pool(p)
         });
-        self.client
-            .publish(subject, payload.into())
+        self.publish_json(subject, &msg, "discovery cancel", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish discovery cancel: {e}")))
     }
 }
 
 #[async_trait]
 impl PeerBus for NatsBus {
     async fn publish_auth_revoke(&self, msg: AuthRevoke) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&msg)
-            .map_err(|e| BusError::Publish(format!("encode auth revoke: {e}")))?;
-        self.client
-            .publish(subjects::auth_revoke(), payload.into())
+        self.publish_json(subjects::auth_revoke(), &msg, "auth revoke", None)
             .await
-            .map_err(|e| BusError::Publish(format!("publish auth revoke: {e}")))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{install_tls_crypto_provider, redact_url, split_userinfo_password};
+
+    #[test]
+    fn bus_bytes_reports_what_was_added_in_each_direction() {
+        let bytes = super::BusBytes::default();
+        assert_eq!(bytes.snapshot(), (0, 0));
+        bytes.add_rx(1_500);
+        bytes.add_tx(40);
+        bytes.add_rx(500);
+        assert_eq!(bytes.snapshot(), (2_000, 40), "received first, sent second");
+    }
+
+    /// 🚨 **Every payload that crosses this bus is counted because each direction has exactly one
+    /// door.** The Yagra health page subtracts [`super::BusBytes`] from the interface total
+    /// (ADR-137), so a publish or a subscription added beside the two counted helpers would fail
+    /// nothing — its bytes would quietly be filed under "other". This module is an I/O adapter no
+    /// unit test can drive, so the property is held on the text: the client's publish call and the
+    /// stream's `filter_map` each appear exactly once, inside the helper that counts.
+    ///
+    /// Read through `srcread` with comments dropped: the raw file carries this test, whose needles
+    /// would count themselves, and doc comments are free to name the calls.
+    #[test]
+    fn every_publish_and_every_subscription_goes_through_the_counted_helpers() {
+        let src = yagra_common::srcread::code_no_comments_in(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+            "src",
+            "nats",
+        );
+        assert_eq!(
+            src.matches(".publish(").count(),
+            1,
+            "a publish outside `publish_json` is bus traffic the health page files under \"other\""
+        );
+        assert_eq!(
+            src.matches("filter_map(").count(),
+            1,
+            "a subscription outside `decoded` is received bus traffic nobody counts"
+        );
+        // The floors. Both counts above are also satisfied by a text in which the call sites were
+        // never recognised, so prove they were seen: 18 publishes and 17 subscriptions today.
+        let publishes = src.matches(".publish_json(").count();
+        let subscriptions = src.matches("decoded::<").count();
+        assert!(
+            publishes >= 18,
+            "only {publishes} publish_json call sites seen"
+        );
+        assert!(
+            subscriptions >= 17,
+            "only {subscriptions} decoded call sites seen"
+        );
+    }
 
     #[test]
     fn splits_userinfo_password_from_url() {

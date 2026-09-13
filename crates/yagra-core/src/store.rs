@@ -392,6 +392,22 @@ pub trait MetricStore: Send + Sync {
     ) -> Vec<MetricPoint> {
         Vec::new()
     }
+
+    /// Range of a host **counter** (`net_rx_bytes_total` and the three beside it, ADR-137) for one
+    /// instance, `[from_s, to_s]` at `step_s` (oldest first). Each point is how much the counter
+    /// grew during its step — bytes moved in that step, never a per-second rate and never a running
+    /// total. Read through [`host_counter_range_query`], never [`host_range_query`]: an average of
+    /// a running total is a meaningless number that still draws a smooth line. Default: empty.
+    async fn host_counter_range(
+        &self,
+        _instance: &str,
+        _metric: &str,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+    ) -> Vec<MetricPoint> {
+        Vec::new()
+    }
 }
 
 #[async_trait]
@@ -681,9 +697,31 @@ fn host_range_query(selector: &str, step_s: u64) -> String {
     )
 }
 
+/// The PromQL a host **counter** chart reads: how much `selector` grew during each step (ADR-137).
+///
+/// The traffic counters are the only `yagra_host_*` series that are not gauges, and
+/// [`host_range_query`] would average a running total into a smooth, meaningless line. Three things
+/// here are load-bearing, each for a reason the gauge reader beside it already paid for:
+///
+/// * **window = step.** Shorter drops the growth between windows; longer counts it in two points,
+///   and the cumulative card adds the points up (ADR-082).
+/// * **`increase` inside, the fold outside.** Folding `pool` first would stitch a moved poller's two
+///   series into one and read the seam between them as a counter reset.
+/// * **`sum`, not `avg`.** The one-point remnant a poller leaves under its boot-time `pool` grows by
+///   nothing, so a sum returns the real series unchanged where an average would halve it for that
+///   step. And the fold itself is not optional: [`VmStore::query_range_points`] reads `result[0]`,
+///   so an unfolded `pool` empties the chart exactly as it did for the gauges (ADR-082 増分 2).
+fn host_counter_range_query(selector: &str, step_s: u64) -> String {
+    format!(
+        "sum without (pool) (increase({selector}[{}s]))",
+        step_s.max(1)
+    )
+}
+
 /// Build the Prometheus exposition body for one host self-sample: the scalar gauges (cpu/load/mem/
-/// swap) plus a `fs_used_bytes`/`fs_size_bytes` pair per watched filesystem, all tagged
-/// `instance`/`role`(/`pool`)(/`mount`) with a trailing millisecond timestamp.
+/// swap), the four traffic counters (ADR-137), and a `fs_used_bytes`/`fs_size_bytes` pair per
+/// watched filesystem, all tagged `instance`/`role`(/`pool`)(/`mount`) with a trailing millisecond
+/// timestamp.
 ///
 /// ⚠️ **The read side does not match on all four, and that asymmetry is load-bearing.**
 /// `host_metric_range`/`host_disk_range` pin `instance` (and `mount`) because those are all the
@@ -691,6 +729,12 @@ fn host_range_query(selector: &str, step_s: u64) -> String {
 /// core can move a poller after it has booted — so [`host_range_query`] folds it away rather than
 /// matching it. This doc used to claim the two sets were identical. They never were, and the one
 /// unaccounted label emptied every host chart for a moved poller (ADR-082 増分 2).
+///
+/// ⚠️ **The counters are written only when the sample carries one.** A poller too old to count sends
+/// none of the four fields and serde fills in zeros; writing those would draw a flat "no traffic"
+/// line for a host nobody measured. Leaving them out leaves its network cards empty, which is the
+/// true statement. A process that counts does not report four zeros past its first beat — the
+/// heartbeat it rides on is itself bus traffic.
 fn host_prometheus_lines(
     instance: &str,
     role: &str,
@@ -731,6 +775,20 @@ fn host_prometheus_lines(
         body.push_str(&format!(
             "yagra_host_{metric}{{{base}}} {value} {at_unix_ms}\n"
         ));
+    }
+    // Counters, not gauges: read through `host_counter_range_query`, never `host_range_query`.
+    // Skipped when all four are zero — see the ⚠️ above.
+    if s.net_rx_bytes | s.net_tx_bytes | s.bus_rx_bytes | s.bus_tx_bytes != 0 {
+        for (metric, value) in [
+            ("net_rx_bytes_total", s.net_rx_bytes),
+            ("net_tx_bytes_total", s.net_tx_bytes),
+            ("bus_rx_bytes_total", s.bus_rx_bytes),
+            ("bus_tx_bytes_total", s.bus_tx_bytes),
+        ] {
+            body.push_str(&format!(
+                "yagra_host_{metric}{{{base}}} {value} {at_unix_ms}\n"
+            ));
+        }
     }
     for d in &s.disks {
         let mount = promql_label_escape(&d.mount);
@@ -1330,6 +1388,28 @@ impl MetricStore for VmStore {
         );
         self.query_range_points(host_range_query(&selector, step_s), from_s, to_s, step_s)
             .await
+    }
+
+    async fn host_counter_range(
+        &self,
+        instance: &str,
+        metric: &str,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        let selector = format!(
+            "yagra_host_{}{{instance=\"{}\"}}",
+            metric,
+            promql_label_escape(instance)
+        );
+        self.query_range_points(
+            host_counter_range_query(&selector, step_s),
+            from_s,
+            to_s,
+            step_s,
+        )
+        .await
     }
 
     async fn latest(&self, key: &SeriesKey) -> Option<f64> {
@@ -1964,6 +2044,49 @@ mod tests {
         assert!(!host_range_query(sel, 0).contains("[0s]"));
     }
 
+    /// The counter reader's shape (ADR-137), pinned for the gauge reader's reasons and one of its
+    /// own: the four traffic series are counters, and a chart of one shows how much it grew per step.
+    /// Window = step, or the cumulative card drops growth or counts it twice; `increase` inside the
+    /// fold, or a moved poller's seam reads as a reset; `sum`, not `avg`, or the boot-time remnant
+    /// halves the step it shares with the real series.
+    #[test]
+    fn a_host_counter_query_reads_growth_per_step_and_sums_across_pool() {
+        let sel = "yagra_host_net_rx_bytes_total{instance=\"core\"}";
+        assert_eq!(
+            host_counter_range_query(sel, 60),
+            "sum without (pool) (increase(yagra_host_net_rx_bytes_total{instance=\"core\"}[60s]))"
+        );
+        for step in [15u64, 60, 300, 3600] {
+            let q = host_counter_range_query(sel, step);
+            assert!(
+                q.contains(&format!("increase({sel}[{step}s])")),
+                "step {step}: window must equal the step, got {q}"
+            );
+        }
+        assert!(host_counter_range_query(sel, 0).contains("[1s]"));
+        // The two readers are not interchangeable, in either direction.
+        assert!(!host_counter_range_query(sel, 60).contains("avg"));
+        assert!(!host_range_query(sel, 60).contains("increase"));
+    }
+
+    #[test]
+    fn a_sample_that_counts_no_traffic_writes_no_counters() {
+        // An N-1 poller's sample: serde fills all four fields with zero. Writing those would draw
+        // "no traffic" for a host nobody measured.
+        let body = host_prometheus_lines(
+            "edge-1",
+            "poller",
+            Some("tokyo"),
+            &HostSample::default(),
+            1_000,
+        );
+        assert!(!body.contains("_bytes_total"), "{body}");
+        assert!(
+            body.contains("yagra_host_cpu_pct"),
+            "the gauges are still written"
+        );
+    }
+
     #[test]
     fn host_lines_carry_pool_and_a_pair_per_disk() {
         let sample = HostSample {
@@ -1971,6 +2094,7 @@ mod tests {
             load1: 0.4,
             mem_used_bytes: 2048,
             mem_total_bytes: 8192,
+            bus_tx_bytes: 7,
             disks: vec![
                 yagra_common::DiskUsage {
                     mount: "root".into(),
@@ -1994,6 +2118,15 @@ mod tests {
         assert_eq!(body.matches("yagra_host_fs_used_bytes").count(), 2);
         assert_eq!(body.matches("yagra_host_fs_size_bytes").count(), 2);
         assert!(body.contains("yagra_host_fs_size_bytes{instance=\"edge-1\",role=\"poller\",pool=\"tokyo\",mount=\"database\"} 0 1000"));
+        // One sent byte is enough to write all four traffic counters, on the same labels as the
+        // gauges — the zeros beside it are real readings from a process that counts.
+        assert!(body.contains(
+            "yagra_host_bus_tx_bytes_total{instance=\"edge-1\",role=\"poller\",pool=\"tokyo\"} 7 1000"
+        ));
+        assert!(body.contains(
+            "yagra_host_net_rx_bytes_total{instance=\"edge-1\",role=\"poller\",pool=\"tokyo\"} 0 1000"
+        ));
+        assert_eq!(body.matches("_bytes_total{").count(), 4, "all four or none");
     }
 
     /// 🚨 A host trend query must also fold across **`pool`**, the one label its selector cannot
@@ -2022,6 +2155,17 @@ mod tests {
             // …and it wraps the step fold rather than replacing it.
             assert!(q.contains(&format!("avg_over_time({sel}[15s])")), "got {q}");
         }
+        // 🚨 Both readers, because this bug belongs to each reader separately: the counter reader
+        // (ADR-137) reaches `query_range_points` by its own path, and an unfolded `pool` there would
+        // empty the two network cards of a moved poller while every gauge chart beside them stayed
+        // correct.
+        let sel = "yagra_host_bus_rx_bytes_total{instance=\"edge-1\"}";
+        let q = host_counter_range_query(sel, 15);
+        assert!(
+            q.starts_with("sum without (pool) ("),
+            "the fold must cross `pool`, got {q}"
+        );
+        assert!(q.contains(&format!("increase({sel}[15s])")), "got {q}");
     }
 
     /// 🚨 The writer may not add a label the reader has not accounted for.
@@ -2036,6 +2180,9 @@ mod tests {
     #[test]
     fn host_lines_carry_no_label_the_trend_read_cannot_account_for() {
         let sample = HostSample {
+            // Non-zero so the four traffic counters are written and their labels are inspected too —
+            // an all-zero sample writes none of them (ADR-137), which would leave them unchecked.
+            net_rx_bytes: 1,
             disks: vec![yagra_common::DiskUsage {
                 mount: "root".into(),
                 used_bytes: 10,

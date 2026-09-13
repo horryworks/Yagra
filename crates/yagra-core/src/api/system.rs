@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Host self-observability — CPU, load, memory and filesystem usage of the core process's host and
-//! of every poller reporting telemetry. Yagra monitoring Yagra.
+//! Host self-observability — CPU, load, memory, filesystem usage and network traffic of the core
+//! process's host and of every poller reporting telemetry. Yagra monitoring Yagra.
 //!
 //! `View`-gated like the other fleet views, and **secret-free by construction**: an `instance` is
 //! either the literal `core` or an already-sanitized poller id, and a `mount` is a configured alias
@@ -189,8 +189,33 @@ pub(crate) struct HostDiskRange {
     size_bytes: Vec<MetricPoint>,
 }
 
-/// The scalar host trends plus a per-mount filesystem trend, all over one window — one round trip
-/// per instance/range change.
+/// One host's network traffic over the window: what crossed the network interfaces it counts, and
+/// this component's share of that which travelled over the Yagra bus.
+///
+/// Every point is the number of bytes moved during one step of `step_secs` seconds. It is neither a
+/// per-second rate nor a running total: divide by `step_secs` for a rate, add the points up for a
+/// total. A step with no point had no reading, which is not the same as no traffic.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct HostNetworkRange {
+    /// How many seconds each point covers. This is the step the server actually used, after
+    /// clamping, which can differ from the one requested.
+    step_secs: u64,
+    /// Bytes received on the counted network interfaces during each step. The counted interfaces
+    /// are the physical ones when the host has any, otherwise every interface except loopback — so
+    /// for a component running in a bridge-networked container, this is that container's traffic.
+    nic_rx_bytes: Vec<MetricPoint>,
+    /// Bytes sent on the counted network interfaces during each step.
+    nic_tx_bytes: Vec<MetricPoint>,
+    /// Message-payload bytes this component received over the bus during each step. Payload only:
+    /// protocol framing, TCP/IP and TLS overhead are not included, so this runs slightly below the
+    /// same messages as seen on the interface.
+    bus_rx_bytes: Vec<MetricPoint>,
+    /// Message-payload bytes this component sent over the bus during each step.
+    bus_tx_bytes: Vec<MetricPoint>,
+}
+
+/// The scalar host trends, a per-mount filesystem trend and the network traffic, all over one
+/// window — one round trip per instance/range change.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct HostMetricRange {
     instance: String,
@@ -201,9 +226,11 @@ pub(crate) struct HostMetricRange {
     mem_used_bytes: Vec<MetricPoint>,
     mem_total_bytes: Vec<MetricPoint>,
     disks: Vec<HostDiskRange>,
+    /// Network traffic over the same window.
+    network: HostNetworkRange,
 }
 
-/// Host CPU/load/mem/disk trends for one instance over `[from,to]` at `step`.
+/// Host CPU/load/memory/disk/network trends for one instance over `[from,to]` at `step`.
 #[utoipa::path(
     get, path = "/api/v1/system/hosts/{instance}/metrics/range", tag = "system",
     params(
@@ -266,15 +293,31 @@ pub(crate) async fn host_trends(
     let from = from.unwrap_or(to - DEFAULT_RANGE_SECS);
     let step = host_trend_step(from, to, step);
     let store = &st.store;
-    // The six scalar series and each mount's two disk series are independent queries — fan them out
-    // concurrently, since this backs a 15s System Health refresh.
-    let (cpu_pct, load1, load5, load15, mem_used_bytes, mem_total_bytes) = tokio::join!(
-        store.host_metric_range(&instance, "cpu_pct", from, to, step),
-        store.host_metric_range(&instance, "load1", from, to, step),
-        store.host_metric_range(&instance, "load5", from, to, step),
-        store.host_metric_range(&instance, "load15", from, to, step),
-        store.host_metric_range(&instance, "mem_used_bytes", from, to, step),
-        store.host_metric_range(&instance, "mem_total_bytes", from, to, step),
+    // The six scalar series, the four traffic counters and each mount's two disk series are
+    // independent queries — fan them out concurrently, since this backs a 15s System Health refresh.
+    let (
+        (cpu_pct, load1, load5, load15, mem_used_bytes, mem_total_bytes),
+        (nic_rx_bytes, nic_tx_bytes, bus_rx_bytes, bus_tx_bytes),
+    ) = tokio::join!(
+        async {
+            tokio::join!(
+                store.host_metric_range(&instance, "cpu_pct", from, to, step),
+                store.host_metric_range(&instance, "load1", from, to, step),
+                store.host_metric_range(&instance, "load5", from, to, step),
+                store.host_metric_range(&instance, "load15", from, to, step),
+                store.host_metric_range(&instance, "mem_used_bytes", from, to, step),
+                store.host_metric_range(&instance, "mem_total_bytes", from, to, step),
+            )
+        },
+        // Counters, read as growth per step — never through the gauge reader (ADR-137).
+        async {
+            tokio::join!(
+                store.host_counter_range(&instance, "net_rx_bytes_total", from, to, step),
+                store.host_counter_range(&instance, "net_tx_bytes_total", from, to, step),
+                store.host_counter_range(&instance, "bus_rx_bytes_total", from, to, step),
+                store.host_counter_range(&instance, "bus_tx_bytes_total", from, to, step),
+            )
+        },
     );
     let disks = futures::future::join_all(mounts.into_iter().map(|mount| {
         let store = &st.store;
@@ -301,6 +344,13 @@ pub(crate) async fn host_trends(
         mem_used_bytes,
         mem_total_bytes,
         disks,
+        network: HostNetworkRange {
+            step_secs: step,
+            nic_rx_bytes,
+            nic_tx_bytes,
+            bus_rx_bytes,
+            bus_tx_bytes,
+        },
     })
 }
 
@@ -406,5 +456,36 @@ mod tests {
         assert!(info.online);
         assert!(info.cpu_pct.is_none());
         assert!(info.disks.is_empty());
+    }
+
+    /// The network block names the step its points cover, because each point is the bytes moved in
+    /// one step and the page divides by it (ADR-137). It has to be the clamped step: this caller
+    /// asks for one second and the points it gets back are fifteen seconds wide.
+    #[tokio::test]
+    async fn the_network_block_carries_the_step_its_points_cover() {
+        let resp = send(
+            public_state(),
+            "/api/v1/system/hosts/core/metrics/range?from=0&to=3600&step=1",
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let network = &json["network"];
+        assert_eq!(
+            network["step_secs"],
+            crate::host_collector::HOST_SAMPLE_SECS
+        );
+        for series in [
+            "nic_rx_bytes",
+            "nic_tx_bytes",
+            "bus_rx_bytes",
+            "bus_tx_bytes",
+        ] {
+            assert!(
+                network[series].is_array(),
+                "{series} missing from {network}"
+            );
+        }
     }
 }

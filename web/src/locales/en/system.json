@@ -337,8 +337,18 @@
       "loadAverage": "Load average",
       "memory": "Memory",
       "disk": "Disk · {{mount}}",
-      "diskShort": "Disk"
-    }
+      "diskShort": "Disk",
+      "network": "Network",
+      "networkTotal": "Cumulative traffic"
+    },
+    "series": {
+      "busIn": "Core ⇄ poller · in",
+      "busOut": "Core ⇄ poller · out",
+      "otherIn": "Other · in",
+      "otherOut": "Other · out"
+    },
+    "netHeadline": "In {{rx}} / Out {{tx}}",
+    "netNote": "Received above the line, sent below. Core ⇄ poller counts message contents only, so protocol and TLS overhead lands in Other. For a component running in a container, this is that container's own traffic, not the host's."
   },
   "supportBundle": {
     "title": "Take a bundle",

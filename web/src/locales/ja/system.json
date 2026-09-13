@@ -329,8 +329,18 @@
       "loadAverage": "ロードアベレージ",
       "memory": "メモリ",
       "disk": "ディスク · {{mount}}",
-      "diskShort": "ディスク"
-    }
+      "diskShort": "ディスク",
+      "network": "ネットワーク",
+      "networkTotal": "累積通信量"
+    },
+    "series": {
+      "busIn": "Core ⇄ ポーラー · 受信",
+      "busOut": "Core ⇄ ポーラー · 送信",
+      "otherIn": "その他 · 受信",
+      "otherOut": "その他 · 送信"
+    },
+    "netHeadline": "受信 {{rx}} / 送信 {{tx}}",
+    "netNote": "線より上が受信、下が送信です。Core ⇄ ポーラーはメッセージの中身だけを数えるので、プロトコルと TLS の上乗せぶんは「その他」に入ります。コンテナで動く部品では、ホストではなくそのコンテナ自身の通信量です。"
   },
   "supportBundle": {
     "title": "バンドルを取得",

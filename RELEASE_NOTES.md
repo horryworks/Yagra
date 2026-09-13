@@ -44,6 +44,22 @@
   `Cisco remote-access VPN`, `Fortinet VPN` and `Palo Alto sessions/VPN` templates for some time,
   and an ASA is bound to the first of those automatically from its sysDescr — so on an existing
   deployment the numbers are already there and this is the screen that shows them.
+- **Yagra health now draws network traffic, and separates what core and the pollers send each
+  other from everything else.** Every host section on Settings ▸ Yagra health gains two cards:
+  **Network**, the traffic in bits per second, and **Cumulative traffic**, the bytes moved since the
+  start of the chosen window. Both draw received above the line and sent below it, and both split it
+  in two — **Core ⇄ poller**, the bus traffic between Yagra's own components, and **Other**,
+  everything else that crossed the interface.
+  ⚠️ **What is counted.** The interface side counts the host's physical network interfaces when it
+  has any, otherwise every interface except loopback — so for a component running in a container,
+  which core always does, the figure is that container's own traffic, not the whole server's. The
+  Core ⇄ poller side counts message contents only; protocol and TLS overhead are not in it, so they
+  land in Other.
+  The charts fill in from the upgrade onward. A poller still running an older release shows empty
+  network cards until it is upgraded too. `GET /api/v1/system/hosts/{instance}/metrics/range` gains
+  a `network` object, in which each point is the bytes moved during one step of `step_secs` seconds
+  — not a per-second rate and not a running total. The series behind it are four new counters,
+  `yagra_host_{net,bus}_{rx,tx}_bytes_total`.
 - **A node whose SNMP walk is being cut short now says so, instead of reading green.** A device with
   many ports can be slow enough that the interface walk spends its whole budget before it asks for
   the metric columns at all — the oper status, the traffic counters, the error counters. Nothing

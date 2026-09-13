@@ -28,7 +28,7 @@ import { useRangeStore } from '../store';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
-import { formatBytes, formatUtil } from '../lib/format';
+import { formatBps, formatBytes, formatUtil } from '../lib/format';
 import { diskHeadline } from './diskHeadline';
 import { groupHosts, hostCharts } from './hostSections';
 import type { HostSection } from './hostSections';
@@ -191,7 +191,16 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
     };
   }, [open, instance, range]);
 
-  const charts = useMemo(() => hostCharts(hostRange, PALETTE), [hostRange]);
+  const charts = useMemo(
+    () =>
+      hostCharts(hostRange, PALETTE, {
+        busIn: t('health.series.busIn'),
+        busOut: t('health.series.busOut'),
+        otherIn: t('health.series.otherIn'),
+        otherOut: t('health.series.otherOut'),
+      }),
+    [hostRange, t],
+  );
 
   const title =
     section.kind === 'core'
@@ -269,6 +278,33 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
               win={win}
             />
           ))}
+          {/* Received is drawn above the axis and sent below it, so every reading goes through
+              Math.abs before it is printed (ADR-137). */}
+          <HostMetricCard
+            label={t('health.metric.network')}
+            value={t('health.netHeadline', {
+              rx: formatBps(charts.netRate.rx),
+              tx: formatBps(charts.netRate.tx),
+            })}
+            timestamps={charts.net.timestamps}
+            series={charts.net.series}
+            yFormat={(v) => formatBps(Math.abs(v))}
+            legendFormat={(v) => formatBps(Math.abs(v))}
+            win={win}
+          />
+          <HostMetricCard
+            label={t('health.metric.networkTotal')}
+            value={t('health.netHeadline', {
+              rx: formatBytes(charts.netSum.rx),
+              tx: formatBytes(charts.netSum.tx),
+            })}
+            timestamps={charts.netTotal.timestamps}
+            series={charts.netTotal.series}
+            yFormat={(v) => formatBytes(Math.abs(v))}
+            legendFormat={(v) => formatBytes(Math.abs(v))}
+            win={win}
+          />
+          <p className="muted host-net-note">{t('health.netNote')}</p>
         </div>
       ) : (
         // Collapsed still answers "is anything wrong in here" — from the inventory call the page

@@ -32,6 +32,6 @@ pub use messages::{
 };
 #[cfg(feature = "nats")]
 pub use nats::{
-    install_tls_crypto_provider, redact_url, split_userinfo_password, NatsBus, DEFAULT_POOL,
-    POLLER_QUEUE,
+    install_tls_crypto_provider, redact_url, split_userinfo_password, BusBytes, NatsBus,
+    DEFAULT_POOL, POLLER_QUEUE,
 };

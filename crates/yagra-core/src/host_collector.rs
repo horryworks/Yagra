@@ -2,7 +2,8 @@
 //! Core's own host-resource sampling (self-observability, monitoring-conventions).
 //!
 //! Yagra monitors itself, and this is the half that watches the machine core runs on: CPU, load,
-//! memory and disk, sampled every [`HOST_SAMPLE_SECS`], cached for the System Health page and
+//! memory, disk and network traffic — plus core's own share of that traffic which crossed the bus
+//! (ADR-137) — sampled every [`HOST_SAMPLE_SECS`], cached for the System Health page and
 //! written to the TSDB as the `yagra_host_*` series. **Core is the single writer for its own host
 //! and for every poller's** — a poller sends its sample over the bus and core persists it, so there
 //! is exactly one process holding the TSDB write path for this series family.
@@ -24,13 +25,17 @@ pub(crate) const HOST_SAMPLE_SECS: u64 = 15;
 /// **Runs on every core, deliberately not leader-gated.** The series is labelled with the host, so
 /// two cores in an HA pair write two distinct series rather than racing one; and a standby whose
 /// CPU is pinned is exactly the thing an operator needs to see before promoting it.
+///
+/// `bus_bytes` is this core's own bus traffic (ADR-137). It rides in the host sample because the
+/// page draws it against the interface total, and the sample is the one thing both halves arrive in.
 pub(crate) fn start(
     store: Arc<dyn MetricStore>,
     cache: crate::api::CoreHostSample,
     pool: sqlx::PgPool,
+    bus_bytes: Arc<yagra_bus::BusBytes>,
     shutdown: &yagra_telemetry::CancellationToken,
 ) {
-    yagra_telemetry::spawn_cancellable(shutdown, run_host_collector(store, cache, pool));
+    yagra_telemetry::spawn_cancellable(shutdown, run_host_collector(store, cache, pool, bus_bytes));
 }
 
 /// Sample core's own host every [`HOST_SAMPLE_SECS`]: refresh the shared latest-sample cache (read
@@ -41,12 +46,14 @@ async fn run_host_collector(
     store: Arc<dyn MetricStore>,
     cache: crate::api::CoreHostSample,
     pool: sqlx::PgPool,
+    bus_bytes: Arc<yagra_bus::BusBytes>,
 ) {
     let collector = yagra_hoststats::HostCollector::from_env();
     let mut tick = tokio::time::interval(Duration::from_secs(HOST_SAMPLE_SECS));
     loop {
         tick.tick().await;
         let mut sample = collector.sample();
+        (sample.bus_rx_bytes, sample.bus_tx_bytes) = bus_bytes.snapshot();
         // Database growth trend: used-only proxy (capacity unknown ⇒ size_bytes = 0).
         match sqlx::query_scalar::<_, i64>("SELECT pg_database_size(current_database())")
             .fetch_one(&pool)

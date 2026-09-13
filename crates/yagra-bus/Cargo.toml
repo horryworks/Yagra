@@ -35,3 +35,8 @@ rustls = { workspace = true, optional = true }
 
 [features]
 nats = ["dep:async-nats", "dep:futures", "dep:rustls"]
+
+[dev-dependencies]
+# The source-reading helper (`srcread`) for the one guard `nats.rs` holds on its own text: every
+# payload in either direction crosses one counted helper (ADR-137). Test-only, like everywhere else.
+yagra-common = { path = "../yagra-common", features = ["test-util"] }

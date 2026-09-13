@@ -1599,7 +1599,8 @@ export const api = {
    *  Powers the System Health "Host resources" instance selector + the Pollers table columns. */
   getSystemHosts: (): Promise<SystemHostsResponse> => apiGet('/api/v1/system/hosts'),
 
-  /** Host CPU/load/mem/disk trends for one instance (`core` or a poller id) over a window. */
+  /** Host CPU/load/mem/disk/network trends for one instance (`core` or a poller id) over a window.
+   *  The `network` points are bytes moved per step of `step_secs`, not rates (ADR-137). */
   getHostMetricRange: (
     instance: string,
     opts?: { from?: number; to?: number; step?: number },
