@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.18 — MCP is served by default, a VPN sessions widget, network traffic on Yagra health, a truncated SNMP walk raises a Warning, and metrics carry their units**
+> Status: **v0.3.19 — OS version on the node Overview, Nodes ▸ Reclassify, bulk node delete, Discovery skips devices already in the tree, fast IP-range filing**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.19 — ノードの Overview に OS バージョンが出て、Nodes ▸ 分類のかけ直しが加わり、ノードをまとめて削除でき、Discovery が登録済みの機器を飛ばし、IP レンジでの振り分けが速くなる
+
 ### 新機能
 
 - **ノードの Overview に機器の OS バージョンが出るようになりました。** Nodes ▸ 機器 ▸ Overview の

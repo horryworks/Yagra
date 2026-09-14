@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.19 — OS version on the node Overview, Nodes ▸ Reclassify, bulk node delete, Discovery skips devices already in the tree, fast IP-range filing
+
 ### New Features
 
 - **A device's OS version on its node Overview.** Nodes ▸ a device ▸ Overview has a new
