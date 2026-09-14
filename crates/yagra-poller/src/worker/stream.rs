@@ -16,13 +16,6 @@
 
 use super::*;
 
-/// sysDescr.0 — system description scalar (the v3 GET form).
-/// Ceiling on how long one job waits for another probe against the same device (see
-/// `single_flight_wait`). A device's specs are serialised, so this bounds the tail of that chain;
-/// 60s comfortably covers the slowest walk measured (6.0s against a 232-interface switch) while
-/// keeping a long-interval check from parking for hours behind a wedged device.
-const MAX_SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(60);
-
 /// Where one poll's wall-clock went, in four disjoint phases (ADR-109).
 ///
 /// The poller had **no histogram at all** until this one, so "the poll took 800 ms" and "the poll
@@ -170,22 +163,6 @@ pub async fn run_stream<S>(
             continue;
         }
 
-        // How long a job may wait for another probe against the same device to finish.
-        //
-        // Bounded by the job's own interval: a poll still waiting when its successor is due has
-        // stopped being late and started being a queue, and shedding it is the honest answer.
-        // Capped at [`MAX_SINGLE_FLIGHT_WAIT`] so a daily check does not sit for hours.
-        //
-        // Zero-interval jobs (an operator's "poll now") get the cap rather than no wait at all —
-        // an on-demand poll landing while the scheduled one is mid-walk should queue behind it,
-        // not report a skip to the person who pressed the button.
-        fn single_flight_wait(job: &PollJob) -> Duration {
-            match job.interval_secs {
-                0 => MAX_SINGLE_FLIGHT_WAIT,
-                secs => Duration::from_secs(u64::from(secs)).min(MAX_SINGLE_FLIGHT_WAIT),
-            }
-        }
-
         // 🚨 **A spawn slot is awaited here — not the concurrency permit, and not the device.**
         // Three arrangements are ruled out by three measurements, and `PollLimiter` carries all of
         // them: waiting for the *device* here is head-of-line blocking (4.8 jobs/min against 187
@@ -234,7 +211,9 @@ pub async fn run_stream<S>(
         // watching. It still takes a concurrency permit; only the device queue is skipped.
         // Both this and the wait are decided out here because the task takes the job by value.
         let global_only = matches!(job.check, CheckSpec::Dns(_) | CheckSpec::Icmp(_));
-        let wait = single_flight_wait(&job);
+        // How long this job may wait for the probe ahead of it on the same device — long enough
+        // for a table job sized from this interval to finish (ADR-110 Increment 10).
+        let wait = table_plan::single_flight_wait(job.interval_secs);
         let limiter = limiter.clone();
         let sink = sink.clone();
         let transport = transport.clone();
@@ -427,9 +406,9 @@ mod tests {
     /// An ICMP job for `node` at `target`.
     ///
     /// 🚨 **The 60 s interval is load-bearing in every test that uses these two.**
-    /// `single_flight_wait` is `min(interval, 60s)`, so a short interval would let a job that
-    /// *waits* for its device finish waiting inside the test's own timeout, and a test asserting
-    /// "it did not wait" would pass against the code it exists to reject.
+    /// `table_plan::single_flight_wait` is 60 s at that interval, so a short interval would let a
+    /// job that *waits* for its device finish waiting inside the test's own timeout, and a test
+    /// asserting "it did not wait" would pass against the code it exists to reject.
     fn icmp_at(node: u128, target: std::net::Ipv4Addr) -> PollJob {
         PollJob::icmp(
             Uuid::nil(),

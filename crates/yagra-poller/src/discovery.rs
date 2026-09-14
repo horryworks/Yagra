@@ -606,9 +606,15 @@ async fn try_candidate(
                 SYSNAME_BASE.to_owned(),
             ];
             let rows = transport
-                .snmp_walk_strings(target, community, &bases, timeout)
+                .snmp_walk_strings(
+                    target,
+                    community,
+                    &bases,
+                    yagra_transport::WalkLimits::per_round_trip(timeout),
+                )
                 .await
-                .ok()?;
+                .ok()?
+                .rows;
             if rows.is_empty() {
                 return None;
             }
@@ -726,8 +732,18 @@ mod tests {
     use yagra_bus::{DiscoveryCredential, DiscoveryV3};
     use yagra_transport::{
         DnsChain, DnsProbeSpec, HttpProbe, HttpProbeSpec, IcmpProbe, SnmpSample, SnmpStringSample,
-        SnmpTableSample, SnmpTableString, TransportError,
+        SnmpTableSample, SnmpTableString, TableWalk, TransportError, WalkLimits,
     };
+
+    /// A table walk that returned nothing and was stopped by nothing — what these fakes answer for
+    /// the walks discovery does not use.
+    fn empty_walk<R>() -> TableWalk<R> {
+        TableWalk {
+            rows: Vec::new(),
+            columns: Vec::new(),
+            stopped: None,
+        }
+    }
 
     /// Discovery never resolves DNS, so both fakes below answer with an empty timed-out chain —
     /// enough to satisfy the trait without pretending to model a resolution.
@@ -837,10 +853,9 @@ mod tests {
             _target: IpAddr,
             _community: &str,
             _column_oids: &[String],
-            _timeout: Duration,
-        ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-        {
-            Ok((Vec::new(), None))
+            _limits: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+            Ok(empty_walk())
         }
 
         async fn snmp_walk_strings(
@@ -848,10 +863,10 @@ mod tests {
             _target: IpAddr,
             community: &str,
             column_oids: &[String],
-            _timeout: Duration,
-        ) -> Result<Vec<SnmpTableString>, TransportError> {
-            if Some(community) == self.good_community.as_deref() {
-                Ok(column_oids
+            _limits: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+            let rows = if Some(community) == self.good_community.as_deref() {
+                column_oids
                     .iter()
                     .map(|b| SnmpTableString {
                         oid_base: b.clone(),
@@ -862,10 +877,14 @@ mod tests {
                             _ => "sw01".to_owned(),
                         },
                     })
-                    .collect())
+                    .collect()
             } else {
-                Ok(Vec::new())
-            }
+                Vec::new()
+            };
+            Ok(TableWalk {
+                rows,
+                ..empty_walk()
+            })
         }
 
         async fn snmp_v3_walk(
@@ -873,10 +892,9 @@ mod tests {
             _target: IpAddr,
             _params: &SnmpV3Params,
             _column_oids: &[String],
-            _timeout: Duration,
-        ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-        {
-            Ok((Vec::new(), None))
+            _limits: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+            Ok(empty_walk())
         }
 
         async fn snmp_v3_walk_strings(
@@ -884,9 +902,9 @@ mod tests {
             _target: IpAddr,
             _params: &SnmpV3Params,
             _column_oids: &[String],
-            _timeout: Duration,
-        ) -> Result<Vec<SnmpTableString>, TransportError> {
-            Ok(Vec::new())
+            _limits: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+            Ok(empty_walk())
         }
 
         async fn snmp_walk_instances(
@@ -1275,39 +1293,37 @@ mod tests {
                 _t: IpAddr,
                 _c: &str,
                 _o: &[String],
-                _to: Duration,
-            ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-            {
-                Ok((Vec::new(), None))
+                _l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+                Ok(empty_walk())
             }
             async fn snmp_walk_strings(
                 &self,
                 _t: IpAddr,
                 _c: &str,
                 _o: &[String],
-                _to: Duration,
-            ) -> Result<Vec<SnmpTableString>, TransportError> {
+                _l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableString>, TransportError> {
                 self.attempts.fetch_add(1, Ordering::SeqCst);
-                Ok(Vec::new()) // empty ⇒ this candidate "failed"
+                Ok(empty_walk()) // empty ⇒ this candidate "failed"
             }
             async fn snmp_v3_walk(
                 &self,
                 _t: IpAddr,
                 _p: &SnmpV3Params,
                 _o: &[String],
-                _to: Duration,
-            ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-            {
-                Ok((Vec::new(), None))
+                _l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+                Ok(empty_walk())
             }
             async fn snmp_v3_walk_strings(
                 &self,
                 _t: IpAddr,
                 _p: &SnmpV3Params,
                 _o: &[String],
-                _to: Duration,
-            ) -> Result<Vec<SnmpTableString>, TransportError> {
-                Ok(Vec::new())
+                _l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+                Ok(empty_walk())
             }
             async fn snmp_walk_instances(
                 &self,
@@ -1640,38 +1656,36 @@ mod tests {
             t: IpAddr,
             c: &str,
             o: &[String],
-            to: Duration,
-        ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-        {
-            self.inner.snmp_walk(t, c, o, to).await
+            l: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+            self.inner.snmp_walk(t, c, o, l).await
         }
         async fn snmp_walk_strings(
             &self,
             t: IpAddr,
             c: &str,
             o: &[String],
-            to: Duration,
-        ) -> Result<Vec<SnmpTableString>, TransportError> {
-            self.inner.snmp_walk_strings(t, c, o, to).await
+            l: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+            self.inner.snmp_walk_strings(t, c, o, l).await
         }
         async fn snmp_v3_walk(
             &self,
             t: IpAddr,
             p: &SnmpV3Params,
             o: &[String],
-            to: Duration,
-        ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-        {
-            self.inner.snmp_v3_walk(t, p, o, to).await
+            l: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+            self.inner.snmp_v3_walk(t, p, o, l).await
         }
         async fn snmp_v3_walk_strings(
             &self,
             t: IpAddr,
             p: &SnmpV3Params,
             o: &[String],
-            to: Duration,
-        ) -> Result<Vec<SnmpTableString>, TransportError> {
-            self.inner.snmp_v3_walk_strings(t, p, o, to).await
+            l: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+            self.inner.snmp_v3_walk_strings(t, p, o, l).await
         }
         async fn snmp_walk_instances(
             &self,

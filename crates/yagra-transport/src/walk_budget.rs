@@ -55,20 +55,21 @@ use std::time::{Duration, Instant};
 /// answer**, never columns it does not implement.
 pub(crate) const MAX_CONSECUTIVE_COLUMN_FAILURES: usize = 2;
 
-/// How many per-round-trip timeouts one whole multi-column call may spend.
+/// How many per-round-trip timeouts one whole multi-column call may spend, when its caller did not
+/// name a deadline of its own ([`WalkLimits::per_round_trip`]).
 ///
-/// **Deliberately not a new setting.** The caller already says how patient it is, once per check, as
-/// `timeout_ms`; the whole call's patience is a fixed multiple of that, so raising the per-round-trip
-/// timeout raises this budget with it and nobody has to learn a second knob.
-///
-/// ⚠️ **That lever is not in an operator's hands today.** Core fills every SNMP job's `timeout_ms`
-/// from one constant (`scheduler::SNMP_TIMEOUT_MS`, 2 s), and no profile or setting overrides it.
-/// A slow device is answered in code, per caller — the identity probe's patch-table walk waits
-/// longer for exactly this reason (ADR-138 Increment 4).
+/// ⚠️ **This is not an operator's knob, and this doc used to say it was.** Core fills every SNMP
+/// job's `timeout_ms` from one constant (`scheduler::SNMP_TIMEOUT_MS`, 2 s), and no profile or setting
+/// overrides it, so "raise the check's timeout and the budget follows" was advice nobody could take.
+/// The walk that needed a bigger budget — the interface table walk on a slow switch — now names its
+/// own deadline from the poll interval ([`WalkLimits::until`], ADR-110 Increment 10). What still
+/// comes here is the optical, adjacency and identity walks, whose budget is unchanged. A slow device
+/// is otherwise answered in code, per caller — the identity probe's patch-table walk waits longer
+/// for exactly this reason (ADR-138 Increment 4).
 ///
 /// **Why eight.** The slowest *healthy* walk measured in this lab is 6.0 s (a 232-interface switch
-/// over a LAN, recorded on `worker::stream`'s `MAX_SINGLE_FLIGHT_WAIT`). At the default 2 s timeout
-/// this is a 16 s budget — 2.7× that worst case.
+/// over a LAN, recorded on the poller's `worker::table_plan::SINGLE_FLIGHT_FLOOR`). At the default
+/// 2 s timeout this is a 16 s budget — 2.7× that worst case.
 ///
 /// ⚠️ **That headroom is an argument, not a measurement of the fleet.** A 200-port device across a
 /// 100 ms WAN plausibly needs longer and would be truncated. [`Truncation::Deadline`] exists to say
@@ -120,6 +121,8 @@ impl Truncation {
 /// loop in `snmp.rs`, which runs against a scripted agent through its `BulkPager` seam.
 pub(crate) struct WalkBudget {
     deadline: Instant,
+    /// Whether the deadline also stops a column part-way — see [`Self::cuts_mid_column`].
+    per_page: bool,
     consecutive_failures: usize,
     /// Columns recorded as [`ColumnOutcome::Answered`], for [`Self::every_column_answered`].
     answered: usize,
@@ -131,17 +134,46 @@ impl WalkBudget {
         Self::with_remaining(timeout.saturating_mul(WALK_BUDGET_TIMEOUTS))
     }
 
+    /// The budget a caller's [`WalkLimits`] describe (ADR-110 Increment 10).
+    ///
+    /// No deadline is exactly [`Self::new`]. A deadline replaces the multiple **and** is consulted
+    /// before every page, not only before every column.
+    pub(crate) fn within(limits: WalkLimits) -> Self {
+        match limits.deadline {
+            None => Self::new(limits.timeout),
+            Some(deadline) => Self {
+                deadline,
+                per_page: true,
+                consecutive_failures: 0,
+                answered: 0,
+            },
+        }
+    }
+
     /// A budget with an explicit amount of wall-clock left.
     ///
     /// The seam the tests build an already-spent budget through — `Duration::ZERO` expires it now.
     /// Subtracting from `Instant::now()` would be the other way to write that, and it is fallible
     /// on platforms whose monotonic clock starts at zero.
-    fn with_remaining(remaining: Duration) -> Self {
+    pub(crate) fn with_remaining(remaining: Duration) -> Self {
         Self {
             deadline: Instant::now() + remaining,
+            per_page: false,
             consecutive_failures: 0,
             answered: 0,
         }
+    }
+
+    /// Whether a column that has already been answered at least one page must stop before the next.
+    ///
+    /// 🚨 **Only when the caller named its deadline.** Before ADR-110 Increment 10 the deadline was
+    /// consulted only at the top of a column, so a column that was started always finished — and a
+    /// slow switch's walk overran its 16 s by whatever its last column cost, which is how some of
+    /// GW01's polls reached their metric columns at all. Cutting at the page on that 16 s budget would
+    /// have taken those polls away. The interface walk now sizes its deadline from the poll interval,
+    /// and only a walk sized that way is cut here; every other walk keeps finishing what it started.
+    pub(crate) fn cuts_mid_column(&self) -> bool {
+        self.per_page && Instant::now() >= self.deadline
     }
 
     /// Why this walk must stop, or `None` to attempt another column.
@@ -319,6 +351,167 @@ pub(crate) fn is_silence(rows_collected: usize, stopped: Option<Truncation>) -> 
     rows_collected == 0 && matches!(stopped, Some(Truncation::Silent))
 }
 
+/// How long a multi-column table walk may run, as its caller states it (ADR-110 Increment 10).
+///
+/// Two shapes, and the difference is more than the number:
+///
+/// | | budget | checked |
+/// |---|---|---|
+/// | [`Self::per_round_trip`] | [`WALK_BUDGET_TIMEOUTS`] × `timeout`, from when the walk starts | before each column |
+/// | [`Self::until`] | the caller's instant | before each column **and each page** |
+///
+/// The first is what every walk had before Increment 10, and what the optical, adjacency, identity
+/// and discovery walks keep. The second is for a caller that knows how long it can afford — the
+/// interface table walk, which sizes one budget for its whole job from the poll interval and hands
+/// each of its two walks a share of it. Why the page check comes only with it is on
+/// [`WalkBudget::cuts_mid_column`].
+///
+/// ⚠️ **A page already sent is not recalled.** The deadline stops the *next* request, so a walk can
+/// overrun it by one round trip (and its one retry, which is only granted while the deadline has
+/// not passed). Whoever waits behind a walk has to allow for that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalkLimits {
+    /// How long one request waits for its answer.
+    pub timeout: Duration,
+    /// When the whole walk must stop. `None` is [`Self::per_round_trip`].
+    pub deadline: Option<Instant>,
+}
+
+impl WalkLimits {
+    /// Increment 3's budget: [`WALK_BUDGET_TIMEOUTS`] round trips, consulted between columns.
+    #[must_use]
+    pub fn per_round_trip(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            deadline: None,
+        }
+    }
+
+    /// Stop at `deadline`, including part-way down a column.
+    #[must_use]
+    pub fn until(timeout: Duration, deadline: Instant) -> Self {
+        Self {
+            timeout,
+            deadline: Some(deadline),
+        }
+    }
+}
+
+/// How one column of a table walk ended (ADR-110 Increment 10).
+///
+/// The rows alone cannot say this, for the reason [`crate::InstanceWalk`] gives: fewer rows is what
+/// both a device that does not implement a column and a walk that never reached it look like.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColumnEnd {
+    /// The agent walked it to its end — **including by answering that it does not implement it**,
+    /// or with an error PDU. Either is an answer (see this module's doc).
+    Answered,
+    /// The deadline fell while this column was being paged. The rows before the cut are in the walk;
+    /// the column continues after the instance `resume_after` (the sub-identifiers past its base —
+    /// empty when not one row had arrived yet).
+    Partial { resume_after: Vec<u32> },
+    /// The agent stopped answering part-way, and its retry went unanswered too. Rows it gave before
+    /// that are kept.
+    Failed,
+    /// Nothing was asked: the column OID is malformed.
+    Skipped,
+    /// The walk stopped before reaching this column.
+    NotAsked,
+}
+
+/// One column of a table walk and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnReport {
+    /// The column base OID as the caller spelled it.
+    pub column: String,
+    pub end: ColumnEnd,
+}
+
+/// What a numeric or string table walk collected, column by column (ADR-110 Increment 10).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableWalk<R> {
+    pub rows: Vec<R>,
+    /// One entry per column asked for, in the order asked.
+    pub columns: Vec<ColumnReport>,
+    /// Why the walk stopped short, if it did — what `Transport::snmp_walk` returned as its second
+    /// half before this type existed.
+    pub stopped: Option<Truncation>,
+}
+
+/// How one column's conversation ended, as the walker loops need it: the verdict about the device
+/// that [`WalkBudget::record`] folds in, or a cut at the deadline part-way down the column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ColumnStop {
+    Ended(ColumnOutcome),
+    /// Cut by [`WalkBudget::cuts_mid_column`] after the instance this carries.
+    Cut(Vec<u32>),
+}
+
+impl ColumnStop {
+    /// What this says about the device. A cut column had answered every page it was sent, so it is
+    /// an answer — it must not count toward [`MAX_CONSECUTIVE_COLUMN_FAILURES`].
+    pub(crate) fn outcome(&self) -> ColumnOutcome {
+        match self {
+            Self::Ended(outcome) => *outcome,
+            Self::Cut(_) => ColumnOutcome::Answered,
+        }
+    }
+
+    /// The public report for this column.
+    pub(crate) fn end(self) -> ColumnEnd {
+        match self {
+            Self::Ended(ColumnOutcome::Answered) => ColumnEnd::Answered,
+            Self::Ended(ColumnOutcome::Failed) => ColumnEnd::Failed,
+            Self::Ended(ColumnOutcome::Skipped) => ColumnEnd::Skipped,
+            Self::Cut(resume_after) => ColumnEnd::Partial { resume_after },
+        }
+    }
+}
+
+/// Why a table walk that ran out of columns stopped short, if it did.
+///
+/// The column loops only consult the budget at the top of a column, so a walk whose last columns
+/// failed ends by running out of columns rather than by tripping, and has to be asked once more.
+/// **Two answers, and the second is narrower than [`WalkBudget::spent`] on purpose:** silence is the
+/// device's run of failures, but a deadline counts only when a column was actually cut. A last
+/// column that finished just after the deadline has asked for everything — reading the clock
+/// instead reported that walk as truncated, and `snmp_walk_complete` said `0` for a whole table.
+pub(crate) fn trailing_stop(budget: &WalkBudget, columns: &[ColumnReport]) -> Option<Truncation> {
+    if budget.consecutive_failures >= MAX_CONSECUTIVE_COLUMN_FAILURES {
+        return Some(Truncation::Silent);
+    }
+    columns
+        .iter()
+        .any(|c| matches!(c.end, ColumnEnd::Partial { .. }))
+        .then_some(Truncation::Deadline)
+}
+
+/// The reports for the columns a table walk stopped before reaching.
+pub(crate) fn not_asked(rest: &[String]) -> impl Iterator<Item = ColumnReport> + '_ {
+    rest.iter().map(|column| ColumnReport {
+        column: column.clone(),
+        end: ColumnEnd::NotAsked,
+    })
+}
+
+/// Why a finished table walk stopped short: the reason its column loop broke on, or else
+/// [`trailing_stop`]. A last column cut part-way is noted here, because no loop break reported it —
+/// nothing was left unasked (`skipped = 0`), but that column was not read out.
+pub(crate) fn conclude(
+    broke_on: Option<Truncation>,
+    budget: &WalkBudget,
+    columns: &[ColumnReport],
+    target: IpAddr,
+) -> Option<Truncation> {
+    broke_on.or_else(|| {
+        let trailing = trailing_stop(budget, columns);
+        if trailing == Some(Truncation::Deadline) {
+            note_truncation(Truncation::Deadline, target, 0);
+        }
+        trailing
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,8 +556,10 @@ mod tests {
                     .trim_end_matches('(')
                     .to_owned();
                 checked += 1;
+                // Either constructor: `within` is how a table walk takes the caller's deadline
+                // (ADR-110 Increment 10), and it falls back to `new` when there is none.
                 assert!(
-                    body.contains("WalkBudget::new("),
+                    body.contains("WalkBudget::new(") || body.contains("WalkBudget::within("),
                     "yagra-transport/src/{name}: `{signature}` walks a list of columns without a \
                      budget. A device that answers nothing then costs one timeout per column — the \
                      defect ADR-110 Increment 3 exists to close, measured at 51,299 ms"
@@ -621,5 +816,102 @@ mod tests {
         let mut retries = RetryAllowance::new();
         retries.heard();
         assert!(!retries.claim(ColumnOutcome::Failed, 0, &budget));
+    }
+
+    // ── WalkLimits (ADR-110 Increment 10) ─────────────────────────────────────
+
+    /// **The accepting side, first**: a deadline the caller named and that has not passed lets the
+    /// walk start and lets a column go on to its next page. A budget that stopped everything would
+    /// pass every test after this one.
+    #[test]
+    fn a_named_deadline_that_has_not_passed_lets_the_walk_page_on() {
+        let later = Instant::now() + Duration::from_secs(30);
+        let budget = WalkBudget::within(WalkLimits::until(Duration::from_secs(2), later));
+        assert_eq!(budget.spent(), None);
+        assert!(!budget.cuts_mid_column());
+        assert!(
+            budget.remaining() > Duration::from_secs(20),
+            "the caller's deadline replaces the 8 × timeout multiple, got {:?}",
+            budget.remaining()
+        );
+    }
+
+    /// A deadline the caller named cuts a column part-way once it has passed.
+    #[test]
+    fn a_named_deadline_that_has_passed_cuts_the_column_part_way() {
+        let budget = WalkBudget::within(WalkLimits::until(Duration::from_secs(2), Instant::now()));
+        assert_eq!(budget.spent(), Some(Truncation::Deadline));
+        assert!(budget.cuts_mid_column());
+    }
+
+    /// 🚨 **Without a named deadline, a column that was started always finishes** — even once the
+    /// budget has run out. This is what keeps the optical, adjacency and identity walks exactly as
+    /// they were: cutting at the page on their 16 s budget would take away the polls that used to
+    /// finish by overrunning it (see [`WalkBudget::cuts_mid_column`]).
+    #[test]
+    fn without_a_named_deadline_a_started_column_is_never_cut() {
+        let expired = WalkBudget::with_remaining(Duration::ZERO);
+        assert_eq!(expired.spent(), Some(Truncation::Deadline));
+        assert!(!expired.cuts_mid_column());
+
+        let legacy = WalkBudget::within(WalkLimits::per_round_trip(Duration::from_secs(2)));
+        let remaining = legacy.remaining();
+        assert!(
+            remaining > Duration::from_millis(15_900) && remaining <= Duration::from_secs(16),
+            "no deadline is Increment 3's budget, got {remaining:?}"
+        );
+    }
+
+    /// A cut column had its every page answered, so it is an answer: two cuts in a row are not a
+    /// silent device.
+    #[test]
+    fn a_cut_column_is_an_answer_not_a_failure() {
+        let cut = ColumnStop::Cut(vec![7]);
+        assert_eq!(cut.outcome(), ColumnOutcome::Answered);
+        assert_eq!(
+            cut.end(),
+            ColumnEnd::Partial {
+                resume_after: vec![7]
+            }
+        );
+        let mut budget = WalkBudget::new(Duration::from_secs(2));
+        budget.record(ColumnStop::Cut(vec![1]).outcome());
+        budget.record(ColumnStop::Cut(vec![2]).outcome());
+        assert_eq!(budget.spent(), None);
+    }
+
+    fn report(end: ColumnEnd) -> ColumnReport {
+        ColumnReport {
+            column: "1.3.6.1.2.1.2.2.1.8".to_owned(),
+            end,
+        }
+    }
+
+    /// **The accepting side of [`trailing_stop`]**: a walk that asked for every column is not
+    /// truncated — even when its budget ran out while the last one was being read. Reading the clock
+    /// here used to report exactly that walk as cut.
+    #[test]
+    fn a_walk_that_asked_every_column_is_not_truncated_even_past_its_deadline() {
+        let expired = WalkBudget::with_remaining(Duration::ZERO);
+        let columns = [report(ColumnEnd::Answered), report(ColumnEnd::Failed)];
+        assert_eq!(trailing_stop(&expired, &columns), None);
+    }
+
+    /// A column cut part-way is a deadline, and a run of failures is silence, which is named first.
+    #[test]
+    fn a_trailing_cut_is_a_deadline_and_a_trailing_run_of_failures_is_silence() {
+        let budget = WalkBudget::new(Duration::from_secs(2));
+        let cut = [
+            report(ColumnEnd::Answered),
+            report(ColumnEnd::Partial {
+                resume_after: vec![3],
+            }),
+        ];
+        assert_eq!(trailing_stop(&budget, &cut), Some(Truncation::Deadline));
+
+        let mut quiet = WalkBudget::new(Duration::from_secs(2));
+        quiet.record(ColumnOutcome::Failed);
+        quiet.record(ColumnOutcome::Failed);
+        assert_eq!(trailing_stop(&quiet, &cut), Some(Truncation::Silent));
     }
 }

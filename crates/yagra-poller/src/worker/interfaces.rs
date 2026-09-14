@@ -89,6 +89,15 @@ async fn execute_table_walk(
     timeout: Duration,
     walker: &SnmpWalker,
 ) -> PollResult {
+    // 🚨 **One budget for the whole job, sized from the poll interval** (ADR-110 Increment 10). The
+    // numeric walk may run to three quarters of it and the name walk to the end; both stop part-way
+    // down a column when their deadline falls, rather than only between columns. Before this each
+    // walk had 16 s of its own whatever the interval, and a slow switch polled every minute lost
+    // columns on half its polls with thirty seconds to spare.
+    let deadlines = table_plan::TableDeadlines::from(
+        Instant::now(),
+        table_plan::table_job_budget(job.interval_secs),
+    );
     let by_base: HashMap<&str, &SnmpColumn> = columns.iter().map(|c| (c.oid.as_str(), c)).collect();
     // Interface-speed columns (ifSpeed) declared in meta_columns; ifHighSpeed is walked poller-side.
     let speed_oids: Vec<String> = meta_columns
@@ -129,14 +138,20 @@ async fn execute_table_walk(
     // that case would put back the 14 days nobody noticed.
     let mut spoke = false;
     match walker
-        .walk(transport, job.target, &numeric_oids, timeout)
+        .walk(
+            transport,
+            job.target,
+            &numeric_oids,
+            WalkLimits::until(timeout, deadlines.numeric),
+        )
         .await
     {
-        Ok((rows, stopped)) => {
-            answered = !rows.is_empty();
+        Ok(walk) => {
+            let stopped = walk.stopped;
+            answered = !walk.rows.is_empty();
             truncated = stopped;
             spoke = answered || stopped != Some(Truncation::Silent);
-            for row in rows {
+            for row in walk.rows {
                 // 🚨 `ifHighSpeed` is TWO things at once and must feed both.
                 //
                 // It is a declared metric column in the built-in interface template
@@ -182,12 +197,12 @@ async fn execute_table_walk(
         Err(err) => tracing::warn!(job_id = %job.job_id, error = %err, "snmp table walk failed"),
     }
 
-    // 🚨 **A table poll is two walks, and each carries its own budget** — so a silent device paid
-    // for both, and the job cost twice what one walk's ceiling promised. A device that produced no
-    // numeric row has said nothing at all: there is no ifIndex for a name to attach to, and asking
-    // is a second full budget spent to re-establish a fact already in hand. This is the cheap half
-    // of the "whole job" bound ADR-110 Increment 3 asked for, and it halves the cost of a mass
-    // outage where every device is in exactly this state.
+    // 🚨 **A table poll is two walks** — and until ADR-110 Increment 10 each carried its own
+    // budget, so a silent device paid for both. A device that produced no numeric row has said
+    // nothing at all: there is no ifIndex for a name to attach to, and asking is a second walk spent
+    // to re-establish a fact already in hand. This was the cheap half of the "whole job" bound
+    // Increment 3 asked for; Increment 10's shared deadline is the other half. It halves the cost of
+    // a mass outage where every device is in exactly this state.
     //
     // ⚠️ **One behaviour changes**: a device that answers `ifName` while answering no numeric
     // column at all no longer has its interface names stored. Such a device's poll already reports
@@ -195,7 +210,8 @@ async fn execute_table_walk(
     // node Yagra is simultaneously calling unreachable. Declared rather than silent — it is in the
     // release notes.
     let interfaces = if answered {
-        walk_interface_metadata(job, transport, walker, meta_columns, &raw, timeout).await
+        let limits = WalkLimits::until(timeout, deadlines.names);
+        walk_interface_metadata(job, transport, walker, meta_columns, &raw, limits).await
     } else {
         Vec::new()
     };
@@ -332,15 +348,16 @@ struct RawInterfaceNumerics {
 }
 
 /// Fold interface metadata into [`DiscoveredInterface`]s: walk the `ifName`/`ifAlias` **string**
-/// columns (the poll's second and only other SNMP session), and resolve `if_speed` from the
-/// `ifSpeed`/`ifHighSpeed` values already gathered by the combined numeric walk in the caller (S5).
+/// columns (the poll's second and only other SNMP session) within `limits` — the rest of the job's
+/// budget — and resolve `if_speed` from the `ifSpeed`/`ifHighSpeed` values already gathered by the
+/// combined numeric walk in the caller (S5).
 async fn walk_interface_metadata(
     job: &PollJob,
     transport: &dyn Transport,
     walker: &SnmpWalker,
     meta_columns: &[SnmpMetaColumn],
     raw: &RawInterfaceNumerics,
-    timeout: Duration,
+    limits: WalkLimits,
 ) -> Vec<DiscoveredInterface> {
     let RawInterfaceNumerics {
         speed: raw_speed,
@@ -380,11 +397,11 @@ async fn walk_interface_metadata(
 
     if !string_oids.is_empty() {
         match walker
-            .walk_strings(transport, job.target, &string_oids, timeout)
+            .walk_strings(transport, job.target, &string_oids, limits)
             .await
         {
-            Ok(rows) => {
-                for row in rows {
+            Ok(walk) => {
+                for row in walk.rows {
                     let Some(field) = field_by_base.get(row.oid_base.as_str()) else {
                         continue;
                     };
@@ -1197,6 +1214,58 @@ mod tests {
             None,
             "the metric columns were never asked for"
         );
+    }
+
+    /// 🚨 **One budget for the whole table job, sized from its interval** (ADR-110 Increment 10).
+    ///
+    /// Read from the limits the two walks were handed, because nothing in the rows reflects them: a
+    /// poller that still gave each walk 16 s of its own would return exactly the same result against
+    /// this fake. Three intervals, so a formula that happened to agree at one would not pass — the
+    /// one-minute poll the PoC runs at, the cap, and "poll now".
+    ///
+    /// ⚠️ And still exactly two walks: the budget changes how long the device is asked, never what.
+    #[tokio::test]
+    async fn the_table_job_shares_one_budget_across_its_two_walks() {
+        for (interval, budget) in [
+            (60u32, Duration::from_secs(30)),
+            (300, Duration::from_secs(150)),
+            (0, Duration::from_secs(16)),
+        ] {
+            let mut job = catalog_table_job();
+            job.interval_secs = interval;
+            let t = FakeTransport::reachable(0.0).with_snmp_table(vec![SnmpTableSample {
+                oid_base: OID_IF_HIGH_SPEED.to_owned(),
+                ifindex: 1,
+                value: 1_000.0,
+            }]);
+            let before = Instant::now();
+            let _ = execute(&job, &t, 1_000).await;
+            let after = Instant::now();
+
+            let limits = t.walk_limits();
+            assert_eq!(
+                limits.len(),
+                2,
+                "interval {interval}s: the numeric walk and the name walk, nothing else"
+            );
+            let (numeric, names) = (limits[0], limits[1]);
+            assert_eq!(numeric.timeout, Duration::from_secs(2));
+            assert_eq!(names.timeout, Duration::from_secs(2));
+            let numeric_at = numeric
+                .deadline
+                .expect("the numeric walk names its deadline");
+            let names_at = names.deadline.expect("the name walk names its deadline");
+            assert_eq!(
+                names_at - numeric_at,
+                budget / 4,
+                "interval {interval}s: the name walk ends a quarter of the budget after the \
+                 numeric one — both counted from one start"
+            );
+            assert!(
+                names_at >= before + budget && names_at <= after + budget,
+                "interval {interval}s: the job's budget is {budget:?}"
+            );
+        }
     }
 
     /// A walk that failed outright leaves completeness to `snmp_up`.

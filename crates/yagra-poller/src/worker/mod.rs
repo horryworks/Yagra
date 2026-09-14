@@ -20,9 +20,11 @@
 //! | [`physical`] | the physical layer — optical power and media, via ENTITY-MIB when needed |
 //! | [`adjacency`] | observational neighbour / address / ARP / routing walks |
 //!
-//! One more file is not a conversation: [`identity`] decides **when** a node's `sysDescr` and OS
+//! Two more files are not conversations. [`identity`] decides **when** a node's `sysDescr` and OS
 //! version are read again — hourly, on the poller, so a classified device's upgrade still shows
 //! (ADR-138). It holds a timer per node and touches nothing; `stream` asks it and `snmp` probes.
+//! [`table_plan`] decides **how long** a table job may run and how long a job waits for its device,
+//! from the poll interval (ADR-110 Increment 10) — arithmetic only; `interfaces` and `stream` ask it.
 //!
 //! 🚨 **Every arm of [`execute`] delegates; none of them touches the transport itself.** That is
 //! what makes the table above true rather than aspirational, and `guards.rs` fails the build if an
@@ -46,6 +48,7 @@ mod physical;
 mod probes;
 mod snmp;
 mod stream;
+mod table_plan;
 #[cfg(test)]
 mod testkit;
 
@@ -84,7 +87,7 @@ use yagra_common::{
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
-    Transport, TransportError, Truncation,
+    TableWalk, Transport, TransportError, Truncation, WalkLimits,
 };
 
 /// Execute one job and build its result. Pure given the transport and timestamp, so it

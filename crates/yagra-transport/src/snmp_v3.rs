@@ -8,7 +8,10 @@
 //! (counters included) — rates are derived at query time (ADR-012). Live-only (needs a
 //! device + UDP); the parameter mapping is unit-tested.
 
-use crate::walk_budget::{is_silence, note_truncation, ColumnOutcome, Truncation, WalkBudget};
+use crate::walk_budget::{
+    conclude, is_silence, not_asked, note_truncation, ColumnOutcome, ColumnReport, ColumnStop,
+    TableWalk, Truncation, WalkBudget, WalkLimits,
+};
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpStringSample, SnmpTableSample, SnmpTableString, SnmpV3Params,
     SnmpValue, TransportError,
@@ -174,41 +177,28 @@ pub async fn snmp_walk_v3(
     target: IpAddr,
     params: &SnmpV3Params,
     column_oids: &[String],
-    timeout: Duration,
-) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
-    let mut session = open_session(target, params, timeout).await?;
-    let mut rows = Vec::new();
-    let mut budget = WalkBudget::new(timeout);
-    // Kept rather than dropped, for the reason `snmp_walk_v2c` gives: a `Deadline` here means the
-    // caller's configured metric columns were never asked for (ADR-110 Increment 6).
-    let mut stopped: Option<Truncation> = None;
-    for (asked, base_str) in column_oids.iter().enumerate() {
-        if let Some(reason) = budget.spent() {
-            note_truncation(reason, target, column_oids.len() - asked);
-            stopped = Some(reason);
-            break;
-        }
-        let outcome = walk_column_v3(
-            &mut session,
-            base_str,
-            timeout,
-            ROWS_BOUNDED_BY_REQUEST_CEILING,
-            |tail, value| {
-                let ifindex = crate::ifindex_from_tail(tail)?;
-                numeric(value).map(|v| SnmpTableSample {
-                    oid_base: base_str.clone(),
-                    ifindex,
-                    value: v,
-                })
-            },
-            &mut rows,
-        )
-        .await;
-        budget.record(outcome);
-    }
-    // The budget is only consulted at the top of an iteration, so a walk whose last columns failed
-    // ends by running out of columns rather than by tripping. Ask once more.
-    Ok((rows, stopped.or_else(|| budget.spent())))
+    limits: WalkLimits,
+) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+    let mut session = open_session(target, params, limits.timeout).await?;
+    let mut budget = WalkBudget::within(limits);
+    // Why the walk stopped is kept, for the reason `snmp_walk_v2c` gives: a `Deadline` here means
+    // the caller's configured metric columns were never asked for (ADR-110 Increment 6).
+    Ok(walk_columns_v3(
+        &mut session,
+        target,
+        column_oids,
+        limits.timeout,
+        &mut budget,
+        |base_str, tail, value| {
+            let ifindex = crate::ifindex_from_tail(tail)?;
+            numeric(value).map(|v| SnmpTableSample {
+                oid_base: base_str.to_owned(),
+                ifindex,
+                value: v,
+            })
+        },
+    )
+    .await)
 }
 
 /// Walk string-valued table columns (e.g. `ifName`, `ifAlias`) from `target` via SNMP v3 (USM)
@@ -218,35 +208,75 @@ pub async fn snmp_walk_strings_v3(
     target: IpAddr,
     params: &SnmpV3Params,
     column_oids: &[String],
+    limits: WalkLimits,
+) -> Result<TableWalk<SnmpTableString>, TransportError> {
+    let mut session = open_session(target, params, limits.timeout).await?;
+    let mut budget = WalkBudget::within(limits);
+    Ok(walk_columns_v3(
+        &mut session,
+        target,
+        column_oids,
+        limits.timeout,
+        &mut budget,
+        |base_str, tail, value| {
+            let ifindex = crate::ifindex_from_tail(tail)?;
+            string_value(value).map(|s| SnmpTableString {
+                oid_base: base_str.to_owned(),
+                ifindex,
+                value: s,
+            })
+        },
+    )
+    .await)
+}
+
+/// The column loop the numeric and string v3 walkers share — the twin of `snmp::walk_columns`: one
+/// [`walk_column_v3`] per column, folded into `budget`, reporting how every column ended
+/// (ADR-110 Increment 10).
+///
+/// `budget` is handed in so that its constructor stays in the text of each public walker, where
+/// `every_multi_column_call_takes_a_budget` reads it. `map` receives the column base as the caller
+/// spelled it, the instance tail, and the value.
+async fn walk_columns_v3<R>(
+    session: &mut AsyncSession,
+    target: IpAddr,
+    column_oids: &[String],
     timeout: Duration,
-) -> Result<Vec<SnmpTableString>, TransportError> {
-    let mut session = open_session(target, params, timeout).await?;
+    budget: &mut WalkBudget,
+    map: impl Fn(&str, &[u32], &Value) -> Option<R>,
+) -> TableWalk<R> {
     let mut rows = Vec::new();
-    let mut budget = WalkBudget::new(timeout);
+    let mut columns = Vec::with_capacity(column_oids.len());
+    let mut stopped: Option<Truncation> = None;
     for (asked, base_str) in column_oids.iter().enumerate() {
         if let Some(reason) = budget.spent() {
             note_truncation(reason, target, column_oids.len() - asked);
+            stopped = Some(reason);
+            columns.extend(not_asked(&column_oids[asked..]));
             break;
         }
-        let outcome = walk_column_v3(
-            &mut session,
+        let stop = walk_column_v3(
+            session,
             base_str,
             timeout,
+            budget,
             ROWS_BOUNDED_BY_REQUEST_CEILING,
-            |tail, value| {
-                let ifindex = crate::ifindex_from_tail(tail)?;
-                string_value(value).map(|s| SnmpTableString {
-                    oid_base: base_str.clone(),
-                    ifindex,
-                    value: s,
-                })
-            },
+            |tail, value| map(base_str, tail, value),
             &mut rows,
         )
         .await;
-        budget.record(outcome);
+        budget.record(stop.outcome());
+        columns.push(ColumnReport {
+            column: base_str.clone(),
+            end: stop.end(),
+        });
     }
-    Ok(rows)
+    let stopped = conclude(stopped, budget, &columns, target);
+    TableWalk {
+        rows,
+        columns,
+        stopped,
+    }
 }
 
 /// Walk table columns keeping each row's **full instance index** and **raw** value via SNMP v3
@@ -281,10 +311,12 @@ pub async fn snmp_walk_instances_v3(
             break;
         }
         let row_budget = max_rows - rows.len();
-        let outcome = walk_column_v3(
+        // This budget names no deadline, so no column here is ever cut part-way.
+        let stop = walk_column_v3(
             &mut session,
             base_str,
             timeout,
+            &budget,
             row_budget,
             |tail, value| {
                 raw_value(value).map(|v| SnmpInstanceRow {
@@ -296,7 +328,7 @@ pub async fn snmp_walk_instances_v3(
             &mut rows,
         )
         .await;
-        budget.record(outcome);
+        budget.record(stop.outcome());
     }
     // The loop only consults the budget at the *top* of an iteration, so a walk whose last
     // two columns both failed ends by running out of columns rather than by tripping. Ask
@@ -324,30 +356,38 @@ pub async fn snmp_walk_instances_v3(
 /// it with [`crate::ifindex_from_tail`] (so the v2c and v3 row keying can never diverge); the
 /// neighbour walker keeps it, because a folded `lldpRemTable` index cannot be reassembled into
 /// which local port faces which peer.
-/// `budget` caps how many rows this column may contribute. [`ROWS_BOUNDED_BY_REQUEST_CEILING`] is
-/// the value for the walkers that predate ADR-043 Increment 3 and are already bounded by
+/// `row_budget` caps how many rows this column may contribute. [`ROWS_BOUNDED_BY_REQUEST_CEILING`]
+/// is the value for the walkers that predate ADR-043 Increment 3 and are already bounded by
 /// [`MAX_WALK_REQUESTS`] × [`WALK_MAX_REPETITIONS`] rows — naming it says which bound applies rather
 /// than leaving a bare `usize::MAX` that reads as "no bound at all".
+///
+/// `budget` is consulted before every page after the first, and stops the column there only when
+/// it names the caller's deadline ([`WalkBudget::cuts_mid_column`], ADR-110 Increment 10).
 async fn walk_column_v3<R>(
     session: &mut AsyncSession,
     base_str: &str,
     timeout: Duration,
+    budget: &WalkBudget,
     row_budget: usize,
     map: impl Fn(&[u32], &Value) -> Option<R>,
     out: &mut Vec<R>,
-) -> ColumnOutcome {
+) -> ColumnStop {
     if parse_oid(base_str).is_none() {
         tracing::warn!(%base_str, "skipping malformed table column OID");
-        return ColumnOutcome::Skipped;
+        return ColumnStop::Ended(ColumnOutcome::Skipped);
     }
     let mut cursor_str = base_str.to_owned();
     let mut taken = 0usize;
-    for _ in 0..MAX_WALK_REQUESTS {
+    for request in 0..MAX_WALK_REQUESTS {
         if taken >= row_budget {
-            return AGENT_ANSWERED;
+            return ColumnStop::Ended(AGENT_ANSWERED);
+        }
+        if request > 0 && budget.cuts_mid_column() {
+            tracing::debug!(%base_str, kept = taken, "snmp v3 column walk cut at the walk's deadline");
+            return ColumnStop::Cut(tail_subids(&cursor_str, base_str).unwrap_or_default());
         }
         let Some(cursor) = parse_oid(&cursor_str) else {
-            return ColumnOutcome::Skipped;
+            return ColumnStop::Ended(ColumnOutcome::Skipped);
         };
         let pdu = match tokio::time::timeout(
             timeout,
@@ -358,11 +398,11 @@ async fn walk_column_v3<R>(
             Ok(Ok(pdu)) => pdu,
             Ok(Err(e)) => {
                 tracing::debug!(%base_str, error = %e, "snmp v3 table walk failed");
-                return AGENT_ANSWERED;
+                return ColumnStop::Ended(AGENT_ANSWERED);
             }
             Err(_) => {
                 tracing::debug!(%base_str, "snmp v3 table walk timed out");
-                return AGENT_SAID_NOTHING;
+                return ColumnStop::Ended(AGENT_SAID_NOTHING);
             }
         };
         // Scan this page: collect in-subtree rows and note the last OID reached so the next
@@ -403,10 +443,10 @@ async fn walk_column_v3<R>(
             // failed to advance (defensive: GETBULK returns strictly-greater OIDs).
             Some(next) if !stop && next != cursor_str => cursor_str = next,
             // The agent answered every page it was asked for; the column ended on its own terms.
-            _ => return AGENT_ANSWERED,
+            _ => return ColumnStop::Ended(AGENT_ANSWERED),
         }
     }
-    AGENT_ANSWERED
+    ColumnStop::Ended(AGENT_ANSWERED)
 }
 
 /// Sub-identifiers of `oid_str` past the column `base_str`, or `None` when `oid_str` is not a

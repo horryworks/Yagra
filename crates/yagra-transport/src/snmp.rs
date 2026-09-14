@@ -11,7 +11,8 @@
 //! multi-column loops around it still need a device and are covered only by reading their source.
 
 use crate::walk_budget::{
-    is_silence, note_retry, note_truncation, ColumnOutcome, RetryAllowance, Truncation, WalkBudget,
+    conclude, is_silence, not_asked, note_retry, note_truncation, ColumnEnd, ColumnOutcome,
+    ColumnReport, ColumnStop, RetryAllowance, TableWalk, Truncation, WalkBudget, WalkLimits,
 };
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpTableSample, SnmpTableString, SnmpValue, TransportError,
@@ -111,10 +112,10 @@ pub async fn snmp_walk_v2c(
     target: IpAddr,
     community: &str,
     column_oids: &[String],
-    timeout: Duration,
-) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
-    let client = connect(target, community, timeout).await?;
-    let mut budget = WalkBudget::new(timeout);
+    limits: WalkLimits,
+) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+    let client = connect(target, community, limits.timeout).await?;
+    let mut budget = WalkBudget::within(limits);
     // Why the walk stopped is returned rather than dropped. `snmp_walk_instances_v2c` keeps it to
     // spare a caller a second walk at a silent device; this one keeps it for the opposite reason —
     // the caller is the interface table walk, and a `Deadline` there means the node's configured
@@ -142,11 +143,11 @@ pub async fn snmp_walk_strings_v2c(
     target: IpAddr,
     community: &str,
     column_oids: &[String],
-    timeout: Duration,
-) -> Result<Vec<SnmpTableString>, TransportError> {
-    let client = connect(target, community, timeout).await?;
-    let mut budget = WalkBudget::new(timeout);
-    let (rows, _stopped) = walk_columns(
+    limits: WalkLimits,
+) -> Result<TableWalk<SnmpTableString>, TransportError> {
+    let client = connect(target, community, limits.timeout).await?;
+    let mut budget = WalkBudget::within(limits);
+    Ok(walk_columns(
         &client,
         target,
         column_oids,
@@ -160,40 +161,46 @@ pub async fn snmp_walk_strings_v2c(
             })
         },
     )
-    .await;
-    Ok(rows)
+    .await)
 }
 
 /// The column loop the numeric and string walkers share: one [`walk_column_v2c`] per column, each
-/// folded into `budget`, stopping when the budget says so.
+/// folded into `budget`, stopping when the budget says so, and reporting how every column ended
+/// (ADR-110 Increment 10).
 ///
-/// `budget` is handed in rather than built here so that `WalkBudget::new(` stays in the text of
-/// each public walker — `walk_budget.rs`'s `every_multi_column_call_takes_a_budget` reads it there.
-/// `map` turns one in-subtree varbind into a row, or `None` to drop it (the column base itself, a
-/// value of the wrong type).
+/// `budget` is handed in rather than built here so that the budget's constructor stays in the text
+/// of each public walker — `walk_budget.rs`'s `every_multi_column_call_takes_a_budget` reads it
+/// there. `map` turns one in-subtree varbind into a row, or `None` to drop it (the column base
+/// itself, a value of the wrong type).
 async fn walk_columns<P, R>(
     pager: &P,
     target: IpAddr,
     column_oids: &[String],
     budget: &mut WalkBudget,
     map: impl Fn(&str, &ObjectIdentifier, &ObjectIdentifier, &ObjectValue) -> Option<R> + Send + Sync,
-) -> (Vec<R>, Option<Truncation>)
+) -> TableWalk<R>
 where
     P: BulkPager,
     R: Send,
 {
     let mut rows = Vec::new();
+    let mut columns = Vec::with_capacity(column_oids.len());
     let mut retries = RetryAllowance::new();
     let mut stopped: Option<Truncation> = None;
     for (asked, base_str) in column_oids.iter().enumerate() {
         if let Some(reason) = budget.spent() {
             note_truncation(reason, target, column_oids.len() - asked);
             stopped = Some(reason);
+            columns.extend(not_asked(&column_oids[asked..]));
             break;
         }
         let Some(base) = parse_oid(base_str) else {
             tracing::warn!(%base_str, "skipping malformed table column OID");
             budget.record(ColumnOutcome::Skipped);
+            columns.push(ColumnReport {
+                column: base_str.clone(),
+                end: ColumnEnd::Skipped,
+            });
             continue;
         };
         let column = Column {
@@ -202,18 +209,24 @@ where
             row_budget: usize::MAX,
             empty: EmptyColumn::AskBase,
         };
-        let outcome = walk_column_v2c(pager, &column, budget, &mut retries, |oid, value| {
+        let stop = walk_column_v2c(pager, &column, budget, &mut retries, |oid, value| {
             if let Some(row) = map(base_str, &base, oid, value) {
                 rows.push(row);
             }
         })
         .await;
-        budget.record(outcome);
+        budget.record(stop.outcome());
+        columns.push(ColumnReport {
+            column: base_str.clone(),
+            end: stop.end(),
+        });
     }
-    // The loop only consults the budget at the *top* of an iteration, so a walk whose last two
-    // columns both failed ends by running out of columns rather than by tripping. Ask once more —
-    // the question is about the device, not about where the loop stopped.
-    (rows, stopped.or_else(|| budget.spent()))
+    let stopped = conclude(stopped, budget, &columns, target);
+    TableWalk {
+        rows,
+        columns,
+        stopped,
+    }
 }
 
 /// Walk table columns keeping each row's **full instance index** and **raw** value (ADR-038).
@@ -265,7 +278,7 @@ pub async fn snmp_walk_instances_v2c(
             // there is nothing a GET could add to it.
             empty: EmptyColumn::Stop,
         };
-        let outcome = walk_column_v2c(&client, &column, &budget, &mut retries, |oid, value| {
+        let stop = walk_column_v2c(&client, &column, &budget, &mut retries, |oid, value| {
             let Some(tail) = oid.relative_to(&base) else {
                 return;
             };
@@ -280,7 +293,8 @@ pub async fn snmp_walk_instances_v2c(
             });
         })
         .await;
-        budget.record(outcome);
+        // This budget names no deadline, so no column here is ever cut part-way.
+        budget.record(stop.outcome());
     }
     // The loop only consults the budget at the *top* of an iteration, so a walk whose last
     // two columns both failed ends by running out of columns rather than by tripping. Ask
@@ -394,18 +408,22 @@ struct Column<'a> {
 ///   timeout per column.
 /// - **A request ceiling**: an agent whose pages do not advance, or a column longer than
 ///   `MAX_REQUESTS × WALK_MAX_REPETITIONS` rows, ends as answered rather than spinning.
+/// - **A cut at the caller's deadline** before any page after the first, when the budget names one
+///   ([`WalkBudget::cuts_mid_column`], ADR-110 Increment 10). The first page is always sent: whether
+///   to start a column at all is the column loop's question, asked before this is called.
 ///
 /// What it keeps from `walk_bulk`, deliberately: the subtree and end-of-MIB stops, and — for
 /// [`EmptyColumn::AskBase`] — one GET on the base of an empty column, with `noSuchObject` read as
 /// "answered, empty". The module doc of `walk_budget.rs` explains why counting consecutive failures
-/// is only safe because an unimplemented column ends that way.
+/// is only safe because an unimplemented column ends that way. That GET is not cut at the deadline:
+/// it is one round trip, and it is what finishes the column.
 async fn walk_column_v2c<P: BulkPager>(
     pager: &P,
     column: &Column<'_>,
     budget: &WalkBudget,
     retries: &mut RetryAllowance,
     mut keep: impl FnMut(&ObjectIdentifier, &ObjectValue) + Send,
-) -> ColumnOutcome {
+) -> ColumnStop {
     const MAX_REQUESTS: usize = 4096;
     let base = column.base;
     let mut cursor = base;
@@ -415,7 +433,19 @@ async fn walk_column_v2c<P: BulkPager>(
     loop {
         if requests == MAX_REQUESTS {
             tracing::debug!(base = %column.base_str, "column walk hit its request ceiling");
-            return ColumnOutcome::Answered;
+            return ColumnStop::Ended(ColumnOutcome::Answered);
+        }
+        if requests > 0 && budget.cuts_mid_column() {
+            tracing::debug!(
+                base = %column.base_str,
+                kept = taken,
+                "snmp column walk cut at the walk's deadline"
+            );
+            let resume_after = cursor
+                .relative_to(&base)
+                .map(|tail| tail.as_slice().to_vec())
+                .unwrap_or_default();
+            return ColumnStop::Cut(resume_after);
         }
         requests += 1;
         let page = match pager.bulk(cursor).await {
@@ -445,7 +475,7 @@ async fn walk_column_v2c<P: BulkPager>(
                     kept = taken,
                     "snmp column walk ended on an error"
                 );
-                return outcome;
+                return ColumnStop::Ended(outcome);
             }
         };
         let (take, next) = page_slice(&base, &page.entries, column.row_budget - taken);
@@ -461,7 +491,7 @@ async fn walk_column_v2c<P: BulkPager>(
         }
     }
     if taken > 0 || column.empty == EmptyColumn::Stop {
-        return ColumnOutcome::Answered;
+        return ColumnStop::Ended(ColumnOutcome::Answered);
     }
     // Nothing under the base. `csnmp::walk_bulk` asked the base itself at this point, and the
     // walkers that used it keep doing so: a device is then asked exactly what it was asked before.
@@ -475,7 +505,7 @@ async fn walk_column_v2c<P: BulkPager>(
                 }
                 // The value is dropped either way: the base carries no instance, so no walker can
                 // key a row from it.
-                return ColumnOutcome::Answered;
+                return ColumnStop::Ended(ColumnOutcome::Answered);
             }
             Err(e) => {
                 let outcome = outcome_of(&e);
@@ -490,7 +520,7 @@ async fn walk_column_v2c<P: BulkPager>(
                     note_retry(false);
                 }
                 tracing::debug!(base = %column.base_str, error = %e, "snmp column base get failed");
-                return outcome;
+                return ColumnStop::Ended(outcome);
             }
         }
     }
@@ -607,6 +637,7 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;
+    use std::time::Instant;
 
     // ── Bounded instance walk (ADR-043 I3) ───────────────────────────────────
     //
@@ -725,6 +756,10 @@ mod tests {
         ErrorPdu,
         /// The base GET answered `noSuchObject`.
         NoSuch,
+        /// A GETBULK page that arrives only after this long — how a test lets a deadline fall while
+        /// a column is being paged. A real sleep: the budget reads `std::time::Instant`, which
+        /// Tokio's paused clock does not move.
+        Late(Duration, &'static [&'static str]),
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -780,6 +815,13 @@ mod tests {
                     entries: page(oids),
                     end_of_mib: false,
                 }),
+                Reply::Late(delay, oids) => {
+                    tokio::time::sleep(delay).await;
+                    Ok(Page {
+                        entries: page(oids),
+                        end_of_mib: false,
+                    })
+                }
                 Reply::Timeout => Err(SnmpClientError::TimedOut),
                 Reply::ErrorPdu => Err(error_pdu(cursor)),
                 Reply::NoSuch => panic!("a GETBULK was answered with a base-GET reply"),
@@ -795,7 +837,7 @@ mod tests {
                 Reply::NoSuch => Ok(BaseAnswer::NoSuch),
                 Reply::Timeout => Err(SnmpClientError::TimedOut),
                 Reply::ErrorPdu => Err(error_pdu(base)),
-                Reply::Page(_) => panic!("a base GET was answered with a page"),
+                Reply::Page(_) | Reply::Late(..) => panic!("a base GET was answered with a page"),
             }
         }
     }
@@ -816,6 +858,16 @@ mod tests {
         budget: &WalkBudget,
         retries: &mut RetryAllowance,
     ) -> (ColumnOutcome, Vec<String>) {
+        let (stop, kept) = walk_stop(agent, budget, retries).await;
+        (stop.outcome(), kept)
+    }
+
+    /// As [`walk_with`], keeping whether the column was cut rather than folding that into an answer.
+    async fn walk_stop(
+        agent: &ScriptedAgent,
+        budget: &WalkBudget,
+        retries: &mut RetryAllowance,
+    ) -> (ColumnStop, Vec<String>) {
         let column = Column {
             base_str: COL,
             base: oid(COL),
@@ -823,11 +875,11 @@ mod tests {
             empty: EmptyColumn::AskBase,
         };
         let mut kept = Vec::new();
-        let outcome = walk_column_v2c(agent, &column, budget, retries, |o, _| {
+        let stop = walk_column_v2c(agent, &column, budget, retries, |o, _| {
             kept.push(o.to_string());
         })
         .await;
-        (outcome, kept)
+        (stop, kept)
     }
 
     /// **The accepting side, first**: a healthy column pages until it leaves the subtree, keeps
@@ -961,7 +1013,7 @@ mod tests {
         let agent = ScriptedAgent::new(vec![Reply::Timeout, Reply::Timeout]);
         let columns: Vec<String> = (8..13).map(|c| format!("1.3.6.1.2.1.2.2.1.{c}")).collect();
         let mut budget = WalkBudget::new(Duration::from_secs(2));
-        let (rows, stopped) = walk_columns(
+        let walk = walk_columns(
             &agent,
             IpAddr::from([10, 0, 0, 1]),
             &columns,
@@ -969,9 +1021,119 @@ mod tests {
             |_, base, oid, _| ifindex_of(oid, base),
         )
         .await;
-        assert!(rows.is_empty());
-        assert_eq!(stopped, Some(Truncation::Silent));
+        assert!(walk.rows.is_empty());
+        assert_eq!(walk.stopped, Some(Truncation::Silent));
         assert_eq!(agent.asked().len(), 2, "one request per column, no retries");
+        let ends: Vec<ColumnEnd> = walk.columns.into_iter().map(|c| c.end).collect();
+        assert_eq!(
+            ends,
+            vec![
+                ColumnEnd::Failed,
+                ColumnEnd::Failed,
+                ColumnEnd::NotAsked,
+                ColumnEnd::NotAsked,
+                ColumnEnd::NotAsked,
+            ],
+            "every column is reported, including the three never asked"
+        );
+    }
+
+    // ── A deadline named by the caller (ADR-110 Increment 10) ─────────────────
+
+    /// **The accepting side, first**: a column whose budget has run out but names no deadline still
+    /// pages to its end. That is every walk except the interface table walk, and cutting them at the
+    /// page would take away the polls that finished by overrunning 16 s.
+    #[tokio::test]
+    async fn a_column_with_no_named_deadline_finishes_even_past_its_budget() {
+        let agent = ScriptedAgent::new(vec![
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.1", "1.3.6.1.2.1.2.2.1.8.2"]),
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.3", NEXT_COL]),
+        ]);
+        let expired = WalkBudget::with_remaining(Duration::ZERO);
+        let (stop, kept) = walk_stop(&agent, &expired, &mut RetryAllowance::new()).await;
+        assert_eq!(stop, ColumnStop::Ended(ColumnOutcome::Answered));
+        assert_eq!(kept.len(), 3);
+    }
+
+    /// A deadline the caller named, passed, stops the column **before its next page** — the rows in
+    /// hand are kept, and the column says where it stopped.
+    #[tokio::test]
+    async fn a_named_deadline_cuts_the_column_before_its_next_page() {
+        let agent = ScriptedAgent::new(vec![Reply::Page(&[
+            "1.3.6.1.2.1.2.2.1.8.1",
+            "1.3.6.1.2.1.2.2.1.8.2",
+        ])]);
+        let passed = WalkBudget::within(WalkLimits::until(Duration::from_secs(2), Instant::now()));
+        let (stop, kept) = walk_stop(&agent, &passed, &mut RetryAllowance::new()).await;
+        assert_eq!(stop, ColumnStop::Cut(vec![2]), "resumes after ifIndex 2");
+        assert_eq!(kept.len(), 2, "the page in hand is kept");
+        assert_eq!(
+            agent.asked(),
+            vec![bulk(COL)],
+            "the first page is always sent; the second is not"
+        );
+    }
+
+    /// **The whole loop**: the deadline falls while the first column is being paged. That column is
+    /// reported cut after the row it reached, the two after it are never asked, and the walk says
+    /// `Deadline`.
+    #[tokio::test]
+    async fn a_deadline_that_falls_mid_column_cuts_it_and_asks_nothing_after() {
+        let agent = ScriptedAgent::new(vec![Reply::Late(
+            Duration::from_millis(120),
+            &["1.3.6.1.2.1.2.2.1.8.1", "1.3.6.1.2.1.2.2.1.8.2"],
+        )]);
+        let columns: Vec<String> = (8..11).map(|c| format!("1.3.6.1.2.1.2.2.1.{c}")).collect();
+        let deadline = Instant::now() + Duration::from_millis(40);
+        let mut budget = WalkBudget::within(WalkLimits::until(Duration::from_secs(2), deadline));
+        let walk = walk_columns(
+            &agent,
+            IpAddr::from([10, 0, 0, 1]),
+            &columns,
+            &mut budget,
+            |_, base, oid, _| ifindex_of(oid, base),
+        )
+        .await;
+        assert_eq!(walk.rows, vec![1, 2]);
+        assert_eq!(walk.stopped, Some(Truncation::Deadline));
+        let ends: Vec<ColumnEnd> = walk.columns.into_iter().map(|c| c.end).collect();
+        assert_eq!(
+            ends,
+            vec![
+                ColumnEnd::Partial {
+                    resume_after: vec![2]
+                },
+                ColumnEnd::NotAsked,
+                ColumnEnd::NotAsked,
+            ]
+        );
+        assert_eq!(agent.asked().len(), 1);
+    }
+
+    /// 🚨 **A last column that finished after the deadline has asked for everything.** The page that
+    /// carried it past the deadline also left its subtree, so nothing was cut — and the walk used to
+    /// read the clock at the end and call itself truncated anyway, which is a `snmp_walk_complete`
+    /// of `0` for a table that was read whole.
+    #[tokio::test]
+    async fn a_walk_whose_last_page_landed_after_the_deadline_is_not_truncated() {
+        let agent = ScriptedAgent::new(vec![Reply::Late(
+            Duration::from_millis(120),
+            &["1.3.6.1.2.1.2.2.1.8.1", NEXT_COL],
+        )]);
+        let columns = vec![COL.to_owned()];
+        let deadline = Instant::now() + Duration::from_millis(40);
+        let mut budget = WalkBudget::within(WalkLimits::until(Duration::from_secs(2), deadline));
+        let walk = walk_columns(
+            &agent,
+            IpAddr::from([10, 0, 0, 1]),
+            &columns,
+            &mut budget,
+            |_, base, oid, _| ifindex_of(oid, base),
+        )
+        .await;
+        assert_eq!(walk.rows, vec![1]);
+        assert_eq!(walk.stopped, None);
+        assert_eq!(walk.columns[0].end, ColumnEnd::Answered);
     }
 
     /// No v2c walker pages through `csnmp::walk_bulk` any more — and the three that walk columns
