@@ -33,13 +33,14 @@ pub use meraki::{
     list_devices, list_networks, list_organizations, MerakiDeviceInfo, MerakiNetworkInfo,
     MerakiOrgInfo,
 };
-/// Why a multi-column walk stopped early, for the callers that have to act on it.
+/// Why a multi-column walk stopped early, how long one may run, and how each of its columns ended.
 ///
 /// The rest of `walk_budget` stays private: the budget, the per-column outcome and the counter are
-/// this crate's business. **This one type is not**, because a walk that was cut before it reached a
-/// caller's columns returned `Ok` with fewer rows, and no caller could tell that from a device that
-/// simply does not implement them (ADR-110 Increment 6).
-pub use walk_budget::Truncation;
+/// this crate's business. **These types are not.** A walk that was cut before it reached a caller's
+/// columns returned `Ok` with fewer rows, and no caller could tell that from a device that simply
+/// does not implement them (ADR-110 Increment 6); and a caller that sizes its own budget has to be
+/// able to say so, and to be told which column the deadline fell in (Increment 10).
+pub use walk_budget::{ColumnEnd, ColumnReport, TableWalk, Truncation, WalkLimits};
 
 pub use yagra_common::{DnsChain, DnsRecordType, HttpAuth, HttpMethod, MerakiTier};
 
@@ -387,45 +388,52 @@ pub trait Transport: Send + Sync {
     ) -> Result<Vec<SnmpStringSample>, TransportError>;
 
     /// Walk one or more table *column base* OIDs via SNMP v2c GETBULK, returning the
-    /// numeric value of every row, tagged with its ifIndex. A per-column walk failure is
-    /// logged and skipped (one bad column doesn't fail the poll). Counters are raw (ADR-012).
+    /// numeric value of every row, tagged with its ifIndex. A column that fails keeps the rows it
+    /// had paged, and the walk moves on (one bad column doesn't fail the poll). Counters are raw
+    /// (ADR-012).
     ///
-    /// 🚨 **The second half of the answer says whether every column was actually asked for.**
-    /// `Ok` with fewer rows than expected has two causes that look identical from here — the device
-    /// does not implement those columns, or the walk's budget ran out before reaching them — and
-    /// the caller has to act on them differently. Returning `Some(_)` is how the interface walk
-    /// knows its node's configured metric columns were never sent (ADR-110 Increment 6).
+    /// `limits` says how long the walk may run — see [`WalkLimits`]. Every caller but the interface
+    /// table walk passes [`WalkLimits::per_round_trip`], which is the budget every walk had before
+    /// ADR-110 Increment 10.
+    ///
+    /// 🚨 **[`TableWalk::stopped`] says whether every column was actually asked for.** `Ok` with
+    /// fewer rows than expected has two causes that look identical from here — the device does not
+    /// implement those columns, or the walk's budget ran out before reaching them — and the caller
+    /// has to act on them differently. `Some(_)` is how the interface walk knows its node's
+    /// configured metric columns were never sent (ADR-110 Increment 6); [`TableWalk::columns`] says
+    /// which ones, and where a column cut part-way stopped.
     async fn snmp_walk(
         &self,
         target: IpAddr,
         community: &str,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError>;
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableSample>, TransportError>;
 
     /// Walk table *column base* OIDs whose values are strings (e.g. `ifName`, `ifAlias`),
     /// returning each row's string value tagged with its ifIndex. For interface metadata
-    /// (PostgreSQL), never TSDB labels (ADR-011).
+    /// (PostgreSQL), never TSDB labels (ADR-011). `limits` and the report mean what they do on
+    /// [`Transport::snmp_walk`].
     async fn snmp_walk_strings(
         &self,
         target: IpAddr,
         community: &str,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<Vec<SnmpTableString>, TransportError>;
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableString>, TransportError>;
 
     /// Walk numeric table *column base* OIDs via SNMP v3 (USM) GETBULK — the v3 analogue of
     /// [`Transport::snmp_walk`], returning one numeric row per instance tagged with its ifIndex.
     /// A per-column walk failure is logged and skipped. Counters are raw (ADR-012); auth/priv
-    /// come resolved from core (ADR-018/020) and are never logged. The truncation half of the
-    /// answer means what it does on [`Transport::snmp_walk`].
+    /// come resolved from core (ADR-018/020) and are never logged. `limits` and the report mean
+    /// what they do on [`Transport::snmp_walk`].
     async fn snmp_v3_walk(
         &self,
         target: IpAddr,
         params: &SnmpV3Params,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError>;
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableSample>, TransportError>;
 
     /// Walk string-valued table *column base* OIDs (e.g. `ifName`, `ifAlias`) via SNMP v3 (USM)
     /// GETBULK — the v3 analogue of [`Transport::snmp_walk_strings`]. For interface metadata
@@ -435,8 +443,8 @@ pub trait Transport: Send + Sync {
         target: IpAddr,
         params: &SnmpV3Params,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<Vec<SnmpTableString>, TransportError>;
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableString>, TransportError>;
 
     /// Walk table *column base* OIDs via SNMP v2c GETBULK, keeping each row's **full instance
     /// index** and its **raw** value (ADR-038). The neighbour walk needs both: `lldpRemTable`'s
@@ -575,6 +583,10 @@ pub struct FakeTransport {
     /// so a test can see that a caller which stretches one walk's patience really passed it on
     /// (ADR-138 Increment 4). [`Self::asked`] records what was asked, never how long to wait.
     pub instance_walk_timeouts: Arc<Mutex<Vec<Duration>>>,
+    /// The [`WalkLimits`] every numeric and string table walk (v2c and v3) was called with, oldest
+    /// first — so a test can see the deadline a caller computed, which no row it gets back reflects
+    /// (ADR-110 Increment 10).
+    pub walk_limits: Arc<Mutex<Vec<WalkLimits>>>,
     /// When set, every **numeric column** walk (v2c and v3) reports itself as having stopped early
     /// with this reason, alongside whatever [`Self::snmp_table`] rows it returns.
     ///
@@ -593,6 +605,42 @@ pub struct FakeTransport {
     /// interface walk owes its completeness gauge on *every* path, including this one — cannot be
     /// tested at all while the fake can only produce the first.
     pub snmp_walk_error: Option<String>,
+}
+
+/// The canned `rows` whose column was asked for, with one report per asked column.
+///
+/// A column is [`ColumnEnd::Answered`] unless the walk is `truncated` and the column returned no row,
+/// in which case it is [`ColumnEnd::NotAsked`] — the shape a real truncated walk leaves: its first
+/// columns answered, the rest never sent. ⚠️ So a fake cannot build a column cut part-way; the
+/// scripted agent in `snmp.rs` is where that is tested.
+#[cfg(any(test, feature = "test-util"))]
+fn canned_walk<R: Clone>(
+    rows: &[R],
+    base_of: impl Fn(&R) -> &str,
+    column_oids: &[String],
+    truncated: Option<Truncation>,
+) -> TableWalk<R> {
+    let rows: Vec<R> = rows
+        .iter()
+        .filter(|r| column_oids.iter().any(|c| c == base_of(r)))
+        .cloned()
+        .collect();
+    let columns = column_oids
+        .iter()
+        .map(|column| ColumnReport {
+            column: column.clone(),
+            end: if truncated.is_none() || rows.iter().any(|r| base_of(r) == column) {
+                ColumnEnd::Answered
+            } else {
+                ColumnEnd::NotAsked
+            },
+        })
+        .collect();
+    TableWalk {
+        rows,
+        columns,
+        stopped: truncated,
+    }
 }
 
 /// A canned one-hop chain resolving to `10.1.2.3`, or the same query having timed out.
@@ -653,6 +701,24 @@ impl FakeTransport {
         }
     }
 
+    /// Note that a table walk asked for `oids` within `limits`.
+    fn record_walk(&self, oids: &[String], limits: WalkLimits) {
+        self.record_asked(oids);
+        if let Ok(mut log) = self.walk_limits.lock() {
+            log.push(limits);
+        }
+    }
+
+    /// Every table walk's [`WalkLimits`], oldest first — a snapshot, for the reason [`Self::asked`]
+    /// is one.
+    #[must_use]
+    pub fn walk_limits(&self) -> Vec<WalkLimits> {
+        self.walk_limits
+            .lock()
+            .map(|log| log.clone())
+            .unwrap_or_default()
+    }
+
     /// Every SNMP call's requested OID list, oldest first.
     ///
     /// A snapshot rather than a guard, so a test can assert against it without holding the lock
@@ -705,6 +771,7 @@ impl FakeTransport {
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
             instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
+            walk_limits: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
             snmp_walk_error: None,
             dns: fake_dns_chain(true),
@@ -740,6 +807,7 @@ impl FakeTransport {
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
             instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
+            walk_limits: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
             snmp_walk_error: None,
             dns: fake_dns_chain(false),
@@ -894,19 +962,17 @@ impl Transport for FakeTransport {
         _target: IpAddr,
         _community: &str,
         column_oids: &[String],
-        _timeout: Duration,
-    ) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
-        self.record_asked(column_oids);
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+        self.record_walk(column_oids, limits);
         if let Some(msg) = &self.snmp_walk_error {
             return Err(TransportError::Io(msg.clone()));
         }
         // Return only the rows for the requested columns, as a real per-column walk would.
-        Ok((
-            self.snmp_table
-                .iter()
-                .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
-                .cloned()
-                .collect(),
+        Ok(canned_walk(
+            &self.snmp_table,
+            |r| r.oid_base.as_str(),
+            column_oids,
             self.snmp_walk_truncated,
         ))
     }
@@ -916,15 +982,15 @@ impl Transport for FakeTransport {
         _target: IpAddr,
         _community: &str,
         column_oids: &[String],
-        _timeout: Duration,
-    ) -> Result<Vec<SnmpTableString>, TransportError> {
-        self.record_asked(column_oids);
-        Ok(self
-            .snmp_table_strings
-            .iter()
-            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
-            .cloned()
-            .collect())
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+        self.record_walk(column_oids, limits);
+        Ok(canned_walk(
+            &self.snmp_table_strings,
+            |r| r.oid_base.as_str(),
+            column_oids,
+            None,
+        ))
     }
 
     async fn snmp_v3_walk(
@@ -932,19 +998,17 @@ impl Transport for FakeTransport {
         _target: IpAddr,
         _params: &SnmpV3Params,
         column_oids: &[String],
-        _timeout: Duration,
-    ) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
-        self.record_asked(column_oids);
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+        self.record_walk(column_oids, limits);
         if let Some(msg) = &self.snmp_walk_error {
             return Err(TransportError::Io(msg.clone()));
         }
         // Same canned rows as the v2c walk — the fake is protocol-agnostic.
-        Ok((
-            self.snmp_table
-                .iter()
-                .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
-                .cloned()
-                .collect(),
+        Ok(canned_walk(
+            &self.snmp_table,
+            |r| r.oid_base.as_str(),
+            column_oids,
             self.snmp_walk_truncated,
         ))
     }
@@ -954,15 +1018,15 @@ impl Transport for FakeTransport {
         _target: IpAddr,
         _params: &SnmpV3Params,
         column_oids: &[String],
-        _timeout: Duration,
-    ) -> Result<Vec<SnmpTableString>, TransportError> {
-        self.record_asked(column_oids);
-        Ok(self
-            .snmp_table_strings
-            .iter()
-            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
-            .cloned()
-            .collect())
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+        self.record_walk(column_oids, limits);
+        Ok(canned_walk(
+            &self.snmp_table_strings,
+            |r| r.oid_base.as_str(),
+            column_oids,
+            None,
+        ))
     }
 
     async fn snmp_walk_instances(

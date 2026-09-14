@@ -267,13 +267,19 @@ impl SnmpWalker {
                         columns.push(column.to_owned());
                     }
                 }
-                let Ok(rows) = transport
-                    .snmp_walk_strings(target, community, &columns, timeout)
+                let Ok(walk) = transport
+                    .snmp_walk_strings(
+                        target,
+                        community,
+                        &columns,
+                        WalkLimits::per_round_trip(timeout),
+                    )
                     .await
                 else {
                     return HashMap::new();
                 };
-                rows.into_iter()
+                walk.rows
+                    .into_iter()
                     .map(|r| (format!("{}.{}", r.oid_base, r.ifindex), r.value))
                     .filter(|(instance, _)| oids.contains(&instance.as_str()))
                     .collect()
@@ -291,27 +297,27 @@ impl SnmpWalker {
         }
     }
 
-    /// Walk numeric table columns via the appropriate protocol.
+    /// Walk numeric table columns via the appropriate protocol, within `limits`.
     ///
-    /// The second half of the answer is whether the walk got to ask for every column — see
-    /// [`Transport::snmp_walk`]. Passed straight through rather than consumed here: this type is
-    /// the shared funnel, and what a truncation *means* differs per caller (ADR-110 Increment 6).
+    /// Whether the walk got to ask for every column, and how each ended, travel with the rows — see
+    /// [`Transport::snmp_walk`]. Passed straight through rather than consumed here: this type is the
+    /// shared funnel, and what a truncation *means* differs per caller (ADR-110 Increment 6).
     pub(super) async fn walk(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         columns: &[String],
-        timeout: Duration,
-    ) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
         match self {
             SnmpWalker::V2c(community) => {
                 transport
-                    .snmp_walk(target, community, columns, timeout)
+                    .snmp_walk(target, community, columns, limits)
                     .await
             }
             SnmpWalker::V3(params) => {
                 transport
-                    .snmp_v3_walk(target, params, columns, timeout)
+                    .snmp_v3_walk(target, params, columns, limits)
                     .await
             }
         }
@@ -361,23 +367,24 @@ impl SnmpWalker {
         }
     }
 
-    /// Walk string-valued table columns (interface metadata) via the appropriate protocol.
+    /// Walk string-valued table columns (interface metadata) via the appropriate protocol, within
+    /// `limits`.
     pub(super) async fn walk_strings(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         columns: &[String],
-        timeout: Duration,
-    ) -> Result<Vec<SnmpTableString>, TransportError> {
+        limits: WalkLimits,
+    ) -> Result<TableWalk<SnmpTableString>, TransportError> {
         match self {
             SnmpWalker::V2c(community) => {
                 transport
-                    .snmp_walk_strings(target, community, columns, timeout)
+                    .snmp_walk_strings(target, community, columns, limits)
                     .await
             }
             SnmpWalker::V3(params) => {
                 transport
-                    .snmp_v3_walk_strings(target, params, columns, timeout)
+                    .snmp_v3_walk_strings(target, params, columns, limits)
                     .await
             }
         }

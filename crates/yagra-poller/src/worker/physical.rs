@@ -245,8 +245,10 @@ async fn walk_simple_optical(
     // The truncation verdict is ignored here on purpose: this walk is observational (ADR-110
     // Increment 6 reports completeness for the interface table walk, which carries the node's
     // configured collection set; a short optical or sensor walk costs a gap in an optional reading).
-    let rows = match walker.walk(transport, job.target, &columns, timeout).await {
-        Ok((rows, _truncated)) => rows,
+    // Its budget is still Increment 3's — Increment 11 is where the optical job gets its own.
+    let limits = WalkLimits::per_round_trip(timeout);
+    let rows = match walker.walk(transport, job.target, &columns, limits).await {
+        Ok(walk) => walk.rows,
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "optical walk failed");
             return (Vec::new(), HashMap::new());
@@ -341,8 +343,9 @@ async fn walk_entity_sensor_optical(
     // The truncation verdict is ignored here on purpose: this walk is observational (ADR-110
     // Increment 6 reports completeness for the interface table walk, which carries the node's
     // configured collection set; a short optical or sensor walk costs a gap in an optional reading).
-    let rows = match walker.walk(transport, job.target, &columns, timeout).await {
-        Ok((rows, _truncated)) => rows,
+    let limits = WalkLimits::per_round_trip(timeout);
+    let rows = match walker.walk(transport, job.target, &columns, limits).await {
+        Ok(walk) => walk.rows,
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity-sensor walk failed");
             return (Vec::new(), Vec::new());
@@ -446,11 +449,16 @@ async fn walk_entity_text(
     ];
     let mut out: HashMap<u32, String> = HashMap::new();
     match walker
-        .walk_strings(transport, job.target, &columns, timeout)
+        .walk_strings(
+            transport,
+            job.target,
+            &columns,
+            WalkLimits::per_round_trip(timeout),
+        )
         .await
     {
-        Ok(rows) => {
-            for row in rows {
+        Ok(walk) => {
+            for row in walk.rows {
                 // Device-supplied text: kept only to classify, never rendered or used as a label.
                 if optical::reading_from_text(&row.value).is_some() {
                     out.insert(row.ifindex, row.value);

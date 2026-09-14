@@ -150,9 +150,9 @@ impl Transport for SurgePingTransport {
         target: IpAddr,
         community: &str,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<(Vec<crate::SnmpTableSample>, Option<crate::Truncation>), TransportError> {
-        crate::snmp::snmp_walk_v2c(target, community, column_oids, timeout).await
+        limits: crate::WalkLimits,
+    ) -> Result<crate::TableWalk<crate::SnmpTableSample>, TransportError> {
+        crate::snmp::snmp_walk_v2c(target, community, column_oids, limits).await
     }
 
     async fn snmp_walk_strings(
@@ -160,9 +160,9 @@ impl Transport for SurgePingTransport {
         target: IpAddr,
         community: &str,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<Vec<crate::SnmpTableString>, TransportError> {
-        crate::snmp::snmp_walk_strings_v2c(target, community, column_oids, timeout).await
+        limits: crate::WalkLimits,
+    ) -> Result<crate::TableWalk<crate::SnmpTableString>, TransportError> {
+        crate::snmp::snmp_walk_strings_v2c(target, community, column_oids, limits).await
     }
 
     async fn snmp_v3_walk(
@@ -170,9 +170,9 @@ impl Transport for SurgePingTransport {
         target: IpAddr,
         params: &crate::SnmpV3Params,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<(Vec<crate::SnmpTableSample>, Option<crate::Truncation>), TransportError> {
-        crate::snmp_v3::snmp_walk_v3(target, params, column_oids, timeout).await
+        limits: crate::WalkLimits,
+    ) -> Result<crate::TableWalk<crate::SnmpTableSample>, TransportError> {
+        crate::snmp_v3::snmp_walk_v3(target, params, column_oids, limits).await
     }
 
     async fn snmp_v3_walk_strings(
@@ -180,9 +180,9 @@ impl Transport for SurgePingTransport {
         target: IpAddr,
         params: &crate::SnmpV3Params,
         column_oids: &[String],
-        timeout: Duration,
-    ) -> Result<Vec<crate::SnmpTableString>, TransportError> {
-        crate::snmp_v3::snmp_walk_strings_v3(target, params, column_oids, timeout).await
+        limits: crate::WalkLimits,
+    ) -> Result<crate::TableWalk<crate::SnmpTableString>, TransportError> {
+        crate::snmp_v3::snmp_walk_strings_v3(target, params, column_oids, limits).await
     }
 
     async fn snmp_walk_instances(

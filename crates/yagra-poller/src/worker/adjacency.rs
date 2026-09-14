@@ -473,38 +473,36 @@ mod tests {
                 t: IpAddr,
                 c: &str,
                 o: &[String],
-                to: Duration,
-            ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-            {
-                self.0.snmp_walk(t, c, o, to).await
+                l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+                self.0.snmp_walk(t, c, o, l).await
             }
             async fn snmp_walk_strings(
                 &self,
                 t: IpAddr,
                 c: &str,
                 o: &[String],
-                to: Duration,
-            ) -> Result<Vec<SnmpTableString>, TransportError> {
-                self.0.snmp_walk_strings(t, c, o, to).await
+                l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+                self.0.snmp_walk_strings(t, c, o, l).await
             }
             async fn snmp_v3_walk(
                 &self,
                 t: IpAddr,
                 p: &SnmpV3Params,
                 o: &[String],
-                to: Duration,
-            ) -> Result<(Vec<SnmpTableSample>, Option<yagra_transport::Truncation>), TransportError>
-            {
-                self.0.snmp_v3_walk(t, p, o, to).await
+                l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+                self.0.snmp_v3_walk(t, p, o, l).await
             }
             async fn snmp_v3_walk_strings(
                 &self,
                 t: IpAddr,
                 p: &SnmpV3Params,
                 o: &[String],
-                to: Duration,
-            ) -> Result<Vec<SnmpTableString>, TransportError> {
-                self.0.snmp_v3_walk_strings(t, p, o, to).await
+                l: WalkLimits,
+            ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+                self.0.snmp_v3_walk_strings(t, p, o, l).await
             }
             async fn probe_http(
                 &self,
