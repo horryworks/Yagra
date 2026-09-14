@@ -1059,6 +1059,9 @@ export function NodesPage() {
               nodes={treeNodes}
               onMove={() => selectedNode && setMoving([selectedNode])}
               onOpenDetail={() => navigate(`/nodes/${selected.id}`)}
+              // The breadcrumb opens a folder the same way its tree row does (ADR-142), so Escape
+              // and the dropped `tab` behave exactly as they do after a row click.
+              onOpenGroup={(id) => select({ kind: 'group', id })}
               // An edit made in this pane changes the row the tree is drawing beside it — its name
               // and its pool are both editable from that dialog (ADR-135).
               onChanged={() => void reload()}
@@ -1072,6 +1075,8 @@ export function NodesPage() {
               canEdit={canConfig}
               onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
               onAddNode={() => openAddNode(selectedGroup.id)}
+              onOpenGroup={(id) => select({ kind: 'group', id })}
+              onOpenNode={(id) => select({ kind: 'node', id })}
             />
           ) : (
             <div className="nd-empty">

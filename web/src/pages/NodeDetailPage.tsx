@@ -14,6 +14,7 @@ import type { NodeGroup } from '../types/api';
 import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
+import { nodesPageHref } from '../lib/treeSelection';
 
 export function NodeDetailPage() {
   const { t } = useTranslation();
@@ -51,6 +52,9 @@ export function NodeDetailPage() {
         tab={tab}
         onTabChange={setTab}
         groups={groups}
+        // This route has no pane to open a folder in, so a folder hands the operator to All nodes
+        // with that folder open (ADR-142 決定 4).
+        onOpenGroup={(id) => navigate(nodesPageHref({ kind: 'group', id }))}
         onDeleted={() => navigate('/nodes')}
       />
     </div>

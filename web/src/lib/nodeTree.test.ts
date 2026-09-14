@@ -12,6 +12,7 @@ import {
   groupDeletionImpact,
   groupOptions,
   groupPath,
+  groupTrail,
   isSelfOrDescendant,
   mergeNodesById,
   pendingGroupKeys,
@@ -779,6 +780,34 @@ describe('groupPath', () => {
   it('returns an empty path for a null or unknown id', () => {
     expect(groupPath(groups, null)).toEqual([]);
     expect(groupPath(groups, 'missing')).toEqual([]);
+  });
+});
+
+describe('groupTrail', () => {
+  const groups = [group('a', 'Tokyo'), group('b', 'Edge', 'a'), group('c', 'Firewall', 'b')];
+
+  it('carries each folder id with its name, root first, so a segment can be opened', () => {
+    expect(groupTrail(groups, 'c')).toEqual([
+      { id: 'a', name: 'Tokyo' },
+      { id: 'b', name: 'Edge' },
+      { id: 'c', name: 'Firewall' },
+    ]);
+  });
+
+  it('is the path groupPath draws, segment for segment', () => {
+    for (const id of ['a', 'b', 'c']) {
+      expect(groupTrail(groups, id).map((s) => s.name)).toEqual(groupPath(groups, id));
+    }
+  });
+
+  it('is empty for a null or unknown id', () => {
+    expect(groupTrail(groups, null)).toEqual([]);
+    expect(groupTrail(groups, 'missing')).toEqual([]);
+  });
+
+  it('stops on cyclic parent links instead of looping', () => {
+    const cyclic = [group('x', 'X', 'y'), group('y', 'Y', 'x')];
+    expect(groupTrail(cyclic, 'x').length).toBeLessThanOrEqual(cyclic.length + 1);
   });
 });
 

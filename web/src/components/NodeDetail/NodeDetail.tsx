@@ -10,7 +10,8 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
-import { groupPath } from '../../lib/nodeTree';
+import { groupTrail } from '../../lib/nodeTree';
+import { GroupCrumbs } from './GroupCrumbs';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { useNodeTabStore } from '../../store';
 import type {
@@ -63,6 +64,9 @@ interface Props {
   /** Inline only: open the move-to-group picker / jump to the full-page detail. */
   onMove?: () => void;
   onOpenDetail?: () => void;
+  /** Open a folder from the eyebrow breadcrumb (ADR-142) — a pane in the split, All nodes on the
+   *  route. Absent ⇒ the breadcrumb stays plain text. */
+  onOpenGroup?: (groupId: string) => void;
   /** Page only: navigate away after a delete. */
   onDeleted?: () => void;
   /** 🚨 **Something about this node changed and the surrounding page shows it too.**
@@ -85,6 +89,7 @@ export function NodeDetail({
   nodes,
   onMove,
   onOpenDetail,
+  onOpenGroup,
   onDeleted,
   onChanged,
 }: Props) {
@@ -257,7 +262,7 @@ export function NodeDetail({
   }
 
   const state = status?.state ?? 'unknown';
-  const path = groupPath(groups, node.group_id ?? null);
+  const trail = groupTrail(groups, node.group_id ?? null);
   const lastSeen = series.timestamps.at(-1);
   // What the tab bar decorates itself from (count pills / warning dots) — the rules themselves live
   // beside the whitelist in tabs.ts.
@@ -293,7 +298,13 @@ export function NodeDetail({
     <div className="nd">
       <div className="nd-head">
         <div className="nd-eyebrow">
-          <BoxIcon width={12} height={12} /> {path.length ? path.join(' / ') : t('ungrouped')}
+          <BoxIcon width={12} height={12} />{' '}
+          {trail.length ? (
+            // Every segment is a link here, the last included: it is the node's folder, not this pane.
+            <GroupCrumbs trail={trail} onOpenGroup={onOpenGroup} linkLast />
+          ) : (
+            t('ungrouped')
+          )}
         </div>
         <div className="nd-namerow">
           <div className="nd-namewrap">

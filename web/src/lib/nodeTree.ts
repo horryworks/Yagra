@@ -513,19 +513,31 @@ export function asGroupType(value: string | undefined): GroupType {
   return GROUP_TYPES.find((g) => g === value) ?? 'generic';
 }
 
-/** The chain of group names from the top-level ancestor down to `groupId` (inclusive), for the
- *  detail-pane breadcrumb eyebrow (e.g. `Tokyo / Edge / Firewall`). Empty for a null/unknown id.
- *  Bounded by the group count so malformed (cyclic) data can't loop forever. */
-export function groupPath(groups: NodeGroup[], groupId: string | null): string[] {
+/** One folder on a path: the id it is opened by, and the name it is drawn with. */
+export interface GroupCrumb {
+  id: string;
+  name: string;
+}
+
+/** The chain of folders from the top-level ancestor down to `groupId` (inclusive), for the
+ *  detail-pane breadcrumbs (e.g. `Tokyo / Edge / Firewall`), each segment carrying its id so it can
+ *  be opened (ADR-142). Empty for a null/unknown id. Bounded by the group count so malformed
+ *  (cyclic) data can't loop forever. */
+export function groupTrail(groups: NodeGroup[], groupId: string | null): GroupCrumb[] {
   if (!groupId) return [];
   const byId = new Map(groups.map((g) => [g.id, g]));
-  const out: string[] = [];
+  const out: GroupCrumb[] = [];
   let cur = byId.get(groupId);
   for (let i = 0; cur && i <= groups.length; i++) {
-    out.unshift(cur.name);
+    out.unshift({ id: cur.id, name: cur.name });
     cur = cur.parent_id ? byId.get(cur.parent_id) : undefined;
   }
   return out;
+}
+
+/** `groupTrail`'s names alone, for the callers that only draw or search the path. */
+export function groupPath(groups: NodeGroup[], groupId: string | null): string[] {
+  return groupTrail(groups, groupId).map((s) => s.name);
 }
 
 /** One folder as a picker offers it.
