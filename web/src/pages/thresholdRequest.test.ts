@@ -97,6 +97,24 @@ describe('thresholdFormFrom + thresholdBody', () => {
     ).toBe('above');
   });
 
+  it('round-trips a row pattern, sends blank as absent, and drops one on a port rule', () => {
+    // ADR-143. Opening a rule scoped to one pool and saving it unchanged must keep the pattern —
+    // losing it would silently widen the rule to every pool.
+    const r = rule({ metric: 'cisco_mem_used_pct', row_match: 'I/O' });
+    const f = thresholdFormFrom(r);
+    expect(f.rowMatch).toBe('I/O');
+    expect(thresholdBody(f).row_match).toBe('I/O');
+    // Blank means every row and goes as absent, never as an empty pattern the server would store.
+    expect(thresholdBody({ ...f, rowMatch: '   ' }).row_match).toBeUndefined();
+    expect(thresholdBody({ ...f, rowMatch: ' MPU Board * ' }).row_match).toBe('MPU Board *');
+    // A pattern typed before the level was switched to a port is not sent into a 400.
+    expect(
+      thresholdBody({ ...f, level: 'interface', scopeIds: [`${r.id}:3`] }).row_match,
+    ).toBeUndefined();
+    // A rule with no pattern opens with an empty box.
+    expect(thresholdFormFrom(rule()).rowMatch).toBe('');
+  });
+
   it('will not submit a rule that names no bound, except liveness', () => {
     // A rule with no bound is stored, listed, and never fires. The server refuses one since
     // ADR-081; this keeps the button from enabling on a body it will 400. Liveness is the one
@@ -233,6 +251,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
       warningAbove: '',
       criticalAbove: '90',
       dwell: '3',
+      rowMatch: '',
     };
     const node = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 

@@ -61,6 +61,8 @@ impl Transition {
             metric: String::new(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         })
     }
 }

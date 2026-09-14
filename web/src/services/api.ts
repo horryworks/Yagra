@@ -625,25 +625,37 @@ export const api = {
       body: bundle,
     }),
 
-  /** Latest reading for one node metric. */
+  /** Latest reading for one node metric.
+   *
+   *  `rows: true` also returns each table row's latest value and name — the memory pools, CPUs or
+   *  sensors a table metric has (ADR-143). */
   getNodeMetric: (
     nodeId: string,
     metric: string,
-    opts?: { agg?: MetricAgg },
+    opts?: { agg?: MetricAgg; rows?: boolean },
   ): Promise<MetricReading> =>
     apiGet('/api/v1/nodes/{node_id}/metrics/{metric}', {
       path: { node_id: nodeId, metric },
-      query: { agg: opts?.agg },
+      query: { agg: opts?.agg, rows: opts?.rows },
     }),
 
   /** Time-series window for one node metric (defaults: last hour, 60s step).
    *
    *  `rate: true` returns the per-second rate of a counter instead of its stored values — the only
-   *  honest way to chart one (ADR-012). The server refuses `rate` together with `agg`. */
+   *  honest way to chart one (ADR-012). The server refuses `rate` together with `agg`. `row` reads
+   *  one table row's series by the key a `rows: true` read returned; it cannot be combined with
+   *  `agg` either (ADR-143). */
   getNodeMetricRange: (
     nodeId: string,
     metric: string,
-    opts?: { from?: number; to?: number; step?: number; agg?: MetricAgg; rate?: boolean },
+    opts?: {
+      from?: number;
+      to?: number;
+      step?: number;
+      agg?: MetricAgg;
+      rate?: boolean;
+      row?: number;
+    },
   ): Promise<MetricRange> =>
     apiGet('/api/v1/nodes/{node_id}/metrics/{metric}/range', {
       path: { node_id: nodeId, metric },
@@ -653,6 +665,7 @@ export const api = {
         step: opts?.step,
         agg: opts?.agg,
         rate: opts?.rate,
+        row: opts?.row,
       },
     }),
 

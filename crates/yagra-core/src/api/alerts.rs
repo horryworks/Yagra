@@ -952,6 +952,8 @@ mod tests {
             metric: "__liveness__".to_string(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         let other = Alert {
             subject: yagra_alert::Subject::Node(NodeId::from(Uuid::from_u128(9))),
@@ -964,6 +966,8 @@ mod tests {
             metric: "__liveness__".to_string(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         let mut acks: HashMap<AckKey, AckView> = HashMap::new();
         acks.insert(
@@ -1009,6 +1013,8 @@ mod tests {
             metric: "live_pollers".to_string(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         let out = decorate_alerts(vec![alert], &HashMap::new());
         let json = serde_json::to_value(&out[0]).unwrap();
@@ -1046,6 +1052,8 @@ mod tests {
             metric: "live_pollers".to_string(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         assert!(decorate_alerts(vec![impostor], &acks)[0].acked.is_none());
     }
@@ -1101,6 +1109,8 @@ mod tests {
             direction: Some(yagra_common::Direction::Above),
             recorded_at: "1970-01-01T00:00:10Z".to_owned(),
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         let clear = AlertHistoryRow {
             id: Uuid::new_v4(),
@@ -1118,6 +1128,8 @@ mod tests {
             direction: None,
             recorded_at: "1970-01-01T00:00:20Z".to_owned(),
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         let unrelated = AlertHistoryRow {
             id: Uuid::new_v4(),
@@ -1135,6 +1147,8 @@ mod tests {
             direction: None,
             recorded_at: "1970-01-01T00:00:05Z".to_owned(),
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         let mut acks: HashMap<AckKey, AckView> = HashMap::new();
         acks.insert(

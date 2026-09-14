@@ -96,6 +96,7 @@ pub async fn execute_meraki(
             l3: None,
             arp: None,
             routing: None,
+            row_names: Vec::new(),
             observational: false,
             poller_id: None,
             trace_context: Default::default(),

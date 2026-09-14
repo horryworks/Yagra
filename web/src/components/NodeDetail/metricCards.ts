@@ -175,9 +175,9 @@ export function resolveCard(
     if (!it || it.status === 'no_data') continue;
     const { read, chart } = viewOf(it);
     // A candidate this surface cannot draw is not a card, and the next candidate down is free to
-    // win. Two cells of the table land here: a per-entity counter has no query at all (it would
-    // have to be differentiated per row and then collapsed, and a folded multi-index table's rows
-    // cannot be named), and a per-interface one belongs to the Interfaces tab, which shows every
+    // win. Two cells of the table land here: a per-entity counter has no node-level query (it would
+    // have to be differentiated per row and then collapsed — one row's rate is reachable with `row`,
+    // ADR-143, but a headline needs the node's), and a per-interface one belongs to the Interfaces tab, which shows every
     // row by name. Falling through rather than returning a drawable-looking card is the point —
     // the alternative is a headline over a permanently empty chart.
     if (chart.kind === 'none' || chart.kind === 'interfaces') continue;

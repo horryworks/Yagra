@@ -109,8 +109,9 @@ pub(crate) enum MetricDimension {
     /// One series per interface, each naming an interface this node has. Read those through the
     /// per-interface series endpoint.
     Interface,
-    /// One series per table row. Row identity is lost when the values are collected, so these rows
-    /// cannot be named — only aggregated node-wide with `agg=max`.
+    /// One series per table row — a memory pool, a CPU, a sensor. Read the node-wide maximum with
+    /// `agg=max`, every row's latest value and name with `rows=true`, and one row's history with
+    /// `row=<key>` on the range read.
     Entity,
 }
 
@@ -337,6 +338,70 @@ pub(crate) struct MetricReading {
     pub node_id: NodeId,
     pub metric: String,
     pub value: f64,
+    /// With `rows=true`, every table row of the metric on this node with its latest value and name,
+    /// ordered by row key. Omitted otherwise, and for a metric with one series per node.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<MetricRowReading>,
+}
+
+/// One row of a vendor table — a memory pool, a CPU, a sensor — and its latest value.
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub(crate) struct MetricRowReading {
+    /// The row key the row's values carry. Pass it as `row` to the range read for this row's
+    /// history; an alert about the row carries the same number.
+    pub row: u32,
+    /// The row's name as the device reports it (`I/O`, `MPU Board 0`). Absent when no name has been
+    /// read for the row — its tables may have none, or the hourly name read has not reached it yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub value: f64,
+}
+
+// ADR-143. One function both edges call — REST's `rows=true` and MCP `query_metrics` — so the two
+// cannot come to disagree about which rows a node has or what they are called. Values come from the
+// TSDB and names from `entity_row_names`; a failed name read degrades to unnamed rows (logged) rather
+// than to no rows, because the values are still true and still what the operator came for.
+/// Every table row of `metric` on `node_id`, with its latest value and name.
+pub(crate) async fn node_metric_rows(
+    st: &ApiState,
+    node_id: Uuid,
+    metric: &str,
+) -> Vec<MetricRowReading> {
+    let values = st
+        .store
+        .series_rows(
+            metric,
+            Some(&[node_id]),
+            crate::store::INSTANT_LOOKBACK_SECS,
+        )
+        .await;
+    let names: std::collections::HashMap<i64, String> = match st.admin.as_ref() {
+        Some(admin) => match admin
+            .repo
+            .row_names_for(node_id, &[metric.to_owned()])
+            .await
+        {
+            Ok(rows) => rows.into_iter().map(|(_, row, name)| (row, name)).collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, metric, "reading row names failed; rows shown unnamed");
+                std::collections::HashMap::new()
+            }
+        },
+        None => std::collections::HashMap::new(),
+    };
+    let mut rows: Vec<MetricRowReading> = values
+        .into_iter()
+        .filter(|((node, _), _)| *node == node_id)
+        .filter_map(|((_, row), value)| {
+            Some(MetricRowReading {
+                row: u32::try_from(row).ok()?,
+                name: names.get(&row).cloned(),
+                value,
+            })
+        })
+        .collect();
+    rows.sort_by_key(|r| r.row);
+    rows
 }
 
 /// A time-series window for one node metric.
@@ -353,6 +418,9 @@ pub(crate) struct MetricRange {
 #[into_params(parameter_in = Query)]
 pub(super) struct MetricQuery {
     agg: Option<String>,
+    /// `true` ⇒ also return every table row's latest value and name in `rows` (a metric collected
+    /// once per table row; see the inventory's `entity` dimension).
+    rows: Option<bool>,
 }
 
 /// Reject an `agg` value we don't support (validate at the edge — security.md).
@@ -365,15 +433,15 @@ fn invalid_agg(other: &str) -> ApiError {
 
 /// Reject `rate` combined with `agg` — there is no node-max-rate to serve.
 ///
-/// A per-entity counter would need its rows differentiated and then collapsed, and the rows of a
-/// folded multi-index table cannot be named in the first place (ADR-046 decision 5). Interface
-/// counters, the case anyone actually wants, are already served per interface and as fleet
-/// throughput. So this is refused at the edge rather than answered with something plausible.
+/// A per-entity counter would need its rows differentiated and then collapsed into one number that
+/// names no row. One row's rate is served with `row` (ADR-143), and interface counters are served
+/// per interface and as fleet throughput. So this is refused at the edge rather than answered with
+/// something plausible.
 fn rate_and_agg_together() -> ApiError {
     ApiError::bad_request(
         "rate_with_agg",
         "`rate` and `agg` cannot be combined; a per-entity counter has no node-level rate — read \
-         its interfaces individually instead",
+         one row's rate with `row` instead",
     )
 }
 
@@ -427,11 +495,25 @@ async fn get_node_metric(
             format!("no reading for metric '{metric}' on node {node_id}"),
         )
     })?;
+    let rows = if q.rows.unwrap_or(false) {
+        node_metric_rows(&st, node_id, &metric).await
+    } else {
+        Vec::new()
+    };
     Ok(Json(MetricReading {
         node_id: node,
         metric,
         value,
+        rows,
     }))
+}
+
+/// Reject `row` combined with `agg` — one row's series has nothing to collapse.
+fn row_and_agg_together() -> ApiError {
+    ApiError::bad_request(
+        "row_with_agg",
+        "`row` and `agg` cannot be combined; `row` already names one series",
+    )
 }
 
 /// Query params for the range endpoints that take a window and nothing else (interface series,
@@ -467,6 +549,9 @@ pub(super) struct NodeRangeQuery {
     /// `true` ⇒ per-second rate of a counter series instead of its stored values. Cannot be
     /// combined with `agg`.
     rate: Option<bool>,
+    /// One table row's series instead of the node's — the `row` key a `rows=true` read returns.
+    /// Cannot be combined with `agg`.
+    row: Option<u32>,
 }
 
 #[utoipa::path(
@@ -478,7 +563,7 @@ pub(super) struct NodeRangeQuery {
     ),
     responses(
         (status = 200, description = "The window's points; empty when the slice has no samples", body = MetricRange),
-        (status = 400, description = "The metric name is not an identifier, `agg` is unsupported, or `rate` and `agg` were combined", body = super::error::ErrorBody),
+        (status = 400, description = "The metric name is not an identifier, `agg` is unsupported, or `agg` was combined with `rate` or `row`", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
@@ -497,7 +582,15 @@ async fn get_node_metric_range(
     // Clamping the step (rather than trusting it) bounds the point count, so a wide window cannot
     // be turned into an unbounded TSDB response by asking for a one-second step.
     let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
-    let key = SeriesKey::node(node, metric.as_str());
+    if q.row.is_some() && q.agg.is_some() {
+        return Err(row_and_agg_together());
+    }
+    // One table row (ADR-143) is the series carrying that row key, spelled the way the store already
+    // spells a per-interface series — the TSDB has one row-key label for both (ADR-011).
+    let key = match q.row {
+        Some(row) => SeriesKey::interface(node, yagra_common::IfIndex(row), metric.as_str()),
+        None => SeriesKey::node(node, metric.as_str()),
+    };
     let rate = q.rate.unwrap_or(false);
     if rate && q.agg.is_some() {
         return Err(rate_and_agg_together());

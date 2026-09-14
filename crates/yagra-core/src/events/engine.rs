@@ -400,6 +400,8 @@ impl EventEngine {
                 // A passive event names its node, never a port: syslog and traps carry an
                 // interface in their *text*, not as a series key we could resolve to an ifIndex.
                 ifindex: None,
+                row: None,
+                row_name: None,
             };
             // Raise in the manager while holding the runtime lock, then mirror into
             // `runtime.active`. Because both sets are mutated together, the sweeper can
@@ -799,6 +801,8 @@ mod tests {
             metric: "event:test".into(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
 
         // First raise fires; a same-severity duplicate is deduped at the manager.

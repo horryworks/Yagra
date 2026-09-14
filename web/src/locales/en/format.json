@@ -42,6 +42,8 @@
   "alertCondition": "{{direction}} {{value}}",
   "alertObservedWas": "was {{value}}",
   "alertOnPort": "port {{ifindex}}",
+  "alertOnRow": "on {{name}}",
+  "alertOnRowKey": "row {{row}}",
   "scalar": {
     "snmp_sys_uptime_ticks": "Uptime",
     "meraki_device_up": "Availability",

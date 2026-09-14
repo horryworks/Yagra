@@ -836,7 +836,11 @@ impl YagraMcp {
                        so resolve them with get_config(kind=profiles), list_node_groups or \
                        list_nodes rather than assuming a UUID. The narrowest level that reaches a \
                        target wins, and rules at that level merge by keeping the more restrictive \
-                       bound of each severity. `metric` is `__liveness__` for the reachability \
+                       bound of each severity. `row_match` (null for most rules) narrows a rule on \
+                       a table metric to the rows whose name matches it, case-insensitive with \
+                       `*` as a wildcard — at the winning level a rule naming a row beats one \
+                       that does not, and each row alerts on its own. \
+                       `metric` is `__liveness__` for the reachability \
                        rule, a sentinel rather than a collected metric; `if_in_util_pct` / \
                        `if_out_util_pct` / `if_in_bps` / `if_out_bps` are derived per port and \
                        exist in no time series. The reply carries `total` (rules matching the \

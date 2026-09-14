@@ -187,7 +187,10 @@
       "dwellOnly": "Breaches",
       "folderGroupHint": "Applies to this group and every group inside it. A rule on a group further in wins over this one.",
       "legacyTagHint": "Legacy scope: matches a tag on the node, or one it inherits from its folder — not the folder tree itself. Kept so existing rules keep working; new rules use a folder group.",
-      "interfaceHint": "This rule covers one port of one node. Port rules are created from a node’s Interfaces tab, where the port is already in view; here you can change its bounds or delete it."
+      "interfaceHint": "This rule covers one port of one node. Port rules are created from a node’s Interfaces tab, where the port is already in view; here you can change its bounds or delete it.",
+      "rowMatch": "Row name (optional)",
+      "rowMatchPlaceholder": "every row (e.g. I/O, MPU Board *)",
+      "rowMatchHint": "For a metric reported once per memory pool, CPU or sensor: apply this rule only to rows with this name. * matches anything, and case is ignored. Leave it empty for every row. At the same scope, a rule with a row name wins over one without for the rows it names — so it can loosen or tighten one pool beside the rule for all of them."
     },
     "deleteModal": {
       "title": "Delete threshold rule",

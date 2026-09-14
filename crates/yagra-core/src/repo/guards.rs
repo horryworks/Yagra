@@ -99,6 +99,8 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ),
     ("interfaces.rs", &["interfaces"]),
     ("profiles.rs", &["profiles"]),
+    // What each vendor-table row is called (ADR-143).
+    ("row_names.rs", &["entity_row_names"]),
     ("settings.rs", &["app_settings"]),
     ("snapshots.rs", &["node_state_snapshots"]),
     // sqlx's own bookkeeping table; no migration declares it, so `table_vocabulary` adds it by hand.

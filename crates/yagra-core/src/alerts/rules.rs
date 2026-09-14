@@ -100,6 +100,11 @@ pub struct AlertConfig {
     /// Empty means "nothing is per-interface", which is the pre-ADR-076 behaviour — the safe
     /// direction for a config that failed to load.
     pub(super) per_interface: BTreeSet<String>,
+    /// Metric names at least one rule of which is scoped to a row name (ADR-143).
+    ///
+    /// Only for these does a sample's row name change which rule resolves, so only for these does
+    /// the engine look the name up — every other table metric resolves exactly as it did.
+    pub(super) row_rule_metrics: BTreeSet<String>,
 }
 
 /// One metric's rules, split by how narrowly each can be addressed (ADR-076 increment 6).
@@ -248,6 +253,11 @@ impl AlertConfig {
     /// add them with [`Self::with_topology`]).
     #[must_use]
     pub fn new(thresholds: Vec<StoredThreshold>, node_meta: HashMap<NodeId, NodeMeta>) -> Self {
+        let row_rule_metrics: BTreeSet<String> = thresholds
+            .iter()
+            .filter(|t| t.row_match.is_some())
+            .map(|t| t.rule.metric.clone())
+            .collect();
         let mut by_metric: HashMap<String, MetricRules> = HashMap::new();
         for (seq, t) in thresholds.into_iter().enumerate() {
             // `seq` is the position in the caller's list, which is the order every resolve must
@@ -266,6 +276,7 @@ impl AlertConfig {
             maintenance: BTreeSet::new(),
             pool_groups: HashMap::new(),
             per_interface: BTreeSet::new(),
+            row_rule_metrics,
         }
     }
 
@@ -387,16 +398,29 @@ impl AlertConfig {
         }
     }
 
+    /// Whether any rule on `metric` is scoped to a row name (ADR-143) — the one case where a
+    /// sample's row name has to be looked up before the sample can be resolved.
+    #[must_use]
+    pub fn has_row_rules(&self, metric: &str) -> bool {
+        self.row_rule_metrics.contains(metric)
+    }
+
     /// Resolve the effective threshold for one (node, metric), honouring scope inheritance.
     ///
     /// `ifindex` names the port a per-interface sample came from, so an [`ScopeLevel::Interface`]
     /// rule can be matched against it (ADR-076). `None` means "not a per-port question" and makes
     /// every interface-scoped rule non-applicable, which is the correct answer for a node-wide
     /// metric: a port rule must not leak onto the node's own check.
+    ///
+    /// `row_name` is the name of the vendor-table row a sample came from (ADR-143). A rule carrying a
+    /// `row_match` applies only when it matches, and at the winning scope it displaces the rules
+    /// without one — see [`prefer_row_rules`]. `None` (a scalar, a port, a row not named yet) is
+    /// reached only by rules without a pattern.
     pub(super) fn resolve(
         &self,
         node: NodeId,
         ifindex: Option<IfIndex>,
+        row_name: Option<&str>,
         metric: &str,
     ) -> Option<EffectiveThreshold> {
         let rules = self.by_metric.get(metric)?;
@@ -407,7 +431,7 @@ impl AlertConfig {
             .candidates(node, ifindex)
             .into_iter()
             .map(|e| &e.t)
-            .filter(|t| threshold_applies(t, node, ifindex, meta))
+            .filter(|t| threshold_applies(t, node, ifindex, row_name, meta))
             .collect();
         // A folder-group rule can match the node's own group *and* any group above it, so several
         // rules can arrive at the same `ScopeLevel::FolderGroup`. `resolve_effective` only knows
@@ -415,16 +439,42 @@ impl AlertConfig {
         // a deliberately looser rule on an inner group. ADR-013's first rule is most-specific-wins,
         // and the chain is ordered, so the nearest group's rules are the only ones that survive.
         let nearest = nearest_folder_depth(&matched, meta);
-        let scoped: Vec<ScopedThreshold> = matched
+        let matched: Vec<&StoredThreshold> = matched
             .into_iter()
             .filter(|t| t.level != ScopeLevel::FolderGroup || folder_depth(t, meta) == nearest)
+            .collect();
+        let scoped: Vec<ScopedThreshold> = prefer_row_rules(matched)
+            .into_iter()
             .map(|t| ScopedThreshold::new(t.level, t.rule.clone()))
             .collect();
         resolve_effective(&scoped)
     }
 }
 
-/// Whether one stored rule applies to `(node, ifindex)`.
+/// At the winning scope level, keep only the rules with a row pattern when there are any (ADR-143).
+///
+/// `resolve_effective` merges every rule at the winning level by "most restrictive wins". Without
+/// this, a profile rule `cisco_mem_used_pct above 80` and a profile rule `above 90 for I/O` merge to
+/// 80 on the I/O pool — the rule written to loosen one pool could never loosen it. **Scope still
+/// comes first**: a node rule without a pattern beats a profile rule with one, because whoever wrote
+/// a rule for this node meant this node. So this only narrows within the level that already won.
+pub(crate) fn prefer_row_rules(matched: Vec<&StoredThreshold>) -> Vec<&StoredThreshold> {
+    let Some(winning) = matched.iter().map(|t| t.level).max() else {
+        return matched;
+    };
+    let row_specific = matched
+        .iter()
+        .any(|t| t.level == winning && t.row_match.is_some());
+    if !row_specific {
+        return matched;
+    }
+    matched
+        .into_iter()
+        .filter(|t| t.level != winning || t.row_match.is_some())
+        .collect()
+}
+
+/// Whether one stored rule applies to `(node, ifindex)`, and to the table row named `row_name`.
 ///
 /// Free rather than a method, and `pub(crate)` rather than private, because two places have to
 /// answer this identically: the engine, resolving a sample, and `GET
@@ -438,8 +488,17 @@ pub(crate) fn threshold_applies(
     t: &StoredThreshold,
     node: NodeId,
     ifindex: Option<IfIndex>,
+    row_name: Option<&str>,
     meta: Option<&NodeMeta>,
 ) -> bool {
+    // A rule scoped to row names reaches only a row whose name matches (ADR-143). A sample with no
+    // name — a port, a scalar, or a row whose name has not been read yet — is reached only by rules
+    // without a pattern.
+    if let Some(pattern) = t.row_match.as_deref() {
+        if !row_name.is_some_and(|name| yagra_common::row_names::row_name_matches(pattern, name)) {
+            return false;
+        }
+    }
     match t.level {
         // The fleet default (ADR-075). It matches a node with no profile and no tags too —
         // which is the whole reason it exists, since a profile-scoped default cannot reach
@@ -522,7 +581,8 @@ pub(crate) fn matching_rules(
 ) -> Vec<(StoredThreshold, bool)> {
     let matched: Vec<&StoredThreshold> = rules
         .iter()
-        .filter(|t| threshold_applies(t, node, ifindex, meta))
+        // No row name: this answers for a port, and a rule scoped to row names never reaches one.
+        .filter(|t| threshold_applies(t, node, ifindex, None, meta))
         .collect();
     // The winning level per metric, and the nearest folder depth among that metric's own matches.
     let mut winner: HashMap<&str, ScopeLevel> = HashMap::new();
@@ -613,6 +673,10 @@ pub(super) struct CheckSpec<'a> {
     /// The port this check is about, for a per-interface metric (ADR-076). Descriptive only —
     /// identity already lives in `check`, which [`interface_check_id`] built from the same port.
     pub(super) ifindex: Option<IfIndex>,
+    /// The vendor-table row this check is about (ADR-143), and its name if one has been read.
+    /// Descriptive only, like `ifindex` — [`row_check_id`] put the row into `check`.
+    pub(super) row: Option<u32>,
+    pub(super) row_name: Option<&'a str>,
 }
 
 /// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a
@@ -693,6 +757,17 @@ pub(crate) fn interface_check_id(node: NodeId, ifindex: IfIndex, metric: &str) -
     subject_check_id(&Subject::Node(node), &format!("{metric}@{ifindex}"))
 }
 
+/// Deterministic check id for one **row of a vendor table** — a memory pool, a CPU, a sensor
+/// (ADR-143 decision 4).
+///
+/// The same spelling as a port's, `metric@row`, and deliberately: a metric is collected either once
+/// per interface or once per table row, never both (`yagra_common::item_publishes_per_interface`
+/// decides which), so the two can share the form without two checks ever sharing an id. One
+/// function rather than a second `format!`, so the form cannot drift between the two.
+pub(crate) fn row_check_id(node: NodeId, row: u32, metric: &str) -> CheckId {
+    interface_check_id(node, IfIndex(row), metric)
+}
+
 /// Severity ordering over [`NodeState`] for rolling several states up to one headline.
 /// Worse states rank higher; ties never matter (they map to the same display).
 pub(super) fn severity_rank(state: NodeState) -> u8 {
@@ -721,7 +796,10 @@ mod tests {
         let unrelated = Uuid::from_u128(0xf003);
         let meta = in_folder(node, vec![own, parent]);
 
-        let warn = |c: AlertConfig| c.resolve(node, None, "cpu_util").and_then(|e| e.warning());
+        let warn = |c: AlertConfig| {
+            c.resolve(node, None, None, "cpu_util")
+                .and_then(|e| e.warning())
+        };
         // The node's own group.
         assert_eq!(
             warn(cfg(vec![folder_rule(own, 10.0)], meta.clone())),
@@ -738,7 +816,7 @@ mod tests {
         let orphan = cfg(vec![folder_rule(own, 10.0)], HashMap::new());
         assert_eq!(
             orphan
-                .resolve(node, None, "cpu_util")
+                .resolve(node, None, None, "cpu_util")
                 .and_then(|e| e.warning()),
             None
         );
@@ -759,7 +837,8 @@ mod tests {
             meta.clone(),
         );
         assert_eq!(
-            c.resolve(node, None, "cpu_util").and_then(|e| e.warning()),
+            c.resolve(node, None, None, "cpu_util")
+                .and_then(|e| e.warning()),
             Some(90.0),
             "the node's own group must beat its parent"
         );
@@ -771,7 +850,8 @@ mod tests {
             meta.clone(),
         );
         assert_eq!(
-            c.resolve(node, None, "cpu_util").and_then(|e| e.warning()),
+            c.resolve(node, None, None, "cpu_util")
+                .and_then(|e| e.warning()),
             Some(60.0),
             "same depth ⇒ strictest wins"
         );
@@ -794,7 +874,8 @@ mod tests {
             meta,
         );
         assert_eq!(
-            c.resolve(node, None, "cpu_util").and_then(|e| e.warning()),
+            c.resolve(node, None, None, "cpu_util")
+                .and_then(|e| e.warning()),
             Some(99.0)
         );
     }
@@ -1158,14 +1239,14 @@ mod tests {
         for who in [ios_router, catalyst] {
             assert_eq!(
                 config
-                    .resolve(who, None, "cpu_util")
+                    .resolve(who, None, None, "cpu_util")
                     .and_then(|e| e.critical()),
                 Some(90.0),
                 "a named profile must resolve"
             );
         }
         assert!(
-            config.resolve(juniper, None, "cpu_util").is_none(),
+            config.resolve(juniper, None, None, "cpu_util").is_none(),
             "a profile the rule does not name must resolve to nothing"
         );
     }
@@ -1205,7 +1286,7 @@ mod tests {
         let config = AlertConfig::new(vec![broad, pair], node_meta);
         assert_eq!(
             config
-                .resolve(node, None, "cpu_util")
+                .resolve(node, None, None, "cpu_util")
                 .and_then(|e| e.critical()),
             Some(95.0),
             "the pair-naming rule sits at the inner folder, so it overrides rather than merging"
@@ -1225,11 +1306,11 @@ mod tests {
         let config = AlertConfig::new(vec![rule], HashMap::new());
         assert_eq!(
             config
-                .resolve(node, None, "cpu_util")
+                .resolve(node, None, None, "cpu_util")
                 .and_then(|e| e.critical()),
             Some(42.0)
         );
-        assert!(config.resolve(other, None, "cpu_util").is_none());
+        assert!(config.resolve(other, None, None, "cpu_util").is_none());
     }
 
     #[test]
@@ -1404,7 +1485,7 @@ mod tests {
                 for who in [node, other] {
                     for port in ports {
                         let want = resolve_reference(subset, who, port, config.node_meta.get(&who));
-                        let got = config.resolve(who, port, "cpu_util");
+                        let got = config.resolve(who, port, None, "cpu_util");
                         assert_eq!(
                             got,
                             want,
@@ -1520,7 +1601,128 @@ mod tests {
         assert!(m.by_node.is_empty());
         assert!(m.by_port.is_empty());
         // And they still resolve to nothing, which is what they did before.
-        assert!(config.resolve(node, None, "cpu_util").is_none());
-        assert!(config.resolve(node, Some(IfIndex(7)), "cpu_util").is_none());
+        assert!(config.resolve(node, None, None, "cpu_util").is_none());
+        assert!(config
+            .resolve(node, Some(IfIndex(7)), None, "cpu_util")
+            .is_none());
+    }
+}
+
+/// ADR-143: rules that pick table rows by name.
+#[cfg(test)]
+mod row_rule_tests {
+    use super::super::testkit::*;
+    use super::*;
+    use yagra_common::{ThresholdBounds, ThresholdRule};
+
+    const M: &str = "cisco_mem_used_pct";
+
+    fn rule(
+        level: ScopeLevel,
+        ids: Vec<String>,
+        warning: f64,
+        row: Option<&str>,
+    ) -> StoredThreshold {
+        StoredThreshold::new(
+            Uuid::new_v4(),
+            level,
+            ids,
+            ThresholdRule::new(M, ThresholdBounds::above(Some(warning), None), 1),
+        )
+        .with_row_match(row.map(str::to_owned))
+    }
+
+    fn warning(c: &AlertConfig, node: NodeId, row: Option<&str>) -> Option<f64> {
+        c.resolve(node, None, row, M).and_then(|e| e.warning())
+    }
+
+    /// The accepting side and the refusals together, because a matcher that answered one way for
+    /// everything would pass either half alone.
+    #[test]
+    fn a_row_pattern_reaches_only_the_rows_it_names_and_never_a_port() {
+        let node = NodeId::new();
+        let t = rule(ScopeLevel::Global, Vec::new(), 90.0, Some("MPU Board *"));
+        assert!(threshold_applies(&t, node, None, Some("MPU Board 3"), None));
+        assert!(threshold_applies(&t, node, None, Some("mpu board 0"), None));
+        assert!(!threshold_applies(
+            &t,
+            node,
+            None,
+            Some("LPU Board 3"),
+            None
+        ));
+        assert!(
+            !threshold_applies(&t, node, None, None, None),
+            "an unnamed row"
+        );
+        assert!(
+            !threshold_applies(&t, node, Some(IfIndex(3)), None, None),
+            "a port never has a row name"
+        );
+        let plain = rule(ScopeLevel::Global, Vec::new(), 80.0, None);
+        assert!(threshold_applies(
+            &plain,
+            node,
+            None,
+            Some("anything"),
+            None
+        ));
+        assert!(threshold_applies(&plain, node, None, None, None));
+    }
+
+    #[test]
+    fn at_the_same_scope_the_rule_naming_the_row_wins_for_that_row_alone() {
+        let node = NodeId::new();
+        let c = AlertConfig::new(
+            vec![
+                rule(ScopeLevel::Global, Vec::new(), 80.0, None),
+                rule(ScopeLevel::Global, Vec::new(), 90.0, Some("I/O")),
+            ],
+            meta_for(node),
+        );
+        assert!(c.has_row_rules(M));
+        assert_eq!(
+            warning(&c, node, Some("I/O")),
+            Some(90.0),
+            "not merged down to 80"
+        );
+        assert_eq!(warning(&c, node, Some("Processor")), Some(80.0));
+        assert_eq!(warning(&c, node, None), Some(80.0));
+    }
+
+    /// 🚨 Scope still comes first: whoever wrote a rule for this node meant this node, so a node rule
+    /// without a pattern beats a fleet rule with one.
+    #[test]
+    fn a_narrower_scope_without_a_pattern_beats_a_broader_one_with_one() {
+        let node = NodeId::new();
+        let c = AlertConfig::new(
+            vec![
+                rule(ScopeLevel::Node, vec![node.to_string()], 70.0, None),
+                rule(ScopeLevel::Global, Vec::new(), 90.0, Some("I/O")),
+            ],
+            meta_for(node),
+        );
+        assert_eq!(warning(&c, node, Some("I/O")), Some(70.0));
+    }
+
+    #[test]
+    fn a_metric_with_no_row_rule_does_not_ask_for_names() {
+        let node = NodeId::new();
+        let c = AlertConfig::new(
+            vec![rule(ScopeLevel::Global, Vec::new(), 80.0, None)],
+            meta_for(node),
+        );
+        assert!(!c.has_row_rules(M));
+    }
+
+    /// The row check id is the port's spelling, by construction — one `format!`, not two.
+    #[test]
+    fn a_row_check_id_is_spelled_like_a_port_check_id() {
+        let node = NodeId::new();
+        assert_eq!(
+            row_check_id(node, 2, M),
+            interface_check_id(node, IfIndex(2), M)
+        );
+        assert_ne!(row_check_id(node, 2, M), check_id(node, M));
     }
 }

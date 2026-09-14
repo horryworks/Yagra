@@ -26,6 +26,7 @@ mod notify_template;
 pub mod profile;
 mod rbac;
 pub mod routing;
+pub mod row_names;
 pub mod severity;
 pub mod snmp_auth;
 /// Reading a module's own source text — see the module doc (ADR-091/099).
@@ -95,7 +96,8 @@ pub use neighbor::{
 pub use node::Node;
 pub use node_kind::{NodeKind, NodeRows};
 pub use notify_template::{
-    minimal_facts, sample_facts, AlertFacts, NotifyEvent, TemplateVariable, TEMPLATE_VARIABLES,
+    minimal_facts, sample_facts, sample_row_facts, AlertFacts, NotifyEvent, TemplateVariable,
+    TEMPLATE_VARIABLES,
 };
 pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope, TokenSurface, UserKind};

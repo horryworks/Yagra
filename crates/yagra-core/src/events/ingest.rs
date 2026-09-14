@@ -295,6 +295,8 @@ mod tests {
             metric: "event:test".into(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 

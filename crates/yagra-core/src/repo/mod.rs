@@ -63,6 +63,7 @@ mod nodes;
 mod pool_takeover;
 mod pools;
 mod profiles;
+mod row_names;
 mod seed;
 mod settings;
 mod snapshots;
@@ -98,6 +99,7 @@ pub use nodes::{NodeBindingUpdate, NodeWithNotes, ReclassifyInput, ReclassifyWri
 pub use pool_takeover::{PoolTakeoverCounts, PoolTakeoverSummary};
 pub use pools::{PoolCarry, PoolRow};
 pub use profiles::ProfileSummary;
+pub use row_names::RowNameRow;
 
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].
 fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {

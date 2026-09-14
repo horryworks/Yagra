@@ -4683,6 +4683,17 @@ export interface components {
             /** @description What the alert is about: a node's UUID, or `pool:<name>` for a poller-pool alert. */
             node: string;
             root_cause?: null | components["schemas"]["NodeId"];
+            /**
+             * Format: int32
+             * @description The row of a vendor table this alert is about — a memory pool, a CPU, a sensor — as the row
+             *     key its samples carry; `None` for an alert about the whole node or about a port.
+             */
+            row?: number | null;
+            /**
+             * @description What that row was called when the alert fired (`I/O`, `MPU Board 0`); `None` when the row has
+             *     no name yet or the alert is not about a row.
+             */
+            row_name?: string | null;
             /** @description Severity (derived from the committed state). */
             severity: components["schemas"]["Severity"];
             /** @description The committed state that triggered the alert. */
@@ -4761,6 +4772,15 @@ export interface components {
              */
             recorded_at: string;
             resolved: boolean;
+            /**
+             * Format: int32
+             * @description The row of a vendor table this was about — a memory pool, a CPU, a sensor — as the row key
+             *     its samples carry (ADR-143). `None` for an alert about the node as a whole or about a port,
+             *     and for every row recorded before a table row could alert on its own.
+             */
+            row?: number | null;
+            /** @description What that row was called when the alert fired, e.g. `I/O`. `None` when it had no name. */
+            row_name?: string | null;
             severity: components["schemas"]["Severity"];
             state: components["schemas"]["NodeState"];
             /** @description What the transition was about. */
@@ -8258,6 +8278,27 @@ export interface components {
         MetricReading: {
             metric: string;
             node_id: components["schemas"]["NodeId"];
+            /**
+             * @description With `rows=true`, every table row of the metric on this node with its latest value and name,
+             *     ordered by row key. Omitted otherwise, and for a metric with one series per node.
+             */
+            rows?: components["schemas"]["MetricRowReading"][];
+            /** Format: double */
+            value: number;
+        };
+        /** @description One row of a vendor table — a memory pool, a CPU, a sensor — and its latest value. */
+        MetricRowReading: {
+            /**
+             * @description The row's name as the device reports it (`I/O`, `MPU Board 0`). Absent when no name has been
+             *     read for the row — its tables may have none, or the hourly name read has not reached it yet.
+             */
+            name?: string | null;
+            /**
+             * Format: int32
+             * @description The row key the row's values carry. Pass it as `row` to the range read for this row's
+             *     history; an alert about the row carries the same number.
+             */
+            row: number;
             /** Format: double */
             value: number;
         };
@@ -10803,6 +10844,13 @@ export interface components {
             /** Format: uuid */
             id: string;
             /**
+             * @description Which rows of a vendor table this rule applies to, by the row's name — `I/O`, or
+             *     `MPU Board *`. Case-insensitive, and `*` matches any run of characters. Absent means every
+             *     row, and every metric that has no rows. At the same scope, a rule with a pattern wins over
+             *     one without for the rows it matches.
+             */
+            row_match?: string | null;
+            /**
              * @description Every profile, folder group, node or port this rule applies to — `scope_level` says which
              *     of those they are. Empty for a `global` rule, which applies to every node.
              */
@@ -11036,6 +11084,14 @@ export interface components {
             dwell_samples?: number | null;
             metric: string;
             /**
+             * @description Apply the rule only to the rows of a table metric whose name matches — a memory pool (`I/O`),
+             *     a board (`MPU Board *`). Case-insensitive; `*` matches any run of characters. Omit it for
+             *     every row. At the same scope, a rule with a pattern wins for the rows it matches, so a looser
+             *     bound for one pool can sit beside the rule for all of them. Not allowed on an `interface`
+             *     rule, which already names one port.
+             */
+            row_match?: string | null;
+            /**
              * @description The rule’s target when it has exactly one. Superseded by `scope_ids`, which wins if both
              *     are sent; still accepted so that a client written against the earlier shape keeps working.
              */
@@ -11095,6 +11151,11 @@ export interface components {
             /** Format: uuid */
             id: string;
             metric: string;
+            /**
+             * @description Which table rows the rule reaches, by name (`I/O`, `MPU Board *`). Absent means every row,
+             *     which is also what a bundle written before row patterns existed means.
+             */
+            row_match?: string | null;
             /**
              * @description The rule’s first target. Kept beside `scope_ids` so that a bundle written by a newer
              *     deployment still imports into an older one.
@@ -21953,6 +22014,11 @@ export interface operations {
         parameters: {
             query?: {
                 agg?: string;
+                /**
+                 * @description `true` ⇒ also return every table row's latest value and name in `rows` (a metric collected
+                 *     once per table row; see the inventory's `entity` dimension).
+                 */
+                rows?: boolean;
             };
             header?: never;
             path: {
@@ -22025,6 +22091,11 @@ export interface operations {
                  *     combined with `agg`.
                  */
                 rate?: boolean;
+                /**
+                 * @description One table row's series instead of the node's — the `row` key a `rows=true` read returns.
+                 *     Cannot be combined with `agg`.
+                 */
+                row?: number;
             };
             header?: never;
             path: {
@@ -22046,7 +22117,7 @@ export interface operations {
                     "application/json": components["schemas"]["MetricRange"];
                 };
             };
-            /** @description The metric name is not an identifier, `agg` is unsupported, or `rate` and `agg` were combined */
+            /** @description The metric name is not an identifier, `agg` is unsupported, or `agg` was combined with `rate` or `row` */
             400: {
                 headers: {
                     [name: string]: unknown;

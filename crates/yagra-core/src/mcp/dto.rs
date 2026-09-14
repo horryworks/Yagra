@@ -139,6 +139,14 @@ pub struct AlertDto {
     /// alongside the port's name, alias and speed. Two alerts on one node with different values
     /// here are about different ports and are separate incidents, each with its own `check_id`.
     pub ifindex: Option<u32>,
+    /// The row of a vendor table this is about — a memory pool, a CPU, a sensor — for a metric
+    /// collected once per table row, as the row key its samples carry. `null` for an alert about the
+    /// node as a whole or about a port. Two alerts on one node with different values here are
+    /// separate incidents, each with its own `check_id`.
+    pub row: Option<u32>,
+    /// That row's name when the alert fired (`I/O`, `MPU Board 0`). `null` when it has none — then
+    /// only `row` identifies it.
+    pub row_name: Option<String>,
     /// Whether the underlying check is currently flapping.
     pub flapping: bool,
     pub breach: Option<BreachDto>,
@@ -163,6 +171,8 @@ impl AlertDto {
             fired_at: unix_ms_to_rfc3339(alert.at_unix_ms),
             root_cause: alert.root_cause.map(|r| r.0),
             ifindex: alert.ifindex.map(|i| i.0),
+            row: alert.row,
+            row_name: alert.row_name.clone(),
             flapping: alert.flapping,
             breach: alert.breach.as_ref().map(|b| BreachDto {
                 value: b.value,
@@ -207,6 +217,12 @@ pub struct AlertHistoryDto {
     /// Also `null` on every row recorded before Yagra could alert per port, so an old row is not
     /// evidence that the alert was node-wide.
     pub ifindex: Option<u32>,
+    /// The row of a vendor table this was about — a memory pool, a CPU, a sensor — as its row key.
+    /// `null` for an alert about the node as a whole or about a port, and on every row recorded
+    /// before a table row could alert on its own.
+    pub row: Option<u32>,
+    /// That row's name when the alert fired (`I/O`, `MPU Board 0`); `null` when it had none.
+    pub row_name: Option<String>,
     /// Keyset cursor for the next page, first half — pass the **oldest** returned row's value as
     /// `before`. This is insertion time, which is **not** `at`: `at` is when the alert fired, and
     /// paging on it returns the wrong rows.
@@ -235,6 +251,8 @@ impl AlertHistoryDto {
             threshold_value: row.threshold_value,
             direction: row.direction.map(|d| d.as_str().to_owned()),
             ifindex: row.ifindex,
+            row: row.row,
+            row_name: row.row_name.clone(),
             // Without these the tool advertised `before` while returning nothing a caller could
             // build it from — and its description pointed at `at`, which is a different clock.
             cursor_at: row.recorded_at.clone(),
@@ -439,6 +457,21 @@ pub struct MetricSeriesDto {
     /// collapsed number that reads like a plain one is a wrong answer wearing the right shape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// For a metric collected once per table row, read in `latest` mode: every row's latest value
+    /// and name. Omitted otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<MetricRowDto>,
+}
+
+/// One row of a vendor table — a memory pool, a CPU, a sensor — and its latest value (ADR-143).
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricRowDto {
+    /// The row key. Pass it as `row` to read this row's own series; an alert about the row carries
+    /// the same number.
+    pub row: u32,
+    /// The row's name as the device reports it (`I/O`, `MPU Board 0`); `null` when none was read.
+    pub name: Option<String>,
+    pub value: f64,
 }
 
 /// Fleet health summary: inventory size and rolled-up state counts + which optional stores are on.
@@ -1004,6 +1037,8 @@ mod tests {
             root_cause: None,
             // Populated, not `None`: the canary only scans the fields an instance actually fills.
             ifindex: Some(7),
+            row: None,
+            row_name: None,
             flapping: false,
             breach: Some(BreachDto {
                 value: 900.0,
@@ -1028,6 +1063,11 @@ mod tests {
             latest: None,
             points: vec![MetricPointDto { t: 0, v: 42.0 }],
             note: Some("collapsed the node's 15 table-row series to their maximum".to_owned()),
+            rows: vec![MetricRowDto {
+                row: 2,
+                name: Some("I/O".to_owned()),
+                value: 83.9,
+            }],
         };
         assert_no_forbidden_keys(&serde_json::to_value(&series).unwrap(), "MetricSeries");
 
@@ -1192,6 +1232,8 @@ mod tests {
                 direction: None,
                 recorded_at: "1970-01-01T00:00:00Z".to_owned(),
                 ifindex: None,
+                row: None,
+                row_name: None,
             },
             Some("edge-router-1".to_owned()),
         );

@@ -513,6 +513,11 @@ pub(crate) struct MetaRecord {
     /// The routing adjacency observed on this poll (routing walks only, ADR-043 Increment 4). Same
     /// tier again. `None` means nothing was observed and nothing is written — never "no peers".
     routing: Option<yagra_common::RoutingSnapshot>,
+    /// The vendor-table row names read on this poll (ADR-143), as `(metric, row, name)` and cleaned
+    /// again here — the poller already did, but this is the edge a value from an older or
+    /// misbehaving poller crosses. Empty means nothing was read and nothing is written, never "these
+    /// rows have no names".
+    row_names: Vec<(String, i64, String)>,
 }
 
 /// One alert-lifecycle transition for the async PG writer's history batch. Never shed — the matcher
@@ -673,7 +678,21 @@ fn persist_metrics_and_meta(
     // And the routing adjacency, for the fifth time: a snapshot dropped here is re-observed on the
     // next collection, and the stored one simply does not advance in the meantime.
     let routing = result.routing.clone();
-    if !interfaces.is_empty()
+    // Row names ride the same shed-able tier (ADR-143): they are re-read hourly, so a dropped record
+    // costs an hour's delay on a name the engine already holds from the result itself.
+    let row_names: Vec<(String, i64, String)> = result
+        .row_names
+        .iter()
+        .filter_map(|n| {
+            Some((
+                n.metric.clone(),
+                i64::from(n.row),
+                yagra_common::row_names::sanitize_row_name(&n.name)?,
+            ))
+        })
+        .collect();
+    if !row_names.is_empty()
+        || !interfaces.is_empty()
         || identity.is_some()
         || os_version.is_some()
         || os_version_without_patch.is_some()
@@ -698,6 +717,7 @@ fn persist_metrics_and_meta(
             l3,
             arp,
             routing,
+            row_names,
         };
         match meta_tx.try_send(rec) {
             Ok(()) => {}
@@ -767,6 +787,9 @@ async fn ingest_result(
     // Alerts: evaluate synchronously in-memory (never shed — the loss-free matcher core), record each
     // lifecycle transition (batched via `history_tx`, inline fallback), and hand delivery to the
     // notification task (bounded queue) so a slow vendor endpoint can't stall ingest.
+    // The row names first (ADR-143): a rule scoped to a row name resolves against them, so the names
+    // this result carries must be in the engine before its own samples are judged.
+    alerts.record_row_names(result.node_id, &result.row_names);
     for action in alerts.observe(&result) {
         // Which row an action produces is one rule for the whole crate (ADR-092); what is this
         // path's own is the channel — a roll-up persists nothing, and the eventual real recovery
@@ -1061,7 +1084,11 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
     let mut arp_rows: Vec<(Uuid, yagra_common::ArpSummary)> = Vec::new();
     let mut routing_rows: Vec<(Uuid, yagra_common::RoutingSnapshot)> = Vec::new();
+    let mut row_name_rows: Vec<repo::RowNameRow> = Vec::new();
     for rec in buf.drain(..) {
+        for (metric, row, name) in rec.row_names {
+            row_name_rows.push((rec.node_id, metric, row, name));
+        }
         for iface in rec.interfaces {
             iface_rows.push((rec.node_id, iface));
         }
@@ -1180,6 +1207,13 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !routing_rows.is_empty() {
         metrics::counter!("yagra_routing_persisted_total").increment(routing_rows.len() as u64);
     }
+    // Row names are current state, coalesced across the batch like interfaces are: the upsert keeps
+    // the last name per (node, metric, row) and rewrites a stored row only when the name changed.
+    if !row_name_rows.is_empty() {
+        if let Err(e) = repo.upsert_row_names_batch(&row_name_rows).await {
+            tracing::warn!(error = %e, "batch row-name upsert failed");
+        }
+    }
     metrics::counter!("yagra_result_meta_persisted_total").increment(count);
 }
 
@@ -1244,6 +1278,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            row_names: Vec::new(),
             observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
@@ -1362,6 +1397,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            row_names: Vec::new(),
             observational: true,
             poller_id: None,
             trace_context: Default::default(),
@@ -1554,6 +1590,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            row_names: Vec::new(),
             observational: false,
             poller_id: None,
             trace_context: Default::default(),

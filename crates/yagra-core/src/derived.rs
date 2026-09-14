@@ -167,6 +167,16 @@ pub struct DerivedMetric {
     pub name: &'static str,
     /// How it is computed.
     pub formula: Formula,
+    /// Whether each table row is a reading of its own (ADR-143) — a memory pool, a filesystem, a
+    /// PSE group — rather than the node's one value computed from scalars.
+    ///
+    /// 🚨 **Declared, not inferred from the row keys.** A scalar's series carries no row label and
+    /// reads back as row `0` ([`crate::store::MetricStore::series_rows`]), which is also a real row
+    /// key on some agents, so the keys cannot tell a Net-SNMP host's memory from a one-row table. A
+    /// per-row metric alerts per row (`metric@row`); a scalar one keeps the node-wide check it always
+    /// had, so no existing check id moves. `every_per_row_flag_agrees_with_how_its_input_is_collected`
+    /// pins this to the collection catalogue.
+    pub per_row: bool,
 }
 
 /// Percentage of a Cisco Enhanced Memory Pool in use.
@@ -203,6 +213,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             used: "cisco_cemp_mem_used",
             free: "cisco_cemp_mem_free",
         },
+        per_row: true,
     },
     DerivedMetric {
         name: METRIC_CISCO_CPU_MEM_USED_PCT,
@@ -210,6 +221,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             used: "cisco_cpu_mem_used",
             free: "cisco_cpu_mem_free",
         },
+        per_row: true,
     },
     DerivedMetric {
         name: METRIC_CISCO_MEM_USED_PCT,
@@ -217,6 +229,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             used: "cisco_mem_used",
             free: "cisco_mem_free",
         },
+        per_row: true,
     },
     DerivedMetric {
         name: METRIC_HR_STORAGE_USED_PCT,
@@ -224,6 +237,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             part: "hr_storage_used",
             whole: "hr_storage_size",
         },
+        per_row: true,
     },
     DerivedMetric {
         name: METRIC_HUAWEI_MEM_USED_PCT,
@@ -231,6 +245,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             total: "huawei_mem_total",
             free: "huawei_mem_free",
         },
+        per_row: true,
     },
     DerivedMetric {
         name: METRIC_POE_POWER_USED_PCT,
@@ -238,12 +253,14 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             part: "poe_power_consumed_w",
             whole: "poe_power_capacity_w",
         },
+        per_row: true,
     },
     DerivedMetric {
         name: METRIC_UCD_CPU_USED_PCT,
         formula: Formula::Complement {
             idle: "ucd_cpu_idle_pct",
         },
+        per_row: false,
     },
     DerivedMetric {
         name: METRIC_UCD_LOAD_PER_CORE,
@@ -251,6 +268,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             value: "ucd_load_1min",
             per: "hr_processor_load",
         },
+        per_row: false,
     },
     DerivedMetric {
         name: METRIC_UCD_MEM_USED_PCT,
@@ -258,6 +276,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             total: "ucd_mem_total_kb",
             free: "ucd_mem_avail_kb",
         },
+        per_row: false,
     },
     DerivedMetric {
         name: METRIC_UCD_SWAP_USED_PCT,
@@ -265,6 +284,7 @@ pub const DERIVED_NODE_METRICS: [DerivedMetric; 10] = [
             total: "ucd_swap_total_kb",
             free: "ucd_swap_avail_kb",
         },
+        per_row: false,
     },
 ];
 
@@ -458,17 +478,17 @@ pub(crate) async fn run_derived_metric_watch(
             let row_count = readings.len() as f64;
             metrics::gauge!("yagra_derived_metric_rows", "metric" => derived.name).set(row_count);
 
-            // Rows are grouped per node and observed together: they share one node-level check, so
-            // the engine folds them to the worst under the rule's own direction (ADR-081). Feeding
-            // them one at a time would push N observations into one dwell window — the ADR-076 bug,
-            // on the rows ADR-076 did not split.
-            let mut by_node: BTreeMap<NodeId, Vec<f64>> = BTreeMap::new();
+            // Rows are grouped per node and handed over together. What the engine does with them
+            // depends on `per_row` (ADR-143): a table metric gets one check per row, so each row has
+            // a dwell window of its own; a scalar one still folds to the node's one check. Feeding
+            // rows one call at a time into one check would push N observations into one dwell
+            // window — the ADR-076 bug, which the per-row check exists not to have.
+            let mut by_node: BTreeMap<NodeId, Vec<(i64, f64)>> = BTreeMap::new();
             for r in readings {
-                by_node.entry(r.node).or_default().push(r.value);
+                by_node.entry(r.node).or_default().push((r.row, r.value));
             }
-            for (node, values) in by_node {
-                if let Some(a) = alerts.observe_derived_metric(node, derived.name, &values, now_ms)
-                {
+            for (node, rows) in by_node {
+                if let Some(a) = alerts.observe_derived_metric(node, derived.name, &rows, now_ms) {
                     actions.extend(a);
                 }
             }
@@ -486,6 +506,33 @@ pub(crate) async fn run_derived_metric_watch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 🚨 `per_row` is a declaration, and the catalogue is what it declares about: a metric is per
+    /// row exactly when its first input is walked as a table. Getting it wrong one way puts a
+    /// Net-SNMP host's memory on a check called `ucd_mem_used_pct@0`; the other way folds a Cisco
+    /// switch's three pools back into the one check this ADR exists to split (ADR-143).
+    #[test]
+    fn every_per_row_flag_agrees_with_how_its_input_is_collected() {
+        let items: Vec<yagra_common::CollectionItem> = yagra_common::builtin_templates()
+            .into_iter()
+            .flat_map(|t| t.items)
+            .chain(yagra_common::builtin_catalog())
+            .collect();
+        for d in DERIVED_NODE_METRICS {
+            let [first, _] = d.formula.inputs();
+            let kind = items
+                .iter()
+                .find(|i| i.metric_name == first)
+                .map(|i| i.kind)
+                .unwrap_or_else(|| panic!("{}: input {first} is not in the catalogue", d.name));
+            assert_eq!(
+                d.per_row,
+                kind == yagra_common::CollectionKind::Table,
+                "{}: per_row must be true exactly when {first} is walked as a table",
+                d.name
+            );
+        }
+    }
 
     fn rows(entries: &[(u128, i64, f64)]) -> BTreeMap<(Uuid, i64), f64> {
         entries

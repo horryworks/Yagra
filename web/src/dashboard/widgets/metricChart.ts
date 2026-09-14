@@ -45,9 +45,9 @@ export function readSelection(settings: WidgetSettings | undefined): MetricChart
  *
  * Interface-dimensioned metrics are excluded because they are charted per row elsewhere (the node's
  * Interfaces tab, and the interface Top-N widgets) and collapsing eight ports into one line answers
- * a different question, worse. Per-entity counters are excluded because there is no query for them
- * at all — the rate would have to be taken per row and then collapsed, and the rows of a folded
- * multi-index table cannot be named in the first place.
+ * a different question, worse. Per-entity counters are excluded because there is no node-level query
+ * for them — the rate would have to be taken per row and then collapsed. One row's rate can be read
+ * with `row` (ADR-143), but a widget drawing "the node" has no single row to ask for.
  *
  * A metric with `status: 'no_data'` **is** offered. It was configured and has produced nothing, and
  * the honest rendering of that is an empty chart the operator can leave on the board while they fix

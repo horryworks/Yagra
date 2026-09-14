@@ -49,6 +49,16 @@ pub struct StoredThreshold {
     pub critical: Option<f64>,
     #[serde(flatten)]
     pub rule: ThresholdRule,
+    /// Which rows of a vendor table this rule applies to, by the row's name — `I/O`, or
+    /// `MPU Board *`. Case-insensitive, and `*` matches any run of characters. Absent means every
+    /// row, and every metric that has no rows. At the same scope, a rule with a pattern wins over
+    /// one without for the rows it matches.
+    //
+    // (ADR-143.) Not on `ThresholdRule`: that type is the four bounds and a dwell, shared with the
+    // engine's resolution and with every literal in the workspace, and which rows a rule reaches is
+    // a matter of scope — which is what this type already carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_match: Option<String>,
 }
 
 impl StoredThreshold {
@@ -57,6 +67,8 @@ impl StoredThreshold {
     /// The only way to make one, so `direction`/`warning`/`critical` cannot be set to something the
     /// bounds do not say. A struct literal could, and a row describing a rule the engine does not
     /// run is precisely the failure ADR-081 is about.
+    ///
+    /// The row starts with no row-name pattern; [`Self::with_row_match`] sets one.
     #[must_use]
     pub fn new(id: Uuid, level: ScopeLevel, scope_ids: Vec<String>, rule: ThresholdRule) -> Self {
         let bounds = rule.bounds();
@@ -68,7 +80,15 @@ impl StoredThreshold {
             warning: bounds.warning(),
             critical: bounds.critical(),
             rule,
+            row_match: None,
         }
+    }
+
+    /// The same row, reaching only the table rows whose name matches `row_match` (ADR-143).
+    #[must_use]
+    pub fn with_row_match(mut self, row_match: Option<String>) -> Self {
+        self.row_match = row_match;
+        self
     }
 }
 
@@ -94,6 +114,8 @@ pub struct ThresholdWrite<'a> {
     /// bounds face down, and nothing downstream could tell which half to believe.
     pub bounds: ThresholdBounds,
     pub dwell_samples: i32,
+    /// The row-name pattern, already validated by the edge (ADR-143). `None` for every row.
+    pub row_match: Option<&'a str>,
 }
 
 impl ThresholdWrite<'_> {
@@ -203,7 +225,7 @@ impl ThresholdStore {
     /// Columns every read below selects, in the order [`Self::row_to_threshold`] expects.
     const COLUMNS: &'static str = "id, scope_level, scope_id, scope_ids, metric, direction, \
          warning, critical, warning_below, critical_below, warning_above, critical_above, \
-         dwell_samples";
+         dwell_samples, row_match";
 
     /// **Every** threshold rule — the alert engine snapshots these to evaluate against.
     ///
@@ -401,7 +423,8 @@ impl ThresholdStore {
                 bounds,
                 u32::try_from(dwell).unwrap_or(1),
             ),
-        ))
+        )
+        .with_row_match(row.try_get("row_match")?))
     }
 
     /// Create a threshold rule; returns its id.
@@ -411,8 +434,9 @@ impl ThresholdStore {
         sqlx::query(
             "INSERT INTO thresholds \
              (id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
-              warning_below, critical_below, warning_above, critical_above, dwell_samples) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+              warning_below, critical_below, warning_above, critical_above, dwell_samples, \
+              row_match) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(id)
         .bind(w.scope_level)
@@ -427,6 +451,7 @@ impl ThresholdStore {
         .bind(w.bounds.warning_above)
         .bind(w.bounds.critical_above)
         .bind(w.dwell_samples.max(1))
+        .bind(w.row_match)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -449,7 +474,7 @@ impl ThresholdStore {
             "UPDATE thresholds SET scope_level = $2, scope_id = $3, scope_ids = $4, metric = $5, \
              direction = $6, warning = $7, critical = $8, warning_below = $9, \
              critical_below = $10, warning_above = $11, critical_above = $12, \
-             dwell_samples = $13 WHERE id = $1",
+             dwell_samples = $13, row_match = $14 WHERE id = $1",
         )
         .bind(id)
         .bind(w.scope_level)
@@ -464,6 +489,7 @@ impl ThresholdStore {
         .bind(w.bounds.warning_above)
         .bind(w.bounds.critical_above)
         .bind(w.dwell_samples.max(1))
+        .bind(w.row_match)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -488,23 +514,29 @@ impl ThresholdStore {
     /// refuses a repeated target, but it does not sort, so two rules naming the same two profiles
     /// in opposite orders are not caught here. That is the narrow miss this accepts — both rules
     /// still resolve, and the pair is far rarer than the accidental second rule this is for.
+    ///
+    /// The row-name pattern is part of "the same scope" (ADR-143): a rule for every pool and a rule
+    /// for the `I/O` pool at one profile are two rules, and the second is the whole point.
     pub async fn find_duplicate(
         &self,
         scope_level: &str,
         scope_ids: &[String],
         metric: &str,
+        row_match: Option<&str>,
         exclude: Option<Uuid>,
     ) -> anyhow::Result<Option<Uuid>> {
         let row = sqlx::query(
             "SELECT id FROM thresholds \
              WHERE scope_level = $1 AND scope_ids = $2 AND metric = $3 \
                AND ($4::uuid IS NULL OR id <> $4) \
+               AND row_match IS NOT DISTINCT FROM $5 \
              LIMIT 1",
         )
         .bind(scope_level)
         .bind(scope_ids)
         .bind(metric)
         .bind(exclude)
+        .bind(row_match)
         .fetch_optional(&self.pool)
         .await?;
         row.map(|r| r.try_get("id")).transpose().map_err(Into::into)
@@ -730,9 +762,10 @@ mod tests {
         // API's capped page, and the per-interface candidate set (ADR-076 決定 11).
         let src = production_source();
         assert_eq!(src.matches("Self::COLUMNS").count(), 3);
-        // 13 since ADR-081 added the four bounds. Deliberately a written-out number: this is the
-        // one assertion whose whole job is to make someone confirm the column set changed on
-        // purpose, so deriving it from `COLUMNS` would make it assert nothing.
-        assert_eq!(ThresholdStore::COLUMNS.matches(", ").count() + 1, 13);
+        // 13 since ADR-081 added the four bounds, 14 since ADR-143 added `row_match`. Deliberately
+        // a written-out number: this is the one assertion whose whole job is to make someone
+        // confirm the column set changed on purpose, so deriving it from `COLUMNS` would make it
+        // assert nothing.
+        assert_eq!(ThresholdStore::COLUMNS.matches(", ").count() + 1, 14);
     }
 }

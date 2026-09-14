@@ -288,6 +288,10 @@ pub struct ThresholdRow {
     #[serde(default)]
     pub critical_above: Option<f64>,
     pub dwell_samples: i32,
+    /// Which table rows the rule reaches, by name (`I/O`, `MPU Board *`). Absent means every row,
+    /// which is also what a bundle written before row patterns existed means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_match: Option<String>,
 }
 
 /// A URL / HTTP endpoint monitor's configuration (1:1 with its node).

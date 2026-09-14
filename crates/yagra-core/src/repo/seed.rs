@@ -383,8 +383,8 @@ impl NodeRepo {
                 sqlx::query(
                     "INSERT INTO thresholds \
                         (id, scope_level, scope_id, scope_ids, metric, direction, warning, \
-                         critical, dwell_samples) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING",
+                         critical, dwell_samples, row_match) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING",
                 )
                 .bind(SeedRange::DefaultThresholds.id(offset))
                 .bind(level)
@@ -397,6 +397,7 @@ impl NodeRepo {
                 .bind(warning)
                 .bind(critical)
                 .bind(dwell)
+                .bind(super::defaults::default_row_match(offset))
                 .execute(&self.pool)
                 .await?;
             }

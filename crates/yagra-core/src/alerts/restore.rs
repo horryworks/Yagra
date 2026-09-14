@@ -94,6 +94,36 @@ pub(crate) async fn restore(mgr: &AlertManager, history: &AlertHistoryStore) {
     );
 }
 
+/// Load what each vendor-table row is called into the engine (ADR-143 decision 3).
+///
+/// Awaited in `run_live` beside [`restore`], and for the same reason it must finish before results
+/// arrive: a rule scoped to a row name matches only a named row, and the poller re-reads names once
+/// an hour, so an engine that started without them would judge every row by the unnamed rule — and
+/// could page — for up to that hour. A failed read is logged and skipped rather than fatal: the
+/// names come back with the next walk, and until then only the rules without a pattern apply,
+/// which is how every rule behaved before row names existed.
+pub(crate) async fn restore_row_names(mgr: &AlertManager, repo: &crate::repo::NodeRepo) {
+    match repo.list_row_names().await {
+        Ok(rows) => {
+            let taken =
+                mgr.seed_row_names(rows.into_iter().filter_map(|(node, metric, row, name)| {
+                    Some((
+                        yagra_common::NodeId::from(node),
+                        metric,
+                        u32::try_from(row).ok()?,
+                        name,
+                    ))
+                }));
+            tracing::info!(names = taken, "restored vendor-table row names (ADR-143)");
+        }
+        Err(e) => tracing::warn!(
+            error = %e,
+            "reading row names failed; rules scoped to a row name match nothing until the next \
+             hourly row-name walk"
+        ),
+    }
+}
+
 /// One read, with the cap warning and the degraded-read decision in one place so the two sides
 /// cannot answer them differently.
 fn read(
@@ -167,6 +197,10 @@ fn alert_from_row(row: AlertHistoryRow) -> Option<Alert> {
         metric,
         breach,
         ifindex: row.ifindex.map(IfIndex),
+        // Read back so the engine can put a restored row alert back on its own row's check, and so
+        // the index of rows holding a state is rebuilt with it (ADR-143 decision 5).
+        row: row.row,
+        row_name: row.row_name,
     })
 }
 
@@ -193,6 +227,8 @@ mod tests {
             threshold_value: None,
             direction: None,
             ifindex: None,
+            row: None,
+            row_name: None,
             recorded_at: "2026-08-24T00:00:00Z".to_owned(),
         }
     }

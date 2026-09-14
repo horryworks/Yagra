@@ -18,6 +18,7 @@ import { splitInterfaceScopeId } from '../../lib/interfaceScope';
 import {
   isThresholdReady,
   scopeAcceptsMany,
+  scopeAcceptsRowMatch,
   scopeIdKind,
   thresholdBody,
   thresholdFormFrom,
@@ -320,6 +321,21 @@ export function ThresholdModal({
           />
         )}
       </div>
+      {/* ADR-143: which rows of a table metric the rule reaches — one memory pool, one board. Not
+          offered for a port rule, which already names exactly one thing and which the server refuses
+          a pattern on; the form sends none there even if one was typed before the level changed. */}
+      {scopeAcceptsRowMatch(form.level) && !noBounds && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('thresholds.addModal.rowMatch')}</label>
+          <TextInput
+            className="mono"
+            placeholder={t('thresholds.addModal.rowMatchPlaceholder')}
+            value={form.rowMatch}
+            onChange={(e) => set('rowMatch', e.target.value)}
+          />
+          <span className="modal-hint">{t('thresholds.addModal.rowMatchHint')}</span>
+        </div>
+      )}
       {/* ADR-081: there is no direction selector. The rule faces whichever way the operator filled
           in, and filling both rows alerts outside a band — a dark optical link *and* an overdriven
           one, from one rule. A selector beside the numbers was a second statement of the same fact,

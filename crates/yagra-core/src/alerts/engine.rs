@@ -9,14 +9,14 @@
 //! 🚨 This module names **no** delivery type. An alert leaves here as a [`super::NotifyAction`]
 //! and nothing more — the module doc on [`super`] says why that boundary is load-bearing.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use tokio::sync::broadcast;
 use uuid::Uuid;
 use yagra_alert::CheckState;
 use yagra_alert::{Alert, Breach, Subject};
-use yagra_bus::{CheckOutcome, PollResult, Sample};
+use yagra_bus::{CheckOutcome, PollResult, RowName, Sample};
 use yagra_common::{
     CheckId, Direction, EffectiveThreshold, IfIndex, MetricKind, NodeId, NodeState, Severity,
 };
@@ -39,6 +39,25 @@ const EVENT_BUFFER: usize = 1024;
 /// overflows this gets a `resync` hint and re-seeds from REST, so the bound is a soft backstop.
 const NODE_EVENT_BUFFER: usize = 4096;
 
+/// Which check one threshold sample is observed on.
+///
+/// Three shapes, one per dimension a metric can be collected in, and a metric is only ever one of
+/// them: the node as a whole, one port (ADR-076), or one row of a vendor table (ADR-143). An enum
+/// rather than an `Option` for the port and another for the row, because "a port and a row at once"
+/// is not a state any sample is in, and two options would let a caller spell it.
+#[derive(Debug, Clone, Copy)]
+enum CheckOn<'a> {
+    /// The node's one check for the metric.
+    Node,
+    /// One port's check.
+    Port(IfIndex),
+    /// One table row's check, with the row's name when one has been read.
+    Row(u32, Option<&'a str>),
+}
+
+/// What each vendor-table row is called, per node: node → metric → row key → name (ADR-143).
+type RowNamesByNode = HashMap<NodeId, HashMap<String, HashMap<u32, String>>>;
+
 /// In-memory alert engine: per-check state, active alerts, an SSE broadcast, the committed
 /// per-node liveness map (inventory roll-up + suppression down-set), and the
 /// threshold/metadata/topology config snapshot.
@@ -58,6 +77,23 @@ pub struct AlertManager {
     /// the whole fleet every 15s. Kept separate from `tx` so the two event schemas don't mix.
     node_tx: broadcast::Sender<StreamFrame>,
     config: RwLock<AlertConfig>,
+    /// What each vendor-table row is called: node → metric → row key → name (ADR-143).
+    ///
+    /// Filled from poll results ([`Self::record_row_names`]) and, before those start, from PostgreSQL
+    /// ([`Self::seed_row_names`]). Read when a rule on the metric is scoped to a row name, and to put
+    /// the name on an alert when it fires.
+    row_names: RwLock<RowNamesByNode>,
+    /// The table rows whose check holds a state: node → metric → rows (ADR-143 decision 5).
+    ///
+    /// 🚨 **A healthy row with no state is not observed at all**, so this index decides whether a
+    /// healthy sample is worth a check id. A row missing from it while its check holds a state would
+    /// never see its own recovery — which is why [`Self::restore`] fills it from the restored alerts.
+    /// An entry whose state has since gone is harmless: the row is observed once more and holds a
+    /// fresh `Ok` state.
+    row_states: Mutex<HashMap<NodeId, HashMap<String, HashSet<u32>>>>,
+    /// Node-wide threshold checks restored from before a table row alerted on its own (ADR-143
+    /// decision 6). The first per-row observation of the same metric closes the matching one here.
+    legacy_node_checks: Mutex<HashSet<CheckId>>,
 }
 
 /// One open alert a store can still be asked about, and the series that would answer.
@@ -93,12 +129,54 @@ impl AlertManager {
             tx,
             node_tx,
             config: RwLock::new(AlertConfig::default()),
+            row_names: RwLock::new(HashMap::new()),
+            row_states: Mutex::new(HashMap::new()),
+            legacy_node_checks: Mutex::new(HashSet::new()),
         }
     }
 
     /// Replace the threshold/metadata snapshot (called by the periodic refresh task).
     pub fn set_config(&self, config: AlertConfig) {
         *self.config.write().expect("config rwlock poisoned") = config;
+    }
+
+    /// Remember what one node's vendor-table rows are called, from the poll result that read them
+    /// (ADR-143). Called before that result's own samples are observed, so a rule scoped to a row
+    /// name can match on the very poll that learned the name.
+    pub fn record_row_names(&self, node: NodeId, names: &[RowName]) {
+        if names.is_empty() {
+            return;
+        }
+        let mut map = self.row_names.write().expect("row names rwlock poisoned");
+        let per_node = map.entry(node).or_default();
+        for n in names {
+            per_node
+                .entry(n.metric.clone())
+                .or_default()
+                .insert(n.row, n.name.clone());
+        }
+    }
+
+    /// Load the stored row names before results start arriving (ADR-143 decision 3). Returns how
+    /// many it took. Never overwrites a name a poll has already delivered.
+    pub fn seed_row_names(
+        &self,
+        rows: impl IntoIterator<Item = (NodeId, String, u32, String)>,
+    ) -> usize {
+        let mut map = self.row_names.write().expect("row names rwlock poisoned");
+        let mut taken = 0usize;
+        for (node, metric, row, name) in rows {
+            map.entry(node)
+                .or_default()
+                .entry(metric)
+                .or_default()
+                .entry(row)
+                .or_insert_with(|| {
+                    taken += 1;
+                    name
+                });
+        }
+        taken
     }
 
     /// Seed the engine with the alerts that were open when the previous process stopped
@@ -205,16 +283,48 @@ impl AlertManager {
     /// it — this runs before the ingest starts, but a restore that could deadlock against a poll
     /// result would be a trap laid for whoever moves the call.
     fn seed_states(&self, alerts: &[Alert]) {
-        let mut states = self.states.lock().expect("states mutex poisoned");
+        {
+            let mut states = self.states.lock().expect("states mutex poisoned");
+            for a in alerts {
+                states.entry(a.check).or_insert_with(|| {
+                    CheckState::restored(
+                        a.state,
+                        DEFAULT_LIVENESS_DWELL,
+                        FLAP_WINDOW_MS,
+                        FLAP_THRESHOLD,
+                    )
+                });
+            }
+        }
+        // ADR-143. A restored row alert's check holds a state now, so its row goes into the index —
+        // without it a healthy sample of that row would be skipped and the alert would never
+        // resolve. A restored node-wide threshold alert may be about a metric whose rows alert on
+        // their own since this version, so it is remembered for the first per-row observation to
+        // close. The locks are taken one after the other, never nested.
+        {
+            let mut rows = self.row_states.lock().expect("row states mutex poisoned");
+            for a in alerts {
+                if let (Some(node), Some(row)) = (a.node(), a.row) {
+                    rows.entry(node)
+                        .or_default()
+                        .entry(a.metric.clone())
+                        .or_default()
+                        .insert(row);
+                }
+            }
+        }
+        let mut legacy = self
+            .legacy_node_checks
+            .lock()
+            .expect("legacy checks mutex poisoned");
         for a in alerts {
-            states.entry(a.check).or_insert_with(|| {
-                CheckState::restored(
-                    a.state,
-                    DEFAULT_LIVENESS_DWELL,
-                    FLAP_WINDOW_MS,
-                    FLAP_THRESHOLD,
-                )
-            });
+            if a.node().is_some()
+                && a.row.is_none()
+                && a.ifindex.is_none()
+                && Self::is_threshold_alert(a)
+            {
+                legacy.insert(a.check);
+            }
         }
     }
 
@@ -436,7 +546,15 @@ impl AlertManager {
         // gets one check per port (ADR-076). Resolution is still per metric — a threshold rule
         // scopes to a node, not to a port, at this increment — so the memo stays one entry per
         // distinct name and the port is applied when the id is built, below.
-        let mut resolved: Vec<(ResolveKey<'_>, Option<EffectiveThreshold>)> = Vec::new();
+        let mut resolved: Vec<(ResolveKey<'_>, Option<&str>, Option<EffectiveThreshold>)> =
+            Vec::new();
+        // Each sample's row name where it changes which rule resolves (ADR-143), kept by position so
+        // the second pass — which runs after the config lock is dropped — rebuilds the same memo key.
+        let mut sample_names: Vec<Option<&str>> = Vec::with_capacity(result.samples.len());
+        // Held for the whole call. Nothing below takes this lock for writing, and `record_row_names`
+        // runs before `observe` on the same task, so it cannot be waiting on it.
+        let names = self.row_names.read().expect("row names rwlock poisoned");
+        let node_names = names.get(&node);
         // The metric names in this result that the catalogue calls per-interface. Captured while
         // the config lock is held so the second pass can rebuild the same memo key without
         // re-acquiring it (`process_check` takes the lock itself, and `std::sync::RwLock` offers no
@@ -452,7 +570,7 @@ impl AlertManager {
         let in_maintenance = {
             let config = self.config.read().expect("config rwlock poisoned");
             liveness_dwell = config
-                .resolve(node, None, LIVENESS)
+                .resolve(node, None, None, LIVENESS)
                 .map(|eff| eff.dwell_samples);
             for sample in &result.samples {
                 if config.is_per_interface(&sample.metric)
@@ -466,9 +584,11 @@ impl AlertManager {
                 // every port. A node-wide metric keys on `None` and collapses to one entry, as
                 // before — the repeats a table walk produces are still resolved once.
                 let key = resolve_key(&sample.metric, sample.ifindex, &per_if_metrics);
-                if !resolved.iter().any(|(k, _)| *k == key) {
-                    let eff = config.resolve(node, key.1, &sample.metric);
-                    resolved.push((key, eff));
+                let name = Self::resolving_row_name(&config, node_names, sample, key.1);
+                sample_names.push(name);
+                if !resolved.iter().any(|(k, n, _)| *k == key && *n == name) {
+                    let eff = config.resolve(node, key.1, name, &sample.metric);
+                    resolved.push((key, name, eff));
                 }
             }
             config.maintenance.contains(&node)
@@ -498,6 +618,8 @@ impl AlertManager {
                 alerting: liveness_dwell.is_some(),
                 eval: None,
                 ifindex: None,
+                row: None,
+                row_name: None,
             },
         ));
 
@@ -519,27 +641,42 @@ impl AlertManager {
         // ⚠️ The memo above is still keyed per (metric, port) and is read, not rebuilt: folding
         // changes how many times a resolved threshold is *observed*, never how it resolves.
         let mut folded: Vec<(&str, &Sample, &EffectiveThreshold)> = Vec::new();
-        for sample in &result.samples {
+        // ⚠️ ADR-143 decision 4 takes the table rows back out of that fold: a sample that carries a
+        // row key on a metric that is not per-interface is a memory pool, a CPU or a sensor, and gets
+        // a check of its own. They are gathered here and observed together below, where the index of
+        // rows holding a state decides which of them are worth observing at all (decision 5).
+        let mut rows: Vec<(&Sample, &EffectiveThreshold, u32, Option<&str>)> = Vec::new();
+        for (position, sample) in result.samples.iter().enumerate() {
             let key = resolve_key(&sample.metric, sample.ifindex, &per_if_metrics);
+            let name = sample_names.get(position).copied().flatten();
             let Some(eff) = resolved
                 .iter()
-                .find(|(k, _)| *k == key)
-                .and_then(|(_, eff)| eff.as_ref())
+                .find(|(k, n, _)| *k == key && *n == name)
+                .and_then(|(_, _, eff)| eff.as_ref())
             else {
                 continue;
             };
-            match key.1 {
+            match (key.1, sample.ifindex) {
                 // One port, one check, one observation (ADR-076).
-                Some(idx) => actions.extend(self.observe_threshold_sample(
+                (Some(idx), _) => actions.extend(self.observe_threshold_sample(
                     node,
                     result.at_unix_ms,
                     in_maintenance,
                     sample,
                     eff,
-                    Some(idx),
+                    CheckOn::Port(idx),
                 )),
+                // One table row, one check (ADR-143). The name goes on the alert whether or not a
+                // rule needed it to resolve, so it is looked up here rather than taken from `name`.
+                (None, Some(row)) => {
+                    let display = node_names
+                        .and_then(|m| m.get(sample.metric.as_str()))
+                        .and_then(|m| m.get(&row.0))
+                        .map(String::as_str);
+                    rows.push((sample, eff, row.0, display));
+                }
                 // Node-wide: keep the worst sample **in this rule's own direction**, observe below.
-                None => match folded.iter_mut().find(|(m, _, _)| *m == sample.metric) {
+                (None, None) => match folded.iter_mut().find(|(m, _, _)| *m == sample.metric) {
                     Some(slot) => {
                         if eff.is_worse(sample.value, slot.1.value) {
                             slot.1 = sample;
@@ -556,8 +693,11 @@ impl AlertManager {
                 in_maintenance,
                 sample,
                 eff,
-                None,
+                CheckOn::Node,
             ));
+        }
+        if !rows.is_empty() {
+            actions.extend(self.observe_rows(node, result.at_unix_ms, in_maintenance, rows));
         }
 
         // Push an incremental node-state event only when the rolled-up display state actually moved
@@ -594,11 +734,23 @@ impl AlertManager {
         in_maintenance: bool,
         sample: &Sample,
         eff: &EffectiveThreshold,
-        ifindex: Option<IfIndex>,
+        on: CheckOn<'_>,
     ) -> Vec<NotifyAction> {
-        let check = match ifindex {
-            Some(idx) => interface_check_id(node, idx, &sample.metric),
-            None => check_id(node, &sample.metric),
+        let (check, ifindex, row, row_name) = match on {
+            CheckOn::Port(idx) => (
+                interface_check_id(node, idx, &sample.metric),
+                Some(idx),
+                None,
+                None,
+            ),
+            CheckOn::Row(r, name) => (row_check_id(node, r, &sample.metric), None, Some(r), name),
+            CheckOn::Node => {
+                let id = check_id(node, &sample.metric);
+                // Observed as a node-wide check, so it is not a leftover from before table rows
+                // alerted on their own (ADR-143 decision 6).
+                self.forget_legacy(id);
+                (id, None, None, None)
+            }
         };
         let raw = if in_maintenance {
             NodeState::Maintenance
@@ -645,8 +797,132 @@ impl AlertManager {
                 alerting: true,
                 eval: Some(eval),
                 ifindex,
+                row,
+                row_name,
             },
         )
+    }
+
+    /// The row name a sample resolves under (ADR-143): only a table row — a row key on a metric that
+    /// is not per-interface — and only when some rule on its metric is scoped to a row name. Every
+    /// other sample resolves exactly as it did, with no lookup.
+    fn resolving_row_name<'n>(
+        config: &AlertConfig,
+        node_names: Option<&'n HashMap<String, HashMap<u32, String>>>,
+        sample: &Sample,
+        port: Option<IfIndex>,
+    ) -> Option<&'n str> {
+        if port.is_some() || !config.has_row_rules(&sample.metric) {
+            return None;
+        }
+        let row = sample.ifindex?;
+        node_names?
+            .get(sample.metric.as_str())?
+            .get(&row.0)
+            .map(String::as_str)
+    }
+
+    /// Observe one result's table rows, each on its own check (ADR-143 decisions 4–6).
+    ///
+    /// 🚨 **A healthy row that holds no state is skipped**, and that is what keeps this affordable: a
+    /// Huawei stack reports 306 entity rows per metric, nearly all of them zero, and a state per row
+    /// per metric per node is tens of millions at fleet scale. Skipping is exact rather than an
+    /// approximation — a fresh state is `Ok`, and observing `Ok` on it commits nothing — so the only
+    /// thing that has to be right is the index of rows that do hold one.
+    fn observe_rows(
+        &self,
+        node: NodeId,
+        at_unix_ms: i64,
+        in_maintenance: bool,
+        rows: Vec<(&Sample, &EffectiveThreshold, u32, Option<&str>)>,
+    ) -> Vec<NotifyAction> {
+        let mut actions = Vec::new();
+        // Decision 6: the node-wide alert a metric had before its rows alerted on their own is closed
+        // by the first per-row observation of that metric. Asked once per metric.
+        let mut metrics_seen: Vec<&str> = Vec::new();
+        for (sample, ..) in &rows {
+            if !metrics_seen.contains(&sample.metric.as_str()) {
+                metrics_seen.push(sample.metric.as_str());
+                actions.extend(self.retire_legacy_node_check(node, &sample.metric));
+            }
+        }
+        // Decision 5: which rows already hold a state. One lock, released before any observation.
+        let held: Vec<bool> = {
+            let states = self.row_states.lock().expect("row states mutex poisoned");
+            let node_rows = states.get(&node);
+            rows.iter()
+                .map(|(sample, _, row, _)| {
+                    node_rows
+                        .and_then(|m| m.get(sample.metric.as_str()))
+                        .is_some_and(|set| set.contains(row))
+                })
+                .collect()
+        };
+        let mut newly_held: Vec<(String, u32)> = Vec::new();
+        for ((sample, eff, row, name), held) in rows.into_iter().zip(held) {
+            // A counter is never evaluated (ADR-012) and maintenance breaches nothing, so neither is
+            // a reason to create a state — only to keep feeding one that exists.
+            let breaching = !in_maintenance
+                && sample.kind != MetricKind::Counter
+                && eff.evaluate(sample.value) != NodeState::Ok;
+            if !breaching && !held {
+                continue;
+            }
+            actions.extend(self.observe_threshold_sample(
+                node,
+                at_unix_ms,
+                in_maintenance,
+                sample,
+                eff,
+                CheckOn::Row(row, name),
+            ));
+            if !held {
+                newly_held.push((sample.metric.clone(), row));
+            }
+        }
+        if !newly_held.is_empty() {
+            let mut states = self.row_states.lock().expect("row states mutex poisoned");
+            let node_rows = states.entry(node).or_default();
+            for (metric, row) in newly_held {
+                node_rows.entry(metric).or_default().insert(row);
+            }
+        }
+        actions
+    }
+
+    /// Close the node-wide alert `metric` had on `node` before its table rows alerted on their own,
+    /// if one was restored (ADR-143 decision 6).
+    ///
+    /// The close is an ordinary resolve, so an external incident opened on the old check id is
+    /// closed too rather than left open forever. A row that is still breaching then fires on its own
+    /// check. Costs one lock and nothing else once no restored node-wide alert is left.
+    fn retire_legacy_node_check(&self, node: NodeId, metric: &str) -> Vec<NotifyAction> {
+        let legacy = {
+            let mut set = self
+                .legacy_node_checks
+                .lock()
+                .expect("legacy checks mutex poisoned");
+            if set.is_empty() {
+                return Vec::new();
+            }
+            let id = check_id(node, metric);
+            if !set.remove(&id) {
+                return Vec::new();
+            }
+            id
+        };
+        self.resolve_orphans(vec![legacy])
+    }
+
+    /// A node-wide check was observed as one, so it is not a leftover waiting to be retired.
+    fn forget_legacy(&self, check: CheckId) {
+        let mut set = self
+            .legacy_node_checks
+            .lock()
+            .expect("legacy checks mutex poisoned");
+        if !set.is_empty() {
+            set.remove(&check);
+        }
     }
 
     fn process_check(
@@ -664,6 +940,8 @@ impl AlertManager {
             alerting,
             eval,
             ifindex,
+            row,
+            row_name,
         } = spec;
         let (transition, observed) = {
             let mut states = self.states.lock().expect("states mutex poisoned");
@@ -791,6 +1069,10 @@ impl AlertManager {
                 // carries it — but it is the only way History, the API and a notification can name
                 // the port, since the check id is a one-way hash (ADR-076).
                 alert.ifindex = ifindex;
+                // Which table row, and what it was called when this fired (ADR-143). Descriptive, like
+                // the port: the check id already names the row.
+                alert.row = row;
+                alert.row_name = row_name.map(str::to_owned);
                 if let Some(ev) = eval {
                     let threshold = match alert.severity {
                         Severity::Critical => ev.critical,
@@ -1048,8 +1330,10 @@ impl AlertManager {
                 threshold: Some(1.0),
                 direction: Direction::Below,
             }),
-            // A pool is not a port.
+            // A pool is not a port, nor a table row.
             ifindex: None,
+            row: None,
+            row_name: None,
         })
     }
 
@@ -1095,7 +1379,7 @@ impl AlertManager {
         let (eff, in_maintenance) = {
             let config = self.config.read().expect("config rwlock poisoned");
             (
-                config.resolve(node, Some(ifindex), metric),
+                config.resolve(node, Some(ifindex), None, metric),
                 config.maintenance.contains(&node),
             )
         };
@@ -1124,6 +1408,8 @@ impl AlertManager {
                     critical: eff.critical(),
                 }),
                 ifindex: Some(ifindex),
+                row: None,
+                row_name: None,
             },
         ))
     }
@@ -1151,7 +1437,7 @@ impl AlertManager {
         &self,
         node: NodeId,
         metric: &'static str,
-        values: &[f64],
+        rows: &[(i64, f64)],
         at_unix_ms: i64,
     ) -> Option<Vec<NotifyAction>> {
         if !crate::interface_util::may_observe_ports(self.node_liveness(node)) {
@@ -1159,10 +1445,16 @@ impl AlertManager {
             // the device went unreachable, or page about memory on a box that is already down.
             return None;
         }
+        // A table metric is one check per row (ADR-143); only a metric computed from scalars still
+        // folds its rows — which is one row — into the node's check below.
+        if crate::derived::derived_node_metric(metric).is_some_and(|d| d.per_row) {
+            return self.observe_derived_rows(node, metric, rows, at_unix_ms);
+        }
+        let values: Vec<f64> = rows.iter().map(|(_, v)| *v).collect();
         let (eff, in_maintenance) = {
             let config = self.config.read().expect("config rwlock poisoned");
             (
-                config.resolve(node, None, metric),
+                config.resolve(node, None, None, metric),
                 config.maintenance.contains(&node),
             )
         };
@@ -1183,12 +1475,14 @@ impl AlertManager {
         } else {
             eff.evaluate(value)
         };
+        let check = check_id(node, metric);
+        self.forget_legacy(check);
         Some(self.process_check(
             node,
             raw,
             at_unix_ms,
             CheckSpec {
-                check: check_id(node, metric),
+                check,
                 metric,
                 dwell: eff.dwell_samples,
                 is_liveness: false,
@@ -1200,8 +1494,64 @@ impl AlertManager {
                     critical: eff.critical(),
                 }),
                 ifindex: None,
+                row: None,
+                row_name: None,
             },
         ))
+    }
+
+    /// The per-row half of [`Self::observe_derived_metric`] (ADR-143): each row resolves on its own
+    /// — under its name, when a rule on the metric is scoped to one — and is observed on its own
+    /// check through the same [`Self::observe_rows`] the poll path uses. A row's name is the name of
+    /// the same row of the formula's first input, which is the series the poller named.
+    fn observe_derived_rows(
+        &self,
+        node: NodeId,
+        metric: &'static str,
+        rows: &[(i64, f64)],
+        at_unix_ms: i64,
+    ) -> Option<Vec<NotifyAction>> {
+        let input = crate::derived::derived_node_metric(metric).map(|d| d.formula.inputs()[0])?;
+        let names = self.row_names.read().expect("row names rwlock poisoned");
+        let input_names = names.get(&node).and_then(|m| m.get(input));
+        // A key outside `u32` cannot have come from a walk; it is dropped rather than wrapped onto
+        // another row's check.
+        let samples: Vec<(Sample, u32, Option<&str>)> = rows
+            .iter()
+            .filter_map(|&(row, value)| {
+                let row = u32::try_from(row).ok()?;
+                let name = input_names.and_then(|m| m.get(&row)).map(String::as_str);
+                Some((Sample::gauge(metric, value), row, name))
+            })
+            .collect();
+        let (in_maintenance, effs) = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            let by_name = config.has_row_rules(metric);
+            let mut memo: Vec<(Option<&str>, Option<EffectiveThreshold>)> = Vec::new();
+            let effs: Vec<Option<EffectiveThreshold>> = samples
+                .iter()
+                .map(|(_, _, name)| {
+                    let key = if by_name { *name } else { None };
+                    if let Some((_, eff)) = memo.iter().find(|(k, _)| *k == key) {
+                        return eff.clone();
+                    }
+                    let eff = config.resolve(node, None, key, metric);
+                    memo.push((key, eff.clone()));
+                    eff
+                })
+                .collect();
+            (config.maintenance.contains(&node), effs)
+        };
+        // `None` still means "nobody is watching this metric on this node", as for the node-wide form.
+        if effs.iter().all(Option::is_none) {
+            return None;
+        }
+        let observed: Vec<(&Sample, &EffectiveThreshold, u32, Option<&str>)> = samples
+            .iter()
+            .zip(&effs)
+            .filter_map(|((sample, row, name), eff)| Some((sample, eff.as_ref()?, *row, *name)))
+            .collect();
+        Some(self.observe_rows(node, at_unix_ms, in_maintenance, observed))
     }
 
     /// What the threshold rules in force for `metric` cover — an evaluator plans its query from
@@ -1300,7 +1650,7 @@ impl AlertManager {
                     let ifindex = a.ifindex?;
                     let metric = crate::interface_util::derived_metric_name(&a.metric)?;
                     config
-                        .resolve(node, Some(ifindex), metric)
+                        .resolve(node, Some(ifindex), None, metric)
                         .is_none()
                         .then_some(a.check)
                 })
@@ -1333,8 +1683,10 @@ impl AlertManager {
                         return None;
                     }
                     let metric = crate::derived::derived_node_metric(&a.metric)?.name;
+                    // A row alert asks under the name it fired under (ADR-143): a rule scoped to
+                    // that name is still a rule for it, and asking with no name would call it gone.
                     config
-                        .resolve(node, None, metric)
+                        .resolve(node, None, a.row_name.as_deref(), metric)
                         .is_none()
                         .then_some(a.check)
                 })
@@ -1403,7 +1755,7 @@ impl AlertManager {
                         return None;
                     }
                     config
-                        .resolve(node, a.ifindex, &a.metric)
+                        .resolve(node, a.ifindex, a.row_name.as_deref(), &a.metric)
                         .is_none()
                         .then_some(a.check)
                 })
@@ -1611,9 +1963,23 @@ impl AlertManager {
                     live.remove(node);
                 }
             }
-            let mut down = self.down.lock().expect("down mutex poisoned");
+            {
+                let mut down = self.down.lock().expect("down mutex poisoned");
+                for node in &gone {
+                    down.remove(node);
+                }
+            }
+            // What a deleted node's rows were called and which of them held a state (ADR-143) —
+            // forgotten with the node, each lock on its own.
+            {
+                let mut names = self.row_names.write().expect("row names rwlock poisoned");
+                for node in &gone {
+                    names.remove(node);
+                }
+            }
+            let mut rows = self.row_states.lock().expect("row states mutex poisoned");
             for node in &gone {
-                down.remove(node);
+                rows.remove(node);
             }
         }
         let actions = self.resolve_orphans(orphans);
@@ -2644,9 +3010,11 @@ mod tests {
     /// The ADR-077 regression, and the mirror of
     /// `one_breaching_port_among_many_fires_exactly_one_alert`.
     ///
-    /// Before the fold, one hot CPU among fourteen idle ones had its dwell candidate reset by the
+    /// Before ADR-077, one hot CPU among fourteen idle ones had its dwell candidate reset by the
     /// very next sample in the same poll, so a 3-sample rule **never fired at all** —
-    /// `huawei_cpu_usage` arrives 15 times per poll and `juniper_cpu_1min` 53 times.
+    /// `huawei_cpu_usage` arrives 15 times per poll and `juniper_cpu_1min` 53 times. ADR-077 folded
+    /// the rows into one check; ADR-143 gives each row its own, so the hot row's dwell is its own and
+    /// the idle rows cannot reach it either way.
     #[test]
     fn one_breaching_row_among_many_fires_after_the_dwell() {
         use yagra_bus::Sample;
@@ -2690,16 +3058,17 @@ mod tests {
             fired.extend(actions);
         }
 
-        // Exactly one alert — not one per row, and not none.
+        // Exactly one alert — one for the hot row, none for the fourteen idle ones.
         assert_eq!(fired.len(), 1, "one hot row must raise exactly one alert");
         let NotifyAction::Fire(alert) = &fired[0] else {
             panic!("expected a fire, got {:?}", fired[0]);
         };
         assert_eq!(alert.metric, "huawei_cpu_usage");
         assert_eq!(alert.severity, Severity::Critical);
-        // The check stays the node-wide id: folding changes how often a check is observed, never
-        // which check it is. A per-row id would be a new identity no open alert could close.
-        assert_eq!(alert.check, check_id(node, "huawei_cpu_usage"));
+        // The check is the row's own (ADR-143), so the incident says which CPU is hot. A row is not
+        // a port, so `ifindex` stays empty and the row travels in `row`.
+        assert_eq!(alert.check, row_check_id(node, 4, "huawei_cpu_usage"));
+        assert_eq!(alert.row, Some(4));
         assert_eq!(alert.ifindex, None);
         // The breach reports the row that actually breached, not whichever arrived last.
         assert_eq!(alert.breach.as_ref().map(|b| b.value), Some(95.0));
@@ -2762,9 +3131,10 @@ mod tests {
     /// The other direction of the same bug: N breaching rows must not satisfy an N-sample dwell
     /// inside **one** poll.
     ///
-    /// Before the fold a 3-sample rule on a metric with three or more rows fired on the first poll,
+    /// Before ADR-077 a 3-sample rule on a metric with three or more rows fired on the first poll,
     /// which is the dwell silently becoming "three rows" instead of "three polls" — the opposite
-    /// failure to the inert one, and just as wrong.
+    /// failure to the inert one, and just as wrong. Since ADR-143 every row has its own window, so
+    /// twelve breaching rows are twelve incidents — each one only after three polls.
     #[test]
     fn every_row_breaching_still_needs_the_whole_dwell() {
         use yagra_bus::Sample;
@@ -2798,21 +3168,33 @@ mod tests {
 
         assert!(
             mgr.observe(&poll(0)).is_empty(),
-            "twelve breaching rows in one poll are one observation, not twelve"
+            "twelve breaching rows in one poll are one step of twelve windows, not a whole dwell"
         );
         assert!(mgr.observe(&poll(1_000)).is_empty());
         let fired = mgr.observe(&poll(2_000));
-        assert_eq!(fired.len(), 1, "the third poll completes the dwell");
-        assert!(matches!(fired[0], NotifyAction::Fire(_)));
+        assert_eq!(
+            fired.len(),
+            12,
+            "the third poll completes every row's dwell"
+        );
+        let checks: std::collections::HashSet<_> = fired
+            .iter()
+            .map(|a| match a {
+                NotifyAction::Fire(alert) => alert.check,
+                other => panic!("expected a fire, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(checks.len(), 12, "one check per row, never a shared one");
     }
 
-    /// A `below` rule must fold to the **minimum**, and this is the test that catches folding with
-    /// `max` — which is what the rest of the product does.
+    /// A `below` rule must alert on the **low** row, and this is the test that catches reading the
+    /// table through `max` — which is what the node-level chart does.
     ///
     /// `query_metrics` collapses an entity metric to its maximum and its own response says the
     /// consequence out loud: where low is the fault, the maximum is the *healthiest* series. A UPS
-    /// with one string at 15% and two at 80/90% is in trouble; folded with `max` it reports 90 and
-    /// alerts on nothing.
+    /// with one string at 15% and two at 80/90% is in trouble; read with `max` it reports 90 and
+    /// alerts on nothing. ADR-077 folded to the worst row; since ADR-143 the depleted row is judged
+    /// on its own check, which answers the same way.
     #[test]
     fn a_below_rule_folds_to_the_worst_row_not_the_healthiest() {
         use yagra_bus::Sample;
@@ -2973,10 +3355,11 @@ mod tests {
         assert_eq!(alert.ifindex, Some(IfIndex(1)));
     }
 
-    /// A metric the catalogue does not call per-interface keeps the node-level check, even when
-    /// its samples carry an `ifindex` — the label is a row key, not a port number (ADR-011).
+    /// A metric the catalogue does not call per-interface is never read as a port, even when its
+    /// samples carry an `ifindex` — the label is a row key, not a port number (ADR-011). Since
+    /// ADR-143 each row is its own check, but it is a **row** check: `ifindex` stays empty.
     #[test]
-    fn a_row_key_that_is_not_a_port_does_not_split_the_check() {
+    fn a_row_key_that_is_not_a_port_is_a_row_not_a_port() {
         use yagra_bus::Sample;
         use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
@@ -3000,12 +3383,8 @@ mod tests {
             meta,
         ));
 
-        // Two "rows" breaching in one poll are ONE observation, not two (ADR-077). They share a
-        // check, so they share a dwell window — and a two-sample dwell therefore means two polls.
-        // This assertion used to read the other way: it demanded that two rows satisfy the dwell
-        // inside a single poll, which is the bug ADR-077 names (the dwell quietly becoming "two
-        // rows" instead of "two polls"). What the test is really for — that a chassis row key does
-        // not split the check — is unchanged and still asserted below.
+        // Two rows breaching in one poll are one step of each row's own window, so a two-sample
+        // dwell still means two polls (ADR-077's property, kept by ADR-143 without the fold).
         let poll = |at: i64| {
             let mut res = result(node, CheckOutcome::Reachable, at);
             res.samples = vec![
@@ -3016,15 +3395,18 @@ mod tests {
         };
         assert!(
             mgr.observe(&poll(0)).is_empty(),
-            "two chassis rows in one poll are one observation, not two"
+            "one poll is one dwell step, however many rows breach in it"
         );
         let actions = mgr.observe(&poll(1_000));
-        assert_eq!(actions.len(), 1, "chassis rows share one check");
-        let NotifyAction::Fire(alert) = &actions[0] else {
-            panic!("expected a fire");
-        };
-        assert_eq!(alert.ifindex, None, "a chassis reading names no port");
-        assert_eq!(alert.check, check_id(node, "cisco_env_temp"));
+        assert_eq!(actions.len(), 2, "each chassis row is its own check");
+        for (action, row) in actions.iter().zip([17_u32, 18]) {
+            let NotifyAction::Fire(alert) = action else {
+                panic!("expected a fire, got {action:?}");
+            };
+            assert_eq!(alert.ifindex, None, "a chassis reading names no port");
+            assert_eq!(alert.row, Some(row));
+            assert_eq!(alert.check, row_check_id(node, row, "cisco_env_temp"));
+        }
     }
 
     /// One metric's repeated samples in a single poll are **one** observation (ADR-077).
@@ -4293,7 +4675,7 @@ mod tests {
         mgr.set_config(cfg(vec![rule(1.0)], meta_for(node)));
         let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
         let acts = mgr
-            .observe_derived_metric(node, "huawei_mem_used_pct", &[80.44], 1)
+            .observe_derived_metric(node, "huawei_mem_used_pct", &[(0, 80.44)], 1)
             .expect("a rule is in force");
         assert!(acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))));
 
@@ -4323,7 +4705,7 @@ mod tests {
         // Idempotence alone is also satisfied by a check that can no longer do anything.
         mgr.set_config(cfg(vec![rule(1.0)], meta_for(node)));
         let acts = mgr
-            .observe_derived_metric(node, "huawei_mem_used_pct", &[80.44], 3)
+            .observe_derived_metric(node, "huawei_mem_used_pct", &[(0, 80.44)], 3)
             .expect("the recreated rule is in force");
         assert!(
             acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))),
@@ -4923,5 +5305,289 @@ mod tests {
         );
         assert_eq!(mgr.active_alerts().len(), 1);
         assert_eq!(mgr.node_state(node), Some(NodeState::Unreachable));
+    }
+}
+
+/// ADR-143: a vendor table's rows are checks of their own.
+///
+/// A sibling of `tests` rather than more of it: these are about one decision, and the fixtures they
+/// share (a percentage table metric, a named row) are not what the rest of the engine's tests use.
+#[cfg(test)]
+mod row_tests {
+    use super::super::testkit::*;
+    use super::*;
+    use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
+
+    const MEM: &str = "huawei_mem_usage";
+
+    fn rule(warning: f64, critical: f64, dwell: u32, row_match: Option<&str>) -> StoredThreshold {
+        StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            Vec::new(),
+            ThresholdRule::new(
+                MEM,
+                ThresholdBounds::above(Some(warning), Some(critical)),
+                dwell,
+            ),
+        )
+        .with_row_match(row_match.map(str::to_owned))
+    }
+
+    fn rows(node: NodeId, values: &[(u32, f64)], at: i64) -> PollResult {
+        let mut r = result(node, CheckOutcome::Reachable, at);
+        r.samples = values
+            .iter()
+            .map(|(row, v)| Sample::interface(MEM, IfIndex(*row), *v, MetricKind::Gauge))
+            .collect();
+        r
+    }
+
+    fn name(metric: &str, row: u32, name: &str) -> RowName {
+        RowName {
+            metric: metric.to_owned(),
+            row,
+            name: name.to_owned(),
+        }
+    }
+
+    fn fires(actions: &[NotifyAction]) -> Vec<&Alert> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                NotifyAction::Fire(alert) => Some(alert),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn resolves(actions: &[NotifyAction]) -> Vec<&Alert> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                NotifyAction::Resolve(alert) => Some(alert),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn setup(rules: Vec<StoredThreshold>) -> (AlertManager, NodeId) {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(rules, meta_for(node)));
+        (mgr, node)
+    }
+
+    /// The accepting side first: a breaching row fires on its own check, named, and a healthy row
+    /// and a zero row leave nothing behind — the property that keeps a 306-row table affordable.
+    #[test]
+    fn a_breaching_row_fires_on_its_own_check_and_a_healthy_row_holds_no_state() {
+        let (mgr, node) = setup(vec![rule(80.0, 90.0, 1, None)]);
+        mgr.record_row_names(node, &[name(MEM, 7, "MPU Board 0")]);
+        let actions = mgr.observe(&rows(node, &[(7, 85.0), (8, 33.0), (9, 0.0)], 1));
+        let fired = fires(&actions);
+        assert_eq!(fired.len(), 1, "{actions:?}");
+        assert_eq!(fired[0].check, row_check_id(node, 7, MEM));
+        assert_eq!(fired[0].row, Some(7));
+        assert_eq!(fired[0].row_name.as_deref(), Some("MPU Board 0"));
+        assert_eq!(fired[0].ifindex, None, "a row is not a port");
+
+        let states = mgr.states.lock().unwrap();
+        assert!(states.contains_key(&row_check_id(node, 7, MEM)));
+        assert!(!states.contains_key(&row_check_id(node, 8, MEM)));
+        assert!(!states.contains_key(&row_check_id(node, 9, MEM)));
+        assert!(
+            !states.contains_key(&check_id(node, MEM)),
+            "no node-wide check for a table metric"
+        );
+    }
+
+    /// The ADR-077 failure, both directions, now structurally impossible: a bad row among good ones
+    /// reaches its dwell, and two bad rows do not reach it in one poll.
+    #[test]
+    fn each_row_keeps_its_own_dwell_window() {
+        let (mgr, node) = setup(vec![rule(80.0, 90.0, 3, None)]);
+        for at in 1..=2 {
+            let actions = mgr.observe(&rows(node, &[(7, 85.0), (8, 10.0), (9, 86.0)], at));
+            assert!(fires(&actions).is_empty(), "poll {at}: {actions:?}");
+        }
+        let actions = mgr.observe(&rows(node, &[(7, 85.0), (8, 10.0), (9, 86.0)], 3));
+        let mut fired: Vec<Option<u32>> = fires(&actions).iter().map(|a| a.row).collect();
+        fired.sort();
+        assert_eq!(fired, vec![Some(7), Some(9)]);
+    }
+
+    /// Recovery and a new breach are two incidents, not one flip of a shared check.
+    #[test]
+    fn a_row_recovers_and_another_breaches_as_separate_incidents() {
+        let (mgr, node) = setup(vec![rule(80.0, 90.0, 1, None)]);
+        let _ = mgr.observe(&rows(node, &[(7, 85.0), (8, 10.0)], 1));
+        let actions = mgr.observe(&rows(node, &[(7, 50.0), (8, 95.0)], 2));
+        assert_eq!(
+            resolves(&actions).iter().map(|a| a.row).collect::<Vec<_>>(),
+            vec![Some(7)]
+        );
+        assert_eq!(
+            fires(&actions).iter().map(|a| a.row).collect::<Vec<_>>(),
+            vec![Some(8)]
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// Decision 7 end to end: at the same scope, the rule naming the row wins for that row alone.
+    #[test]
+    fn a_rule_naming_a_row_governs_that_row_and_only_that_row() {
+        let (mgr, node) = setup(vec![
+            rule(80.0, 90.0, 1, None),
+            rule(90.0, 95.0, 1, Some("MPU Board 0")),
+        ]);
+        mgr.record_row_names(
+            node,
+            &[name(MEM, 7, "MPU Board 0"), name(MEM, 8, "MPU Board 1")],
+        );
+        let actions = mgr.observe(&rows(node, &[(7, 85.0), (8, 85.0)], 1));
+        let fired = fires(&actions);
+        assert_eq!(fired.len(), 1, "{actions:?}");
+        assert_eq!(fired[0].row_name.as_deref(), Some("MPU Board 1"));
+    }
+
+    /// A row with no name yet is judged by the rules without a pattern — never by none at all.
+    #[test]
+    fn an_unnamed_row_falls_back_to_the_unpatterned_rule() {
+        let (mgr, node) = setup(vec![
+            rule(80.0, 90.0, 1, None),
+            rule(90.0, 95.0, 1, Some("MPU Board 0")),
+        ]);
+        let actions = mgr.observe(&rows(node, &[(7, 85.0)], 1));
+        assert_eq!(fires(&actions).len(), 1, "{actions:?}");
+    }
+
+    /// Decision 6: the node-wide alert a table metric had before this version is closed by the first
+    /// per-row observation, with a real resolve — so the incident it opened externally closes too.
+    #[test]
+    fn a_restored_node_wide_alert_is_closed_by_the_first_per_row_observation() {
+        let (mgr, node) = setup(vec![rule(80.0, 90.0, 1, None)]);
+        let legacy = Alert {
+            subject: Subject::Node(node),
+            check: check_id(node, MEM),
+            severity: Severity::Warning,
+            state: NodeState::Warning,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+            metric: MEM.to_owned(),
+            breach: None,
+            ifindex: None,
+            row: None,
+            row_name: None,
+        };
+        assert_eq!(mgr.restore(vec![legacy]), 1);
+        let actions = mgr.observe(&rows(node, &[(7, 50.0)], 1));
+        let resolved = resolves(&actions);
+        assert_eq!(resolved.len(), 1, "{actions:?}");
+        assert_eq!(resolved[0].check, check_id(node, MEM));
+        assert!(mgr.active_alerts().is_empty());
+        // …and only once: the next poll has nothing left to retire.
+        assert!(resolves(&mgr.observe(&rows(node, &[(7, 50.0)], 2))).is_empty());
+    }
+
+    /// 🚨 Decision 5's one way to be wrong: a restored row alert must be in the index of rows holding
+    /// a state, or its healthy sample is skipped and it never resolves.
+    #[test]
+    fn a_restored_row_alert_resolves_when_its_row_recovers() {
+        let (mgr, node) = setup(vec![rule(80.0, 90.0, 1, None)]);
+        let restored = Alert {
+            subject: Subject::Node(node),
+            check: row_check_id(node, 7, MEM),
+            severity: Severity::Warning,
+            state: NodeState::Warning,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+            metric: MEM.to_owned(),
+            breach: None,
+            ifindex: None,
+            row: Some(7),
+            row_name: Some("MPU Board 0".to_owned()),
+        };
+        assert_eq!(mgr.restore(vec![restored]), 1);
+        let actions = mgr.observe(&rows(node, &[(7, 10.0)], 1));
+        assert_eq!(resolves(&actions).len(), 1, "{actions:?}");
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// A derived table metric alerts per row, named from its first input's rows — the C2960S this ADR
+    /// started from, where the Processor pool is healthy and the I/O pool is not.
+    #[test]
+    fn a_derived_metric_alerts_per_row_under_its_input_rows_name() {
+        let pct = crate::derived::METRIC_CISCO_MEM_USED_PCT;
+        let node = NodeId::new();
+        let mgr = manager();
+        let base = StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            Vec::new(),
+            ThresholdRule::new(pct, ThresholdBounds::above(Some(80.0), Some(90.0)), 1),
+        );
+        mgr.set_config(cfg(vec![base.clone()], meta_for(node)));
+        mgr.record_row_names(
+            node,
+            &[
+                name("cisco_mem_used", 1, "Processor"),
+                name("cisco_mem_used", 2, "I/O"),
+                name("cisco_mem_used", 20, "Driver text"),
+            ],
+        );
+        let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        let pools = [(1, 56.4), (2, 83.9), (20, 0.004)];
+        let actions = mgr
+            .observe_derived_metric(node, pct, &pools, 1)
+            .expect("a rule is in force");
+        let fired = fires(&actions);
+        assert_eq!(fired.len(), 1, "{actions:?}");
+        assert_eq!(fired[0].row, Some(2));
+        assert_eq!(fired[0].row_name.as_deref(), Some("I/O"));
+
+        // The shipped default for the I/O pool (90/95) resolves it without touching the others.
+        let io = StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            Vec::new(),
+            ThresholdRule::new(pct, ThresholdBounds::above(Some(90.0), Some(95.0)), 1),
+        )
+        .with_row_match(Some("I/O".to_owned()));
+        mgr.set_config(cfg(vec![base, io], meta_for(node)));
+        let actions = mgr
+            .observe_derived_metric(node, pct, &pools, 2)
+            .expect("rules are in force");
+        assert_eq!(resolves(&actions).len(), 1, "{actions:?}");
+        assert!(fires(&actions).is_empty());
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// A derived metric computed from scalars keeps its one node-wide check — no existing check id
+    /// moves for a Net-SNMP host.
+    #[test]
+    fn a_scalar_derived_metric_keeps_its_node_wide_check() {
+        let pct = crate::derived::METRIC_UCD_MEM_USED_PCT;
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::new_v4(),
+                ScopeLevel::Global,
+                Vec::new(),
+                ThresholdRule::new(pct, ThresholdBounds::above(Some(80.0), None), 1),
+            )],
+            meta_for(node),
+        ));
+        let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        let actions = mgr
+            .observe_derived_metric(node, pct, &[(0, 91.0)], 1)
+            .expect("a rule is in force");
+        let fired = fires(&actions);
+        assert_eq!(fired.len(), 1, "{actions:?}");
+        assert_eq!(fired[0].check, check_id(node, pct));
+        assert_eq!(fired[0].row, None);
     }
 }

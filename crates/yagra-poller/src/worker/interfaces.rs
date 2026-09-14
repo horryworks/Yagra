@@ -270,6 +270,7 @@ async fn execute_table_walk(
         l3: None,
         arp: None,
         routing: None,
+        row_names: Vec::new(),
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).

@@ -704,6 +704,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            row_names: Vec::new(),
             observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),

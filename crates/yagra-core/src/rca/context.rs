@@ -527,6 +527,8 @@ mod tests {
             metric: "__liveness__".to_owned(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 
