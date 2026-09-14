@@ -1555,6 +1555,12 @@ html[data-viewport='mobile'] .nd-extract-row {
   transition: background var(--transition);
 }
 
+/* On a phone the row IS the control (ADR-142 keeps Members pressable on mobile), so it takes the
+   touch-target height rather than the desktop's 32px list rhythm. */
+html[data-viewport='mobile'] .nd-member-link {
+  min-height: var(--touch-target);
+}
+
 .nd-member-link:hover,
 .nd-member-link:focus-visible {
   background: var(--bg-tertiary);

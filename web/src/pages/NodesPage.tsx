@@ -87,6 +87,7 @@ import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail
 import { EditNodeModalById } from '../components/NodeDetail/EditNodeModal';
 import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
+import { memberFetchState } from '../components/NodeDetail/groupMembers';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
 import { MoveByPrefixModal } from '../components/MoveByPrefixModal/MoveByPrefixModal';
 import { BulkTagModal } from '../components/NodeTree/BulkTagModal';
@@ -1070,8 +1071,18 @@ export function NodesPage() {
             <GroupDetail
               group={selectedGroup}
               groups={groups}
-              nodes={treeNodes}
+              // The member cache, not `treeNodes`: under a state / kind / pool filter `treeNodes` is
+              // the server's search page alone, so a folder whose nodes all missed the filter read as
+              // empty. The selected folder's direct members load whether or not a filter is on
+              // (`useLazyGroupMembers`), so this is its whole membership once `membersFetch` says so.
+              nodes={members.nodes}
               groupCounts={groupCounts}
+              membersFetch={memberFetchState(
+                selectedGroup.id,
+                members.loadedGroups,
+                members.failedGroups,
+              )}
+              onRetryMembers={() => members.retry(selectedGroup.id)}
               canEdit={canConfig}
               onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
               onAddNode={() => openAddNode(selectedGroup.id)}

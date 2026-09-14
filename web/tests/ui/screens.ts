@@ -86,11 +86,14 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/dashboard': MARKER,
   '/dashboard/my': MARKER,
   // The public board starts empty and the Tier1 mock has no saved layout, so there is no widget
-  // marker to find — what renders is the empty state and the "this is visible from outside"
-  // banner. `TEXT` on the banner rather than `NONE`: the banner is the one thing on this screen
-  // that must never silently disappear (ADR-055 R6), and an empty board is exactly when a missing
-  // warning would go unnoticed.
-  '/dashboard/public': { kind: 'text', text: 'visible from outside' },
+  // marker to find — what renders is the empty state and the warning banner. The banner rather than
+  // `NONE`: it is the one thing on this screen that must never silently disappear (ADR-055 R6), and
+  // an empty board is exactly when a missing warning would go unnoticed.
+  // ⚠️ **The banner element, not one of its texts.** It says three things: "visible from outside"
+  // until the switch has answered, then "live" or "Not published". The mock answers "not
+  // published", so asserting the first text passed only when the check happened to look before
+  // that request landed — green alone, red in a full run.
+  '/dashboard/public': { kind: 'locator', sel: '.shared-dash-warning' },
   '/dashboard/reports': MARKER,
   '/nodes': MARKER,
   '/nodes/discovery': MARKER,
