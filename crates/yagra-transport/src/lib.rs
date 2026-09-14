@@ -146,6 +146,24 @@ pub struct SnmpInstanceRow {
     pub value: SnmpValue,
 }
 
+/// What an instance walk collected, and whether it heard every column it asked for out.
+///
+/// The rows alone cannot say so. A column that times out between two that answer is skipped, the
+/// walk carries on, and the result is `Ok` with the other columns' rows — shaped exactly like a
+/// device that answered for those columns and does not implement the one that is missing. A caller
+/// that reads rows **across** columns has to tell those apart: Huawei's patch table pairs a version
+/// column with a running-state column, and a half-table reads as "no patch is running"
+/// (ADR-138 Increment 3). Callers that use each column on its own can ignore the flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceWalk {
+    pub rows: Vec<SnmpInstanceRow>,
+    /// Every asked column was walked to its end by the agent — including an agent answering that it
+    /// does not implement one. `false` when a column errored or timed out, was skipped for a
+    /// malformed OID, or was never asked because the deadline, silence or `max_rows` stopped the walk
+    /// first.
+    pub every_column_answered: bool,
+}
+
 /// What a URL/HTTP(S) probe needs from the job (the non-secret request shape). The poller maps
 /// a [`yagra_bus::HttpCheck`] into this; expected-status matching is applied poller-side, not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,6 +447,9 @@ pub trait Transport: Send + Sync {
     /// not by truncating the result. The distinction is the reason the parameter exists: a
     /// hundred-thousand-row ARP table has already cost its memory by the time a caller could
     /// truncate it (ADR-043 Increment 3).
+    ///
+    /// The rows come with whether every column answered — see [`InstanceWalk`] for why a caller
+    /// pairing rows across columns cannot work that out from the rows.
     async fn snmp_walk_instances(
         &self,
         target: IpAddr,
@@ -436,7 +457,7 @@ pub trait Transport: Send + Sync {
         column_oids: &[String],
         timeout: Duration,
         max_rows: usize,
-    ) -> Result<Vec<SnmpInstanceRow>, TransportError>;
+    ) -> Result<InstanceWalk, TransportError>;
 
     /// The SNMP v3 (USM) analogue of [`Transport::snmp_walk_instances`]. Auth/priv come resolved
     /// from core (ADR-018/020) and are never logged.
@@ -447,7 +468,7 @@ pub trait Transport: Send + Sync {
         column_oids: &[String],
         timeout: Duration,
         max_rows: usize,
-    ) -> Result<Vec<SnmpInstanceRow>, TransportError>;
+    ) -> Result<InstanceWalk, TransportError>;
 
     /// Probe an HTTP/HTTPS URL endpoint: reachability + status code + response time, and (for
     /// HTTPS) the server certificate's days-to-expiry. A network failure is reported as
@@ -546,6 +567,10 @@ pub struct FakeTransport {
     /// means "nothing came back". A caller that fires more walks at the device must
     /// distinguish them, and a test that cannot produce the second cannot see it fail to.
     pub snmp_instances_silent: bool,
+    /// When set, every **instance** walk (v2c and v3) still returns [`Self::snmp_instances`] but
+    /// reports that not every column answered — the walk a real agent produces when one column
+    /// times out between two that answer (ADR-138 Increment 3).
+    pub snmp_instances_unanswered: bool,
     /// When set, every **numeric column** walk (v2c and v3) reports itself as having stopped early
     /// with this reason, alongside whatever [`Self::snmp_table`] rows it returns.
     ///
@@ -604,13 +629,17 @@ impl FakeTransport {
     /// tests, and the real walk only proves itself against a device with a hundred-thousand-row
     /// table. Truncated after filtering and in declaration order, so which rows survive is
     /// deterministic.
-    fn canned_instances(&self, column_oids: &[String], max_rows: usize) -> Vec<SnmpInstanceRow> {
-        self.snmp_instances
-            .iter()
-            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
-            .take(max_rows)
-            .cloned()
-            .collect()
+    fn canned_instances(&self, column_oids: &[String], max_rows: usize) -> InstanceWalk {
+        InstanceWalk {
+            rows: self
+                .snmp_instances
+                .iter()
+                .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+                .take(max_rows)
+                .cloned()
+                .collect(),
+            every_column_answered: !self.snmp_instances_unanswered,
+        }
     }
 
     /// Note that an SNMP call asked for `oids`. See [`Self::asked`] for why this is recorded.
@@ -660,6 +689,7 @@ impl FakeTransport {
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             snmp_instances_silent: false,
+            snmp_instances_unanswered: false,
             snmp_walk_truncated: None,
             snmp_walk_error: None,
             dns: fake_dns_chain(true),
@@ -693,6 +723,7 @@ impl FakeTransport {
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             snmp_instances_silent: false,
+            snmp_instances_unanswered: false,
             snmp_walk_truncated: None,
             snmp_walk_error: None,
             dns: fake_dns_chain(false),
@@ -718,6 +749,15 @@ impl FakeTransport {
     #[must_use]
     pub fn with_silent_instance_walks(mut self) -> Self {
         self.snmp_instances_silent = true;
+        self
+    }
+
+    /// Make every instance walk (v2c and v3) return its rows but report that not every column
+    /// answered, as a walker does when one column times out and the next answers (ADR-138
+    /// Increment 3).
+    #[must_use]
+    pub fn with_unanswered_instance_columns(mut self) -> Self {
+        self.snmp_instances_unanswered = true;
         self
     }
 
@@ -916,7 +956,7 @@ impl Transport for FakeTransport {
         column_oids: &[String],
         _timeout: Duration,
         max_rows: usize,
-    ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+    ) -> Result<InstanceWalk, TransportError> {
         self.record_asked(column_oids);
         if self.snmp_instances_silent {
             return Err(TransportError::Silent(_target));
@@ -931,7 +971,7 @@ impl Transport for FakeTransport {
         column_oids: &[String],
         _timeout: Duration,
         max_rows: usize,
-    ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+    ) -> Result<InstanceWalk, TransportError> {
         self.record_asked(column_oids);
         if self.snmp_instances_silent {
             return Err(TransportError::Silent(_target));

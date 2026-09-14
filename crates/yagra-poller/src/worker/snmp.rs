@@ -13,7 +13,9 @@ use super::*;
 use yagra_discovery::os_version;
 
 /// Identity probes run, by what they found: `version`, `no_version` (the device answered but the
-/// table does not cover it or it reports none) or `no_answer` (not even `sysDescr` came back).
+/// table does not cover it or it reports none), `unread` (the device answered but a table column
+/// the version needs did not answer to its end, so no version was sent and core keeps the one it
+/// has — ADR-138 Increment 3) or `no_answer` (not even `sysDescr` came back).
 /// The ratio of the first two is the table's real coverage of a fleet (ADR-138).
 pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_total";
 
@@ -29,12 +31,15 @@ pub(super) struct IdentityProbe {
     /// Always read by the first GET, to pick the version rows; kept since ADR-140 so core can
     /// re-run the classification rules on an existing node.
     pub(super) sys_object_id: Option<String>,
+    /// No version was sent because a column it needs did not answer (ADR-138 Increment 3).
+    pub(super) unread: bool,
 }
 
 impl IdentityProbe {
     fn outcome(&self) -> &'static str {
         match (&self.os_version, &self.sys_descr) {
             (Some(_), _) => "version",
+            (None, _) if self.unread => "unread",
             (None, Some(_)) => "no_version",
             (None, None) => "no_answer",
         }
@@ -74,7 +79,9 @@ impl SnmpWalker {
     /// version depends on what the device is; the next ones take those, and are skipped when the
     /// table keeps this device's version in `sysDescr` or does not know the device at all. Only a
     /// Huawei adds a walk of whole columns, for the patch that is running (ADR-138 Inc.2).
-    /// Best-effort throughout: an error or a missing value is simply absent.
+    /// Best-effort throughout: an error or a missing value is simply absent. The one exception is
+    /// that walk of whole columns: when it did not finish, the version is withheld rather than built
+    /// from half a table, so core keeps the one it already has (ADR-138 Increment 3).
     async fn fetch_identity(
         &self,
         transport: &dyn Transport,
@@ -107,16 +114,27 @@ impl SnmpWalker {
                 .await;
         }
         if !reads.columns.is_empty() {
-            let (strings, integers) = self
+            let columns = self
                 .read_columns(transport, target, &reads.columns, timeout)
                 .await;
-            answers.strings.extend(strings);
-            answers.integers.extend(integers);
+            answers.strings.extend(columns.strings);
+            answers.integers.extend(columns.integers);
+            answers.unanswered_columns = columns.unanswered_columns;
+        }
+        let os_version = os_version::resolve(sys_object_id, sys_descr.as_deref(), &answers);
+        let unread = os_version.is_none() && answers.unanswered_columns;
+        if unread {
+            // The span carries the target and node. Without this line the case is invisible: the
+            // walk logs a failed column at debug only, and the node page just keeps its old value.
+            tracing::info!(
+                "identity probe left the OS version unset: a table column it needs did not answer"
+            );
         }
         IdentityProbe {
-            os_version: os_version::resolve(sys_object_id, sys_descr.as_deref(), &answers),
+            os_version,
             sys_object_id: sys_object_id.and_then(yagra_discovery::normalize_sys_object_id),
             sys_descr,
+            unread,
         }
     }
 
@@ -146,38 +164,44 @@ impl SnmpWalker {
     /// left **unfolded**: Huawei's `hwPatchTable` is indexed by slot and patch (`128.2`), and the
     /// version row is chosen by the state row at the same index — which a folded index could not
     /// pair (ADR-138 Inc.2). Strings and integers go to separate maps, as the table reads them.
+    ///
+    /// Whether the walk finished travels with the rows as `unanswered_columns`: a failed walk, or
+    /// one that returned rows but did not hear every column out, is not the same answer as a table
+    /// with no running patch (ADR-138 Increment 3).
     async fn read_columns(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         columns: &[&str],
         timeout: Duration,
-    ) -> (HashMap<String, String>, HashMap<String, i64>) {
-        let mut strings = HashMap::new();
-        let mut integers = HashMap::new();
+    ) -> os_version::Answers {
+        let mut read = os_version::Answers::default();
         let asked: Vec<String> = columns.iter().map(|c| (*c).to_owned()).collect();
-        let Ok(rows) = self
-            .walk_instances(transport, target, &asked, timeout, IDENTITY_COLUMN_ROWS)
+        let Ok(walk) = self
+            .walk_instance_columns(transport, target, &asked, timeout, IDENTITY_COLUMN_ROWS)
             .await
         else {
-            return (strings, integers);
+            read.unanswered_columns = true;
+            return read;
         };
-        for row in rows {
+        read.unanswered_columns = !walk.every_column_answered;
+        for row in walk.rows {
             let instance: Vec<String> = row.instance.iter().map(u32::to_string).collect();
             let key = format!("{}.{}", row.oid_base, instance.join("."));
             match row.value {
                 yagra_transport::SnmpValue::Int(value) => {
-                    integers.insert(key, value);
+                    read.integers.insert(key, value);
                 }
                 yagra_transport::SnmpValue::Bytes(bytes) => {
-                    strings.insert(key, String::from_utf8_lossy(&bytes).into_owned());
+                    read.strings
+                        .insert(key, String::from_utf8_lossy(&bytes).into_owned());
                 }
                 yagra_transport::SnmpValue::Oid(oid) => {
-                    strings.insert(key, oid);
+                    read.strings.insert(key, oid);
                 }
             }
         }
-        (strings, integers)
+        read
     }
 
     /// Read string-valued **instance** OIDs, keyed by the instance OID.
@@ -266,6 +290,22 @@ impl SnmpWalker {
         timeout: Duration,
         max_rows: usize,
     ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+        self.walk_instance_columns(transport, target, columns, timeout, max_rows)
+            .await
+            .map(|walk| walk.rows)
+    }
+
+    /// As [`Self::walk_instances`], keeping whether every column answered. Only a caller that pairs
+    /// rows across columns needs that — the identity probe's patch table (ADR-138 Increment 3) — so
+    /// the neighbour, address, ARP, routing and media walks keep taking the rows alone.
+    async fn walk_instance_columns(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        columns: &[String],
+        timeout: Duration,
+        max_rows: usize,
+    ) -> Result<yagra_transport::InstanceWalk, TransportError> {
         match self {
             SnmpWalker::V2c(community) => {
                 transport
@@ -618,11 +658,14 @@ mod tests {
     /// `hwPatchTable`, whose row index (`128.2`) is the device's own. So the probe walks the version
     /// and state columns whole, pairs them by the unfolded index, and shows only the running patch —
     /// not the loaded one beside it (ADR-138 Inc.2).
-    #[tokio::test]
-    async fn the_identity_probe_appends_the_running_huawei_patch() {
+    const HW_PATCH_VERSION: &str = "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.4";
+    const HW_PATCH_OPERATE_STATE: &str = "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.14";
+
+    /// The real USG6530F-D the lab watches: its `sysDescr` and `sysObjectID`, and the patch-table
+    /// rows it was read with on 2026-09-13 — a loaded patch in `128.1`, the running one in `128.2`.
+    /// `with_state` false drops the state column, the shape a VRP recording has.
+    fn huawei_usg(with_state: bool) -> FakeTransport {
         use yagra_transport::{SnmpInstanceRow, SnmpValue};
-        let mut job = snmp_job();
-        job.probe_identity = true;
         let mut t = FakeTransport::reachable(0.0)
             .with_snmp(vec![SnmpSample {
                 oid: "1.3.6.1.2.1.1.3.0".to_owned(),
@@ -636,8 +679,6 @@ mod tests {
                 ),
                 string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.2011.2.321.1.406"),
             ]);
-        let version = "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.4";
-        let state = "1.3.6.1.4.1.2011.5.25.19.1.8.5.1.1.14";
         let cell = |column: &str, instance: &[u32], value: SnmpValue| SnmpInstanceRow {
             oid_base: column.to_owned(),
             instance: instance.to_vec(),
@@ -645,30 +686,103 @@ mod tests {
         };
         t.snmp_instances = vec![
             cell(
-                version,
+                HW_PATCH_VERSION,
                 &[128, 1],
                 SnmpValue::Bytes(b"V600R023SPH120".to_vec()),
             ),
             cell(
-                version,
+                HW_PATCH_VERSION,
                 &[128, 2],
                 SnmpValue::Bytes(b"V600R024SPH120".to_vec()),
             ),
-            cell(state, &[128, 1], SnmpValue::Int(3)),
-            cell(state, &[128, 2], SnmpValue::Int(1)),
         ];
+        if with_state {
+            t.snmp_instances
+                .push(cell(HW_PATCH_OPERATE_STATE, &[128, 1], SnmpValue::Int(3)));
+            t.snmp_instances
+                .push(cell(HW_PATCH_OPERATE_STATE, &[128, 2], SnmpValue::Int(1)));
+        }
+        t
+    }
+
+    fn walked_the_patch_table(t: &FakeTransport) -> bool {
+        t.asked().iter().any(|call| {
+            call.iter().any(|o| o == HW_PATCH_VERSION)
+                && call.iter().any(|o| o == HW_PATCH_OPERATE_STATE)
+        })
+    }
+
+    #[tokio::test]
+    async fn the_identity_probe_appends_the_running_huawei_patch() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = huawei_usg(true);
         let r = execute(&job, &t, 1_000).await;
         assert_eq!(
             r.os_version.as_deref(),
             Some("V600R024C00SPC100 [V600R024SPH120]")
         );
-        let asked = t.asked();
         assert!(
-            asked
-                .iter()
-                .any(|call| call.iter().any(|o| o == version) && call.iter().any(|o| o == state)),
-            "the patch table was never walked: {asked:?}"
+            walked_the_patch_table(&t),
+            "the patch table was never walked: {:?}",
+            t.asked()
         );
+    }
+
+    /// 🚨 The defect ADR-138 Increment 3 closes, as `.210` and `.211` showed it: the patch table's
+    /// walk did not finish, so the probe sent the bare version and core overwrote the patched one.
+    /// Now nothing is sent — `None` is what makes core keep the stored value — while the device's
+    /// own identity still arrives. The rows are all in hand here on purpose: a probe that decided
+    /// from the rows would still append the patch, and only the walk's own verdict can stop it.
+    #[tokio::test]
+    async fn the_identity_probe_leaves_no_version_when_the_patch_table_did_not_answer() {
+        let t = huawei_usg(true).with_unanswered_instance_columns();
+        let walker = SnmpWalker::V2c("public".to_owned());
+        let target = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let probe = walker
+            .fetch_identity(&t, target, Duration::from_secs(2))
+            .await;
+        assert_eq!(probe.os_version, None);
+        assert!(probe.unread);
+        assert_eq!(probe.outcome(), "unread");
+        assert!(probe.sys_descr.is_some(), "the device did answer");
+        assert_eq!(
+            probe.sys_object_id.as_deref(),
+            Some("1.3.6.1.4.1.2011.2.321.1.406")
+        );
+        assert!(
+            walked_the_patch_table(&t),
+            "the patch table was never walked: {:?}",
+            t.asked()
+        );
+
+        let silent = huawei_usg(true).with_silent_instance_walks();
+        let probe = walker
+            .fetch_identity(&silent, target, Duration::from_secs(2))
+            .await;
+        assert_eq!(
+            probe.os_version, None,
+            "a walk that failed outright is no better"
+        );
+        assert_eq!(probe.outcome(), "unread");
+    }
+
+    /// The other side of the rule, and the one that protects `.210`'s two simulated VRP devices: a
+    /// table that **answered** without a state column is a device with no running patch, not an
+    /// unfinished read, so the bare version is still sent.
+    #[tokio::test]
+    async fn a_patch_table_that_answered_without_a_state_column_still_gives_the_version() {
+        let t = huawei_usg(false);
+        let probe = SnmpWalker::V2c("public".to_owned())
+            .fetch_identity(
+                &t,
+                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                Duration::from_secs(2),
+            )
+            .await;
+        assert_eq!(probe.os_version.as_deref(), Some("V600R024C00SPC100"));
+        assert!(!probe.unread);
+        assert_eq!(probe.outcome(), "version");
     }
 
     /// Over v3 the version instance is fetched with a GET, not by walking its column, and a value

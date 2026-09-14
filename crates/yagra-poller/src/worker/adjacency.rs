@@ -420,7 +420,7 @@ mod tests {
                 _o: &[String],
                 _to: Duration,
                 _max: usize,
-            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+            ) -> Result<yagra_transport::InstanceWalk, TransportError> {
                 Err(TransportError::Io("snmp connect refused".into()))
             }
             async fn snmp_v3_walk_instances(
@@ -430,7 +430,7 @@ mod tests {
                 _o: &[String],
                 _to: Duration,
                 _max: usize,
-            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+            ) -> Result<yagra_transport::InstanceWalk, TransportError> {
                 Err(TransportError::Io("snmp connect refused".into()))
             }
             async fn probe_icmp(

@@ -263,7 +263,7 @@ pub async fn snmp_walk_instances_v3(
     column_oids: &[String],
     timeout: Duration,
     max_rows: usize,
-) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+) -> Result<crate::InstanceWalk, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut rows = Vec::new();
     let mut budget = WalkBudget::new(timeout);
@@ -308,7 +308,10 @@ pub async fn snmp_walk_instances_v3(
     if is_silence(rows.len(), stopped) {
         return Err(TransportError::Silent(target));
     }
-    Ok(rows)
+    Ok(crate::InstanceWalk {
+        every_column_answered: budget.every_column_answered(column_oids.len()),
+        rows,
+    })
 }
 
 /// Walk one column subtree via repeated GETBULK, mapping each in-subtree varbind to an `R` row

@@ -211,7 +211,7 @@ pub async fn snmp_walk_instances_v2c(
     column_oids: &[String],
     timeout: Duration,
     max_rows: usize,
-) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+) -> Result<crate::InstanceWalk, TransportError> {
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
     let mut budget = WalkBudget::new(timeout);
@@ -247,7 +247,10 @@ pub async fn snmp_walk_instances_v2c(
     if is_silence(rows.len(), stopped) {
         return Err(TransportError::Silent(target));
     }
-    Ok(rows)
+    Ok(crate::InstanceWalk {
+        every_column_answered: budget.every_column_answered(column_oids.len()),
+        rows,
+    })
 }
 
 /// Page one column with GETBULK, stopping at the subtree edge, at end-of-MIB, or at `budget` rows.

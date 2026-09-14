@@ -117,6 +117,8 @@ impl Truncation {
 pub(crate) struct WalkBudget {
     deadline: Instant,
     consecutive_failures: usize,
+    /// Columns recorded as [`ColumnOutcome::Answered`], for [`Self::every_column_answered`].
+    answered: usize,
 }
 
 impl WalkBudget {
@@ -134,6 +136,7 @@ impl WalkBudget {
         Self {
             deadline: Instant::now() + remaining,
             consecutive_failures: 0,
+            answered: 0,
         }
     }
 
@@ -156,10 +159,25 @@ impl WalkBudget {
     /// and cuts it silently, because the poll still succeeds with fewer samples.
     pub(crate) fn record(&mut self, outcome: ColumnOutcome) {
         match outcome {
-            ColumnOutcome::Answered => self.consecutive_failures = 0,
+            ColumnOutcome::Answered => {
+                self.consecutive_failures = 0;
+                self.answered += 1;
+            }
             ColumnOutcome::Failed => self.consecutive_failures += 1,
             ColumnOutcome::Skipped => {}
         }
+    }
+
+    /// Whether every one of the `asked` columns was recorded as answered — none failed, none was
+    /// skipped, and the walk did not stop before reaching one (ADR-138 Increment 3).
+    ///
+    /// A different question from [`Self::spent`] and [`is_silence`], and it has to be: one column
+    /// that times out between two that answer resets the silence count, so the walk returns `Ok`
+    /// with the other columns' rows. A caller that pairs rows *across* columns — the Huawei patch
+    /// table's version with its running state — would read that half-table as a device with no
+    /// running patch. This is what lets it tell the two apart.
+    pub(crate) fn every_column_answered(&self, asked: usize) -> bool {
+        self.answered == asked
     }
 
     /// Wall-clock left before the deadline, saturating at zero.
@@ -378,6 +396,47 @@ mod tests {
             "raising a check's timeout must raise its budget — that is the only knob, got \
              {patient:?}"
         );
+    }
+
+    /// **The accepting side first**: a walk whose every column answered says so. A rule answering
+    /// `false` unconditionally would pass every test below it — and would leave every Huawei device
+    /// with no OS version at all, which is a quieter failure than the one it was written to fix.
+    #[test]
+    fn a_walk_whose_every_column_answered_says_so() {
+        let mut budget = WalkBudget::new(Duration::from_secs(2));
+        budget.record(ColumnOutcome::Answered);
+        budget.record(ColumnOutcome::Answered);
+        assert!(budget.every_column_answered(2));
+        assert!(
+            WalkBudget::new(Duration::from_secs(2)).every_column_answered(0),
+            "asking for nothing leaves nothing unanswered"
+        );
+    }
+
+    /// The case ADR-138 Increment 3 exists for: a column times out between two that answer. The
+    /// silence count resets — the walk goes on and returns `Ok` — but the walk is not whole.
+    #[test]
+    fn a_failed_column_between_answers_leaves_the_walk_incomplete() {
+        let mut budget = WalkBudget::new(Duration::from_secs(2));
+        budget.record(ColumnOutcome::Answered);
+        budget.record(ColumnOutcome::Failed);
+        budget.record(ColumnOutcome::Answered);
+        assert_eq!(budget.spent(), None, "the walk itself carries on");
+        assert!(!budget.every_column_answered(3));
+    }
+
+    /// A column never reached — the deadline, silence or the row cap stopped the loop first — and a
+    /// column skipped for a malformed OID are both columns nobody heard from.
+    #[test]
+    fn a_column_never_reached_or_skipped_is_not_answered() {
+        let mut stopped_early = WalkBudget::new(Duration::from_secs(2));
+        stopped_early.record(ColumnOutcome::Answered);
+        assert!(!stopped_early.every_column_answered(2));
+
+        let mut skipped = WalkBudget::new(Duration::from_secs(2));
+        skipped.record(ColumnOutcome::Answered);
+        skipped.record(ColumnOutcome::Skipped);
+        assert!(!skipped.every_column_answered(2));
     }
 
     /// The two reasons are distinct labels, because the counter is read to tell them apart.

@@ -87,6 +87,13 @@ impl Reads {
 pub struct Answers {
     pub strings: HashMap<String, String>,
     pub integers: HashMap<String, i64>,
+    /// A column in [`Reads::columns`] did not answer to its end — it errored, timed out, or the walk
+    /// stopped before reaching it. `false`, the default, is every walked column heard out (or none
+    /// asked). A row that walks a column then resolves to **nothing** rather than to what the
+    /// half-table suggests: rows paired across columns cannot tell a missing state row from a patch
+    /// that is not running, and a bare version would overwrite the patched one stored from the last
+    /// read (ADR-138 Increment 3).
+    pub unanswered_columns: bool,
 }
 
 /// One condition a row recognises a device by.
@@ -849,6 +856,10 @@ fn add_reads(source: Source, reads: &mut Reads) {
 /// [`oids_to_read`]. `None` when the table does not know the device, or knows it and finds no
 /// version — the two are deliberately not told apart, because to the node page they are the same
 /// dash.
+///
+/// Also `None` when the row walks a table column and [`Answers::unanswered_columns`] says that walk
+/// did not finish. `None` is what makes core keep the version it already has (ADR-138 decision 10);
+/// anything built from a half-read table would replace it.
 #[must_use]
 pub fn resolve(
     sys_object_id: Option<&str>,
@@ -856,10 +867,23 @@ pub fn resolve(
     answers: &Answers,
 ) -> Option<String> {
     let row = row_for(sys_object_id, sys_descr)?;
+    if answers.unanswered_columns && walks_a_column(row) {
+        return None;
+    }
     let descr = as_librenms_reads(sys_descr.unwrap_or_default());
     row.sources
         .iter()
         .find_map(|source| from_source(*source, descr, answers))
+}
+
+/// Whether any of a row's sources reads a table column whole — the reads
+/// [`Answers::unanswered_columns`] speaks for. Derived from [`add_reads`] so the two cannot disagree.
+fn walks_a_column(row: &Row) -> bool {
+    let mut reads = Reads::default();
+    for source in row.sources {
+        add_reads(*source, &mut reads);
+    }
+    !reads.columns.is_empty()
 }
 
 fn from_source(source: Source, descr: &str, answers: &Answers) -> Option<String> {
@@ -929,8 +953,9 @@ fn from_source(source: Source, descr: &str, answers: &Answers) -> Option<String>
 }
 
 /// The version of every `hwPatchTable` row whose state is running — in row order, each version
-/// once, joined by `, `. `None` when no row is running, or the table was not read. A row whose state
-/// did not come back is not running: nothing else says so.
+/// once, joined by `, `. `None` when no row is running, including a table that answered with no rows.
+/// A row whose state did not come back is not running: nothing else says so. A walk that did not
+/// finish never reaches here — [`resolve`] refuses the row first (ADR-138 Increment 3).
 fn running_patch(answers: &Answers) -> Option<String> {
     let version_prefix = format!("{HW_PATCH_VERSION}.");
     let mut rows: Vec<(Vec<u32>, &str)> = answers
@@ -1141,7 +1166,7 @@ mod tests {
     }
 
     /// The patch suffix comes only from a row that says it is running. A loaded-but-idle patch, a
-    /// row whose state did not come back, and a table that was not read all leave the version bare
+    /// row whose state did not come back, and a table that answered empty all leave the version bare
     /// — and a patch never stands in for a version the inner source did not find (ADR-138 Inc.2).
     #[test]
     fn a_huawei_patch_is_appended_only_from_a_running_row() {
@@ -1182,6 +1207,69 @@ mod tests {
 
         let no_release = Some("Huawei YunShan OS \r\nHUAWEI USG6530F-D");
         assert_eq!(resolve(oid, no_release, &running), None);
+    }
+
+    /// A patch table whose walk did not finish leaves **no** version, not a bare one. A bare one
+    /// would overwrite the patched value stored from the last read — ADR-138 decision 10 broken,
+    /// and what `.210` and `.211` both showed (Increment 3). Only rows that walk a column are held
+    /// back; a row reading named instances is not the flag's business.
+    #[test]
+    fn a_patch_table_that_did_not_answer_leaves_no_version() {
+        let usg = Some("1.3.6.1.4.1.2011.2.321.1.406");
+        let usg_descr = Some(
+            "Huawei YunShan OS \r\nVersion 1.24.0.1 (USG V600R024C00SPC100) \r\nHUAWEI USG6530F-D \r\n",
+        );
+        let mut whole = Answers::default();
+        whole.strings.insert(
+            format!("{HW_PATCH_VERSION}.128.2"),
+            "V600R024SPH120".to_owned(),
+        );
+        whole
+            .integers
+            .insert(format!("{HW_PATCH_OPERATE_STATE}.128.2"), 1);
+        // The accepting side first: a flag that refused every Huawei would pass the rest.
+        assert_eq!(
+            resolve(usg, usg_descr, &whole).as_deref(),
+            Some("V600R024C00SPC100 [V600R024SPH120]")
+        );
+        let cut = Answers {
+            unanswered_columns: true,
+            ..whole.clone()
+        };
+        assert_eq!(
+            resolve(usg, usg_descr, &cut),
+            None,
+            "even with the running row in hand, a walk that did not finish is not trusted"
+        );
+
+        let vrp = Some("1.3.6.1.4.1.2011.2.23.291");
+        let vrp_descr = Some(
+            "Huawei Versatile Routing Platform Software\r\nVRP (R) software, Version 5.170 (S5720 V200R010C00SPC600)",
+        );
+        assert_eq!(
+            resolve(vrp, vrp_descr, &Answers::default()).as_deref(),
+            Some("5.170 (V200R010C00SPC600)")
+        );
+        let unanswered = Answers {
+            unanswered_columns: true,
+            ..Answers::default()
+        };
+        assert_eq!(resolve(vrp, vrp_descr, &unanswered), None);
+
+        let fortigate = Some("1.3.6.1.4.1.12356.101.1.15000");
+        let mut forti = Answers {
+            unanswered_columns: true,
+            ..Answers::default()
+        };
+        forti.strings.insert(
+            "1.3.6.1.4.1.12356.101.4.1.1.0".to_owned(),
+            "v7.2.6,build1575,230926 (GA.F)".to_owned(),
+        );
+        assert_eq!(
+            resolve(fortigate, Some("FGT_1500D"), &forti).as_deref(),
+            Some("v7.2.6,build1575,230926 (GA.F)"),
+            "a row that walks no column ignores the flag"
+        );
     }
 
     #[test]
@@ -1330,6 +1418,7 @@ mod tests {
                     .filter(|(k, _)| reads.integers.contains(&k.as_str()) || in_a_walked_column(k))
                     .map(|(k, v)| (k.clone(), *v))
                     .collect(),
+                unanswered_columns: false,
             };
             let got = resolve(oid, descr, &answers);
 

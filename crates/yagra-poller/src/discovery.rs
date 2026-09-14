@@ -896,8 +896,11 @@ mod tests {
             _column_oids: &[String],
             _timeout: Duration,
             _max_rows: usize,
-        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
-            Ok(Vec::new())
+        ) -> Result<yagra_transport::InstanceWalk, TransportError> {
+            Ok(yagra_transport::InstanceWalk {
+                rows: Vec::new(),
+                every_column_answered: true,
+            })
         }
 
         async fn snmp_v3_walk_instances(
@@ -907,8 +910,11 @@ mod tests {
             _column_oids: &[String],
             _timeout: Duration,
             _max_rows: usize,
-        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
-            Ok(Vec::new())
+        ) -> Result<yagra_transport::InstanceWalk, TransportError> {
+            Ok(yagra_transport::InstanceWalk {
+                rows: Vec::new(),
+                every_column_answered: true,
+            })
         }
 
         async fn probe_http(
@@ -1310,8 +1316,11 @@ mod tests {
                 _o: &[String],
                 _to: Duration,
                 _max: usize,
-            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
-                Ok(Vec::new())
+            ) -> Result<yagra_transport::InstanceWalk, TransportError> {
+                Ok(yagra_transport::InstanceWalk {
+                    rows: Vec::new(),
+                    every_column_answered: true,
+                })
             }
             async fn snmp_v3_walk_instances(
                 &self,
@@ -1320,8 +1329,11 @@ mod tests {
                 _o: &[String],
                 _to: Duration,
                 _max: usize,
-            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
-                Ok(Vec::new())
+            ) -> Result<yagra_transport::InstanceWalk, TransportError> {
+                Ok(yagra_transport::InstanceWalk {
+                    rows: Vec::new(),
+                    every_column_answered: true,
+                })
             }
             async fn probe_http(
                 &self,
@@ -1668,7 +1680,7 @@ mod tests {
             o: &[String],
             to: Duration,
             m: usize,
-        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+        ) -> Result<yagra_transport::InstanceWalk, TransportError> {
             self.inner.snmp_walk_instances(t, c, o, to, m).await
         }
         async fn snmp_v3_walk_instances(
@@ -1678,7 +1690,7 @@ mod tests {
             o: &[String],
             to: Duration,
             m: usize,
-        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+        ) -> Result<yagra_transport::InstanceWalk, TransportError> {
             self.inner.snmp_v3_walk_instances(t, p, o, to, m).await
         }
         async fn probe_http(
