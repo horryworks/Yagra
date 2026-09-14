@@ -598,7 +598,14 @@ mod tests {
     /// row, and has a sibling at the same scope without a pattern — the rule it narrows (ADR-143).
     #[test]
     fn every_seeded_row_pattern_narrows_a_default_that_exists() {
-        assert!(!DEFAULT_ROW_MATCHES.is_empty());
+        // Written out, like the profile-scoped count above: the loop below checks nothing over an
+        // empty table, and a new pattern should be a deliberate edit to this number. (Not
+        // `!is_empty()`: clippy 1.90, which flash-verify runs, refuses that on a constant.)
+        assert_eq!(
+            DEFAULT_ROW_MATCHES.len(),
+            1,
+            "one seeded row pattern: the Cisco IOS I/O pool (ADR-143 decision 8)"
+        );
         for (offset, pattern) in DEFAULT_ROW_MATCHES {
             let (_, targets, metric, ..) = DEFAULT_THRESHOLDS
                 .iter()
