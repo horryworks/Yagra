@@ -1466,13 +1466,18 @@ function SeenOnNetworkCard({
                         </option>
                       ))}
                     </Select>
-                    <Button
-                      variant="primary"
-                      disabled={!canConfig || busyId != null}
-                      onClick={() => promote(e)}
-                    >
-                      {t('discovery.seen.monitor')}
-                    </Button>
+                    {/* Not drawn without the permission (ADR-056): the grid keeps its third track. */}
+                    {canConfig ? (
+                      <Button
+                        variant="primary"
+                        disabled={busyId != null}
+                        onClick={() => promote(e)}
+                      >
+                        {t('discovery.seen.monitor')}
+                      </Button>
+                    ) : (
+                      <span />
+                    )}
                   </>
                 ) : (
                   // Already a device node (ADR-139). The form and the button are not drawn: pressing

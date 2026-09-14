@@ -9,6 +9,7 @@ import {
   duplicateWarning,
   DUPLICATE_ADDRESS_KINDS,
   EMPTY_ADD_NODE_FORM,
+  needsAddressLookup,
   type AddNodeForm,
 } from './addNodeRequest';
 
@@ -16,6 +17,24 @@ const form = (over: Partial<AddNodeForm> = {}): AddNodeForm => ({
   ...EMPTY_ADD_NODE_FORM,
   name: 'edge-1',
   ...over,
+});
+
+describe('needsAddressLookup', () => {
+  it('asks before creating a device at an address nobody has confirmed', () => {
+    expect(needsAddressLookup('device', '10.0.0.1', null)).toBe(true);
+  });
+
+  it('does not ask again for the address the operator already confirmed, however it is spaced', () => {
+    expect(needsAddressLookup('device', ' 10.0.0.1 ', '10.0.0.1')).toBe(false);
+    // A different address typed after confirming is a new question.
+    expect(needsAddressLookup('device', '10.0.0.2', '10.0.0.1')).toBe(true);
+  });
+
+  it('does not ask for a blank address, or for a URL or DNS monitor', () => {
+    expect(needsAddressLookup('device', '   ', null)).toBe(false);
+    expect(needsAddressLookup('url', '10.0.0.1', null)).toBe(false);
+    expect(needsAddressLookup('dns', '10.0.0.1', null)).toBe(false);
+  });
 });
 
 describe('duplicateWarning', () => {

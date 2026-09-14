@@ -1637,6 +1637,105 @@ mod tests {
         assert_eq!(profile_and_vendor(&pool, locked).await.0, Some(seen));
     }
 
+    /// A scoped caller's Reclassify reads, applies and locks only the device nodes in its own
+    /// folders (ADR-140, ADR-014) — never a node in another folder, never one at the tree root
+    /// (`group_id` NULL), and never a URL monitor.
+    ///
+    /// 🚨 The unrestricted calls at the end are half the test. They prove the three statements do
+    /// reach the other two device nodes; without them, a predicate that matched nothing at all would
+    /// pass every scoped assertion (`rejection-only-tests-pass-when-everything-rejects`).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_reclassification_touches_only_device_nodes_in_the_callers_folders(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::seed_ids::SeedRange;
+        let repo = pgtest::repo(pool.clone());
+        repo.seed_builtin_profiles().await.expect("seed");
+        let (seen, chosen) = (SeedRange::Profiles.id(0), SeedRange::Profiles.id(2));
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        // Named so `ORDER BY n.name` lists them in this order.
+        let inside = pgtest::node(&pool, "a-inside", 1, Some(mine)).await;
+        let other = pgtest::node(&pool, "b-other-folder", 2, Some(theirs)).await;
+        let root = pgtest::node(&pool, "c-tree-root", 3, None).await;
+        let monitor = pgtest::node(&pool, "d-url-monitor", 4, Some(mine)).await;
+        sqlx::query("INSERT INTO url_checks (node_id, url) VALUES ($1, 'https://10.0.0.4/')")
+            .bind(monitor)
+            .execute(&pool)
+            .await
+            .expect("url check");
+        let everyone = [inside, other, root, monitor];
+        for id in everyone {
+            sqlx::query("UPDATE nodes SET profile_id = $2 WHERE id = $1")
+                .bind(id)
+                .bind(seen)
+                .execute(&pool)
+                .await
+                .expect("the profile the screen showed");
+        }
+        let write = |node| ReclassifyWrite {
+            node,
+            from: Some(seen),
+            to: chosen,
+            vendor: None,
+            model: None,
+        };
+        let sorted = |mut ids: Vec<Uuid>| {
+            ids.sort();
+            ids
+        };
+        let scope: &[Uuid] = &[mine];
+
+        let listed: Vec<Uuid> = repo
+            .reclassify_inputs(Some(scope))
+            .await
+            .expect("scoped read")
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(listed, vec![inside], "the scoped list");
+        let applied = repo
+            .apply_reclassification(&everyone.map(write), Some(scope))
+            .await
+            .expect("scoped apply");
+        assert_eq!(applied, vec![inside], "the scoped apply");
+        let locked = repo
+            .set_profile_locks(&everyone, true, Some(scope))
+            .await
+            .expect("scoped lock");
+        assert_eq!(locked, vec![inside], "the scoped lock");
+
+        // Unrestricted: both other device nodes are reached, and the URL monitor still is not.
+        let listed: Vec<Uuid> = repo
+            .reclassify_inputs(None)
+            .await
+            .expect("read")
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(listed, vec![inside, other, root], "the unrestricted list");
+        let applied = repo
+            .apply_reclassification(&everyone.map(write), None)
+            .await
+            .expect("apply");
+        // `inside` is already on `chosen` and locked, so only the other two move.
+        assert_eq!(
+            sorted(applied),
+            sorted(vec![other, root]),
+            "the unrestricted apply"
+        );
+        let locked = repo
+            .set_profile_locks(&everyone, true, None)
+            .await
+            .expect("lock");
+        assert_eq!(
+            sorted(locked),
+            sorted(vec![inside, other, root]),
+            "the unrestricted lock"
+        );
+    }
+
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unmentioned_note_survives_a_save_and_an_empty_one_clears_it(pool: sqlx::PgPool) {
