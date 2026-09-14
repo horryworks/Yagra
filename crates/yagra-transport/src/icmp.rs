@@ -27,7 +27,13 @@ pub struct SurgePingTransport {
     v4: Client,
     v6: Option<Client>,
     /// Rolling ICMP echo identifier so concurrent probes don't collide.
+    ///
+    /// ⚠️ **On a Linux DGRAM socket — `Config::default()`'s choice — this separates nothing.**
+    /// surge-ping keys a waiting reply by `(host, None, sequence)` there, because the kernel
+    /// rewrites the identifier; see `next_sequences` for what actually keeps probes apart.
     ident: AtomicU16,
+    /// The first sequence number of the next probe's block (`next_sequences`).
+    seq: AtomicU16,
 }
 
 impl SurgePingTransport {
@@ -49,12 +55,30 @@ impl SurgePingTransport {
             v4,
             v6,
             ident: AtomicU16::new(seed),
+            seq: AtomicU16::new(0),
         })
     }
 
     fn next_ident(&self) -> PingIdentifier {
         PingIdentifier(self.ident.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// Reserve `count` consecutive sequence numbers for one probe and return the first.
+///
+/// 🚨 **This is what keeps two probes to the same address from receiving each other's replies.**
+/// On a Linux DGRAM ICMP socket surge-ping matches a reply on `(host, sequence)` alone — the
+/// identifier is rewritten by the kernel and dropped from the key — so two probes that both send
+/// sequences 0, 1, 2 to one host collide: the second registration fails with `IdenticalRequests`
+/// and its echoes are recorded as lost. Until ADR-110 Increment 8 the per-device single-flight
+/// kept same-target probes from overlapping; ICMP now skips that queue, so a poll-now landing on a
+/// scheduled probe, or two nodes sharing an address, overlap for real. Disjoint blocks make that
+/// harmless without putting ICMP back behind the device's SNMP conversation.
+///
+/// The counter wraps; two blocks can only coincide after 65,536 sequences have been handed out in
+/// between, and a probe lasts about a second.
+fn next_sequences(counter: &AtomicU16, count: u8) -> u16 {
+    counter.fetch_add(u16::from(count), Ordering::Relaxed)
 }
 
 #[async_trait]
@@ -77,6 +101,9 @@ impl Transport for SurgePingTransport {
         // one-pinger-per-target (parallelism comes from polling many targets at once); N concurrent
         // pingers to the SAME target return 100% loss for every host — that broke liveness fleet-wide
         // and was reverted (64f42ef). Do not reintroduce concurrent same-target pingers.
+        // ⚠️ Two PROBES to one target can still overlap (a poll-now, a shared address), which is why
+        // each takes its own block of sequence numbers — see `next_sequences`.
+        let first_seq = next_sequences(&self.seq, count);
         let mut pinger = client.pinger(target, self.next_ident()).await;
         pinger.timeout(timeout);
 
@@ -98,7 +125,8 @@ impl Transport for SurgePingTransport {
         let mut sent: u8 = 0;
         for seq in 0..count {
             sent += 1;
-            match pinger.ping(PingSequence(u16::from(seq)), &payload).await {
+            let sequence = PingSequence(first_seq.wrapping_add(u16::from(seq)));
+            match pinger.ping(sequence, &payload).await {
                 Ok((_packet, rtt)) => rtts_ms.push(rtt.as_secs_f64() * 1000.0),
                 Err(err) => {
                     tracing::debug!(%target, error = %err, "icmp echo did not complete");
@@ -270,6 +298,28 @@ pub(crate) fn summarize(count: u8, rtts_ms: &[f64]) -> IcmpProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_probes_to_one_target_never_share_a_sequence_number() {
+        // The property the reply map needs on a Linux DGRAM socket, where it keys on
+        // (host, sequence) alone: the blocks two probes send must not intersect.
+        let counter = AtomicU16::new(0);
+        let a = next_sequences(&counter, 3);
+        let b = next_sequences(&counter, 3);
+        let seqs = |first: u16| (0..3u16).map(move |i| first.wrapping_add(i));
+        assert!(
+            seqs(a).all(|s| !seqs(b).any(|t| t == s)),
+            "{a} and {b} overlap"
+        );
+    }
+
+    #[test]
+    fn a_block_straddling_the_wrap_is_still_disjoint_from_the_next() {
+        let counter = AtomicU16::new(u16::MAX - 1);
+        let a = next_sequences(&counter, 3); // 65534, 65535, 0
+        let b = next_sequences(&counter, 3); // 1, 2, 3
+        assert_eq!((a, b), (u16::MAX - 1, 1));
+    }
 
     #[test]
     fn all_replies_means_no_loss_and_mean_rtt() {

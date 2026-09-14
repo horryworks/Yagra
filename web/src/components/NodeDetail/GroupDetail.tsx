@@ -26,6 +26,7 @@ import { stateLabel } from '../../lib/format';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
+import { membersTrailer, type MemberFetch } from './groupMembers';
 import './NodeDetail.css';
 
 interface Props {
@@ -35,6 +36,11 @@ interface Props {
   /** The server's per-group DIRECT member counts (`/fleet/group-summary`) — the same input the tree
    *  row's rollup uses. Required, and that is the point: see the rollup note below. */
   groupCounts: Record<string, StateCounts>;
+  /** Where this folder's direct-member fetch stands (`groupMembers.ts::memberFetchState`). Required:
+   *  without it an unanswered fetch reads exactly like an empty folder. */
+  membersFetch: MemberFetch;
+  /** Fetch this folder's members again after a failure. Absent ⇒ no retry control. */
+  onRetryMembers?: () => void;
   canEdit: boolean;
   onEditGroup: (group: NodeGroup) => void;
   onAddNode: () => void;
@@ -49,6 +55,8 @@ export function GroupDetail({
   groups,
   nodes,
   groupCounts,
+  membersFetch,
+  onRetryMembers,
   canEdit,
   onEditGroup,
   onAddNode,
@@ -83,6 +91,8 @@ export function GroupDetail({
     [nodes, group.id],
   );
   const trail = groupTrail(groups, group.id);
+  const memberRows = subgroups.length + directMembers.length;
+  const trailer = membersTrailer(membersFetch, memberRows);
 
   return (
     <div className="nd">
@@ -198,7 +208,7 @@ export function GroupDetail({
 
         <section>
           <div className="nd-section-t">{t('groupDetail.members')}</div>
-          {subgroups.length + directMembers.length > 0 ? (
+          {memberRows > 0 && (
             <div className="nd-members">
               {/* Subfolders first, then nodes (ADR-142 増分 2). The count is the subtree's, from
                   the same server rollup as the header — never the members that happen to be loaded. */}
@@ -259,8 +269,20 @@ export function GroupDetail({
                 );
               })}
             </div>
-          ) : (
-            <p className="nd-muted">{t('groupDetail.noMembers')}</p>
+          )}
+          {/* "Nothing here" only after the fetch has answered (`groupMembers.ts`). The subfolder
+              rows above never wait on it, so they stay drawn over a loading or failed line. */}
+          {trailer === 'empty' && <p className="nd-muted">{t('groupDetail.noMembers')}</p>}
+          {trailer === 'loading' && <p className="nd-muted">{t('tree.loadingNodes')}</p>}
+          {trailer === 'failed' && (
+            <p className="nd-muted">
+              {t('tree.loadFailed')}{' '}
+              {onRetryMembers && (
+                <Button variant="ghost" onClick={onRetryMembers}>
+                  {t('tree.retry')}
+                </Button>
+              )}
+            </p>
           )}
         </section>
       </div>
