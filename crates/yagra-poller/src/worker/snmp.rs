@@ -13,9 +13,10 @@ use super::*;
 use yagra_discovery::os_version;
 
 /// Identity probes run, by what they found: `version`, `no_version` (the device answered but the
-/// table does not cover it or it reports none), `unread` (the device answered but a table column
-/// the version needs did not answer to its end, so no version was sent and core keeps the one it
-/// has — ADR-138 Increment 3) or `no_answer` (not even `sysDescr` came back).
+/// table does not cover it or it reports none), `unread` (the device answered but the patch table
+/// the version's row walks did not answer to its end, so the version went out without its patch, in
+/// a field core writes only where it cannot strip one — ADR-138 Increments 3 and 4) or `no_answer`
+/// (not even `sysDescr` came back).
 /// The ratio of the first two is the table's real coverage of a fleet (ADR-138).
 pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_total";
 
@@ -24,14 +25,38 @@ pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_tota
 /// from turning an hourly probe into a table dump.
 const IDENTITY_COLUMN_ROWS: usize = 256;
 
+/// The shortest per-round-trip wait the identity probe gives the table columns it walks whole
+/// (ADR-138 Increment 4).
+///
+/// **Why not the job's own 2 s.** Measured on a Huawei S5731 (VRP 5.170) from the PoC box: a
+/// GETBULK on its empty `hwPatchTable` took **2.35 s** to answer with 20 repetitions and 1.12 s with
+/// one, while `sysDescr` took 0.02 s. At 2 s every hourly walk timed out, and all 43 such switches
+/// there never showed a version. Five seconds is twice the measured answer.
+///
+/// ⚠️ The cost is bounded and hourly: the walk runs only on a device that already answered
+/// `sysDescr`, and a device that ignores the table holds its single-flight slot for at most two
+/// columns of this, once an hour.
+const IDENTITY_COLUMN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The wait for the identity probe's whole-column walks: [`IDENTITY_COLUMN_TIMEOUT`], or the job's
+/// own timeout when that is longer — a job already more patient is never made less so.
+fn identity_column_timeout(job_timeout: Duration) -> Duration {
+    job_timeout.max(IDENTITY_COLUMN_TIMEOUT)
+}
+
 /// What one identity probe learned (ADR-138).
 pub(super) struct IdentityProbe {
     pub(super) sys_descr: Option<String>,
     pub(super) os_version: Option<String>,
+    /// The version without its running-patch suffix, set only when `unread` is — the table did not
+    /// answer, so [`os_version`](Self::os_version) is withheld (ADR-138 Increment 4).
+    pub(super) os_version_without_patch: Option<String>,
     /// Always read by the first GET, to pick the version rows; kept since ADR-140 so core can
     /// re-run the classification rules on an existing node.
     pub(super) sys_object_id: Option<String>,
-    /// No version was sent because a column it needs did not answer (ADR-138 Increment 3).
+    /// A column the version's row walks did not answer, so the full version was withheld
+    /// (ADR-138 Increment 3) and only [`os_version_without_patch`](Self::os_version_without_patch)
+    /// can carry one (Increment 4).
     pub(super) unread: bool,
 }
 
@@ -80,8 +105,10 @@ impl SnmpWalker {
     /// table keeps this device's version in `sysDescr` or does not know the device at all. Only a
     /// Huawei adds a walk of whole columns, for the patch that is running (ADR-138 Inc.2).
     /// Best-effort throughout: an error or a missing value is simply absent. The one exception is
-    /// that walk of whole columns: when it did not finish, the version is withheld rather than built
-    /// from half a table, so core keeps the one it already has (ADR-138 Increment 3).
+    /// that walk of whole columns: when it did not finish, the full version is withheld rather than
+    /// built from half a table (ADR-138 Increment 3), and the version without its patch goes out in
+    /// its own field, which core writes only where no patch can be stripped (Increment 4). That walk
+    /// also waits longer per round trip than the job does — see [`IDENTITY_COLUMN_TIMEOUT`].
     async fn fetch_identity(
         &self,
         transport: &dyn Transport,
@@ -115,7 +142,12 @@ impl SnmpWalker {
         }
         if !reads.columns.is_empty() {
             let columns = self
-                .read_columns(transport, target, &reads.columns, timeout)
+                .read_columns(
+                    transport,
+                    target,
+                    &reads.columns,
+                    identity_column_timeout(timeout),
+                )
                 .await;
             answers.strings.extend(columns.strings);
             answers.integers.extend(columns.integers);
@@ -123,15 +155,24 @@ impl SnmpWalker {
         }
         let os_version = os_version::resolve(sys_object_id, sys_descr.as_deref(), &answers);
         let unread = os_version.is_none() && answers.unanswered_columns;
+        // Withholding the version protects a patched value already stored (Increment 3), but on a
+        // node that never had one it left the row empty for good — every VRP 5.170 switch on the
+        // PoC box. So the bare version still goes out, in the field core will not let strip a patch.
+        let os_version_without_patch = if unread {
+            os_version::resolve_without_patch(sys_object_id, sys_descr.as_deref(), &answers)
+        } else {
+            None
+        };
         if unread {
             // The span carries the target and node. Without this line the case is invisible: the
-            // walk logs a failed column at debug only, and the node page just keeps its old value.
+            // walk logs a failed column at debug only, and the node page shows no patch.
             tracing::info!(
-                "identity probe left the OS version unset: a table column it needs did not answer"
+                "identity probe sent the OS version without its patch: the patch table did not answer"
             );
         }
         IdentityProbe {
             os_version,
+            os_version_without_patch,
             sys_object_id: sys_object_id.and_then(yagra_discovery::normalize_sys_object_id),
             sys_descr,
             unread,
@@ -402,6 +443,7 @@ pub(super) async fn execute_scalar_get(
                 metrics::counter!(IDENTITY_PROBES_METRIC, "result" => probe.outcome()).increment(1);
                 r.sys_descr = probe.sys_descr;
                 r.os_version = probe.os_version;
+                r.os_version_without_patch = probe.os_version_without_patch;
                 r.sys_object_id = probe.sys_object_id;
             }
             r
@@ -745,6 +787,11 @@ mod tests {
         assert_eq!(probe.os_version, None);
         assert!(probe.unread);
         assert_eq!(probe.outcome(), "unread");
+        // ADR-138 Increment 4: the version still goes out, without the patch the rows would give.
+        assert_eq!(
+            probe.os_version_without_patch.as_deref(),
+            Some("V600R024C00SPC100")
+        );
         assert!(probe.sys_descr.is_some(), "the device did answer");
         assert_eq!(
             probe.sys_object_id.as_deref(),
@@ -765,6 +812,69 @@ mod tests {
             "a walk that failed outright is no better"
         );
         assert_eq!(probe.outcome(), "unread");
+        assert_eq!(
+            probe.os_version_without_patch.as_deref(),
+            Some("V600R024C00SPC100"),
+            "the version lives in sysDescr, which did answer"
+        );
+    }
+
+    /// A walk that answered sends the full version and nothing on the side — the field core
+    /// treats more cautiously is for the unread case only, or every Huawei would be written twice.
+    #[tokio::test]
+    async fn a_patch_table_that_answered_sends_nothing_without_its_patch() {
+        let probe = SnmpWalker::V2c("public".to_owned())
+            .fetch_identity(
+                &huawei_usg(true),
+                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                Duration::from_secs(2),
+            )
+            .await;
+        assert_eq!(
+            probe.os_version.as_deref(),
+            Some("V600R024C00SPC100 [V600R024SPH120]")
+        );
+        assert_eq!(probe.os_version_without_patch, None);
+    }
+
+    /// ADR-138 Increment 4's wait: the patch table is walked with five seconds per round trip though
+    /// the job carries two — a VRP 5.170 switch took 2.35 s to answer it — and a job that is already
+    /// more patient keeps its own wait.
+    #[tokio::test]
+    async fn the_patch_table_is_walked_with_a_longer_wait_than_the_job() {
+        let target = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let walker = SnmpWalker::V2c("public".to_owned());
+
+        let t = huawei_usg(true);
+        walker
+            .fetch_identity(&t, target, Duration::from_secs(2))
+            .await;
+        assert!(walked_the_patch_table(&t), "{:?}", t.asked());
+        assert_eq!(t.instance_walk_timeouts(), vec![IDENTITY_COLUMN_TIMEOUT]);
+
+        let patient = huawei_usg(true);
+        walker
+            .fetch_identity(&patient, target, Duration::from_secs(8))
+            .await;
+        assert_eq!(
+            patient.instance_walk_timeouts(),
+            vec![Duration::from_secs(8)]
+        );
+    }
+
+    /// The scalar GET carries the side field onto the result it sends core — the probe computing it
+    /// is not enough if the poll drops it on the way out.
+    #[tokio::test]
+    async fn a_poll_whose_patch_table_did_not_answer_carries_the_version_without_its_patch() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = huawei_usg(true).with_unanswered_instance_columns();
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.os_version, None);
+        assert_eq!(
+            r.os_version_without_patch.as_deref(),
+            Some("V600R024C00SPC100")
+        );
     }
 
     /// The other side of the rule, and the one that protects `.210`'s two simulated VRP devices: a

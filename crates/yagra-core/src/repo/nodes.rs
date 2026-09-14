@@ -70,8 +70,9 @@ pub struct NodeWithNotes {
     /// spelling of "no note" and no reader needs a second case.
     pub notes: Option<String>,
     /// The OS / software version the device last reported over SNMP (ADR-138); `None` ⇒ never
-    /// read. Written only by [`NodeRepo::update_os_version_batch`] — observed state, which no API
-    /// route writes and the configuration bundle does not carry.
+    /// read. Written only by [`NodeRepo::update_os_version_batch`] and
+    /// [`NodeRepo::update_os_version_without_patch_batch`] — observed state, which no API route
+    /// writes and the configuration bundle does not carry.
     pub os_version: Option<String>,
     /// Whether a person fixed this node's profile, so Nodes ▸ Reclassify never offers to change it
     /// (ADR-140). Read here because the edit dialog shows it and writes it back.
@@ -924,16 +925,41 @@ impl NodeRepo {
         if rows.is_empty() {
             return Ok(0);
         }
-        let mut by_node: BTreeMap<Uuid, String> = BTreeMap::new();
-        for (node, version) in rows {
-            by_node.insert(*node, version.clone());
-        }
-        let ids: Vec<Uuid> = by_node.keys().copied().collect();
-        let versions: Vec<String> = by_node.into_values().collect();
+        let (ids, versions) = last_version_per_node(rows);
         let res = sqlx::query(
             "UPDATE nodes SET os_version = t.os_version, updated_at = now() \
              FROM unnest($1::uuid[], $2::text[]) AS t(id, os_version) \
              WHERE nodes.id = t.id AND nodes.os_version IS DISTINCT FROM t.os_version",
+        )
+        .bind(&ids)
+        .bind(&versions)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Write versions read **without their running-patch suffix** — what the identity probe sends
+    /// when the patch table did not answer in time (ADR-138 Increment 4).
+    ///
+    /// Not a plain replace, unlike [`Self::update_os_version_batch`]: a stored value that is the
+    /// same version, bare or as `version [patch]`, is kept, so a slow patch table never strips a
+    /// patch read on an earlier hour. What it does write is a node with no version yet, and a node
+    /// whose stored version is a different one — the device was upgraded, and a patch suffix read
+    /// before describes the image it no longer runs. Dedups keeping the last occurrence per node.
+    pub async fn update_os_version_without_patch_batch(
+        &self,
+        rows: &[(Uuid, String)],
+    ) -> anyhow::Result<u64> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let (ids, versions) = last_version_per_node(rows);
+        let res = sqlx::query(
+            "UPDATE nodes SET os_version = t.os_version, updated_at = now() \
+             FROM unnest($1::uuid[], $2::text[]) AS t(id, os_version) \
+             WHERE nodes.id = t.id AND nodes.os_version IS DISTINCT FROM t.os_version \
+               AND (nodes.os_version IS NULL \
+                    OR NOT starts_with(nodes.os_version, t.os_version || ' ['))",
         )
         .bind(&ids)
         .bind(&versions)
@@ -1320,6 +1346,18 @@ impl NodeRepo {
     }
 }
 
+/// `(node, version)` rows as the two parallel arrays `unnest` takes, one per node — the **last**
+/// row for a node wins, so two polls of one node in a batch write the newer answer. Shared by both
+/// OS-version writers so they cannot disagree about which of two answers is current.
+fn last_version_per_node(rows: &[(Uuid, String)]) -> (Vec<Uuid>, Vec<String>) {
+    let mut by_node: BTreeMap<Uuid, String> = BTreeMap::new();
+    for (node, version) in rows {
+        by_node.insert(*node, version.clone());
+    }
+    let ids = by_node.keys().copied().collect();
+    (ids, by_node.into_values().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1459,6 +1497,74 @@ mod tests {
         assert_eq!(read(&repo, id).await.as_deref(), Some("15.2(7)E9"));
 
         assert_eq!(repo.update_os_version_batch(&[]).await.expect("empty"), 0);
+    }
+
+    /// A version read without its patch fills an empty row and follows an upgrade, but never
+    /// replaces the same version — bare or patched — that is already stored (ADR-138 Increment 4).
+    ///
+    /// 🚨 The patched row is the assertion that matters: an implementation that wrote whenever the
+    /// value differed passes every other line here and puts back the defect Increment 3 removed —
+    /// a slow patch table stripping the patch every hour.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_version_without_its_patch_never_strips_the_patch_from_the_same_version(
+        pool: sqlx::PgPool,
+    ) {
+        let empty = pgtest::node(&pool, "vrp-never-read", 1, None).await;
+        let patched = pgtest::node(&pool, "yunshan-patched", 2, None).await;
+        let repo = pgtest::repo(pool);
+        async fn read(repo: &NodeRepo, id: uuid::Uuid) -> Option<String> {
+            repo.get_node_with_notes(id)
+                .await
+                .expect("read")
+                .expect("the node")
+                .os_version
+        }
+        async fn bare(repo: &NodeRepo, id: uuid::Uuid, version: &str) -> u64 {
+            repo.update_os_version_without_patch_batch(&[(id, version.to_owned())])
+                .await
+                .expect("write")
+        }
+
+        // The accepting side first: the case the increment exists for.
+        assert_eq!(bare(&repo, empty, "5.170 (V200R021C00SPC100)").await, 1);
+        assert_eq!(
+            read(&repo, empty).await.as_deref(),
+            Some("5.170 (V200R021C00SPC100)")
+        );
+        assert_eq!(
+            bare(&repo, empty, "5.170 (V200R021C00SPC100)").await,
+            0,
+            "an unchanged version must not be written"
+        );
+
+        let with_patch = "V600R024C00SPC500 [V600R024HP0021]";
+        repo.update_os_version_batch(&[(patched, with_patch.to_owned())])
+            .await
+            .expect("patched write");
+        assert_eq!(
+            bare(&repo, patched, "V600R024C00SPC500").await,
+            0,
+            "the same version must keep its patch"
+        );
+        assert_eq!(read(&repo, patched).await.as_deref(), Some(with_patch));
+
+        // An upgrade: the stored patch describes an image the device no longer runs.
+        assert_eq!(bare(&repo, patched, "V600R025C00SPC100").await, 1);
+        assert_eq!(
+            read(&repo, patched).await.as_deref(),
+            Some("V600R025C00SPC100")
+        );
+        // A version that is a text prefix of the stored one is still a different version — the
+        // match is on `version [`, not on the first characters.
+        assert_eq!(bare(&repo, patched, "V600R025C00SPC10").await, 1);
+
+        assert_eq!(
+            repo.update_os_version_without_patch_batch(&[])
+                .await
+                .expect("empty"),
+            0
+        );
     }
 
     /// What the device says it is is written when it changes and only then, one column at a time

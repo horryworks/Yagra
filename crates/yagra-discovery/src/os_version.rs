@@ -876,6 +876,32 @@ pub fn resolve(
         .find_map(|source| from_source(*source, descr, answers))
 }
 
+/// The version this device's row finds with the running-patch suffix left off — the answer
+/// [`resolve`] withholds when the patch table's walk did not finish (ADR-138 Increment 4). `None`
+/// for a row that walks no column: its answer never depended on a table, so [`resolve`] is already
+/// the whole answer for it.
+///
+/// Safe to build from a half-read walk because the patch suffix is the only source that walks a
+/// column, and what it wraps reads none — `only_the_patch_suffix_walks_a_column` pins that. The
+/// caller must not present this as the version [`resolve`] would give: core writes it only where it
+/// cannot strip a patch already stored.
+#[must_use]
+pub fn resolve_without_patch(
+    sys_object_id: Option<&str>,
+    sys_descr: Option<&str>,
+    answers: &Answers,
+) -> Option<String> {
+    let row = row_for(sys_object_id, sys_descr)?;
+    if !walks_a_column(row) {
+        return None;
+    }
+    let descr = as_librenms_reads(sys_descr.unwrap_or_default());
+    row.sources.iter().find_map(|source| match *source {
+        Source::PlusRunningPatch(inner) => from_source(*inner, descr, answers),
+        other => from_source(other, descr, answers),
+    })
+}
+
 /// Whether any of a row's sources reads a table column whole — the reads
 /// [`Answers::unanswered_columns`] speaks for. Derived from [`add_reads`] so the two cannot disagree.
 fn walks_a_column(row: &Row) -> bool {
@@ -1270,6 +1296,90 @@ mod tests {
             Some("v7.2.6,build1575,230926 (GA.F)"),
             "a row that walks no column ignores the flag"
         );
+    }
+
+    /// What [`resolve`] withholds is still there to be sent on its own (ADR-138 Increment 4): the
+    /// version without the patch suffix, from exactly the walk that did not finish. The VRP 5.170
+    /// `sysDescr` is the one the PoC box's S5731 returned; with `2 s` to answer, its empty patch
+    /// table timed out every hour and the node never showed a version.
+    #[test]
+    fn a_version_without_its_patch_is_resolved_from_a_walk_that_did_not_finish() {
+        let s5731 = Some("1.3.6.1.4.1.2011.2.23.693");
+        let s5731_descr = Some(
+            "S5731-S48T4X \r\nHuawei Versatile Routing Platform Software \r\n VRP (R) software,Version 5.170 (S5731 V200R021C00SPC100) \r\n Copyright (C) 2007 Huawei Technologies Co., Ltd.",
+        );
+        let unanswered = Answers {
+            unanswered_columns: true,
+            ..Answers::default()
+        };
+        assert_eq!(resolve(s5731, s5731_descr, &unanswered), None);
+        assert_eq!(
+            resolve_without_patch(s5731, s5731_descr, &unanswered).as_deref(),
+            Some("5.170 (V200R021C00SPC100)")
+        );
+
+        // A running row in hand does not turn this into the patched answer: the walk that brought
+        // it did not finish, so the suffix is left off whatever the rows say.
+        let usg = Some("1.3.6.1.4.1.2011.2.321.1.406");
+        let usg_descr = Some(
+            "Huawei YunShan OS \r\nVersion 1.24.0.1 (USG V600R024C00SPC100) \r\nHUAWEI USG6530F-D \r\n",
+        );
+        let mut cut = unanswered.clone();
+        cut.strings.insert(
+            format!("{HW_PATCH_VERSION}.128.2"),
+            "V600R024SPH120".to_owned(),
+        );
+        cut.integers
+            .insert(format!("{HW_PATCH_OPERATE_STATE}.128.2"), HW_PATCH_RUNNING);
+        assert_eq!(
+            resolve_without_patch(usg, usg_descr, &cut).as_deref(),
+            Some("V600R024C00SPC100")
+        );
+
+        // A row that walks no column has nothing withheld, so nothing to send on the side.
+        let mut forti = Answers::default();
+        forti.strings.insert(
+            "1.3.6.1.4.1.12356.101.4.1.1.0".to_owned(),
+            "v7.2.6,build1575,230926 (GA.F)".to_owned(),
+        );
+        assert_eq!(
+            resolve_without_patch(
+                Some("1.3.6.1.4.1.12356.101.1.15000"),
+                Some("FGT_1500D"),
+                &forti
+            ),
+            None
+        );
+        assert_eq!(resolve_without_patch(None, None, &unanswered), None);
+    }
+
+    /// 🚨 What makes [`resolve_without_patch`] safe to build from a walk that did not finish: the
+    /// patch suffix is the only source that walks a table column, and what it wraps walks none. A
+    /// future source that read its *version* from a whole column would be answered here out of
+    /// half a table — this fails first.
+    #[test]
+    fn only_the_patch_suffix_walks_a_column() {
+        let mut walking_rows = 0;
+        for row in ROWS {
+            if walks_a_column(row) {
+                walking_rows += 1;
+            }
+            for source in row.sources {
+                let mut reads = Reads::default();
+                match *source {
+                    Source::PlusRunningPatch(inner) => add_reads(*inner, &mut reads),
+                    other => add_reads(other, &mut reads),
+                }
+                assert!(
+                    reads.columns.is_empty(),
+                    "{:?}: {source:?} walks {:?} for the version itself",
+                    row.os,
+                    reads.columns
+                );
+            }
+        }
+        // Floor: the rows this is about still exist, or the loop above proved nothing.
+        assert!(walking_rows >= 2, "{walking_rows} rows walk a column");
     }
 
     #[test]
