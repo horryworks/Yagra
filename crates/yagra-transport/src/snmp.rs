@@ -3,13 +3,21 @@
 //!
 //! This validates the pure-Rust path before any net-snmp FFI fallback. v3 (auth/priv)
 //! is still pending. Values are returned **raw** (counters included) — rates are derived
-//! at query time (ADR-012). Live-only (needs a device + UDP); the numeric mapping and
-//! ifIndex extraction are unit-tested.
+//! at query time (ADR-012).
+//!
+//! Every column is paged by one function, [`walk_column_v2c`], over the [`BulkPager`] seam
+//! (ADR-110 Increment 9). The seam is what lets the paging — retries, rows kept past a failure, the
+//! base GET on an empty column — run against a scripted agent in the tests below; the three
+//! multi-column loops around it still need a device and are covered only by reading their source.
 
-use crate::walk_budget::{is_silence, note_truncation, ColumnOutcome, Truncation, WalkBudget};
+use crate::walk_budget::{
+    is_silence, note_retry, note_truncation, ColumnOutcome, RetryAllowance, Truncation, WalkBudget,
+};
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpTableSample, SnmpTableString, SnmpValue, TransportError,
 };
+use async_trait::async_trait;
+use csnmp::message::BindingValue;
 use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient, SnmpClientError};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -25,9 +33,10 @@ const SNMP_PORT: u16 = 161;
 /// a scalar GET reports *"I do not implement that OID"*. That is an answer. Only the five variants
 /// below mean the conversation did not happen.
 ///
-/// ⚠️ The table walk reaches "unimplemented" differently — `walk_bulk` swallows `noSuchObject` and
-/// returns `Ok(empty)` — so it never arrives here at all. This function exists mainly for the
-/// scalar GET loop, where a device missing two collection OIDs in a row must not read as silent.
+/// ⚠️ A column walk reaches "unimplemented" without coming here: [`BulkPager::get_base`] turns
+/// `noSuchObject` / `noSuchInstance` on the column base into [`BaseAnswer::NoSuch`], the way
+/// `csnmp::walk_bulk` swallowed it. What does arrive here from a column walk is a page or a base
+/// GET that errored, and the answer decides whether [`RetryAllowance`] may send it again.
 fn outcome_of(err: &SnmpClientError) -> ColumnOutcome {
     match err {
         SnmpClientError::TimedOut
@@ -44,7 +53,7 @@ fn outcome_of(err: &SnmpClientError) -> ColumnOutcome {
 }
 
 /// GETBULK max-repetitions per request. Bounded so a huge table is paged, not pulled in
-/// one oversized PDU; `csnmp::walk_bulk` repeats internally until the column is exhausted.
+/// one oversized PDU; [`walk_column_v2c`] repeats until the column is exhausted.
 const WALK_MAX_REPETITIONS: u32 = 20;
 
 /// Fetch `oids` from `target` via SNMP v2c. Per-OID failures are logged and skipped so a
@@ -95,9 +104,9 @@ pub async fn snmp_get_v2c(
 /// Walk numeric table columns from `target` via GETBULK. Each column base yields one row per
 /// instance: a single trailing sub-identifier is the row key directly, while a multi-part index
 /// is folded to a synthetic key (see [`ifindex_of`]) so multi-index tables — vendor memory
-/// (HUAWEI-MEMORY-MIB `hwMemoryDevTable`), BGP4-MIB peers, … — are collected too. A per-column
-/// walk failure is logged and skipped. Counters are returned **raw** (rates derived at query
-/// time, ADR-012).
+/// (HUAWEI-MEMORY-MIB `hwMemoryDevTable`), BGP4-MIB peers, … — are collected too. A column that
+/// fails ends there and keeps the rows it had already paged (ADR-110 Increment 9). Counters are
+/// returned **raw** (rates derived at query time, ADR-012).
 pub async fn snmp_walk_v2c(
     target: IpAddr,
     community: &str,
@@ -105,12 +114,76 @@ pub async fn snmp_walk_v2c(
     timeout: Duration,
 ) -> Result<(Vec<SnmpTableSample>, Option<Truncation>), TransportError> {
     let client = connect(target, community, timeout).await?;
-    let mut rows = Vec::new();
     let mut budget = WalkBudget::new(timeout);
-    // Why the walk stopped, kept rather than dropped. `snmp_walk_instances_v2c` keeps it to spare a
-    // caller a second walk at a silent device; this one keeps it for the opposite reason — the
-    // caller is the interface table walk, and a `Deadline` there means the node's configured metric
-    // columns were never asked for at all (ADR-110 Increment 6).
+    // Why the walk stopped is returned rather than dropped. `snmp_walk_instances_v2c` keeps it to
+    // spare a caller a second walk at a silent device; this one keeps it for the opposite reason —
+    // the caller is the interface table walk, and a `Deadline` there means the node's configured
+    // metric columns were never asked for at all (ADR-110 Increment 6).
+    Ok(walk_columns(
+        &client,
+        target,
+        column_oids,
+        &mut budget,
+        |base_str, base, oid, value| {
+            let (ifindex, v) = (ifindex_of(oid, base)?, numeric(value)?);
+            Some(SnmpTableSample {
+                oid_base: base_str.to_owned(),
+                ifindex,
+                value: v,
+            })
+        },
+    )
+    .await)
+}
+
+/// Walk string table columns (e.g. `ifName`, `ifAlias`) for interface metadata. Same
+/// per-column behaviour as [`snmp_walk_v2c`]; non-string values are skipped.
+pub async fn snmp_walk_strings_v2c(
+    target: IpAddr,
+    community: &str,
+    column_oids: &[String],
+    timeout: Duration,
+) -> Result<Vec<SnmpTableString>, TransportError> {
+    let client = connect(target, community, timeout).await?;
+    let mut budget = WalkBudget::new(timeout);
+    let (rows, _stopped) = walk_columns(
+        &client,
+        target,
+        column_oids,
+        &mut budget,
+        |base_str, base, oid, value| {
+            let (ifindex, s) = (ifindex_of(oid, base)?, string_value(value)?);
+            Some(SnmpTableString {
+                oid_base: base_str.to_owned(),
+                ifindex,
+                value: s,
+            })
+        },
+    )
+    .await;
+    Ok(rows)
+}
+
+/// The column loop the numeric and string walkers share: one [`walk_column_v2c`] per column, each
+/// folded into `budget`, stopping when the budget says so.
+///
+/// `budget` is handed in rather than built here so that `WalkBudget::new(` stays in the text of
+/// each public walker — `walk_budget.rs`'s `every_multi_column_call_takes_a_budget` reads it there.
+/// `map` turns one in-subtree varbind into a row, or `None` to drop it (the column base itself, a
+/// value of the wrong type).
+async fn walk_columns<P, R>(
+    pager: &P,
+    target: IpAddr,
+    column_oids: &[String],
+    budget: &mut WalkBudget,
+    map: impl Fn(&str, &ObjectIdentifier, &ObjectIdentifier, &ObjectValue) -> Option<R> + Send + Sync,
+) -> (Vec<R>, Option<Truncation>)
+where
+    P: BulkPager,
+    R: Send,
+{
+    let mut rows = Vec::new();
+    let mut retries = RetryAllowance::new();
     let mut stopped: Option<Truncation> = None;
     for (asked, base_str) in column_oids.iter().enumerate() {
         if let Some(reason) = budget.spent() {
@@ -123,74 +196,24 @@ pub async fn snmp_walk_v2c(
             budget.record(ColumnOutcome::Skipped);
             continue;
         };
-        match client.walk_bulk(base, WALK_MAX_REPETITIONS).await {
-            Ok(entries) => {
-                for (oid, value) in entries {
-                    if let (Some(ifindex), Some(v)) = (ifindex_of(&oid, &base), numeric(&value)) {
-                        rows.push(SnmpTableSample {
-                            oid_base: base_str.clone(),
-                            ifindex,
-                            value: v,
-                        });
-                    }
-                }
-                budget.record(ColumnOutcome::Answered);
+        let column = Column {
+            base_str,
+            base,
+            row_budget: usize::MAX,
+            empty: EmptyColumn::AskBase,
+        };
+        let outcome = walk_column_v2c(pager, &column, budget, &mut retries, |oid, value| {
+            if let Some(row) = map(base_str, &base, oid, value) {
+                rows.push(row);
             }
-            Err(e) => {
-                tracing::debug!(%base_str, error = %e, "snmp table walk failed");
-                budget.record(outcome_of(&e));
-            }
-        }
+        })
+        .await;
+        budget.record(outcome);
     }
     // The loop only consults the budget at the *top* of an iteration, so a walk whose last two
     // columns both failed ends by running out of columns rather than by tripping. Ask once more —
     // the question is about the device, not about where the loop stopped.
-    Ok((rows, stopped.or_else(|| budget.spent())))
-}
-
-/// Walk string table columns (e.g. `ifName`, `ifAlias`) for interface metadata. Same
-/// per-column skip-on-error behaviour as [`snmp_walk_v2c`]; non-string values are skipped.
-pub async fn snmp_walk_strings_v2c(
-    target: IpAddr,
-    community: &str,
-    column_oids: &[String],
-    timeout: Duration,
-) -> Result<Vec<SnmpTableString>, TransportError> {
-    let client = connect(target, community, timeout).await?;
-    let mut rows = Vec::new();
-    let mut budget = WalkBudget::new(timeout);
-    for (asked, base_str) in column_oids.iter().enumerate() {
-        if let Some(reason) = budget.spent() {
-            note_truncation(reason, target, column_oids.len() - asked);
-            break;
-        }
-        let Some(base) = parse_oid(base_str) else {
-            tracing::warn!(%base_str, "skipping malformed table column OID");
-            budget.record(ColumnOutcome::Skipped);
-            continue;
-        };
-        match client.walk_bulk(base, WALK_MAX_REPETITIONS).await {
-            Ok(entries) => {
-                for (oid, value) in entries {
-                    if let (Some(ifindex), Some(s)) =
-                        (ifindex_of(&oid, &base), string_value(&value))
-                    {
-                        rows.push(SnmpTableString {
-                            oid_base: base_str.clone(),
-                            ifindex,
-                            value: s,
-                        });
-                    }
-                }
-                budget.record(ColumnOutcome::Answered);
-            }
-            Err(e) => {
-                tracing::debug!(%base_str, error = %e, "snmp string table walk failed");
-                budget.record(outcome_of(&e));
-            }
-        }
-    }
-    Ok(rows)
+    (rows, stopped.or_else(|| budget.spent()))
 }
 
 /// Walk table columns keeping each row's **full instance index** and **raw** value (ADR-038).
@@ -198,8 +221,8 @@ pub async fn snmp_walk_strings_v2c(
 /// The two walkers above each collapse something on purpose — non-numeric values, or the
 /// multi-part index — and both losses are fatal for adjacency data: `lldpRemTable` is indexed by
 /// `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex)` and a chassis id is typed octets. Same
-/// per-column skip-on-error behaviour as the others; a value type this build has no representation
-/// for is skipped rather than coerced.
+/// per-column behaviour as the others; a value type this build has no representation for is
+/// skipped rather than coerced.
 /// `max_rows` bounds the **whole** call, across every column, and it is enforced *during* paging
 /// rather than by truncating the result. That distinction is the point: memory is consumed while
 /// the pages arrive, so a post-hoc truncation of a 400,000-row ARP table has already cost the
@@ -215,6 +238,7 @@ pub async fn snmp_walk_instances_v2c(
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
     let mut budget = WalkBudget::new(timeout);
+    let mut retries = RetryAllowance::new();
     // Why the walk stopped, kept rather than dropped so the caller can be told the
     // device said nothing at all (ADR-110 Increment 4).
     let mut stopped: Option<Truncation> = None;
@@ -233,8 +257,29 @@ pub async fn snmp_walk_instances_v2c(
             tracing::debug!(%base_str, max_rows, "instance walk row budget spent; skipping column");
             break;
         }
-        let outcome =
-            walk_column_capped(&client, base_str, &base, max_rows - rows.len(), &mut rows).await;
+        let column = Column {
+            base_str,
+            base,
+            row_budget: max_rows - rows.len(),
+            // This walker never asked the base: an adjacency column's base carries no instance, so
+            // there is nothing a GET could add to it.
+            empty: EmptyColumn::Stop,
+        };
+        let outcome = walk_column_v2c(&client, &column, &budget, &mut retries, |oid, value| {
+            let Some(tail) = oid.relative_to(&base) else {
+                return;
+            };
+            let instance = tail.as_slice().to_vec();
+            if instance.is_empty() {
+                return; // the column base itself: no instance
+            }
+            rows.push(SnmpInstanceRow {
+                oid_base: base_str.clone(),
+                instance,
+                value: raw_value(value),
+            });
+        })
+        .await;
         budget.record(outcome);
     }
     // The loop only consults the budget at the *top* of an iteration, so a walk whose last
@@ -253,67 +298,202 @@ pub async fn snmp_walk_instances_v2c(
     })
 }
 
-/// Page one column with GETBULK, stopping at the subtree edge, at end-of-MIB, or at `budget` rows.
+/// One GETBULK page, as a column walk needs it.
+pub(crate) struct Page {
+    /// The varbinds in OID order.
+    entries: Vec<(ObjectIdentifier, ObjectValue)>,
+    /// The agent signalled end-of-MIB: nothing follows this page.
+    end_of_mib: bool,
+}
+
+/// What a GET on a column's base returned, once `noSuchObject` / `noSuchInstance` have been taken
+/// out of the error path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BaseAnswer {
+    /// The base OID is itself a value.
+    Value,
+    /// The agent does not implement the column — an answer, not a failure.
+    NoSuch,
+}
+
+/// The two requests a column walk sends (ADR-110 Increment 9).
 ///
-/// Hand-rolled rather than `Snmp2cClient::walk_bulk` because that collects the entire subtree before
-/// returning — there is no point at which a caller can say "enough". The paging *decisions* live in
-/// [`page_slice`], which is pure and tested; this function is the I/O around it.
-///
-/// A column that errors or times out ends here and only here, as in the other walkers: one bad
-/// column must not fail the whole poll. What it returns is that column's verdict **about the
-/// device**, which the caller folds into its [`WalkBudget`] — see [`outcome_of`] for why an error
-/// is not automatically a failure.
-async fn walk_column_capped(
-    client: &Snmp2cClient,
-    base_str: &str,
-    base: &ObjectIdentifier,
+/// A seam and nothing more: [`Snmp2cClient`] is the only production implementation, and the tests
+/// drive [`walk_column_v2c`] through a scripted one. Before it existed the paging was either inside
+/// `csnmp::walk_bulk` or inside a function that opened a UDP socket, and neither could be run
+/// without a device — so the rule "a column that fails keeps its rows" could not have been tested.
+#[async_trait]
+pub(crate) trait BulkPager: Sync {
+    /// One GETBULK after `cursor`.
+    async fn bulk(&self, cursor: ObjectIdentifier) -> Result<Page, SnmpClientError>;
+    /// One GET on a column's base — asked only when paging found nothing under it.
+    async fn get_base(&self, base: ObjectIdentifier) -> Result<BaseAnswer, SnmpClientError>;
+}
+
+#[async_trait]
+impl BulkPager for Snmp2cClient {
+    async fn bulk(&self, cursor: ObjectIdentifier) -> Result<Page, SnmpClientError> {
+        let result = self.get_bulk(&[cursor], 0, WALK_MAX_REPETITIONS).await?;
+        // `GetBulkResult::values` is a `BTreeMap`, so it already arrives in OID order — which is
+        // what "leading entries" in `page_slice` means.
+        Ok(Page {
+            entries: result.values.into_iter().collect(),
+            end_of_mib: result.end_of_mib_view,
+        })
+    }
+
+    async fn get_base(&self, base: ObjectIdentifier) -> Result<BaseAnswer, SnmpClientError> {
+        match self.get(base).await {
+            Ok(_) => Ok(BaseAnswer::Value),
+            // Exactly the two `csnmp::walk_bulk` swallowed on an empty column. Anything else is an
+            // error, and `outcome_of` decides whether it was an answer.
+            Err(SnmpClientError::FailedBinding { binding })
+                if matches!(
+                    binding.value,
+                    BindingValue::NoSuchObject | BindingValue::NoSuchInstance
+                ) =>
+            {
+                Ok(BaseAnswer::NoSuch)
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// What a column walk does when its subtree turned out to be empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyColumn {
+    /// Ask the base with a GET, as `csnmp::walk_bulk` did — the numeric and string walkers keep the
+    /// exact request sequence they had, so a healthy device is asked the same things as before.
+    AskBase,
+    /// Stop — the instance walker never asked.
+    Stop,
+}
+
+/// One column to walk.
+struct Column<'a> {
+    base_str: &'a str,
+    base: ObjectIdentifier,
+    /// How many in-subtree varbinds this column may take. `usize::MAX` for the walkers that are
+    /// bounded only by the request ceiling.
     row_budget: usize,
-    out: &mut Vec<SnmpInstanceRow>,
+    empty: EmptyColumn,
+}
+
+/// Page one column with GETBULK until it leaves the subtree, reaches end-of-MIB or spends its row
+/// budget, handing each kept varbind to `keep` as it arrives (ADR-110 Increment 9).
+///
+/// Returns the column's verdict **about the device**, which the caller folds into its
+/// [`WalkBudget`]. Three things this does that `csnmp::walk_bulk` did not:
+///
+/// - 🚨 **Rows reach `keep` as each page arrives, so a column that fails keeps what it paged.**
+///   `walk_bulk` returned the column in one `Result`, and one late page threw the whole column
+///   away.
+/// - **An unanswered request is sent again** when [`RetryAllowance::claim`] allows it — never for a
+///   device that has not answered anything in this walk, so a silent device still costs one
+///   timeout per column.
+/// - **A request ceiling**: an agent whose pages do not advance, or a column longer than
+///   `MAX_REQUESTS × WALK_MAX_REPETITIONS` rows, ends as answered rather than spinning.
+///
+/// What it keeps from `walk_bulk`, deliberately: the subtree and end-of-MIB stops, and — for
+/// [`EmptyColumn::AskBase`] — one GET on the base of an empty column, with `noSuchObject` read as
+/// "answered, empty". The module doc of `walk_budget.rs` explains why counting consecutive failures
+/// is only safe because an unimplemented column ends that way.
+async fn walk_column_v2c<P: BulkPager>(
+    pager: &P,
+    column: &Column<'_>,
+    budget: &WalkBudget,
+    retries: &mut RetryAllowance,
+    mut keep: impl FnMut(&ObjectIdentifier, &ObjectValue) + Send,
 ) -> ColumnOutcome {
-    // Defensive ceiling on requests as well as rows: an agent that answers with OIDs that do not
-    // advance would otherwise spin forever, and `budget` alone cannot catch that because such a
-    // page yields no rows either.
     const MAX_REQUESTS: usize = 4096;
-    let mut cursor = *base;
+    let base = column.base;
+    let mut cursor = base;
     let mut taken = 0usize;
-    for _ in 0..MAX_REQUESTS {
-        let page = match client.get_bulk(&[cursor], 0, WALK_MAX_REPETITIONS).await {
-            Ok(p) => p,
+    let mut retried = 0u32;
+    let mut requests = 0usize;
+    loop {
+        if requests == MAX_REQUESTS {
+            tracing::debug!(base = %column.base_str, "column walk hit its request ceiling");
+            return ColumnOutcome::Answered;
+        }
+        requests += 1;
+        let page = match pager.bulk(cursor).await {
+            Ok(page) => {
+                retries.heard();
+                if retried > 0 {
+                    note_retry(true);
+                }
+                retried = 0;
+                page
+            }
             Err(e) => {
-                tracing::debug!(%base_str, error = %e, "snmp instance walk failed");
-                return outcome_of(&e);
+                let outcome = outcome_of(&e);
+                if outcome != ColumnOutcome::Failed {
+                    retries.heard();
+                }
+                if retries.claim(outcome, retried, budget) {
+                    retried += 1;
+                    continue;
+                }
+                if retried > 0 {
+                    note_retry(false);
+                }
+                tracing::debug!(
+                    base = %column.base_str,
+                    error = %e,
+                    kept = taken,
+                    "snmp column walk ended on an error"
+                );
+                return outcome;
             }
         };
-        // `GetBulkResult::values` is a `BTreeMap`, so it already arrives in OID order — which is
-        // what "leading entries" in `page_slice` means. Materialized as a slice (≤
-        // `WALK_MAX_REPETITIONS` entries) so the paging decision stays a pure function over one.
-        let entries: Vec<(ObjectIdentifier, ObjectValue)> = page.values.into_iter().collect();
-        let (take, next) = page_slice(base, &entries, row_budget - taken);
-        for (oid, value) in entries.iter().take(take) {
-            let Some(tail) = oid.relative_to(base) else {
-                continue;
-            };
-            let instance = tail.as_slice().to_vec();
-            if instance.is_empty() {
-                continue; // the column base itself: no instance
-            }
-            out.push(SnmpInstanceRow {
-                oid_base: base_str.to_owned(),
-                instance,
-                value: raw_value(value),
-            });
+        let (take, next) = page_slice(&base, &page.entries, column.row_budget - taken);
+        for (oid, value) in page.entries.iter().take(take) {
+            keep(oid, value);
         }
         taken += take;
         match next {
             // `next != cursor` guards the non-advancing agent; GETBULK is specified to return
             // strictly greater OIDs, but a buggy one that repeats itself must not loop us.
-            Some(n) if !page.end_of_mib_view && n != cursor => cursor = n,
-            // The agent answered every page it was asked for; the walk ended on its own terms.
-            _ => return ColumnOutcome::Answered,
+            Some(n) if !page.end_of_mib && n != cursor => cursor = n,
+            _ => break,
         }
     }
-    tracing::debug!(%base_str, "instance walk hit its request ceiling");
-    ColumnOutcome::Answered
+    if taken > 0 || column.empty == EmptyColumn::Stop {
+        return ColumnOutcome::Answered;
+    }
+    // Nothing under the base. `csnmp::walk_bulk` asked the base itself at this point, and the
+    // walkers that used it keep doing so: a device is then asked exactly what it was asked before.
+    let mut retried = 0u32;
+    loop {
+        match pager.get_base(base).await {
+            Ok(_) => {
+                retries.heard();
+                if retried > 0 {
+                    note_retry(true);
+                }
+                // The value is dropped either way: the base carries no instance, so no walker can
+                // key a row from it.
+                return ColumnOutcome::Answered;
+            }
+            Err(e) => {
+                let outcome = outcome_of(&e);
+                if outcome != ColumnOutcome::Failed {
+                    retries.heard();
+                }
+                if retries.claim(outcome, retried, budget) {
+                    retried += 1;
+                    continue;
+                }
+                if retried > 0 {
+                    note_retry(false);
+                }
+                tracing::debug!(base = %column.base_str, error = %e, "snmp column base get failed");
+                return outcome;
+            }
+        }
+    }
 }
 
 /// How much of one GETBULK page this walk may keep, and where to continue from.
@@ -425,6 +605,8 @@ fn numeric(value: &ObjectValue) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
 
     // ── Bounded instance walk (ADR-043 I3) ───────────────────────────────────
     //
@@ -521,6 +703,304 @@ mod tests {
         let (take, next) = page_slice(&base, &p, 100);
         assert_eq!(take, 2);
         assert_eq!(next, Some(oid("1.3.6.1.2.1.4.35.1.4.1")));
+    }
+
+    // ── Column walk over a scripted agent (ADR-110 Increment 9) ──────────────
+    //
+    // These run `walk_column_v2c` — the loop itself, not a decision extracted from it — against an
+    // agent whose every reply is written down. Each asserts both what came back and what the agent
+    // was *asked*, because the failure modes here are about requests: a retry that is never sent, a
+    // retry sent to a silent device, a base GET that disappears.
+
+    const COL: &str = "1.3.6.1.2.1.2.2.1.8";
+    const NEXT_COL: &str = "1.3.6.1.2.1.2.2.1.9.1";
+
+    /// One scripted reply.
+    enum Reply {
+        /// A GETBULK page carrying these OIDs (each valued `1`).
+        Page(&'static [&'static str]),
+        /// Nothing inside the per-request timeout.
+        Timeout,
+        /// An error PDU: bytes came back, so the agent is there.
+        ErrorPdu,
+        /// The base GET answered `noSuchObject`.
+        NoSuch,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Asked {
+        Bulk(String),
+        Base(String),
+    }
+
+    struct ScriptedAgent {
+        replies: Mutex<VecDeque<Reply>>,
+        asked: Mutex<Vec<Asked>>,
+    }
+
+    impl ScriptedAgent {
+        fn new(replies: Vec<Reply>) -> Self {
+            Self {
+                replies: Mutex::new(replies.into()),
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn next(&self) -> Reply {
+            self.replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("the walk sent a request the script has no reply for")
+        }
+
+        fn asked(&self) -> Vec<Asked> {
+            std::mem::take(&mut *self.asked.lock().unwrap())
+        }
+    }
+
+    fn error_pdu(at: ObjectIdentifier) -> SnmpClientError {
+        SnmpClientError::FailedBinding {
+            binding: csnmp::message::VariableBinding {
+                name: at,
+                value: BindingValue::Unspecified,
+            },
+        }
+    }
+
+    #[async_trait]
+    impl BulkPager for ScriptedAgent {
+        async fn bulk(&self, cursor: ObjectIdentifier) -> Result<Page, SnmpClientError> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(Asked::Bulk(cursor.to_string()));
+            match self.next() {
+                Reply::Page(oids) => Ok(Page {
+                    entries: page(oids),
+                    end_of_mib: false,
+                }),
+                Reply::Timeout => Err(SnmpClientError::TimedOut),
+                Reply::ErrorPdu => Err(error_pdu(cursor)),
+                Reply::NoSuch => panic!("a GETBULK was answered with a base-GET reply"),
+            }
+        }
+
+        async fn get_base(&self, base: ObjectIdentifier) -> Result<BaseAnswer, SnmpClientError> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(Asked::Base(base.to_string()));
+            match self.next() {
+                Reply::NoSuch => Ok(BaseAnswer::NoSuch),
+                Reply::Timeout => Err(SnmpClientError::TimedOut),
+                Reply::ErrorPdu => Err(error_pdu(base)),
+                Reply::Page(_) => panic!("a base GET was answered with a page"),
+            }
+        }
+    }
+
+    fn bulk(at: &str) -> Asked {
+        Asked::Bulk(at.to_owned())
+    }
+
+    /// Walk [`COL`] once with a fresh budget and allowance, returning the verdict and the rows kept.
+    async fn walk_one(agent: &ScriptedAgent) -> (ColumnOutcome, Vec<String>) {
+        let budget = WalkBudget::new(Duration::from_secs(2));
+        let mut retries = RetryAllowance::new();
+        walk_with(agent, &budget, &mut retries).await
+    }
+
+    async fn walk_with(
+        agent: &ScriptedAgent,
+        budget: &WalkBudget,
+        retries: &mut RetryAllowance,
+    ) -> (ColumnOutcome, Vec<String>) {
+        let column = Column {
+            base_str: COL,
+            base: oid(COL),
+            row_budget: usize::MAX,
+            empty: EmptyColumn::AskBase,
+        };
+        let mut kept = Vec::new();
+        let outcome = walk_column_v2c(agent, &column, budget, retries, |o, _| {
+            kept.push(o.to_string());
+        })
+        .await;
+        (outcome, kept)
+    }
+
+    /// **The accepting side, first**: a healthy column pages until it leaves the subtree, keeps
+    /// every row, and asks the base nothing. A walk that stopped after one page, or never, would
+    /// fail here before any of the failure-path tests below could pass for the wrong reason.
+    #[tokio::test]
+    async fn a_healthy_column_pages_until_it_leaves_the_subtree() {
+        let agent = ScriptedAgent::new(vec![
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.1", "1.3.6.1.2.1.2.2.1.8.2"]),
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.3", NEXT_COL]),
+        ]);
+        let (outcome, kept) = walk_one(&agent).await;
+        assert_eq!(outcome, ColumnOutcome::Answered);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(
+            agent.asked(),
+            vec![bulk(COL), bulk("1.3.6.1.2.1.2.2.1.8.2")],
+            "two pages and no base GET: the column had rows"
+        );
+    }
+
+    /// 🚨 The property Increment 3's silence rule stands on: a column the device does not implement
+    /// is **answered**, not failed — one page walks straight out of the subtree, and one GET on the
+    /// base comes back `noSuchObject`, exactly the request sequence `csnmp::walk_bulk` sent.
+    #[tokio::test]
+    async fn an_unimplemented_column_asks_the_base_once_and_ends_answered_empty() {
+        let agent = ScriptedAgent::new(vec![Reply::Page(&[NEXT_COL]), Reply::NoSuch]);
+        let (outcome, kept) = walk_one(&agent).await;
+        assert_eq!(outcome, ColumnOutcome::Answered);
+        assert!(kept.is_empty());
+        assert_eq!(agent.asked(), vec![bulk(COL), Asked::Base(COL.to_owned())]);
+    }
+
+    /// A page that times out after the device has answered is asked again **from the same
+    /// cursor**, and the column then finishes whole. Before Increment 9 this column was one
+    /// `walk_bulk` call and ended as a failure with no rows at all.
+    #[tokio::test]
+    async fn a_timeout_after_the_device_answered_is_retried_once_from_the_same_cursor() {
+        let agent = ScriptedAgent::new(vec![
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.1", "1.3.6.1.2.1.2.2.1.8.2"]),
+            Reply::Timeout,
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.3", NEXT_COL]),
+        ]);
+        let (outcome, kept) = walk_one(&agent).await;
+        assert_eq!(outcome, ColumnOutcome::Answered);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(
+            agent.asked(),
+            vec![
+                bulk(COL),
+                bulk("1.3.6.1.2.1.2.2.1.8.2"),
+                bulk("1.3.6.1.2.1.2.2.1.8.2"),
+            ]
+        );
+    }
+
+    /// 🚨 **A device that has not answered anything is never asked twice.** This is what keeps a
+    /// silent device at Increment 3's price — one timeout per column — and a mass outage is exactly
+    /// when every device is in this state.
+    #[tokio::test]
+    async fn a_timeout_before_the_device_ever_answered_is_not_retried() {
+        let agent = ScriptedAgent::new(vec![Reply::Timeout]);
+        let (outcome, kept) = walk_one(&agent).await;
+        assert_eq!(outcome, ColumnOutcome::Failed);
+        assert!(kept.is_empty());
+        assert_eq!(agent.asked(), vec![bulk(COL)], "one request, no retry");
+    }
+
+    /// A page that stays unanswered through its retry ends the column as failed — and the rows
+    /// paged before it are **kept**, which is the half `walk_bulk` could not do.
+    #[tokio::test]
+    async fn a_page_that_fails_twice_ends_the_column_failed_and_keeps_its_rows() {
+        let agent = ScriptedAgent::new(vec![
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.1", "1.3.6.1.2.1.2.2.1.8.2"]),
+            Reply::Timeout,
+            Reply::Timeout,
+        ]);
+        let (outcome, kept) = walk_one(&agent).await;
+        assert_eq!(outcome, ColumnOutcome::Failed);
+        assert_eq!(
+            kept.len(),
+            2,
+            "the two rows paged before the silence survive"
+        );
+        assert_eq!(
+            agent.asked().len(),
+            3,
+            "the page, then the timeout and its one retry"
+        );
+    }
+
+    /// An error PDU is an answer: the column ends there, keeps its rows, and is **not** retried —
+    /// re-asking a device that replied would only get the same reply.
+    #[tokio::test]
+    async fn an_error_pdu_mid_column_keeps_rows_and_counts_as_answered() {
+        let agent = ScriptedAgent::new(vec![
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.1"]),
+            Reply::ErrorPdu,
+        ]);
+        let (outcome, kept) = walk_one(&agent).await;
+        assert_eq!(outcome, ColumnOutcome::Answered);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(agent.asked().len(), 2, "no retry after an answer");
+    }
+
+    /// The allowance is shared by the walk, not renewed per column: once it is spent, a timeout
+    /// that would have been retried ends its column at once.
+    #[tokio::test]
+    async fn a_spent_allowance_is_not_renewed_by_the_next_column() {
+        let budget = WalkBudget::new(Duration::from_secs(2));
+        let mut retries = RetryAllowance::new();
+        retries.heard();
+        for _ in 0..crate::walk_budget::MAX_RETRIES_PER_WALK {
+            assert!(retries.claim(ColumnOutcome::Failed, 0, &budget));
+        }
+        let agent = ScriptedAgent::new(vec![
+            Reply::Page(&["1.3.6.1.2.1.2.2.1.8.1"]),
+            Reply::Timeout,
+        ]);
+        let (outcome, kept) = walk_with(&agent, &budget, &mut retries).await;
+        assert_eq!(outcome, ColumnOutcome::Failed);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(agent.asked().len(), 2, "the spent allowance sent no retry");
+    }
+
+    /// **The whole loop, at a silent device**: two columns, one request each, and the walk stops
+    /// as `Silent` without asking the other three. Increment 3 measured this as 51 s → 4 s; a
+    /// retry on the first page of each column would quietly double it.
+    #[tokio::test]
+    async fn a_silent_device_costs_one_request_per_column_until_the_walk_stops() {
+        let agent = ScriptedAgent::new(vec![Reply::Timeout, Reply::Timeout]);
+        let columns: Vec<String> = (8..13).map(|c| format!("1.3.6.1.2.1.2.2.1.{c}")).collect();
+        let mut budget = WalkBudget::new(Duration::from_secs(2));
+        let (rows, stopped) = walk_columns(
+            &agent,
+            IpAddr::from([10, 0, 0, 1]),
+            &columns,
+            &mut budget,
+            |_, base, oid, _| ifindex_of(oid, base),
+        )
+        .await;
+        assert!(rows.is_empty());
+        assert_eq!(stopped, Some(Truncation::Silent));
+        assert_eq!(agent.asked().len(), 2, "one request per column, no retries");
+    }
+
+    /// No v2c walker pages through `csnmp::walk_bulk` any more — and the three that walk columns
+    /// all go through [`walk_column_v2c`]. Read as source, because a walker that quietly went back
+    /// to `walk_bulk` would compile, pass every test above (they drive the shared function), and
+    /// lose the rows of every column with one late page.
+    ///
+    /// ⚠️ The count is the accepting half: a detector that stopped matching would otherwise find
+    /// "no `walk_bulk`" in an empty string.
+    #[test]
+    fn every_v2c_column_walk_pages_through_the_shared_loop() {
+        use crate::module_source::{files_no_comments, roots};
+
+        let code = files_no_comments(&roots("src", "snmp"))
+            .into_iter()
+            .find(|(name, _)| name == "snmp.rs")
+            .map(|(_, code)| code)
+            .expect("snmp.rs");
+        assert!(
+            !code.contains(&format!(".{}(", "walk_bulk")),
+            "a v2c walker calls `walk_bulk` again: one late page would discard its whole column"
+        );
+        // The definition is spelled `walk_column_v2c<P: BulkPager>(`, so this counts call sites only.
+        let callers = code.matches(&format!("{}(", "walk_column_v2c")).count();
+        assert!(
+            callers >= 2,
+            "only {callers} calls to the shared column loop were found; the numeric/string loop \
+             (`walk_columns`) and the instance walker should both call it"
+        );
     }
 
     #[test]
