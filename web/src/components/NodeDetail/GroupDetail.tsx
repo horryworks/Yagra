@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Group detail pane (shown in the split when a group row is selected, instead of a node detail).
 // No tabs: a header (type eyebrow · breadcrumb name · counts · Edit/Add actions) over a Health
-// rollup (full-width bar + per-state legend) and the group's direct member nodes. Subgroup-only
-// groups say so rather than showing an empty member list. Reuses the parent page's modals for edit
-// and add-node. The breadcrumb's ancestors and every member row open what they name (ADR-142).
+// rollup (full-width bar + per-state legend) and the group's direct members — its subfolders, then
+// its nodes. Reuses the parent page's modals for edit and add-node. The breadcrumb's ancestors and
+// every member row open what they name (ADR-142).
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,6 +15,7 @@ import { GroupIcon } from '../NodeTree/GroupIcon';
 import {
   asGroupType,
   buildNodeTree,
+  findTreeGroup,
   groupTrail,
   STATE_ORDER,
   subtreeTallyMap,
@@ -66,17 +67,20 @@ export function GroupDetail({
   // The tree is built from the groups alone — `buildNodeTree(groups, [])` — because only the shape
   // is needed here; the nodes are not walked at all. Memoized because this component re-renders on
   // every SSE frame.
-  const tally = useMemo(() => {
+  const { tally, subgroups, subtreeTally } = useMemo(() => {
     const roots = buildNodeTree(groups, []).roots;
-    return subtreeTallyMap(roots, groupCounts).get(group.id) ?? tallyStates([]);
+    const byGroup = subtreeTallyMap(roots, groupCounts);
+    return {
+      tally: byGroup.get(group.id) ?? tallyStates([]),
+      // The tree's own `children`, so Members lists the subfolders in the order the tree beside it
+      // does (`sort_order`, then name) without a second sort that could disagree (ADR-142 決定 7).
+      subgroups: findTreeGroup(roots, group.id)?.children ?? [],
+      subtreeTally: byGroup,
+    };
   }, [groups, groupCounts, group.id]);
   const directMembers = useMemo(
     () => nodes.filter((n) => n.group_id === group.id),
     [nodes, group.id],
-  );
-  const subgroups = useMemo(
-    () => groups.filter((g) => g.parent_id === group.id).length,
-    [groups, group.id],
   );
   const trail = groupTrail(groups, group.id);
 
@@ -116,7 +120,7 @@ export function GroupDetail({
             {tally.total} {t('common:noun.node', { count: tally.total })}
           </span>
           <span className="nd-sep">·</span>
-          <span>{t('count.subgroup', { count: subgroups })}</span>
+          <span>{t('count.subgroup', { count: subgroups.length })}</span>
           <span className="nd-sep">·</span>
           <span className={tally.needAttention ? 'nd-attention' : undefined}>
             {t('inventory.needAttention', { count: tally.needAttention })}
@@ -194,8 +198,36 @@ export function GroupDetail({
 
         <section>
           <div className="nd-section-t">{t('groupDetail.members')}</div>
-          {directMembers.length > 0 ? (
+          {subgroups.length + directMembers.length > 0 ? (
             <div className="nd-members">
+              {/* Subfolders first, then nodes (ADR-142 増分 2). The count is the subtree's, from
+                  the same server rollup as the header — never the members that happen to be loaded. */}
+              {subgroups.map((g) => {
+                const total = subtreeTally.get(g.id)?.total ?? 0;
+                const body = (
+                  <>
+                    <GroupIcon type={asGroupType(g.group_type)} />
+                    <span className="nd-member-name">{g.name}</span>
+                    <span className="nd-member-count">
+                      {total} {t('common:noun.node', { count: total })}
+                    </span>
+                  </>
+                );
+                return onOpenGroup ? (
+                  <button
+                    type="button"
+                    className="nd-member nd-member-link nd-member-group"
+                    key={`g:${g.id}`}
+                    onClick={() => onOpenGroup(g.id)}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className="nd-member nd-member-group" key={`g:${g.id}`}>
+                    {body}
+                  </div>
+                );
+              })}
               {directMembers.map((n) => {
                 const body = (
                   <>
@@ -228,7 +260,7 @@ export function GroupDetail({
               })}
             </div>
           ) : (
-            <p className="nd-muted">{t('groupDetail.noDirectMembers')}</p>
+            <p className="nd-muted">{t('groupDetail.noMembers')}</p>
           )}
         </section>
       </div>

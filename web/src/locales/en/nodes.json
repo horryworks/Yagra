@@ -525,7 +525,7 @@
     "health": "Health",
     "members": "Members",
     "noNodes": "No nodes in this group.",
-    "noDirectMembers": "No direct member nodes — see subgroups.",
+    "noMembers": "No subfolders or nodes in this folder.",
     "prefixes": "IP prefixes",
     "tags": "Tags"
   },
