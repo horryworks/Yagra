@@ -13270,6 +13270,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "rows",
+            "in": "query",
+            "description": "`true` ⇒ also return every table row's latest value and name in `rows` (a metric collected\nonce per table row; see the inventory's `entity` dimension).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -13397,6 +13406,17 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "row",
+            "in": "query",
+            "description": "One table row's series instead of the node's — the `row` key a `rows=true` read returns.\nCannot be combined with `agg`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -13411,7 +13431,7 @@
             }
           },
           "400": {
-            "description": "The metric name is not an identifier, `agg` is unsupported, or `rate` and `agg` were combined",
+            "description": "The metric name is not an identifier, `agg` is unsupported, or `agg` was combined with `rate` or `row`",
             "content": {
               "application/json": {
                 "schema": {
@@ -22423,6 +22443,22 @@
               }
             ]
           },
+          "row": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The row of a vendor table this alert is about — a memory pool, a CPU, a sensor — as the row\nkey its samples carry; `None` for an alert about the whole node or about a port.",
+            "minimum": 0
+          },
+          "row_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What that row was called when the alert fired (`I/O`, `MPU Board 0`); `None` when the row has\nno name yet or the alert is not about a row."
+          },
           "severity": {
             "$ref": "#/components/schemas/Severity",
             "description": "Severity (derived from the committed state)."
@@ -22558,6 +22594,22 @@
           },
           "resolved": {
             "type": "boolean"
+          },
+          "row": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The row of a vendor table this was about — a memory pool, a CPU, a sensor — as the row key\nits samples carry (ADR-143). `None` for an alert about the node as a whole or about a port,\nand for every row recorded before a table row could alert on its own.",
+            "minimum": 0
+          },
+          "row_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What that row was called when the alert fired, e.g. `I/O`. `None` when it had no name."
           },
           "severity": {
             "$ref": "#/components/schemas/Severity"
@@ -30330,6 +30382,40 @@
           "node_id": {
             "$ref": "#/components/schemas/NodeId"
           },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricRowReading"
+            },
+            "description": "With `rows=true`, every table row of the metric on this node with its latest value and name,\nordered by row key. Omitted otherwise, and for a metric with one series per node."
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "MetricRowReading": {
+        "type": "object",
+        "description": "One row of a vendor table — a memory pool, a CPU, a sensor — and its latest value.",
+        "required": [
+          "row",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The row's name as the device reports it (`I/O`, `MPU Board 0`). Absent when no name has been\nread for the row — its tables may have none, or the hourly name read has not reached it yet."
+          },
+          "row": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The row key the row's values carry. Pass it as `row` to the range read for this row's\nhistory; an alert about the row carries the same number.",
+            "minimum": 0
+          },
           "value": {
             "type": "number",
             "format": "double"
@@ -35449,6 +35535,13 @@
                 "type": "string",
                 "format": "uuid"
               },
+              "row_match": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Which rows of a vendor table this rule applies to, by the row's name — `I/O`, or\n`MPU Board *`. Case-insensitive, and `*` matches any run of characters. Absent means every\nrow, and every metric that has no rows. At the same scope, a rule with a pattern wins over\none without for the rows it matches."
+              },
               "scope_ids": {
                 "type": "array",
                 "items": {
@@ -35924,6 +36017,13 @@
           "metric": {
             "type": "string"
           },
+          "row_match": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Apply the rule only to the rows of a table metric whose name matches — a memory pool (`I/O`),\na board (`MPU Board *`). Case-insensitive; `*` matches any run of characters. Omit it for\nevery row. At the same scope, a rule with a pattern wins for the rows it matches, so a looser\nbound for one pool can sit beside the rule for all of them. Not allowed on an `interface`\nrule, which already names one port."
+          },
           "scope_id": {
             "type": [
               "string",
@@ -36042,6 +36142,13 @@
           },
           "metric": {
             "type": "string"
+          },
+          "row_match": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which table rows the rule reaches, by name (`I/O`, `MPU Board *`). Absent means every row,\nwhich is also what a bundle written before row patterns existed means."
           },
           "scope_id": {
             "type": "string",

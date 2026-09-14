@@ -262,6 +262,8 @@ mod tests {
             metric: "__liveness__".to_string(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         Notification::for_alert(&alert, "node down", "{}")
     }

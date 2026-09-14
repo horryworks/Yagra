@@ -203,6 +203,7 @@ pub(super) fn full_bundle() -> ConfigBundle {
             warning_above: Some(80.0),
             critical_above: Some(90.0),
             dwell_samples: 3,
+            row_match: None,
         }],
         url_checks: vec![UrlCheckRow {
             node_id: node_a,

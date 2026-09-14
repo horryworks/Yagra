@@ -278,7 +278,9 @@ pub fn render_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yagra_common::{minimal_facts, sample_facts, NotifyEvent, TEMPLATE_VARIABLES};
+    use yagra_common::{
+        minimal_facts, sample_facts, sample_row_facts, NotifyEvent, TEMPLATE_VARIABLES,
+    };
 
     const BUILTIN_SUBJECT: &str = "node 6f1c9d2a is critical";
     const BUILTIN_BODY: &str = r#"{"builtin":true}"#;
@@ -496,27 +498,38 @@ mod tests {
 
     /// Every name the catalogue advertises has to actually resolve; a palette entry that renders
     /// empty would look like a Yagra bug to the operator who clicked it.
+    ///
+    /// Against the port sample **or** the row sample (ADR-143): `ifindex` and `row_name` are never
+    /// on one alert, so no single sample can show both. Every variable must still render without
+    /// failing on either.
     #[test]
     fn every_advertised_variable_resolves_against_the_sample() {
-        let facts = sample_facts(NotifyEvent::Fire);
+        let samples = [
+            sample_facts(NotifyEvent::Fire),
+            sample_row_facts(NotifyEvent::Fire),
+        ];
         for v in TEMPLATE_VARIABLES {
             let source = format!("{{{{ {} }}}}", v.name);
-            let r = render_with_fallback(
-                Some(&tpl(Some(&source), None)),
-                &facts,
-                false,
-                BUILTIN_SUBJECT,
-                BUILTIN_BODY,
-            );
+            let mut rendered = false;
+            for facts in &samples {
+                let r = render_with_fallback(
+                    Some(&tpl(Some(&source), None)),
+                    facts,
+                    false,
+                    BUILTIN_SUBJECT,
+                    BUILTIN_BODY,
+                );
+                assert!(
+                    r.failures.is_empty(),
+                    "`{}` failed to render: {:?}",
+                    v.name,
+                    r.failures
+                );
+                rendered |= !r.subject.is_empty();
+            }
             assert!(
-                r.failures.is_empty(),
-                "`{}` failed to render: {:?}",
-                v.name,
-                r.failures
-            );
-            assert!(
-                !r.subject.is_empty(),
-                "`{}` is advertised but renders empty on the preview sample",
+                rendered,
+                "`{}` is advertised but renders empty on both preview samples",
                 v.name
             );
         }

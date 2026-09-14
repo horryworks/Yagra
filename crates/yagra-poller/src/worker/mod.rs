@@ -25,6 +25,8 @@
 //! (ADR-138). It holds a timer per node and touches nothing; `stream` asks it and `snmp` probes.
 //! [`table_plan`] decides **how long** a table job may run and how long a job waits for its device,
 //! from the poll interval (ADR-110 Increment 10) — arithmetic only; `interfaces` and `stream` ask it.
+//! [`row_names`] reads what a vendor table's rows are called, hourly, after a table job and inside
+//! its permit (ADR-143) — `stream` decides when and `row_names` walks.
 //!
 //! 🚨 **Every arm of [`execute`] delegates; none of them touches the transport itself.** That is
 //! what makes the table above true rather than aspirational, and `guards.rs` fails the build if an
@@ -46,6 +48,7 @@ mod interfaces;
 mod meraki;
 mod physical;
 mod probes;
+mod row_names;
 mod snmp;
 mod stream;
 mod table_plan;
@@ -285,6 +288,7 @@ fn result(
         l3: None,
         arp: None,
         routing: None,
+        row_names: Vec::new(),
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).

@@ -501,8 +501,9 @@ impl YagraMcp {
                        `metric_kind` (gauge or counter — a counter's stored value is an odometer, \
                        so ask query_metrics for mode=rate), `dimension` (none = one series per \
                        node; interface = one per interface, use get_interface_series; entity = one \
-                       per table row whose identity was lost at collection time, so only a \
-                       node-wide aggregate is meaningful), and `status` (ok = configured and \
+                       per table row such as a memory pool, CPU or sensor — query_metrics reads \
+                       the node-wide maximum by default and one row with `row`, and \
+                       mode=latest lists every row with its name), and `status` (ok = configured and \
                        flowing; no_data = configured but nothing has arrived; unconfigured = data \
                        exists with no collection item, which is normal for reachability, URL/DNS \
                        monitors and neighbour counts). `within_secs` sets how far back a metric \

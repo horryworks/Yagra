@@ -197,6 +197,8 @@ mod tests {
             metric: "live_pollers".to_owned(),
             breach: None::<Breach>,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         // A fire and a resolve are both rows, and `resolved` is decided here rather than by each
         // caller — the half that used to be written five ways (ADR-092).

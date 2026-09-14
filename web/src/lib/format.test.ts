@@ -96,6 +96,8 @@ describe('format', () => {
       condition: 'above 100',
       observed: 'was 450',
       ifindex: null,
+      row: null,
+      rowName: null,
     });
 
     // 🚨 Both numbers are formatted, and the case above cannot tell that: 100 and 450 are integers,
@@ -130,6 +132,8 @@ describe('format', () => {
       condition: null,
       observed: null,
       ifindex: null,
+      row: null,
+      rowName: null,
     });
 
     // A per-interface breach names its port (ADR-076). Two alerts on one node differ only here,
@@ -148,11 +152,48 @@ describe('format', () => {
       condition: 'above 90',
       observed: 'was 94.2',
       ifindex: 7,
+      row: null,
+      rowName: null,
     });
 
     // Port 0 is a real ifIndex on some agents, so it must survive as 0 rather than collapsing to
     // null through a falsy check — that would silently relabel one port's alert as node-wide.
     expect(alertWhat({ metric: 'if_in_util_pct', ifindex: 0 })).toMatchObject({ ifindex: 0 });
+
+    // A table-row breach names its row (ADR-143) — the C2960S's I/O pool, which the node-wide alert
+    // could not tell apart from the Processor pool. Row 0 survives as 0 for the port's reason.
+    expect(
+      alertWhat({
+        metric: 'cisco_mem_used_pct',
+        direction: 'above',
+        threshold_value: 80,
+        observed_value: 83.9,
+        row: 2,
+        row_name: 'I/O',
+      }),
+    ).toMatchObject({ ifindex: null, row: 2, rowName: 'I/O' });
+    expect(alertWhat({ metric: 'huawei_mem_usage', row: 0 })).toMatchObject({
+      row: 0,
+      rowName: null,
+    });
+    // The live shape and the history shape agree about a row too.
+    expect(
+      alertWhatOf({
+        metric: 'cisco_mem_used_pct',
+        breach: { value: 83.9, threshold: 80, direction: 'above' },
+        row: 2,
+        row_name: 'I/O',
+      }),
+    ).toEqual(
+      alertWhat({
+        metric: 'cisco_mem_used_pct',
+        direction: 'above',
+        threshold_value: 80,
+        observed_value: 83.9,
+        row: 2,
+        row_name: 'I/O',
+      }),
+    );
   });
 
   it('describes a LIVE alert the same way as its history row (alertWhatOf)', () => {
@@ -200,6 +241,8 @@ describe('format', () => {
       condition: null,
       observed: 'was 91',
       ifindex: null,
+      row: null,
+      rowName: null,
     });
 
     // An alert with no metric at all (an N-1 core that predates migration 0036) → "—".

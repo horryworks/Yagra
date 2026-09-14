@@ -196,6 +196,8 @@ mod tests {
             metric: "live_pollers".to_owned(),
             breach: None::<Breach>,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 

@@ -65,6 +65,7 @@ pub(crate) fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult
         l3: None,
         arp: None,
         routing: None,
+        row_names: Vec::new(),
         observational: false,
         poller_id: None,
         trace_context: Default::default(),
@@ -112,7 +113,8 @@ pub(crate) fn resolve_reference(
 ) -> Option<EffectiveThreshold> {
     let matched: Vec<&StoredThreshold> = candidates
         .iter()
-        .filter(|t| threshold_applies(t, node, ifindex, meta))
+        // No row name: the differential test compares port and node resolution, where none applies.
+        .filter(|t| threshold_applies(t, node, ifindex, None, meta))
         .collect();
     let nearest = nearest_folder_depth(&matched, meta);
     let scoped: Vec<ScopedThreshold> = matched
@@ -180,6 +182,8 @@ pub(crate) fn open_alert(node: NodeId, metric: &str, state: yagra_common::NodeSt
         metric: metric.to_owned(),
         breach: None,
         ifindex: None,
+        row: None,
+        row_name: None,
     }
 }
 

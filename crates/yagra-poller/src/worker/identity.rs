@@ -82,6 +82,26 @@ impl IdentityCadence {
         true
     }
 
+    /// As [`Self::claim`], except that a node seen for the first time is due **now**.
+    ///
+    /// The row-name walk uses this rather than the offset (ADR-143 decision 2). Until a node's rows
+    /// have names, a threshold rule scoped to a row name cannot match them, so a switch added a
+    /// minute ago would be judged by the looser unnamed rule for up to an hour. The identity probe
+    /// spreads its first reads across the hour to keep a restarted poller from issuing them all at
+    /// once; the row-name walk rides a table job, and table jobs are already spread across their
+    /// interval, so reading on first sight does not bunch them.
+    pub(super) fn claim_first_now(&mut self, node: NodeId, now: Instant) -> bool {
+        self.prune(now);
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.entries.entry(node) {
+            slot.insert(Entry {
+                due: now + IDENTITY_RETRY,
+                seen: now,
+            });
+            return true;
+        }
+        self.claim(node, now, Duration::ZERO)
+    }
+
     /// A probe for this node got an answer: the next one is a full period away.
     pub(super) fn succeeded(&mut self, node: NodeId, now: Instant) {
         if let Some(entry) = self.entries.get_mut(&node) {
@@ -215,6 +235,26 @@ mod tests {
             })
             .collect();
         assert!(distinct.len() > 32, "{} distinct offsets", distinct.len());
+    }
+
+    /// ADR-143: the row-name walk reads a new node straight away, then waits like the probe does.
+    #[test]
+    fn claim_first_now_is_due_on_first_sight_and_then_keeps_the_period() {
+        let mut c = IdentityCadence::default();
+        let t0 = Instant::now();
+        assert!(c.claim_first_now(node(1), t0), "a new node is read at once");
+        assert!(
+            !c.claim_first_now(node(1), t0 + Duration::from_secs(1)),
+            "and is not read again on the next job"
+        );
+        // Unanswered ⇒ the retry; answered ⇒ a full period.
+        assert!(c.claim_first_now(node(1), t0 + IDENTITY_RETRY));
+        c.succeeded(node(1), t0 + IDENTITY_RETRY);
+        assert!(!c.claim_first_now(
+            node(1),
+            t0 + IDENTITY_RETRY + IDENTITY_PERIOD - Duration::from_secs(1)
+        ));
+        assert!(c.claim_first_now(node(1), t0 + IDENTITY_RETRY + IDENTITY_PERIOD));
     }
 
     #[test]

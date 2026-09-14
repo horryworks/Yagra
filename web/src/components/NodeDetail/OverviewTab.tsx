@@ -47,6 +47,7 @@ import type {
   NodeSummary,
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
+import { followedRow, memRows, visibleRows, type MemRow, type RowValue } from './rowBreakdown';
 import {
   cardUnit,
   hasAnyHealth,
@@ -872,6 +873,9 @@ function MetricCard({
     values: [],
   });
   const [win, setWin] = useState<[number, number] | null>(null);
+  // Each table row's latest value and name, for a metric with one series per row (ADR-143). The
+  // headline stays the node maximum; this is what says which row it is.
+  const [rows, setRows] = useState<RowValue[]>([]);
   const tick = useRefreshTick();
   const { metric } = resolved;
   const readKind = resolved.read.kind;
@@ -897,15 +901,20 @@ function MetricCard({
         readKind === 'none'
           ? Promise.resolve(null)
           : api
-              .getNodeMetric(nodeId, metric, readKind === 'aggregate' ? { agg: 'max' } : undefined)
-              .then((r) => r.value as number | null)
+              .getNodeMetric(
+                nodeId,
+                metric,
+                readKind === 'aggregate' ? { agg: 'max', rows: true } : undefined,
+              )
+              .then((r) => ({ value: r.value as number | null, rows: r.rows ?? [] }))
               // 404 is the documented answer for "no reading yet", not an error to surface.
               .catch(() => null);
-      void Promise.all([points, latest]).then(([pts, v]) => {
+      void Promise.all([points, latest]).then(([pts, reading]) => {
         if (cancelled) return;
         const next = pointsToSeries(pts);
         setSeries(next);
-        setValue(readKind === 'none' ? lastValue(next.values) : v);
+        setValue(readKind === 'none' ? lastValue(next.values) : (reading?.value ?? null));
+        setRows(visibleRows(reading?.rows ?? []));
         setWin([from, to]);
       });
     };
@@ -940,6 +949,21 @@ function MetricCard({
       ) : (
         <p className="nd-muted">{t('overview.noHistory')}</p>
       )}
+      {rows.length > 1 && (
+        <ul className="nd-row-list" aria-label={t('overview.breakdown')}>
+          {rows.map((r) => {
+            const name = r.name ?? t('overview.unnamedRow', { row: r.row });
+            return (
+              <li key={r.row} className="nd-row">
+                <span className="nd-row-name" title={name}>
+                  {name}
+                </span>
+                <span className="nd-row-value mono">{fmt(r.value)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -961,6 +985,9 @@ function MemHealth({
   const [usedBytes, setUsedBytes] = useState<number | null>(null);
   const [totalBytes, setTotalBytes] = useState<number | null>(null);
   const [pct, setPct] = useState<number | null>(null);
+  // Every pool, fullest first (ADR-143). Empty on a core that does not return rows, where the card
+  // falls back to the node-wide maxima it always showed.
+  const [pools, setPools] = useState<MemRow[]>([]);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
     values: [],
@@ -970,37 +997,63 @@ function MemHealth({
 
   useEffect(() => {
     let cancelled = false;
-    const load = () => {
+    const load = async () => {
       const { from, to } = resolveRange(range);
-      void Promise.all([
-        Promise.allSettled(mem.metrics.map((m) => api.getNodeMetric(nodeId, m, { agg: 'max' }))),
-        Promise.allSettled(
-          mem.metrics.map((m) => api.getNodeMetricRange(nodeId, m, { from, to, agg: 'max' })),
+      // The current values first, rows included: which pool the chart follows is decided by them.
+      const scalars = await Promise.allSettled(
+        mem.metrics.map((m) => api.getNodeMetric(nodeId, m, { agg: 'max', rows: true })),
+      );
+      if (cancelled) return;
+      const reading = (i: number) => {
+        const s = scalars[i];
+        return s.status === 'fulfilled' ? s.value : null;
+      };
+      const rows = memRows(
+        mem.id,
+        mem.metrics,
+        mem.unitToBytes,
+        reading(0)?.rows ?? [],
+        reading(1)?.rows ?? [],
+      );
+      // 🚨 The headline is the fullest pool, joined on its own row — never the largest "used" over
+      // the largest "used + free", which on a C2960S read 56% while the I/O pool sat at 83.9% under
+      // an alert. With no rows, the node-wide values are the only answer there is.
+      const d = rows[0]
+        ? rows[0]
+        : deriveMem(
+            mem.id,
+            {
+              [mem.metrics[0]]: reading(0)?.value ?? null,
+              [mem.metrics[1]]: reading(1)?.value ?? null,
+            },
+            mem.unitToBytes,
+          );
+      setPools(rows);
+      setPct(d.pct);
+      setUsedBytes(d.usedBytes);
+      // Only trust a total that's plausibly a real RAM size (guards bad vendor readings).
+      setTotalBytes(d.totalBytes != null && d.totalBytes >= MIN_MEM_TOTAL_BYTES ? d.totalBytes : null);
+      // Trend: the followed pool's own two series when there are several, the node's otherwise.
+      const followed = followedRow(rows);
+      const ranges = await Promise.allSettled(
+        mem.metrics.map((m) =>
+          api.getNodeMetricRange(
+            nodeId,
+            m,
+            followed ? { from, to, row: followed.row } : { from, to, agg: 'max' },
+          ),
         ),
-      ]).then(([scalars, ranges]) => {
-        if (cancelled) return;
-        // Current gauge: name → latest value → derive used/total bytes + %.
-        const vals: Record<string, number | null> = {};
-        mem.metrics.forEach((m, i) => {
-          const s = scalars[i];
-          vals[m] = s.status === 'fulfilled' ? s.value.value : null;
-        });
-        const d = deriveMem(mem.id, vals, mem.unitToBytes);
-        setPct(d.pct);
-        setUsedBytes(d.usedBytes);
-        // Only trust a total that's plausibly a real RAM size (guards bad vendor readings).
-        setTotalBytes(d.totalBytes != null && d.totalBytes >= MIN_MEM_TOTAL_BYTES ? d.totalBytes : null);
-        // Trend: name → points, then derive % per aligned timestamp.
-        const byMetric: Record<string, MetricPoint[]> = {};
-        mem.metrics.forEach((m, i) => {
-          const r = ranges[i];
-          byMetric[m] = r.status === 'fulfilled' ? r.value.points : [];
-        });
-        setSeries(memPctSeries(mem, byMetric));
-        setWin([from, to]);
+      );
+      if (cancelled) return;
+      const byMetric: Record<string, MetricPoint[]> = {};
+      mem.metrics.forEach((m, i) => {
+        const r = ranges[i];
+        byMetric[m] = r.status === 'fulfilled' ? r.value.points : [];
       });
+      setSeries(memPctSeries(mem, byMetric));
+      setWin([from, to]);
     };
-    load();
+    void load();
     return () => {
       cancelled = true;
     };
@@ -1008,6 +1061,7 @@ function MemHealth({
 
   // Headline: absolute used / total when we have a trustworthy total, else a bare usage %.
   const absolute = usedBytes != null && totalBytes != null;
+  const followed = followedRow(pools);
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
@@ -1023,6 +1077,13 @@ function MemHealth({
           )}
         </span>
       </div>
+      {followed ? (
+        <p className="nd-health-metric-meaning">
+          {t('overview.followsRow', {
+            name: followed.name ?? t('overview.unnamedRow', { row: followed.row }),
+          })}
+        </p>
+      ) : null}
       {series.timestamps.length > 0 ? (
         <MetricChart
           title=""
@@ -1034,6 +1095,24 @@ function MemHealth({
         />
       ) : (
         <p className="nd-muted">{t('overview.noHistory')}</p>
+      )}
+      {pools.length > 1 && (
+        <ul className="nd-row-list" aria-label={t('overview.breakdown')}>
+          {pools.map((p) => {
+            const name = p.name ?? t('overview.unnamedRow', { row: p.row });
+            return (
+              <li key={p.row} className="nd-row nd-row-mem">
+                <span className="nd-row-name" title={name}>
+                  {name}
+                </span>
+                <span className="nd-row-value mono">
+                  {formatBytes(p.usedBytes)} / {formatBytes(p.totalBytes)}
+                </span>
+                <span className="nd-row-value mono">{formatUtil(p.pct)}</span>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

@@ -765,6 +765,8 @@ mod tests {
             metric: metric.to_owned(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 

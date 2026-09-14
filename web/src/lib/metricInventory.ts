@@ -65,9 +65,9 @@ export function metricView(kind: MetricKind, dimension: MetricDimension): Metric
   if (dimension === 'entity') {
     return {
       read: kind === 'counter' ? { kind: 'none' } : { kind: 'aggregate' },
-      // A per-entity counter would have to be differentiated per row and then collapsed, and the
-      // rows of a folded multi-index table cannot be named in the first place. There is no query
-      // for it and the server refuses `rate` with `agg`, so the surface explains instead of drawing.
+      // A per-entity counter would have to be differentiated per row and then collapsed. There is no
+      // node-level query for it — one row's rate is reachable with `row` (ADR-143), a node headline
+      // is not — and the server refuses `rate` with `agg`, so the surface explains instead of drawing.
       chart: kind === 'counter' ? { kind: 'none' } : { kind: 'aggregate' },
     };
   }

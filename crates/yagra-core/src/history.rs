@@ -58,6 +58,14 @@ pub struct AlertHistoryRow {
     /// no ifIndex value free to mean "none"; `0` is a real one on some agents).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ifindex: Option<u32>,
+    /// The row of a vendor table this was about — a memory pool, a CPU, a sensor — as the row key
+    /// its samples carry (ADR-143). `None` for an alert about the node as a whole or about a port,
+    /// and for every row recorded before a table row could alert on its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row: Option<u32>,
+    /// What that row was called when the alert fired, e.g. `I/O`. `None` when it had no name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_name: Option<String>,
     /// Insertion time as an RFC 3339 timestamp, and the first half of the **keyset cursor**: the
     /// WebUI passes the last row's `recorded_at` as `before` **and its `id` as `before_id`** to
     /// fetch the next (older) page. Distinct from `at_unix_ms` (the event time).
@@ -238,7 +246,8 @@ const HISTORY_FILTER_WHERE: &str = "\
 /// they share one reader, so the list is written once. A second spelling that dropped a column
 /// would not be a compile error; it would be a `try_get` failure at core startup.
 const HISTORY_COLUMNS: &str = "id, node, subject_kind, subject_ref, check_id, severity, state, \
-     at_unix_ms, resolved, metric, observed_value, threshold_value, direction, ifindex, recorded_at";
+     at_unix_ms, resolved, metric, observed_value, threshold_value, direction, ifindex, row_key, \
+     row_name, recorded_at";
 
 /// The one statement that reads a page of history. `ORDER BY` names the cursor's columns in the
 /// cursor's direction — a keyset cursor is only valid for the ordering it was built for, and
@@ -354,8 +363,8 @@ impl AlertHistoryStore {
         sqlx::query(
             "INSERT INTO alert_history \
              (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
-              metric, observed_value, threshold_value, direction, ifindex) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+              metric, observed_value, threshold_value, direction, ifindex, row_key, row_name) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         )
         .bind(Uuid::new_v4())
         .bind(alert.subject.storage_id())
@@ -371,6 +380,8 @@ impl AlertHistoryStore {
         .bind(threshold)
         .bind(direction.map(Direction::as_str))
         .bind(ifindex_column(alert))
+        .bind(alert.row.map(i64::from))
+        .bind(alert.row_name.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -387,7 +398,7 @@ impl AlertHistoryStore {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO alert_history \
              (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
-              metric, observed_value, threshold_value, direction, ifindex) ",
+              metric, observed_value, threshold_value, direction, ifindex, row_key, row_name) ",
         );
         qb.push_values(records, |mut b, (alert, resolved)| {
             let (metric, value, threshold, direction) = breach_columns(alert);
@@ -404,7 +415,9 @@ impl AlertHistoryStore {
                 .push_bind(value)
                 .push_bind(threshold)
                 .push_bind(direction.map(Direction::as_str))
-                .push_bind(ifindex_column(alert));
+                .push_bind(ifindex_column(alert))
+                .push_bind(alert.row.map(i64::from))
+                .push_bind(alert.row_name.clone());
         });
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
@@ -695,6 +708,12 @@ impl AlertHistoryStore {
                 ifindex: row
                     .try_get::<Option<i32>, _>("ifindex")?
                     .and_then(|v| u32::try_from(v).ok()),
+                // BIGINT because a row key is a whole `u32`; anything outside it could only be a
+                // hand-written row, and it degrades to "no row" like a NULL.
+                row: row
+                    .try_get::<Option<i64>, _>("row_key")?
+                    .and_then(|v| u32::try_from(v).ok()),
+                row_name: row.try_get("row_name")?,
                 recorded_at: recorded_at.to_rfc3339(),
             });
         }
@@ -726,6 +745,8 @@ mod tests {
             flapping: false,
             root_cause: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 
@@ -863,6 +884,8 @@ mod tests {
                 direction: None,
                 recorded_at: String::new(),
                 ifindex: None,
+                row: None,
+                row_name: None,
             };
             assert_eq!(row.subject().as_ref(), Some(&subject), "{subject}");
             // `node` is populated exactly when the subject is a node — that biconditional is what
@@ -1199,6 +1222,8 @@ mod tests {
             flapping: false,
             root_cause: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 

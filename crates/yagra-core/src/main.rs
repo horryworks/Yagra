@@ -474,6 +474,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // afterwards a still-broken check would already have re-fired, which is the duplicate incident
     // this exists to stop. It is idempotent and never overwrites, so it cannot undo an observation.
     alerts::restore::restore(&alerts, &history).await;
+    // What each vendor-table row is called (ADR-143), for the same reason and at the same moment:
+    // a rule scoped to a row name only matches a named row, and the poller re-reads names hourly, so
+    // an engine that started without them would judge every row by the unnamed rule for that hour.
+    alerts::restore::restore_row_names(&alerts, &repo).await;
     // Inbound ack reflection from external tools (PagerDuty / JSM); read-only display (ADR-015).
     let acks = Arc::new(AckRepo::new(repo.pool()));
 
@@ -1546,6 +1550,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         l3: None,
         arp: None,
         routing: None,
+        row_names: Vec::new(),
         observational: false,
         poller_id: None,
         trace_context: Default::default(),

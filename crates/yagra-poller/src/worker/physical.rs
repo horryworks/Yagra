@@ -210,6 +210,7 @@ pub(super) async fn execute_optical(
         l3: None,
         arp: None,
         routing: None,
+        row_names: Vec::new(),
         observational: true,
         poller_id: None,
         trace_context: Default::default(),
@@ -636,6 +637,7 @@ fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterfac
         routing: None,
         poller_id: None,
         // Never a liveness statement — see [`execute_mau`]'s doc comment.
+        row_names: Vec::new(),
         observational: true,
         trace_context: Default::default(),
     }

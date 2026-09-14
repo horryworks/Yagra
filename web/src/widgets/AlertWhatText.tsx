@@ -33,6 +33,13 @@ export function AlertWhatText({ what }: { what: AlertWhat }) {
   if (what.ifindex != null) {
     parts.push({ text: t('format:alertOnPort', { ifindex: what.ifindex }), mono: true });
   }
+  // The table row in the same place and for the same reason (ADR-143): "this metric, on this row".
+  // Its name when one was read, since `I/O` is what the operator can act on; the key otherwise.
+  if (what.rowName) {
+    parts.push({ text: t('format:alertOnRow', { name: what.rowName }), mono: false });
+  } else if (what.row != null) {
+    parts.push({ text: t('format:alertOnRowKey', { row: what.row }), mono: true });
+  }
   if (what.condition) parts.push({ text: what.condition, mono: false });
   if (what.observed) parts.push({ text: `(${what.observed})`, mono: false });
   return (

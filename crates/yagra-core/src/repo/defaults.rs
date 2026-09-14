@@ -102,7 +102,7 @@ type DefaultThreshold = (
     i32,
 );
 
-pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 32] = [
+pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 33] = [
     // ── Fleet-wide (ADR-075 + `icmp_rtt_ms`) ───────────────────────────────────
     // These four really do apply to every node, which is why the ADR-075 argument for
     // `global` holds for them and not for the vendor rows below.
@@ -438,7 +438,41 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 32] = [
         None,
         3,
     ),
+    // ── Per memory pool (ADR-143 決定 8) ───────────────────────────────────────
+    // The one default written from a named row. A Catalyst 2960S's `I/O` pool sat at 83.8–83.9% for
+    // a week (measured on the PoC fleet, 2026-09-15) because it holds the packet buffers the switch
+    // pre-allocates, so offset 24's 80/90 paged about it without end while the pool that runs out
+    // in an incident, `Processor`, sat at 56%. At the same profile scope this rule wins for `I/O`
+    // alone (`alerts::rules::prefer_row_rules`) and offset 24 keeps every other pool.
+    //
+    // ⚠️ Only this one. The other pools measured — an ASA's DP System memory at 14% and a Huawei's
+    // MPU boards — gave no reason to move a bound, and a default not written from a measurement is
+    // a guess.
+    (
+        32,
+        CISCO_IOS,
+        "cisco_mem_used_pct",
+        "above",
+        Some(90.0),
+        Some(95.0),
+        3,
+    ),
 ];
+
+/// The row-name pattern each seeded default carries, by offset (ADR-143). Absent means every row.
+///
+/// A table of its own rather than an eighth tuple element: thirty-two rows would each have gained a
+/// `None` for the sake of one pattern, and every one of them is a line to get wrong. The test below
+/// pins every offset named here to a row that exists.
+const DEFAULT_ROW_MATCHES: &[(usize, &str)] = &[(32, "I/O")];
+
+/// The row-name pattern of the seeded default at `offset`, if it has one.
+pub(super) fn default_row_match(offset: usize) -> Option<&'static str> {
+    DEFAULT_ROW_MATCHES
+        .iter()
+        .find(|(o, _)| *o == offset)
+        .map(|(_, pattern)| *pattern)
+}
 
 #[cfg(test)]
 mod tests {
@@ -510,8 +544,8 @@ mod tests {
         // Load-bearing: without it, a loop that stopped matching would skip every assertion above
         // and report success about nothing.
         assert_eq!(
-            checked, 27,
-            "twenty-seven of the defaults are profile-scoped"
+            checked, 28,
+            "twenty-eight of the defaults are profile-scoped"
         );
     }
 
@@ -557,5 +591,40 @@ mod tests {
     fn every_seeded_default_has_its_own_offset_and_they_are_dense() {
         let offsets: Vec<usize> = DEFAULT_THRESHOLDS.iter().map(|(o, ..)| *o).collect();
         assert_eq!(offsets, (0..DEFAULT_THRESHOLDS.len()).collect::<Vec<_>>());
+    }
+
+    /// Every row pattern names a seeded default that exists, is scoped to profiles (a fleet-wide
+    /// rule has no business picking one vendor's pool), is about a metric collected once per table
+    /// row, and has a sibling at the same scope without a pattern — the rule it narrows (ADR-143).
+    #[test]
+    fn every_seeded_row_pattern_narrows_a_default_that_exists() {
+        assert!(!DEFAULT_ROW_MATCHES.is_empty());
+        for (offset, pattern) in DEFAULT_ROW_MATCHES {
+            let (_, targets, metric, ..) = DEFAULT_THRESHOLDS
+                .iter()
+                .find(|(o, ..)| o == offset)
+                .unwrap_or_else(|| {
+                    panic!("row pattern {pattern:?} names offset {offset}, which does not exist")
+                });
+            assert!(
+                !targets.is_empty(),
+                "offset {offset}: a row pattern on a fleet-wide rule"
+            );
+            let derived = crate::derived::derived_node_metric(metric).unwrap_or_else(|| {
+                panic!("offset {offset}: {metric} is not a derived node metric")
+            });
+            assert!(
+                derived.per_row,
+                "offset {offset}: {metric} has no rows to pick from"
+            );
+            assert!(
+                DEFAULT_THRESHOLDS.iter().any(|(o, t, m, ..)| o != offset
+                    && m == metric
+                    && t == targets
+                    && default_row_match(*o).is_none()),
+                "offset {offset}: no unpatterned {metric} rule at the same scope for it to narrow"
+            );
+            assert_eq!(default_row_match(*offset), Some(*pattern));
+        }
     }
 }

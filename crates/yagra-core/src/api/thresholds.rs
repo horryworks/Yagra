@@ -314,6 +314,13 @@ pub(super) struct ThresholdBody {
     #[serde(default)]
     critical_above: Option<f64>,
     dwell_samples: Option<i32>,
+    /// Apply the rule only to the rows of a table metric whose name matches — a memory pool (`I/O`),
+    /// a board (`MPU Board *`). Case-insensitive; `*` matches any run of characters. Omit it for
+    /// every row. At the same scope, a rule with a pattern wins for the rows it matches, so a looser
+    /// bound for one pool can sit beside the rule for all of them. Not allowed on an `interface`
+    /// rule, which already names one port.
+    #[serde(default)]
+    row_match: Option<String>,
 }
 
 /// Most targets one rule may name (ADR-078 decision 3).
@@ -334,6 +341,8 @@ struct ParsedThreshold<'a> {
     scope_ids: Vec<String>,
     /// The four bounds, already folded from whichever shape the body used (ADR-081).
     bounds: ThresholdBounds,
+    /// The row-name pattern, trimmed and validated (ADR-143). `None` for every row.
+    row_match: Option<String>,
 }
 
 /// The synchronous half of validating a rule — shared by create and update.
@@ -463,10 +472,35 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
             }
         }
     }
+    // ADR-143: which rows the rule reaches, normalized through the one function the bundle importer
+    // also uses — blank means every row. Refused on an interface rule, which already names one port:
+    // a pattern there would be stored, listed, and never match anything.
+    let row_match = yagra_common::row_names::normalize_row_match(body.row_match.as_deref())
+        .map_err(|e| {
+            ApiError::bad_request(
+                "invalid_row_match",
+                match e {
+                    yagra_common::row_names::RowMatchError::TooLong => format!(
+                        "row_match may be at most {} characters",
+                        yagra_common::row_names::ROW_MATCH_MAX_CHARS
+                    ),
+                    yagra_common::row_names::RowMatchError::ControlCharacter => {
+                        "row_match must not contain control characters".to_owned()
+                    }
+                },
+            )
+        })?;
+    if row_match.is_some() && level == ScopeLevel::Interface {
+        return Err(ApiError::bad_request(
+            "invalid_row_match",
+            "an interface rule already names one port and cannot carry a row pattern",
+        ));
+    }
     Ok(ParsedThreshold {
         scope_level: &body.scope_level,
         scope_ids,
         bounds,
+        row_match,
     })
 }
 
@@ -577,7 +611,13 @@ async fn reject_duplicate_rule(
 ) -> ApiResult<()> {
     let existing = admin
         .thresholds
-        .find_duplicate(parsed.scope_level, &parsed.scope_ids, metric, exclude)
+        .find_duplicate(
+            parsed.scope_level,
+            &parsed.scope_ids,
+            metric,
+            parsed.row_match.as_deref(),
+            exclude,
+        )
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -659,6 +699,7 @@ async fn create_threshold(
             metric: &body.metric,
             bounds: p.bounds,
             dwell_samples: body.dwell_samples.unwrap_or(3),
+            row_match: p.row_match.as_deref(),
         })
         .await
         .map_err(|e| {
@@ -699,6 +740,7 @@ async fn update_threshold(
                 metric: &body.metric,
                 bounds: p.bounds,
                 dwell_samples: body.dwell_samples.unwrap_or(3),
+                row_match: p.row_match.as_deref(),
             },
         )
         .await
@@ -861,6 +903,7 @@ mod tests {
             warning_above: None,
             critical_above: None,
             dwell_samples: None,
+            row_match: None,
         }
     }
 
@@ -879,6 +922,7 @@ mod tests {
             warning_above: None,
             critical_above: None,
             dwell_samples: None,
+            row_match: None,
         }
     }
 
@@ -1084,5 +1128,88 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "thresholds").await, before + 1);
+    }
+
+    /// ADR-143: a rule naming a table row sits beside the rule for every row at the same scope —
+    /// that pair is the whole point — while a second rule naming the same row is still the ADR-081
+    /// duplicate, and a port rule cannot carry a pattern at all.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_row_pattern_is_stored_beside_the_rule_for_every_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node = crate::pgtest::node(&pool, "c2960s", 7, None).await;
+        let body = |row_match: Option<&str>| {
+            serde_json::json!({
+                "scope_level": "node",
+                "scope_ids": [node.to_string()],
+                "metric": "cisco_mem_used_pct",
+                "direction": "above",
+                "warning_above": 80.0,
+                "critical_above": 90.0,
+                "row_match": row_match,
+            })
+        };
+        let (status, out) = send(&st, "POST", "/api/v1/thresholds", &tok, Some(body(None))).await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{out}");
+        let (status, out) = send(
+            &st,
+            "POST",
+            "/api/v1/thresholds",
+            &tok,
+            Some(body(Some("  I/O "))),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{out}");
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT row_match FROM thresholds WHERE metric = 'cisco_mem_used_pct' \
+             AND row_match IS NOT NULL AND $1 = ANY(scope_ids)",
+        )
+        .bind(node.to_string())
+        .fetch_one(&pool)
+        .await
+        .expect("the patterned rule");
+        assert_eq!(stored.as_deref(), Some("I/O"), "stored trimmed");
+
+        let (status, out) = send(
+            &st,
+            "POST",
+            "/api/v1/thresholds",
+            &tok,
+            Some(body(Some("i/o"))),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::CREATED,
+            "a different pattern is a different rule: {out}"
+        );
+        let (status, _) = send(
+            &st,
+            "POST",
+            "/api/v1/thresholds",
+            &tok,
+            Some(body(Some("I/O"))),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+
+        let (status, _) = send(
+            &st,
+            "POST",
+            "/api/v1/thresholds",
+            &tok,
+            Some(serde_json::json!({
+                "scope_level": "interface",
+                "scope_ids": [format!("{node}:3")],
+                "metric": "if_in_util_pct",
+                "direction": "above",
+                "warning": 80.0,
+                "row_match": "I/O",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
     }
 }

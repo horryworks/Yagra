@@ -1476,6 +1476,8 @@ mod tests {
             metric: "event:test".to_owned(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
         Notification::for_alert(&alert, "node down", r#"{"metric":"event:test"}"#)
     }
@@ -1645,6 +1647,8 @@ mod tests {
             metric: "if_in_util_pct".to_owned(),
             breach: None,
             ifindex: Some(IfIndex(idx)),
+            row: None,
+            row_name: None,
         };
         assert!(mute_matches(std::slice::from_ref(&mute), &port_alert(7)));
         assert!(mute_matches(std::slice::from_ref(&mute), &port_alert(48)));
@@ -1689,6 +1693,8 @@ mod tests {
             metric: "icmp_rtt_ms".to_string(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         };
 
         // Whole-node mute matches any check on the node; another node's mute doesn't.
@@ -1938,6 +1944,8 @@ mod delivery_tests {
             metric: "icmp_rtt_ms".to_owned(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 

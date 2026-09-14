@@ -19,7 +19,7 @@ use yagra_common::{MetricKind, NodeId, SeriesKey};
 
 use super::YagraMcp;
 use crate::api::scope::NodeScope;
-use crate::mcp::dto::{MetricPointDto, MetricSeriesDto};
+use crate::mcp::dto::{MetricPointDto, MetricRowDto, MetricSeriesDto};
 
 // The shared scope: the helpers in `support.rs` and the types the other domain modules declare,
 // re-exported by `mod.rs` so no file has to name where a sibling keeps a thing.
@@ -39,6 +39,10 @@ pub(crate) struct QueryMetricsParams {
     to: Option<i64>,
     /// Sample step in seconds (range/rate modes; clamped to bound the point count).
     step: Option<u64>,
+    /// For a metric with one series per table row (`dimension: entity`): read this one row — a
+    /// memory pool, a CPU, a sensor — by the `row` key a `latest` answer lists in `rows`, instead of
+    /// the node maximum. Works in every mode, including `rate` for a counter.
+    row: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -154,9 +158,10 @@ pub(super) fn no_node_level_answer(
              (get_node_status lists the ifindexes), or top_interfaces to rank the fleet."
         ),
         MetricDimension::Entity => format!(
-            "{metric} is a counter with one series per table row on this node ({n} of them), and \
-             row identity is not retained at collection time, so neither a per-row nor a \
-             node-level rate is available."
+            "{metric} is a counter with one series per table row on this node ({n} of them), so no \
+             single node-level rate exists. Read one row's rate by passing its key as `row`; \
+             get_active_alerts names the row an alert is about, and mode=latest on a gauge from the \
+             same table lists every row's key."
         ),
         // Unreachable via `node_read`, and written out rather than `unreachable!()` so a future
         // dimension cannot turn a wrong answer into a panic on a live deployment.
@@ -176,9 +181,12 @@ impl YagraMcp {
                        This answers at the NODE level, so it depends on the metric's `dimension` \
                        (call list_node_metrics first). `none` is answered directly. A gauge with \
                        several series per node (`entity`, `interface`) is collapsed to the node \
-                       maximum and the answer says so. A COUNTER with several series per node is \
-                       refused rather than answered, because no single node-level number exists — \
-                       use get_interface_series for one interface's rates, or top_interfaces to \
+                       maximum and the answer says so — and an `entity` gauge read in `latest` \
+                       mode also lists every table row (a memory pool, a CPU, a sensor) with its \
+                       latest value and name in `rows`. Pass one of those keys as `row` to read that \
+                       row alone, in any mode. A COUNTER with several series per node is refused \
+                       unless `row` names one of them, because no single node-level number exists \
+                       — use get_interface_series for one interface's rates, or top_interfaces to \
                        rank the fleet."
     )]
     async fn query_metrics(
@@ -228,9 +236,14 @@ impl YagraMcp {
             .find(|e| e.metric == p.metric),
             None => None,
         };
-        let read = entry
-            .as_ref()
-            .map_or(NodeRead::Direct, |e| node_read(e.metric_kind, e.dimension));
+        // One named row (ADR-143) is one series whatever else the node carries under the name, so it
+        // is read directly — never refused, never collapsed.
+        let read = match p.row {
+            Some(_) => NodeRead::Direct,
+            None => entry
+                .as_ref()
+                .map_or(NodeRead::Direct, |e| node_read(e.metric_kind, e.dimension)),
+        };
         if read == NodeRead::Refuse {
             let e = entry
                 .as_ref()
@@ -238,7 +251,14 @@ impl YagraMcp {
             return tool_bad_params(TOOL, &no_node_level_answer(&p.metric, e));
         }
 
-        let key = SeriesKey::node(NodeId::from(p.node_id), p.metric.clone());
+        let key = match p.row {
+            Some(row) => SeriesKey::interface(
+                NodeId::from(p.node_id),
+                yagra_common::IfIndex(row),
+                p.metric.clone(),
+            ),
+            None => SeriesKey::node(NodeId::from(p.node_id), p.metric.clone()),
+        };
         let mode = p.mode.as_deref().unwrap_or("latest");
         let agg = read == NodeRead::NodeMax;
         // Said out loud, never inferred: a collapsed answer that reads like a plain one is the same
@@ -272,6 +292,22 @@ impl YagraMcp {
                 },
                 points: Vec::new(),
                 note,
+                // Every row, when the answer is a collapse of them: the maximum says how bad the
+                // worst row is and only the rows say which one (ADR-143). The same seam the REST
+                // `rows=true` read calls, so the two cannot name rows differently.
+                rows: if agg {
+                    crate::api::metrics::node_metric_rows(&self.state, p.node_id, &p.metric)
+                        .await
+                        .into_iter()
+                        .map(|r| MetricRowDto {
+                            row: r.row,
+                            name: r.name,
+                            value: r.value,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
             },
             // A `NodeMax` metric is a gauge by construction (a multi-series counter was refused
             // above), so `rate` of one is meaningless twice over — and there is no aggregate-rate
@@ -313,6 +349,7 @@ impl YagraMcp {
                         .map(|pt| MetricPointDto { t: pt.t, v: pt.v })
                         .collect(),
                     note,
+                    rows: Vec::new(),
                 }
             }
             _ => return tool_bad_params(TOOL, "`mode` must be latest, range, or rate"),
@@ -640,8 +677,8 @@ mod tests {
     }
 
     /// A refusal that does not say where to go instead makes a model guess or retry, so the
-    /// destination is part of the contract rather than a nicety. The `entity` case deliberately
-    /// names none — row identity is discarded at collection time and there is nowhere to send it.
+    /// destination is part of the contract rather than a nicety. The `entity` case sends the model
+    /// to `row` on this same tool (ADR-143) — never to the interface tools, which cannot read it.
     #[test]
     fn a_refusal_names_the_tool_that_can_answer() {
         let iface = crate::api::metrics::NodeMetricEntry {
@@ -665,7 +702,7 @@ mod tests {
             !msg.contains("get_interface_series"),
             "an entity row is not an interface — sending a model there wastes a call: {msg}"
         );
-        assert!(msg.contains("identity"), "{msg}");
+        assert!(msg.contains("`row`"), "{msg}");
     }
 
     /// The alignment invariant is what can be silently wrong here: every series on one axis, so a

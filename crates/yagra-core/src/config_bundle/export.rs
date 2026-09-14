@@ -211,7 +211,8 @@ impl ConfigBundleRepo {
         let mut thresholds = Vec::new();
         for row in sqlx::query(
             "SELECT id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
-                    warning_below, critical_below, warning_above, critical_above, dwell_samples \
+                    warning_below, critical_below, warning_above, critical_above, dwell_samples, \
+                    row_match \
              FROM thresholds ORDER BY metric, id",
         )
         .fetch_all(&mut *conn)
@@ -236,6 +237,7 @@ impl ConfigBundleRepo {
                 warning_above: row.try_get("warning_above")?,
                 critical_above: row.try_get("critical_above")?,
                 dwell_samples: row.try_get("dwell_samples")?,
+                row_match: row.try_get("row_match")?,
             });
         }
         cap("thresholds", thresholds.len())?;

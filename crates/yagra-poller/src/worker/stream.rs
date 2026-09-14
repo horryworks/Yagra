@@ -107,6 +107,9 @@ pub async fn run_stream<S>(
     // When each node's identity is read again (ADR-138). One map for the loop's lifetime: the loop
     // claims a due probe before the spawn, and the task reports back only when it got an answer.
     let cadence = Arc::new(std::sync::Mutex::new(identity::IdentityCadence::default()));
+    // When each node's vendor-table rows are named again (ADR-143). The same bookkeeping in a second
+    // map: the walk rides a table job, not the scalar GET, so the two are due at different times.
+    let row_cadence = Arc::new(std::sync::Mutex::new(identity::IdentityCadence::default()));
     while let Some(mut job) = jobs.next().await {
         // Meraki org collectors share a sentinel target (0.0.0.0) and are single-flighted per org
         // by core, so they use only the global concurrency cap (not per-device single-flight, which
@@ -195,6 +198,14 @@ pub async fn run_stream<S>(
             job.probe_identity |= due;
         }
         let task_cadence = cadence.clone();
+        // The hourly row-name walk (ADR-143), claimed out here for the identity probe's reason: every
+        // job passes this point, and the task takes the job by value.
+        let names_due = row_names::carries_row_names(&job.check)
+            && row_cadence
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .claim_first_now(job.node_id, Instant::now());
+        let task_row_cadence = row_cadence.clone();
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
@@ -282,6 +293,18 @@ pub async fn run_stream<S>(
                 metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
                 let probed_at = Instant::now();
                 let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+                // After the table job and inside its permit, so the device is asked on a conversation
+                // that already exists. Only a device that answered: a silent one would spend the walk's
+                // whole budget saying nothing, and keeps the short retry `claim_first_now` set.
+                if names_due
+                    && result.outcome == CheckOutcome::Reachable
+                    && row_names::collect(&job, transport.as_ref(), &mut result).await
+                {
+                    task_row_cadence
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .succeeded(job.node_id, Instant::now());
+                }
                 record_phase(kind, "execute", probed_at);
                 // Answered ⇒ not due again for a period. Unanswered (or shed above, which returned
                 // before reaching this) keeps the short retry `claim` already set.

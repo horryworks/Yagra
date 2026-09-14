@@ -538,6 +538,11 @@ export type AlertWhat =
        *  A number, not a name: the alert carries the index, and the name is resolved by the
        *  surface that has the node's interface roster. `null` is the ordinary node-level case. */
       ifindex: number | null;
+      /** The vendor-table row — a memory pool, a CPU, a sensor — when the alert is about one row
+       *  (ADR-143). `row` is its key and `rowName` the name it had when the alert fired; a row with no
+       *  name yet has only the key. Never set together with `ifindex`. */
+      row: number | null;
+      rowName: string | null;
     };
 
 export function alertWhat(row: {
@@ -546,6 +551,8 @@ export function alertWhat(row: {
   threshold_value?: number | null;
   observed_value?: number | null;
   ifindex?: number | null;
+  row?: number | null;
+  row_name?: string | null;
 }): AlertWhat {
   if (!row.metric) return { kind: 'none' };
   if (row.metric === LIVENESS_METRIC) return { kind: 'liveness' };
@@ -579,6 +586,8 @@ export function alertWhat(row: {
     condition,
     observed,
     ifindex: row.ifindex ?? null,
+    row: row.row ?? null,
+    rowName: row.row_name ?? null,
   };
 }
 
@@ -590,6 +599,8 @@ export function alertWhatOf(alert: {
   metric?: string | null;
   breach?: { value?: number; threshold?: number | null; direction?: string } | null;
   ifindex?: number | null;
+  row?: number | null;
+  row_name?: string | null;
 }): AlertWhat {
   return alertWhat({
     metric: alert.metric,
@@ -597,6 +608,8 @@ export function alertWhatOf(alert: {
     threshold_value: alert.breach?.threshold,
     observed_value: alert.breach?.value,
     ifindex: alert.ifindex,
+    row: alert.row,
+    row_name: alert.row_name,
   });
 }
 

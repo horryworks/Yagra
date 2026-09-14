@@ -66,6 +66,8 @@ pub(super) fn alert(sev: Severity) -> Alert {
         metric: "icmp_rtt_ms".to_owned(),
         breach: None,
         ifindex: None,
+        row: None,
+        row_name: None,
     }
 }
 

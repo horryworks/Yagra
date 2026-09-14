@@ -203,6 +203,14 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
         always_present: false,
     },
     TemplateVariable {
+        name: "row_name",
+        description: "The name of the table row that breached — a memory pool, a CPU or a sensor, \
+                      such as I/O or MPU Board 0 — for a metric collected once per row. Absent \
+                      when the alert is about the node as a whole or about a port, or when the \
+                      row has no name.",
+        always_present: false,
+    },
+    TemplateVariable {
         name: "at",
         description: "When the transition committed, as an RFC 3339 timestamp in UTC.",
         always_present: true,
@@ -292,6 +300,10 @@ pub struct AlertFacts {
     // wants to read like an operator does should print both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ifindex: Option<u32>,
+    /// The name of the table row that breached — a memory pool, a CPU, a sensor — for a metric
+    /// collected once per row (ADR-143). The name the row had when the alert fired.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_name: Option<String>,
     /// RFC 3339 UTC timestamp of the transition.
     pub at: String,
     /// The same instant in milliseconds since the Unix epoch.
@@ -359,6 +371,9 @@ pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
         threshold: Some(90.0),
         direction: Some("above".to_owned()),
         ifindex: Some(7),
+        // Absent, and necessarily: a port alert is not a table-row alert, and the two are never
+        // both set on one alert. A template that wants either reads both.
+        row_name: None,
         // `at` and `at_unix_ms` are the same instant, and the preview shows both — a mismatch is
         // the kind of thing an operator notices and then distrusts the whole preview over.
         // `the_preview_sample_states_one_instant_two_ways` pins them together.
@@ -391,6 +406,7 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
         threshold: None,
         direction: None,
         ifindex: None,
+        row_name: None,
         root_cause_id: None,
         root_cause_name: None,
         // Empty rather than inherited from the sample. `tags` is always *present*, so this is not
@@ -398,6 +414,25 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
         // node that inherits no labels either, and this fixture is what proves
         // `{% for t in tags %}` renders nothing instead of erroring on one (see the field's doc).
         tags: Vec::new(),
+        ..sample_facts(event)
+    }
+}
+
+/// The same alert about a **table row** instead of a port (ADR-143) — the one fact
+/// [`sample_facts`] cannot carry, because a port alert and a row alert never share an alert.
+///
+/// The catalogue promises every variable resolves against *a* sample; `row_name` is the only one
+/// whose sample has to be this one. The tests check the union of the two, so a variable that
+/// resolves against neither still fails.
+#[must_use]
+pub fn sample_row_facts(event: NotifyEvent) -> AlertFacts {
+    AlertFacts {
+        metric: Some("cisco_mem_pool_used_pct".to_owned()),
+        value: Some(83.9),
+        threshold: Some(80.0),
+        direction: Some("above".to_owned()),
+        ifindex: None,
+        row_name: Some("I/O".to_owned()),
         ..sample_facts(event)
     }
 }
@@ -438,7 +473,9 @@ mod tests {
     /// bug; a fact the context carries but the catalogue omits is undiscoverable.
     #[test]
     fn every_exposed_key_is_a_declared_variable() {
-        assert_eq!(keys(&sample_facts(NotifyEvent::Fire)), declared());
+        let mut exposed = keys(&sample_facts(NotifyEvent::Fire));
+        exposed.extend(keys(&sample_row_facts(NotifyEvent::Fire)));
+        assert_eq!(exposed, declared());
     }
 
     /// The `always_present` flag is what the editor uses to tell an operator which names need a

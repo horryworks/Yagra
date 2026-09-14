@@ -285,6 +285,18 @@ pub struct Alert {
     // and a newer core deserialising an older one gets `None` rather than a decode error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ifindex: Option<IfIndex>,
+    /// The row of a vendor table this alert is about — a memory pool, a CPU, a sensor — as the row
+    /// key its samples carry; `None` for an alert about the whole node or about a port.
+    //
+    // Descriptive only, like `ifindex`: identity is the check id (`metric@row`, ADR-143). A field of
+    // its own rather than `ifindex` reused, because rule resolution reads `ifindex` as "which port"
+    // and an interface-scoped rule on port 2 must never reach memory pool 2. Same N-1 attributes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row: Option<u32>,
+    /// What that row was called when the alert fired (`I/O`, `MPU Board 0`); `None` when the row has
+    /// no name yet or the alert is not about a row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_name: Option<String>,
 }
 
 impl Alert {
@@ -321,6 +333,8 @@ mod tests {
             metric: "__liveness__".to_string(),
             breach: None,
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 

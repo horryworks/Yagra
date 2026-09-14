@@ -71,6 +71,9 @@ const SPEC_OWNERSHIP: &[(&str, &[&str])] = &[
     // Which kinds can carry the identity probe (ADR-138). The scalar GET is the one conversation
     // that runs it, and `stream.rs` asks this file rather than naming the two itself.
     ("identity.rs", &["Snmp", "SnmpV3"]),
+    // Which kinds can carry the row-name walk (ADR-143), and the credential it reuses from them. Only
+    // a table walk produces row keys, and `stream.rs` asks this file rather than naming the two.
+    ("row_names.rs", &["SnmpTable", "SnmpV3Table"]),
     // Arithmetic from an interval (ADR-110 Increment 10). It is handed a number, not a job.
     ("table_plan.rs", &[]),
     // Destructures the job it was handed; one job, many results.

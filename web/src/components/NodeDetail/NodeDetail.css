@@ -561,6 +561,40 @@ html[data-viewport='mobile'] .nd-extract-row {
 /* One line under a generic card's label saying what the metric measures. Two lines maximum: the
    catalogue sentences run to about 100 characters and an uncapped block would make one card in the
    grid twice the height of its neighbours. */
+/* Device health, one line per table row (ADR-143): a memory pool, a CPU, a sensor. The name truncates
+   and carries its whole text in `title`; the numbers never wrap. */
+.nd-row-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nd-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.nd-row-mem {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.nd-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nd-row-value {
+  text-align: right;
+  white-space: nowrap;
+}
+
 .nd-health-metric-meaning {
   font-size: var(--font-xs);
   color: var(--text-tertiary);

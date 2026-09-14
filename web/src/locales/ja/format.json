@@ -37,6 +37,8 @@
   "alertCondition": "{{value}} を{{direction}}",
   "alertObservedWas": "実測 {{value}}",
   "alertOnPort": "ポート {{ifindex}}",
+  "alertOnRow": "「{{name}}」",
+  "alertOnRowKey": "行 {{row}}",
   "scalar": {
     "snmp_sys_uptime_ticks": "稼働時間",
     "meraki_device_up": "可用性",

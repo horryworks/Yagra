@@ -130,11 +130,31 @@ pub(super) async fn write<'a>(
                 continue;
             }
         }
+        // ADR-143: the row pattern goes through the validator the API edge uses, so the two writers
+        // of this column cannot accept different patterns — and, as there, an interface rule may not
+        // carry one, because it already names exactly one port.
+        let row_match = match yagra_common::row_names::normalize_row_match(t.row_match.as_deref()) {
+            Ok(pattern)
+                if pattern.is_none()
+                    || t.scope_level != yagra_common::ScopeLevel::Interface.as_str() =>
+            {
+                pattern
+            }
+            Ok(_) | Err(_) => {
+                notes.add(
+                    "thresholds",
+                    NoteCode::SkippedInvalidValue,
+                    Some("row_match"),
+                );
+                c.skipped += 1;
+                continue;
+            }
+        };
         sqlx::query(
             "INSERT INTO thresholds (id, scope_level, scope_id, scope_ids, metric, direction, \
                                          warning, critical, warning_below, critical_below, \
-                                         warning_above, critical_above, dwell_samples) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                                         warning_above, critical_above, dwell_samples, row_match) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
                  ON CONFLICT (id) DO UPDATE SET scope_level = EXCLUDED.scope_level, \
                      scope_id = EXCLUDED.scope_id, scope_ids = EXCLUDED.scope_ids, \
                      metric = EXCLUDED.metric, \
@@ -144,7 +164,8 @@ pub(super) async fn write<'a>(
                      critical_below = EXCLUDED.critical_below, \
                      warning_above = EXCLUDED.warning_above, \
                      critical_above = EXCLUDED.critical_above, \
-                     dwell_samples = EXCLUDED.dwell_samples",
+                     dwell_samples = EXCLUDED.dwell_samples, \
+                     row_match = EXCLUDED.row_match",
         )
         .bind(t.id)
         .bind(&t.scope_level)
@@ -164,6 +185,7 @@ pub(super) async fn write<'a>(
         .bind(bounds.warning_above)
         .bind(bounds.critical_above)
         .bind(t.dwell_samples)
+        .bind(&row_match)
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, t.id);

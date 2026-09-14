@@ -216,6 +216,7 @@ pub fn context_for(
             .as_ref()
             .map(|b| b.direction.as_str().to_owned()),
         ifindex: alert.ifindex.map(|i| i.0),
+        row_name: alert.row_name.clone(),
         at: unix_ms_to_rfc3339(alert.at_unix_ms),
         at_unix_ms: alert.at_unix_ms,
         flapping: alert.flapping,
@@ -272,6 +273,8 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
                 .unwrap_or(yagra_common::Direction::Above),
         }),
         ifindex: declared.ifindex.map(yagra_common::IfIndex::from),
+        row: None,
+        row_name: None,
     };
     let mut resolved = HashMap::new();
     resolved.insert(
@@ -388,6 +391,8 @@ pub(crate) mod tests {
                 direction: Direction::Above,
             }),
             ifindex: None,
+            row: None,
+            row_name: None,
         }
     }
 

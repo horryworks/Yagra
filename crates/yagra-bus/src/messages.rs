@@ -2142,6 +2142,15 @@ pub struct PollResult {
     /// and `arp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<RoutingSnapshot>,
+    /// The names of the vendor-table rows this poll's values arrived on — `Processor` and `I/O` for
+    /// a Cisco memory pool, `MPU Board 0` for a Huawei entity (ADR-143). Read by the hourly row-name
+    /// walk after a table job, and only for rows whose value on this poll was not zero. Descriptive
+    /// device text for PostgreSQL and the alert engine — **never a TSDB label** (ADR-011).
+    ///
+    /// Defaulted so an N-1 poller stays compatible, and skipped when empty so every other result's
+    /// wire form is unchanged (ADR-017).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_names: Vec<RowName>,
     /// This result carries **observations only** and makes no claim about the node's reachability.
     ///
     /// Core skips the alert engine entirely for such results. That is not a nicety: `outcome` feeds
@@ -2231,6 +2240,21 @@ pub struct DiscoveredInterface {
     /// Highest acceptable transmit power, dBm. See [`DiscoveredInterface::rx_power_low_dbm`].
     #[serde(default)]
     pub tx_power_high_dbm: Option<f64>,
+}
+
+/// The name of one row of a vendor table, as the row-name walk read it (ADR-143).
+///
+/// `metric` and `row` are exactly the pair a [`Sample`] of that row carries — the metric name and
+/// its `ifindex` row key — so core joins a name to a value without knowing any OID. A table with two
+/// value columns (`cisco_mem_used` and `cisco_mem_free`) produces one entry per metric.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RowName {
+    /// The metric whose samples carry this row key.
+    pub metric: String,
+    /// The row key, as the sample's `ifindex` holds it (folded for a multi-part index).
+    pub row: u32,
+    /// The row's name, already cleaned by `yagra_common::row_names::sanitize_row_name`.
+    pub name: String,
 }
 
 /// High-level outcome of a check.
@@ -3440,6 +3464,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            row_names: Vec::new(),
             observational: false,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
@@ -3448,6 +3473,39 @@ mod tests {
         let back: PollResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
         assert_eq!(back.poller_id.as_deref(), Some("edge-poller-1"));
+    }
+
+    /// ADR-143's row names. An N-1 poller sends none; a result without any keeps exactly the wire
+    /// form it had; and names survive the round trip in the order they were read.
+    #[test]
+    fn poll_result_row_names_tolerate_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "some_future_field": 42
+        }"#;
+        let mut result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.row_names.is_empty());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("row_names"), "{wire}");
+
+        result.row_names = vec![
+            RowName {
+                metric: "cisco_mem_used".into(),
+                row: 2,
+                name: "I/O".into(),
+            },
+            RowName {
+                metric: "cisco_cemp_mem_used".into(),
+                row: 227_729_484,
+                name: "DP System memory".into(),
+            },
+        ];
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        assert_eq!(back.row_names, result.row_names);
     }
 
     /// ADR-038's two new result fields, both N-1 sensitive in the same way `dns_chain` was.

@@ -36,6 +36,9 @@ export interface ThresholdForm {
   warningAbove: string;
   criticalAbove: string;
   dwell: string;
+  /** Which table rows the rule reaches, by name — `I/O`, `MPU Board *` (ADR-143). Blank means every
+   *  row, and is sent as absent rather than as an empty pattern. */
+  rowMatch: string;
 }
 
 /** The breach count a new rule starts at. Matches the server's own default for an absent
@@ -75,6 +78,7 @@ export function thresholdFormFrom(rule?: StoredThreshold): ThresholdForm {
       warningAbove: '',
       criticalAbove: '',
       dwell: String(DEFAULT_DWELL),
+      rowMatch: '',
     };
   }
   return {
@@ -91,7 +95,14 @@ export function thresholdFormFrom(rule?: StoredThreshold): ThresholdForm {
     warningAbove: numberText(rule.warning_above),
     criticalAbove: numberText(rule.critical_above),
     dwell: String(rule.dwell_samples),
+    rowMatch: rule.row_match ?? '',
   };
+}
+
+/** Whether the level can carry a row-name pattern. An `interface` rule already names one port, and
+ *  the server refuses a pattern on one — so the form does not offer the field there (ADR-143). */
+export function scopeAcceptsRowMatch(level: ScopeLevel): boolean {
+  return scopeIdKind(level) !== 'interface';
 }
 
 /** What the target field *is* at a given level — which decides the control the dialog renders.
@@ -185,6 +196,10 @@ export function thresholdBody(f: ThresholdForm): ThresholdInput {
     warning_above: optionalNumber(f.warningAbove),
     critical_above: optionalNumber(f.criticalAbove),
     dwell_samples: optionalNumber(f.dwell) ?? DEFAULT_DWELL,
+    // Blank is "every row" and goes as absent; a pattern left over from before the level was
+    // switched to `interface` is dropped rather than sent into a 400.
+    row_match:
+      scopeAcceptsRowMatch(f.level) && f.rowMatch.trim() !== '' ? f.rowMatch.trim() : undefined,
   };
 }
 
