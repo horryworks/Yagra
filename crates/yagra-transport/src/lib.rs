@@ -571,6 +571,10 @@ pub struct FakeTransport {
     /// reports that not every column answered — the walk a real agent produces when one column
     /// times out between two that answer (ADR-138 Increment 3).
     pub snmp_instances_unanswered: bool,
+    /// The per-round-trip timeout every instance walk (v2c and v3) was called with, oldest first —
+    /// so a test can see that a caller which stretches one walk's patience really passed it on
+    /// (ADR-138 Increment 4). [`Self::asked`] records what was asked, never how long to wait.
+    pub instance_walk_timeouts: Arc<Mutex<Vec<Duration>>>,
     /// When set, every **numeric column** walk (v2c and v3) reports itself as having stopped early
     /// with this reason, alongside whatever [`Self::snmp_table`] rows it returns.
     ///
@@ -659,6 +663,16 @@ impl FakeTransport {
         self.asked.lock().map(|log| log.clone()).unwrap_or_default()
     }
 
+    /// Every instance walk's per-round-trip timeout, oldest first — a snapshot, for the reason
+    /// [`Self::asked`] is one.
+    #[must_use]
+    pub fn instance_walk_timeouts(&self) -> Vec<Duration> {
+        self.instance_walk_timeouts
+            .lock()
+            .map(|log| log.clone())
+            .unwrap_or_default()
+    }
+
     /// A fake that always reports the target reachable with the given RTT (and an HTTP 200).
     #[must_use]
     pub fn reachable(rtt_ms: f64) -> Self {
@@ -690,6 +704,7 @@ impl FakeTransport {
             snmp_get_error: None,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
+            instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
             snmp_walk_error: None,
             dns: fake_dns_chain(true),
@@ -724,6 +739,7 @@ impl FakeTransport {
             snmp_get_error: None,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
+            instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
             snmp_walk_error: None,
             dns: fake_dns_chain(false),
@@ -958,6 +974,9 @@ impl Transport for FakeTransport {
         max_rows: usize,
     ) -> Result<InstanceWalk, TransportError> {
         self.record_asked(column_oids);
+        if let Ok(mut log) = self.instance_walk_timeouts.lock() {
+            log.push(_timeout);
+        }
         if self.snmp_instances_silent {
             return Err(TransportError::Silent(_target));
         }
@@ -973,6 +992,9 @@ impl Transport for FakeTransport {
         max_rows: usize,
     ) -> Result<InstanceWalk, TransportError> {
         self.record_asked(column_oids);
+        if let Ok(mut log) = self.instance_walk_timeouts.lock() {
+            log.push(_timeout);
+        }
         if self.snmp_instances_silent {
             return Err(TransportError::Silent(_target));
         }

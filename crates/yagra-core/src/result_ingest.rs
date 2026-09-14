@@ -488,6 +488,10 @@ pub(crate) struct MetaRecord {
     /// already caps it, but this is the edge a value from an older or misbehaving poller crosses.
     /// `None` means nothing was read and nothing is written, never "the device has no version".
     os_version: Option<String>,
+    /// The version read without its running-patch suffix because the patch table did not answer
+    /// (ADR-138 Increment 4), sanitized for the reason `os_version` is. Written only where it cannot
+    /// strip a patch already stored — see `NodeRepo::update_os_version_without_patch_batch`.
+    os_version_without_patch: Option<String>,
     /// What the device says it is — `sysObjectID` and `sysDescr` as the classification rules will see
     /// them (ADR-140), normalized again here for the reason `os_version` is. Either may be `None`,
     /// and a `None` writes nothing to that column.
@@ -640,6 +644,10 @@ fn persist_metrics_and_meta(
         .os_version
         .as_deref()
         .and_then(yagra_discovery::os_version::sanitize);
+    let os_version_without_patch = result
+        .os_version_without_patch
+        .as_deref()
+        .and_then(yagra_discovery::os_version::sanitize);
     // What the device says it is (ADR-140), kept so the classification rules can be re-run on a node
     // that already exists. It rides the identity probe, so it arrives hourly rather than per poll.
     let sys_object_id = result
@@ -668,6 +676,7 @@ fn persist_metrics_and_meta(
     if !interfaces.is_empty()
         || identity.is_some()
         || os_version.is_some()
+        || os_version_without_patch.is_some()
         || sys_object_id.is_some()
         || sys_descr.is_some()
         || dns_chain.is_some()
@@ -681,6 +690,7 @@ fn persist_metrics_and_meta(
             interfaces,
             identity,
             os_version,
+            os_version_without_patch,
             sys_object_id,
             sys_descr,
             dns_chain,
@@ -1044,6 +1054,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut iface_rows: Vec<repo::InterfaceBatchRow> = Vec::new();
     let mut ident_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
     let mut os_version_rows: Vec<(Uuid, String)> = Vec::new();
+    let mut os_version_without_patch_rows: Vec<(Uuid, String)> = Vec::new();
     let mut snmp_identity_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
@@ -1059,6 +1070,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if let Some(version) = rec.os_version {
             os_version_rows.push((rec.node_id, version));
+        }
+        if let Some(version) = rec.os_version_without_patch {
+            os_version_without_patch_rows.push((rec.node_id, version));
         }
         if rec.sys_object_id.is_some() || rec.sys_descr.is_some() {
             snmp_identity_rows.push((rec.node_id, rec.sys_object_id, rec.sys_descr));
@@ -1092,6 +1106,16 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !os_version_rows.is_empty() {
         if let Err(e) = repo.update_os_version_batch(&os_version_rows).await {
             tracing::warn!(error = %e, "batch node os-version update failed");
+        }
+    }
+    // After the full versions, so a patched answer and a bare one for the same node in one batch
+    // meet the rule the bare writer applies to what is already stored.
+    if !os_version_without_patch_rows.is_empty() {
+        if let Err(e) = repo
+            .update_os_version_without_patch_batch(&os_version_without_patch_rows)
+            .await
+        {
+            tracing::warn!(error = %e, "batch node os-version (without patch) update failed");
         }
     }
     if !snmp_identity_rows.is_empty() {
@@ -1213,6 +1237,7 @@ mod tests {
             }],
             sys_descr: None,
             os_version: None,
+            os_version_without_patch: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,
@@ -1232,6 +1257,34 @@ mod tests {
             meta_rx.try_recv().is_ok(),
             "backfilled interface metadata reaches the PG writer"
         );
+    }
+
+    /// ADR-138 Increment 4: a version sent without its patch reaches the PG writer in its **own**
+    /// field, sanitized like the full one. Arriving as `os_version` would let the plain writer
+    /// replace a patched value with it — the defect Increment 3 removed.
+    #[test]
+    fn a_version_without_its_patch_reaches_the_pg_writer_in_its_own_field() {
+        let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
+        let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+        let mut result: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable"}"#,
+        )
+        .expect("a result");
+        // A tab from the device, folded to one space on this edge as on the poller's.
+        result.os_version_without_patch =
+            Some(format!("5.170{}(V200R021C00SPC100)", char::from(9)));
+        persist_metrics_and_meta(&Arc::new(result), &vm, &meta_tx);
+        let rec = meta_rx
+            .try_recv()
+            .expect("the record reaches the PG writer");
+        assert_eq!(
+            rec.os_version_without_patch.as_deref(),
+            Some("5.170 (V200R021C00SPC100)")
+        );
+        assert_eq!(rec.os_version, None);
     }
 
     /// One result through `ingest_result`, returning everything the alert engine produced.
@@ -1302,6 +1355,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            os_version_without_patch: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
@@ -1493,6 +1547,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            os_version_without_patch: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,

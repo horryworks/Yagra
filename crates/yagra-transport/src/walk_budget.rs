@@ -58,10 +58,13 @@ pub(crate) const MAX_CONSECUTIVE_COLUMN_FAILURES: usize = 2;
 /// How many per-round-trip timeouts one whole multi-column call may spend.
 ///
 /// **Deliberately not a new setting.** The caller already says how patient it is, once per check, as
-/// `timeout_ms`; the whole call's patience is a fixed multiple of that. An operator with a device
-/// slow enough to be truncated therefore already has the lever — raising that check's `timeout_ms`
-/// raises this budget with it — and nobody has to learn a second knob whose right value depends on
-/// the first.
+/// `timeout_ms`; the whole call's patience is a fixed multiple of that, so raising the per-round-trip
+/// timeout raises this budget with it and nobody has to learn a second knob.
+///
+/// ⚠️ **That lever is not in an operator's hands today.** Core fills every SNMP job's `timeout_ms`
+/// from one constant (`scheduler::SNMP_TIMEOUT_MS`, 2 s), and no profile or setting overrides it.
+/// A slow device is answered in code, per caller — the identity probe's patch-table walk waits
+/// longer for exactly this reason (ADR-138 Increment 4).
 ///
 /// **Why eight.** The slowest *healthy* walk measured in this lab is 6.0 s (a 232-interface switch
 /// over a LAN, recorded on `worker::stream`'s `MAX_SINGLE_FLIGHT_WAIT`). At the default 2 s timeout

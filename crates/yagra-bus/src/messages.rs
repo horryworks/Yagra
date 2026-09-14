@@ -2070,6 +2070,20 @@ pub struct PollResult {
     /// wire form is unchanged (ADR-017).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os_version: Option<String>,
+    /// The OS version the identity probe found **without** its running-patch suffix, sent only when
+    /// the patch table that version's row walks did not answer in time — so `os_version` is `None`
+    /// on the same result (ADR-138 Increment 4).
+    ///
+    /// Core writes it only where the stored version is empty or is a *different* version: a stored
+    /// `X` or `X [patch]` is kept when this says `X`, so a slow patch table cannot strip a patch that
+    /// was read on an earlier hour. It is a field of its own rather than `os_version` so that an N-1
+    /// core, which drops a field it does not know, keeps doing what it did — writing nothing —
+    /// instead of overwriting the patched value Increment 3 protects.
+    ///
+    /// Defaulted so an N-1 poller stays compatible, and skipped when absent so every other result's
+    /// wire form is unchanged (ADR-017). Descriptive device text — never a TSDB label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_version_without_patch: Option<String>,
     /// The device's `sysObjectID.0`, read by the same identity probe as `sys_descr` (ADR-140), so
     /// core can keep what the device says it is and re-run the classification rules on a node that
     /// already exists. Normalized poller-side to dotted digits; `None` means "not probed or not
@@ -3419,6 +3433,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             os_version: None,
+            os_version_without_patch: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,
@@ -3483,6 +3498,35 @@ mod tests {
         let back: PollResult =
             serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
         assert_eq!(back.sys_object_id.as_deref(), Some("1.3.6.1.4.1.9.1.516"));
+    }
+
+    /// ADR-138 Increment 4's field. An N-1 poller sends none; a result without one keeps its wire
+    /// form; a probed one survives the round trip — and it travels **beside** `os_version`, never
+    /// in it, which is what keeps an N-1 core from writing it as a full version.
+    #[test]
+    fn poll_result_os_version_without_patch_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "sys_descr": "S5731-S48T4X",
+            "some_future_field": 42
+        }"#;
+        let mut result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.os_version_without_patch.is_none());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("os_version"), "{wire}");
+
+        result.os_version_without_patch = Some("5.170 (V200R021C00SPC100)".to_owned());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains(r#""os_version":"#), "{wire}");
+        let back: PollResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(
+            back.os_version_without_patch.as_deref(),
+            Some("5.170 (V200R021C00SPC100)")
+        );
+        assert_eq!(back.os_version, None);
     }
 
     /// `None` (no set observed) and `Some(empty)` (this device has no neighbours) must survive the
