@@ -19,6 +19,14 @@
 //! reported 8 of 8. **The stagger was never the guarantee; it is a hint. Serialising is the
 //! guarantee**, and one device's specs genuinely have to be serialised because they are one
 //! conversation with one agent.
+//!
+//! 🚨 **"One conversation with one agent" is the SNMP agent, and ICMP is not part of it** (ADR-110
+//! Increment 8). An echo is answered by the device's kernel, not its agent, and queueing it behind a
+//! walk bought nothing but its loss: ICMP is the last spec a node gets, so it arrived mid-walk every
+//! cycle, and on a switch whose SNMP chain outran the wait it was shed — measured on the PoC at
+//! 21 of 31 points in 30 minutes, 490 ICMP polls shed fleet-wide in ~26 h. ICMP now takes
+//! [`PollLimiter::begin_global`], as DNS does, and so the liveness check cannot be starved by the
+//! device it is checking. It still takes a permit.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -237,12 +245,19 @@ impl PollLimiter {
         self.claim_then_permit(target, max_wait).await
     }
 
-    /// Acquire only the global concurrency permit — **no** per-target single-flight. For jobs whose
-    /// single-flight is enforced elsewhere and which share a sentinel target (Meraki org collectors
-    /// all carry `0.0.0.0`, gated per-org by core), so per-device single-flight would wrongly drop
-    /// concurrent collects for different orgs. Awaits a permit (backpressure); returns `None` only
-    /// on shutdown. The returned guard's sentinel target is never inserted into the inflight set, so
-    /// its drop is a harmless no-op there.
+    /// Acquire only the global concurrency permit — **no** per-target single-flight. Three kinds take
+    /// it, for two reasons:
+    ///
+    /// - **A shared sentinel target.** Meraki org collectors all carry `0.0.0.0` (gated per-org by
+    ///   core), and so does every DNS check against the system resolver, so per-device single-flight
+    ///   would wrongly drop every one but the first.
+    /// - **Not part of the device's SNMP conversation.** ICMP has a real target, but an echo is
+    ///   answered by the device's kernel, and serialising it behind a walk only got it shed
+    ///   (ADR-110 Increment 8 — see the module doc).
+    ///
+    /// Awaits a permit (backpressure); returns `None` only on shutdown. The returned guard's
+    /// sentinel target is never inserted into the inflight set, so its drop is a harmless no-op
+    /// there — which is also why an ICMP job holding one does not mark its device busy.
     pub async fn begin_global(&self) -> Option<PollGuard> {
         self.acquire_permit().await.map(|p| self.global_guard(p))
     }
