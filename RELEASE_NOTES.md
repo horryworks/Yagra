@@ -36,6 +36,14 @@
   (ManageConfig, limited to the caller's folders); `profile_locked` on `GET /api/v1/nodes/{node_id}`,
   on `PUT /api/v1/nodes/{node_id}/bindings` (absent leaves it unchanged) and on the configuration
   bundle's nodes. MCP: `get_config(kind="reclassify")`, and `profile_locked` on `get_node_status`.
+- **Delete every selected node at once.** In Nodes ▸ All nodes, with several nodes selected
+  (Ctrl / Shift click), right-clicking one of them now offers **Delete N selected…**, and the
+  selection bar has **Delete…**. Until now Delete removed only the row that was right-clicked,
+  whatever else was selected. The confirmation names the nodes, and if some could not be deleted —
+  already gone, or in a folder you cannot see — it says how many of how many went. Right-clicking a
+  row outside the selection offers **Delete "name"…** for that row alone.
+  API: `POST /api/v1/nodes/delete` (`{ node_ids }` → `{ requested, deleted }`, at most 1000 ids,
+  ManageConfig, limited to the caller's folders).
 
 ### Improvements
 
@@ -50,6 +58,26 @@
   inventory, with `nodes` (the id and name of each one you can see) and `outside_scope`. The MCP
   `get_config(kind="discovery_scan")` tool returns the same list. The import responses gain
   `skipped_existing`.
+- **Filing imported devices by IP range is fast with many ranges.** Finding the folder whose range
+  holds an address compared every range with every other one, so a deployment with thousands of
+  NetBox ranges spent seconds on each address — importing 64 devices against 2,618 ranges took about
+  fifteen minutes, with nothing on screen meanwhile. The whole batch now takes tens of
+  milliseconds. The answers are unchanged, including an address two folders claim equally. Move by IP
+  range gets the same fix.
+- **Discovery previews folders one request at a time, and Import says it is importing.** While a
+  sweep ran, every newly found candidate re-sent the folder preview for every address still waiting
+  on an answer, so the requests piled up. Now one runs at a time, and the next one carries whatever
+  arrived meanwhile. The import button reads **Importing…** until the server answers.
+- **Nodes that share a name in one folder show their address.** When a folder holds two or more
+  nodes with the same name, the tree shows each one's address after its name. Hovering any node's
+  name shows its name and address.
+- **Adding a device at an address that is already monitored warns first.** Nodes ▸ Add node looks
+  the address up before creating a device node. If a device or Meraki node is already there, the
+  dialog names it, with a link, and offers **Add anyway**. URL and DNS monitors at that address do
+  not count. The API does not refuse duplicates: `POST /api/v1/nodes` is unchanged.
+  API: `GET /api/v1/nodes` accepts `address` — one exact IP address, compared as an address, so
+  `2001:DB8::1` finds `2001:db8::1`; a value that is not an IP address is `400 invalid_address`. The
+  MCP `list_nodes` tool accepts the same `address`.
 
 ### Bug Fixes
 
@@ -71,6 +99,13 @@
   suggests; nodes already in the tree are not moved — see Nodes ▸ Reclassify.
   ⚠️ A built-in rule you edited or disabled is left as you left it, and is not corrected. Rolling back
   to an older release restores the old rules, and upgrading again does not correct them a second time.
+- **Deleting a node while its poll results or events are still arriving no longer loses other
+  nodes' data.** Interface details from polls and passive events (syslog, traps, webhooks) are
+  written many nodes at a time. A row still naming a node deleted a moment earlier failed the whole
+  write, so every other node's interface updates or events in it were lost, with one warning in the
+  log. Now only the deleted node's interface rows are dropped and the rest are written; an event is
+  still stored, with the node, rule or source it named cleared. Dropped interface rows are counted in
+  `yagra_interface_upsert_rows_total{outcome="node_gone"}`.
 
 ## v0.3.18 — MCP is served by default, a VPN sessions widget, network traffic on Yagra health, a truncated SNMP walk raises a Warning, and metrics carry their units
 

@@ -99,6 +99,9 @@
   },
   "add": {
     "node": "ノードを追加",
+    "duplicateLead": "{{address}} は既に次の機器として監視しています:",
+    "duplicateHint": "もう 1 つ追加すると同じ機器のノードが 2 つになり、そのアドレスから届く syslog とフローは片方にしか紐付きません。",
+    "addAnyway": "それでも追加",
     "urlMonitor": "URL 監視を追加",
     "monitoringType": "監視タイプ",
     "typeDevice": "デバイス (ICMP / SNMP)",
@@ -182,6 +185,7 @@
     "loadInterfaces": "インターフェースの読み込みに失敗しました",
     "requestPoll": "ポーリング要求に失敗しました",
     "deleteNode": "ノードの削除に失敗しました",
+    "deleteNodes": "ノードの一括削除に失敗しました",
     "saveNode": "ノードの保存に失敗しました",
     "setDependency": "依存関係の設定に失敗しました",
     "addDnsMonitor": "DNS 監視の追加に失敗しました",
@@ -264,6 +268,13 @@
     "err": {
       "bindingsAfterCheck": "監視の内容は保存しましたが、ノードの設定は保存できませんでした: {{reason}}。もう一度保存しても安全です。"
     }
+  },
+  "deleteNodes": {
+    "title_one": "{{count}} 件のノードを削除",
+    "title_other": "{{count}} 件のノードを削除",
+    "body": "次のノードを削除しますか？インベントリの項目と、検出済みのインターフェースが消えます。収集済みのメトリクスは TSDB の保持期間が切れ次第、順次消えます。依存関係チェーンの親だったノードは、以後配下のノードを抑制しなくなります。この操作は取り消せません。",
+    "more": "ほか {{count}} 件",
+    "partial": "{{requested}} 台のうち {{deleted}} 台を削除しました。残りは既に無いか、見えないフォルダにあります。"
   },
   "deleteNode": {
     "title": "ノードを削除",
@@ -580,6 +591,8 @@
     "addNodeEllipsis": "ノードを追加…",
     "addGroupEllipsis": "グループを追加…",
     "deleteEllipsis": "削除…",
+    "deleteNodeNamed": "「{{name}}」を削除…",
+    "deleteSelected": "選択した {{count}} 件を削除…",
     "pool": "ポーラープール",
     "poolInherit": "継承",
     "poolNoLivePoller": "このプールには稼働中のポーラーがありません — 割り当てたノードはポーリングされません。",
@@ -750,6 +763,7 @@
     "count": "{{count}} 件選択中",
     "move": "移動…",
     "moveByPrefix": "IP レンジで移動…",
+    "delete": "削除…",
     "clear": "解除",
     "hint": "Ctrl クリックで 1 件ずつ、Shift クリックでまとめて追加"
   },

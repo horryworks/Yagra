@@ -55,6 +55,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     bulk_tag_nodes,
     set_node_group,
     move_nodes,
+    delete_nodes,
     preview_move_by_prefix,
     set_node_pool,
     set_node_parent,
@@ -74,6 +75,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/by-group", get(list_group_nodes))
         .route("/api/v1/node-names", post(node_names_batch))
         .route("/api/v1/nodes/move", post(move_nodes))
+        .route("/api/v1/nodes/delete", post(delete_nodes))
         .route("/api/v1/nodes/tags", post(bulk_tag_nodes))
         .route("/api/v1/nodes/move-preview", post(preview_move_by_prefix))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
@@ -295,6 +297,10 @@ pub(crate) struct NodePageQuery {
     pub limit: Option<i64>,
     /// Case-insensitive substring of the node's name or address.
     pub search: Option<String>,
+    /// Exact IP address of the node, compared as an address (so `2001:DB8::1` finds `2001:db8::1`).
+    /// Pair it with `kind=device,meraki` to ask whether a device is already monitored at an address.
+    /// A value that is not an IP address is rejected.
+    pub address: Option<String>,
     /// Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |
     /// `maintenance`); empty or absent means every state. An unknown token is rejected rather than
     /// ignored.
@@ -355,11 +361,13 @@ pub(crate) async fn filtered_node_page(
     st: &ApiState,
     scope: &super::scope::NodeScope,
     term: &str,
+    address: Option<IpAddr>,
     filter: &NodeFilter,
     limit: i64,
 ) -> Result<(Vec<Node>, bool), ApiError> {
     // The scan is only widened past one page when something has to reject candidates after the
-    // query. A plain text search rejects nothing, so it stays exactly as cheap as it was.
+    // query. A plain text search rejects nothing, so it stays exactly as cheap as it was — and so
+    // does an exact address, which the query itself narrows.
     let scan = if filter.is_set() {
         crate::repo::NODE_SCAN_MAX
     } else {
@@ -367,7 +375,7 @@ pub(crate) async fn filtered_node_page(
     };
     let candidates = st
         .nodes
-        .search(scope.group_filter(), term, scan)
+        .search(scope.group_filter(), term, address, scan)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
@@ -512,6 +520,7 @@ async fn build_node_summaries(
     params(NodePageQuery),
     responses(
         (status = 200, description = "One keyset page of the inventory, or a single capped page in search mode", body = NodePage),
+        (status = 400, description = "An unknown state or kind token, or an address that is not an IP address", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
         (status = 503, description = "Too many inventory reads in flight — retry shortly (`list_busy`)", body = super::error::ErrorBody),
@@ -531,12 +540,13 @@ async fn list_nodes(
         .unwrap_or(100)
         .clamp(1, crate::repo::NODE_SEARCH_MAX);
     let term = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let address = parse_address_filter(q.address.as_deref())?;
     let filter = parse_node_filter(q.state.as_deref(), q.kind.as_deref(), q.pool.as_deref())?;
-    // Filter mode: any of search / state / kind / pool returns a single capped page (no keyset
-    // cursor) — the tree narrows the fleet without loading it.
-    if term.is_some() || filter.is_set() {
+    // Filter mode: any of search / address / state / kind / pool returns a single capped page (no
+    // keyset cursor) — the tree narrows the fleet without loading it.
+    if term.is_some() || address.is_some() || filter.is_set() {
         let (nodes, truncated) =
-            filtered_node_page(&st, &scope, term.unwrap_or(""), &filter, limit).await?;
+            filtered_node_page(&st, &scope, term.unwrap_or(""), address, &filter, limit).await?;
         return Ok(Json(NodePage {
             nodes: build_node_summaries(&st, nodes, HashMap::new()).await,
             next_cursor: None,
@@ -568,6 +578,24 @@ async fn list_nodes(
         // read both would show a "results were cut" notice on every page but the last.
         truncated: false,
     }))
+}
+
+/// Parse the list's exact-address filter at the edge, for both the REST list and the MCP tool
+/// (ADR-139 増分 2).
+///
+/// Refused rather than dropped: a filter that silently fell away would answer with the whole fleet,
+/// and the caller that sends it — the add-node dialog's duplicate check — would read that as "a
+/// device is already monitored here".
+pub(crate) fn parse_address_filter(raw: Option<&str>) -> Result<Option<IpAddr>, ApiError> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    raw.parse::<IpAddr>().map(Some).map_err(|_| {
+        ApiError::bad_request(
+            "invalid_address",
+            format!("address {raw:?} is not a valid IP address"),
+        )
+    })
 }
 
 /// Parse the three set filters, in one place, for both the REST edge and the MCP tool.
@@ -740,7 +768,7 @@ async fn search_nodes(
     let limit = q.limit.unwrap_or(50);
     let nodes = st
         .nodes
-        .search(scope.group_filter(), term.trim(), limit)
+        .search(scope.group_filter(), term.trim(), None, limit)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "node search", "failed to search nodes")
@@ -844,7 +872,7 @@ async fn list_group_nodes(
         // an ungrouped node is outside every group scope, which `search` enforces for us.
         let nodes = if q.group.is_none() && batch.is_none() {
             st.nodes
-                .search(scope.group_filter(), "", GROUP_NODES_CAP)
+                .search(scope.group_filter(), "", None, GROUP_NODES_CAP)
                 .await
                 .unwrap_or_default()
         } else {
@@ -1587,7 +1615,7 @@ async fn set_node_group(
 
 // ── Moving MANY nodes at once (ADR-124) ─────────────────────────────────────
 
-/// Ceiling on one bulk move / preview.
+/// Ceiling on one bulk move / delete / preview.
 ///
 /// 🚨 **Over the ceiling is a refusal, not a truncation** — deliberately unlike
 /// [`NODE_NAMES_BATCH_MAX`] beside it, which silently drops the tail because a name that does not
@@ -1818,6 +1846,66 @@ async fn move_nodes(
     // moved something and never how much (`api/maintenance.rs` does the same for its bulk clear).
     tracing::info!(requested, moved, group = ?body.group_id, "bulk node move");
     Ok(Json(BulkMoveResult { requested, moved }))
+}
+
+/// The nodes to delete.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct BulkNodeDelete {
+    node_ids: Vec<Uuid>,
+}
+
+/// What a bulk delete actually did.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct BulkDeleteResult {
+    /// Distinct ids the request named, after de-duplication.
+    requested: usize,
+    /// Nodes actually deleted. **Lower than `requested` is normal**: an id can name a node that no
+    /// longer exists, or one outside the caller's scope. The two are not distinguished.
+    deleted: u64,
+}
+
+/// Delete many nodes in one request.
+///
+/// Scoped to the caller's folders: a node outside them is not deleted and is not counted.
+#[utoipa::path(
+    post, path = "/api/v1/nodes/delete", tag = "nodes",
+    request_body = BulkNodeDelete,
+    responses(
+        (status = 200, description = "How many of the named nodes were deleted", body = BulkDeleteResult),
+        (status = 400, description = "More ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn delete_nodes(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<BulkNodeDelete>,
+) -> ApiResult<Json<BulkDeleteResult>> {
+    // Refused, never truncated (ADR-124 決定 7): a truncated delete would report the whole batch
+    // handled while leaving everything past the cut in place.
+    if body.node_ids.len() > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {NODE_MOVE_BATCH_MAX} nodes may be deleted in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    let (requested, deleted) = admin
+        .repo
+        .delete_nodes_batch(&body.node_ids, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "bulk delete nodes", "failed to delete nodes")
+        })?;
+    // The audit middleware records method and path only, so without this the log says that someone
+    // deleted something and never how much — the same reason the bulk move logs.
+    tracing::info!(requested, deleted, "bulk node delete");
+    Ok(Json(BulkDeleteResult { requested, deleted }))
 }
 
 #[utoipa::path(
@@ -2708,7 +2796,7 @@ mod tests {
         let st = public_state();
         let scope = super::super::scope::NodeScope::All;
         let (rows, truncated) =
-            filtered_node_page(&st, &scope, "demo", &NodeFilter::default(), 100)
+            filtered_node_page(&st, &scope, "demo", None, &NodeFilter::default(), 100)
                 .await
                 .expect("search succeeds");
         assert_eq!(rows.len(), 1, "the skeleton inventory holds one node");
@@ -2727,7 +2815,7 @@ mod tests {
             state: vec![NodeState::Unknown],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", &want_unknown, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, "", None, &want_unknown, 100)
             .await
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1);
@@ -2735,7 +2823,7 @@ mod tests {
             state: vec![NodeState::Ok],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", &want_ok, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, "", None, &want_ok, 100)
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty(), "no node displays ok, so none may match ok");
@@ -2757,7 +2845,7 @@ mod tests {
                 kind: vec![kind],
                 ..Default::default()
             };
-            let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
+            let (rows, _) = filtered_node_page(&st, &scope, "", None, &f, 100)
                 .await
                 .expect("filter succeeds");
             assert_eq!(rows.len(), expect, "{kind:?}");
@@ -2775,7 +2863,7 @@ mod tests {
             pool: vec![yagra_bus::DEFAULT_POOL.to_owned()],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, "", None, &f, 100)
             .await
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1, "the demo node inherits the default pool");
@@ -2783,7 +2871,7 @@ mod tests {
             pool: vec!["tokyo".to_owned()],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, "", None, &f, 100)
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty());
@@ -2843,7 +2931,7 @@ mod tests {
             state: vec![NodeState::Ok, NodeState::Unknown],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", &with, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, "", None, &with, 100)
             .await
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1);
@@ -2851,7 +2939,7 @@ mod tests {
             state: vec![NodeState::Ok, NodeState::Warning],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", &without, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, "", None, &without, 100)
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty());
@@ -2873,6 +2961,28 @@ mod tests {
             resolver.resolve_pool(&n(3, "c", Some(""))),
             yagra_bus::DEFAULT_POOL
         );
+    }
+
+    /// An address filter that is not an IP address is refused, never dropped: a dropped filter
+    /// answers with the whole fleet, which a duplicate check would read as "already monitored".
+    #[tokio::test]
+    async fn an_address_filter_that_is_not_an_ip_is_refused() {
+        let st = public_state();
+        let resp = router(st)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/nodes?address=not-an-ip")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "invalid_address", "{body}");
     }
 
     #[tokio::test]
@@ -3206,6 +3316,127 @@ mod tests {
         assert_eq!(body["error"]["code"], "too_many_nodes", "{body}");
     }
 
+    /// A bulk delete is **accepted** and the rows are gone (ADR-115's shape, ADR-124 増分 6).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_delete_is_accepted_and_the_nodes_are_gone(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+        let kept = crate::pgtest::node(&pool, "kept", 3, None).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/delete",
+            &tok,
+            // `a` twice: the count is of distinct nodes, not of ids sent.
+            Some(serde_json::json!({ "node_ids": [a, b, a] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["deleted"], 2, "{body}");
+
+        let repo = crate::pgtest::repo(pool);
+        for id in [a, b] {
+            assert!(
+                repo.get_node(id).await.expect("read").is_none(),
+                "{id} survived"
+            );
+        }
+        assert!(
+            repo.get_node(kept).await.expect("read").is_some(),
+            "an unnamed node was deleted"
+        );
+    }
+
+    /// 🚨 **A scoped caller's bulk delete does not reach another site's nodes**, and the count says
+    /// so rather than claiming the batch.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_delete_does_not_reach_outside_the_callers_scope(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let own = crate::pgtest::node(&pool, "own", 1, Some(mine)).await;
+        let other = crate::pgtest::node(&pool, "other", 2, Some(theirs)).await;
+        let tok = scoped_token(&st, &[mine]);
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/delete",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [own, other] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["deleted"], 1, "{body}");
+
+        let repo = crate::pgtest::repo(pool);
+        assert!(repo.get_node(own).await.expect("read").is_none());
+        assert!(
+            repo.get_node(other).await.expect("read").is_some(),
+            "a scoped caller deleted a node in a folder it cannot see"
+        );
+    }
+
+    /// Over the ceiling is refused outright, as the bulk move is.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_delete_over_the_ceiling_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let ids: Vec<uuid::Uuid> = (0..=NODE_MOVE_BATCH_MAX)
+            .map(|_| uuid::Uuid::new_v4())
+            .collect();
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/delete",
+            &tok,
+            Some(serde_json::json!({ "node_ids": ids })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "too_many_nodes", "{body}");
+    }
+
+    /// The exact-address filter finds the device at that address and not its near neighbour
+    /// (ADR-139 増分 2) — through the whole router, with the kind filter the add-node dialog sends.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_list_finds_the_device_at_an_exact_address(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Viewer);
+        let one = crate::pgtest::node(&pool, "one", 1, None).await;
+        crate::pgtest::node(&pool, "ten", 10, None).await;
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            "/api/v1/nodes?address=10.0.0.1&kind=device,meraki",
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let ids: Vec<String> = body["nodes"]
+            .as_array()
+            .expect("a node list")
+            .iter()
+            .map(|n| n["id"].as_str().expect("an id").to_owned())
+            .collect();
+        assert_eq!(ids, vec![one.to_string()], "{body}");
+    }
+
     /// A viewer may read the inventory and may not rearrange it.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3216,7 +3447,11 @@ mod tests {
         let body = serde_json::json!({ "node_ids": [a], "group_id": null });
 
         let viewer = token(&st, yagra_common::Role::Viewer);
-        for path in ["/api/v1/nodes/move", "/api/v1/nodes/move-preview"] {
+        for path in [
+            "/api/v1/nodes/move",
+            "/api/v1/nodes/move-preview",
+            "/api/v1/nodes/delete",
+        ] {
             let (status, out) = send(&st, "POST", path, &viewer, Some(body.clone())).await;
             assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{path}: {out}");
         }

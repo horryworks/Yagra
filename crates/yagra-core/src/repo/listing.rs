@@ -87,10 +87,17 @@ pub trait NodeListing: Send + Sync {
     /// page ordered by name), capped at `limit`. Backs the node-picker's server-side typeahead so
     /// it never loads the whole inventory into the browser (ui-conventions: search is server-side
     /// at fleet scale, A-2).
+    ///
+    /// `address`, when given, keeps only nodes **at exactly that address** (ADR-139 増分 2) —
+    /// compared as an address, not as text, so `2001:DB8::1` finds `2001:db8::1`. It is a second
+    /// narrowing beside the substring rather than a spelling of it: a substring of `10.0.0.1` also
+    /// matches `10.0.0.10`, and a name-ordered page capped at `limit` can hold every one of those
+    /// and not the node that is actually at the address.
     async fn search(
         &self,
         groups: GroupFilter<'_>,
         term: &str,
+        address: Option<IpAddr>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>>;
 }
@@ -133,19 +140,28 @@ impl NodeListing for NodeRepo {
         &self,
         groups: GroupFilter<'_>,
         term: &str,
+        address: Option<IpAddr>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
         let limit = limit.clamp(1, NODE_SCAN_MAX);
+        // The exact-address narrowing is an `inet` equality, so `nodes_address_idx` serves it. Bound
+        // as text and cast twice — for the NULL test and for the comparison — because one parameter
+        // used as both `text` and `inet` is a type PostgreSQL refuses to infer (sqlx's `ipnetwork`
+        // feature stays out of the build; see `groups::attach_prefixes`).
+        let address = address.map(|a| a.to_string());
         // Parameterized ILIKE (security.md — never string-format user input into SQL); the `%`
         // wildcards are concatenated in SQL so the term itself is a bound value. `host(address)`
         // strips the netmask so an IP-substring search matches the displayed address.
         let rows = if term.is_empty() {
             sqlx::query(&format!(
-                "SELECT {} FROM nodes WHERE {} ORDER BY name, id LIMIT $2",
+                "SELECT {} FROM nodes WHERE {} \
+                   AND ($2::text IS NULL OR address = $2::text::inet) \
+                 ORDER BY name, id LIMIT $3",
                 Self::NODE_COLUMNS,
                 Self::SCOPE_PREDICATE
             ))
             .bind(Self::scope_bind(groups))
+            .bind(&address)
             .bind(limit)
             .fetch_all(&self.pool)
             .await?
@@ -154,12 +170,14 @@ impl NodeListing for NodeRepo {
                 "SELECT {} FROM nodes \
                  WHERE {} \
                    AND (name ILIKE '%' || $2 || '%' OR host(address) ILIKE '%' || $2 || '%') \
-                 ORDER BY name, id LIMIT $3",
+                   AND ($3::text IS NULL OR address = $3::text::inet) \
+                 ORDER BY name, id LIMIT $4",
                 Self::NODE_COLUMNS,
                 Self::SCOPE_PREDICATE
             ))
             .bind(Self::scope_bind(groups))
             .bind(term)
+            .bind(&address)
             .bind(limit)
             .fetch_all(&self.pool)
             .await?
@@ -238,6 +256,7 @@ impl NodeListing for StaticNodeList {
         &self,
         groups: GroupFilter<'_>,
         term: &str,
+        address: Option<IpAddr>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
         let t = term.to_lowercase();
@@ -245,6 +264,8 @@ impl NodeListing for StaticNodeList {
             .0
             .iter()
             .filter(|n| Self::in_scope(groups, n))
+            // Mirrors `address = $n::inet`: an address compared as an address, never as text.
+            .filter(|n| address.is_none_or(|a| n.address == a))
             .filter(|n| {
                 t.is_empty()
                     || n.name.to_lowercase().contains(&t)
@@ -312,11 +333,15 @@ mod tests {
 
         // The inversion that would be a privilege escalation: an empty set matches nothing.
         assert_eq!(list.count(Some(&[])).await.unwrap(), 0);
-        assert!(list.search(Some(&[]), "", 50).await.unwrap().is_empty());
+        assert!(list
+            .search(Some(&[]), "", None, 50)
+            .await
+            .unwrap()
+            .is_empty());
         assert!(list.node_group_map(Some(&[])).await.unwrap().is_empty());
 
         // Scope is applied before the search term, not instead of it.
-        let hits = list.search(Some(&[tokyo]), "in-", 50).await.unwrap();
+        let hits = list.search(Some(&[tokyo]), "in-", None, 50).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].name, "in-tokyo");
     }
@@ -329,13 +354,13 @@ mod tests {
             node(3, "nagoya-edge", "192.168.5.9", None),
         ]);
         // Name substring, case-insensitive.
-        assert_eq!(list.search(None, "EDGE", 50).await.unwrap().len(), 2);
+        assert_eq!(list.search(None, "EDGE", None, 50).await.unwrap().len(), 2);
         // Address substring.
-        let by_addr = list.search(None, "192.168", 50).await.unwrap();
+        let by_addr = list.search(None, "192.168", None, 50).await.unwrap();
         assert_eq!(by_addr.len(), 1);
         assert_eq!(by_addr[0].name, "nagoya-edge");
         // Empty term returns all, ordered by name and capped.
-        let capped = list.search(None, "", 2).await.unwrap();
+        let capped = list.search(None, "", None, 2).await.unwrap();
         assert_eq!(capped.len(), 2);
         assert_eq!(capped[0].name, "nagoya-edge"); // nagoya < osaka < tokyo
         assert_eq!(capped[1].name, "osaka-core");
@@ -349,11 +374,17 @@ mod tests {
         let list = StaticNodeList(nodes);
         // A caller asking for one page gets one page — the repo does not quietly cut it shorter,
         // which was the original defect.
-        let page = list.search(None, "sw-", NODE_SEARCH_MAX).await.unwrap();
+        let page = list
+            .search(None, "sw-", None, NODE_SEARCH_MAX)
+            .await
+            .unwrap();
         assert_eq!(page.len() as i64, NODE_SEARCH_MAX);
         // Asking for more than the scan ceiling yields exactly the ceiling, not some smaller
         // inner limit.
-        let hits = list.search(None, "sw-", NODE_SCAN_MAX * 2).await.unwrap();
+        let hits = list
+            .search(None, "sw-", None, NODE_SCAN_MAX * 2)
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 600, "fewer nodes exist than the ceiling allows");
     }
 
@@ -409,14 +440,14 @@ mod tests {
             assert_eq!(a, b, "node_group_map disagrees with {label}");
             for term in ["", "in-", "10.0.0."] {
                 let mut a: Vec<Uuid> = sql
-                    .search(scope, term, 50)
+                    .search(scope, term, None, 50)
                     .await
                     .unwrap()
                     .iter()
                     .map(|n| n.id.as_uuid())
                     .collect();
                 let mut b: Vec<Uuid> = memory
-                    .search(scope, term, 50)
+                    .search(scope, term, None, 50)
                     .await
                     .unwrap()
                     .iter()
@@ -455,16 +486,61 @@ mod tests {
             crate::pgtest::node(&pool, &format!("node-{i}"), i, None).await;
         }
         let sql = crate::pgtest::repo(pool.clone());
-        assert_eq!(sql.search(None, "", 50).await.unwrap().len(), 5);
-        assert_eq!(sql.search(None, "", 2).await.unwrap().len(), 2);
+        assert_eq!(sql.search(None, "", None, 50).await.unwrap().len(), 5);
+        assert_eq!(sql.search(None, "", None, 2).await.unwrap().len(), 2);
         // A caller asking for more than the shared cap gets the cap, not its own number.
         assert_eq!(
-            sql.search(None, "", NODE_SEARCH_MAX * 10)
+            sql.search(None, "", None, NODE_SEARCH_MAX * 10)
                 .await
                 .unwrap()
                 .len(),
             5
         );
+    }
+
+    /// **The address narrowing is an address comparison, in both stores** (ADR-139 増分 2).
+    ///
+    /// The substring search cannot answer "who is at 10.0.0.1": it also matches `10.0.0.10`, and a
+    /// name-ordered page capped at its limit can be full of those and miss the node actually there.
+    /// So the check is two-sided — the near-miss address must not come back — and it runs the SQL
+    /// and the skeleton mirror over the same fixture, IPv6 spelling included.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_address_filter_matches_the_address_and_not_a_substring_of_it(pool: sqlx::PgPool) {
+        let one = crate::pgtest::node(&pool, "one", 1, None).await;
+        let ten = crate::pgtest::node(&pool, "ten", 10, None).await;
+        let v6 =
+            crate::pgtest::node_at(&pool, "v6", "2001:db8::1".parse().expect("v6"), None).await;
+        let sql = crate::pgtest::repo(pool.clone());
+        let memory = StaticNodeList(sql.list_nodes().await.expect("read the fixture back"));
+
+        for (addr, want) in [("10.0.0.1", one), ("10.0.0.10", ten), ("2001:DB8::1", v6)] {
+            let addr: IpAddr = addr.parse().expect("addr");
+            for (label, store) in [("sql", &sql as &dyn NodeListing), ("memory", &memory)] {
+                let ids: Vec<Uuid> = store
+                    .search(None, "", Some(addr), 50)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|n| n.id.as_uuid())
+                    .collect();
+                assert_eq!(ids, vec![want], "{label} at {addr}");
+            }
+        }
+        // Nobody there is an empty answer, not every node.
+        let nobody: IpAddr = "192.0.2.1".parse().expect("addr");
+        assert!(sql
+            .search(None, "", Some(nobody), 50)
+            .await
+            .unwrap()
+            .is_empty());
+        // And it narrows alongside the substring rather than replacing it.
+        let one_addr: IpAddr = "10.0.0.1".parse().expect("addr");
+        assert!(sql
+            .search(None, "ten", Some(one_addr), 50)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// Ids of the first page, in the order the store returned them.

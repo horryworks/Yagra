@@ -9,6 +9,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { api, errMsg } from '../../services/api';
 import { isValidPoolName } from '../../lib/pool';
 import { isSnmpCredentialKind } from '../../lib/credentialKinds';
@@ -33,9 +34,12 @@ import { TextInput, Select, RequiredMark } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import {
   createRequest,
+  duplicateWarning,
+  DUPLICATE_ADDRESS_KINDS,
   sendCreate,
   EMPTY_ADD_NODE_FORM,
   type AddNodeForm,
+  type SameAddressNode,
 } from './addNodeRequest';
 
 export function AddNodeModal({
@@ -87,9 +91,13 @@ export function AddNodeModal({
     form.name.trim() !== '' &&
     targetFilled(kind, { address: form.address, url: form.url, dnsName: form.dnsName });
 
-  const submit = () => {
-    setBusy(true);
-    setError(null);
+  /** Nodes already monitored at the address being added, once the lookup found some (ADR-139
+   *  増分 2). While set, the dialog names them and the primary button becomes "Add anyway". */
+  const [sameAddress, setSameAddress] = useState<SameAddressNode[] | null>(null);
+  /** The address the operator chose to add anyway. A different address is a new question. */
+  const [confirmedAddress, setConfirmedAddress] = useState<string | null>(null);
+
+  const create = () =>
     sendCreate(createRequest(kind, form))
       // The create endpoints take no group_id, so a node lands Ungrouped; file it with the
       // canonical op — which since ADR-124 Inc.4 is `moveNodes`, the one request every move on
@@ -111,6 +119,32 @@ export function AddNodeModal({
         setError(errMsg(e, t(spec.errorKey)));
         setBusy(false);
       });
+
+  /** Ask first whether a device is already monitored at this address, then create.
+   *
+   *  The lookup is skipped for a URL or DNS monitor and for an address the operator already chose
+   *  to add anyway. A failed lookup goes ahead: the warning is an aid, and whether the node may be
+   *  created is still the API's answer, not this read's. */
+  const submit = (confirmed: string | null = confirmedAddress) => {
+    setBusy(true);
+    setError(null);
+    const address = form.address.trim();
+    const lookup: Promise<SameAddressNode[] | null> =
+      kind === 'device' && address !== '' && confirmed !== address
+        ? api
+            .listNodesPage({ address, kind: DUPLICATE_ADDRESS_KINDS.join(','), limit: 10 })
+            .then((page) => page.nodes.map((n) => ({ id: n.id, name: n.name })))
+            .catch(() => null)
+        : Promise.resolve(null);
+    void lookup.then((found) => {
+      const warn = duplicateWarning(kind, form.address, found, confirmed);
+      if (warn) {
+        setSameAddress(warn);
+        setBusy(false);
+        return;
+      }
+      void create();
+    });
   };
 
   // Keyed by kind rather than chained on it, so the compiler demands an entry for a fourth kind
@@ -198,7 +232,11 @@ export function AddNodeModal({
           <TextInput
             className="mono"
             value={form.address}
-            onChange={(e) => set('address', e.target.value)}
+            onChange={(e) => {
+              set('address', e.target.value);
+              // The warning was about the address that was there; a new one has not been asked.
+              setSameAddress(null);
+            }}
             placeholder={t('add.addressPlaceholder')}
           />
         </label>
@@ -266,9 +304,24 @@ export function AddNodeModal({
           <Button onClick={onClose} disabled={busy}>
             {t('common:actions.cancel')}
           </Button>
-          <Button variant="primary" onClick={submit} disabled={!canSubmit || busy}>
-            {title}
-          </Button>
+          {sameAddress ? (
+            <Button
+              variant="primary"
+              onClick={() => {
+                const address = form.address.trim();
+                setConfirmedAddress(address);
+                setSameAddress(null);
+                submit(address);
+              }}
+              disabled={busy}
+            >
+              {t('add.addAnyway')}
+            </Button>
+          ) : (
+            <Button variant="primary" onClick={() => submit()} disabled={!canSubmit || busy}>
+              {title}
+            </Button>
+          )}
         </>
       }
     >
@@ -291,7 +344,10 @@ export function AddNodeModal({
             onChange={(e) => {
               // Narrowed, not cast: the value arrives as a string, and casting it would admit a
               // kind with no create endpoint into the form state.
-              if (isAddableKind(e.target.value)) setKind(e.target.value);
+              if (isAddableKind(e.target.value)) {
+                setKind(e.target.value);
+                setSameAddress(null);
+              }
             }}
           >
             {MONITOR_KINDS.map((k) => (
@@ -335,6 +391,19 @@ export function AddNodeModal({
             {poolValid ? t('add.poolHint') : t('field.poolInvalid')}
           </span>
         </label>
+        {sameAddress && (
+          <div className="form-warning" role="alert">
+            <p>{t('add.duplicateLead', { address: form.address.trim() })}</p>
+            <ul>
+              {sameAddress.map((n) => (
+                <li key={n.id}>
+                  <Link to={'/nodes/' + n.id}>{n.name}</Link>
+                </li>
+              ))}
+            </ul>
+            <p>{t('add.duplicateHint')}</p>
+          </div>
+        )}
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>

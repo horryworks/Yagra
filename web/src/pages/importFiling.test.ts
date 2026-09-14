@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   pendingAddresses,
+  previewBatch,
   mergePreview,
   destinationLabel,
   importMessage,
@@ -43,6 +44,28 @@ describe('pendingAddresses', () => {
   it('asks for nothing when every candidate is answered', () => {
     const known = new Map<string, RowDestination>([['10.0.0.1', { kind: 'unmatched' }]]);
     expect(pendingAddresses(known, [{ address: '10.0.0.1' }])).toEqual([]);
+  });
+});
+
+describe('previewBatch', () => {
+  const candidates = [{ address: '10.0.0.1' }, { address: '10.0.0.2' }, { address: '10.0.0.3' }];
+
+  it('sends nothing while a request is still out', () => {
+    // The overlap this exists to stop: the candidate count moved while the first request was out,
+    // and the page re-sent the addresses it was still waiting on.
+    expect(previewBatch(new Map(), candidates, new Set(['10.0.0.1']))).toEqual([]);
+  });
+
+  it('sends every unanswered address once nothing is out', () => {
+    const known = new Map<string, RowDestination>([['10.0.0.1', { kind: 'unmatched' }]]);
+    expect(previewBatch(known, candidates, new Set())).toEqual(['10.0.0.2', '10.0.0.3']);
+  });
+
+  it('sends nothing when every address is answered', () => {
+    const known = new Map<string, RowDestination>(
+      candidates.map((c) => [c.address, { kind: 'unmatched' }]),
+    );
+    expect(previewBatch(known, candidates, new Set())).toEqual([]);
   });
 });
 

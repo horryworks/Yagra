@@ -24,6 +24,22 @@ pub struct EventRepo {
     pool: PgPool,
 }
 
+/// References a queued event named that were deleted before it was written (ADR-141). Each is
+/// written as NULL on the one retry; empty on the first attempt.
+#[derive(Default)]
+struct GoneReferences {
+    nodes: std::collections::HashSet<Uuid>,
+    rules: std::collections::HashSet<Uuid>,
+    sources: std::collections::HashSet<Uuid>,
+}
+
+impl GoneReferences {
+    /// `id`, unless it names something in `gone`.
+    fn kept(gone: &std::collections::HashSet<Uuid>, id: Option<Uuid>) -> Option<Uuid> {
+        id.filter(|id| !gone.contains(id))
+    }
+}
+
 impl EventRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
@@ -239,10 +255,90 @@ impl EventRepo {
 
     /// Persist a batch of received events in one multi-row INSERT (best-effort — the caller runs
     /// off the matcher's hot path, and a DB hiccup must not stop alerting). Returns rows inserted.
+    ///
+    /// 🚨 **A record queued before the node, rule or source it names was deleted still carries the
+    /// old id** (ADR-141). `ON DELETE SET NULL` reaches only rows that already exist, so that one
+    /// record used to fail the whole statement and every other event in the flush with it. On exactly
+    /// that error the ids that are gone are looked up and the batch is written **once** more with those
+    /// references cleared. The event is kept: it is still a fact that arrived, and a cleared reference
+    /// is what the delete would have left on a row stored a moment earlier.
     pub async fn insert_events_batch(&self, records: &[&PersistRecord]) -> anyhow::Result<u64> {
         if records.is_empty() {
             return Ok(0);
         }
+        match self
+            .insert_event_rows(records, &GoneReferences::default())
+            .await
+        {
+            Ok(inserted) => Ok(inserted),
+            Err(sqlx::Error::Database(db)) if db.is_foreign_key_violation() => {
+                let gone = self.gone_references(records).await?;
+                tracing::debug!(
+                    nodes = gone.nodes.len(),
+                    rules = gone.rules.len(),
+                    sources = gone.sources.len(),
+                    "events named references deleted since they were queued; stored without them"
+                );
+                // A reference deleted in the window of this retry fails it too, and is reported
+                // like any other error rather than retried again.
+                Ok(self.insert_event_rows(records, &gone).await?)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Which of the ids these records name no longer exist. Asked only after a foreign-key
+    /// violation, never on the normal path.
+    async fn gone_references(&self, records: &[&PersistRecord]) -> anyhow::Result<GoneReferences> {
+        let named = |pick: fn(&PersistRecord) -> Option<Uuid>| -> Vec<Uuid> {
+            let mut ids: Vec<Uuid> = records.iter().filter_map(|r| pick(r)).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+        let (nodes, rules, sources) = (
+            named(|r| r.node_id),
+            named(|r| r.matched_rule_id),
+            named(|r| r.source_id),
+        );
+        let present_nodes: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM nodes WHERE id = ANY($1)")
+                .bind(&nodes)
+                .fetch_all(&self.pool)
+                .await?;
+        let present_rules: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM event_rules WHERE id = ANY($1)")
+                .bind(&rules)
+                .fetch_all(&self.pool)
+                .await?;
+        let present_sources: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM event_sources WHERE id = ANY($1)")
+                .bind(&sources)
+                .fetch_all(&self.pool)
+                .await?;
+        let missing = |named: Vec<Uuid>, present: Vec<Uuid>| {
+            let present: std::collections::HashSet<Uuid> = present.into_iter().collect();
+            named
+                .into_iter()
+                .filter(|id| !present.contains(id))
+                .collect()
+        };
+        Ok(GoneReferences {
+            nodes: missing(nodes, present_nodes),
+            rules: missing(rules, present_rules),
+            sources: missing(sources, present_sources),
+        })
+    }
+
+    /// The multi-row INSERT itself, with every reference in `gone` written as NULL.
+    ///
+    /// Returns the `sqlx` error unconverted, because the caller's retry turns on whether it is a
+    /// foreign-key violation.
+    async fn insert_event_rows(
+        &self,
+        records: &[&PersistRecord],
+        gone: &GoneReferences,
+    ) -> Result<u64, sqlx::Error> {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO events (id, kind, at_unix_ms, source_ip, node_id, source_id, pool, \
              facility, syslog_severity, hostname, app_name, trap_oid, signature, varbinds, \
@@ -259,8 +355,8 @@ impl EventRepo {
             // the old single-row insert).
             b.push_bind(m.source_ip.map(|ip| ip.to_string()))
                 .push_unseparated("::inet");
-            b.push_bind(r.node_id)
-                .push_bind(r.source_id)
+            b.push_bind(GoneReferences::kept(&gone.nodes, r.node_id))
+                .push_bind(GoneReferences::kept(&gone.sources, r.source_id))
                 .push_bind(m.pool.clone())
                 .push_bind(m.facility.map(i16::from))
                 .push_bind(m.syslog_severity.map(i16::from))
@@ -270,7 +366,7 @@ impl EventRepo {
                 .push_bind(r.signature.clone())
                 .push_bind(varbinds)
                 .push_bind(m.message.clone())
-                .push_bind(r.matched_rule_id)
+                .push_bind(GoneReferences::kept(&gone.rules, r.matched_rule_id))
                 .push_bind(r.action.as_str());
         });
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
@@ -629,6 +725,74 @@ mod tests {
         let mut m = testkit::syslog_msg(message);
         m.at_unix_ms = at_ms;
         m
+    }
+
+    /// 🚨 **A record naming a node or rule deleted since it was queued is kept, and does not lose
+    /// the rest of the batch** (ADR-141).
+    ///
+    /// `ON DELETE SET NULL` reaches only the rows that already exist when the parent goes. A record
+    /// queued before the delete still carries the old id, and one violating row fails the whole
+    /// multi-row INSERT — every other event in the flush with it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_record_naming_a_deleted_node_or_rule_does_not_lose_the_batch(pool: sqlx::PgPool) {
+        let kept = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let gone = crate::pgtest::node(&pool, "rtr-2", 12, None).await;
+        let repo = EventRepo::new(pool.clone());
+        let rule = repo
+            .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
+            .await
+            .unwrap();
+        let gone_rule = repo
+            .create_rule(&rule_params("retired", "RETIRED"))
+            .await
+            .unwrap();
+        assert!(crate::pgtest::repo(pool.clone())
+            .delete_node(gone)
+            .await
+            .unwrap());
+        assert!(repo.delete_rule(gone_rule).await.unwrap());
+
+        let a = record(
+            syslog_at("from the kept node", T0),
+            Some(kept),
+            Some(rule),
+            EventAction::Fired,
+        );
+        let b = record(
+            syslog_at("from the deleted node", T0 + 1_000),
+            Some(gone),
+            None,
+            EventAction::None,
+        );
+        let c = record(
+            syslog_at("matched the deleted rule", T0 + 2_000),
+            Some(kept),
+            Some(gone_rule),
+            EventAction::Fired,
+        );
+
+        assert_eq!(
+            repo.insert_events_batch(&[&a, &b, &c])
+                .await
+                .expect("a batch naming a deleted node must still be written"),
+            3
+        );
+        let all = repo.list_events(&EventFilter::default(), 50).await.unwrap();
+        let row = |message: &str| {
+            all.iter()
+                .find(|e| e.message == message)
+                .unwrap_or_else(|| panic!("{message:?} was not stored"))
+        };
+        assert_eq!(row("from the kept node").node_id, Some(kept));
+        assert_eq!(row("from the kept node").matched_rule_id, Some(rule));
+        assert_eq!(
+            row("from the deleted node").node_id,
+            None,
+            "the id of a node that no longer exists"
+        );
+        assert_eq!(row("matched the deleted rule").node_id, Some(kept));
+        assert_eq!(row("matched the deleted rule").matched_rule_id, None);
     }
 
     fn rule_params<'a>(name: &'a str, pattern: &'a str) -> RuleParams<'a> {

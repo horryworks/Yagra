@@ -43,7 +43,7 @@ import {
   destinationLabel,
   importMessage,
   mergePreview,
-  pendingAddresses,
+  previewBatch,
   type RowDestination,
 } from './importFiling';
 import { GroupPicker } from '../components/ui/GroupPicker';
@@ -567,27 +567,43 @@ export function DiscoveryPage() {
    *
    * A failure is left silent and simply retried on the next arrival: the column falls back to the
    * pending marker, and a red banner over a *preview* would be louder than the thing it describes.
+   *
+   * 🚨 **One request at a time** (ADR-131 増分 2). The addresses of the request that is out live in
+   * a ref, and `previewBatch` sends nothing while it holds any: before, every candidate that arrived
+   * re-sent everything still waiting on its reply, and seven of these overlapped on the PoC box.
+   * A success bumps `previewRound`, so what arrived meanwhile goes out as the next single request.
+   * A failure does not — it waits for the next arrival, as it always did, rather than retrying a
+   * request that keeps failing in a loop.
    */
+  const previewInFlight = useRef<ReadonlySet<string>>(new Set());
+  const [previewRound, setPreviewRound] = useState(0);
   useEffect(() => {
     if (!canConfig) return;
-    let live = true;
     // A device already in the tree is not going to be imported, so where it would land is not a
     // question worth a request (ADR-139).
-    const pending = pendingAddresses(destinations, importableCandidates(candidates, existing));
-    if (pending.length === 0) return;
+    const batch = previewBatch(
+      destinations,
+      importableCandidates(candidates, existing),
+      previewInFlight.current,
+    );
+    if (batch.length === 0) return;
+    previewInFlight.current = new Set(batch);
+    // No stale-reply guard, deliberately: an answer is about an address, not about this render, so
+    // a reply that lands after the candidates moved on is still true — and discarding it is what
+    // made the page ask for the same addresses again.
     api
-      .previewDiscoveryImport(pending)
+      .previewDiscoveryImport(batch)
       .then((p) => {
-        if (!live) return;
+        previewInFlight.current = new Set();
         setDestinations((cur) => mergePreview(cur, p));
         setAnyPrefixes(p.any_prefixes);
+        setPreviewRound((r) => r + 1);
       })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
+      .catch(() => {
+        previewInFlight.current = new Set();
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates.length, existing.size, canConfig]);
+  }, [candidates.length, existing.size, canConfig, previewRound]);
 
   const importSelected = () => {
     setImportNote(null);
@@ -1221,9 +1237,14 @@ export function DiscoveryPage() {
                 onClick={importSelected}
                 disabled={selectedCount === 0 || importing}
               >
-                {selectedCount > 0
-                  ? t('discovery.importSelectedCount', { count: selectedCount })
-                  : t('discovery.importSelectedNone')}
+                {/* Say it is working, not only that it cannot be pressed (ADR-131 増分 2 決定 14):
+                    on the PoC box an import sat for fifteen minutes behind a merely greyed button,
+                    and it was pressed again from another machine. */}
+                {importing
+                  ? t('discovery.importInProgress')
+                  : selectedCount > 0
+                    ? t('discovery.importSelectedCount', { count: selectedCount })
+                    : t('discovery.importSelectedNone')}
               </Button>
             </div>
           )}

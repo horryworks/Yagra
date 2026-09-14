@@ -778,18 +778,23 @@ impl GroupRepo {
             return Ok(Vec::new());
         }
         let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
+        // The longest match is a `rank()`, for the reason `match_address_prefixes` gives: the
+        // correlated `MAX(masklen)` it replaced re-scanned every range once per candidate row
+        // (ADR-131 増分 2 決定 12). Ties share rank 1, so an ambiguity still comes back twice.
         let rows = sqlx::query(
-            "SELECT n.id AS node_id, p.group_id AS group_id, p.prefix::TEXT AS prefix \
-             FROM nodes n \
-             JOIN node_group_prefixes p ON n.address <<= p.prefix \
-             WHERE n.id = ANY($1) \
-               AND ($2::uuid[] IS NULL OR n.group_id = ANY($2)) \
-               AND ($2::uuid[] IS NULL OR p.group_id = ANY($2)) \
-               AND masklen(p.prefix) = ( \
-                     SELECT MAX(masklen(q.prefix)) FROM node_group_prefixes q \
-                     WHERE n.address <<= q.prefix \
-                       AND ($2::uuid[] IS NULL OR q.group_id = ANY($2))) \
-             ORDER BY n.id, p.group_id",
+            "WITH hits AS ( \
+               SELECT n.id AS node_id, p.group_id, p.prefix, \
+                      rank() OVER (PARTITION BY n.id \
+                                   ORDER BY masklen(p.prefix) DESC) AS depth_rank \
+               FROM nodes n \
+               JOIN node_group_prefixes p ON n.address <<= p.prefix \
+               WHERE n.id = ANY($1) \
+                 AND ($2::uuid[] IS NULL OR n.group_id = ANY($2)) \
+                 AND ($2::uuid[] IS NULL OR p.group_id = ANY($2))) \
+             SELECT node_id, group_id, prefix::TEXT AS prefix \
+             FROM hits \
+             WHERE depth_rank = 1 \
+             ORDER BY node_id, group_id",
         )
         .bind(nodes)
         .bind(&scope_bind)
@@ -831,8 +836,17 @@ impl GroupRepo {
     /// cannot see hands over the subnet layout of a site whose membership they were refused.
     /// A future reader "fixing" the asymmetry would be adding a filter to data the client supplied.
     ///
-    /// `DISTINCT` in the CTE so fifty candidates in one /24 do not re-run the `MAX(masklen)`
-    /// subquery fifty times; [`fold_prefix_matches`] still answers per requested address.
+    /// `DISTINCT` in the CTE so fifty candidates in one /24 are ranked once rather than fifty times;
+    /// [`fold_prefix_matches`] still answers per requested address.
+    ///
+    /// 🚨 **The longest match is a `rank()`, not a correlated `MAX(masklen)`** (ADR-131 増分 2
+    /// 決定 12). The correlated form re-scanned every range once per candidate row — addresses ×
+    /// ranges² — and against the PoC box's 2,618 NetBox ranges one address took 8.9 s, which held a
+    /// 64-device import for fifteen minutes. Ranking each address's containing ranges once is
+    /// addresses × ranges: the same data answered 65 addresses in 43 ms. Ties at the longest length
+    /// share rank 1, so a range two folders both claim still comes back twice — the ambiguity the
+    /// fold reports rather than resolves. The old form survives only in the tests, as the oracle the
+    /// new one is compared against.
     pub async fn match_address_prefixes(
         &self,
         addresses: &[IpAddr],
@@ -844,17 +858,18 @@ impl GroupRepo {
         let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
         let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
         let rows = sqlx::query(
-            "WITH addrs AS (SELECT DISTINCT a.txt::inet AS addr FROM unnest($1::text[]) AS a(txt)) \
-             SELECT host(addrs.addr) AS address, p.group_id AS group_id, \
-                    p.prefix::TEXT AS prefix \
-             FROM addrs \
-             JOIN node_group_prefixes p ON addrs.addr <<= p.prefix \
-             WHERE ($2::uuid[] IS NULL OR p.group_id = ANY($2)) \
-               AND masklen(p.prefix) = ( \
-                     SELECT MAX(masklen(q.prefix)) FROM node_group_prefixes q \
-                     WHERE addrs.addr <<= q.prefix \
-                       AND ($2::uuid[] IS NULL OR q.group_id = ANY($2))) \
-             ORDER BY addrs.addr, p.group_id",
+            "WITH addrs AS (SELECT DISTINCT a.txt::inet AS addr FROM unnest($1::text[]) AS a(txt)), \
+                  hits AS ( \
+                    SELECT addrs.addr, p.group_id, p.prefix, \
+                           rank() OVER (PARTITION BY addrs.addr \
+                                        ORDER BY masklen(p.prefix) DESC) AS depth_rank \
+                    FROM addrs \
+                    JOIN node_group_prefixes p ON addrs.addr <<= p.prefix \
+                    WHERE ($2::uuid[] IS NULL OR p.group_id = ANY($2))) \
+             SELECT host(addr) AS address, group_id, prefix::TEXT AS prefix \
+             FROM hits \
+             WHERE depth_rank = 1 \
+             ORDER BY addr, group_id",
         )
         .bind(&text)
         .bind(&scope_bind)
@@ -2031,6 +2046,215 @@ mod tests {
         assert_eq!(scoped[0].group, mine);
         // The address itself was never filtered: it is answered for, which is the asymmetry.
         assert_eq!(scoped[0].key, addr);
+    }
+
+    // ── ADR-131 増分 2: the ranked longest match, against the correlated form it replaced ────
+
+    /// The address match as it was before ADR-131 増分 2 — kept **only** as the oracle the ranked
+    /// form is compared against. It re-scans every range once per candidate row, which is why it
+    /// left production: 8.9 s per address against the PoC box's 2,618 ranges.
+    const CORRELATED_ADDRESS_MATCH: &str =
+        "WITH addrs AS (SELECT DISTINCT a.txt::inet AS addr FROM unnest($1::text[]) AS a(txt)) \
+         SELECT host(addrs.addr) AS address, p.group_id AS group_id, p.prefix::TEXT AS prefix \
+         FROM addrs \
+         JOIN node_group_prefixes p ON addrs.addr <<= p.prefix \
+         WHERE ($2::uuid[] IS NULL OR p.group_id = ANY($2)) \
+           AND masklen(p.prefix) = ( \
+                 SELECT MAX(masklen(q.prefix)) FROM node_group_prefixes q \
+                 WHERE addrs.addr <<= q.prefix \
+                   AND ($2::uuid[] IS NULL OR q.group_id = ANY($2)))";
+
+    /// The node match as it was before ADR-131 増分 2 — the same oracle, for `match_prefixes`.
+    const CORRELATED_NODE_MATCH: &str =
+        "SELECT n.id AS node_id, p.group_id AS group_id, p.prefix::TEXT AS prefix \
+         FROM nodes n \
+         JOIN node_group_prefixes p ON n.address <<= p.prefix \
+         WHERE n.id = ANY($1) \
+           AND ($2::uuid[] IS NULL OR n.group_id = ANY($2)) \
+           AND ($2::uuid[] IS NULL OR p.group_id = ANY($2)) \
+           AND masklen(p.prefix) = ( \
+                 SELECT MAX(masklen(q.prefix)) FROM node_group_prefixes q \
+                 WHERE n.address <<= q.prefix \
+                   AND ($2::uuid[] IS NULL OR q.group_id = ANY($2)))";
+
+    /// Six folders sharing 150 ranges drawn from a deliberately small space, so that `/8 ⊃ /16 ⊃
+    /// /24` nesting is everywhere and the same CIDR regularly lands in two folders — the two shapes
+    /// a longest match can get wrong. Duplicates of one `(folder, range)` are skipped, not failed.
+    async fn tangled_ranges(pool: &sqlx::PgPool) -> Vec<Uuid> {
+        let mut groups = Vec::new();
+        for i in 0..6 {
+            groups.push(crate::pgtest::group(pool, &format!("tangle-{i}")).await);
+        }
+        for i in 0..150usize {
+            let (b, c) = ((i * 3) % 4, (i * 7) % 4);
+            let cidr = match i % 3 {
+                0 => "10.0.0.0/8".to_owned(),
+                1 => format!("10.{b}.0.0/16"),
+                _ => format!("10.{b}.{c}.0/24"),
+            };
+            sqlx::query(
+                "INSERT INTO node_group_prefixes (group_id, prefix, description) \
+                 VALUES ($1, network($2::inet)::cidr, 'tangle') ON CONFLICT DO NOTHING",
+            )
+            .bind(groups[(i * 5) % groups.len()])
+            .bind(&cidr)
+            .execute(pool)
+            .await
+            .expect("seed a tangled range");
+        }
+        groups
+    }
+
+    /// Addresses across the tangle, plus one no range covers and one IPv6 address.
+    fn tangle_addresses() -> Vec<IpAddr> {
+        let mut out: Vec<IpAddr> = (0..100u8)
+            .map(|i| IpAddr::from([10, i % 5, (i / 5) % 5, i % 250 + 1]))
+            .collect();
+        out.push("192.0.2.1".parse().expect("outside"));
+        out.push("2001:db8::7".parse().expect("v6"));
+        out
+    }
+
+    /// `(key, group, prefix)` triples as a sorted list, so two answers compare regardless of order.
+    fn triples<K: Ord + Copy>(hits: &[PrefixHit<K>]) -> Vec<(K, Uuid, String)> {
+        let mut out: Vec<(K, Uuid, String)> = hits
+            .iter()
+            .map(|h| (h.key, h.group, h.prefix.clone()))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// 🚨 **The ranked address match answers exactly as the correlated one did**, scoped and not.
+    ///
+    /// The rewrite is a performance change and must not be a behaviour change: the same folders for
+    /// the same addresses, and a tie still reported as two rows. The floor on ties is what keeps this
+    /// from passing over a fixture that happens to contain none.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_ranked_address_match_answers_as_the_correlated_one_did(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let groups = tangled_ranges(&pool).await;
+        let addresses = tangle_addresses();
+        let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+
+        for scope in [None, Some(&groups[..3])] {
+            let ranked = repo
+                .match_address_prefixes(&addresses, scope)
+                .await
+                .expect("ranked");
+            let rows: Vec<(String, Uuid, String)> = sqlx::query_as(CORRELATED_ADDRESS_MATCH)
+                .bind(&text)
+                .bind(scope.map(<[Uuid]>::to_vec))
+                .fetch_all(&pool)
+                .await
+                .expect("correlated");
+            let correlated: Vec<PrefixHit<IpAddr>> = rows
+                .into_iter()
+                .map(|(address, group, prefix)| PrefixHit {
+                    key: address.parse().expect("an address"),
+                    group,
+                    prefix,
+                })
+                .collect();
+
+            assert_eq!(triples(&ranked), triples(&correlated), "scope {scope:?}");
+            assert!(
+                ranked.len() > 50,
+                "the fixture matched almost nothing: {}",
+                ranked.len()
+            );
+            let fold = fold_prefix_matches(&addresses, ranked);
+            if scope.is_none() {
+                assert!(
+                    !fold.ambiguous.is_empty(),
+                    "the fixture produced no tie, so the tie half of the rule went unchecked"
+                );
+            }
+        }
+    }
+
+    /// 🚨 **The ranked node match answers exactly as the correlated one did**, on both sides of the
+    /// scope — the node side narrows too, which the address match does not.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_ranked_node_match_answers_as_the_correlated_one_did(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let groups = tangled_ranges(&pool).await;
+        let mut nodes = Vec::new();
+        for (i, addr) in tangle_addresses().into_iter().enumerate().step_by(3) {
+            let home = groups[i % groups.len()];
+            nodes.push(crate::pgtest::node_at(&pool, &format!("n{i}"), addr, Some(home)).await);
+        }
+
+        for scope in [None, Some(&groups[..3])] {
+            let ranked = repo.match_prefixes(&nodes, scope).await.expect("ranked");
+            let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(CORRELATED_NODE_MATCH)
+                .bind(&nodes)
+                .bind(scope.map(<[Uuid]>::to_vec))
+                .fetch_all(&pool)
+                .await
+                .expect("correlated");
+            let correlated: Vec<PrefixHit<Uuid>> = rows
+                .into_iter()
+                .map(|(key, group, prefix)| PrefixHit { key, group, prefix })
+                .collect();
+            assert_eq!(triples(&ranked), triples(&correlated), "scope {scope:?}");
+            assert!(!ranked.is_empty(), "scope {scope:?} matched nothing");
+        }
+    }
+
+    /// 🚨 **A full sweep against thousands of ranges answers promptly** (ADR-131 増分 2).
+    ///
+    /// The PoC box held 2,618 ranges; this holds 3,001 and asks about 1,024 addresses — the most one
+    /// sweep may carry. The correlated form was addresses × ranges² and would take hours here, so a
+    /// generous ceiling still catches a return to it without being sensitive to a slow machine.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_full_sweep_against_thousands_of_ranges_is_matched_promptly(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let mut groups = Vec::new();
+        for i in 0..40 {
+            groups.push(crate::pgtest::group(&pool, &format!("site-{i}")).await);
+        }
+        // One /24 per range, spread over 40 folders, plus a /8 over all of them for depth.
+        sqlx::query(
+            "INSERT INTO node_group_prefixes (group_id, prefix, description) \
+             SELECT ($1::uuid[])[1 + (i % 40)], \
+                    network(format('10.%s.%s.0/24', i / 256, i % 256)::inet)::cidr, 'scale' \
+             FROM generate_series(0, 2999) AS i",
+        )
+        .bind(&groups)
+        .execute(&pool)
+        .await
+        .expect("seed 3,000 ranges");
+        crate::pgtest::prefix(&pool, groups[0], "10.0.0.0/8").await;
+
+        let addresses: Vec<IpAddr> = (0..1024u32)
+            .map(|i| IpAddr::from([10, (i / 256) as u8, (i % 256) as u8, 5]))
+            .collect();
+        let started = std::time::Instant::now();
+        let hits = repo
+            .match_address_prefixes(&addresses, None)
+            .await
+            .expect("match");
+        let took = started.elapsed();
+
+        let fold = fold_prefix_matches(&addresses, hits);
+        assert_eq!(
+            fold.matched.len(),
+            1024,
+            "every address sits in its own /24"
+        );
+        assert!(fold
+            .matched
+            .iter()
+            .all(|(_, _, prefix)| prefix.ends_with("/24")));
+        assert!(
+            took < std::time::Duration::from_secs(10),
+            "1,024 addresses against 3,001 ranges took {took:?}"
+        );
+        eprintln!("1,024 addresses against 3,001 ranges: {took:?}");
     }
 
     /// `canonical_prefix` accepts host bits and normalises them; a non-address is `None`.

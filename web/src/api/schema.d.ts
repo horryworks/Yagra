@@ -2099,6 +2099,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete many nodes in one request.
+         * @description Scoped to the caller's folders: a node outside them is not deleted and is not counted.
+         */
+        post: operations["delete_nodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/move": {
         parameters: {
             query?: never;
@@ -5172,6 +5192,17 @@ export interface components {
             /** Format: double */
             value: number;
         };
+        /** @description What a bulk delete actually did. */
+        BulkDeleteResult: {
+            /**
+             * Format: int64
+             * @description Nodes actually deleted. **Lower than `requested` is normal**: an id can name a node that no
+             *     longer exists, or one outside the caller's scope. The two are not distinguished.
+             */
+            deleted: number;
+            /** @description Distinct ids the request named, after de-duplication. */
+            requested: number;
+        };
         /** @description What a bulk move actually did. */
         BulkMoveResult: {
             /**
@@ -5182,6 +5213,10 @@ export interface components {
             moved: number;
             /** @description Distinct ids the request named, after de-duplication. */
             requested: number;
+        };
+        /** @description The nodes to delete. */
+        BulkNodeDelete: {
+            node_ids: string[];
         };
         /** @description Move many nodes into one folder (or `null` to ungroup them all). */
         BulkNodeMove: {
@@ -19943,6 +19978,12 @@ export interface operations {
                 /** @description Case-insensitive substring of the node's name or address. */
                 search?: string;
                 /**
+                 * @description Exact IP address of the node, compared as an address (so `2001:DB8::1` finds `2001:db8::1`).
+                 *     Pair it with `kind=device,meraki` to ask whether a device is already monitored at an address.
+                 *     A value that is not an IP address is rejected.
+                 */
+                address?: string;
+                /**
                  * @description Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |
                  *     `maintenance`); empty or absent means every state. An unknown token is rejected rather than
                  *     ignored.
@@ -19975,6 +20016,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodePage"];
+                };
+            };
+            /** @description An unknown state or kind token, or an address that is not an IP address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */
@@ -20107,6 +20157,66 @@ export interface operations {
                 };
             };
             /** @description Too many inventory reads in flight — retry shortly (`list_busy`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_nodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNodeDelete"];
+            };
+        };
+        responses: {
+            /** @description How many of the named nodes were deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteResult"];
+                };
+            };
+            /** @description More ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -28430,6 +28540,12 @@ export interface operations {
                 limit?: number;
                 /** @description Case-insensitive substring of the node's name or address. */
                 search?: string;
+                /**
+                 * @description Exact IP address of the node, compared as an address (so `2001:DB8::1` finds `2001:db8::1`).
+                 *     Pair it with `kind=device,meraki` to ask whether a device is already monitored at an address.
+                 *     A value that is not an IP address is rejected.
+                 */
+                address?: string;
                 /**
                  * @description Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |
                  *     `maintenance`); empty or absent means every state. An unknown token is rejected rather than

@@ -742,12 +742,15 @@ export const api = {
     state?: string;
     kind?: string;
     pool?: string;
+    /** One exact IP address, compared as an address by the server (ADR-139 増分 2). */
+    address?: string;
   }): Promise<NodePage> =>
     apiGet('/api/v1/nodes', {
       query: {
         cursor: opts?.cursor || undefined,
         limit: opts?.limit,
         search: opts?.search || undefined,
+        address: opts?.address || undefined,
         state: opts?.state || undefined,
         kind: opts?.kind || undefined,
         pool: opts?.pool || undefined,
@@ -1231,6 +1234,13 @@ export const api = {
     groupId: string | null,
   ): Promise<{ requested: number; moved: number }> =>
     apiPost('/api/v1/nodes/move', { body: { node_ids: nodeIds, group_id: groupId } }),
+
+  /** Delete MANY nodes in one request (ADR-124 増分 6).
+   *
+   *  ⚠️ `deleted` can be lower than `requested`: an id may name a node already gone, or one in a
+   *  folder this token cannot see. Show both numbers rather than the count that was asked for. */
+  deleteNodes: (nodeIds: string[]): Promise<{ requested: number; deleted: number }> =>
+    apiPost('/api/v1/nodes/delete', { body: { node_ids: nodeIds } }),
 
   /** Which folder's IP range contains each of these nodes' addresses (ADR-124 決定 5/6).
    *

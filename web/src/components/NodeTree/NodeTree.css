@@ -254,6 +254,17 @@
   color: var(--accent-color);
 }
 
+/* The address, drawn only beside a node whose name another node in the same folder also carries
+   (ADR-139 増分 2). It never shrinks: the name beside it is what gives way, because two rows reading
+   "as001  10.216.50…" would be as indistinguishable as the two it replaced. */
+.ntree-node-addr {
+  flex: none;
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
 /* Ungrouped section header row (also the root drop zone). In the flattened/virtualized list it's a
    standalone row, so it carries the separator the old wrapper provided — via an inset line rather
    than a border/margin, so the row height stays exactly --row-h for the virtualizer's estimate. */

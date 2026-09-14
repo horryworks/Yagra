@@ -102,6 +102,10 @@ pub(super) struct DnsChainParams {
 pub(super) struct ListNodesParams {
     /// Case-insensitive substring matched against node name or address.
     search: Option<String>,
+    /// Exact IP address of the node, compared as an address (so `2001:DB8::1` finds
+    /// `2001:db8::1`). Pair it with `kind=device,meraki` to ask whether a device is already
+    /// monitored at an address. A value that is not an IP address is an error.
+    address: Option<String>,
     /// Max nodes to return (1–100, default 50).
     limit: Option<i64>,
     /// Rolled-up states to include, comma-separated: `ok` | `warning` | `critical` |
@@ -282,17 +286,24 @@ impl YagraMcp {
             Ok(f) => f,
             Err(e) => return tool_api_error(TOOL, &e),
         };
+        // The same edge parser as REST, so a model sending a non-address is told so rather than
+        // handed the whole fleet.
+        let address = match crate::api::nodes::parse_address_filter(p.address.as_deref()) {
+            Ok(a) => a,
+            Err(e) => return tool_api_error(TOOL, &e),
+        };
         // The scope goes into the query as the same indexed `group_id = ANY(…)` predicate the REST
         // list uses — `NodeListing` takes a `GroupFilter` on every method precisely so no call site
         // can default to the whole fleet without saying so.
         let groups = scope.group_filter();
-        let nodes = if p.search.is_some() || filter.is_set() {
+        let nodes = if p.search.is_some() || address.is_some() || filter.is_set() {
             // The shared seam, so a model and the WebUI cannot be told different things about
             // which nodes match — the filters run in-process here too, over the same bounded scan.
             match crate::api::nodes::filtered_node_page(
                 &self.state,
                 scope,
                 p.search.as_deref().unwrap_or(""),
+                address,
                 &filter,
                 limit,
             )
