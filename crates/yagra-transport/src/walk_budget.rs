@@ -114,9 +114,10 @@ impl Truncation {
 /// One multi-column SNMP call's remaining patience.
 ///
 /// Holds only the decision — no client, no columns, no I/O — so the stop conditions can be tested
-/// without an agent. That matters more here than usual: the loops that consult it cannot be
-/// unit-tested at all (they need a real device on a fixed UDP port), so this type carries every
-/// assertion the workspace is able to make about the rule.
+/// without an agent. That matters more here than usual: most loops that consult it open a UDP
+/// socket to port 161 and cannot be unit-tested, so this type carries most of the assertions the
+/// workspace can make about the rule. The exception since ADR-110 Increment 9 is the v2c column
+/// loop in `snmp.rs`, which runs against a scripted agent through its `BulkPager` seam.
 pub(crate) struct WalkBudget {
     deadline: Instant,
     consecutive_failures: usize,
@@ -210,6 +211,90 @@ pub(crate) fn note_truncation(reason: Truncation, target: IpAddr, skipped: usize
         skipped,
         "snmp walk truncated: the remaining columns were not attempted"
     );
+}
+
+/// How many times one request may be sent again after it went unanswered (ADR-110 Increment 9).
+///
+/// **One.** A second silence on the same page is the device, not the packet.
+pub(crate) const PAGE_RETRIES: u32 = 1;
+
+/// How many re-sends one whole multi-column call may spend, across every page of every column.
+///
+/// Bounds the one case a retry makes more expensive: a device that answered the first columns and
+/// then went quiet for good. Without a cap that device would pay two timeouts per page until the
+/// deadline; with it, the extra cost is at most four timeouts, and the silence rule still ends the
+/// walk two columns later.
+pub(crate) const MAX_RETRIES_PER_WALK: u32 = 4;
+
+/// Whether an unanswered request is worth asking again (ADR-110 Increment 9).
+///
+/// 🚨 **Why this exists.** A column used to be one `walk_bulk` call, and one GETBULK page that came
+/// back later than the per-request timeout failed the **whole column** — discarding the rows it had
+/// already paged. On a slow agent that drops the odd response (measured on the PoC: a manual walk
+/// with no retries stopped at 20 of 229 `ifType` rows), two such columns in a row read as a silent
+/// device, and a switch that was answering had its walk cut as `silent`.
+///
+/// 🚨 **Retrying is only allowed after the device has answered something in this walk, and that is
+/// what keeps Increment 3's price for a silent device.** A device that never answers gets no retry
+/// at all, so it still costs exactly two timeouts (one per column) before [`WalkBudget::spent`]
+/// reports [`Truncation::Silent`]. Retrying the first page too would double that — and a mass
+/// outage is when every device is in exactly that state.
+pub(crate) struct RetryAllowance {
+    spent: u32,
+    heard: bool,
+}
+
+impl RetryAllowance {
+    /// A fresh allowance for one multi-column call: nothing heard, nothing spent.
+    pub(crate) fn new() -> Self {
+        Self {
+            spent: 0,
+            heard: false,
+        }
+    }
+
+    /// The device answered something in this walk — a page, a base GET, or an error PDU. An error
+    /// PDU counts: bytes came back, so the agent is there (see `outcome_of`).
+    pub(crate) fn heard(&mut self) {
+        self.heard = true;
+    }
+
+    /// Whether the request that just ended with `outcome` should be sent again, given that it has
+    /// already been re-sent `retries_on_this_request` times. Takes one from the allowance when it
+    /// answers yes.
+    ///
+    /// Every condition is a reason to say no, and each is tested on its own:
+    /// the outcome was an answer (never re-ask a device that replied), the device has not been
+    /// heard from in this walk, this request has had its retry, the walk's allowance is spent, or
+    /// the budget has run out.
+    pub(crate) fn claim(
+        &mut self,
+        outcome: ColumnOutcome,
+        retries_on_this_request: u32,
+        budget: &WalkBudget,
+    ) -> bool {
+        let worth_it = outcome == ColumnOutcome::Failed
+            && self.heard
+            && retries_on_this_request < PAGE_RETRIES
+            && self.spent < MAX_RETRIES_PER_WALK
+            && budget.spent().is_none();
+        if worth_it {
+            self.spent += 1;
+        }
+        worth_it
+    }
+}
+
+/// Record how a re-sent request ended: `recovered` when the retry was answered.
+///
+/// The counter is what says whether [`PAGE_RETRIES`] is doing anything on a real fleet — a
+/// `recovered` count near zero means the retries only ever add time.
+pub(crate) fn note_retry(recovered: bool) {
+    metrics::counter!(
+        "yagra_snmp_page_retries_total",
+        "result" => if recovered { "recovered" } else { "failed" }
+    )
+    .increment(1);
 }
 
 /// Whether a finished multi-column call amounts to **"this device said nothing"**.
@@ -475,5 +560,66 @@ mod tests {
     fn only_a_silent_truncation_with_no_rows_is_silence() {
         assert!(is_silence(0, Some(Truncation::Silent)));
         assert!(!is_silence(0, Some(Truncation::Deadline)));
+    }
+
+    // ── RetryAllowance (ADR-110 Increment 9) ──────────────────────────────────
+
+    /// **The accepting side, first**: a device that has answered gets its unanswered page asked
+    /// once more — and only once. A `claim` that answered `false` unconditionally would pass every
+    /// test after this one.
+    #[test]
+    fn a_timeout_after_the_device_answered_is_retried_once() {
+        let budget = WalkBudget::new(Duration::from_secs(2));
+        let mut retries = RetryAllowance::new();
+        retries.heard();
+        assert!(retries.claim(ColumnOutcome::Failed, 0, &budget));
+        assert!(
+            !retries.claim(ColumnOutcome::Failed, PAGE_RETRIES, &budget),
+            "a page that stayed silent through its retry is the device, not the packet"
+        );
+    }
+
+    /// 🚨 The rule that keeps Increment 3's price for a silent device: nothing heard, no retry.
+    #[test]
+    fn a_timeout_before_the_device_ever_answered_is_not_retried() {
+        let budget = WalkBudget::new(Duration::from_secs(2));
+        let mut retries = RetryAllowance::new();
+        assert!(!retries.claim(ColumnOutcome::Failed, 0, &budget));
+    }
+
+    /// An answer is never re-asked — including a column skipped for a malformed OID, which sent
+    /// nothing to retry.
+    #[test]
+    fn an_answer_or_a_skip_is_never_retried() {
+        let budget = WalkBudget::new(Duration::from_secs(2));
+        let mut retries = RetryAllowance::new();
+        retries.heard();
+        assert!(!retries.claim(ColumnOutcome::Answered, 0, &budget));
+        assert!(!retries.claim(ColumnOutcome::Skipped, 0, &budget));
+    }
+
+    /// The allowance is per walk and runs out: a device that answered and then went quiet for good
+    /// pays at most [`MAX_RETRIES_PER_WALK`] extra timeouts.
+    #[test]
+    fn the_walk_retry_allowance_is_bounded() {
+        let budget = WalkBudget::new(Duration::from_secs(2));
+        let mut retries = RetryAllowance::new();
+        retries.heard();
+        for page in 0..MAX_RETRIES_PER_WALK {
+            assert!(
+                retries.claim(ColumnOutcome::Failed, 0, &budget),
+                "page {page} is within the allowance"
+            );
+        }
+        assert!(!retries.claim(ColumnOutcome::Failed, 0, &budget));
+    }
+
+    /// A retry never outlives the budget: once the deadline has passed, nothing is sent again.
+    #[test]
+    fn no_retry_past_the_deadline() {
+        let budget = WalkBudget::with_remaining(Duration::ZERO);
+        let mut retries = RetryAllowance::new();
+        retries.heard();
+        assert!(!retries.claim(ColumnOutcome::Failed, 0, &budget));
     }
 }
