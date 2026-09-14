@@ -219,12 +219,14 @@ export function ThresholdsPage() {
           row.metric === LIVENESS_METRIC ? (
             <span>{t('format:liveness')}</span>
           ) : (
-            <span>
+            // The title carries the whole string because the column is narrow and the pattern is
+            // what gets cut off — the one part that tells two rules for the same metric apart.
+            <span title={row.row_match ? `${row.metric} · ${row.row_match}` : undefined}>
               <span className="mono">{row.metric}</span>
               {/* The rows it reaches, when it is scoped to some (ADR-143) — without this, a rule for
                   one pool beside the rule for every pool reads as the same rule twice. */}
               {row.row_match ? (
-                <span className="muted" title={t('thresholds.addModal.rowMatch')}>
+                <span className="muted">
                   {' · '}
                   <span className="mono">{row.row_match}</span>
                 </span>
