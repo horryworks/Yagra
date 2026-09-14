@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { ColumnWidthDoc } from './lib/columnWidths';
+import { toggleCollapsed } from './lib/nodeTree';
 import type { DiscoveryScanMemory } from './pages/discoveryScans';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
@@ -197,12 +198,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setLanguage: (language) => set({ language }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       toggleNodeTreeGroup: (id) =>
-        set((s) => {
-          const next = { ...s.nodeTreeCollapsed };
-          if (next[id]) delete next[id];
-          else next[id] = true;
-          return { nodeTreeCollapsed: next };
-        }),
+        set((s) => ({ nodeTreeCollapsed: toggleCollapsed(s.nodeTreeCollapsed, id) })),
       setThroughputScale: (throughputScale) => set({ throughputScale }),
       toggleThroughputScale: () =>
         set((s) => ({ throughputScale: s.throughputScale === 'fit' ? 'capacity' : 'fit' })),

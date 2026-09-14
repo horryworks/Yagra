@@ -24,11 +24,16 @@ import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import {
   asGroupType,
   buildNodeTree,
+  filterCollapseFor,
   filterTerm,
   flattenTree,
   flatRowKey,
+  NO_FILTER_COLLAPSE,
   pendingGroupKeys,
   sameNameNodeIds,
+  toggleFilterCollapse,
+  treeFilterKey,
+  type FilterCollapse,
   type FlatRow,
   type StateCounts,
   type TreeGroup,
@@ -148,13 +153,18 @@ interface Props {
    *  clicking the empty space below the rows. Omit and both become no-ops — the tree keeps its
    *  pre-ADR-073 behaviour of only ever moving the selection, never removing it. */
   onSelectNone?: () => void;
-  /** Case-insensitive name filter; non-empty force-expands and hides non-matching rows. */
+  /** Case-insensitive name filter; non-empty hides non-matching rows and opens every folder
+   *  (the operator can still close one while it is on — ADR-053 Inc.11). */
   filter?: string;
   /** The nodes handed in were already narrowed by the pane's state / kind / pool controls, which
    *  run server-side. The tree cannot see those filters, so without this it does not know it is
    *  filtering at all: every folder stays on screen — including the ones with nothing matching
    *  under them — and a collapsed folder stays collapsed over its own matches. */
   narrowed?: boolean;
+  /** The VALUES behind `narrowed` (`inventoryFilters.ts::inventoryKey`). A folder collapsed under
+   *  one filter must not stay collapsed under the next, and `narrowed` cannot tell Critical from
+   *  Warning. */
+  narrowKey?: string;
   /** Render the internal Add-group / drag-hint toolbar (the split hosts Add-group in its pane head). */
   showToolbar?: boolean;
   onOpenNode: (node: NodeSummary) => void;
@@ -257,6 +267,7 @@ export function NodeTree({
   onSelectNone,
   filter,
   narrowed,
+  narrowKey,
   showToolbar = true,
   onOpenNode,
   onAddGroup,
@@ -303,11 +314,20 @@ export function NodeTree({
   /** Group row whose ＋ menu is open — keeps that row's hover-revealed actions on screen. */
   const [addMenuGroup, setAddMenuGroup] = useState<string | null>(null);
 
-  // Active name filter (case-insensitive). While filtering, every group is force-expanded and
+  // Active name filter (case-insensitive). While filtering, every group starts open and
   // non-matching rows are hidden, so matches are always revealed — and a group matched by its own
   // name reveals its whole subtree, members included.
   const q = filterTerm(filter ?? '');
   const filtering = q.length > 0 || narrowed === true;
+  // What the operator collapsed under THIS filter (ADR-053 Inc.11). Never the saved layout: the
+  // twisty used to write that one while the rows ignored it, so it did nothing on screen and
+  // changed the tree the operator came back to.
+  const [heldCollapse, setHeldCollapse] = useState<FilterCollapse>(NO_FILTER_COLLAPSE);
+  // Leaving the filter forgets it, so typing the same term again starts open too. Adjusted during
+  // render rather than in an effect, which would paint one frame of the stale set first.
+  if (!filtering && heldCollapse !== NO_FILTER_COLLAPSE) setHeldCollapse(NO_FILTER_COLLAPSE);
+  const collapseKey = treeFilterKey(filter ?? '', narrowed === true, narrowKey ?? '');
+  const filterCollapsed = filterCollapseFor(heldCollapse, collapseKey);
   // The flattened, display-ordered list of visible rows — the single source of truth the virtualized
   // body renders (collapse state + filter applied). Only the on-screen window is turned into DOM, so
   // a tens-of-thousands-node inventory stays responsive (S13).
@@ -315,6 +335,7 @@ export function NodeTree({
     () =>
       flattenTree(tree, {
         collapsed,
+        filterCollapsed,
         filter: filter ?? '',
         narrowed,
         groupCounts,
@@ -326,6 +347,7 @@ export function NodeTree({
     [
       tree,
       collapsed,
+      filterCollapsed,
       filter,
       narrowed,
       groupCounts,
@@ -738,7 +760,8 @@ export function NodeTree({
           className={`ntree-twisty${isOpen ? ' open' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            toggle(group.id);
+            if (filtering) setHeldCollapse((h) => toggleFilterCollapse(h, collapseKey, group.id));
+            else toggle(group.id);
           }}
           aria-label={isOpen ? t('nav:shell.collapse') : t('nav:shell.expand')}
           disabled={!hasChildren}
