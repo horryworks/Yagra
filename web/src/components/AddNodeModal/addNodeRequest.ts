@@ -161,6 +161,21 @@ export interface SameAddressNode {
 }
 
 /**
+ * Whether to ask what is already monitored at the address before creating: only for a device, only
+ * for an address that is not blank, and never again for the address the operator already confirmed.
+ * The same three conditions {@link duplicateWarning} applies to the answer, so the question is not
+ * sent when the answer could not stop the create.
+ */
+export function needsAddressLookup(
+  kind: AddableKind,
+  address: string,
+  confirmedAddress: string | null,
+): boolean {
+  const trimmed = address.trim();
+  return kind === 'device' && trimmed !== '' && confirmedAddress !== trimmed;
+}
+
+/**
  * Whether adding a device must stop and warn first (ADR-139 増分 2 決定 12): the nodes to name, or
  * `null` to go ahead.
  *

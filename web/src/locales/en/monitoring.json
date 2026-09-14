@@ -425,7 +425,9 @@
       "contested_one": "{{count}} of those is claimed by two folders.",
       "contested_other": "{{count}} of those are claimed by two folders.",
       "chosen_one": "{{count}} went where you chose.",
-      "chosen_other": "{{count}} went where you chose."
+      "chosen_other": "{{count}} went where you chose.",
+      "skippedExisting_one": "Skipped {{count}} device already in the tree.",
+      "skippedExisting_other": "Skipped {{count}} devices already in the tree."
     },
     "err": {
       "badTargets": "Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.",

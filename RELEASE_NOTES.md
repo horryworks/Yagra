@@ -78,6 +78,14 @@
   API: `GET /api/v1/nodes` accepts `address` — one exact IP address, compared as an address, so
   `2001:DB8::1` finds `2001:db8::1`; a value that is not an IP address is `400 invalid_address`. The
   MCP `list_nodes` tool accepts the same `address`.
+- **Deleting nodes no longer slows down as the network map grows.** Each deleted node made the
+  database read the whole network-map link table, and the table of endpoints seen on the network,
+  once. On a test database with 50,000 nodes and 100,000 links, deleting 1,000 nodes at once went
+  from about six seconds to about a quarter of a second. Migration `0115` adds the two indexes on
+  upgrade.
+- **The *Seen on the network* card shows Monitor only to someone who can use it.** Without the
+  permission to change the monitoring configuration, the button is no longer drawn greyed out; the
+  card already says which permission is needed.
 
 ### Bug Fixes
 

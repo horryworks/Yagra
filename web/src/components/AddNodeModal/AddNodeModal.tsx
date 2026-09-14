@@ -36,6 +36,7 @@ import {
   createRequest,
   duplicateWarning,
   DUPLICATE_ADDRESS_KINDS,
+  needsAddressLookup,
   sendCreate,
   EMPTY_ADD_NODE_FORM,
   type AddNodeForm,
@@ -130,7 +131,7 @@ export function AddNodeModal({
     setError(null);
     const address = form.address.trim();
     const lookup: Promise<SameAddressNode[] | null> =
-      kind === 'device' && address !== '' && confirmed !== address
+      needsAddressLookup(kind, address, confirmed)
         ? api
             .listNodesPage({ address, kind: DUPLICATE_ADDRESS_KINDS.join(','), limit: 10 })
             .then((page) => page.nodes.map((n) => ({ id: n.id, name: n.name })))
@@ -313,7 +314,7 @@ export function AddNodeModal({
                 setSameAddress(null);
                 submit(address);
               }}
-              disabled={busy}
+              disabled={!canSubmit || busy}
             >
               {t('add.addAnyway')}
             </Button>
