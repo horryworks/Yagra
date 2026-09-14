@@ -6,11 +6,13 @@
 //! poller holds no state beyond the in-flight job, and that is what lets pollers scale out and fail
 //! over.
 //!
-//! ⚠️ **Two check kinds are named here and it is not incidental.** `MerakiCollect` fans one job out
-//! to many results, and `Dns` takes the global-only guard rather than per-device single-flight
+//! ⚠️ **Three check kinds are named here and it is not incidental.** `MerakiCollect` fans one job
+//! out to many results. `Dns` takes the global-only guard rather than per-device single-flight
 //! because every DNS check against the system resolver carries the same `0.0.0.0` display address
-//! and would otherwise starve itself. A third kind that needs either treatment has to say so —
-//! `guards.rs` reads the ownership table (ADR-099).
+//! and would otherwise starve itself. `Icmp` takes it because an echo is not part of the SNMP
+//! conversation single-flight serialises, and queued behind one it was shed (ADR-110 Increment 8).
+//! A fourth kind that needs either treatment has to say so — `guards.rs` reads the ownership table
+//! (ADR-099).
 
 use super::*;
 
@@ -221,8 +223,17 @@ pub async fn run_stream<S>(
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
         // guard for the same reason Meraki collectors do. Pile-up stays bounded by each check's
         // total timeout budget (≤30 s, enforced in the transport) plus the global concurrency cap.
+        //
+        // 🚨 **ICMP takes the global-only guard too, for a different reason** (ADR-110 Increment 8).
+        // One device's specs are serialised because they are one conversation with one SNMP agent
+        // (`limiter.rs`); three echoes answered by the device's kernel are not part of it. Queued
+        // behind that conversation, ICMP arrived mid-walk every cycle (it is the last spec a node
+        // gets, staggered 1 s after the others) and was shed whenever the device's SNMP chain outran
+        // the wait — measured on a PoC switch at 21 of 31 points in 30 minutes, and 490 ICMP polls
+        // shed fleet-wide in ~26 h. ICMP is the liveness check, so a shed echo is a node nobody is
+        // watching. It still takes a concurrency permit; only the device queue is skipped.
         // Both this and the wait are decided out here because the task takes the job by value.
-        let dns = matches!(job.check, CheckSpec::Dns(_));
+        let global_only = matches!(job.check, CheckSpec::Dns(_) | CheckSpec::Icmp(_));
         let wait = single_flight_wait(&job);
         let limiter = limiter.clone();
         let sink = sink.clone();
@@ -232,28 +243,33 @@ pub async fn run_stream<S>(
         let inflight = inflight.clone();
         // Poll span: child of core's dispatch span when the job carried one (legacy/poll-now), else
         // a fresh root (working-set). Secret-free fields only (no community/creds — security.md).
+        //
+        // `kind` is here so a warning the transport logs inside the poll — a truncated walk, say —
+        // names the job it came from. Without it, two truncations a minute against one address
+        // could not be told apart (ADR-110 Increment 8).
         let span = tracing::info_span!(
             "poll.execute",
             job_id = %job.job_id,
             node_id = %job.node_id,
             target = %job.target,
+            kind,
         );
         yagra_telemetry::set_span_parent(&span, &job.trace_context);
         tokio::spawn(
             async move {
                 let _admit = admit;
                 // Per-device single-flight, awaited here rather than on the loop: a device still
-                // being walked now delays only the jobs aimed at *it*. DNS monitors share the
-                // `0.0.0.0` display address (see above), so they wait for a permit and nothing else.
+                // being walked now delays only the jobs aimed at *it*. DNS and ICMP take the global
+                // guard (see above), so they wait for a permit and nothing else.
                 //
                 // ⚠️ **`wait_device` now covers the permit wait too, and cannot be split from it.**
                 // `claim_then_permit` interleaves the two — it takes a permit only once the device
                 // looks free and gives it straight back if it loses the race — so there is no
                 // instant to measure between them. What the phase means is unchanged in the way
                 // that matters: it is time *outside* the permit, bar the moment of the claim.
-                // A DNS or Meraki job has no device, so its wait is recorded as `wait_permit`.
+                // A DNS, ICMP or Meraki job waits for no device, so its wait is `wait_permit`.
                 let claimed_at = Instant::now();
-                let guard = if dns {
+                let guard = if global_only {
                     limiter.begin_global().await
                 } else {
                     limiter.claim_then_permit(job.target, wait).await
@@ -263,7 +279,11 @@ pub async fn run_stream<S>(
                 // the reason this phase is measured separately from `execute`.
                 record_phase(
                     kind,
-                    if dns { "wait_permit" } else { "wait_device" },
+                    if global_only {
+                        "wait_permit"
+                    } else {
+                        "wait_device"
+                    },
                     claimed_at,
                 );
                 // Released (and the target unmarked) when the probe finishes.
@@ -404,37 +424,74 @@ mod tests {
         assert!(result.poller_id.is_none(), "None poller id leaves it unset");
     }
 
+    /// An ICMP job for `node` at `target`.
+    ///
+    /// 🚨 **The 60 s interval is load-bearing in every test that uses these two.**
+    /// `single_flight_wait` is `min(interval, 60s)`, so a short interval would let a job that
+    /// *waits* for its device finish waiting inside the test's own timeout, and a test asserting
+    /// "it did not wait" would pass against the code it exists to reject.
+    fn icmp_at(node: u128, target: std::net::Ipv4Addr) -> PollJob {
+        PollJob::icmp(
+            Uuid::nil(),
+            NodeId::from(Uuid::from_u128(node)),
+            IpAddr::V4(target),
+            yagra_bus::IcmpCheck::default(),
+            60,
+        )
+    }
+
+    /// A scalar SNMP job for `node` at `target` — a spec that is part of the device's one SNMP
+    /// conversation, and so still serialised. 60 s for the reason on [`icmp_at`].
+    fn snmp_at(node: u128, target: std::net::Ipv4Addr) -> PollJob {
+        PollJob::snmp(
+            Uuid::nil(),
+            NodeId::from(Uuid::from_u128(node)),
+            IpAddr::V4(target),
+            yagra_bus::SnmpCheck {
+                community: "public".into(),
+                oids: vec!["1.3.6.1.2.1.1.3.0".into()],
+                columns: Vec::new(),
+                timeout_ms: 2000,
+            },
+            60,
+        )
+    }
+
+    /// Drive `jobs` through a fresh loop over `limiter` and hand back the results channel.
+    fn run_jobs(
+        limiter: Arc<PollLimiter>,
+        jobs: Vec<PollJob>,
+    ) -> tokio::sync::broadcast::Receiver<PollResult> {
+        let bus = Arc::new(InMemoryBus::new(16));
+        let results_rx = bus.subscribe_results();
+        tokio::spawn(run_stream(
+            Box::pin(futures::stream::iter(jobs)),
+            crate::store_forward::StoreForwardSink::passthrough(bus.clone()),
+            Arc::new(FakeTransport::reachable(5.0)),
+            limiter,
+            None,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+        ));
+        results_rx
+    }
+
     /// **A device that is still being walked stalls its own next spec — and nothing else.**
     ///
     /// The regression for the head-of-line stall described on [`run_stream`]. Both jobs are due at
     /// once and the *blocked* one is first, which is the only ordering that can tell the two
     /// designs apart: with the wait on the loop, `run_stream` parks in `claim_then_permit` for the full
     /// single-flight budget and the second device's job is never even pulled off the stream.
+    /// Confirmed by reverting the fix: this fails (the recv times out).
     ///
-    /// 🚨 **The 60 s interval is load-bearing.** `single_flight_wait` is `min(interval, 60s)`, so a
-    /// short interval here would let the loop clear the blocked job inside the timeout and the test
-    /// would pass against the code it exists to reject. Confirmed by reverting the fix: this fails
-    /// (the recv times out), and the other two tests in this module do not.
+    /// ⚠️ **Both jobs are SNMP, and until ADR-110 Increment 8 they were ICMP.** ICMP no longer waits
+    /// for its device at all, so an ICMP job here would sail past the held marker and this test would
+    /// pass against the head-of-line stall it exists to reject.
     #[tokio::test]
     async fn a_busy_device_does_not_stall_other_devices() {
         use std::net::Ipv4Addr;
-        use yagra_bus::IcmpCheck;
 
-        fn job_at(node: u128, target: Ipv4Addr, interval_secs: u32) -> PollJob {
-            PollJob::icmp(
-                Uuid::nil(),
-                NodeId::from(Uuid::from_u128(node)),
-                IpAddr::V4(target),
-                IcmpCheck::default(),
-                interval_secs,
-            )
-        }
-
-        let bus = Arc::new(InMemoryBus::new(16));
-        let mut results_rx = bus.subscribe_results();
-        let transport: Arc<dyn Transport> = Arc::new(FakeTransport::reachable(5.0));
         let limiter = Arc::new(PollLimiter::new(16));
-
         let busy = Ipv4Addr::new(10, 0, 0, 1);
         let other = Ipv4Addr::new(10, 0, 0, 2);
 
@@ -445,16 +502,7 @@ mod tests {
             .await
             .expect("the marker is free before anything else takes it");
 
-        let jobs = vec![job_at(1, busy, 60), job_at(2, other, 60)];
-        tokio::spawn(run_stream(
-            Box::pin(futures::stream::iter(jobs)),
-            crate::store_forward::StoreForwardSink::passthrough(bus.clone()),
-            transport,
-            limiter.clone(),
-            None,
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicU64::new(0)),
-        ));
+        let mut results_rx = run_jobs(limiter.clone(), vec![snmp_at(1, busy), snmp_at(2, other)]);
 
         let result = tokio::time::timeout(Duration::from_secs(5), results_rx.recv())
             .await
@@ -470,6 +518,67 @@ mod tests {
             "the result that came back is the unblocked device's"
         );
         drop(held);
+    }
+
+    /// **The accepting side, and it comes first: ICMP runs while its device is being walked**
+    /// (ADR-110 Increment 8).
+    ///
+    /// The marker held on the target is exactly the state a long SNMP walk leaves it in. Before
+    /// this increment the echo waited behind it for up to 60 s and was shed if the walk outlasted
+    /// that — measured on a PoC switch at 21 of 31 points in 30 minutes.
+    #[tokio::test]
+    async fn icmp_is_not_held_behind_a_walk_on_the_same_device() {
+        use std::net::Ipv4Addr;
+
+        let limiter = Arc::new(PollLimiter::new(16));
+        let walked = Ipv4Addr::new(10, 0, 0, 1);
+        let held = limiter
+            .begin_for(IpAddr::V4(walked), Duration::from_secs(1))
+            .await
+            .expect("the marker is free before anything else takes it");
+
+        let mut results_rx = run_jobs(limiter.clone(), vec![icmp_at(1, walked)]);
+
+        let result = tokio::time::timeout(Duration::from_secs(2), results_rx.recv())
+            .await
+            .expect(
+                "the ICMP job did not run while its device was held: it is still queueing behind \
+                 the device's SNMP conversation, which is how liveness polls were being shed",
+            )
+            .unwrap();
+        assert_eq!(result.outcome, CheckOutcome::Reachable);
+        drop(held);
+    }
+
+    /// **…and an SNMP job still waits for its device.** The rejecting half: without it, a change
+    /// that took *every* kind off single-flight would pass the test above, and two walks would talk
+    /// to one agent at once.
+    #[tokio::test]
+    async fn an_snmp_job_still_waits_for_its_device() {
+        use std::net::Ipv4Addr;
+
+        let limiter = Arc::new(PollLimiter::new(16));
+        let walked = Ipv4Addr::new(10, 0, 0, 1);
+        let held = limiter
+            .begin_for(IpAddr::V4(walked), Duration::from_secs(1))
+            .await
+            .expect("the marker is free before anything else takes it");
+
+        let mut results_rx = run_jobs(limiter.clone(), vec![snmp_at(1, walked)]);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(400), results_rx.recv())
+                .await
+                .is_err(),
+            "the SNMP job ran while another probe held its device — single-flight no longer \
+             serialises the SNMP conversation"
+        );
+        drop(held);
+        let result = tokio::time::timeout(Duration::from_secs(5), results_rx.recv())
+            .await
+            .expect("the SNMP job never ran after its device was released")
+            .unwrap();
+        assert_eq!(result.node_id, NodeId::from(Uuid::from_u128(1)));
     }
 
     /// Distributed-poller walking skeleton (ADR-009/020): a spec lands in a [`WorkingSet`] via a

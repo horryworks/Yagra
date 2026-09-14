@@ -16,6 +16,7 @@
 
 ### Bug Fixes
 
+- **A device whose SNMP polls run long no longer loses its ping checks.** The poller talks SNMP to one device one request at a time, and the ping check used to wait in that same queue. On a device whose SNMP polls took longer than the poll interval, pings that waited too long were thrown away — about a third of them on one 229-port switch — so the node's reachability and round-trip-time charts had gaps. Pings no longer wait for SNMP on the same device. For operators reading the poller's own metrics: `yagra_poll_phase_seconds` now records an ICMP poll's wait under `phase="wait_permit"` instead of `phase="wait_device"`, and each poll's log context carries a `kind` field naming the check.
 - **Huawei switches whose patch table answers slowly now show an OS version.** On a Huawei VRP 5.170 switch (S5731, S6730), the table of running patches can take more than two seconds to answer. The hourly read gave up after two seconds, so the node's **OS version** row stayed empty for good. The poller now waits up to five seconds for that table. When the table still does not answer, the node shows its version without the patch part — for example `5.170 (V200R021C00SPC100)` — instead of nothing. A version already shown with its patch is not replaced by the same version without it; a different version (after an upgrade) does replace it.
 
 ## v0.3.19 — OS version on the node Overview, Nodes ▸ Reclassify, bulk node delete, Discovery skips devices already in the tree, fast IP-range filing

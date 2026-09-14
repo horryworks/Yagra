@@ -30,10 +30,11 @@ use crate::module_source;
 ///
 /// ⚠️ **The two entries below `mod.rs` are the interesting ones, and neither is incidental.**
 /// `stream.rs` names `MerakiCollect` because that job fans out to many results and cannot go through
-/// the one-job-one-result dispatch, and `Dns` because a DNS check against the system resolver
-/// carries the display address `0.0.0.0` — per-device single-flight would let one such check starve
-/// every other. A third kind that needs either treatment has to add itself here, which is the whole
-/// point.
+/// the one-job-one-result dispatch, `Dns` because a DNS check against the system resolver carries
+/// the display address `0.0.0.0` — per-device single-flight would let one such check starve every
+/// other — and `Icmp` because an echo is not part of the SNMP conversation single-flight exists to
+/// serialise, and waiting behind one it was shed (ADR-110 Increment 8). A fourth kind that needs
+/// either treatment has to add itself here, which is the whole point.
 ///
 /// The four SNMP conversation files declare **nothing**, and that is a statement rather than an
 /// omission: they work from arguments the dispatch already destructured, so a `CheckSpec` variant
@@ -65,8 +66,8 @@ const SPEC_OWNERSHIP: &[(&str, &[&str])] = &[
             "SnmpV3Routing",
         ],
     ),
-    // The loop, and the two kinds whose *scheduling* differs — see the doc above.
-    ("stream.rs", &["MerakiCollect", "Dns"]),
+    // The loop, and the three kinds whose *scheduling* differs — see the doc above.
+    ("stream.rs", &["MerakiCollect", "Dns", "Icmp"]),
     // Which kinds can carry the identity probe (ADR-138). The scalar GET is the one conversation
     // that runs it, and `stream.rs` asks this file rather than naming the two itself.
     ("identity.rs", &["Snmp", "SnmpV3"]),
