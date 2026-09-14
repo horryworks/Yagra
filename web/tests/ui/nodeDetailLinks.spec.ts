@@ -100,6 +100,21 @@ test("a folder's title links its ancestors but not itself, and a member row open
   await expect(page.locator('.nd-name')).toHaveText(NODE_NAME);
 });
 
+test("a folder's Members lists its subfolder, and pressing it opens that folder", async ({ page }) => {
+  await page.goto(`/nodes?sel=group:${PARENT_ID}`);
+  const sub = page.locator('.nd-members .nd-member-group');
+  await expect(sub).toHaveCount(1);
+  await expect(sub.locator('.nd-member-name')).toHaveText(CHILD_NAME);
+
+  await sub.click();
+  await expect.poll(() => selected(page)).toBe(`group:${CHILD_ID}`);
+  await expect(page.locator('.nd-name')).toContainText(CHILD_NAME);
+  // The pane really moved: the child has no subfolder of its own, and its node is listed. Asserted
+  // after the positive half so the "no subfolder row" count is read from the settled child pane.
+  await expect(page.locator('.nd-member-link').filter({ hasText: NODE_NAME })).toBeVisible();
+  await expect(page.locator('.nd-member-group')).toHaveCount(0);
+});
+
 test('on the standalone node page a folder takes you to All nodes with it open', async ({ page }) => {
   await page.goto(`/nodes/${NODE_ID}`);
   const crumb = page.locator('.nd-eyebrow .nd-crumb').filter({ hasText: CHILD_NAME });

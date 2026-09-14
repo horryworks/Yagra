@@ -1529,6 +1529,14 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--text-tertiary);
 }
 
+/* A subfolder row's right-hand slot (ADR-142 増分 2): the subtree's node count where a node row puts
+   its address. Same place and size, but the UI font — a count is not an address. */
+.nd-member-count {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
 /* A member row that opens its node (ADR-142). A real <button>, so the browser's own button look is
    taken off and the row keeps the divider rhythm above — `border` is reset first and the top rule put
    back, and `.nd-member:first-child` still removes it on the first row. */

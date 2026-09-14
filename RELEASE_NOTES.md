@@ -12,7 +12,7 @@
 
 ### Improvements
 
-- **The folder path over a node's name now opens those folders.** In Nodes ▸ All nodes, each folder in the path above a node's name (`Japan / Ehime / …`) opens that folder in the right-hand pane, and each row under a folder's **Members** opens that node. A folder's own title opens its parent folders the same way. On the standalone node page, a folder takes you to All nodes with that folder open.
+- **The folder path over a node's name now opens those folders.** In Nodes ▸ All nodes, each folder in the path above a node's name (`Japan / Ehime / …`) opens that folder in the right-hand pane, and each row under a folder's **Members** opens what it names. **Members** now lists the folder's subfolders above its nodes, each with how many nodes it holds. A folder's own title opens its parent folders the same way. On the standalone node page, a folder takes you to All nodes with that folder open.
 
 ## v0.3.19 — OS version on the node Overview, Nodes ▸ Reclassify, bulk node delete, Discovery skips devices already in the tree, fast IP-range filing
 
