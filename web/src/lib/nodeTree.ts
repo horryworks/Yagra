@@ -248,10 +248,66 @@ function subtreeHasNodes(group: TreeGroup): boolean {
   return group.nodes.length > 0 || group.children.some(subtreeHasNodes);
 }
 
+/** Flip one folder in a collapse set, returning a new set. Shared by the saved layout
+ *  (`prefs.ts::toggleNodeTreeGroup`) and the filter's own set below, so "collapsed" is spelled
+ *  one way in both. */
+export function toggleCollapsed(
+  set: Readonly<Record<string, true>>,
+  id: string,
+): Record<string, true> {
+  const next = { ...set };
+  if (next[id]) delete next[id];
+  else next[id] = true;
+  return next;
+}
+
+/** The folders collapsed WHILE a filter is on, and which filter they were collapsed under
+ *  (ADR-053 Inc.11).
+ *
+ *  🚨 **A separate set from the saved layout, on purpose.** Filtering ignores `nodeTreeCollapsed` so
+ *  a folder closed while browsing cannot hide its own match (Inc.6). The twisty used to go on writing
+ *  that saved set anyway: pressing it under a filter changed nothing on screen and quietly collapsed
+ *  the folder in the tree the operator came back to. */
+export interface FilterCollapse {
+  readonly key: string;
+  readonly collapsed: Readonly<Record<string, true>>;
+}
+
+/** Nothing collapsed, under no filter. One shared value, so it is a stable `useMemo` dependency. */
+export const NO_FILTER_COLLAPSE: FilterCollapse = Object.freeze({
+  key: '',
+  collapsed: Object.freeze({}),
+});
+
+/** Which filter a {@link FilterCollapse} belongs to: the term as the tree compares it, plus the
+ *  server-side state / kind / pool values (`inventoryKey`).
+ *
+ *  ⚠️ `narrowed` alone is not enough — it is a boolean, so Critical → Warning leaves it `true`, and a
+ *  folder collapsed under the first question would stay collapsed over the second one's matches. */
+export function treeFilterKey(filter: string, narrowed: boolean, narrowKey: string): string {
+  return JSON.stringify([filterTerm(filter), narrowed ? narrowKey : '']);
+}
+
+/** The collapse set for the filter `key` names: what was collapsed under that same filter, and
+ *  nothing for any other — a new filter starts with every folder open. */
+export function filterCollapseFor(
+  held: FilterCollapse,
+  key: string,
+): Readonly<Record<string, true>> {
+  return held.key === key ? held.collapsed : NO_FILTER_COLLAPSE.collapsed;
+}
+
+/** Flip one folder under the filter `key`. Starts from {@link filterCollapseFor}, so a set left
+ *  over from a previous filter is dropped rather than carried into this one. */
+export function toggleFilterCollapse(held: FilterCollapse, key: string, id: string): FilterCollapse {
+  return { key, collapsed: toggleCollapsed(filterCollapseFor(held, key), id) };
+}
+
 /** Flatten the visible rows of the inventory tree in display order, honouring collapse state and
  *  the name filter — the single source of truth the virtualized `NodeTree` renders. Collapsed
- *  groups omit their descendants; while filtering, every group is force-expanded and non-matching
- *  rows are hidden. Pure (no React) so the ordering/visibility rules are unit-tested directly.
+ *  groups omit their descendants; while filtering, the saved collapse state is ignored (every group
+ *  starts open, and only `filterCollapsed` closes one) and non-matching rows are hidden. Pure (no
+ *  React) so the ordering/visibility rules are unit-tested directly.
  *
  *  Lazy load (A-3): when `groupCounts` (server per-group direct counts) is supplied, group rows roll
  *  up from those — correct over the whole fleet even before members are fetched. `loadedGroups` says
@@ -306,6 +362,9 @@ export function flattenTree(
      *  `group-loading` placeholder — otherwise a folder nobody can load is drawn exactly like one
      *  that is still arriving, forever. */
     failedGroups?: Set<string>;
+    /** The folders collapsed while this filter is on ({@link FilterCollapse}). Read only while
+     *  narrowing — browsing reads `collapsed`, and filtering never does. */
+    filterCollapsed?: Readonly<Record<string, true>>;
   },
 ): FlatRow[] {
   const q = filterTerm(opts.filter);
@@ -362,7 +421,12 @@ export function flattenTree(
       return;
     }
 
-    const isOpen = narrowing ? true : !opts.collapsed[group.id];
+    // Narrowing never reads the saved layout, so a folder closed while browsing cannot hide its own
+    // match (ADR-053 Inc.6). It reads its own set instead, which starts empty for every new filter
+    // (Inc.11) — before that this was `true`, and the twisty did nothing while a filter was on.
+    const isOpen = narrowing
+      ? !opts.filterCollapsed?.[group.id]
+      : !opts.collapsed[group.id];
     // 🚨 **While narrowing, the bar describes the rows on screen — not the fleet.** The server
     // rollup (`groupCounts`) is the group's whole membership and is the right answer when browsing,
     // where the row stands in for a folder nobody has opened. Under a filter it is a different

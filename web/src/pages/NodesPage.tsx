@@ -44,6 +44,7 @@ import { FILTER_SEARCH_LIMIT, useFilterSearch } from './useFilterSearch';
 import {
   inventoryColumns,
   inventoryFilterLabels,
+  inventoryKey,
   isInventoryFiltered,
   readInventoryFilters,
   truncationNotice,
@@ -924,6 +925,7 @@ export function NodesPage() {
             // The tree cannot see the state / kind / pool controls — those run server-side — so it
             // has to be told, or it does not know it is filtering and hides nothing.
             narrowed={serverNarrowed}
+            narrowKey={inventoryKey(inventoryFilters)}
             onSelectNode={(n) => select({ kind: 'node', id: n.id })}
             onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
             onSelectNone={() => select(null)}

@@ -12,46 +12,17 @@
 
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
-import { defaultBodyFor, MOCK_PREFIX, type Json } from '../support/openapi';
-
-const PARENT_ID = '00000000-0000-4000-8000-0000000000c1';
-const CHILD_ID = '00000000-0000-4000-8000-0000000000c2';
-const NODE_ID = '00000000-0000-4000-8000-0000000000c3';
-const PARENT_NAME = `${MOCK_PREFIX}region`;
-const CHILD_NAME = `${MOCK_PREFIX}site`;
-const NODE_NAME = `${MOCK_PREFIX}member`;
-
-/** Parent → child, built from the generated group row so a change to its shape reaches this too. */
-function twoLevelGroups(): Json {
-  const [template] = defaultBodyFor('/api/v1/node-groups') as Record<string, Json>[];
-  return [
-    { ...template, id: PARENT_ID, name: PARENT_NAME, parent_id: null, group_type: 'generic' },
-    { ...template, id: CHILD_ID, name: CHILD_NAME, parent_id: PARENT_ID, group_type: 'generic' },
-  ] as unknown as Json;
-}
-
-/** One node, filed in the child folder. Mirrors the two forms `bootstrap.ts` answers: the batch
- *  form echoes the folders it was asked about in `answered` (without it the tree re-queues the
- *  folder forever, ADR-125), and the single-group form carries no echo. */
-function membersByGroup(url: URL): Json {
-  const body = defaultBodyFor('/api/v1/nodes/by-group') as {
-    nodes: Record<string, Json>[];
-    answered?: string[];
-  };
-  const member = { ...body.nodes[0], id: NODE_ID, name: NODE_NAME, group_id: CHILD_ID, sort_order: 1 };
-  const batch = url.searchParams.get('groups');
-  if (batch) {
-    const asked = batch.split(',').filter(Boolean);
-    return {
-      nodes: asked.includes(CHILD_ID) ? [member] : [],
-      truncated: false,
-      answered: asked,
-    } as unknown as Json;
-  }
-  delete body.answered;
-  const nodes = url.searchParams.get('group') === CHILD_ID ? [member] : [];
-  return { ...body, nodes } as unknown as Json;
-}
+import { type Json } from '../support/openapi';
+import {
+  CHILD_ID,
+  CHILD_NAME,
+  membersByGroup,
+  NODE_ID,
+  NODE_NAME,
+  PARENT_ID,
+  PARENT_NAME,
+  twoLevelGroups,
+} from '../support/twoLevelTree';
 
 test.use({
   mockConfig: {

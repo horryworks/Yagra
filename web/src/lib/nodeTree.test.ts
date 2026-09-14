@@ -4,6 +4,7 @@ import {
   asGroupType,
   buildNodeTree,
   descendantNodes,
+  filterCollapseFor,
   filterGroupOptions,
   filterTerm,
   findTreeGroup,
@@ -15,11 +16,15 @@ import {
   groupTrail,
   isSelfOrDescendant,
   mergeNodesById,
+  NO_FILTER_COLLAPSE,
   pendingGroupKeys,
   revealedGroupKeys,
   sameNameNodeIds,
   subtreeGroupIds,
   tallyStates,
+  toggleCollapsed,
+  toggleFilterCollapse,
+  treeFilterKey,
   type StateCounts,
   type TreeGroup,
 } from './nodeTree';
@@ -107,6 +112,82 @@ describe('flattenTree', () => {
     const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
     const rows = flattenTree(t, { collapsed: {}, filter: '' });
     expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'ungrouped-head']);
+  });
+});
+
+describe('flattenTree — collapsing a folder while a filter is on (ADR-053 Inc.11)', () => {
+  // The reported bug: with `MYJ` in the box, the folder's ▼ did nothing. Filtering forced every
+  // folder open, and the twisty wrote a set filtering never reads.
+  const tree = () =>
+    buildNodeTree(
+      [group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1')],
+      [node('n1', 'sw1', 'g2'), node('n2', 'router', null)],
+    );
+
+  it('a folder collapsed under a term hides what is under it and keeps its own row', () => {
+    const rows = flattenTree(tree(), { collapsed: {}, filter: 'sw1', filterCollapsed: { g2: true } });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g2']);
+    const g2 = rows[1];
+    expect(g2.kind === 'group' && g2.isOpen).toBe(false);
+    // The twisty has to stay enabled, or the folder could be closed and never opened again.
+    expect(g2.kind === 'group' && g2.hasChildren).toBe(true);
+  });
+
+  it('works for a state filter with an empty box, too', () => {
+    const narrowedTree = buildNodeTree(
+      [group('g1', 'Internet Sites'), group('g2', 'DNS', 'g1')],
+      [node('n1', 'test.example', 'g2', 0, 'critical')],
+    );
+    const rows = flattenTree(narrowedTree, {
+      collapsed: {},
+      filter: '',
+      narrowed: true,
+      filterCollapsed: { g1: true },
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1']);
+  });
+
+  it('still ignores the saved layout while filtering, and the filter set while browsing', () => {
+    // Both directions: the saved set must not hide a match (Inc.6), and a set left over from a
+    // filter must not close a folder in the tree the operator browses.
+    const filtering = flattenTree(tree(), {
+      collapsed: { g1: true, g2: true },
+      filter: 'sw1',
+      filterCollapsed: {},
+    });
+    expect(filtering.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'n:n1']);
+    const browsing = flattenTree(tree(), { collapsed: {}, filter: '', filterCollapsed: { g1: true } });
+    expect(browsing.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'n:n1', 'ungrouped-head', 'n:n2']);
+  });
+});
+
+describe('the collapse set a filter holds (ADR-053 Inc.11)', () => {
+  it('toggleCollapsed flips one folder and leaves its input alone', () => {
+    const before = { g1: true } as const;
+    expect(toggleCollapsed(before, 'g2')).toEqual({ g1: true, g2: true });
+    expect(toggleCollapsed(before, 'g1')).toEqual({});
+    expect(before).toEqual({ g1: true });
+  });
+
+  it('is kept under the same filter and dropped under a different one', () => {
+    const myj = treeFilterKey('MYJ', false, '');
+    const held = toggleFilterCollapse(NO_FILTER_COLLAPSE, myj, 'g1');
+    expect(filterCollapseFor(held, myj)).toEqual({ g1: true });
+    expect(filterCollapseFor(held, treeFilterKey('MYJ0', false, ''))).toEqual({});
+  });
+
+  it('toggling under a new filter starts from everything open, not from the old set', () => {
+    const first = toggleFilterCollapse(NO_FILTER_COLLAPSE, treeFilterKey('tokyo', false, ''), 'g1');
+    const second = toggleFilterCollapse(first, treeFilterKey('osaka', false, ''), 'g2');
+    expect(second.collapsed).toEqual({ g2: true });
+  });
+
+  it('keys on the term as the tree compares it, and on the server-side values', () => {
+    expect(treeFilterKey(' MYJ ', false, '')).toBe(treeFilterKey('myj', false, ''));
+    // `narrowed` is true for both, so only the values can tell these two questions apart.
+    expect(treeFilterKey('', true, 'critical  ')).not.toBe(treeFilterKey('', true, 'warning  '));
+    // Values the tree was not told are narrowing it do not make a different filter.
+    expect(treeFilterKey('x', false, 'critical  ')).toBe(treeFilterKey('x', false, ''));
   });
 });
 

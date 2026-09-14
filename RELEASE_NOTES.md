@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A folder's ▼ in Nodes ▸ All nodes now works while the tree is filtered.** With a search term, or a state, kind or pool filter, pressing ▼ beside a folder changed nothing on screen. It also quietly collapsed or expanded that folder in the unfiltered tree, which showed once the filter was cleared. Now the arrow opens and closes the folder while the filter is on. Each new filter starts with every folder open, and clearing the filter brings back the tree as you had it.
+
 ## v0.3.20 — Folder paths and Members open what they name, pings no longer wait behind SNMP, slow SNMP devices keep their interface data, Huawei OS version despite a slow patch table
 
 ### Improvements
