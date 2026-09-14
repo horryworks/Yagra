@@ -38,6 +38,29 @@
   display: block;
 }
 
+/* A folder on a path that opens that folder (ADR-142) — in the node eyebrow and the group title.
+   It inherits everything from where it sits (uppercase + tracking in the eyebrow, the 20px title in
+   the group pane), so the path reads exactly as it did as plain text until it is hovered. Hover and
+   focus are a colour change only (ui-conventions.md "Interactive states"). */
+.nd-crumb {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  transition: color var(--transition);
+}
+
+.nd-crumb:hover,
+.nd-crumb:focus-visible {
+  color: var(--accent-color);
+  outline: none;
+}
+
 .nd-namerow {
   display: flex;
   align-items: center;
@@ -1504,6 +1527,34 @@ html[data-viewport='mobile'] .nd-extract-row {
   margin-left: auto;
   font-size: var(--font-xs);
   color: var(--text-tertiary);
+}
+
+/* A member row that opens its node (ADR-142). A real <button>, so the browser's own button look is
+   taken off and the row keeps the divider rhythm above — `border` is reset first and the top rule put
+   back, and `.nd-member:first-child` still removes it on the first row. */
+.nd-member-link {
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-top: var(--border-width) solid var(--border-color);
+  font: inherit;
+  font-size: var(--font-sm);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.nd-member-link:hover,
+.nd-member-link:focus-visible {
+  background: var(--bg-tertiary);
+  outline: none;
+}
+
+.nd-member-link:focus-visible .nd-member-name {
+  color: var(--accent-color);
 }
 
 /* ============================================================ mobile (ADR-027 M2)

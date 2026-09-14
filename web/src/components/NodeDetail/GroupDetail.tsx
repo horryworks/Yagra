@@ -3,7 +3,7 @@
 // No tabs: a header (type eyebrow · breadcrumb name · counts · Edit/Add actions) over a Health
 // rollup (full-width bar + per-state legend) and the group's direct member nodes. Subgroup-only
 // groups say so rather than showing an empty member list. Reuses the parent page's modals for edit
-// and add-node.
+// and add-node. The breadcrumb's ancestors and every member row open what they name (ADR-142).
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,7 +15,7 @@ import { GroupIcon } from '../NodeTree/GroupIcon';
 import {
   asGroupType,
   buildNodeTree,
-  groupPath,
+  groupTrail,
   STATE_ORDER,
   subtreeTallyMap,
   tallyStates,
@@ -24,6 +24,7 @@ import {
 import { stateLabel } from '../../lib/format';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
+import { GroupCrumbs } from './GroupCrumbs';
 import './NodeDetail.css';
 
 interface Props {
@@ -36,6 +37,10 @@ interface Props {
   canEdit: boolean;
   onEditGroup: (group: NodeGroup) => void;
   onAddNode: () => void;
+  /** Open an ancestor folder from the title's breadcrumb (ADR-142). Absent ⇒ plain text. */
+  onOpenGroup?: (groupId: string) => void;
+  /** Open a member node from its row (ADR-142). Absent ⇒ the rows are not pressable. */
+  onOpenNode?: (nodeId: string) => void;
 }
 
 export function GroupDetail({
@@ -46,6 +51,8 @@ export function GroupDetail({
   canEdit,
   onEditGroup,
   onAddNode,
+  onOpenGroup,
+  onOpenNode,
 }: Props) {
   const { t } = useTranslation('nodes');
   // 🚨 **The rollup comes from the server counts, exactly as the tree row's does** (ADR-125). It
@@ -71,7 +78,7 @@ export function GroupDetail({
     () => groups.filter((g) => g.parent_id === group.id).length,
     [groups, group.id],
   );
-  const path = groupPath(groups, group.id);
+  const trail = groupTrail(groups, group.id);
 
   return (
     <div className="nd">
@@ -84,7 +91,14 @@ export function GroupDetail({
         </div>
         <div className="nd-namerow">
           <div className="nd-namewrap">
-            <span className="nd-name">{path.join(' / ') || group.name}</span>
+            <span className="nd-name">
+              {trail.length ? (
+                // The last segment is this pane, so it is never a link (ADR-142 決定 3).
+                <GroupCrumbs trail={trail} onOpenGroup={onOpenGroup} linkLast={false} />
+              ) : (
+                group.name
+              )}
+            </span>
           </div>
           {canEdit && (
             <div className="nd-actions">
@@ -182,18 +196,36 @@ export function GroupDetail({
           <div className="nd-section-t">{t('groupDetail.members')}</div>
           {directMembers.length > 0 ? (
             <div className="nd-members">
-              {directMembers.map((n) => (
-                <div className="nd-member" key={n.id}>
-                  <StatusDot state={n.state} withLabel={false} />
-                  <span className="nd-member-name">{n.name}</span>
-                  {NODE_KIND_SPEC[n.kind].badge && (
-                    <span className="nd-kind" title={t(NODE_KIND_SPEC[n.kind].labelKey)}>
-                      {NODE_KIND_SPEC[n.kind].badge}
-                    </span>
-                  )}
-                  <span className="nd-member-addr mono">{n.address}</span>
-                </div>
-              ))}
+              {directMembers.map((n) => {
+                const body = (
+                  <>
+                    <StatusDot state={n.state} withLabel={false} />
+                    <span className="nd-member-name">{n.name}</span>
+                    {NODE_KIND_SPEC[n.kind].badge && (
+                      <span className="nd-kind" title={t(NODE_KIND_SPEC[n.kind].labelKey)}>
+                        {NODE_KIND_SPEC[n.kind].badge}
+                      </span>
+                    )}
+                    <span className="nd-member-addr mono">{n.address}</span>
+                  </>
+                );
+                // A real button, so the row is reachable by keyboard like every other drill-in
+                // (ui-conventions.md "Accessibility / operability"), not a div with a click handler.
+                return onOpenNode ? (
+                  <button
+                    type="button"
+                    className="nd-member nd-member-link"
+                    key={n.id}
+                    onClick={() => onOpenNode(n.id)}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className="nd-member" key={n.id}>
+                    {body}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <p className="nd-muted">{t('groupDetail.noDirectMembers')}</p>

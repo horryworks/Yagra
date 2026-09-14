@@ -26,6 +26,16 @@ export function parseSelection(raw: string | null): TreeSelection {
   return null;
 }
 
+/** The All nodes page opened on `sel`, for a surface outside the split — the `/nodes/:id` route —
+ *  that hands the operator to a pane rather than rendering one itself (ADR-142). Built through
+ *  `URLSearchParams`, the encoder `NodesPage` writes `?sel=` with, so the link and a reload of the
+ *  page it lands on spell the parameter the same way. */
+export function nodesPageHref(sel: TreeSelection): string {
+  const value = selectionToParam(sel);
+  if (!value) return '/nodes';
+  return `/nodes?${new URLSearchParams({ sel: value }).toString()}`;
+}
+
 /** What one Escape press on the Nodes page clears, or null when there is nothing to clear. */
 export type EscapeTarget = 'checked' | 'selection' | null;
 
