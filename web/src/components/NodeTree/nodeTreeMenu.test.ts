@@ -7,6 +7,7 @@ import {
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  nodeDeleteItems,
   nodeMoveItems,
   nodeMenuHasItems,
   rootMenuHasItems,
@@ -163,6 +164,41 @@ describe('canMoveByPrefix', () => {
 
   it('withholds it without ManageConfig, whatever the folders carry', () => {
     expect(canMoveByPrefix([folder('b', ['10.0.0.0/8'])], false)).toBe(false);
+  });
+});
+
+describe('nodeDeleteItems', () => {
+  const set = (...ids: string[]) => new Map(ids.map((id) => [id, { id }]));
+
+  it('deletes the working set when the right-clicked row is in it', () => {
+    // 🚨 THE REGRESSION (ADR-124 増分 6). An operator removing duplicates selected a run of rows,
+    // right-clicked one and pressed Delete; only the right-clicked node went.
+    expect(nodeDeleteItems(set('a', 'b', 'c'), 'b', true)).toEqual({
+      scope: 'selection',
+      count: 3,
+      nameTheRow: false,
+    });
+  });
+
+  it('deletes the row alone when nothing is checked', () => {
+    expect(nodeDeleteItems(set(), 'a', true)).toEqual({ scope: 'row', count: 0, nameTheRow: false });
+  });
+
+  it('treats a working set of just this row as the row', () => {
+    expect(nodeDeleteItems(set('a'), 'a', true)).toMatchObject({ scope: 'row', nameTheRow: false });
+  });
+
+  it('names the row, and offers no batch, when the row is outside the set', () => {
+    // A plain "Delete…" beside a live selection reads as deleting the selection.
+    expect(nodeDeleteItems(set('a', 'b'), 'c', true)).toEqual({
+      scope: 'row',
+      count: 2,
+      nameTheRow: true,
+    });
+  });
+
+  it('offers nothing to a caller who may not delete', () => {
+    expect(nodeDeleteItems(set('a', 'b'), 'a', false)).toBeNull();
   });
 });
 

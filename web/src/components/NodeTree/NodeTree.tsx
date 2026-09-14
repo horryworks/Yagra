@@ -28,6 +28,7 @@ import {
   flattenTree,
   flatRowKey,
   pendingGroupKeys,
+  sameNameNodeIds,
   type FlatRow,
   type StateCounts,
   type TreeGroup,
@@ -64,6 +65,7 @@ import {
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  nodeDeleteItems,
   nodeMoveItems,
   rootMenuHasItems,
   type MenuCapabilities,
@@ -168,6 +170,9 @@ interface Props {
   onAddNode?: (groupId: string | null) => void;
   /** Right-click → delete a node (opens a destructive-consent modal). Omit to hide the item. */
   onDeleteNode?: (node: NodeSummary) => void;
+  /** Delete every checked node — the menu's item when the right-clicked row is in the working set
+   *  (ADR-124 増分 6). Omit to fall back to deleting the row. */
+  onDeleteChecked?: () => void;
   /** Open the "move node" picker (context-menu / button path, keyboard-accessible). */
   onRequestMoveNode: (node: NodeSummary) => void;
   /** The working set — nodes checked with Ctrl / Shift for a bulk action (ADR-124 決定 2).
@@ -260,6 +265,7 @@ export function NodeTree({
   onEditNode,
   onAddNode,
   onDeleteNode,
+  onDeleteChecked,
   onRequestMoveNode,
   checked,
   anchorId,
@@ -284,6 +290,8 @@ export function NodeTree({
 }: Props) {
   const { t } = useTranslation('nodes');
   const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
+  // Rows that would read identically by name alone get their address beside it (ADR-139 増分 2).
+  const sameName = useMemo(() => sameNameNodeIds(nodes), [nodes]);
   // Expansion defaults to fully-expanded and persists across reloads: the prefs store keeps the
   // set of groups the user explicitly collapsed (empty ⇒ everything open), so the last layout is
   // restored and any newly-added group shows expanded automatically.
@@ -873,6 +881,8 @@ export function NodeTree({
         <button
           type="button"
           className="ntree-node-name"
+          // Every row: the name can be cut off, and the address is how two rows are told apart.
+          title={`${node.name} — ${node.address}`}
           onClick={(e) => {
             e.stopPropagation();
             clickNode(e, node);
@@ -880,6 +890,7 @@ export function NodeTree({
         >
           {node.name}
         </button>
+        {sameName.has(node.id) && <span className="ntree-node-addr">{node.address}</span>}
         {/* What kind of node this is, when it is not an ordinary ICMP/SNMP device — a URL monitor,
             a DNS monitor or a Meraki device. Unmarked is the default: the tree is overwhelmingly
             ordinary devices, so a badge on every one of 50k rows would say nothing. */}
@@ -1043,6 +1054,11 @@ export function NodeTree({
    *  here it is only applied. */
   const moveItems =
     menu?.kind === 'node' ? nodeMoveItems(checkedNodes, menu.node.id, canEdit) : null;
+
+  /** What the open node menu's Delete acts on (ADR-124 増分 6), decided in `nodeTreeMenu.ts`. The
+   *  permission is the page's: the item exists only when it wired a delete. */
+  const deleteItems =
+    menu?.kind === 'node' ? nodeDeleteItems(checkedNodes, menu.node.id, !!onDeleteNode) : null;
 
   /** The two items that act on the working set. Rendered in the single item's place when the
    *  right-clicked row is in the set, and below a separator when it is not. */
@@ -1361,12 +1377,24 @@ export function NodeTree({
                 menu.node,
                 menu,
               )}
-              {onDeleteNode && (
+              {/* What Delete acts on is `nodeTreeMenu.ts`'s call (ADR-124 増分 6): the working set
+                  when this row is in it, otherwise this row — named while a set exists elsewhere. */}
+              {deleteItems && (
                 <>
                   <div className="ntree-menu-sep" />
-                  <button type="button" className="danger" onClick={() => { onDeleteNode(menu.node); setMenu(null); }}>
-                    {t('tree.deleteEllipsis')}
-                  </button>
+                  {deleteItems.scope === 'selection' && onDeleteChecked ? (
+                    <button type="button" className="danger" onClick={() => { onDeleteChecked(); setMenu(null); }}>
+                      {t('tree.deleteSelected', { count: deleteItems.count })}
+                    </button>
+                  ) : (
+                    onDeleteNode && (
+                      <button type="button" className="danger" onClick={() => { onDeleteNode(menu.node); setMenu(null); }}>
+                        {deleteItems.nameTheRow
+                          ? t('tree.deleteNodeNamed', { name: menu.node.name })
+                          : t('tree.deleteEllipsis')}
+                      </button>
+                    )
+                  )}
                 </>
               )}
             </>

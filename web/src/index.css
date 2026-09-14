@@ -114,6 +114,27 @@ code,
   color: var(--status-critical);
 }
 
+/* Something the operator should read before going on, that is not a refusal — e.g. the add-node
+   dialog finding a device already monitored at the address (ADR-139 増分 2). Marked by the bar, not
+   by the text colour, so the node names in it stay readable. */
+.form-warning {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--status-warning);
+  background: var(--bg-secondary);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+}
+
+.form-warning p,
+.form-warning ul {
+  margin: 0 0 4px;
+}
+
+.form-warning ul {
+  padding-left: 18px;
+}
+
 /* Required-field marker (RequiredMark): red asterisk, no underline. */
 .form-req {
   margin-left: 3px;

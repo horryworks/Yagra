@@ -967,6 +967,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/nodes/delete",
+        // Scoped for the reason `/nodes/move` is (ADR-124 増分 6): an Operator holds
+        // `manage_config` and can be group-scoped, and a bulk delete that skipped the scope would
+        // remove another site's inventory. The single-node `DELETE` below keeps its `ADMIN_CFG`
+        // claim; that is 決定 8's known gap, not a precedent.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/nodes/tags",
         // Scoped for the same reason `/nodes/move` above is, and deliberately not `ADMIN_CFG`:
         // this route relabels many nodes at once, so an unscoped claim would let one site's

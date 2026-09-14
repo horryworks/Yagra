@@ -379,6 +379,7 @@
     "matchedSuffix": " ✓ 一致",
     "importSelectedCount": "{{count}} 件をインポート",
     "importSelectedNone": "選択項目をインポート",
+    "importInProgress": "インポート中…",
     "badge": {
       "inTree": "登録済み",
       "ping": "ping",

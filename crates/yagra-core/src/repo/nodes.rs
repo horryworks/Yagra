@@ -1223,6 +1223,58 @@ impl NodeRepo {
         Ok(map)
     }
 
+    /// Which of these node ids still exist (ADR-141).
+    ///
+    /// For the batch writers' retry after a foreign-key violation: a poll result or an event queued
+    /// before its node was deleted still names the old id, and one such row fails a statement that
+    /// writes for many nodes. Asked only on that failure path — the normal path writes without it.
+    pub async fn existing_node_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> anyhow::Result<std::collections::HashSet<Uuid>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        let rows: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM nodes WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Delete many nodes in one statement (ADR-124 増分 6). Returns `(requested, deleted)`:
+    /// distinct ids asked for, and rows actually removed.
+    ///
+    /// `deleted < requested` is normal and not an error — an id can name a node already gone, or
+    /// one outside `scope`. The caller reports **both** numbers, as the bulk move does
+    /// (ADR-124 決定 7).
+    ///
+    /// ⚠️ **Scoped, unlike [`Self::delete_node`]'s route.** `manage_config` is held by Operator and
+    /// an Operator can be group-scoped, so a bulk delete that ignored the scope would let one site's
+    /// operator remove another site's inventory. The predicate is written out rather than reusing
+    /// `SCOPE_PREDICATE` for the reason [`Self::set_node_group_batch`] gives: that one is bound to
+    /// `$1`, and this statement needs `$1` for the ids. An empty slice matches nothing.
+    pub async fn delete_nodes_batch(
+        &self,
+        ids: &[Uuid],
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+        if ids.is_empty() {
+            return Ok((0, 0));
+        }
+        let res = sqlx::query(
+            "DELETE FROM nodes WHERE id = ANY($1) \
+               AND ($2::uuid[] IS NULL OR group_id = ANY($2))",
+        )
+        .bind(&ids)
+        .bind(Self::scope_bind(scope))
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
+    }
+
     /// Delete a node by id. Returns whether a row was removed.
     pub async fn delete_node(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM nodes WHERE id = $1")

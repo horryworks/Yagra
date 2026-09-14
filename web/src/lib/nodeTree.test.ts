@@ -16,6 +16,7 @@ import {
   mergeNodesById,
   pendingGroupKeys,
   revealedGroupKeys,
+  sameNameNodeIds,
   subtreeGroupIds,
   tallyStates,
   type StateCounts,
@@ -1010,5 +1011,34 @@ describe('groupDeletionImpact', () => {
     const out = groupDeletionImpact([grp('a')], {}, grp('a'), t);
     expect(out).toContain('count.subgroup=0');
     expect(out).toContain('count.memberNode=0');
+  });
+});
+
+describe('sameNameNodeIds', () => {
+  const ids = (nodes: NodeSummary[]) => [...sameNameNodeIds(nodes)].sort();
+
+  it('marks every node that shares its name with another in the same folder', () => {
+    // The PoC box's duplicates: two `as001` rows in one folder, indistinguishable by name.
+    expect(ids([node('a', 'as001', 'g1'), node('b', 'as001', 'g1'), node('c', 'as002', 'g1')])).toEqual(
+      ['a', 'b'],
+    );
+  });
+
+  it('does not mark the same name in two different folders', () => {
+    expect(ids([node('a', 'core-sw', 'g1'), node('b', 'core-sw', 'g2')])).toEqual([]);
+  });
+
+  it('treats the tree root as one folder', () => {
+    expect(ids([node('a', 'edge', null), node('b', 'edge', null), node('c', 'edge', 'g1')])).toEqual(
+      ['a', 'b'],
+    );
+  });
+
+  it('compares names exactly', () => {
+    expect(ids([node('a', 'AS001', 'g1'), node('b', 'as001', 'g1')])).toEqual([]);
+  });
+
+  it('does not count one node listed twice as a duplicate of itself', () => {
+    expect(ids([node('a', 'as001', 'g1'), node('a', 'as001', 'g1')])).toEqual([]);
   });
 });

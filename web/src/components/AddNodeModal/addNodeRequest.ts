@@ -7,7 +7,8 @@
 
 import { api } from '../../services/api';
 import type { AddableKind } from '../../pages/monitorKinds';
-import type { DnsRecordType } from '../../types/api';
+import { NODE_KINDS } from '../../types/api';
+import type { DnsRecordType, NodeKind } from '../../types/api';
 
 /** Every field the add-node form collects, for all kinds at once. */
 export interface AddNodeForm {
@@ -132,4 +133,51 @@ export function sendCreate(req: CreateRequest): Promise<{ id: string }> {
     case 'dns':
       return api.createDnsMonitor(req.body);
   }
+}
+
+/**
+ * The node kinds that mean "a device is already monitored at this address" (ADR-139 決定 1).
+ *
+ * URL and DNS monitors store an address too — the host a URL resolved to, the resolver asked — and a
+ * router that merely serves a monitored web page is not already monitored. A Meraki device is. A
+ * `Record` over every kind, so a new kind is a compile error here rather than silently not counted.
+ */
+const MEANS_A_DEVICE_AT_THE_ADDRESS: Record<NodeKind, boolean> = {
+  device: true,
+  meraki: true,
+  url: false,
+  dns: false,
+};
+
+/** The `kind` filter the duplicate-address lookup sends with `address`. */
+export const DUPLICATE_ADDRESS_KINDS: readonly NodeKind[] = NODE_KINDS.filter(
+  (k) => MEANS_A_DEVICE_AT_THE_ADDRESS[k],
+);
+
+/** A node already monitored at the address being added. */
+export interface SameAddressNode {
+  id: string;
+  name: string;
+}
+
+/**
+ * Whether adding a device must stop and warn first (ADR-139 増分 2 決定 12): the nodes to name, or
+ * `null` to go ahead.
+ *
+ * The warning never refuses. An operator who has read it passes `confirmedAddress`, and that address
+ * then goes through; a different address typed after confirming is a new question.
+ *
+ * ⚠️ `found` is `null` when the lookup failed, and that goes ahead too. The warning is an aid, and a
+ * read that failed must not stop a create the API would have accepted.
+ */
+export function duplicateWarning(
+  kind: AddableKind,
+  address: string,
+  found: readonly SameAddressNode[] | null,
+  confirmedAddress: string | null,
+): SameAddressNode[] | null {
+  if (kind !== 'device') return null;
+  if (!found || found.length === 0) return null;
+  if (confirmedAddress !== null && confirmedAddress === address.trim()) return null;
+  return [...found];
 }

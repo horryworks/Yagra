@@ -51,6 +51,27 @@ export function pendingAddresses(
 }
 
 /**
+ * The addresses to send in the next preview request — **none while one is already out**
+ * (ADR-131 増分 2 決定 13).
+ *
+ * 🚨 **The request this answers used to overlap itself.** The page previewed whenever the candidate
+ * count moved, and an address stayed "pending" until its reply was merged — so every 2s poll that
+ * brought a new candidate re-sent everything still in flight. On the PoC box, where the range match
+ * took 8.9 s per address, seven of these ran at once and a single one took 794 s.
+ *
+ * Holding the next batch back until the current reply lands costs nothing: that reply is merged and
+ * the page asks again for whatever arrived meanwhile, in one request rather than one per poll.
+ */
+export function previewBatch(
+  known: ReadonlyMap<string, RowDestination>,
+  candidates: readonly { address: string }[],
+  inFlight: ReadonlySet<string>,
+): string[] {
+  if (inFlight.size > 0) return [];
+  return pendingAddresses(known, candidates);
+}
+
+/**
  * Fold a preview response into the running map, keyed by address.
  *
  * Returns a new map; the previous answers are kept, because a second request only ever covers

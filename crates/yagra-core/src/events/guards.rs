@@ -118,7 +118,13 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     // LEFT JOIN the free-text search reaches into — searching a node's name is part of the contract
     // (`logstore.rs` implements the same reach in LogsQL), not a second file's worth of inventory.
     ("sql.rs", &["events", "nodes"]),
-    ("repo.rs", &["events", "event_rules", "event_sources"]),
+    // `nodes` only to ask which node a queued event names still exists, after the batch INSERT fails
+    // on a foreign key (ADR-141). It reads no inventory: one `SELECT id … WHERE id = ANY` on the
+    // failure path.
+    (
+        "repo.rs",
+        &["events", "event_rules", "event_sources", "nodes"],
+    ),
     // A stored rule becomes a matcher. Reading the rules is `repo.rs`'s job.
     ("rules.rs", &[]),
     // 🚨 The two that matter. Both are hot paths — the engine runs per message and the writers run

@@ -90,6 +90,7 @@ import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
 import { MoveByPrefixModal } from '../components/MoveByPrefixModal/MoveByPrefixModal';
 import { BulkTagModal } from '../components/NodeTree/BulkTagModal';
+import { DeleteNodesModal } from '../components/NodeTree/DeleteNodesModal';
 import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
@@ -299,6 +300,9 @@ export function NodesPage() {
   const [groupModal, setGroupModal] = useState<GroupModalState | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
   const [deletingNode, setDeletingNode] = useState<NodeSummary | null>(null);
+  /** The working set the bulk delete is about — from the tree's menu or the selection bar
+   *  (ADR-124 増分 6). `null` ⇒ closed. */
+  const [deletingNodes, setDeletingNodes] = useState<NodeSummary[] | null>(null);
   /** Nodes the move dialog is about: one from the tree's own "Move…", or the whole working set
    *  from the selection bar. `null` ⇒ closed. */
   const [moving, setMoving] = useState<NodeSummary[] | null>(null);
@@ -929,6 +933,7 @@ export function NodesPage() {
             onEditNode={canConfig ? (n) => setEditingNode(n) : undefined}
             onAddNode={canConfig ? openAddNode : undefined}
             onDeleteNode={canConfig ? (n) => setDeletingNode(n) : undefined}
+            onDeleteChecked={canConfig ? () => setDeletingNodes([...checked.values()]) : undefined}
             checked={checked}
             anchorId={anchorId}
             onCheckedChange={(next, anchor) => {
@@ -987,6 +992,9 @@ export function NodesPage() {
                   {t('select.moveByPrefix')}
                 </Button>
               )}
+              <Button variant="outline" onClick={() => setDeletingNodes([...checked.values()])}>
+                {t('select.delete')}
+              </Button>
               <Button variant="outline" onClick={clearChecked}>
                 {t('select.clear')}
               </Button>
@@ -1129,6 +1137,22 @@ export function NodesPage() {
             // If the deleted node was the open selection, clear the right pane.
             if (selected?.kind === 'node' && selected.id === deletingNode.id) select(null);
             setDeletingNode(null);
+            void reload();
+          }}
+        />
+      )}
+
+      {deletingNodes && (
+        <DeleteNodesModal
+          targets={deletingNodes}
+          onClose={() => setDeletingNodes(null)}
+          onDeleted={() => {
+            // What went is gone even when some did not: the pane, the working set and the tree follow
+            // it either way, and the dialog itself says whether everything went.
+            if (selected?.kind === 'node' && deletingNodes.some((n) => n.id === selected.id)) {
+              select(null);
+            }
+            clearChecked();
             void reload();
           }}
         />

@@ -161,8 +161,9 @@ export interface MoveItems {
  * the wrong one where it is easiest to reach. A row *outside* the set keeps its own move, named,
  * with the set's items below a separator; a set of just this row is the row.
  *
- * ⚠️ Only the moves are batch-aware. Edit, Delete, pool and suppression stay about the row: none
- * has a batch form to switch to, and Delete's confirmation names the node before anything happens.
+ * ⚠️ Only the moves and Delete are batch-aware — Delete since ADR-124 増分 6, by
+ * {@link nodeDeleteItems}. Edit, pool and suppression stay about the row: none has a batch form to
+ * switch to.
  *
  * Takes the permission rather than `MenuCapabilities` for the reason `canMoveByPrefix` does: the
  * row's ↗ is the second caller and has no capabilities object to hand over.
@@ -184,4 +185,39 @@ export function nodeMoveItems(
   }
   const elsewhere = count > 0 && !checked.has(nodeId);
   return { scope: 'row', count, nameTheRow: elsewhere, alsoSelection: elsewhere };
+}
+
+/** What the delete item on a node row acts on (ADR-124 増分 6). */
+export interface DeleteItems {
+  /** `selection`: the item deletes every checked node. `row`: the right-clicked one. */
+  scope: 'row' | 'selection';
+  /** How many nodes are checked. Read for a `selection` label. */
+  count: number;
+  /** Row scope while a working set exists elsewhere: the item carries the node's name, so a plain
+   *  "Delete…" cannot be read as deleting the batch. */
+  nameTheRow: boolean;
+}
+
+/**
+ * Which delete item a node row's menu carries, and what it deletes.
+ *
+ * 🚨 **This is the rule that deleted one node when the operator had selected several.** Delete
+ * stayed "about the row" after the moves learned the working set, so an operator removing
+ * duplicates on the PoC box selected a run, pressed Delete, and saw only one node go — the defect
+ * {@link nodeMoveItems} fixed for moving, left in place for the one action that cannot be undone.
+ *
+ * Same rule as the moves, through the same function (`actsOnSelection`). Unlike the moves, a row
+ * outside the set is **not** offered the set's delete as well: the batch has its own button on the
+ * selection bar, and a destructive batch item in the menu of a row it does not include is easy to
+ * press for the wrong reason.
+ */
+export function nodeDeleteItems(
+  checked: ReadonlyMap<string, unknown>,
+  nodeId: string,
+  canDelete: boolean,
+): DeleteItems | null {
+  if (!canDelete) return null;
+  const count = checked.size;
+  if (actsOnSelection(checked, nodeId)) return { scope: 'selection', count, nameTheRow: false };
+  return { scope: 'row', count, nameTheRow: count > 0 && !checked.has(nodeId) };
 }

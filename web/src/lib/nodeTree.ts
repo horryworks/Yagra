@@ -73,6 +73,37 @@ export function buildNodeTree(groups: NodeGroup[], nodes: NodeSummary[]): NodeTr
   return { roots, ungrouped };
 }
 
+/**
+ * The nodes whose name another node in the **same folder** also carries (ADR-139 増分 2 決定 11).
+ *
+ * The tree shows a node by its name alone, so two nodes with one name in one folder are two
+ * identical rows. That is what an operator removing duplicates saw on the PoC box: they deleted one
+ * copy, and the copy they kept looked like the row that "had not gone away". These rows get their
+ * address drawn beside the name; every other row stays as it was.
+ *
+ * ⚠️ **Per folder, and exact.** The folder is `group_id` (`null` is the tree root, which is one
+ * folder). The same name in two folders is told apart by where it sits, and `AS001` beside `as001`
+ * already reads differently. A folder's members arrive together (`/nodes/by-group`), so a loaded
+ * list never holds half of one folder's duplicates. One node listed twice is not a duplicate.
+ */
+export function sameNameNodeIds(
+  nodes: readonly Pick<NodeSummary, 'id' | 'name' | 'group_id'>[],
+): Set<string> {
+  const byName = new Map<string, Set<string>>();
+  for (const n of nodes) {
+    // A uuid never contains `/`, so the first `/` always ends the folder half of the key.
+    const key = `${n.group_id ?? ''}/${n.name}`;
+    const ids = byName.get(key) ?? new Set<string>();
+    ids.add(n.id);
+    byName.set(key, ids);
+  }
+  const out = new Set<string>();
+  for (const ids of byName.values()) {
+    if (ids.size > 1) for (const id of ids) out.add(id);
+  }
+  return out;
+}
+
 /** Every member node at or below a group in the tree — the group's own nodes plus those of all
  *  descendant groups (recursively). Used for the per-group health rollup and member counts. The
  *  passed `group` is a built `TreeGroup` (children + nodes already resolved). */

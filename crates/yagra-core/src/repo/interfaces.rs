@@ -323,13 +323,66 @@ impl NodeRepo {
     /// binds arrays, so the row count is unbounded by the 65535-parameter ceiling. Dedups within the
     /// batch keeping the last occurrence per `(node_id, ifindex)` — `ON CONFLICT` cannot touch the
     /// same key twice in one statement.
+    ///
+    /// 🚨 **A row naming a node deleted since its poll no longer takes the batch with it** (ADR-141).
+    /// The statement writes for many nodes at once, so one such row used to fail it and every other
+    /// node's rows were lost behind a single `warn`. On exactly that error the rows whose node is gone
+    /// are dropped and the statement runs **once** more; the normal path is still one statement.
     pub async fn upsert_interfaces_batch(&self, rows: &[InterfaceBatchRow]) -> anyhow::Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut by_key: BTreeMap<(Uuid, i32), InterfaceUpsert> = BTreeMap::new();
+        let mut by_key: BTreeMap<(Uuid, i32), &InterfaceUpsert> = BTreeMap::new();
         for (node, iface) in rows {
-            by_key.insert((*node, iface.ifindex), iface.clone());
+            by_key.insert((*node, iface.ifindex), iface);
+        }
+        let written = match self.upsert_interface_rows(&by_key).await {
+            Ok(written) => written,
+            // A node deleted in the window of *this* retry fails it too, and that is reported like
+            // any other error rather than retried again.
+            Err(sqlx::Error::Database(db)) if db.is_foreign_key_violation() => {
+                // The keys are ordered by node first, so each node's ids are adjacent and `dedup`
+                // is enough.
+                let mut named: Vec<Uuid> = by_key.keys().map(|(node, _)| *node).collect();
+                named.dedup();
+                let present = self.existing_node_ids(&named).await?;
+                let offered = by_key.len();
+                by_key.retain(|(node, _), _| present.contains(node));
+                let gone = (offered - by_key.len()) as u64;
+                // Its own outcome, never `skipped`: that one means "unchanged, so not rewritten",
+                // and a deleted node's rows counted there would overstate what ADR-110 saves.
+                metrics::counter!("yagra_interface_upsert_rows_total", "outcome" => "node_gone")
+                    .increment(gone);
+                tracing::debug!(
+                    rows = gone,
+                    "dropped interface rows for nodes deleted since their poll"
+                );
+                self.upsert_interface_rows(&by_key).await?
+            }
+            Err(e) => return Err(e.into()),
+        };
+        // What this fleet costs the table, permanently visible rather than only during a load
+        // test. `skipped` is the whole point of ADR-110 Increment 1; `written` climbing to meet it
+        // means either a fleet whose ports really are changing or a predicate that has stopped
+        // matching, and neither is visible from a queue depth.
+        let offered = by_key.len() as u64;
+        metrics::counter!("yagra_interface_upsert_rows_total", "outcome" => "written")
+            .increment(written);
+        metrics::counter!("yagra_interface_upsert_rows_total", "outcome" => "skipped")
+            .increment(offered.saturating_sub(written));
+        Ok(())
+    }
+
+    /// The statement [`Self::upsert_interfaces_batch`] runs, over the rows it kept.
+    ///
+    /// Returns the `sqlx` error unconverted, because the caller's retry turns on whether it is a
+    /// foreign-key violation.
+    async fn upsert_interface_rows(
+        &self,
+        by_key: &BTreeMap<(Uuid, i32), &InterfaceUpsert>,
+    ) -> Result<u64, sqlx::Error> {
+        if by_key.is_empty() {
+            return Ok(0);
         }
         let n = by_key.len();
         let mut node_ids: Vec<Uuid> = Vec::with_capacity(n);
@@ -346,15 +399,15 @@ impl NodeRepo {
         let mut tx_lows: Vec<Option<f64>> = Vec::with_capacity(n);
         let mut tx_highs: Vec<Option<f64>> = Vec::with_capacity(n);
         for ((node, _), iface) in by_key {
-            node_ids.push(node);
+            node_ids.push(*node);
             ifindexes.push(iface.ifindex);
-            names.push(iface.if_name);
-            aliases.push(iface.if_alias);
+            names.push(iface.if_name.clone());
+            aliases.push(iface.if_alias.clone());
             speeds.push(iface.if_speed);
-            duplexes.push(iface.if_duplex);
+            duplexes.push(iface.if_duplex.clone());
             if_types.push(iface.if_type);
-            medias.push(iface.if_media);
-            models.push(iface.transceiver_model);
+            medias.push(iface.if_media.clone());
+            models.push(iface.transceiver_model.clone());
             rx_lows.push(iface.rx_power_low_dbm);
             rx_highs.push(iface.rx_power_high_dbm);
             tx_lows.push(iface.tx_power_low_dbm);
@@ -362,7 +415,7 @@ impl NodeRepo {
         }
         // Only the rows that would actually change are written — see `INTERFACE_TOUCH_SECS` for
         // why the clock column is on a lazy touch and why that cannot make a live port look stale.
-        let written = sqlx::query(&UPSERT_SQL)
+        Ok(sqlx::query(&UPSERT_SQL)
             .bind(&node_ids)
             .bind(&ifindexes)
             .bind(&names)
@@ -379,17 +432,7 @@ impl NodeRepo {
             .bind(INTERFACE_TOUCH_SECS as f64)
             .execute(&self.pool)
             .await?
-            .rows_affected();
-        // What this fleet costs the table, permanently visible rather than only during a load
-        // test. `skipped` is the whole point of ADR-110 Increment 1; `written` climbing to meet it
-        // means either a fleet whose ports really are changing or a predicate that has stopped
-        // matching, and neither is visible from a queue depth.
-        let offered = n as u64;
-        metrics::counter!("yagra_interface_upsert_rows_total", "outcome" => "written")
-            .increment(written);
-        metrics::counter!("yagra_interface_upsert_rows_total", "outcome" => "skipped")
-            .increment(offered.saturating_sub(written));
-        Ok(())
+            .rows_affected())
     }
 }
 
@@ -604,5 +647,35 @@ mod tests {
             last_seen(&pool, node, 1).await > old,
             "a row past the touch window was never refreshed — every port would go stale"
         );
+    }
+
+    /// 🚨 **A node deleted between its poll and this write does not lose every other node's rows**
+    /// (ADR-141).
+    ///
+    /// The batch is one statement for many nodes, so before this a single row naming a node the
+    /// operator had just deleted raised a foreign-key violation and the whole batch was lost — seen on
+    /// the PoC box while duplicates were being removed, as one `warn` line and nothing else.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_deleted_node_does_not_lose_the_rest_of_the_batch(pool: sqlx::PgPool) {
+        let kept = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let gone = crate::pgtest::node(&pool, "sw2", 2, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+        assert!(repo.delete_node(gone).await.expect("delete"));
+
+        repo.upsert_interfaces_batch(&[
+            walk(kept, 1, "Gi0/1", Some("uplink")),
+            walk(gone, 1, "Gi0/1", Some("uplink")),
+            walk(kept, 2, "Gi0/2", Some("access")),
+        ])
+        .await
+        .expect("a batch naming a deleted node must still be written");
+
+        assert_eq!(
+            repo.list_interfaces(kept).await.unwrap().len(),
+            2,
+            "the surviving node's rows were lost with the deleted one's"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "interfaces").await, 2);
     }
 }

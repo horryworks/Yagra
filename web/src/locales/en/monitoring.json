@@ -387,6 +387,7 @@
     "matchedSuffix": " ✓ matched",
     "importSelectedCount": "Import {{count}} selected",
     "importSelectedNone": "Import selected",
+    "importInProgress": "Importing…",
     "badge": {
       "inTree": "In tree",
       "ping": "ping",

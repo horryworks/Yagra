@@ -99,6 +99,9 @@
   },
   "add": {
     "node": "Add node",
+    "duplicateLead": "A device is already monitored at {{address}}:",
+    "duplicateHint": "Adding it again makes a second node for the same device, and syslog and flows from that address attach to only one of them.",
+    "addAnyway": "Add anyway",
     "urlMonitor": "Add URL monitor",
     "monitoringType": "Monitoring type",
     "typeDevice": "Device (ICMP / SNMP)",
@@ -182,6 +185,7 @@
     "loadInterfaces": "failed to load interfaces",
     "requestPoll": "failed to request poll",
     "deleteNode": "failed to delete node",
+    "deleteNodes": "failed to delete nodes",
     "saveNode": "failed to save node",
     "setDependency": "failed to set dependency",
     "addDnsMonitor": "failed to add DNS monitor",
@@ -264,6 +268,13 @@
     "err": {
       "bindingsAfterCheck": "The monitor settings were saved, but the node settings were not: {{reason}}. Saving again is safe."
     }
+  },
+  "deleteNodes": {
+    "title_one": "Delete {{count}} node",
+    "title_other": "Delete {{count}} nodes",
+    "body": "Delete these nodes? Their inventory entries and discovered interfaces are removed. Collected metrics age out of the TSDB. A node that is a parent in a dependency chain stops suppressing its dependents. This cannot be undone.",
+    "more": "and {{count}} more",
+    "partial": "Deleted {{deleted}} of {{requested}} nodes. The rest no longer existed or are in folders you cannot see."
   },
   "deleteNode": {
     "title": "Delete node",
@@ -580,6 +591,8 @@
     "addNodeEllipsis": "Add node…",
     "addGroupEllipsis": "Add group…",
     "deleteEllipsis": "Delete…",
+    "deleteNodeNamed": "Delete \"{{name}}\"…",
+    "deleteSelected": "Delete {{count}} selected…",
     "pool": "Poller pool",
     "poolInherit": "Inherit",
     "poolNoLivePoller": "No live poller serves this pool — nodes assigned to it are not polled.",
@@ -751,6 +764,7 @@
     "count": "{{count}} selected",
     "move": "Move…",
     "moveByPrefix": "Move by IP range…",
+    "delete": "Delete…",
     "clear": "Clear",
     "hint": "Ctrl-click to add one, Shift-click to add a run."
   },
