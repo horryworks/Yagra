@@ -613,6 +613,24 @@ export function alertWhatOf(alert: {
   });
 }
 
+/** The row part of "what fired" (ADR-143), or `null` for an alert about no row.
+ *
+ *  The row's name when one was read, since `I/O` is what the operator can act on; its key
+ *  otherwise, in mono because a key is a number off the wire rather than a word. Here rather than
+ *  in `AlertWhatText.tsx`, where it was, because Vitest never runs a `.tsx` (testing.md). */
+export function alertRowPart(what: {
+  row: number | null;
+  rowName: string | null;
+}): { text: string; mono: boolean } | null {
+  if (what.rowName) {
+    return { text: i18n.t('format:alertOnRow', { name: what.rowName }), mono: false };
+  }
+  if (what.row != null) {
+    return { text: i18n.t('format:alertOnRowKey', { row: what.row }), mono: true };
+  }
+  return null;
+}
+
 /** An autonomous-system label: `AS15169 · GOOGLE` (with name) or `AS15169` (number only), or
  *  `null` when the ASN is unknown/absent (0) — callers omit the AS line in that case. The org
  *  name is device/registry data, shown verbatim (not localized). */

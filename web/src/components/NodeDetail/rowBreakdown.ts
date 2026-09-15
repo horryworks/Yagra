@@ -102,3 +102,22 @@ export function memRangeQuery(rows: readonly MemRow[]): { row: number } | { agg:
   const followed = followedRow(rows);
   return followed ? { row: followed.row } : { agg: 'max' };
 }
+
+/** How many rows a Device-health card lists before it stops (ADR-143 Inc.2).
+ *
+ *  A card's explanation is already clamped to two lines so the grid's cards stay the same height,
+ *  and the row list was the one part left to grow: `hr_processor_load` is a CPU candidate, so a
+ *  64-core host listed 64 lines under one card. */
+export const ROW_LIST_MAX = 5;
+
+/** The rows a card lists, and how many it left out.
+ *
+ *  `rows` arrives highest first (`visibleRows` / `memRows`), so the cut keeps the worst ones — and
+ *  the headline, which is `rows[0]`, is always among them. */
+export function limitRows<T>(
+  rows: readonly T[],
+  max: number = ROW_LIST_MAX,
+): { shown: T[]; more: number } {
+  const shown = rows.slice(0, Math.max(0, max));
+  return { shown, more: rows.length - shown.length };
+}

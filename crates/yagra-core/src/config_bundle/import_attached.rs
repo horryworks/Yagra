@@ -66,7 +66,7 @@ pub(super) async fn write<'a>(
         // imported `snmp_up below 0.5` as `above 0.5`, which pages for **every healthy device**.
         // The API edge has always parsed both through `from_token`; a second writer of the same
         // rows enforcing neither is the shape `extensibility.md` §3 names.
-        let (Some(_), Some(direction)) = (
+        let (Some(level), Some(direction)) = (
             yagra_common::ScopeLevel::from_token(&t.scope_level),
             yagra_common::Direction::from_token(&t.direction),
         ) else {
@@ -130,26 +130,21 @@ pub(super) async fn write<'a>(
                 continue;
             }
         }
-        // ADR-143: the row pattern goes through the validator the API edge uses, so the two writers
-        // of this column cannot accept different patterns — and, as there, an interface rule may not
-        // carry one, because it already names exactly one port.
-        let row_match = match yagra_common::row_names::normalize_row_match(t.row_match.as_deref()) {
-            Ok(pattern)
-                if pattern.is_none()
-                    || t.scope_level != yagra_common::ScopeLevel::Interface.as_str() =>
-            {
-                pattern
-            }
-            Ok(_) | Err(_) => {
-                notes.add(
-                    "thresholds",
-                    NoteCode::SkippedInvalidValue,
-                    Some("row_match"),
-                );
-                c.skipped += 1;
-                continue;
-            }
-        };
+        // ADR-143: the row pattern goes through the validator the API edge uses — the level check
+        // included (Inc.2) — so the two writers of this column cannot accept different patterns.
+        let row_match =
+            match yagra_common::row_names::row_match_for_level(level, t.row_match.as_deref()) {
+                Ok(pattern) => pattern,
+                Err(_) => {
+                    notes.add(
+                        "thresholds",
+                        NoteCode::SkippedInvalidValue,
+                        Some("row_match"),
+                    );
+                    c.skipped += 1;
+                    continue;
+                }
+            };
         sqlx::query(
             "INSERT INTO thresholds (id, scope_level, scope_id, scope_ids, metric, direction, \
                                          warning, critical, warning_below, critical_below, \

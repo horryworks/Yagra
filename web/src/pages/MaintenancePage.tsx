@@ -26,7 +26,8 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { useClientFilters } from '../lib/useClientFilters';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
-import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { EntityName } from '../components/ui/EntityName';
+import { useEntityNames } from '../components/ui/entityNames';
 import { formatScheduleTime } from '../lib/format';
 import { isEnded, windowStatus } from './maintenanceStatus';
 import { windowFilters } from './suppressionFilters';

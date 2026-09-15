@@ -14,7 +14,8 @@ import { api } from '../../services/api';
 import { formatBps, formatDbm, formatPps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries, Neighbor } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
-import { MetricChart, PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
+import { MetricChart } from '../MetricChart/MetricChart';
+import { PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/palette';
 import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useCan, useRangeStore } from '../../store';
@@ -68,7 +69,8 @@ import { buildPredicate } from '../../lib/filterPredicate';
 import { dockBudget, stickyChromeHeight } from './interfaceDockHeight';
 import { operLabel } from './healthTone';
 import { duplexTitle, mediaTitle } from './linkMode';
-import { AnchoredPopover, focusPopoverTrigger } from '../ui/AnchoredPopover';
+import { AnchoredPopover } from '../ui/AnchoredPopover';
+import { focusPopoverTrigger } from '../ui/focusPopoverTrigger';
 import { Capabilities } from './NeighborsTab';
 import {
   neighborCellText,

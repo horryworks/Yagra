@@ -13,7 +13,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AnchoredPopover, focusPopoverTrigger } from './AnchoredPopover';
+import { AnchoredPopover } from './AnchoredPopover';
+import { focusPopoverTrigger } from './focusPopoverTrigger';
 import { MultiSelectList } from './MultiSelectList';
 import { SearchField } from './SearchField';
 import { TextConditionEditor } from './TextConditionEditor';

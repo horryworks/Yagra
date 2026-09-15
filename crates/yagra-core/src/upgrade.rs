@@ -663,6 +663,132 @@ pub fn dark_pools(fleet: &[PollerBuild], moving: &[&str]) -> Vec<String> {
     out
 }
 
+/// The poller fleet, reduced to what the upgrade view and a convergence ask of it.
+///
+/// ⚠️ **Offline pollers are included, and used to be filtered out here.** An upgrade may only act on
+/// a poller that is running — that filter still exists, but it belongs where the acting happens.
+/// Applying it to the *view* meant a site that died during its own upgrade dropped out of the list
+/// and the deployment reported itself aligned (ADR-051 Inc.6).
+///
+/// Takes the coordinator rather than the API's state because the tail of core's own upgrade asks the
+/// same question from a task that has no API state (ADR-051 Inc.8) — and a second copy of this
+/// mapping is how that path came to answer "who moves" differently from the buttons.
+#[must_use]
+pub(crate) fn poller_builds(coordinator: &crate::coordinator::Coordinator) -> Vec<PollerBuild> {
+    coordinator
+        .poller_views(std::time::Instant::now())
+        .into_iter()
+        .map(|v| PollerBuild {
+            // Whatever its site updater last said, carried on the build so the set that decides
+            // *who moves* and the set that shows *how each is going* are one list and cannot
+            // disagree about which row is which poller.
+            upgrade: v.upgrade.as_ref().map(PollerUpgradeProgress::from),
+            self_upgrades: v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE),
+            // The site updater beside it saying an apply will not damage that site (ADR-051
+            // Inc.7). Read from the same list and never inferred from the poller's version: the
+            // hazard is in the site's composition, which a poller upgraded on its own leaves
+            // untouched — see `CAP_SITE_PREPARED`.
+            site_prepared: v.caps.iter().any(|c| c == yagra_bus::CAP_SITE_PREPARED),
+            version: (!v.version.is_empty()).then_some(v.version),
+            online: v.online,
+            pool: v.pool,
+            id: v.id,
+        })
+        .collect()
+}
+
+/// How long the tail of core's own upgrade waits for the pollers it was asked to move to reconnect.
+///
+/// core has just restarted, so its registry of pollers starts empty and fills one heartbeat at a
+/// time (every 10 s). On 192.168.1.211 the two chosen pollers beat 3 s and about 12 s after core
+/// started, while the targets were fixed at 10 s — so the second stayed on its old build with the
+/// screen reading "aligned" (ADR-051 Inc.8). Sixty seconds is six beats, and leaves room for a bus
+/// the same upgrade recreated. A selection that is complete sooner ends the wait sooner.
+const SELECTION_WAIT: Duration = Duration::from_secs(60);
+
+/// How often that wait re-reads the registry.
+const SELECTION_WAIT_TICK: Duration = Duration::from_secs(5);
+
+/// Whether every poller an upgrade was asked to move is connected again.
+///
+/// `None` — no selection was recorded, which means "every poller that can move" — is never
+/// complete: with no list there is no way to know the last poller is back, so the wait runs its full
+/// length and takes whoever has arrived.
+#[must_use]
+pub fn selection_arrived(fleet: &[PollerBuild], selected: Option<&[String]>) -> bool {
+    selected.is_some_and(|sel| {
+        sel.iter()
+            .all(|id| fleet.iter().any(|p| &p.id == id && p.online))
+    })
+}
+
+/// Who the tail of core's own upgrade moves, and who it was asked to move and cannot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostUpgradePlan {
+    /// Ids to converge — the set [`movable_to`] gives the two buttons.
+    pub moving: Vec<String>,
+    /// Chosen, and not connected when the wait ended. Reported on the progress record and in the
+    /// audit log; nothing is sent to them.
+    pub not_connected: Vec<String>,
+    /// Chosen and connected, but no longer movable — already on the target, or no longer
+    /// advertising a site updater. The dialog cannot produce this, so it is logged, not shown.
+    pub not_movable: Vec<String>,
+}
+
+/// Decide the tail of core's own upgrade from the fleet as it stands when the wait ends.
+///
+/// 🚨 **Through [`movable_to`], like both buttons.** This path used to filter the registry itself,
+/// which made it a third answer to "who moves": it kept a poller already on the target, and it
+/// dropped a chosen poller that had not reconnected yet without a word (ADR-051 Inc.8).
+#[must_use]
+pub fn post_upgrade_plan(
+    fleet: &[PollerBuild],
+    tag: &str,
+    core_version: &str,
+    selected: Option<&[String]>,
+) -> PostUpgradePlan {
+    let rows = components(fleet, None, core_version, true);
+    let moving: Vec<String> = movable_to(&rows, tag, selected)
+        .into_iter()
+        .map(|r| r.id.clone())
+        .collect();
+    let mut not_connected: Vec<String> = Vec::new();
+    let mut not_movable: Vec<String> = Vec::new();
+    for id in selected.unwrap_or_default() {
+        if moving.contains(id) || not_connected.contains(id) || not_movable.contains(id) {
+            continue;
+        }
+        if fleet.iter().any(|p| &p.id == id && p.online) {
+            not_movable.push(id.clone());
+        } else {
+            not_connected.push(id.clone());
+        }
+    }
+    not_connected.sort();
+    not_movable.sort();
+    PostUpgradePlan {
+        moving,
+        not_connected,
+        not_movable,
+    }
+}
+
+/// Wait until every chosen poller has reconnected, or [`SELECTION_WAIT`] has passed, and return the
+/// fleet as it then stands.
+async fn wait_for_selection(
+    coordinator: &crate::coordinator::Coordinator,
+    selected: Option<&[String]>,
+) -> Vec<PollerBuild> {
+    let deadline = tokio::time::Instant::now() + SELECTION_WAIT;
+    loop {
+        let fleet = poller_builds(coordinator);
+        if selection_arrived(&fleet, selected) || tokio::time::Instant::now() >= deadline {
+            return fleet;
+        }
+        tokio::time::sleep(SELECTION_WAIT_TICK).await;
+    }
+}
+
 // Why it is computed here rather than in the WebUI: the comparison is semver — `0.2.10` is newer
 // than `0.2.9` — and it is the same rule that decides whether a rollback is safe, so it lives in
 // the one place that already owns `binding_floor`. A second implementation in TypeScript would be
@@ -1360,14 +1486,19 @@ pub(crate) fn open(pool: PgPool) -> std::sync::Arc<UpgradeRepo> {
 /// would hold the whole API port closed for the length of an upgrade.
 pub(crate) async fn start(
     repo: &std::sync::Arc<UpgradeRepo>,
-    audit: std::sync::Arc<crate::audit::AuditRepo>,
-    maintenance: std::sync::Arc<crate::maintenance::MaintenanceRepo>,
-    bus: std::sync::Arc<yagra_bus::NatsBus>,
-    coordinator: std::sync::Arc<crate::coordinator::Coordinator>,
+    handles: SettleHandles,
     shutdown: &yagra_telemetry::CancellationToken,
 ) {
     {
         let upgrade = repo.clone();
+        let SettleHandles {
+            audit,
+            maintenance,
+            bus,
+            coordinator,
+            pollers,
+            is_leader,
+        } = handles;
         yagra_telemetry::spawn_cancellable(shutdown, async move {
             let Some(run) = upgrade.settle_finished_run(&audit, &maintenance).await else {
                 return;
@@ -1396,22 +1527,40 @@ pub(crate) async fn start(
                     "this upgrade named the pollers it may move; the rest stay on their current build"
                 );
             }
-            let targets: Vec<crate::poller_upgrade::Target> = coordinator
-                .poller_views(std::time::Instant::now())
-                .into_iter()
-                .filter(|v| v.online && v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE))
-                .filter(|v| {
-                    selection
-                        .as_deref()
-                        .is_none_or(|sel| sel.iter().any(|id| id == &v.id))
-                })
-                .map(|v| crate::poller_upgrade::Target {
-                    id: v.id,
-                    pool: v.pool,
-                    version: v.version,
-                    incarnation: v.incarnation,
-                })
-                .collect();
+            // 🚨 core has just restarted, so the registry holds only the pollers that have beaten
+            // since. Deciding at this moment is how 192.168.1.212 was left on its old build while
+            // the screen read "aligned" (ADR-051 Inc.8 decision 32) — wait for the chosen ones.
+            tracing::info!(
+                run = %run.id,
+                wait_secs = SELECTION_WAIT.as_secs(),
+                "waiting for the chosen remote pollers to reconnect before handing them the release"
+            );
+            let fleet = wait_for_selection(&coordinator, selection.as_deref()).await;
+            // Only the leader receives heartbeats, so a follower's registry is empty and would name
+            // every chosen poller as not connected (decision 35). The leader runs this same task.
+            if !is_leader.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::info!(
+                    run = %run.id,
+                    "this core is not the leader; the leader hands the remote pollers the release"
+                );
+                return;
+            }
+            let plan = post_upgrade_plan(
+                &fleet,
+                &tag,
+                env!("CARGO_PKG_VERSION"),
+                selection.as_deref(),
+            );
+            for id in &plan.not_movable {
+                tracing::warn!(
+                    run = %run.id,
+                    poller = %id,
+                    "a poller chosen for this upgrade is connected but can no longer be moved \
+                     (already on the target, or no site updater); leaving it where it is"
+                );
+            }
+            let absent = absent_pollers(&pollers, &plan.not_connected).await;
+            let targets = crate::poller_upgrade::targets(&coordinator, &plan.moving);
             // Shares one lock with the "align the pollers" button (ADR-051 Inc.4 decision 17).
             // Losing it here is not an error: somebody pressed that button while core was coming
             // back, and their run is already moving the same fleet to the same place.
@@ -1431,6 +1580,7 @@ pub(crate) async fn start(
                     requested_by: run.requested_by.unwrap_or_else(|| "unknown".to_owned()),
                 },
                 targets,
+                absent,
                 lock,
             )
             .await;
@@ -1443,6 +1593,62 @@ pub(crate) async fn start(
     // and the file is its cache, so a deleted volume — or one last written by a core that has since
     // been replaced — converges here rather than silently disagreeing with what was chosen.
     repo.publish_enabled(repo.enabled().await);
+}
+
+/// What [`start`] needs beyond the repository: settling a finished run, and — when it succeeded —
+/// handing the same release on to the remote-site pollers (ADR-051).
+///
+/// A struct because the two ADR-051 Inc.8 handles took the argument list past what clippy accepts,
+/// and because all six travel together into one task.
+pub(crate) struct SettleHandles {
+    /// Where the run's outcome, and each poller's, is recorded.
+    pub audit: std::sync::Arc<crate::audit::AuditRepo>,
+    /// The fleet-wide window the run opened, which settling closes.
+    pub maintenance: std::sync::Arc<crate::maintenance::MaintenanceRepo>,
+    /// Where upgrade commands to the pollers go.
+    pub bus: std::sync::Arc<yagra_bus::NatsBus>,
+    /// The live poller registry.
+    pub coordinator: std::sync::Arc<crate::coordinator::Coordinator>,
+    /// The durable poller inventory. A chosen poller that has not reconnected is named from here,
+    /// because the registry has not heard of it since this process started.
+    pub pollers: std::sync::Arc<crate::pollers::PollerRepo>,
+    /// Whether this core leads. Only the leader receives heartbeats, so only the leader can tell a
+    /// poller that is absent from one it was never going to hear about (ADR-051 Inc.8 decision 35).
+    pub is_leader: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Name the chosen pollers that did not reconnect, each with the pool the inventory last saw it
+/// serve.
+///
+/// A failed read still names them, with no pool: a site left behind has to say so whether or not
+/// the table answered.
+async fn absent_pollers(
+    pollers: &crate::pollers::PollerRepo,
+    ids: &[String],
+) -> Vec<crate::poller_upgrade::Absent> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let known = match pollers.list().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not read the poller inventory to name the pools of pollers that did not reconnect"
+            );
+            Vec::new()
+        }
+    };
+    ids.iter()
+        .map(|id| crate::poller_upgrade::Absent {
+            id: id.clone(),
+            pool: known
+                .iter()
+                .find(|r| &r.id == id)
+                .map(|r| r.pool.clone())
+                .unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// A fresh run id.
@@ -2609,6 +2815,75 @@ pub(crate) mod tests {
             // spelling out at the one call site that wants it.
             online: true,
         }
+    }
+
+    // ── The tail of core's own upgrade (ADR-051 Inc.8) ──────────────────────────────────────────
+
+    /// The wait ends when every chosen poller is connected, and not before — the decision on
+    /// 192.168.1.211 was made with one of the two chosen pollers still to beat.
+    #[test]
+    fn a_selection_has_arrived_only_once_every_chosen_poller_is_connected() {
+        let chosen = ["edge-a".to_owned(), "edge-b".to_owned()];
+        let a = || in_pool("site", "edge-a", Some("0.3.21"), true);
+        let b = || in_pool("site", "edge-b", Some("0.3.21"), true);
+
+        assert!(
+            selection_arrived(&[a(), b()], Some(&chosen)),
+            "both back — the accepting case first, or a wait that never ends would pass"
+        );
+        assert!(
+            !selection_arrived(&[a()], Some(&chosen)),
+            "edge-b has not beaten since core restarted, so the registry does not know it"
+        );
+        assert!(
+            !selection_arrived(
+                &[
+                    a(),
+                    PollerBuild {
+                        online: false,
+                        ..b()
+                    }
+                ],
+                Some(&chosen)
+            ),
+            "known but not live is not back"
+        );
+        assert!(
+            !selection_arrived(&[a()], None),
+            "with no selection there is no list to complete, so the wait runs its length"
+        );
+    }
+
+    /// Who moves goes through `movable_to`, exactly as the buttons' choice does, and a chosen poller
+    /// that did not come back is named instead of dropped.
+    #[test]
+    fn a_post_upgrade_plan_moves_the_connected_and_names_the_rest() {
+        let fleet = vec![
+            in_pool("site", "edge-a", Some("0.3.21"), true),
+            // Already on the target: recreating it would change nothing.
+            in_pool("site", "edge-c", Some("0.3.22"), true),
+            // Connected, behind, and not chosen.
+            in_pool("other", "edge-d", Some("0.3.21"), true),
+        ];
+        let chosen = [
+            "edge-a".to_owned(),
+            "edge-b".to_owned(),
+            "edge-c".to_owned(),
+        ];
+        let plan = post_upgrade_plan(&fleet, "v0.3.22", "0.3.22", Some(&chosen));
+        assert_eq!(plan.moving, vec!["edge-a".to_owned()]);
+        assert_eq!(
+            plan.not_connected,
+            vec!["edge-b".to_owned()],
+            "chosen and never seen since the restart: named, not silently left out"
+        );
+        assert_eq!(plan.not_movable, vec!["edge-c".to_owned()]);
+
+        // No selection recorded means everyone who can move, and nobody can be named as missing.
+        let all = post_upgrade_plan(&fleet, "v0.3.22", "0.3.22", None);
+        assert_eq!(all.moving, vec!["edge-a".to_owned(), "edge-d".to_owned()]);
+        assert!(all.not_connected.is_empty());
+        assert!(all.not_movable.is_empty());
     }
 
     /// The constraint ADR-050 wrote down and nothing enforced: with a poller two releases behind the

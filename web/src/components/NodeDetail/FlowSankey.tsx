@@ -7,7 +7,7 @@
 
 import { useMemo } from 'react';
 import { formatBytes, formatAsn } from '../../lib/format';
-import { PALETTE } from '../MetricChart/MetricChart';
+import { PALETTE } from '../MetricChart/palette';
 import type { FlowConversation } from '../../types/api';
 import './FlowSankey.css';
 

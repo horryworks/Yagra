@@ -16,7 +16,7 @@ import type { NodeDetail } from '../../types/api';
 import { DataTable } from '../ui/DataTable';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { TableToolbar, TableSpacer, ResultCount } from '../ui/TableToolbar';
-import { useEntityNames } from '../ui/EntityName';
+import { useEntityNames } from '../ui/entityNames';
 import { eventColumns, eventCard } from '../EventLog/eventColumns';
 import {
   eventEmptyKind,

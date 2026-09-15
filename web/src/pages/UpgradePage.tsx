@@ -197,6 +197,7 @@ function ConvergeProgress({
     returned: '✓',
     failed: '✗',
     skipped: '·',
+    not_connected: '✗',
   };
   return (
     <div className="upgrade-progress">
@@ -216,7 +217,7 @@ function ConvergeProgress({
               ? 'upgrade-site upgrade-site-done'
               : st === 'applying'
                 ? 'upgrade-site upgrade-site-now'
-                : st === 'failed'
+                : st === 'failed' || st === 'not_connected'
                   ? 'upgrade-site upgrade-site-bad'
                   : 'upgrade-site upgrade-site-wait';
           return (

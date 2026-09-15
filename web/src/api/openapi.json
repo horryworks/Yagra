@@ -24889,7 +24889,8 @@
           "applying",
           "returned",
           "failed",
-          "skipped"
+          "skipped",
+          "not_connected"
         ]
       },
       "Convergence": {

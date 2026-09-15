@@ -18,7 +18,7 @@ import { api } from '../services/api';
 import { type AlertHistoryRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Badge } from '../components/ui/Badge';
-import { useEntityNames } from '../components/ui/EntityName';
+import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';

@@ -222,6 +222,7 @@ export const CONVERGE_STATES = [
   'returned',
   'failed',
   'skipped',
+  'not_connected',
 ] as const;
 export type ConvergeState = (typeof CONVERGE_STATES)[number];
 
@@ -345,8 +346,10 @@ export function convergePhase(status: UpgradeStatus, pending: string | null): Co
   const conv = status.poller_convergence ?? null;
   if (conv === null) return pending === null ? { kind: 'idle' } : { kind: 'starting' };
   const done = conv.targets.filter((t) => t.state === 'returned').length;
+  // Everything that ended without the build: a site that did not come back, the rest of its pool
+  // that was never reached, and a chosen site that was not on the bus when the run began.
   const failed = conv.targets.filter(
-    (t) => t.state === 'failed' || t.state === 'skipped',
+    (t) => t.state === 'failed' || t.state === 'skipped' || t.state === 'not_connected',
   ).length;
   const counts = { conv, done, failed, total: conv.targets.length };
   if (conv.finished_at === null) return { kind: 'running', ...counts };

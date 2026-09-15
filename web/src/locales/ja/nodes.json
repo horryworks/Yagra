@@ -310,6 +310,7 @@
     "noHistory": "履歴はまだありません…",
     "breakdown": "行ごとの内訳",
     "unnamedRow": "行 {{row}}",
+    "moreRows": "ほか {{count}} 行",
     "followsRow": "使用率がいちばん高いプールを表示中: {{name}}",
     "systemSnmp": "システム (SNMP)",
     "systemSnmpNote": "デバイスヘルスに出ていないメトリクスです。",

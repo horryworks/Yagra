@@ -8,7 +8,8 @@
 import { useTranslation } from 'react-i18next';
 import { Select } from '../../components/ui/Field';
 import { FlowSankey } from '../../components/NodeDetail/FlowSankey';
-import { MetricChart, PALETTE } from '../../components/MetricChart/MetricChart';
+import { MetricChart } from '../../components/MetricChart/MetricChart';
+import { PALETTE } from '../../components/MetricChart/palette';
 import { formatAsn, formatBytes, formatSi } from '../../lib/format';
 import { portLabel, protoName } from '../../lib/flowLabels';
 import { api } from '../../services/api';

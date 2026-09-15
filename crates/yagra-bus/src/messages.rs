@@ -2257,6 +2257,31 @@ pub struct RowName {
     pub name: String,
 }
 
+impl RowName {
+    /// The names a result carried, made safe to keep: each cleaned by
+    /// [`yagra_common::row_names::sanitize_row_name`], dropped when nothing is left, and cut off at
+    /// [`yagra_common::row_names::ROW_NAMES_MAX`].
+    ///
+    /// The poller already does all three before it sends, and this does them again on receipt on
+    /// purpose: a check the sender promises is not a check the receiver made (ADR-143 Inc.2). Core
+    /// keeps these names in the alert engine and in PostgreSQL, and both go through here, so the
+    /// two cannot hold different names for the same row.
+    #[must_use]
+    pub fn cleaned(names: &[RowName]) -> Vec<RowName> {
+        names
+            .iter()
+            .filter_map(|n| {
+                Some(RowName {
+                    metric: n.metric.clone(),
+                    row: n.row,
+                    name: yagra_common::row_names::sanitize_row_name(&n.name)?,
+                })
+            })
+            .take(yagra_common::row_names::ROW_NAMES_MAX)
+            .collect()
+    }
+}
+
 /// High-level outcome of a check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2725,6 +2750,49 @@ impl RawFlowDatagram {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-143 Inc.2: what core keeps from a result's row names. The accepting cases come first — a
+    /// clean name passes untouched and a dirty one is cleaned rather than dropped — because a rule
+    /// tested only by what it removes is satisfied by one that removes everything.
+    #[test]
+    fn row_names_are_cleaned_capped_and_empty_ones_dropped_on_receipt() {
+        use yagra_common::row_names::{ROW_NAMES_MAX, ROW_NAME_MAX_CHARS};
+        let n = |row: u32, name: &str| RowName {
+            metric: "cisco_mem_used".to_owned(),
+            row,
+            name: name.to_owned(),
+        };
+
+        assert_eq!(RowName::cleaned(&[n(1, "I/O")]), vec![n(1, "I/O")]);
+        assert_eq!(
+            RowName::cleaned(&[n(2, "MPU\tBoard\n0")]),
+            vec![n(2, "MPU Board 0")]
+        );
+        assert!(
+            RowName::cleaned(&[n(3, " \u{7} ")]).is_empty(),
+            "nothing is left of it, so it is no name at all"
+        );
+        let long = "x".repeat(ROW_NAME_MAX_CHARS + 1);
+        assert_eq!(
+            RowName::cleaned(&[n(4, &long)])[0].name.chars().count(),
+            ROW_NAME_MAX_CHARS
+        );
+
+        let cap = u32::try_from(ROW_NAMES_MAX).expect("the cap fits a row key");
+        let many: Vec<RowName> = (0..=cap).map(|i| n(i, "pool")).collect();
+        let kept = RowName::cleaned(&many);
+        assert_eq!(kept.len(), ROW_NAMES_MAX, "one past the cap is dropped");
+        assert_eq!(
+            kept.last().map(|r| r.row),
+            Some(cap - 1),
+            "and the one dropped is the one past the cap"
+        );
+
+        // A name with nothing left in it does not use up a place under the cap.
+        let mut padded = vec![n(9_999, "  ")];
+        padded.extend((0..cap).map(|i| n(i, "pool")));
+        assert_eq!(RowName::cleaned(&padded).len(), ROW_NAMES_MAX);
+    }
     use std::net::Ipv4Addr;
 
     fn sample_job() -> PollJob {

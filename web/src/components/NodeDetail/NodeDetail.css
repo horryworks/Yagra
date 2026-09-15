@@ -766,19 +766,14 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 .nd-if-row {
   min-height: 42px;
-  /* 🚨 A <button> carries a UA default `padding: 1px 6px`, and never resetting it made every data
-     row 12px narrower than the header and filter row it shares a grid template with — so the five
-     flexible tracks resolved to different widths in the three grids and every control sat slightly
-     off its heading. Found by `tests/ui/interfaceHeat.spec.ts` comparing the three resolved track
-     lists; the note above the template claimed they agreed, and nothing had ever checked. */
-  padding: 0;
-  border: none;
+  /* A <div> since ADR-145 decision 3 — the port name inside it is the button — so the resets a
+     <button> row needed (padding, border, background, text-align, color, font) are gone.
+     🚨 What they fixed still matters: a button's UA `padding: 1px 6px` made every data row 12px
+     narrower than the header and filter row it shares a grid template with, so the flexible tracks
+     resolved to different widths in the three grids. `tests/ui/interfaceHeat.spec.ts` compares the
+     three resolved track lists, and it is what fails if a row ever gains its own padding again. */
   border-bottom: var(--border-width) solid var(--border-color);
-  background: none;
   width: 100%;
-  text-align: left;
-  color: inherit;
-  font-family: inherit;
   cursor: pointer;
 }
 

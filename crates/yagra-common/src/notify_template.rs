@@ -424,6 +424,11 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
 /// The catalogue promises every variable resolves against *a* sample; `row_name` is the only one
 /// whose sample has to be this one. The tests check the union of the two, so a variable that
 /// resolves against neither still fails.
+///
+/// Test-only: the notification preview serves [`sample_facts`], and nothing in production asks
+/// for a row-scoped sample. Behind `test-util` rather than in a test module because the renderer's
+/// tests in `yagra-core` need it too.
+#[cfg(any(test, feature = "test-util"))]
 #[must_use]
 pub fn sample_row_facts(event: NotifyEvent) -> AlertFacts {
     AlertFacts {

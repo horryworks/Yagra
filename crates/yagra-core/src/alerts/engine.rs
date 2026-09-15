@@ -169,17 +169,19 @@ impl AlertManager {
     /// Remember what one node's vendor-table rows are called, from the poll result that read them
     /// (ADR-143). Called before that result's own samples are observed, so a rule scoped to a row
     /// name can match on the very poll that learned the name.
+    ///
+    /// Cleaned and capped here rather than trusted (ADR-143 Inc.2): the bus message says the poller
+    /// already did both, and nothing on this side held it to that. A name kept here becomes an
+    /// alert's `row_name`, which reaches every notification and `alert_history`.
     pub fn record_row_names(&self, node: NodeId, names: &[RowName]) {
+        let names = RowName::cleaned(names);
         if names.is_empty() {
             return;
         }
         let mut map = self.row_names.write().expect("row names rwlock poisoned");
         let per_node = map.entry(node).or_default();
         for n in names {
-            per_node
-                .entry(n.metric.clone())
-                .or_default()
-                .insert(n.row, n.name.clone());
+            per_node.entry(n.metric).or_default().insert(n.row, n.name);
         }
     }
 
@@ -5633,6 +5635,40 @@ mod row_tests {
         // The seed first, then a poll: the poll's name replaces the seeded one.
         mgr.record_row_names(node, &[name(MEM, 8, "MPU Board 1 (renamed)")]);
         assert_eq!(named(8).as_deref(), Some("MPU Board 1 (renamed)"));
+    }
+
+    /// ADR-143 Inc.2: the engine cleans and caps what it keeps rather than trusting the poller to
+    /// have done it — a name held here becomes an alert's `row_name` and reaches every notification.
+    #[test]
+    fn the_engine_keeps_a_cleaned_name_and_no_more_rows_than_the_cap() {
+        let (mgr, node) = setup(Vec::new());
+        let held_rows = || {
+            mgr.row_names
+                .read()
+                .unwrap()
+                .get(&node)
+                .and_then(|metrics| metrics.get(MEM))
+                .map_or(0, |rows| rows.len())
+        };
+
+        mgr.record_row_names(node, &[name(MEM, 7, "MPU\nBoard 0")]);
+        let named = mgr
+            .row_names
+            .read()
+            .unwrap()
+            .get(&node)
+            .and_then(|metrics| metrics.get(MEM))
+            .and_then(|rows| rows.get(&7))
+            .cloned();
+        assert_eq!(named.as_deref(), Some("MPU Board 0"));
+
+        let many: Vec<RowName> = (100..700).map(|row| name(MEM, row, "pool")).collect();
+        mgr.record_row_names(node, &many);
+        assert_eq!(
+            held_rows(),
+            1 + yagra_common::row_names::ROW_NAMES_MAX,
+            "row 7 from before, plus exactly the cap from a result that carried 600"
+        );
     }
 
     /// The accepting side first: a breaching row fires on its own check, named, and a healthy row

@@ -2,12 +2,43 @@
 import { describe, expect, it } from 'vitest';
 import {
   followedRow,
+  limitRows,
   memHeadline,
   memRangeQuery,
   memRows,
+  ROW_LIST_MAX,
   visibleRows,
   type MemRow,
 } from './rowBreakdown';
+
+describe('limitRows', () => {
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ row: i, value: n - i }));
+
+  // ADR-143 Inc.2: a 64-core host listed 64 lines under one card.
+  it('lists the first five and counts the rest', () => {
+    const { shown, more } = limitRows(rows(64));
+    expect(ROW_LIST_MAX).toBe(5);
+    expect(shown.map((r) => r.row)).toEqual([0, 1, 2, 3, 4]);
+    expect(more).toBe(59);
+  });
+
+  // The accepting edge: exactly the cap lists everything and leaves no "and N more" line behind.
+  it('leaves nothing out when there are no more rows than the cap', () => {
+    expect(limitRows(rows(5))).toEqual({ shown: rows(5), more: 0 });
+    expect(limitRows(rows(2))).toEqual({ shown: rows(2), more: 0 });
+  });
+
+  it('counts one left out when there is one more than the cap', () => {
+    const { shown, more } = limitRows(rows(6));
+    expect(shown).toHaveLength(5);
+    expect(more).toBe(1);
+  });
+
+  // The headline is `rows[0]`, so the cut must never be able to drop it.
+  it('keeps the first row, which is what the card headlines', () => {
+    expect(limitRows(rows(64)).shown[0]).toEqual(rows(64)[0]);
+  });
+});
 
 describe('memRows', () => {
   // The C2960S's own numbers (PoC fleet, 2026-09-15): the pools the old card could not tell apart.

@@ -739,6 +739,41 @@ impl VmStore {
     }
 }
 
+/// The three fleet-wide reads whose `rate()` window follows the slowest poll interval in the fleet
+/// (ADR-144 Inc.2). Timed so a deployment can say whether that widening costs anything before
+/// anyone changes how they read — the "about 48× the work" that prompted this was derived from the
+/// ratio of range to window, not measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FleetRead {
+    InterfaceTop,
+    InterfaceDelta,
+    FleetThroughput,
+}
+
+impl FleetRead {
+    /// The `read` label. A closed set of three, so the histogram adds three series and no more.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::InterfaceTop => "interface_top",
+            Self::InterfaceDelta => "interface_delta",
+            Self::FleetThroughput => "fleet_throughput",
+        }
+    }
+}
+
+const M_VM_READ_SECONDS: &str = "yagra_vm_read_seconds";
+const M_VM_FLEET_WINDOW_SECS: &str = "yagra_vm_fleet_window_secs";
+
+/// Record how long one fleet-wide read took and the window it read with.
+///
+/// Recorded when the read fails too: a read that times out is the slowest read there is, and
+/// leaving it out would make the histogram look healthiest exactly when it is not.
+fn record_fleet_read(read: FleetRead, window_secs: u64, started: std::time::Instant) {
+    metrics::histogram!(M_VM_READ_SECONDS, "read" => read.label())
+        .record(started.elapsed().as_secs_f64());
+    metrics::gauge!(M_VM_FLEET_WINDOW_SECS).set(window_secs as f64);
+}
+
 /// PromQL instant-vector selector for a thin-label series, e.g.
 /// `icmp_rtt_ms{node="…"}` (plus `ifindex` for per-interface series).
 fn selector(key: &SeriesKey) -> String {
@@ -1722,31 +1757,22 @@ impl MetricStore for VmStore {
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)> {
         let url = format!("{}/api/v1/query", self.base);
-        let resp = match self
-            .http
-            .get(&url)
-            .query(&[(
-                "query",
-                topk_interface_query(
-                    metric,
-                    agg,
-                    limit,
-                    self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS),
-                ),
-            )])
-            .send()
-            .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics interface topk query failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return Vec::new();
-        };
-        parse_top_interfaces(&json)
+        let w = self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS);
+        let query = topk_interface_query(metric, agg, limit, w);
+        let started = std::time::Instant::now();
+        let json = async {
+            let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tracing::warn!(error = %e, "VictoriaMetrics interface topk query failed");
+                    return None;
+                }
+            };
+            resp.json::<serde_json::Value>().await.ok()
+        }
+        .await;
+        record_fleet_read(FleetRead::InterfaceTop, w, started);
+        json.as_ref().map_or_else(Vec::new, parse_top_interfaces)
     }
 
     async fn interface_candidates(
@@ -1882,15 +1908,22 @@ impl MetricStore for VmStore {
         let url = format!("{}/api/v1/query", self.base);
         // The comparison window is also each rate's window, so it must hold two polls of the
         // slowest node or "now" and "then" are both empty for it (ADR-144).
-        let query = interface_delta_query(direction, self.fleet_window(window_secs), limit);
-        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics interface-delta query failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
+        let w = self.fleet_window(window_secs);
+        let query = interface_delta_query(direction, w, limit);
+        let started = std::time::Instant::now();
+        let json = async {
+            let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tracing::warn!(error = %e, "VictoriaMetrics interface-delta query failed");
+                    return None;
+                }
+            };
+            resp.json::<serde_json::Value>().await.ok()
+        }
+        .await;
+        record_fleet_read(FleetRead::InterfaceDelta, w, started);
+        let Some(json) = json else {
             return Vec::new();
         };
         let mut out = parse_top_interfaces(&json);
@@ -1916,10 +1949,12 @@ impl MetricStore for VmStore {
         let in_q = fleet_throughput_query("if_hc_in_octets", w);
         let out_q = fleet_throughput_query("if_hc_out_octets", w);
         // The in/out range queries are independent — run them concurrently.
+        let started = std::time::Instant::now();
         let (in_pts, out_pts) = tokio::join!(
             self.query_range_points(in_q, from_s, to_s, step_s),
             self.query_range_points(out_q, from_s, to_s, step_s),
         );
+        record_fleet_read(FleetRead::FleetThroughput, w, started);
         (in_pts, out_pts)
     }
 

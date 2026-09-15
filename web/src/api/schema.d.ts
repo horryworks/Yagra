@@ -5838,7 +5838,7 @@ export interface components {
          * @description Where one poller has got to in a convergence.
          * @enum {string}
          */
-        ConvergeState: "waiting" | "prefetching" | "applying" | "returned" | "failed" | "skipped";
+        ConvergeState: "waiting" | "prefetching" | "applying" | "returned" | "failed" | "skipped" | "not_connected";
         /**
          * @description A convergence, running or finished.
          *

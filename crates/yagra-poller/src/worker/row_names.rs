@@ -29,9 +29,8 @@ use yagra_common::row_names::{row_name_source, sanitize_row_name, RowNameSource}
 /// table job already held, so it is bounded on its own rather than borrowing the job's budget.
 const NAME_WALK_BUDGET: Duration = Duration::from_secs(20);
 
-/// The most names one result carries. Bounded because the bus message is, and because a device that
-/// reported thousands of non-zero rows would be naming something this feature was not built for.
-pub(super) const ROW_NAMES_MAX: usize = 512;
+/// The most names one result carries — the same cap core applies on receipt, kept in one place.
+pub(super) use yagra_common::row_names::ROW_NAMES_MAX;
 
 /// Whether a job of this kind can carry the row-name walk. Only a table walk produces row keys, and
 /// `stream.rs` asks this rather than naming the kinds itself (`guards.rs`).

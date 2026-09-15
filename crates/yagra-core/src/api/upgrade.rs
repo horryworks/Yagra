@@ -314,50 +314,20 @@ async fn get_upgrade(
     admin: Admin,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<UpgradeStatusResponse>> {
-    upgrade_status(&upgrade, st.started, &poller_builds(&admin))
-        .await
-        .map(Json)
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "read the migration history",
-                "failed to read the migration history",
-            )
-        })
-}
-
-/// The poller fleet, reduced to what the upgrade view asks of it.
-///
-/// ⚠️ **Offline pollers are included, and used to be filtered out here.** An upgrade may only act on
-/// a poller that is running — that filter still exists, but it belongs where the acting happens.
-/// Applying it to the *view* meant a site that died during its own upgrade dropped out of the list
-/// and the deployment reported itself aligned (ADR-051 Inc.6).
-pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::PollerBuild> {
-    let now = std::time::Instant::now();
-    admin
-        .coordinator
-        .poller_views(now)
-        .into_iter()
-        .map(|v| crate::upgrade::PollerBuild {
-            // Whatever its site updater last said, carried on the build so the set that decides
-            // *who moves* and the set that shows *how each is going* are one list and cannot
-            // disagree about which row is which poller.
-            upgrade: v
-                .upgrade
-                .as_ref()
-                .map(crate::upgrade::PollerUpgradeProgress::from),
-            self_upgrades: v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE),
-            // The site updater beside it saying an apply will not damage that site (ADR-051
-            // Inc.7). Read from the same list and never inferred from the poller's version: the
-            // hazard is in the site's composition, which a poller upgraded on its own leaves
-            // untouched — see `CAP_SITE_PREPARED`.
-            site_prepared: v.caps.iter().any(|c| c == yagra_bus::CAP_SITE_PREPARED),
-            version: (!v.version.is_empty()).then_some(v.version),
-            online: v.online,
-            pool: v.pool,
-            id: v.id,
-        })
-        .collect()
+    upgrade_status(
+        &upgrade,
+        st.started,
+        &crate::upgrade::poller_builds(&admin.coordinator),
+    )
+    .await
+    .map(Json)
+    .map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "read the migration history",
+            "failed to read the migration history",
+        )
+    })
 }
 
 /// The updater sidecar's own state, from its heartbeat.
@@ -692,7 +662,7 @@ async fn start_convergence(
             "not a release tag; a poller is moved to a published release, not to a bare version",
         ));
     }
-    let fleet = poller_builds(admin);
+    let fleet = crate::upgrade::poller_builds(&admin.coordinator);
     // `local` is `None` here rather than the updater's list, and that is not a shortcut: this route
     // must work on a deployment with no central updater at all, and a co-located poller does not
     // advertise `CAP_SELF_UPGRADE` (only core is given `YAGRA_UPGRADE_DIR`), so `movable_to`
@@ -732,19 +702,8 @@ async fn start_convergence(
         // follow the checkboxes reads the same when it matters as when it does not.
         dark_pools: crate::upgrade::dark_pools(&fleet, &ids),
     };
-    let now = std::time::Instant::now();
-    let targets: Vec<crate::poller_upgrade::Target> = admin
-        .coordinator
-        .poller_views(now)
-        .into_iter()
-        .filter(|v| ids.contains(&v.id.as_str()))
-        .map(|v| crate::poller_upgrade::Target {
-            id: v.id,
-            pool: v.pool,
-            version: v.version,
-            incarnation: v.incarnation,
-        })
-        .collect();
+    let chosen_ids: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
+    let targets = crate::poller_upgrade::targets(&admin.coordinator, &chosen_ids);
     let run = crate::poller_upgrade::Run {
         bus,
         coordinator: admin.coordinator.clone(),
@@ -759,8 +718,11 @@ async fn start_convergence(
     // shutdown behaviour to attach. Killed mid-run, the sites already reached are on the new build
     // and the rest are on the old one, which is exactly where a failed convergence leaves them
     // anyway (decision 9). The lock moves into the task, so it is released however the task ends.
+    //
+    // Nobody is absent here: core has been running all along, so `movable_to` only ever names a
+    // poller that is connected now (ADR-051 Inc.8 is about the moment right after a restart).
     tokio::spawn(async move {
-        crate::poller_upgrade::converge(run, targets, lock).await;
+        crate::poller_upgrade::converge(run, targets, Vec::new(), lock).await;
     });
     Ok(ack)
 }

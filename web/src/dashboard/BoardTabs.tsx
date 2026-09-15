@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/Field';
 import { Modal } from '../components/ui/Modal';
-import { useLayoutStoreContext } from './LayoutStoreContext';
+import { useLayoutStoreContext } from './layoutStoreHook';
 import './BoardTabs.css';
 
 export function BoardTabs({ editing }: { editing: boolean }) {
