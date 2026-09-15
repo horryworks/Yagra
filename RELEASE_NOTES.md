@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **Pin nodes and folders, and show only what you pinned.** Right-click a node or folder in All nodes and choose Pin, or press Pin in its detail pane. A new "Pinned only" button right of Filter narrows the tree to the pinned nodes, the pinned folders with everything inside them, and the folders above both. Pins belong to your account, so they follow you to another machine, and so does the button's state; deleting a node or folder removes its pins. Any signed-in account can pin, up to 500 pins. The API is `GET /api/v1/pins` plus `PUT` / `DELETE` on `/api/v1/pins/nodes/{node_id}` and `/api/v1/pins/groups/{group_id}` — each pin change is written to the audit log, and a pin on a node or folder outside your scope answers 404.
+
 ### Improvements
 
 - **Device health cards list at most five rows.** A card for a CPU, a sensor or a memory pool used to list every row the device reports — 64 lines for a 64-core host. It now lists the five highest and ends with "and N more".

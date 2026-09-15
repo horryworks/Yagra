@@ -46,6 +46,9 @@
 //! * **`user_preferences`** — per-account WebUI chrome (ADR-058), an opaque blob nothing on this
 //!   side parses. It belongs to a *person*, not to a deployment's configuration, and carrying it
 //!   would move one operator's screen settings onto another deployment's accounts.
+//! * **`user_pins`** — which nodes and folders one account keeps within reach of its tree
+//!   (ADR-146). Personal for the same reason as `user_preferences`, and keyed to accounts the
+//!   bundle does not carry either.
 //! * **`maintenance_windows` / `mutes`** — bounded-in-time operational state, not configuration.
 //! * **The four retention windows of `app_settings`** — retention is a policy of the *target*
 //!   deployment (its disks, its compliance window), and lowering one deletes data. An import is not

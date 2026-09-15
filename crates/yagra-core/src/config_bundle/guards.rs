@@ -218,7 +218,8 @@ fn writes(code: &str, vocab: &BTreeSet<String>) -> Vec<String> {
 ///
 /// This is the module doc's "what is deliberately not carried" list — users, api_tokens,
 /// oidc_providers, credentials, notification_channels, routing_rules, llm_config, ldap_config,
-/// meraki_*, pollers, mib_catalog, user_dashboards, user_preferences, maintenance_windows, mutes —
+/// meraki_*, pollers, mib_catalog, user_dashboards, user_preferences, user_pins, maintenance_windows,
+/// mutes —
 /// as a build failure rather than as forty lines of prose. Every one of those exclusions is a
 /// decision with its reason beside it, and the sharpest is the first: an import is a write path, so
 /// carrying accounts across would make "restore a config" the shortest route to granting yourself a

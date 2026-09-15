@@ -14871,6 +14871,317 @@
         ]
       }
     },
+    "/api/v1/pins": {
+      "get": {
+        "tags": [
+          "pins"
+        ],
+        "summary": "The caller's pinned folders and nodes, narrowed to what the caller may see.",
+        "operationId": "list_pins",
+        "responses": {
+          "200": {
+            "description": "The caller's pinned folders and nodes, narrowed to what the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pins"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token — pins are keyed by account, so this stays closed in public-dashboard mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An API token names no person, so it has no pins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pins/groups/{group_id}": {
+      "put": {
+        "tags": [
+          "pins"
+        ],
+        "summary": "Pin a folder. The tree shows it with everything beneath it. Repeating it is not an error.",
+        "operationId": "pin_group",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The folder is pinned (or already was)"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An API token names no person, so it cannot pin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder, not one this caller may see, or the session's account no longer exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The account already holds the maximum number of pins (`pin_limit`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pins"
+        ],
+        "summary": "Remove the caller's pin on a folder.",
+        "operationId": "unpin_group",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The folder is not pinned (whether or not it was)"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An API token names no person, so it has no pins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pins/nodes/{node_id}": {
+      "put": {
+        "tags": [
+          "pins"
+        ],
+        "summary": "Pin a node. Repeating it is not an error.",
+        "operationId": "pin_node",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The node is pinned (or already was)"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An API token names no person, so it cannot pin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node, not one this caller may see, or the session's account no longer exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The account already holds the maximum number of pins (`pin_limit`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pins"
+        ],
+        "summary": "Remove the caller's pin on a node.",
+        "operationId": "unpin_node",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The node is not pinned (whether or not it was)"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An API token names no person, so it has no pins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/poller-health": {
       "get": {
         "tags": [
@@ -32019,6 +32330,31 @@
           },
           "label": {
             "type": "string"
+          }
+        }
+      },
+      "Pins": {
+        "type": "object",
+        "description": "The caller's pins, as the inventory tree draws them.",
+        "required": [
+          "group_ids",
+          "nodes"
+        ],
+        "properties": {
+          "group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Pinned folders the caller may see. The tree shows each one with everything beneath it."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeSummary"
+            },
+            "description": "Pinned nodes the caller may see, as full inventory rows. A pinned node usually sits in a\nfolder the tree has not loaded, so its row cannot come from anywhere else."
           }
         }
       },

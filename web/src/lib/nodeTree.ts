@@ -8,6 +8,7 @@ import { GROUP_TYPES } from '../types/api';
 import type { GroupType, NodeGroup, NodeState, NodeSummary } from '../types/api';
 import { pushInto } from './mapBucket';
 import { DISPLAY_ORDER, PROBLEM_STATES, emptyStateCounts } from './nodeState';
+import { pinnedGroupShown, pinnedNodeShown, type PinnedView } from './pins';
 
 /** Re-exported for the health-bar/legend call sites that read "the order states are shown in".
  *  The definition lives in `nodeState.ts` with the rest of the NodeState vocabulary. */
@@ -231,23 +232,6 @@ export function revealedGroupKeys(groups: NodeGroup[], filter: string, cap: numb
   return out;
 }
 
-/** Whether a group's subtree contains anything matching `q` (its own name, a descendant group's
- *  name, or a member node's name) — so ancestor groups stay visible to reveal a nested match. */
-function subtreeMatches(group: TreeGroup, q: string): boolean {
-  if (group.name.toLowerCase().includes(q)) return true;
-  if (group.nodes.some((n) => n.name.toLowerCase().includes(q))) return true;
-  return group.children.some((c) => subtreeMatches(c, q));
-}
-
-/** Whether anything at all is under this group.
- *
- *  The counterpart of {@link subtreeMatches} for the `narrowed` mode, where there is no term to
- *  match against: the caller has already handed in exactly the nodes that survived a state / kind /
- *  pool filter, so "has a row" *is* "matches". */
-function subtreeHasNodes(group: TreeGroup): boolean {
-  return group.nodes.length > 0 || group.children.some(subtreeHasNodes);
-}
-
 /** Flip one folder in a collapse set, returning a new set. Shared by the saved layout
  *  (`prefs.ts::toggleNodeTreeGroup`) and the filter's own set below, so "collapsed" is spelled
  *  one way in both. */
@@ -284,8 +268,16 @@ export const NO_FILTER_COLLAPSE: FilterCollapse = Object.freeze({
  *
  *  ⚠️ `narrowed` alone is not enough — it is a boolean, so Critical → Warning leaves it `true`, and a
  *  folder collapsed under the first question would stay collapsed over the second one's matches. */
-export function treeFilterKey(filter: string, narrowed: boolean, narrowKey: string): string {
-  return JSON.stringify([filterTerm(filter), narrowed ? narrowKey : '']);
+export function treeFilterKey(
+  filter: string,
+  narrowed: boolean,
+  narrowKey: string,
+  pinnedOnly = false,
+): string {
+  const key = [filterTerm(filter), narrowed ? narrowKey : ''];
+  // Pinned only (ADR-146) is a different question too. Appended only while it is on, so every key a
+  // filter produced before it existed is unchanged.
+  return JSON.stringify(pinnedOnly ? [...key, 'pinned'] : key);
 }
 
 /** The collapse set for the filter `key` names: what was collapsed under that same filter, and
@@ -365,6 +357,9 @@ export function flattenTree(
     /** The folders collapsed while this filter is on ({@link FilterCollapse}). Read only while
      *  narrowing — browsing reads `collapsed`, and filtering never does. */
     filterCollapsed?: Readonly<Record<string, true>>;
+    /** Pinned only (ADR-146): keep what this view keeps — pinned folders whole, pinned nodes, and
+     *  the folders above both as a path. Omit when the switch is off. */
+    pinned?: PinnedView;
   },
 ): FlatRow[] {
   const q = filterTerm(opts.filter);
@@ -372,7 +367,19 @@ export function flattenTree(
   // name*; `narrowing` decides whether the tree is showing a filtered set at all — which is what
   // force-expansion, hiding an empty folder and the ungrouped header turn on.
   const byTerm = q.length > 0;
-  const narrowing = byTerm || opts.narrowed === true;
+  const pinned = opts.pinned;
+  // 🚨 **A third question since ADR-146, and it must not borrow the second one's rules.** `searching`
+  // means the rows in hand are a search's answer (a term, or the server-side filters). Pinned only
+  // narrows too, but it narrows the BROWSE tree: its folders still fetch their members lazily. Had it
+  // joined `searching`, a pinned folder would count as loaded (no placeholder, so nothing fetched) and
+  // as empty (no rows yet, so hidden) — and would never show a single member.
+  const searching = byTerm || opts.narrowed === true;
+  const narrowing = searching || pinned !== undefined;
+  const nameMatches = (name: string) => name.toLowerCase().includes(q);
+  /** Pinned only keeps this folder's row — always true while the switch is off. */
+  const groupKept = (id: string) => !pinned || pinnedGroupShown(pinned, id);
+  /** Pinned only keeps this node's row — always true while the switch is off. */
+  const nodeKept = (n: NodeSummary) => !pinned || pinnedNodeShown(pinned, n);
   const rows: FlatRow[] = [];
   const counts = opts.groupCounts;
   // The counts are on their way (ADR-133). Everything below asks this BEFORE it asks `counts`,
@@ -387,7 +394,7 @@ export function flattenTree(
   // being fetched separately, because the term matched the folder rather than its contents) can be
   // waiting on anything.
   const isLoaded = (id: string) =>
-    narrowing
+    searching
       ? !opts.revealedGroups?.has(id) || (opts.loadedGroups?.has(id) ?? true)
       : !opts.loadedGroups || opts.loadedGroups.has(id);
 
@@ -400,9 +407,48 @@ export function flattenTree(
    * from anything simpler would put a figure beside the bar that the rows below contradict.
    */
   const visibleNodes = (group: TreeGroup, ancestorMatch: boolean): NodeSummary[] => {
-    const eff = ancestorMatch || (byTerm && group.name.toLowerCase().includes(q));
-    const own = group.nodes.filter((n) => !byTerm || eff || n.name.toLowerCase().includes(q));
+    if (!groupKept(group.id)) return [];
+    const eff = ancestorMatch || (byTerm && nameMatches(group.name));
+    const own = group.nodes.filter((n) => nodeKept(n) && (!byTerm || eff || nameMatches(n.name)));
     return [...own, ...group.children.flatMap((c) => visibleNodes(c, eff))];
+  };
+
+  /**
+   * Whether anything under `group` survives the search, so the folders above a match stay on screen:
+   * its own name or a descendant folder's matching the term, or — with no term, only the server's
+   * filters — any row at all. Counts only what Pinned only keeps.
+   *
+   * ⚠️ One predicate where there were two (`subtreeMatches` / `subtreeHasNodes`): neither could ask
+   * the pinned question, and a third copy that could was the drift waiting to happen.
+   */
+  const survivesSearch = (group: TreeGroup): boolean => {
+    if (!groupKept(group.id)) return false;
+    if (byTerm && nameMatches(group.name)) return true;
+    if (group.nodes.some((n) => nodeKept(n) && (!byTerm || nameMatches(n.name)))) return true;
+    return group.children.some(survivesSearch);
+  };
+
+  /**
+   * A folder that is only ABOVE the pins, under Pinned only: its bar covers what its rows show — the
+   * whole-folder rollup of each pinned folder beneath it, plus the pinned nodes beneath it that no
+   * pinned folder already counts (ADR-146). Its own membership would describe rows it hides, which
+   * is the mistake the narrowing tally below was changed to stop making.
+   */
+  const pinnedAncestorCounts = (
+    group: TreeGroup,
+    sub: Map<string, StateTally>,
+  ): StateCounts => {
+    const acc = emptyStateCounts();
+    for (const n of group.nodes) if (pinned?.nodes.has(n.id)) acc[n.state] += 1;
+    for (const child of group.children) {
+      const add = pinned?.subtree.has(child.id)
+        ? sub.get(child.id)?.counts
+        : pinned?.ancestors.has(child.id)
+          ? pinnedAncestorCounts(child, sub)
+          : undefined;
+      if (add) for (const s of DISPLAY_ORDER) acc[s] += add[s];
+    }
+    return acc;
   };
 
   const walkGroup = (group: TreeGroup, depth: number, ancestorMatch: boolean): void => {
@@ -417,9 +463,10 @@ export function flattenTree(
     // the `if` — so every browse-mode flatten walked every subtree and threw the answer away one
     // line later. That is O((groups + nodes) × depth) per flatten, and a flatten runs once per
     // arriving `/nodes/by-group` response. `&&` short-circuits, so browsing now walks nothing.
-    if (narrowing && !effMatch && !(byTerm ? subtreeMatches(group, q) : subtreeHasNodes(group))) {
-      return;
-    }
+    // ⚠️ Pinned only on its own asks nothing of the subtree: a pinned folder whose members have not
+    // arrived has no rows yet, and hiding it for that would stop it ever asking for them.
+    if (!groupKept(group.id)) return;
+    if (searching && !effMatch && !survivesSearch(group)) return;
 
     // Narrowing never reads the saved layout, so a folder closed while browsing cannot hide its own
     // match (ADR-053 Inc.6). It reads its own set instead, which starts empty for every new filter
@@ -436,13 +483,19 @@ export function flattenTree(
     // filter is on.
     // ⚠️ `pending` is asked before `subtree`, not after. Narrowing still wins outright: it tallies
     // the rows it is about to draw, which needs no server answer.
-    const tally: StateTally | null = narrowing
+    // Under Pinned only with no search, a pinned folder is shown whole, so it reads exactly as it
+    // does when browsing; a folder above the pins counts only what it shows (`pinnedAncestorCounts`).
+    const tally: StateTally | null = searching
       ? tallyStates(visibleNodes(group, ancestorMatch))
       : pending
         ? null
-        : subtree
-          ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
-          : tallyStates(descendantNodes(group));
+        : pinned && !pinned.subtree.has(group.id)
+          ? subtree
+            ? tallyFromCounts(pinnedAncestorCounts(group, subtree))
+            : tallyStates(visibleNodes(group, ancestorMatch))
+          : subtree
+            ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
+            : tallyStates(descendantNodes(group));
     const directTotal = counts ? countsTotal(counts[group.id] ?? emptyStateCounts()) : group.nodes.length;
     // A twisty is offered when the group has sub-groups or any (counted or loaded) member below it
     // — and, while the counts are pending, whenever the members have not arrived either. We cannot
@@ -464,7 +517,7 @@ export function flattenTree(
     // Only a term rejects a node here — the state / kind / pool filters already did their rejecting
     // server-side, so every node still in hand is one the operator asked for.
     const shown = group.nodes.filter(
-      (n) => !byTerm || effMatch || n.name.toLowerCase().includes(q),
+      (n) => nodeKept(n) && (!byTerm || effMatch || nameMatches(n.name)),
     );
     for (const n of shown) rows.push({ kind: 'node', depth: depth + 1, node: n });
     // Members still arriving: one placeholder standing in for the rest. What we already have goes
@@ -473,7 +526,9 @@ export function flattenTree(
     // 🚨 **`pending ||` is what starts the very first fetch.** `directTotal` is 0 until the counts
     // land, so without it this reads `0 > 0` for every folder and the tree asks for nothing — see
     // `countsPending`'s own note, which is where the failure that motivated it is written down.
-    if (!isLoaded(group.id) && (pending || directTotal > shown.length)) {
+    // A folder that is only above the pins shows a path, not its members, so it asks for none.
+    const wantsMembers = !pinned || pinned.subtree.has(group.id);
+    if (wantsMembers && !isLoaded(group.id) && (pending || directTotal > shown.length)) {
       // A failed fetch is not a slow one, and drawing it as one leaves the operator waiting on
       // something that is never coming (ADR-125). The failed row carries the retry control.
       const kind = opts.failedGroups?.has(group.id) ? 'group-failed' : 'group-loading';
@@ -483,9 +538,10 @@ export function flattenTree(
 
   for (const g of tree.roots) walkGroup(g, 0, false);
 
-  const ungroupedShown = byTerm
-    ? tree.ungrouped.filter((n) => n.name.toLowerCase().includes(q))
-    : tree.ungrouped;
+  const ungroupedShown =
+    byTerm || pinned
+      ? tree.ungrouped.filter((n) => nodeKept(n) && (!byTerm || nameMatches(n.name)))
+      : tree.ungrouped;
   // Show the ungrouped header + its root drop zone whenever there's any inventory (so the drop zone
   // is reachable next to the groups), but not while narrowing with nothing ungrouped to show, and
   // not for a completely empty inventory (the page shows its own empty-state message instead).
@@ -493,7 +549,11 @@ export function flattenTree(
     ? ungroupedShown.length > 0
     : tree.roots.length > 0 || tree.ungrouped.length > 0;
   if (showUngrouped) {
-    rows.push({ kind: 'ungrouped-head', count: tree.ungrouped.length });
+    // Under Pinned only the header counts the pins it shows; the whole bucket is not what is on screen.
+    rows.push({
+      kind: 'ungrouped-head',
+      count: pinned ? ungroupedShown.length : tree.ungrouped.length,
+    });
     for (const n of ungroupedShown) rows.push({ kind: 'ungrouped-node', depth: 1, node: n });
   }
   return rows;

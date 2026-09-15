@@ -263,13 +263,13 @@ mod tests {
         ("analysis_schedules", 1),
     ];
 
-    /// The fifteen tables the module doc says a bundle deliberately does not carry.
+    /// The sixteen tables the module doc says a bundle deliberately does not carry.
     ///
     /// `config_bundle/guards.rs` already refuses a *write* to any of them by reading this module's
     /// text. This is the other half: the import actually runs, and they are still empty afterwards.
     /// A guard that reads text cannot see a write performed through a helper.
     #[cfg(test)]
-    const NEVER_CARRIED: [&str; 15] = [
+    const NEVER_CARRIED: [&str; 16] = [
         "users",
         "api_tokens",
         "credentials",
@@ -284,6 +284,7 @@ mod tests {
         "user_dashboards",
         "shared_dashboard",
         "user_preferences",
+        "user_pins",
         "maintenance_windows",
     ];
 

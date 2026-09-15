@@ -20,6 +20,7 @@ const caps = (over: Partial<MenuCapabilities> = {}): MenuCapabilities => ({
   canEdit: false,
   canSuppress: false,
   canAddNode: false,
+  canPin: false,
   ...over,
 });
 
@@ -31,6 +32,14 @@ describe('which right-click menus have anything in them', () => {
     expect(groupMenuHasItems(caps({ canSuppress: true }))).toBe(true);
     expect(groupMenuHasItems(caps({ canAddNode: true }))).toBe(true);
     expect(groupMenuHasItems(caps({ canEdit: true }))).toBe(true);
+  });
+
+  it('opens a group menu for a viewer, whose one item is the pin (ADR-146)', () => {
+    // The same regression shape again: a Viewer holds none of the three permissions above, and a
+    // folder menu gated on them would give a Viewer no way to pin a folder by right-click.
+    expect(groupMenuHasItems(caps({ canPin: true }))).toBe(true);
+    // Pinning adds nothing to the root menu, whose one item is adding a node.
+    expect(rootMenuHasItems(caps({ canPin: true }))).toBe(false);
   });
 
   it('withholds a group menu only when every item is gone', () => {

@@ -64,6 +64,7 @@ pub(crate) mod nodes;
 mod notifications;
 mod oidc;
 pub mod openapi;
+mod pins;
 pub(crate) mod pollers;
 pub(crate) mod pools;
 mod preferences;
@@ -171,6 +172,8 @@ pub struct AdminState {
     pub public_dashboard: Arc<crate::dashboard::PublicDashboardRepo>,
     /// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
     pub prefs: Arc<UserPrefsRepo>,
+    /// Per-account pins on the inventory tree (ADR-146).
+    pub pins: Arc<crate::pins::UserPinsRepo>,
     /// Live poll-loop self-monitoring counters (the poller-health endpoint).
     pub scheduler_stats: Arc<crate::scheduler::SchedulerStats>,
     /// On-demand poll dispatch (the "poll now" action) — shares the scheduler's job-building so a
@@ -439,6 +442,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(public_dashboard::routes())
         // Per-account WebUI preferences (ADR-058), in `api/preferences.rs`.
         .merge(preferences::routes())
+        // Per-account pins on the inventory tree (ADR-146), in `api/pins.rs`.
+        .merge(pins::routes())
         .merge(mib::routes())
         .merge(api_tokens::routes())
         .merge(session::routes())
@@ -606,6 +611,12 @@ fn changes_monitoring_config(path: &str) -> bool {
         || path == "/api/v1/preferences"
         || path == "/api/v1/dashboard"
         || path == "/api/v1/shared-dashboard"
+        // One account's pins on the inventory tree (ADR-146). Real writes, like the three above,
+        // and read by no rebuild: they decide which rows one person's tree shows, never what is
+        // polled or alerted on. A prefix because the target id is in the path; nothing else lives
+        // under `/api/v1/pins/`, and the trailing slash keeps a sibling like `/api/v1/pinsets`
+        // from inheriting it.
+        || path.starts_with("/api/v1/pins/")
         // Resolving a batch of node ids to display names (`useEntityNames`). A `RequireView` read
         // that is a POST only because the id list is too long for a query string — and it fires on
         // **every** table that renders a node reference, which made it the largest source of
@@ -1655,6 +1666,26 @@ mod tests {
         // that has to argue for its own exemption rather than inheriting one.
         assert!(changes_monitoring_config("/api/v1/dashboards"));
         assert!(changes_monitoring_config("/api/v1/preferences/reset"));
+    }
+
+    /// Pinning is one account's navigation (ADR-146): it must not rebuild the fleet's poll specs.
+    ///
+    /// The one prefix among the presentation exemptions, because the pinned id is in the path. The
+    /// second half pins the trailing slash — a sibling route whose name merely starts with `pins`
+    /// has to argue for its own exemption.
+    #[test]
+    fn pinning_does_not_dirty_the_config_generation() {
+        let id = "8c7e1b0a-0000-4000-8000-000000000001";
+        for path in [
+            format!("/api/v1/pins/nodes/{id}"),
+            format!("/api/v1/pins/groups/{id}"),
+        ] {
+            assert!(
+                !changes_monitoring_config(&path),
+                "{path} must not invalidate"
+            );
+        }
+        assert!(changes_monitoring_config("/api/v1/pinsets"));
     }
 
     /// 🚨 Proposing a move must not rebuild the fleet's poll specs; making one must.

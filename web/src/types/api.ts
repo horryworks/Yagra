@@ -221,6 +221,8 @@ export type Alert = components['schemas']['ActiveAlertView'];
 
 /** A node row for inventory listings. */
 export type NodeSummary = components['schemas']['NodeSummary'];
+/** The signed-in account's pins on the inventory tree (ADR-146). */
+export type Pins = components['schemas']['Pins'];
 
 /** What the IP-range match proposes for a set of nodes (`POST /api/v1/nodes/move-preview`).
  *  A proposal — nothing has moved when this arrives (ADR-124 決定 6). */

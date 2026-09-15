@@ -24,6 +24,7 @@ import { appView } from './appGate';
 import { PublicShell } from './dashboard/PublicDashboardPage';
 import { applyLanguage, applyTheme, usePrefsStore } from './prefs';
 import { loadServerPrefs, resetServerPrefs } from './serverPrefs';
+import { usePinsStore } from './pinsStore';
 import { applyViewportMode, useViewportMode } from './lib/viewport';
 import i18n from './i18n';
 import { useAuthStore, useConfigStore } from './store';
@@ -89,12 +90,17 @@ export function App() {
   // precondition for rendering role-gated UI, whereas this one only refines values the local store
   // already holds — it must never gate, retry or report. Signing out resets the sync so the next
   // account does not inherit the previous one's "endpoint unsupported" verdict.
+  //
+  // The account's pins ride along (ADR-146), for the same two reasons: they follow the person, and a
+  // sign-out must not leave one account's pins drawn for the next.
   useEffect(() => {
     if (!authed || !getToken()) {
       resetServerPrefs();
+      usePinsStore.getState().reset();
       return;
     }
     void loadServerPrefs();
+    void usePinsStore.getState().load();
   }, [authed]);
 
   // Reflect the persisted theme onto <html data-theme> (and keep it in sync on change).

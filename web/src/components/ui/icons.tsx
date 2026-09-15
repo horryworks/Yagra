@@ -24,6 +24,16 @@ export function SearchIcon(props: IconProps) {
   );
 }
 
+/** A pushpin — a node or folder pinned on the inventory tree (ADR-146). */
+export function PinIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z" />
+      <path d="M12 14v7" />
+    </svg>
+  );
+}
+
 export function HashIcon(props: IconProps) {
   return (
     <svg {...base(props)} strokeWidth="1.8" strokeLinecap="round">

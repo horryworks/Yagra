@@ -52,7 +52,8 @@ import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
 import { ActionMenu } from '../ui/ActionMenu';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
-import { WrenchIcon, BellIcon, BellOffIcon } from '../ui/icons';
+import { WrenchIcon, BellIcon, BellOffIcon, PinIcon } from '../ui/icons';
+import { nothingPinned, type PinnedView } from '../../lib/pins';
 import { HealthBar } from '../HealthBar/HealthBar';
 import {
   dropAction,
@@ -247,6 +248,13 @@ interface Props {
   /** Right-click → aim a discovery sweep at this folder's IP prefixes (ADR-100 decision 10).
    *  Shown only for a folder that carries some — see `canRunDiscovery`. Omit to hide the item. */
   onRunDiscovery?: (group: NodeGroup) => void;
+  /** The signed-in account's pins (ADR-146): the pin marks, and — with `pinnedOnly` — which rows
+   *  are kept. Omit while pins are unavailable (a core without the endpoint, or not loaded yet). */
+  pins?: PinnedView;
+  /** Show only what `pins` keeps: pinned folders whole, pinned nodes, and the folders above both. */
+  pinnedOnly?: boolean;
+  /** Right-click → pin or unpin a node or folder. Omit to hide the item. */
+  onTogglePin?: (target: { kind: 'node' | 'group'; id: string }) => void;
 }
 
 export function NodeTree({
@@ -298,6 +306,9 @@ export function NodeTree({
   pools,
   onSetPool,
   onRunDiscovery,
+  pins,
+  pinnedOnly,
+  onTogglePin,
 }: Props) {
   const { t } = useTranslation('nodes');
   const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
@@ -318,7 +329,10 @@ export function NodeTree({
   // non-matching rows are hidden, so matches are always revealed — and a group matched by its own
   // name reveals its whole subtree, members included.
   const q = filterTerm(filter ?? '');
-  const filtering = q.length > 0 || narrowed === true;
+  // Pinned only narrows the tree as well (ADR-146), so it takes the filter's collapse set, not the
+  // saved layout — a folder closed while browsing must not hide a pin.
+  const pinnedFilter = pinnedOnly ? pins : undefined;
+  const filtering = q.length > 0 || narrowed === true || pinnedFilter !== undefined;
   // What the operator collapsed under THIS filter (ADR-053 Inc.11). Never the saved layout: the
   // twisty used to write that one while the rows ignored it, so it did nothing on screen and
   // changed the tree the operator came back to.
@@ -326,7 +340,12 @@ export function NodeTree({
   // Leaving the filter forgets it, so typing the same term again starts open too. Adjusted during
   // render rather than in an effect, which would paint one frame of the stale set first.
   if (!filtering && heldCollapse !== NO_FILTER_COLLAPSE) setHeldCollapse(NO_FILTER_COLLAPSE);
-  const collapseKey = treeFilterKey(filter ?? '', narrowed === true, narrowKey ?? '');
+  const collapseKey = treeFilterKey(
+    filter ?? '',
+    narrowed === true,
+    narrowKey ?? '',
+    pinnedFilter !== undefined,
+  );
   const filterCollapsed = filterCollapseFor(heldCollapse, collapseKey);
   // The flattened, display-ordered list of visible rows — the single source of truth the virtualized
   // body renders (collapse state + filter applied). Only the on-screen window is turned into DOM, so
@@ -343,6 +362,7 @@ export function NodeTree({
         loadedGroups,
         revealedGroups,
         failedGroups,
+        pinned: pinnedFilter,
       }),
     [
       tree,
@@ -355,6 +375,7 @@ export function NodeTree({
       loadedGroups,
       revealedGroups,
       failedGroups,
+      pinnedFilter,
     ],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -421,6 +442,7 @@ export function NodeTree({
     canEdit,
     canSuppress: !!onSetMaintenance || !!onSetMute,
     canAddNode: !!onAddNode,
+    canPin: !!onTogglePin,
   };
 
   // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active, plus
@@ -781,6 +803,12 @@ export function NodeTree({
         >
           {group.name}
         </button>
+        {/* A mark, not a control: pinning is in the row's menu and the detail pane. */}
+        {pins?.groups.has(group.id) && (
+          <span className="ntree-pin" role="img" title={t('tree.pinnedMark')} aria-label={t('tree.pinnedMark')}>
+            <PinIcon />
+          </span>
+        )}
         {/* `tally === null` is "the rollup has not answered yet" (ADR-133), and the two elements
             still occupy their width. Dropping them instead would let the name column stretch and
             then snap back as each answer lands — the tree moving for a reason that is not the
@@ -914,6 +942,11 @@ export function NodeTree({
           {node.name}
         </button>
         {sameName.has(node.id) && <span className="ntree-node-addr">{node.address}</span>}
+        {pins?.nodes.has(node.id) && (
+          <span className="ntree-pin" role="img" title={t('tree.pinnedMark')} aria-label={t('tree.pinnedMark')}>
+            <PinIcon />
+          </span>
+        )}
         {/* What kind of node this is, when it is not an ordinary ICMP/SNMP device — a URL monitor,
             a DNS monitor or a Meraki device. Unmarked is the default: the tree is overwhelmingly
             ordinary devices, so a badge on every one of 50k rows would say nothing. */}
@@ -1178,7 +1211,11 @@ export function NodeTree({
       >
         {flat.length === 0 ? (
           // Empty flat list: a blank body while filtering with no matches, else loading / empty-state.
-          filtering ? null : loading ? (
+          // Pinned only with nothing pinned says how to pin instead (ADR-146, ADR-055 R6) — a blank
+          // pane after pressing a button reads as a broken button.
+          pinnedFilter && nothingPinned(pinnedFilter) ? (
+            <p className="muted ntree-empty">{t('tree.pinnedEmpty')}</p>
+          ) : filtering ? null : loading ? (
             <p className="muted ntree-empty">{t('tree.loadingNodes')}</p>
           ) : (
             <p
@@ -1245,6 +1282,18 @@ export function NodeTree({
               {/* Reshaping the folder tree is `ManageConfig`; suppressing it is not. Each item
                   asks for its own permission so an operator who may open a maintenance window on
                   a folder still gets that half of the menu (ADR-057). */}
+              {/* Gated on its own prop, never on `canEdit`: any signed-in account may pin (ADR-146). */}
+              {onTogglePin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onTogglePin({ kind: 'group', id: menu.group.id });
+                    setMenu(null);
+                  }}
+                >
+                  {pins?.groups.has(menu.group.id) ? t('tree.unpin') : t('tree.pin')}
+                </button>
+              )}
               {canEdit && (
                 <button type="button" onClick={() => { onAddGroup(menu.group.id); setMenu(null); }}>
                   {t('group.addSubgroup')}
@@ -1327,6 +1376,17 @@ export function NodeTree({
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
                 {t('tree.open')}
               </button>
+              {onTogglePin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onTogglePin({ kind: 'node', id: menu.node.id });
+                    setMenu(null);
+                  }}
+                >
+                  {pins?.nodes.has(menu.node.id) ? t('tree.unpin') : t('tree.pin')}
+                </button>
+              )}
               {onEditNode && (
                 <button type="button" onClick={() => { onEditNode(menu.node); setMenu(null); }}>
                   {t('tree.editNodeEllipsis')}

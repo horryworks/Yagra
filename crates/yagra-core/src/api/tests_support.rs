@@ -306,6 +306,7 @@ async fn live_state_with(
         shared_dashboard: Arc::new(crate::dashboard::SharedDashboardRepo::new(pool.clone())),
         public_dashboard: Arc::new(crate::dashboard::PublicDashboardRepo::new(pool.clone())),
         prefs: Arc::new(crate::preferences::UserPrefsRepo::new(pool.clone())),
+        pins: Arc::new(crate::pins::UserPinsRepo::new(pool.clone())),
         scheduler_stats: scheduler_stats.clone(),
         dispatcher: Arc::new(crate::scheduler::PollDispatcher::new(
             crate::scheduler::PollDispatcherStores {

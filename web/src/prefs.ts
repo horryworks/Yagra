@@ -119,6 +119,15 @@ interface PrefsStore {
    *  one has to reconcile the memory against what the deployment still has (a deleted credential, a
    *  removed pool), and that reconciliation is where the judgement is. */
   discoveryScan: DiscoveryScanMemory | null;
+  /** Whether the inventory tree shows only what this account pinned (ADR-146). `null` = never set,
+   *  which reads as off.
+   *
+   *  ⚠️ **This one has a second, authoritative home: the server** (ADR-058, `serverPrefs.ts`), because
+   *  the pins it narrows to follow the account — a switch that stayed behind on one machine would
+   *  narrow a tree to pins the operator set somewhere else, with no memory of pressing it here.
+   *  `null` rather than `false` so a machine that never touched it does not overwrite the account's
+   *  answer with a default. Nothing should call the setter directly. */
+  nodeTreePinnedOnly: boolean | null;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -149,6 +158,9 @@ interface PrefsStore {
   /** Record the sweep just started. Call it **once per scan**, not per keystroke — and only after
    *  the target spec has parsed (see [`discoveryScan`]). */
   setDiscoveryScan: (scan: DiscoveryScanMemory) => void;
+  /** Record the Pinned only switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also syncs
+   *  it to the account (see [`nodeTreePinnedOnly`]). */
+  setNodeTreePinnedOnly: (on: boolean | null) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -178,6 +190,8 @@ export const usePrefsStore = create<PrefsStore>()(
       tableColumnWidths: {},
       // Same again: absent before ADR-134, read as `null`, no migration owed.
       discoveryScan: null,
+      // Same again: absent before ADR-146, read as `null` (off), no migration owed.
+      nodeTreePinnedOnly: null,
       // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
       // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
       // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
@@ -211,6 +225,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),
       setTableColumnWidths: (tableColumnWidths) => set({ tableColumnWidths }),
       setDiscoveryScan: (discoveryScan) => set({ discoveryScan }),
+      setNodeTreePinnedOnly: (nodeTreePinnedOnly) => set({ nodeTreePinnedOnly }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),
