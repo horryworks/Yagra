@@ -25,10 +25,11 @@ pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_tota
 /// from turning an hourly probe into a table dump.
 const IDENTITY_COLUMN_ROWS: usize = 256;
 
-/// Serial-number reads (ADR-147), by what they found: `serial` (a chassis row carried one), `none`
-/// (the walk finished and no chassis row did — no ENTITY-MIB, or an empty serial) or `unread` (the
-/// walk failed or did not finish, so nothing was sent). The first against the second is how much
-/// of a fleet the chassis-row rule actually covers.
+/// Serial-number reads (ADR-147), one per identity probe, by what they found — `serial` (a row
+/// carried one), `none` (every walk finished and nothing did: no ENTITY-MIB, or an empty serial) or
+/// `unread` (a walk failed or did not finish, so nothing was sent) — and by `source`, the read that
+/// decided it: a vendor's own MIB (`juniper`, Increment 2) or `entity`. The first result against the
+/// second, per source, is how much of a fleet each rule actually covers.
 pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
 
 /// The most rows the serial read takes from ENTITY-MIB's two columns together. A chassis with every
@@ -36,6 +37,11 @@ pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
 /// keeps an hourly read from turning into a dump of a device listing thousands of sensors. A walk it
 /// stops sends no serial rather than a partial list (ADR-147 decision 4).
 const SERIAL_ENTITY_ROWS: usize = 4096;
+
+/// The most rows the serial read takes from a vendor's own MIB (ADR-147 Increment 2). A Juniper
+/// Virtual Chassis has at most ten members and the box serial is one row, so this is room to spare,
+/// not a limit a real device reaches. A walk it stops sends nothing, as the ENTITY-MIB one does.
+const SERIAL_VENDOR_ROWS: usize = 64;
 
 /// The shortest per-round-trip wait the identity probe gives the table columns it walks whole
 /// (ADR-138 Increment 4).
@@ -66,9 +72,10 @@ pub(super) struct IdentityProbe {
     /// Always read by the first GET, to pick the version rows; kept since ADR-140 so core can
     /// re-run the classification rules on an existing node.
     pub(super) sys_object_id: Option<String>,
-    /// The device's serial number from ENTITY-MIB's chassis rows (ADR-147), a stack's members
-    /// joined with `, `. `None` when `sysDescr` did not answer, the walk did not finish, or no
-    /// chassis row carries one.
+    /// The device's serial number (ADR-147) — from its vendor's own MIB (a Juniper Virtual Chassis
+    /// lists its members, Increment 2) or ENTITY-MIB's chassis rows, a stack's members joined with
+    /// `, `. `None` when `sysDescr` did not answer, the walk that decided did not finish, or nothing
+    /// carries one.
     pub(super) serial_number: Option<String>,
     /// A column the version's row walks did not answer, so the full version was withheld
     /// (ADR-138 Increment 3) and only [`os_version_without_patch`](Self::os_version_without_patch)
@@ -126,8 +133,8 @@ impl SnmpWalker {
     /// its own field, which core writes only where no patch can be stripped (Increment 4). That walk
     /// also waits longer per round trip than the job does — see [`IDENTITY_COLUMN_TIMEOUT`].
     ///
-    /// A device that answered `sysDescr` is also asked for its serial number, out of ENTITY-MIB's
-    /// chassis rows (ADR-147) — see [`Self::read_serial_number`].
+    /// A device that answered `sysDescr` is also asked for its serial number, out of its vendor's own
+    /// MIB or ENTITY-MIB's chassis rows (ADR-147) — see [`Self::read_serial_number`].
     async fn fetch_identity(
         &self,
         transport: &dyn Transport,
@@ -192,8 +199,13 @@ impl SnmpWalker {
         // Only a device that answered `sysDescr` is walked for a serial: one that did not is not
         // going to answer a table, and the walk would spend the probe's time waiting on silence.
         let serial_number = if sys_descr.is_some() {
-            self.read_serial_number(transport, target, identity_column_timeout(timeout))
-                .await
+            self.read_serial_number(
+                transport,
+                target,
+                sys_object_id,
+                identity_column_timeout(timeout),
+            )
+            .await
         } else {
             None
         };
@@ -207,18 +219,60 @@ impl SnmpWalker {
         }
     }
 
-    /// The serial number from ENTITY-MIB (ADR-147): walk `entPhysicalClass` and
-    /// `entPhysicalSerialNum` together, and let [`serial::resolve`] take the chassis rows.
+    /// The serial number (ADR-147): from the vendor's own MIB when [`serial::vendor_read`] knows the
+    /// vendor (Increment 2), and otherwise — or when those columns are empty — from ENTITY-MIB,
+    /// walking `entPhysicalClass` and `entPhysicalSerialNum` together and letting
+    /// [`serial::resolve`] take the chassis rows.
     ///
-    /// Nothing is sent unless the walk heard both columns out — a stack read halfway would replace
-    /// three members' serials with one (decision 4). The wait is the one the patch table gets, for
-    /// the same reason: a whole-column walk on a slow agent is not a scalar GET.
+    /// Nothing is sent unless the walk that decided heard every column out — a stack read halfway
+    /// would replace three members' serials with one (decision 4) — and a vendor walk that did not
+    /// finish does not fall back to ENTITY-MIB, for the same reason (decision 12). The wait is the
+    /// one the patch table gets: a whole-column walk on a slow agent is not a scalar GET.
     async fn read_serial_number(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
+        sys_object_id: Option<&str>,
         timeout: Duration,
     ) -> Option<String> {
+        // One count per probe, under the read that decided it.
+        let count = |source: &'static str, result: &'static str| {
+            metrics::counter!(SERIAL_PROBES_METRIC, "source" => source, "result" => result)
+                .increment(1);
+        };
+        if let Some(read) = serial::vendor_read(sys_object_id) {
+            let columns: Vec<String> = read.columns.iter().map(|c| c.oid().to_owned()).collect();
+            let walk = match self
+                .walk_instance_columns(transport, target, &columns, timeout, SERIAL_VENDOR_ROWS)
+                .await
+            {
+                Ok(walk) if walk.every_column_answered => walk,
+                Ok(_) | Err(_) => {
+                    count(read.name, "unread");
+                    return None;
+                }
+            };
+            let mut rows: std::collections::BTreeMap<
+                String,
+                std::collections::BTreeMap<u32, String>,
+            > = std::collections::BTreeMap::new();
+            for row in walk.rows {
+                // A vendor serial column is indexed by one number — a member id, or `0`.
+                let [index] = row.instance.as_slice() else {
+                    continue;
+                };
+                let index = *index;
+                if let yagra_transport::SnmpValue::Bytes(bytes) = row.value {
+                    rows.entry(row.oid_base)
+                        .or_default()
+                        .insert(index, String::from_utf8_lossy(&bytes).into_owned());
+                }
+            }
+            if let Some(found) = serial::resolve_vendor(read, &rows) {
+                count(read.name, "serial");
+                return Some(found);
+            }
+        }
         let columns = [
             serial::OID_ENT_PHYSICAL_CLASS.to_owned(),
             serial::OID_ENT_PHYSICAL_SERIAL_NUM.to_owned(),
@@ -229,7 +283,7 @@ impl SnmpWalker {
         {
             Ok(walk) if walk.every_column_answered => walk,
             Ok(_) | Err(_) => {
-                metrics::counter!(SERIAL_PROBES_METRIC, "result" => "unread").increment(1);
+                count("entity", "unread");
                 return None;
             }
         };
@@ -258,8 +312,7 @@ impl SnmpWalker {
             }
         }
         let resolved = serial::resolve(&classes, &serials);
-        let found = if resolved.is_some() { "serial" } else { "none" };
-        metrics::counter!(SERIAL_PROBES_METRIC, "result" => found).increment(1);
+        count("entity", if resolved.is_some() { "serial" } else { "none" });
         resolved
     }
 
@@ -1103,6 +1156,149 @@ mod tests {
         let r = execute(&snmp_job(), &unasked, 1_000).await;
         assert_eq!(r.serial_number, None);
         assert!(!walked_for_a_serial(&unasked), "{:?}", unasked.asked());
+    }
+
+    /// A Juniper device as the identity probe meets it (ADR-147 Increment 2): `sysDescr` and
+    /// `sysObjectID` answered, the Virtual Chassis serial column as `(member id, serial)` rows, and
+    /// the box serial at `.0` when there is one.
+    fn juniper(
+        sys_object_id: &str,
+        members: &[(u32, &str)],
+        box_serial: Option<&str>,
+    ) -> FakeTransport {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        let mut t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row(
+                    "1.3.6.1.2.1.1.1",
+                    0,
+                    "Juniper Networks, Inc. vmx internet router, kernel JUNOS 18.2R1.9, Build date: 2018-06-28 04:23:52 UTC Copyright (c) 1996-2018 Juniper Networks, Inc.",
+                ),
+                string_row("1.3.6.1.2.1.1.2", 0, sys_object_id),
+            ]);
+        let row = |oid_base: &str, index: u32, value: &str| SnmpInstanceRow {
+            oid_base: oid_base.to_owned(),
+            instance: vec![index],
+            value: SnmpValue::Bytes(value.as_bytes().to_vec()),
+        };
+        for (member, serial_number) in members {
+            t.snmp_instances.push(row(
+                serial::OID_JNX_VC_MEMBER_SERIAL,
+                *member,
+                serial_number,
+            ));
+        }
+        if let Some(serial_number) = box_serial {
+            t.snmp_instances
+                .push(row(serial::OID_JNX_BOX_SERIAL, 0, serial_number));
+        }
+        t
+    }
+
+    /// LibreNMS's `junos_ex4600mp`, which `.210` replays as `sim-juniper-ex`: eight members, and a
+    /// box serial that is only member 0's.
+    fn juniper_virtual_chassis() -> FakeTransport {
+        let members: Vec<(u32, String)> = (0..8)
+            .map(|m| (m, format!("XR01234567{}", 89 + m)))
+            .collect();
+        let borrowed: Vec<(u32, &str)> = members.iter().map(|(m, s)| (*m, s.as_str())).collect();
+        juniper(
+            "1.3.6.1.4.1.2636.1.1.1.4.63.9",
+            &borrowed,
+            Some("XR0123456789"),
+        )
+    }
+
+    fn walked_juniper_columns(t: &FakeTransport) -> bool {
+        t.asked()
+            .iter()
+            .any(|call| call.iter().any(|o| o == serial::OID_JNX_BOX_SERIAL))
+    }
+
+    /// The Virtual Chassis lists every member in member-id order, and ENTITY-MIB is not walked at
+    /// all — a chassis row put there on purpose would otherwise have been a second answer.
+    #[tokio::test]
+    async fn a_virtual_chassis_lists_every_member_and_skips_entity_mib() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = with_entity_rows(juniper_virtual_chassis(), &[(1, 3, "ENTITY-SN")]);
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some(
+                "XR0123456789, XR0123456790, XR0123456791, XR0123456792, \
+                 XR0123456793, XR0123456794, XR0123456795, XR0123456796"
+            )
+        );
+        assert!(walked_juniper_columns(&t), "{:?}", t.asked());
+        assert!(!walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// LibreNMS's `junos_vmx`, which `.210` replays as `sim-junos-vmx`.
+    #[tokio::test]
+    async fn a_juniper_box_outside_a_virtual_chassis_gives_its_box_serial() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = juniper("1.3.6.1.4.1.2636.1.1.1.2.108", &[], Some("VM600B272BD3"));
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.serial_number.as_deref(), Some("VM600B272BD3"));
+    }
+
+    /// 🚨 ADR-147 decision 12. Every row is in hand, and ENTITY-MIB has a chassis serial too: only
+    /// the walk's own verdict stops a half-read Virtual Chassis from being replaced — by the box
+    /// serial, or by an ENTITY-MIB fallback.
+    #[tokio::test]
+    async fn an_unfinished_juniper_walk_sends_nothing_and_does_not_fall_back() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let unanswered = with_entity_rows(juniper_virtual_chassis(), &[(1, 3, "ENTITY-SN")])
+            .with_unanswered_instance_columns();
+        let r = execute(&job, &unanswered, 1_000).await;
+        assert_eq!(r.serial_number, None);
+        assert!(r.sys_descr.is_some(), "the device did answer");
+        assert!(
+            !walked_for_a_serial(&unanswered),
+            "{:?}",
+            unanswered.asked()
+        );
+
+        let silent = with_entity_rows(juniper_virtual_chassis(), &[(1, 3, "ENTITY-SN")])
+            .with_silent_instance_walks();
+        let r = execute(&job, &silent, 1_000).await;
+        assert_eq!(r.serial_number, None, "a walk that failed outright");
+        assert!(!walked_for_a_serial(&silent), "{:?}", silent.asked());
+    }
+
+    /// ADR-147 decision 13: a Juniper device whose own MIB has nothing is read exactly as before.
+    #[tokio::test]
+    async fn a_juniper_device_with_nothing_in_its_own_mib_falls_back_to_entity_rows() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = with_entity_rows(
+            juniper("1.3.6.1.4.1.2636.1.1.1.2.108", &[], None),
+            &[(1, 3, "ENTITY-SN")],
+        );
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.serial_number.as_deref(), Some("ENTITY-SN"));
+        assert!(walked_juniper_columns(&t), "{:?}", t.asked());
+        assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    #[tokio::test]
+    async fn a_non_juniper_device_is_not_asked_juniper_columns() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = catalyst_stack();
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some("FCW1929B68S, FCW1931A06Z, FCW1929B6BP")
+        );
+        assert!(!walked_juniper_columns(&t), "{:?}", t.asked());
     }
 
     /// Over v3 the version instance is fetched with a GET, not by walking its column, and a value
