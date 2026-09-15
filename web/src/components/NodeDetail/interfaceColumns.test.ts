@@ -15,9 +15,14 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { INTERFACE_COLUMNS } from './interfaceColumns';
+import type { TFunction } from 'i18next';
+import { filterSlots, INTERFACE_COLUMNS } from './interfaceColumns';
+import { interfaceColumns } from './tabFilters';
 
 const CSS = readFileSync(join(__dirname, 'NodeDetail.css'), 'utf8');
+
+/** The keys the filter row has a control for — read from the real specs, not restated. */
+const FILTER_KEYS = interfaceColumns(((k: string) => k) as unknown as TFunction).map((c) => c.key);
 
 /** The fallback track list out of `grid-template-columns: var(--nd-if-cols, …)`. */
 function cssFallback(): string {
@@ -27,13 +32,14 @@ function cssFallback(): string {
 }
 
 describe('the Interfaces column list', () => {
-  it('has the nine columns the header draws', () => {
+  it('has the ten columns the header draws', () => {
     // The accepting case first: a list that had lost a column would satisfy the comparison below
     // just as well, because the CSS would be edited to match it.
-    expect(INTERFACE_COLUMNS).toHaveLength(9);
+    expect(INTERFACE_COLUMNS).toHaveLength(10);
     expect(INTERFACE_COLUMNS.map((c) => c.key)).toEqual([
       'if_name',
       'if_alias',
+      'neighbors',
       'oper',
       'media',
       'speed',
@@ -58,18 +64,28 @@ describe('the Interfaces column list', () => {
     // the note about the time a <button>'s UA padding did exactly that here).
     for (const c of INTERFACE_COLUMNS) expect(c.width).not.toMatch(/\bauto\b/);
   });
+});
 
-  it('keeps the six filterable keys the filter row slots name', () => {
-    // `InterfacesTab.tsx` passes `slots={['if_name','if_alias','oper','media','speed','duplex',
-    // null, null, null]}` — one slot per column, in this order. A key renamed on one side and not
-    // the other puts a filter control under the wrong heading, which nothing else would catch.
-    expect(INTERFACE_COLUMNS.slice(0, 6).map((c) => c.key)).toEqual([
+describe('filterSlots', () => {
+  it('puts each filter control under its own heading, one slot per column', () => {
+    // Pinned by position, because a slot one place off draws a control under the wrong heading and
+    // nothing else notices — NEIGHBORS (ADR-145) is the column that carries none, third.
+    expect(filterSlots(FILTER_KEYS)).toEqual([
       'if_name',
       'if_alias',
+      null,
       'oper',
       'media',
       'speed',
       'duplex',
+      null,
+      null,
+      null,
     ]);
+  });
+
+  it('places every filter spec, so a renamed key cannot silently lose its control', () => {
+    expect(FILTER_KEYS.length).toBeGreaterThan(0);
+    expect(filterSlots(FILTER_KEYS).filter((s) => s !== null)).toEqual(FILTER_KEYS);
   });
 });

@@ -12,7 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { formatBps, formatDbm, formatPps, formatSi } from '../../lib/format';
-import type { InterfaceRow, InterfaceSeries } from '../../types/api';
+import type { InterfaceRow, InterfaceSeries, Neighbor } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
 import { MetricChart, PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
 import { operState } from './healthTone';
@@ -24,7 +24,7 @@ import { usePrefsStore } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
 import { resolveWidths } from '../../lib/columnWidths';
-import { INTERFACE_COLUMNS } from './interfaceColumns';
+import { filterSlots, INTERFACE_COLUMNS } from './interfaceColumns';
 import { ColumnResizeHandles, ColumnWidthReset } from '../ui/ColumnResizeHandles';
 import { useColumnWidths } from '../ui/useColumnWidths';
 import { useRefreshTick } from '../../lib/refreshTick';
@@ -68,6 +68,15 @@ import { buildPredicate } from '../../lib/filterPredicate';
 import { dockBudget, stickyChromeHeight } from './interfaceDockHeight';
 import { operLabel } from './healthTone';
 import { duplexTitle, mediaTitle } from './linkMode';
+import { AnchoredPopover, focusPopoverTrigger } from '../ui/AnchoredPopover';
+import { Capabilities } from './NeighborsTab';
+import {
+  neighborCellText,
+  neighborKey,
+  neighborsByPort,
+  peerLabel,
+  peerLabelIsChassis,
+} from './neighbors';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 const SPARK_WINDOW_SECS = 3600;
@@ -170,6 +179,29 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     () => rows.filter(buildPredicate(columns, filters, Date.now())),
     [rows, columns, filters],
   );
+  // What each port is connected to (ADR-145), on the node detail's shared refresh clock. A failure
+  // is deliberately silent: the Neighbors tab owns that error surface, and here it only leaves the
+  // column showing dashes — the interface list must not go down with it. Cleared when the node
+  // changes, so one device's neighbours are never drawn against another device's ports.
+  const tick = useRefreshTick();
+  const [neighbors, setNeighbors] = useState<Neighbor[]>([]);
+  useEffect(() => {
+    setNeighbors([]);
+  }, [nodeId]);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getNeighbors(nodeId)
+      .then((cur) => {
+        if (!cancelled) setNeighbors(cur?.neighbors.neighbors ?? []);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, tick]);
+  const byPort = useMemo(() => neighborsByPort(neighbors, rows), [neighbors, rows]);
+  const slots = useMemo(() => filterSlots(columns.map((c) => c.key)), [columns]);
   const counts = useMemo(
     () =>
       Object.fromEntries(
@@ -181,12 +213,13 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   );
   // Keyed by the column each control sits under. ⚠️ Untyped, exactly like `DataTable`'s
   // `specs[c.key]` lookup: rename a key in `tabFilters.ts` and the cell silently stops rendering.
-  // Since ADR-129 it covers all nine columns, not only the filterable ones: the resize grips read
+  // Since ADR-129 it covers every column, not only the filterable ones: the resize grips read
   // the same map for their accessible names, and a grip announced as "out" rather than "Out" is a
   // grip nobody driving this from a screen reader can place.
   const labels: Record<string, string> = {
     if_name: t('interfaces.colInterface'),
     if_alias: t('interfaces.colDescription'),
+    neighbors: t('interfaces.colNeighbors'),
     oper: t('interfaces.colOper'),
     media: t('interfaces.colMedia'),
     speed: t('interfaces.colSpeed'),
@@ -397,31 +430,38 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <div className="nd-if-h" style={{ gridColumn: 2, gridRow: 1 }}>
             {t('interfaces.colDescription')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 3, gridRow: 1 }} title={t('interfaces.colOperTitle')}>
+          <div
+            className="nd-if-h"
+            style={{ gridColumn: 3, gridRow: 1 }}
+            title={t('interfaces.colNeighborsTitle')}
+          >
+            {t('interfaces.colNeighbors')}
+          </div>
+          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }} title={t('interfaces.colOperTitle')}>
             {t('interfaces.colOper')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }}>
+          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }}>
             {t('interfaces.colMedia')}
           </div>
-          <div className="nd-if-h right" style={{ gridColumn: 5, gridRow: 1 }}>
+          <div className="nd-if-h right" style={{ gridColumn: 6, gridRow: 1 }}>
             {t('interfaces.colSpeed')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 6, gridRow: 1 }} title={t('interfaces.duplexHint')}>
+          <div className="nd-if-h" style={{ gridColumn: 7, gridRow: 1 }} title={t('interfaces.duplexHint')}>
             {t('interfaces.colDuplex')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 7, gridRow: 1 }}>
+          <div className="nd-if-h" style={{ gridColumn: 8, gridRow: 1 }}>
             {t('interfaces.colThroughput')}
           </div>
           <div
             className="nd-if-h right"
-            style={{ gridColumn: 8, gridRow: 1 }}
+            style={{ gridColumn: 9, gridRow: 1 }}
             title={t('interfaces.colInOutTitle')}
           >
             {t('interfaces.colIn')}
           </div>
           <div
             className="nd-if-h right"
-            style={{ gridColumn: 9, gridRow: 1 }}
+            style={{ gridColumn: 10, gridRow: 1 }}
             title={t('interfaces.colInOutTitle')}
           >
             {t('interfaces.colOut')}
@@ -441,7 +481,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             halfway down the scroller and the interface rows ran through the gap above it. */}
         <ColumnFilterRow
           columns={columns}
-          slots={['if_name', 'if_alias', 'oper', 'media', 'speed', 'duplex', null, null, null]}
+          slots={slots}
           filters={filters}
           onChange={setFilters}
           counts={counts}
@@ -450,9 +490,12 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         />
         {shown.map((r) => {
           const down = r.oper_status != null && r.oper_status !== 1;
+          const portName = r.if_name ?? `if${r.ifindex}`;
+          // A <div>, not a <button>, since ADR-145: the Neighbors cell holds a control of its own,
+          // and interactive content inside a button is invalid markup that no keyboard can reach.
+          // The port name is the row's keyboard handle now — its click bubbles here like any other.
           return (
-            <button
-              type="button"
+            <div
               key={r.ifindex}
               className={`nd-if-row${r.ifindex === selected ? ' selected' : ''}${down ? ' down' : ''}${
                 r.stale ? ' stale' : ''
@@ -460,7 +503,14 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               onClick={() => setSelected((cur) => (cur === r.ifindex ? null : r.ifindex))}
             >
               <span className="nd-if-id">
-                <span className="nd-if-name mono">{r.if_name ?? `if${r.ifindex}`}</span>
+                <button
+                  type="button"
+                  className="nd-if-name"
+                  aria-expanded={r.ifindex === selected}
+                  title={portName}
+                >
+                  {portName}
+                </button>
               </span>
               {/* The title carries the whole alias: this column's floor dropped to 88px when
                   ADR-126 split In/Out, and it is the one that ellipsizes first. Device-supplied
@@ -468,6 +518,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               <span className="nd-if-cell nd-if-desc" title={r.if_alias || undefined}>
                 {r.if_alias || '—'}
               </span>
+              <NeighborCell port={portName} neighbors={byPort.get(r.ifindex)} />
               <span className="nd-if-oper">
                 <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
                 {operLabel(r.oper_status ?? null, t)}
@@ -533,7 +584,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
                   </span>
                 );
               })}
-            </button>
+            </div>
           );
         })}
         {shown.length === 0 && (
@@ -558,6 +609,83 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         <div className="nd-if-dockhint">{t('interfaces.dockHint')}</div>
       )}
     </div>
+  );
+}
+
+/** The Neighbors cell (ADR-145): the first neighbour's name as a link, `+N` for the rest, and a
+ *  popover listing every neighbour on the port. Which neighbour belongs to which port is decided in
+ *  `neighbors.ts`, where a test runs; this only draws it.
+ *
+ *  Only the link stops its click. The rest of the cell is row, so a click beside a short name still
+ *  opens the dock, and `AnchoredPopover` stops the clicks inside its own panel — which matters,
+ *  because a portalled panel's React events bubble to this row through the component tree. */
+function NeighborCell({ port, neighbors }: { port: string; neighbors: Neighbor[] | undefined }) {
+  const { t } = useTranslation('nodes');
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const dismiss = useCallback((restoreFocus: boolean) => {
+    setOpen(false);
+    if (restoreFocus) focusPopoverTrigger(wrapRef.current, 'dialog');
+  }, []);
+  const cell = neighborCellText(neighbors);
+  if (cell == null || neighbors == null) {
+    return <span className="nd-if-cell nd-if-nb nd-muted">—</span>;
+  }
+  const title = t('interfaces.neighborsTitle', { port });
+  return (
+    <span className="nd-if-cell nd-if-nb" ref={wrapRef}>
+      <button
+        type="button"
+        className="nd-if-nb-link"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={cell.title}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+      >
+        {cell.label}
+      </button>
+      {cell.more > 0 && (
+        <span className="nd-if-nb-more">{t('interfaces.neighborsMore', { count: cell.more })}</span>
+      )}
+      <AnchoredPopover
+        open={open}
+        anchorRef={wrapRef}
+        role="dialog"
+        label={title}
+        align="start"
+        onDismiss={dismiss}
+        className="nd-if-nbpop"
+      >
+        <p className="nd-if-nbpop-title">{title}</p>
+        <ul className="nd-if-nbpop-list">
+          {neighbors.map((n) => (
+            <li key={neighborKey(n)} className="nd-if-nbpop-item">
+              <span className="nd-if-nbpop-head">
+                <span className="nd-if-nbpop-peer">{peerLabel(n)}</span>
+                <span className="nd-nb-proto">{t(`neighbors.proto.${n.proto}`)}</span>
+              </span>
+              {!peerLabelIsChassis(n) && <span className="mono nd-muted">{n.remote_chassis}</span>}
+              {/* Device-supplied strings throughout, so they are text children and never markup. */}
+              <span>
+                <span className="nd-muted">{t('neighbors.colRemotePort')}</span>{' '}
+                <span className="mono">{n.remote_port || '—'}</span>
+                {n.remote_port_desc && <span className="nd-muted"> ({n.remote_port_desc})</span>}
+              </span>
+              {n.remote_mgmt_addr && (
+                <span>
+                  <span className="nd-muted">{t('interfaces.neighborsMgmt')}</span>{' '}
+                  <span className="mono">{n.remote_mgmt_addr}</span>
+                </span>
+              )}
+              <Capabilities neighbor={n} />
+            </li>
+          ))}
+        </ul>
+      </AnchoredPopover>
+    </span>
   );
 }
 
