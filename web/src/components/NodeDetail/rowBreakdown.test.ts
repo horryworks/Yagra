@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { followedRow, memRows, visibleRows } from './rowBreakdown';
+import {
+  followedRow,
+  memHeadline,
+  memRangeQuery,
+  memRows,
+  visibleRows,
+  type MemRow,
+} from './rowBreakdown';
 
 describe('memRows', () => {
   // The C2960S's own numbers (PoC fleet, 2026-09-15): the pools the old card could not tell apart.
@@ -61,6 +68,45 @@ describe('memRows', () => {
       [{ row: 3, value: 250 }],
     );
     expect(rows).toEqual([{ row: 3, name: null, usedBytes: 750, totalBytes: 1000, pct: 75 }]);
+  });
+});
+
+const pool = (row: number, pct: number): MemRow => ({
+  row,
+  name: null,
+  usedBytes: pct,
+  totalBytes: 100,
+  pct,
+});
+
+describe('memHeadline', () => {
+  // 🚨 The C2960S case: the node-wide maxima read 56% while the fullest pool read 83.9%. While there
+  // are pools the node-wide reading is not consulted at all.
+  it('headlines the fullest pool, never the node-wide reading, while there are pools', () => {
+    let consulted = false;
+    const headline = memHeadline([pool(2, 83.9), pool(1, 56.4)], () => {
+      consulted = true;
+      return { usedBytes: 1, totalBytes: 2, pct: 56 };
+    });
+    expect(headline.pct).toBe(83.9);
+    expect(consulted).toBe(false);
+  });
+
+  it('falls back to the node-wide reading when there are no pools', () => {
+    const nodeWide = { usedBytes: 10, totalBytes: 20, pct: 50 };
+    expect(memHeadline([], () => nodeWide)).toBe(nodeWide);
+  });
+});
+
+describe('memRangeQuery', () => {
+  it('charts the fullest pool by its row when there are several', () => {
+    expect(memRangeQuery([pool(2, 83.9), pool(1, 56.4)])).toEqual({ row: 2 });
+  });
+
+  // One pool may be a scalar source read back as row 0, which has no series of its own to chart.
+  it('charts the node-wide maximum with one pool or none', () => {
+    expect(memRangeQuery([pool(0, 40)])).toEqual({ agg: 'max' });
+    expect(memRangeQuery([])).toEqual({ agg: 'max' });
   });
 });
 

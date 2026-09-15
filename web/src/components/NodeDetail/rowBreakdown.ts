@@ -11,6 +11,7 @@
 // A `.ts` rather than inside the `.tsx`, because Vitest never executes a `.tsx` (testing.md).
 
 import { deriveMem, type MemId } from '../../lib/format';
+import type { MetricAgg } from '../../types/api';
 
 /** One row as `GET /nodes/{id}/metrics/{metric}?rows=true` returns it. */
 export interface RowValue {
@@ -83,4 +84,21 @@ export function memRows(
  *  series that does not exist — and with one row, its history *is* the node's. */
 export function followedRow<T extends { row: number }>(rows: readonly T[]): T | null {
   return rows.length > 1 ? rows[0] : null;
+}
+
+/** What the memory card headlines: the fullest pool, joined on its own row — or, when there are no
+ *  rows (a core that does not return them), the node-wide reading, the only answer there is.
+ *
+ *  🚨 Never the node-wide reading while there are rows. It divides the largest "used" by the largest
+ *  "used + free", which on a C2960S read 56% while the I/O pool sat at 83.9% under an alert — so it
+ *  is not even computed when a pool is available. `rows` is `memRows`' answer, fullest first. */
+export function memHeadline<T>(rows: readonly MemRow[], nodeWide: () => T): MemRow | T {
+  return rows.length > 0 ? rows[0] : nodeWide();
+}
+
+/** How the memory chart reads its two series: the followed pool's own row when there are several,
+ *  the node-wide maximum otherwise — `followedRow` says why one row is read node-wide. */
+export function memRangeQuery(rows: readonly MemRow[]): { row: number } | { agg: MetricAgg } {
+  const followed = followedRow(rows);
+  return followed ? { row: followed.row } : { agg: 'max' };
 }

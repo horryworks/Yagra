@@ -47,7 +47,15 @@ import type {
   NodeSummary,
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
-import { followedRow, memRows, visibleRows, type MemRow, type RowValue } from './rowBreakdown';
+import {
+  followedRow,
+  memHeadline,
+  memRangeQuery,
+  memRows,
+  visibleRows,
+  type MemRow,
+  type RowValue,
+} from './rowBreakdown';
 import {
   cardUnit,
   hasAnyHealth,
@@ -1015,34 +1023,26 @@ function MemHealth({
         reading(0)?.rows ?? [],
         reading(1)?.rows ?? [],
       );
-      // 🚨 The headline is the fullest pool, joined on its own row — never the largest "used" over
-      // the largest "used + free", which on a C2960S read 56% while the I/O pool sat at 83.9% under
-      // an alert. With no rows, the node-wide values are the only answer there is.
-      const d = rows[0]
-        ? rows[0]
-        : deriveMem(
-            mem.id,
-            {
-              [mem.metrics[0]]: reading(0)?.value ?? null,
-              [mem.metrics[1]]: reading(1)?.value ?? null,
-            },
-            mem.unitToBytes,
-          );
+      // 🚨 The fullest pool, never the node-wide maxima while there are pools — `memHeadline` says why.
+      const d = memHeadline(rows, () =>
+        deriveMem(
+          mem.id,
+          {
+            [mem.metrics[0]]: reading(0)?.value ?? null,
+            [mem.metrics[1]]: reading(1)?.value ?? null,
+          },
+          mem.unitToBytes,
+        ),
+      );
       setPools(rows);
       setPct(d.pct);
       setUsedBytes(d.usedBytes);
       // Only trust a total that's plausibly a real RAM size (guards bad vendor readings).
       setTotalBytes(d.totalBytes != null && d.totalBytes >= MIN_MEM_TOTAL_BYTES ? d.totalBytes : null);
       // Trend: the followed pool's own two series when there are several, the node's otherwise.
-      const followed = followedRow(rows);
+      const query = memRangeQuery(rows);
       const ranges = await Promise.allSettled(
-        mem.metrics.map((m) =>
-          api.getNodeMetricRange(
-            nodeId,
-            m,
-            followed ? { from, to, row: followed.row } : { from, to, agg: 'max' },
-          ),
-        ),
+        mem.metrics.map((m) => api.getNodeMetricRange(nodeId, m, { from, to, ...query })),
       );
       if (cancelled) return;
       const byMetric: Record<string, MetricPoint[]> = {};

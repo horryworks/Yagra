@@ -132,6 +132,21 @@ pub(super) fn node_read(kind: MetricKind, dimension: MetricDimension) -> NodeRea
     }
 }
 
+/// How `query_metrics` reads one metric, kept pure beside [`node_read`] for the same reason.
+///
+/// One named row (ADR-143) is one series whatever else the node carries under the name, so it is
+/// read directly — never refused, never collapsed. Without a row the node-level rule decides, and a
+/// metric the inventory does not know is read as it is stored.
+pub(super) fn read_for_row(
+    row: Option<u32>,
+    entry: Option<&crate::api::metrics::NodeMetricEntry>,
+) -> NodeRead {
+    match row {
+        Some(_) => NodeRead::Direct,
+        None => entry.map_or(NodeRead::Direct, |e| node_read(e.metric_kind, e.dimension)),
+    }
+}
+
 /// The word for a dimension in a sentence addressed to a model.
 pub(super) fn dimension_word(dimension: MetricDimension) -> &'static str {
     match dimension {
@@ -237,14 +252,7 @@ impl YagraMcp {
             .find(|e| e.metric == p.metric),
             None => None,
         };
-        // One named row (ADR-143) is one series whatever else the node carries under the name, so it
-        // is read directly — never refused, never collapsed.
-        let read = match p.row {
-            Some(_) => NodeRead::Direct,
-            None => entry
-                .as_ref()
-                .map_or(NodeRead::Direct, |e| node_read(e.metric_kind, e.dimension)),
-        };
+        let read = read_for_row(p.row, entry.as_ref());
         if read == NodeRead::Refuse {
             let e = entry
                 .as_ref()
@@ -705,6 +713,32 @@ mod tests {
             "an entity row is not an interface — sending a model there wastes a call: {msg}"
         );
         assert!(msg.contains("`row`"), "{msg}");
+    }
+
+    /// ADR-143: naming a row is the only way to read a per-row counter at all, so the refusal must
+    /// not reach it, and a named row is one series, so it is never collapsed either. Without a row
+    /// the node-level rule is unchanged.
+    #[test]
+    fn a_named_row_is_read_directly_where_the_node_level_read_would_refuse_or_collapse() {
+        let counter = crate::api::metrics::NodeMetricEntry {
+            metric: "huawei_bytes".to_owned(),
+            metric_kind: MetricKind::Counter,
+            dimension: MetricDimension::Entity,
+            status: crate::api::metrics::MetricStatus::Ok,
+            series_count: 4,
+        };
+        assert_eq!(read_for_row(None, Some(&counter)), NodeRead::Refuse);
+        assert_eq!(read_for_row(Some(7), Some(&counter)), NodeRead::Direct);
+
+        let gauge = crate::api::metrics::NodeMetricEntry {
+            metric_kind: MetricKind::Gauge,
+            ..counter
+        };
+        assert_eq!(read_for_row(None, Some(&gauge)), NodeRead::NodeMax);
+        assert_eq!(read_for_row(Some(7), Some(&gauge)), NodeRead::Direct);
+
+        // A metric the inventory does not know (skeleton mode) is read as it is stored.
+        assert_eq!(read_for_row(None, None), NodeRead::Direct);
     }
 
     /// The alignment invariant is what can be silently wrong here: every series on one axis, so a

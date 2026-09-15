@@ -339,7 +339,8 @@ pub(crate) struct MetricReading {
     pub metric: String,
     pub value: f64,
     /// With `rows=true`, every table row of the metric on this node with its latest value and name,
-    /// ordered by row key. Omitted otherwise, and for a metric with one series per node.
+    /// ordered by row key. A metric with one series per node is listed as a single row `0`.
+    /// Omitted when `rows` is not set.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<MetricRowReading>,
 }
@@ -348,7 +349,9 @@ pub(crate) struct MetricReading {
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub(crate) struct MetricRowReading {
     /// The row key the row's values carry. Pass it as `row` to the range read for this row's
-    /// history; an alert about the row carries the same number.
+    /// history; an alert about the row carries the same number. The single row `0` of a metric
+    /// with one series per node is the exception: that series has no row key, so its history is
+    /// the range read without `row`.
     pub row: u32,
     /// The row's name as the device reports it (`I/O`, `MPU Board 0`). Absent when no name has been
     /// read for the row — its tables may have none, or the hourly name read has not reached it yet.
@@ -1970,6 +1973,27 @@ mod tests {
         for q in ["rate=true", "agg=max", ""] {
             let (status, _) = get_json(&format!(
                 "/api/v1/nodes/{node}/metrics/if_hc_in_octets/range?{q}"
+            ))
+            .await;
+            assert_eq!(status, StatusCode::OK, "{q}");
+        }
+    }
+
+    #[tokio::test]
+    async fn combining_row_and_agg_is_refused_with_its_own_code() {
+        // ADR-143. A row already names one series, so there is nothing for `agg` to collapse — and
+        // the code is its own, so the UI can tell it apart from an unsupported `agg` value.
+        let node = Uuid::nil();
+        let (status, body) = get_json(&format!(
+            "/api/v1/nodes/{node}/metrics/huawei_mem_usage/range?row=7&agg=max"
+        ))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "row_with_agg");
+        // Each on its own is still fine, and so is one row's rate — the refusal is about the pair.
+        for q in ["row=7", "agg=max", "row=7&rate=true"] {
+            let (status, _) = get_json(&format!(
+                "/api/v1/nodes/{node}/metrics/huawei_mem_usage/range?{q}"
             ))
             .await;
             assert_eq!(status, StatusCode::OK, "{q}");

@@ -8280,7 +8280,8 @@ export interface components {
             node_id: components["schemas"]["NodeId"];
             /**
              * @description With `rows=true`, every table row of the metric on this node with its latest value and name,
-             *     ordered by row key. Omitted otherwise, and for a metric with one series per node.
+             *     ordered by row key. A metric with one series per node is listed as a single row `0`.
+             *     Omitted when `rows` is not set.
              */
             rows?: components["schemas"]["MetricRowReading"][];
             /** Format: double */
@@ -8296,7 +8297,9 @@ export interface components {
             /**
              * Format: int32
              * @description The row key the row's values carry. Pass it as `row` to the range read for this row's
-             *     history; an alert about the row carries the same number.
+             *     history; an alert about the row carries the same number. The single row `0` of a metric
+             *     with one series per node is the exception: that series has no row key, so its history is
+             *     the range read without `row`.
              */
             row: number;
             /** Format: double */
