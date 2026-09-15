@@ -174,6 +174,7 @@ fn make_result(
         // version on every result would exercise a no-op, not the fleet's real write load.
         os_version: None,
         os_version_without_patch: None,
+        serial_number: None,
         // None for the same reason: identity rides the hourly probe (ADR-140).
         sys_object_id: None,
         dns_chain: None,

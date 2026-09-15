@@ -431,9 +431,15 @@ impl YagraMcp {
         };
         // `get_node_with_notes`, not `get_node`: this tool folds `GET /api/v1/nodes/{node_id}`, so
         // it owes the same answer that route gives — the note included (ADR-135).
-        let (node, notes, os_version, profile_locked) =
+        let (node, notes, os_version, serial_number, profile_locked) =
             match admin.repo.get_node_with_notes(p.node_id).await {
-                Ok(Some(n)) => (n.node, n.notes, n.os_version, n.profile_locked),
+                Ok(Some(n)) => (
+                    n.node,
+                    n.notes,
+                    n.os_version,
+                    n.serial_number,
+                    n.profile_locked,
+                ),
                 Ok(None) => return tool_unavailable(TOOL, "no node with that id"),
                 Err(e) => return tool_error(TOOL, "load node", &e),
             };
@@ -462,6 +468,10 @@ impl YagraMcp {
             .get(&p.node_id)
             .copied()
             .unwrap_or(NodeKind::Device);
+        // The fallback the REST detail applies (ADR-147 decision 7), from the same function. Best
+        // effort for the reason it is there: a failed Meraki lookup reads as "no binding".
+        let meraki = admin.meraki_devices.get(p.node_id).await.unwrap_or(None);
+        let serial_number = crate::api::nodes::serial_number_of(serial_number, meraki.as_ref());
         let dto = NodeStatusDto {
             node: NodeSummaryDto::from_node(
                 &node,
@@ -474,6 +484,7 @@ impl YagraMcp {
             snmp_configured: admin.dispatcher.snmp_configured_for(&node),
             notes,
             os_version,
+            serial_number,
             profile_locked,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
@@ -1071,6 +1082,44 @@ mod tests {
         let tool = json_of(&r);
         assert_eq!(
             tool["os_version"], VERSION,
+            "get_node_status folds GET /nodes/:node_id and must answer the same: {tool}"
+        );
+    }
+
+    /// Both surfaces report the same serial number (ADR-147), for the reason the version test above
+    /// gives — the pair after the write is what proves the fold.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_surfaces_agree_on_a_nodes_serial_number(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node_id = crate::pgtest::node(&pool, "sw-stack", 1, None).await;
+
+        let r = YagraMcp::new(st.clone())
+            .node_status_in(NodeIdParams { node_id }, &unrestricted())
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["serial_number"], serde_json::Value::Null);
+
+        const SERIAL: &str = "FCW1929B68S, FCW1931A06Z, FCW1929B6BP";
+        crate::pgtest::repo(pool.clone())
+            .update_serial_number_batch(&[(node_id, SERIAL.to_owned())])
+            .await
+            .expect("record a serial");
+
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{node_id}"), &tok, None).await;
+        assert_eq!(
+            detail["serial_number"], SERIAL,
+            "REST lost the serial: {detail}"
+        );
+        let r = YagraMcp::new(st.clone())
+            .node_status_in(NodeIdParams { node_id }, &unrestricted())
+            .await
+            .expect("ok result");
+        let tool = json_of(&r);
+        assert_eq!(
+            tool["serial_number"], SERIAL,
             "get_node_status folds GET /nodes/:node_id and must answer the same: {tool}"
         );
     }

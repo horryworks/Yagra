@@ -39,6 +39,7 @@ describe('overview fact rows', () => {
       'address',
       'maker',
       'model',
+      'serialNumber',
       'osVersion',
       'profile',
       'credential',
@@ -52,6 +53,7 @@ describe('overview fact rows', () => {
       'address',
       'maker',
       'model',
+      'serialNumber',
       'profile',
       'credential',
       'parent',
@@ -80,7 +82,7 @@ describe('overview fact rows', () => {
   it('drops the SNMP-derived rows from the kinds that are never SNMP-walked', () => {
     for (const kind of ['url', 'dns'] as const) {
       const rows = visibleFactRows(kind);
-      for (const r of ['maker', 'model', 'credential', 'uptime', 'address'] as const) {
+      for (const r of ['maker', 'model', 'serialNumber', 'credential', 'uptime', 'address'] as const) {
         expect(rows, `${kind}/${r}`).not.toContain(r);
       }
     }
@@ -91,6 +93,10 @@ describe('overview fact rows', () => {
       expect(visibleFactRows(kind).includes('osVersion'), kind).toBe(kind === 'device');
     }
     expect(visibleFactRows('meraki')).toContain('address');
+    // A Meraki node shows the serial it was imported with, a device the one ENTITY-MIB reports
+    // (ADR-147).
+    expect(visibleFactRows('meraki')).toContain('serialNumber');
+    expect(visibleFactRows('device')).toContain('serialNumber');
     // Only the DNS monitor names its resolver.
     for (const kind of NODE_KINDS) {
       expect(visibleFactRows(kind).includes('resolver'), kind).toBe(kind === 'dns');

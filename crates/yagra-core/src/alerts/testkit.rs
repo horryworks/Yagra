@@ -59,6 +59,7 @@ pub(crate) fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult
         sys_descr: None,
         os_version: None,
         os_version_without_patch: None,
+        serial_number: None,
         sys_object_id: None,
         dns_chain: None,
         neighbors: None,

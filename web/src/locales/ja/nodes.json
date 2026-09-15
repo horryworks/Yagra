@@ -9,6 +9,7 @@
     "snmpCredential": "SNMP 認証情報",
     "maker": "メーカー",
     "model": "モデル",
+    "serialNumber": "シリアル番号",
     "osVersion": "OS バージョン",
     "group": "グループ",
     "parentNode": "親ノード",

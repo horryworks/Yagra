@@ -22,6 +22,7 @@ export const FACT_ROWS = [
   'address',
   'maker',
   'model',
+  'serialNumber',
   'osVersion',
   'profile',
   'credential',
@@ -39,8 +40,16 @@ const PLACEMENT: readonly FactRow[] = ['group', 'pool', 'polledBy', 'profile', '
 /** Rows that come from an SNMP walk of the node itself, plus its management address. Only an
  *  ordinary device has them; a Meraki node keeps the descriptive ones because the org collector
  *  reports maker/model and the node has a real management address, but not `uptime` (no sysUpTime
- *  walk) — see [`FACT_ROWS_BY_KIND`]. */
-const DEVICE_IDENTITY: readonly FactRow[] = ['address', 'maker', 'model', 'credential'];
+ *  walk) — see [`FACT_ROWS_BY_KIND`]. The serial number belongs here too: an SNMP device's is read
+ *  from its ENTITY-MIB chassis rows, and a Meraki node's is the serial it was imported with
+ *  (ADR-147), so both kinds have a real value to show. */
+const DEVICE_IDENTITY: readonly FactRow[] = [
+  'address',
+  'maker',
+  'model',
+  'serialNumber',
+  'credential',
+];
 
 export const FACT_ROWS_BY_KIND: Record<NodeKind, readonly FactRow[]> = {
   // `osVersion` is read by the SNMP identity probe (ADR-138), so only a device has one. A Meraki
