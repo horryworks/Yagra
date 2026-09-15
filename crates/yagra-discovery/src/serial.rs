@@ -20,6 +20,11 @@
 //! first non-empty row gave an ASR9010 a line card's serial and a RouterOS box the name of a USB
 //! device, and index 1 is empty on both stacks.
 //!
+//! One narrow exception (Increment 3, decision 16): a device with **no class column at all** and
+//! exactly one distinct non-empty serial shows that serial. Two conditions, not one — "the first
+//! non-empty row" is still refused — and a real device is not expected to meet them, since
+//! ENTITY-MIB makes the class column mandatory; the lab's trimmed `ios_c3560` recording does.
+//!
 //! ## A stack shows every member
 //!
 //! Several chassis rows are joined in index order with `, ` (ADR-147 decision 2). A serial repeated
@@ -147,8 +152,27 @@ pub fn resolve_vendor(
 /// A serial with no class row beside it is not taken, and a chassis row with an empty serial is
 /// skipped rather than listed as a blank — a RouterOS box reports exactly that, with its only
 /// non-empty serial on a USB device.
+///
+/// One exception, for a device with **no class column at all** (Increment 3, decision 16): when
+/// `classes` is empty and the serial column holds exactly one distinct non-empty value, that value
+/// is the device — there is nothing to tell the rows apart, one candidate is unambiguous, and two
+/// would be a guess. The lab's `ios_c3560` recording is the case: LibreNMS trimmed the class column
+/// out and left one serial, `CAT0912N0CU`. A real device implements the class column (ENTITY-MIB
+/// makes it mandatory), so class rows present and no chassis among them stays `None`.
 #[must_use]
 pub fn resolve(classes: &BTreeMap<u32, i64>, serials: &BTreeMap<u32, String>) -> Option<String> {
+    if classes.is_empty() {
+        let mut distinct: Vec<String> = Vec::new();
+        for serial in serials.values().filter_map(|s| sanitize(s)) {
+            if !distinct.contains(&serial) {
+                distinct.push(serial);
+            }
+            if distinct.len() > 1 {
+                return None;
+            }
+        }
+        return distinct.pop();
+    }
     join(
         classes
             .iter()
@@ -306,6 +330,9 @@ mod tests {
     fn no_chassis_row_gives_nothing() {
         assert_eq!(resolved(&[(1, 9, "MOD1"), (2, 10, "PORT1")]), None);
         assert_eq!(resolved(&[]), None);
+        // A class column that is present and names no chassis is not one that is absent: the one
+        // serial here is a module's, and its class row says so (decision 16 does not apply).
+        assert_eq!(resolved(&[(1, 9, "MOD1")]), None);
     }
 
     /// A serial row with no class row at the same index is not assumed to be a chassis.
@@ -314,6 +341,33 @@ mod tests {
         let classes = BTreeMap::from([(1, 9)]);
         let serials = BTreeMap::from([(1, "MOD1".to_owned()), (2, "LONELY".to_owned())]);
         assert_eq!(resolve(&classes, &serials), None);
+    }
+
+    /// The shape of `ios_c3560` as LibreNMS recorded it: no class column at all, and one serial
+    /// (Increment 3, decision 16). With nothing to tell the rows apart, one candidate is the device.
+    #[test]
+    fn a_lone_serial_with_no_class_column_is_taken() {
+        let none = BTreeMap::new();
+        let serials = BTreeMap::from([(1001, "CAT0912N0CU".to_owned())]);
+        assert_eq!(resolve(&none, &serials).as_deref(), Some("CAT0912N0CU"));
+        // A blank row is not a candidate, so it does not make the one serial ambiguous.
+        let serials = BTreeMap::from([(1, "  ".to_owned()), (1001, "CAT0912N0CU".to_owned())]);
+        assert_eq!(resolve(&none, &serials).as_deref(), Some("CAT0912N0CU"));
+    }
+
+    /// One serial *repeated* is still one candidate — NX-OS writes its chassis serial on the stack
+    /// and module rows too — while two different serials are a guess, and a guess is not taken.
+    #[test]
+    fn with_no_class_column_only_one_distinct_serial_is_unambiguous() {
+        let none = BTreeMap::new();
+        let repeated = BTreeMap::from([
+            (10, "FDO2750P".to_owned()),
+            (22, "FDO2750P".to_owned()),
+            (149, "FDO2750P".to_owned()),
+        ]);
+        assert_eq!(resolve(&none, &repeated).as_deref(), Some("FDO2750P"));
+        let two = BTreeMap::from([(1, "CHASSIS1".to_owned()), (2, "MODULE1".to_owned())]);
+        assert_eq!(resolve(&none, &two), None);
     }
 
     #[test]

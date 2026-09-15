@@ -60,6 +60,10 @@ const WALK_MAX_REPETITIONS: u32 = 20;
 /// Fetch `oids` from `target` via SNMP v2c. Per-OID failures are logged and skipped so a
 /// single bad OID doesn't fail the whole poll — bounded by a [`WalkBudget`], so a device that
 /// answers nothing costs two round trips rather than one per OID (ADR-110 Increment 3).
+///
+/// `Ok(vec![])` means the agent answered and implements none of these OIDs; a device that
+/// answered **nothing** is [`TransportError::Silent`] instead (ADR-138 Increment 5), so the
+/// identity probe that rides this GET runs on the first and is not sent to the second.
 pub async fn snmp_get_v2c(
     target: IpAddr,
     community: &str,
@@ -98,6 +102,13 @@ pub async fn snmp_get_v2c(
                 budget.record(outcome_of(&e));
             }
         }
+    }
+    // Not one OID answered — not even with `noSuchObject` — is a device that is not there, and
+    // the caller must be able to tell that from a device that answered with nothing it implements
+    // (ADR-138 Increment 5). `samples` is necessarily empty here: a sample is only kept under an
+    // answer.
+    if budget.heard_nothing() {
+        return Err(TransportError::Silent(target));
     }
     Ok(samples)
 }
