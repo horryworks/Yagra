@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.20 — Folder paths and Members open what they name, pings no longer wait behind SNMP, slow SNMP devices keep their interface data, Huawei OS version despite a slow patch table**
+> Status: **v0.3.21 — Memory, CPU and temperature judged per row with row-name threshold rules, a Neighbors column on Interfaces, new installations poll every 5 minutes, traffic charts no longer go blank on slowly polled nodes**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
@@ -94,7 +94,9 @@ polling**. Users access it through the WebUI.
 > poller answers first, stopped mid-run, and it skips the addresses that do not answer ping — which
 > took a /24 on the test network from 5m21s to a fraction of it. And a dashboard card can now
 > **carry the name and the links you gave it**, plotting up to six interfaces from any nodes on one
-> chart with transmit above the line and receive below.
+> chart with transmit above the line and receive below. Vendor health tables are now **judged per
+> row**: each memory pool, CPU and temperature sensor is a check of its own, named in its alert, and
+> a threshold rule can pick the rows it applies to by name.
 > HA stores remain a configuration step away, not a rewrite.
 
 ## Components

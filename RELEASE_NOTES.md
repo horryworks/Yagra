@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.21 — Memory, CPU and temperature judged per row with row-name threshold rules, a Neighbors column on Interfaces, new installations poll every 5 minutes, traffic charts no longer go blank on slowly polled nodes
+
 ### New Features
 
 - **Memory, CPU and temperature are judged and shown per row — per memory pool, per CPU, per sensor.** A switch reports memory separately for each pool (`Processor`, `I/O`, …) and a chassis a CPU and a temperature per board. Until now an alert fired on the worst of them without saying which, and Device health showed a number that could come from a different one: on a Catalyst 2960S an alert said memory was above 80% (83.9) while the card said 56%, because the alert was about the I/O pool and the card showed the Processor pool. Now each row is its own check with its own alert, named after the row — `cisco_mem_used_pct on I/O above 80 (was 83.9)` — and Device health lists every row by name under its card. The memory card's headline and chart follow the fullest pool. The poller reads the row names from the device once an hour: a Cisco memory pool's own name, a Huawei board's ENTITY-MIB name, and so on. A row whose value is zero (a port on a Huawei stack has no memory of its own) is not listed.
@@ -33,6 +35,10 @@
 - **Interface utilization alerts and alerts on computed metrics (memory and disk used %) wait for as many polls as their rule says.** They are evaluated once a minute, and their breach count counted minutes, so on a node polled every 5 minutes "3 breaches" was met by one poll read three times. On a node polled less often than once a minute the count now covers that many polls; faster nodes keep counting minutes, as before.
 - **Flapping is detected on slowly polled nodes.** A check counted as flapping after 5 state changes within 10 minutes, which cannot happen when polls are 5 minutes apart. The window is now 20 polls long, and never shorter than 10 minutes.
 - **A folder's ▼ in Nodes ▸ All nodes now works while the tree is filtered.** With a search term, or a state, kind or pool filter, pressing ▼ beside a folder changed nothing on screen. It also quietly collapsed or expanded that folder in the unfiltered tree, which showed once the filter was cleared. Now the arrow opens and closes the folder while the filter is on. Each new filter starts with every folder open, and clearing the filter brings back the tree as you had it.
+
+### Security
+
+- **rustls is updated to 0.23.45 (RUSTSEC-2026-0285).** Version 0.23.40 accepted a TLS 1.3 handshake message sent at the wrong encryption level — a message that should have been encrypted, sent in plaintext in the same record as the one before it. The handshake itself stays authenticated, so this could not be used to alter or complete one. It applies to the TLS connections core and the pollers make through rustls.
 
 ## v0.3.20 — Folder paths and Members open what they name, pings no longer wait behind SNMP, slow SNMP devices keep their interface data, Huawei OS version despite a slow patch table
 
