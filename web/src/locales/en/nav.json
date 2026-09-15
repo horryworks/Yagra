@@ -17,6 +17,7 @@
   "nodes": {
     "all": "All nodes",
     "discovery": "Discovery",
+    "duplicates": "Duplicates",
     "profiles": "Device profiles",
     "classificationRules": "Classification rules",
     "reclassify": "Reclassify",
@@ -110,6 +111,7 @@
     "dashboardReports": "Scheduled and on-demand PDF reports on availability, capacity and SLA",
     "nodesAll": "Everything Yagra monitors, as a folder tree you can act on",
     "nodesDiscovery": "Scan a range for devices, and see what is on the network but unmonitored",
+    "nodesDuplicates": "Nodes that look like the same device added more than once, to pick the copies to delete",
     "topologyGeo": "Node groups placed on a world map by the coordinates you give them",
     "alertsActive": "What is wrong right now — the triage list",
     "alertsHistory": "Every alert that has fired and cleared, with who acknowledged it",

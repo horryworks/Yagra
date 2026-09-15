@@ -42,6 +42,7 @@ mod config_bundle;
 pub(crate) mod credentials;
 mod dashboard;
 pub(crate) mod discovery;
+pub(crate) mod duplicates;
 mod error;
 pub(crate) mod eventlog;
 mod events;
@@ -394,6 +395,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/readyz", get(readyz))
         // The inventory itself: listing, detail, and the folder/dependency-tree writes.
         .merge(nodes::routes())
+        // Nodes ▸ Duplicates (ADR-148): one read, whose cleanup is the bulk delete in `nodes`.
+        .merge(duplicates::routes())
         // Which pool the node effectively belongs to, and which poller currently holds it. Stays
         // with the Pollers view below, whose resolution helpers it shares.
         // URL/HTTP and DNS monitoring (ADR-033) — one node is one kind, see `api/checks.rs`.

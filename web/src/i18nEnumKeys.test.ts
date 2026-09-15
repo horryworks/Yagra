@@ -53,6 +53,9 @@ import {
   NODE_KINDS,
   UPGRADE_PROGRESS_COMMANDS,
   SITE_ID_BUILT_INS,
+  DUPLICATE_CONFIDENCES,
+  DUPLICATE_CONTRADICTIONS,
+  DUPLICATE_EVIDENCE_KINDS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -1141,5 +1144,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       expectKeys('scope label', { en, ja }, prefix, ['all', 'none', 'groups_other']);
       expectKeys('scope label (en plural)', { en, ja: en }, prefix, ['groups_one']);
     }
+  });
+  it('every duplicate evidence kind, confidence and contradiction has strings (monitoring:duplicates.*)', () => {
+    // Nodes ▸ Duplicates names each piece of evidence, and each reason a group is only "to check",
+    // from a value the server sent, so a new kind on the server must arrive with words in both
+    // languages rather than as a raw key on the operator's screen.
+    const locales = { en: enMonitoring, ja: jaMonitoring };
+    expectKeys('duplicate evidence kind', locales, 'duplicates.kind.', DUPLICATE_EVIDENCE_KINDS);
+    expectKeys('duplicate confidence', locales, 'duplicates.confidence.', DUPLICATE_CONFIDENCES);
+    expectKeys('duplicate contradiction', locales, 'duplicates.contradiction.', DUPLICATE_CONTRADICTIONS);
   });
 });

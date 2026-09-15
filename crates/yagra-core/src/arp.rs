@@ -194,6 +194,38 @@ impl ArpRepo {
             .collect()
     }
 
+    /// `(address, MAC)` from every node's ARP cache, for the addresses asked about — the duplicate
+    /// check's `arp_mac` evidence (ADR-148).
+    ///
+    /// Read from these per-node summaries and **not** from `l3_discovered`: that table keeps only the
+    /// endpoints nobody monitors ([`unmonitored`] drops every known address), so the MAC behind a
+    /// monitored address is never in it. Each summary is a bounded sample, so an address that fell
+    /// out of it is simply not reported.
+    pub async fn macs_for(&self, addresses: &[String]) -> anyhow::Result<Vec<(IpAddr, String)>> {
+        let rows = sqlx::query(concat!(
+            "SELECT DISTINCT e->>'ip' AS ip, e->>'mac' AS mac ",
+            "FROM node_arp, ",
+            "jsonb_array_elements(coalesce(summary->'entries', '[]'::jsonb)) e ",
+            "WHERE e->>'mac' IS NOT NULL AND e->>'ip' = ANY($1::text[])",
+        ))
+        .bind(addresses)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let ip = row
+                    .try_get::<Option<String>, _>("ip")
+                    .ok()
+                    .flatten()?
+                    .parse::<IpAddr>()
+                    .ok()?;
+                let mac = row.try_get::<Option<String>, _>("mac").ok().flatten()?;
+                Some((ip, mac))
+            })
+            .collect())
+    }
+
     /// The newest `last_seen` across every node, or `None` when no ARP walk has ever landed.
     ///
     /// The sweep's whole trigger, and its off switch: a deployment that never enabled ARP discovery

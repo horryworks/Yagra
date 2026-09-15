@@ -184,6 +184,59 @@
       "lock": "failed to lock the profiles"
     }
   },
+  "duplicates": {
+    "note": "Device nodes that look like the same device added more than once — at one address, or at two. Nothing is deleted until you choose.",
+    "unavailable": "Duplicate detection is unavailable in skeleton mode (no metadata store).",
+    "counts": "{{total}} groups ({{confident}} likely, {{possible}} to check) · {{scanned}} nodes compared",
+    "truncated": "Showing the first {{shown}} of {{total}} groups. Delete some and reload to see the rest.",
+    "selectKeepers": "Select all but the suggested keepers",
+    "clearSelection": "Clear selection",
+    "selectNode": "Select {{name}}",
+    "delete_one": "Delete {{count}} selected node",
+    "delete_other": "Delete {{count}} selected nodes",
+    "keep": "Suggested keep",
+    "root": "Top level",
+    "cols": {
+      "select": "Select",
+      "group": "Group",
+      "evidence": "Evidence",
+      "node": "Node",
+      "address": "Address",
+      "folder": "Folder",
+      "serial": "Serial number",
+      "added": "Added",
+      "dependents": "Dependents"
+    },
+    "confidence": {
+      "confident": "Likely duplicate",
+      "possible": "To check"
+    },
+    "kind": {
+      "address": "Same address",
+      "serial": "Same serial number",
+      "own_ip": "Each lists the other's address",
+      "own_ip_one_way": "One lists the other's address",
+      "arp_mac": "Same MAC address in ARP",
+      "lldp_chassis": "Same LLDP chassis ID",
+      "cdp_device_id": "Same CDP device ID",
+      "name": "Same name"
+    },
+    "contradiction": {
+      "serial_differs": "serial numbers differ",
+      "model_differs": "models (sysObjectID) differ"
+    },
+    "ignored_one": "{{count}} value was not used as evidence because more than 8 nodes share it: {{values}}",
+    "ignored_other": "{{count}} values were not used as evidence because more than 8 nodes share each of them: {{values}}",
+    "ignoredValue": "{{kind}} {{value}} ({{nodes}} nodes)",
+    "block": {
+      "keepOne": "Every node of group {{groups}} is selected. Leave at least one node of each group.",
+      "tooMany": "Select at most {{max}} nodes at a time."
+    },
+    "empty": "No duplicates among the nodes you can see.",
+    "emptyNothingToCompare": "There are fewer than two device nodes to compare.",
+    "emptyNoEvidence": "No duplicates by address or name. None of the {{count}} nodes has a serial number or an address list yet; the poller reads both over SNMP once an hour, so look again later.",
+    "hint": "A likely duplicate shares an address, a serial number, a MAC address or an LLDP chassis ID, or each node lists the other's address. A group to check shares only weaker signs, or has something that disagrees. Two routers sharing a VRRP or HSRP address can show up as one device: keep both."
+  },
   "sets": {
     "note": "Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it.",
     "unavailable": "Metric sets are unavailable in skeleton mode (no metadata store).",

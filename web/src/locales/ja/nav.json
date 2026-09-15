@@ -17,6 +17,7 @@
   "nodes": {
     "all": "すべてのノード",
     "discovery": "ディスカバリ",
+    "duplicates": "重複ノード",
     "profiles": "デバイスプロファイル",
     "classificationRules": "分類ルール",
     "reclassify": "分類のかけ直し",
@@ -110,6 +111,7 @@
     "dashboardReports": "可用性・キャパシティ・SLA の PDF レポート（定期実行と随時実行）",
     "nodesAll": "Yagra が監視している対象すべて。フォルダのツリーで操作できます",
     "nodesDiscovery": "範囲を指定して機器を探索。ネットワーク上にいて未監視のものも分かります",
+    "nodesDuplicates": "同じ機器を 2 回以上登録したらしいノードを並べ、消すものを選びます",
     "topologyGeo": "与えた座標にもとづき、ノードグループを世界地図上に配置します",
     "alertsActive": "今おきている異常 — 振り分け用の一覧",
     "alertsHistory": "発報して解消したアラートすべて。誰が ACK したかも含みます",

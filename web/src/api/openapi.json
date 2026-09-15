@@ -10781,6 +10781,56 @@
         }
       }
     },
+    "/api/v1/nodes/duplicates": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_duplicate_nodes",
+        "responses": {
+          "200": {
+            "description": "Groups of device nodes that look like one physical device registered more than once, with the evidence for each group and the member suggested to keep",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateNodesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/move": {
       "post": {
         "tags": [
@@ -26910,6 +26960,240 @@
           "AAAA",
           "CNAME"
         ]
+      },
+      "DuplicateConfidence": {
+        "type": "string",
+        "description": "How sure a group is.",
+        "enum": [
+          "confident",
+          "possible"
+        ]
+      },
+      "DuplicateContradiction": {
+        "type": "string",
+        "description": "Something in a group that says its members are *not* one device (decision 4).",
+        "enum": [
+          "serial_differs",
+          "model_differs"
+        ]
+      },
+      "DuplicateEvidence": {
+        "type": "object",
+        "description": "One piece of evidence.\n\nStrong kinds (`address`, `serial`, `own_ip`, `arp_mac`, `lldp_chassis`) are enough on their own.\nWeak kinds (`own_ip_one_way`, `cdp_device_id`, `name`) list a group only when two of them agree.",
+        "required": [
+          "kind",
+          "value",
+          "node_ids"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DuplicateEvidenceKind"
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The members that share it."
+          },
+          "value": {
+            "type": "string",
+            "description": "The shared value: the address, the serial number, the MAC address, the chassis or device id,\nor the name."
+          }
+        }
+      },
+      "DuplicateEvidenceKind": {
+        "type": "string",
+        "description": "One kind of evidence that two nodes are one device.\n\nOrdered strong-first so the evidence a group lists reads from the most to the least convincing.",
+        "enum": [
+          "address",
+          "serial",
+          "own_ip",
+          "own_ip_one_way",
+          "arp_mac",
+          "lldp_chassis",
+          "cdp_device_id",
+          "name"
+        ]
+      },
+      "DuplicateGroup": {
+        "type": "object",
+        "description": "One group of device nodes that look like one physical device.",
+        "required": [
+          "confidence",
+          "evidence",
+          "contradictions",
+          "members"
+        ],
+        "properties": {
+          "confidence": {
+            "$ref": "#/components/schemas/DuplicateConfidence",
+            "description": "`confident` when strong evidence joins the members and nothing in the group contradicts it;\n`possible` when only two kinds of weak evidence join them, or something contradicts it."
+          },
+          "contradictions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateContradiction"
+            },
+            "description": "What says the members are not one device. Never empty on a `confident` group's opposite:\na contradiction always makes the group `possible`."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateEvidence"
+            },
+            "description": "What the members share, strongest first."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateMember"
+            },
+            "description": "The member suggested to keep first, then the rest from the oldest registration."
+          }
+        }
+      },
+      "DuplicateIgnoredValue": {
+        "type": "object",
+        "description": "A value too many nodes share to count as evidence.",
+        "required": [
+          "kind",
+          "value",
+          "nodes"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DuplicateEvidenceKind"
+          },
+          "nodes": {
+            "type": "integer",
+            "description": "How many of the compared nodes share it.",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "DuplicateMember": {
+        "type": "object",
+        "description": "One node in a group.",
+        "required": [
+          "node_id",
+          "node_name",
+          "address",
+          "created_at",
+          "dependents",
+          "suggested_keep"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The monitored address."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the node was added."
+          },
+          "dependents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many nodes name this one as their dependency parent."
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The inventory folder; `null` ⇒ the tree root."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suggested_keep": {
+            "type": "boolean",
+            "description": "The member suggested to keep: the most depended-on, then the oldest. A suggestion only."
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DuplicateNodesView": {
+        "type": "object",
+        "description": "What Nodes ▸ Duplicates shows.",
+        "required": [
+          "groups",
+          "total",
+          "ignored",
+          "ignored_total",
+          "scanned",
+          "with_serial",
+          "with_address_list"
+        ],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateGroup"
+            },
+            "description": "Groups of device nodes that look like one physical device. Confident groups first, at most\n500 — `total` says how many there are."
+          },
+          "ignored": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateIgnoredValue"
+            },
+            "description": "Values not used as evidence because more than 8 of the compared nodes share them (a shared\nmonitored address always counts). The most widely shared first, at most 200."
+          },
+          "ignored_total": {
+            "type": "integer",
+            "description": "How many values were not used.",
+            "minimum": 0
+          },
+          "scanned": {
+            "type": "integer",
+            "description": "How many device nodes were compared.",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "description": "How many groups there are.",
+            "minimum": 0
+          },
+          "with_address_list": {
+            "type": "integer",
+            "description": "Of those, how many have an interface-address list. The poller reads it once an hour over\nSNMP when address discovery is on.",
+            "minimum": 0
+          },
+          "with_serial": {
+            "type": "integer",
+            "description": "Of those, how many report a serial number. The poller reads it once an hour over SNMP.",
+            "minimum": 0
+          }
+        }
       },
       "EnabledBody": {
         "type": "object",

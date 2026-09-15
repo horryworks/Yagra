@@ -172,6 +172,7 @@ pub(super) enum ConfigKind {
     NodeCollection,
     ClassificationRules,
     Reclassify,
+    DuplicateNodes,
     MibCatalog,
     MetricMeanings,
     UrlCheck,
@@ -216,6 +217,7 @@ impl ConfigKind {
         "node_collection",
         "classification_rules",
         "reclassify",
+        "duplicate_nodes",
         "mib_catalog",
         "metric_meanings",
         "url_check",
@@ -255,6 +257,7 @@ impl ConfigKind {
             "node_collection" => Self::NodeCollection,
             "classification_rules" => Self::ClassificationRules,
             "reclassify" => Self::Reclassify,
+            "duplicate_nodes" => Self::DuplicateNodes,
             "mib_catalog" => Self::MibCatalog,
             "metric_meanings" => Self::MetricMeanings,
             "url_check" => Self::UrlCheck,
@@ -300,6 +303,7 @@ impl ConfigKind {
             | Self::CollectionTemplates
             | Self::ClassificationRules
             | Self::Reclassify
+            | Self::DuplicateNodes
             | Self::MibCatalog
             | Self::MetricMeanings
             | Self::DiscoveryCandidates
@@ -334,6 +338,7 @@ impl ConfigKind {
             Self::NodeCollection => "node_collection",
             Self::ClassificationRules => "classification_rules",
             Self::Reclassify => "reclassify",
+            Self::DuplicateNodes => "duplicate_nodes",
             Self::MibCatalog => "mib_catalog",
             Self::MetricMeanings => "metric_meanings",
             Self::UrlCheck => "url_check",
@@ -374,7 +379,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 32 values.
+    /// Which configuration to read. Required; see the tool description for the 33 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -801,6 +806,12 @@ impl YagraMcp {
                        profile differs from the one the classification rules choose for their \
                        stored sysObjectID and sysDescr, each with the rule that chose it, plus how \
                        many are locked by a person and how many are not identified yet), \
+                       duplicate_nodes (device nodes that look like one physical device registered \
+                       more than once — under two addresses, or twice at one — grouped with the \
+                       evidence for each group; `confidence` is `confident` when strong evidence \
+                       joins them and nothing contradicts it and `possible` otherwise, the first \
+                       member of each group is the one suggested to keep, and `ignored` lists \
+                       values shared by too many nodes to count), \
                        mib_catalog (`search` filters, \
                        `limit` 1–2000, default 100), metric_meanings (one sentence per metric, \
                        plus whether it is a `check`, `derived` or `collected` number — \
@@ -996,6 +1007,14 @@ impl YagraMcp {
                 Ok(view) => ok_json(TOOL, &view),
                 Err(e) => tool_api_error(TOOL, &e),
             },
+            // Through the same `duplicates_view` the REST route calls (ADR-042 read parity), so the
+            // groups a scoped caller sees are decided once (ADR-148).
+            ConfigKind::DuplicateNodes => {
+                match crate::api::duplicates::duplicates_view(a, scope).await {
+                    Ok(view) => ok_json(TOOL, &view),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
             // Unreachable: answered above the live-mode gate. Written out anyway because the
             // match is exhaustive on purpose — that is what makes a new kind impossible to
             // forget — and because `unreachable!()` would put a panic here that only an edit to
@@ -1478,7 +1497,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            32,
+            33,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

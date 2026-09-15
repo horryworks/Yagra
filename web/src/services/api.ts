@@ -31,6 +31,7 @@ import type {
   ClassificationRuleInput,
   ReclassifyApplied,
   ReclassifyLocked,
+  DuplicateNodesView,
   ReclassifyView,
   CollectionKind,
   CollectionTemplate,
@@ -1788,6 +1789,11 @@ export const api = {
   /** Nodes ▸ Reclassify (ADR-140): the device nodes whose profile differs from the one the current
    *  classification rules choose. Computed on the server on every read; nothing is stored. */
   getReclassify: (): Promise<ReclassifyView> => apiGet('/api/v1/reclassify'),
+
+  /** Nodes ▸ Duplicates (ADR-148): device nodes that look like one device registered more than once,
+   *  grouped with the evidence for each group. Computed on the server on every read; the cleanup is
+   *  `deleteNodes`. */
+  getDuplicateNodes: (): Promise<DuplicateNodesView> => apiGet('/api/v1/nodes/duplicates'),
 
   /** Move nodes to the profile the rules choose. Each item echoes the profile the screen showed, so
    *  the server skips — and counts — a node someone re-profiled or locked since. */

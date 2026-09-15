@@ -96,6 +96,25 @@ pub struct ReclassifyInput {
     pub profile_locked: bool,
 }
 
+/// One device node as Nodes ▸ Duplicates compares it (ADR-148) — see [`NodeRepo::duplicate_inputs`].
+#[derive(Debug, Clone)]
+pub struct DuplicateInput {
+    pub id: Uuid,
+    pub name: String,
+    /// The monitored address.
+    pub address: IpAddr,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub group_id: Option<Uuid>,
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    /// `None` ⇒ never read (see `migrations/0119`). A stack's members are joined with `, `.
+    pub serial_number: Option<String>,
+    /// What the device last said it is; `None` ⇒ never read (see `migrations/0113`).
+    pub sys_object_id: Option<String>,
+    /// How many nodes name this one as their dependency parent, in any folder.
+    pub dependents: i64,
+}
+
 /// One accepted reclassification — see [`NodeRepo::apply_reclassification`].
 #[derive(Debug, Clone)]
 pub struct ReclassifyWrite {
@@ -1108,6 +1127,50 @@ impl NodeRepo {
                 })
             })
             .collect()
+    }
+
+    /// Every device node the caller may see, with what Nodes ▸ Duplicates compares (ADR-148), ordered
+    /// by name.
+    ///
+    /// Device nodes only ([`Self::DEVICE_NODE_PREDICATE`]): a URL or DNS monitor stores a resolved
+    /// address in `nodes.address`, and two monitors of one site are not one device registered twice.
+    ///
+    /// `dependents` counts every node that names this one as its dependency parent, **in any folder**.
+    /// It decides which member is suggested to keep, and that suggestion should not change with who
+    /// is asking; a count names no node.
+    pub async fn duplicate_inputs(
+        &self,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<DuplicateInput>> {
+        let sql = format!(
+            "SELECT n.id, n.name, host(n.address) AS address, n.created_at, n.group_id, n.vendor, n.model, n.serial_number, n.sys_object_id, coalesce(d.dependents, 0) AS dependents FROM nodes n LEFT JOIN (SELECT parent_id, count(*) AS dependents FROM nodes WHERE parent_id IS NOT NULL GROUP BY parent_id) d ON d.parent_id = n.id WHERE {scope} AND {device} ORDER BY n.name, n.id",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let rows = sqlx::query(&sql)
+            .bind(Self::scope_bind(groups))
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            // `host()`, never `::TEXT`: the cast renders the netmask and every parse would fail.
+            let Ok(address) = row.try_get::<String, _>("address")?.parse::<IpAddr>() else {
+                continue;
+            };
+            out.push(DuplicateInput {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                address,
+                created_at: row.try_get("created_at")?,
+                group_id: row.try_get("group_id")?,
+                vendor: row.try_get("vendor")?,
+                model: row.try_get("model")?,
+                serial_number: row.try_get("serial_number")?,
+                sys_object_id: row.try_get("sys_object_id")?,
+                dependents: row.try_get("dependents")?,
+            });
+        }
+        Ok(out)
     }
 
     /// Move each node to the profile the rules chose for it — **only while it is still on the
