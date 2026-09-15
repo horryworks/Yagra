@@ -83,6 +83,12 @@
   --tag-fg: var(--on-status);
   --match-fg: var(--text-primary);
 
+  /* ---- pins (ADR-146) — a node or folder this account keeps within reach ----
+     Its own yellow, NOT --status-warning: a pin says nothing about the device, and a mark in the
+     warning hue beside a status dot reads as "this one needs attention". Golden rather than pure
+     yellow on the light ground, where #ffd400 all but disappears against white. */
+  --pin-color: #d09c00;
+
   /* ---- status (§1.3) — network-state semantics; never reused for decoration ---- */
   --status-up: #2e7d32;
   --status-warning: #c77a0b;
@@ -265,6 +271,9 @@
 
   --supp-maintenance: #5cb8e0;
   --supp-mute: #d4bb4a;
+
+  /* The pin's yellow at full brightness — a 16px stroke, not a fill, so it cannot blind. */
+  --pin-color: #f5c518;
 
   /* The mirrored chart's two grounds on the dark surface (ADR-128). Lightness only, as above: the
      upper half lifts off #1f2630, the lower half sinks. Darkening both would leave the upper one
