@@ -99,6 +99,23 @@ test.describe('a pinned node', () => {
     await expect(row(page, 'sibling')).toHaveCount(1);
     await expect(row(page, 'far')).toHaveCount(1);
     await expect(page.locator('.ntree-body .ntree-pin'), 'the mark is on the pinned row only').toHaveCount(1);
+    // The mark wears the pin's own yellow at 16px — never the accent, and never a status hue, which
+    // beside a status dot would read as a state (`--pin-color` in tokens.css says why).
+    const mark = await page.locator('.ntree-body .ntree-pin').evaluate((el) => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--pin-color)';
+      document.body.appendChild(probe);
+      const expected = getComputedStyle(probe).color;
+      probe.remove();
+      const svg = el.querySelector('svg');
+      return {
+        color: getComputedStyle(el).color,
+        expected,
+        width: svg ? svg.getBoundingClientRect().width : 0,
+      };
+    });
+    expect(mark.color).toBe(mark.expected);
+    expect(mark.width).toBe(16);
 
     await pinnedOnly(page).click();
     await expect(pinnedOnly(page)).toHaveAttribute('aria-pressed', 'true');

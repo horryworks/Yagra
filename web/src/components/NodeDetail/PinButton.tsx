@@ -34,7 +34,7 @@ export function PinButton({ kind, id, onError }: Props) {
       aria-pressed={pinned}
       onClick={toggle}
     >
-      <PinIcon width={14} height={14} />
+      <PinIcon width={16} height={16} />
       {pinned ? t('detail.unpin') : t('detail.pin')}
     </Button>
   );

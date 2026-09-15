@@ -6,6 +6,11 @@
   gap: 6px;
 }
 
+/* The same yellow as the tree's mark, so the button reads as the thing that makes the mark. */
+.nd-pin svg {
+  color: var(--pin-color);
+}
+
 .nd-pin.on {
   border-color: var(--accent-color);
   color: var(--text-primary);

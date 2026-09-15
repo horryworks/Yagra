@@ -272,12 +272,14 @@
   display: inline-flex;
   align-items: center;
   margin-left: 4px;
-  color: var(--accent-color);
+  color: var(--pin-color);
 }
 
+/* 16px inside a 30px row: large enough to find down a long tree, small enough to leave the name
+   its column. */
 .ntree-pin svg {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
 }
 
 /* Ungrouped section header row (also the root drop zone). In the flattened/virtualized list it's a
