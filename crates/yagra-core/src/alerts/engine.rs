@@ -5604,6 +5604,37 @@ mod row_tests {
         (mgr, node)
     }
 
+    /// ADR-143 decision 3: a stored name stands in only until a poll delivers one, so the seed may
+    /// fill a row no poll has named but never replaces a name a poll did — whichever came first.
+    #[test]
+    fn a_seeded_row_name_never_replaces_one_a_poll_delivered() {
+        let (mgr, node) = setup(Vec::new());
+        let named = |row: u32| {
+            mgr.row_names
+                .read()
+                .unwrap()
+                .get(&node)
+                .and_then(|metrics| metrics.get(MEM))
+                .and_then(|rows| rows.get(&row))
+                .cloned()
+        };
+
+        // The poll first, then a seed carrying a stale name for the same row: the poll's name
+        // stands, and only the row the poll did not name is taken.
+        mgr.record_row_names(node, &[name(MEM, 7, "MPU Board 0")]);
+        let taken = mgr.seed_row_names([
+            (node, MEM.to_owned(), 7, "stale".to_owned()),
+            (node, MEM.to_owned(), 8, "MPU Board 1".to_owned()),
+        ]);
+        assert_eq!(taken, 1);
+        assert_eq!(named(7).as_deref(), Some("MPU Board 0"));
+        assert_eq!(named(8).as_deref(), Some("MPU Board 1"));
+
+        // The seed first, then a poll: the poll's name replaces the seeded one.
+        mgr.record_row_names(node, &[name(MEM, 8, "MPU Board 1 (renamed)")]);
+        assert_eq!(named(8).as_deref(), Some("MPU Board 1 (renamed)"));
+    }
+
     /// The accepting side first: a breaching row fires on its own check, named, and a healthy row
     /// and a zero row leave nothing behind — the property that keeps a 306-row table affordable.
     #[test]

@@ -125,6 +125,26 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/metrics/huawei_cpu_usage');
   });
 
+  it('passes rows on the latest metric read (ADR-143)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeMetric('n1', 'cisco_mem_used', { agg: 'max', rows: true });
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/metrics/cisco_mem_used?agg=max&rows=true');
+  });
+
+  it('builds the range path for one table row (ADR-143)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeMetricRange('n1', 'cisco_mem_used', { from: 100, to: 200, row: 2 });
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/nodes/n1/metrics/cisco_mem_used/range?from=100&to=200&row=2',
+    );
+  });
+
   it('builds the range path with the agg param', async () => {
     const spy = vi
       .fn()

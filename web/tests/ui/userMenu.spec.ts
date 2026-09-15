@@ -124,6 +124,9 @@ test('the address Preferences used to have opens the dialog instead of vanishing
 
 test('Settings no longer lists Preferences anywhere in its sidebar', async ({ page }) => {
   await page.goto('/settings/system-health');
+  // `allTextContents()` does not wait, so read only once the sidebar has drawn more than five items —
+  // read straight after `goto`, it could run before the render and see none.
+  await expect(page.locator('.sidebar-item').nth(5)).toBeAttached();
   const items = await page.locator('.sidebar-item').allTextContents();
   expect(items.length).toBeGreaterThan(5);
   expect(items.map((s) => s.trim())).not.toContain('Preferences');
