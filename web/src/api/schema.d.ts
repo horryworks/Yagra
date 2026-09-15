@@ -2119,6 +2119,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/duplicates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_duplicate_nodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/move": {
         parameters: {
             query?: never;
@@ -6588,6 +6604,117 @@ export interface components {
          * @enum {string}
          */
         DnsRecordType: "A" | "AAAA" | "CNAME";
+        /**
+         * @description How sure a group is.
+         * @enum {string}
+         */
+        DuplicateConfidence: "confident" | "possible";
+        /**
+         * @description Something in a group that says its members are *not* one device (decision 4).
+         * @enum {string}
+         */
+        DuplicateContradiction: "serial_differs" | "model_differs";
+        /**
+         * @description One piece of evidence.
+         *
+         *     Strong kinds (`address`, `serial`, `own_ip`, `arp_mac`, `lldp_chassis`) are enough on their own.
+         *     Weak kinds (`own_ip_one_way`, `cdp_device_id`, `name`) list a group only when two of them agree.
+         */
+        DuplicateEvidence: {
+            kind: components["schemas"]["DuplicateEvidenceKind"];
+            /** @description The members that share it. */
+            node_ids: string[];
+            /**
+             * @description The shared value: the address, the serial number, the MAC address, the chassis or device id,
+             *     or the name.
+             */
+            value: string;
+        };
+        /**
+         * @description One kind of evidence that two nodes are one device.
+         *
+         *     Ordered strong-first so the evidence a group lists reads from the most to the least convincing.
+         * @enum {string}
+         */
+        DuplicateEvidenceKind: "address" | "serial" | "own_ip" | "own_ip_one_way" | "arp_mac" | "lldp_chassis" | "cdp_device_id" | "name";
+        /** @description One group of device nodes that look like one physical device. */
+        DuplicateGroup: {
+            /**
+             * @description `confident` when strong evidence joins the members and nothing in the group contradicts it;
+             *     `possible` when only two kinds of weak evidence join them, or something contradicts it.
+             */
+            confidence: components["schemas"]["DuplicateConfidence"];
+            /**
+             * @description What says the members are not one device. Never empty on a `confident` group's opposite:
+             *     a contradiction always makes the group `possible`.
+             */
+            contradictions: components["schemas"]["DuplicateContradiction"][];
+            /** @description What the members share, strongest first. */
+            evidence: components["schemas"]["DuplicateEvidence"][];
+            /** @description The member suggested to keep first, then the rest from the oldest registration. */
+            members: components["schemas"]["DuplicateMember"][];
+        };
+        /** @description A value too many nodes share to count as evidence. */
+        DuplicateIgnoredValue: {
+            kind: components["schemas"]["DuplicateEvidenceKind"];
+            /** @description How many of the compared nodes share it. */
+            nodes: number;
+            value: string;
+        };
+        /** @description One node in a group. */
+        DuplicateMember: {
+            /** @description The monitored address. */
+            address: string;
+            /**
+             * Format: date-time
+             * @description When the node was added.
+             */
+            created_at: string;
+            /**
+             * Format: int64
+             * @description How many nodes name this one as their dependency parent.
+             */
+            dependents: number;
+            /**
+             * Format: uuid
+             * @description The inventory folder; `null` ⇒ the tree root.
+             */
+            group_id?: string | null;
+            model?: string | null;
+            /** Format: uuid */
+            node_id: string;
+            node_name: string;
+            serial_number?: string | null;
+            /** @description The member suggested to keep: the most depended-on, then the oldest. A suggestion only. */
+            suggested_keep: boolean;
+            vendor?: string | null;
+        };
+        /** @description What Nodes ▸ Duplicates shows. */
+        DuplicateNodesView: {
+            /**
+             * @description Groups of device nodes that look like one physical device. Confident groups first, at most
+             *     500 — `total` says how many there are.
+             */
+            groups: components["schemas"]["DuplicateGroup"][];
+            /**
+             * @description Values not used as evidence because more than 8 of the compared nodes share them (a shared
+             *     monitored address always counts). The most widely shared first, at most 200.
+             */
+            ignored: components["schemas"]["DuplicateIgnoredValue"][];
+            /** @description How many values were not used. */
+            ignored_total: number;
+            /** @description How many device nodes were compared. */
+            scanned: number;
+            /** @description How many groups there are. */
+            total: number;
+            /**
+             * @description Of those, how many have an interface-address list. The poller reads it once an hour over
+             *     SNMP when address discovery is on.
+             */
+            with_address_list: number;
+            /** @description Of those, how many report a serial number. The poller reads it once an hour over SNMP. */
+            with_serial: number;
+        };
         /**
          * @description The body of an enable/disable toggle — `{"enabled": true}`.
          *
@@ -20337,6 +20464,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_duplicate_nodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Groups of device nodes that look like one physical device registered more than once, with the evidence for each group and the member suggested to keep */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicateNodesView"];
                 };
             };
             /** @description No valid bearer token */

@@ -600,6 +600,21 @@ impl MerakiDeviceRepo {
             .collect()
     }
 
+    /// Every Meraki node's serial, by node id — one of the duplicate check's serial sources (ADR-148).
+    pub async fn serials_by_node(&self) -> anyhow::Result<std::collections::HashMap<Uuid, String>> {
+        let rows = sqlx::query("SELECT node_id, serial FROM meraki_devices")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok((
+                    r.try_get::<Uuid, _>("node_id")?,
+                    r.try_get::<String, _>("serial")?,
+                ))
+            })
+            .collect()
+    }
+
     /// The Meraki binding for a node, if it is a Meraki device (joins the org for its `org_id`).
     pub async fn get(&self, node_id: Uuid) -> anyhow::Result<Option<MerakiDeviceConfig>> {
         let row = sqlx::query(

@@ -181,6 +181,57 @@
       "lock": "プロファイルを固定できませんでした"
     }
   },
+  "duplicates": {
+    "note": "同じ機器を 2 回以上登録したらしい機器ノードです。同じアドレスでも、別のアドレスでも見つけます。選んで削除するまで何も消えません。",
+    "unavailable": "スケルトンモードでは重複ノードの検出は利用できません（メタデータストアなし）。",
+    "counts": "{{total}} 組（重複の可能性が高い {{confident}}・要確認 {{possible}}）· 比べたノード {{scanned}} 台",
+    "truncated": "{{total}} 組のうち先頭の {{shown}} 組を表示しています。削除して読み直すと続きが出ます。",
+    "selectKeepers": "残す候補以外をすべて選択",
+    "clearSelection": "選択を外す",
+    "selectNode": "{{name}} を選択",
+    "delete_other": "選んだ {{count}} 台を削除",
+    "keep": "残す候補",
+    "root": "最上位",
+    "cols": {
+      "select": "選択",
+      "group": "組",
+      "evidence": "根拠",
+      "node": "ノード",
+      "address": "アドレス",
+      "folder": "フォルダ",
+      "serial": "シリアル番号",
+      "added": "登録日時",
+      "dependents": "依存"
+    },
+    "confidence": {
+      "confident": "重複の可能性が高い",
+      "possible": "要確認"
+    },
+    "kind": {
+      "address": "同じアドレス",
+      "serial": "同じシリアル番号",
+      "own_ip": "互いのアドレスを持つ",
+      "own_ip_one_way": "片方が相手のアドレスを持つ",
+      "arp_mac": "ARP で同じ MAC アドレス",
+      "lldp_chassis": "LLDP の筐体 ID が同じ",
+      "cdp_device_id": "CDP の装置 ID が同じ",
+      "name": "同じ名前"
+    },
+    "contradiction": {
+      "serial_differs": "シリアル番号が違う",
+      "model_differs": "機種 (sysObjectID) が違う"
+    },
+    "ignored_other": "{{count}} 個の値は 8 台より多くのノードが持つため、根拠に使っていません: {{values}}",
+    "ignoredValue": "{{kind}} {{value}}（{{nodes}} 台）",
+    "block": {
+      "keepOne": "組 {{groups}} のノードをすべて選んでいます。各組で 1 台は残してください。",
+      "tooMany": "一度に選べるのは {{max}} 台までです。"
+    },
+    "empty": "見えるノードの中に重複はありません。",
+    "emptyNothingToCompare": "比べる機器ノードが 2 台未満です。",
+    "emptyNoEvidence": "アドレスと名前では重複は見つかりませんでした。{{count}} 台のどれにも、シリアル番号とアドレス一覧がまだありません。ポーラーが SNMP で 1 時間ごとに読むので、時間をおいて開き直してください。",
+    "hint": "重複の可能性が高い組は、アドレス・シリアル番号・MAC アドレス・LLDP の筐体 ID のどれかが同じか、互いのアドレスを持っています。要確認の組は、弱い手がかりだけでつながっているか、食い違う点があります。VRRP や HSRP で仮想アドレスを共有する 2 台のルータが 1 台として出ることがあります。その場合は両方残してください。"
+  },
   "sets": {
     "note": "使い回せるメトリクスの束です。デバイスプロファイルに紐付けておけば、束を 1 か所直すだけで、使っているすべてのプロファイルに反映されます。",
     "unavailable": "スケルトンモードではメトリクスセットは利用できません（メタデータストアなし）。",

@@ -104,6 +104,14 @@ export const NAV: NavSection[] = [
             path: '/nodes/discovery',
             implemented: true,
           },
+          // The way out beside the way in: Discovery adds nodes, this finds the ones added twice — at
+          // one address or at two — and deletes the copies an operator picks (ADR-148).
+          {
+            labelKey: 'nodes.duplicates',
+            descKey: 'descriptions.nodesDuplicates',
+            path: '/nodes/duplicates',
+            implemented: true,
+          },
         ],
       },
       {

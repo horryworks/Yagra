@@ -165,6 +165,58 @@ impl L3Repo {
         Ok(out)
     }
 
+    /// The rows of any node's own interface-address list that name one of `addresses` — the
+    /// duplicate check's `own_ip` evidence (ADR-148).
+    ///
+    /// Narrowed in SQL to the addresses asked about, so the answer is sized by the candidates rather
+    /// than by the fleet's addressing. A row whose type does not identify its node is dropped here
+    /// (`L3AddrType::identifies_a_node`): a VRRP or HSRP virtual address lives on two routers by
+    /// design, and would otherwise make them one device.
+    pub async fn rows_naming(&self, addresses: &[String]) -> anyhow::Result<Vec<(Uuid, IpAddr)>> {
+        let rows = sqlx::query(concat!(
+            "SELECT l.node_id, a->>'ip' AS ip, a->>'addr_type' AS addr_type ",
+            "FROM node_l3 l, ",
+            "jsonb_array_elements(coalesce(l.addresses->'addresses', '[]'::jsonb)) a ",
+            "WHERE a->>'ip' = ANY($1::text[])",
+        ))
+        .bind(addresses)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::new();
+        for row in rows {
+            let Some(ip) = row
+                .try_get::<Option<String>, _>("ip")?
+                .and_then(|s| s.parse::<IpAddr>().ok())
+            else {
+                continue;
+            };
+            let kind = row
+                .try_get::<Option<String>, _>("addr_type")?
+                .as_deref()
+                .and_then(yagra_common::L3AddrType::from_token)
+                .unwrap_or_default();
+            if kind.identifies_a_node() {
+                out.push((row.try_get("node_id")?, ip));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Which of `nodes` have an interface-address list at all (ADR-148). A list that does not name an
+    /// address is evidence against `own_ip`; no list is only the absence of evidence.
+    pub async fn nodes_with_a_list(
+        &self,
+        nodes: &[Uuid],
+    ) -> anyhow::Result<std::collections::BTreeSet<Uuid>> {
+        let rows = sqlx::query("SELECT node_id FROM node_l3 WHERE node_id = ANY($1)")
+            .bind(nodes)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| Ok(row.try_get("node_id")?))
+            .collect()
+    }
+
     /// Drop history rows older than `retention_secs`. Returns how many were removed.
     pub async fn prune_changes(&self, retention_secs: i64) -> anyhow::Result<u64> {
         let res =

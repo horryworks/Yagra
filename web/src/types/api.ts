@@ -81,6 +81,9 @@ const schemaEnumPins: {
   OidcProviderKind: AssertEqual<OidcProviderKind, components['schemas']['OidcProviderKind']>;
   TokenSurface: AssertEqual<TokenSurface, components['schemas']['TokenSurface']>;
   NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
+  DuplicateEvidenceKind: AssertEqual<DuplicateEvidenceKind, components['schemas']['DuplicateEvidenceKind']>;
+  DuplicateConfidence: AssertEqual<DuplicateConfidence, components['schemas']['DuplicateConfidence']>;
+  DuplicateContradiction: AssertEqual<DuplicateContradiction, components['schemas']['DuplicateContradiction']>;
   NeighborCapability: AssertEqual<NeighborCapability, components['schemas']['NeighborCapability']>;
   LinkSource: AssertEqual<LinkSource, components['schemas']['LinkSource']>;
   LinkOverrideAction: AssertEqual<LinkOverrideAction, components['schemas']['LinkOverrideAction']>;
@@ -122,6 +125,9 @@ const schemaEnumPins: {
   TopologyMode: true,
   RcaConfidence: true,
   TlsCertSource: true,
+  DuplicateEvidenceKind: true,
+  DuplicateConfidence: true,
+  DuplicateContradiction: true,
 };
 void schemaEnumPins;
 
@@ -663,6 +669,38 @@ export type ReclassifyApplied = components['schemas']['ReclassifyApplied'];
 
 /** What `POST /api/v1/reclassify/lock` did. */
 export type ReclassifyLocked = components['schemas']['ReclassifyLocked'];
+
+/** Nodes ▸ Duplicates (`GET /api/v1/nodes/duplicates`, ADR-148): device nodes that look like one
+ *  device registered more than once, grouped with the evidence for each group. */
+export type DuplicateNodesView = components['schemas']['DuplicateNodesView'];
+/** One group of nodes that look like one device. */
+export type DuplicateGroup = components['schemas']['DuplicateGroup'];
+/** One node in a group. */
+export type DuplicateMember = components['schemas']['DuplicateMember'];
+/** A value too many nodes share to count as evidence. */
+export type DuplicateIgnoredValue = components['schemas']['DuplicateIgnoredValue'];
+
+/** What two nodes can share that says they are one device. The screen names each one from the value
+ *  the server sent, so the list must exist at runtime; `schemaEnumPins` ties it to the schema. */
+export const DUPLICATE_EVIDENCE_KINDS = [
+  'address',
+  'serial',
+  'own_ip',
+  'own_ip_one_way',
+  'arp_mac',
+  'lldp_chassis',
+  'cdp_device_id',
+  'name',
+] as const;
+export type DuplicateEvidenceKind = (typeof DUPLICATE_EVIDENCE_KINDS)[number];
+
+/** How sure a duplicate group is. Same reason as above. */
+export const DUPLICATE_CONFIDENCES = ['confident', 'possible'] as const;
+export type DuplicateConfidence = (typeof DUPLICATE_CONFIDENCES)[number];
+
+/** What in a group says its members are not one device. Same reason as above. */
+export const DUPLICATE_CONTRADICTIONS = ['serial_differs', 'model_differs'] as const;
+export type DuplicateContradiction = (typeof DUPLICATE_CONTRADICTIONS)[number];
 
 /** A discovery scan's status (`GET /api/v1/discovery/scan/:id`), with the candidates that are
  *  already device nodes listed beside them (ADR-139). */

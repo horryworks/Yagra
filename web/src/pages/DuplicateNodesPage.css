@@ -1,0 +1,42 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Nodes ▸ Duplicates (ADR-148). The table itself is DataTable's; these are the group shading, the two
+   cells that carry a label beside their text, and the lines around the table. */
+
+/* A state the row is in (which group it belongs to), never its height — DataTable's rowClass rule. */
+.dup-shade-odd {
+  background: var(--bg-secondary);
+}
+
+.dup-group,
+.dup-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dup-node > a,
+.dup-evidence {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dup-group-no {
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+}
+
+.dup-against {
+  color: var(--status-warning);
+}
+
+.dup-counts {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dup-ignored,
+.dup-hint {
+  margin-top: 8px;
+}

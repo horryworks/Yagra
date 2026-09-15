@@ -42,6 +42,7 @@ mod dashboard;
 mod derived;
 mod discovery;
 mod dns_check;
+mod duplicates;
 mod events;
 mod flow_ingest;
 mod flowstore;

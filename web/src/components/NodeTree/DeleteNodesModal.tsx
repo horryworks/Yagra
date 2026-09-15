@@ -16,7 +16,7 @@ export function DeleteNodesModal({
   onClose,
   onDeleted,
 }: {
-  targets: NodeSummary[];
+  targets: readonly Pick<NodeSummary, 'id' | 'name'>[];
   onClose: () => void;
   /** Called once the server has deleted what it will — also when that was not every target, so the
    *  tree and the working set follow what actually went. The dialog closes itself only when all

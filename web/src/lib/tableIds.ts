@@ -42,6 +42,7 @@ export const TABLE_IDS = [
   'nodes.classification',
   'nodes.collectionTemplates',
   'nodes.dependencies',
+  'nodes.duplicates',
   'nodes.mib',
   'nodes.reclassify',
   // Events

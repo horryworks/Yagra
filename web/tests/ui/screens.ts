@@ -100,6 +100,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/nodes/profiles': MARKER,
   '/nodes/classification-rules': MARKER,
   '/nodes/reclassify': MARKER,
+  '/nodes/duplicates': MARKER,
   '/nodes/collection-templates': MARKER,
   '/nodes/mib': MARKER,
   '/topology/map': { kind: 'text', text: 'node in the inventory' },

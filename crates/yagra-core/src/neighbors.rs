@@ -237,6 +237,40 @@ impl NeighborRepo {
             .collect()
     }
 
+    /// What neighbours report about the devices at the addresses asked about — the duplicate check's
+    /// `lldp_chassis` and `cdp_device_id` evidence (ADR-148): each distinct management address,
+    /// chassis or device id, and protocol.
+    pub async fn reports_about(
+        &self,
+        addresses: &[String],
+    ) -> anyhow::Result<Vec<(std::net::IpAddr, String, yagra_common::NeighborProto)>> {
+        let rows = sqlx::query(concat!(
+            "SELECT DISTINCT n->>'remote_mgmt_addr' AS addr, n->>'remote_chassis' AS chassis, ",
+            "n->>'proto' AS proto ",
+            "FROM node_neighbors, ",
+            "jsonb_array_elements(coalesce(neighbors->'neighbors', '[]'::jsonb)) n ",
+            "WHERE n->>'remote_mgmt_addr' = ANY($1::text[])",
+        ))
+        .bind(addresses)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let addr = row
+                    .try_get::<Option<String>, _>("addr")
+                    .ok()
+                    .flatten()?
+                    .parse()
+                    .ok()?;
+                let chassis = row.try_get::<Option<String>, _>("chassis").ok().flatten()?;
+                let proto = row.try_get::<Option<String>, _>("proto").ok().flatten()?;
+                let proto = serde_json::from_value(serde_json::Value::String(proto)).ok()?;
+                Some((addr, chassis, proto))
+            })
+            .collect())
+    }
+
     /// The newest `last_seen` across every node, or `None` when nothing has been observed.
     ///
     /// Half of the derivation task's change signal — see `L3Repo::observation_watermark` for why

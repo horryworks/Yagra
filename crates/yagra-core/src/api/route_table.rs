@@ -1256,6 +1256,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/nodes/duplicates",
+        // `GroupFiltered`, like `/reclassify` (ADR-148): every answer is a node, and `manage_config`
+        // is Operator-held and an Operator can be scoped.
+        GroupFiltered,
+        Tool("get_config"),
+    ),
+    (
+        "GET",
         "/api/v1/notification-channels",
         ADMIN_CFG,
         Tool("get_config"),
