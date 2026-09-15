@@ -30,11 +30,13 @@ const IDENTITY_COLUMN_ROWS: usize = 256;
 /// Serial-number reads (ADR-147), one per identity probe, by what they found — `serial` (a row
 /// carried one), `none` (every walk finished and nothing did: no ENTITY-MIB, or an empty serial) or
 /// `unread` (a walk failed or did not finish, so nothing was sent) — and by `source`, the read that
-/// decided it: a vendor's own MIB (`juniper`, Increment 2) or `entity`. The first result against the
+/// decided it: a vendor's own MIB (`juniper`, Increment 2), a Huawei's main boards (`huawei`,
+/// Increment 4, counted only when the boards decided) or `entity`. The first result against the
 /// second, per source, is how much of a fleet each rule actually covers.
 pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
 
-/// The most rows the serial read takes from ENTITY-MIB's two columns together. A chassis with every
+/// The most rows the serial read takes from ENTITY-MIB's columns together — two, or three on a Huawei
+/// (Increment 4). A chassis with every
 /// line card, power supply and transceiver is some hundreds of rows per column; the cap is what
 /// keeps an hourly read from turning into a dump of a device listing thousands of sensors. A walk it
 /// stops sends no serial rather than a partial list (ADR-147 decision 4).
@@ -230,6 +232,9 @@ impl SnmpWalker {
     /// would replace three members' serials with one (decision 4) — and a vendor walk that did not
     /// finish does not fall back to ENTITY-MIB, for the same reason (decision 12). The wait is the
     /// one the patch table gets: a whole-column walk on a slow agent is not a scalar GET.
+    ///
+    /// A Huawei is walked for `entPhysicalName` as well, and its members' main boards are tried before
+    /// the chassis rows (Increment 4) — out of the same walk, so an unfinished one still sends nothing.
     async fn read_serial_number(
         &self,
         transport: &dyn Transport,
@@ -275,10 +280,13 @@ impl SnmpWalker {
                 return Some(found);
             }
         }
-        let columns = [
+        let mut columns = vec![
             serial::OID_ENT_PHYSICAL_CLASS.to_owned(),
             serial::OID_ENT_PHYSICAL_SERIAL_NUM.to_owned(),
         ];
+        if serial::reads_board_names(sys_object_id) {
+            columns.push(serial::OID_ENT_PHYSICAL_NAME.to_owned());
+        }
         let walk = match self
             .walk_instance_columns(transport, target, &columns, timeout, SERIAL_ENTITY_ROWS)
             .await
@@ -291,6 +299,7 @@ impl SnmpWalker {
         };
         let mut classes = std::collections::BTreeMap::new();
         let mut serials = std::collections::BTreeMap::new();
+        let mut names = std::collections::BTreeMap::new();
         for row in walk.rows {
             // Both columns are indexed by `entPhysicalIndex` alone; a longer index is not a row of
             // this table.
@@ -309,9 +318,20 @@ impl SnmpWalker {
                 {
                     serials.insert(index, String::from_utf8_lossy(&bytes).into_owned());
                 }
+                yagra_transport::SnmpValue::Bytes(bytes)
+                    if row.oid_base == serial::OID_ENT_PHYSICAL_NAME =>
+                {
+                    names.insert(index, String::from_utf8_lossy(&bytes).into_owned());
+                }
                 // A class that is not an integer, or a serial that is not a string, says nothing.
                 _ => {}
             }
+        }
+        // Only a Huawei was walked for names, so for every other device there are none and this is
+        // `None` (Increment 4). Out of the same walk as the chassis rows, so decision 4 still holds.
+        if let Some(found) = serial::resolve_huawei_boards(&classes, &names, &serials) {
+            count("huawei", "serial");
+            return Some(found);
         }
         let resolved = serial::resolve(&classes, &serials);
         count("entity", if resolved.is_some() { "serial" } else { "none" });
@@ -1319,6 +1339,129 @@ mod tests {
         assert_eq!(r.outcome, CheckOutcome::Unreachable, "no scalar answered");
         assert_eq!(r.serial_number.as_deref(), Some("CAT0912N0CU"));
         assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// A Huawei as the identity probe meets it (ADR-147 Increment 4): `sysDescr` and `sysObjectID`
+    /// answered, and ENTITY-MIB rows as `(index, class, name, serial)`.
+    fn huawei(rows: &[(u32, i64, &str, &str)]) -> FakeTransport {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        let mut t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row(
+                    "1.3.6.1.2.1.1.1",
+                    0,
+                    "S6730-H48X6C\r\nHuawei Versatile Routing Platform Software\r\nVRP (R) software, Version 5.170 (S6730 V200R020C10SPC500)",
+                ),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.2011.2.23.291"),
+            ]);
+        for (index, class, name, serial_number) in rows {
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_CLASS.to_owned(),
+                instance: vec![*index],
+                value: SnmpValue::Int(*class),
+            });
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_NAME.to_owned(),
+                instance: vec![*index],
+                value: SnmpValue::Bytes(name.as_bytes().to_vec()),
+            });
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_SERIAL_NUM.to_owned(),
+                instance: vec![*index],
+                value: SnmpValue::Bytes(serial_number.as_bytes().to_vec()),
+            });
+        }
+        t
+    }
+
+    /// The PoC's TDC1004CO01 as it was walked: one chassis row repeating member 0's serial, and each
+    /// member's main board.
+    fn huawei_stack() -> FakeTransport {
+        huawei(&[
+            (67_108_867, 3, "HUAWEI S6730 Routing Switch", "1021A0356448"),
+            (67_108_873, 9, "MPU Board 0", "1021A0356448"),
+            (67_190_797, 9, "POWER Card 0/PWR1", "21021317408NM8002774"),
+            (68_157_449, 9, "MPU Board 1", "1021A0356352"),
+        ])
+    }
+
+    /// The serial walk asked for the name column — both columns in one call, so a names walk made
+    /// for some other reason cannot answer for it.
+    fn walked_board_names(t: &FakeTransport) -> bool {
+        t.asked().iter().any(|call| {
+            call.iter().any(|o| o == serial::OID_ENT_PHYSICAL_NAME)
+                && call
+                    .iter()
+                    .any(|o| o == serial::OID_ENT_PHYSICAL_SERIAL_NUM)
+        })
+    }
+
+    /// ADR-147 Increment 4: a Huawei stack lists every member's main board, where the chassis rule
+    /// showed member 0 alone.
+    #[tokio::test]
+    async fn a_huawei_stack_lists_every_members_main_board() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = huawei_stack();
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some("1021A0356448, 1021A0356352")
+        );
+        assert!(walked_board_names(&t), "{:?}", t.asked());
+    }
+
+    /// Decision 17: only a Huawei pays for the third column.
+    #[tokio::test]
+    async fn a_device_that_is_not_a_huawei_is_not_walked_for_names() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = catalyst_stack();
+        let r = execute(&job, &t, 1_000).await;
+        assert!(r.serial_number.is_some());
+        assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+        assert!(!walked_board_names(&t), "{:?}", t.asked());
+    }
+
+    /// 🚨 Decision 20 (decision 4 again): every row is in hand, so only the walk's own verdict stops
+    /// a half-read stack from sending one member's serial.
+    #[tokio::test]
+    async fn an_unfinished_huawei_walk_sends_no_serial() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let r = execute(
+            &job,
+            &huawei_stack().with_unanswered_instance_columns(),
+            1_000,
+        )
+        .await;
+        assert_eq!(r.serial_number, None);
+        assert!(r.sys_descr.is_some(), "the device did answer");
+
+        let r = execute(&job, &huawei_stack().with_silent_instance_walks(), 1_000).await;
+        assert_eq!(r.serial_number, None, "a walk that failed outright");
+    }
+
+    /// A Huawei whose main board carries no serial is read by the chassis rule, as before.
+    #[tokio::test]
+    async fn a_huawei_with_no_main_board_serial_keeps_its_chassis_serial() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = huawei(&[
+            (
+                67_108_867,
+                3,
+                "HUAWEI S5720 Routing Switch",
+                "2102359576DMHC000120",
+            ),
+            (67_108_873, 9, "MPU Board 0", ""),
+        ]);
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.serial_number.as_deref(), Some("2102359576DMHC000120"));
     }
 
     /// A Juniper device as the identity probe meets it (ADR-147 Increment 2): `sysDescr` and

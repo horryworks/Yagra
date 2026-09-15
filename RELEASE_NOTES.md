@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A Huawei stack shows every member’s serial number.** In ENTITY-MIB a Huawei stack keeps one chassis row for the whole stack, holding the first member’s serial or nothing, so a node’s Overview showed one serial or “—”. The serial is now read from each member’s main board (`MPU Board N`, or `SRU Board N` on a wireless controller or small router) and the members are listed in order, so a two-member S6730-H stack shows both. A Huawei device whose chassis row carries a serial no board carries keeps showing that serial. The new value appears at the next hourly identity read, or at once with Poll now. On Huawei devices only, the poller reads one more ENTITY-MIB column.
+
 ## v0.3.22 — Find and delete nodes registered more than once, pin nodes and folders, serial numbers on a node's Overview, Poll now reads identity and row names at once, a core upgrade no longer leaves a chosen remote poller behind
 
 ### New Features
