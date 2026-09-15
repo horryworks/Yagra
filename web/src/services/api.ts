@@ -87,6 +87,7 @@ import type {
   Mute,
   NodeDetail,
   NodeGroup,
+  Pins,
   MovePreview,
   ImportPreview,
   NodeNameEntry,
@@ -2435,6 +2436,26 @@ export const api = {
    *  per-route opt-out), so callers must debounce rather than save per input event. */
   putPreferences: (prefs: unknown): Promise<{ ok: boolean }> =>
     apiPut('/api/v1/preferences', { body: prefs }),
+
+  /** The signed-in account's pins on the inventory tree (ADR-146): the pinned folder ids, and the
+   *  pinned nodes as full rows — a pinned node usually sits in a folder the tree has not loaded. */
+  getPins: (): Promise<Pins> => apiGet('/api/v1/pins'),
+
+  /** Pin a node for the signed-in account. Repeating it is not an error; each call is audited. */
+  pinNode: (nodeId: string): Promise<void> =>
+    apiPut('/api/v1/pins/nodes/{node_id}', { path: { node_id: nodeId } }),
+
+  /** Remove the signed-in account's pin on a node (204 whether or not it was there). */
+  unpinNode: (nodeId: string): Promise<void> =>
+    apiDelete('/api/v1/pins/nodes/{node_id}', { path: { node_id: nodeId } }),
+
+  /** Pin a folder — Pinned only then shows it with everything beneath it. */
+  pinGroup: (groupId: string): Promise<void> =>
+    apiPut('/api/v1/pins/groups/{group_id}', { path: { group_id: groupId } }),
+
+  /** Remove the signed-in account's pin on a folder. */
+  unpinGroup: (groupId: string): Promise<void> =>
+    apiDelete('/api/v1/pins/groups/{group_id}', { path: { group_id: groupId } }),
 
   /** The current principal (role). Requires a valid session. */
   me: (): Promise<AuthMe> => apiGet('/api/v1/auth/me'),

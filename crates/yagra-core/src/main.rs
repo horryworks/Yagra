@@ -82,6 +82,8 @@ mod oidc;
 /// that keep the convention honest (ADR-114). Test-only, like `module_source` above.
 #[cfg(test)]
 mod pgtest;
+/// Per-account pins on the inventory tree (ADR-146).
+mod pins;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
@@ -884,6 +886,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         shared_dashboard: Arc::new(SharedDashboardRepo::new(repo.pool())),
         public_dashboard: Arc::new(PublicDashboardRepo::new(repo.pool())),
         prefs: Arc::new(UserPrefsRepo::new(repo.pool())),
+        pins: Arc::new(pins::UserPinsRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
         dispatcher,
         analysis,

@@ -26,6 +26,7 @@ import { stateLabel } from '../../lib/format';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
+import { PinButton } from './PinButton';
 import { membersTrailer, type MemberFetch } from './groupMembers';
 import './NodeDetail.css';
 
@@ -48,6 +49,8 @@ interface Props {
   onOpenGroup?: (groupId: string) => void;
   /** Open a member node from its row (ADR-142). Absent ⇒ the rows are not pressable. */
   onOpenNode?: (nodeId: string) => void;
+  /** Where a refused pin is reported (ADR-146). Absent ⇒ no pin button. */
+  onPinError?: (e: unknown) => void;
 }
 
 export function GroupDetail({
@@ -62,6 +65,7 @@ export function GroupDetail({
   onAddNode,
   onOpenGroup,
   onOpenNode,
+  onPinError,
 }: Props) {
   const { t } = useTranslation('nodes');
   // 🚨 **The rollup comes from the server counts, exactly as the tree row's does** (ADR-125). It
@@ -114,14 +118,20 @@ export function GroupDetail({
               )}
             </span>
           </div>
-          {canEdit && (
+          {(canEdit || onPinError) && (
             <div className="nd-actions">
-              <Button variant="outline" onClick={() => onEditGroup(group)}>
-                {t('group.edit')}
-              </Button>
-              <Button variant="primary" onClick={onAddNode}>
-                {t('add.node')}
-              </Button>
+              {/* Not gated on `canEdit`: any signed-in account may pin a folder (ADR-146). */}
+              {onPinError && <PinButton kind="group" id={group.id} onError={onPinError} />}
+              {canEdit && (
+                <>
+                  <Button variant="outline" onClick={() => onEditGroup(group)}>
+                    {t('group.edit')}
+                  </Button>
+                  <Button variant="primary" onClick={onAddNode}>
+                    {t('add.node')}
+                  </Button>
+                </>
+              )}
             </div>
           )}
         </div>

@@ -39,6 +39,8 @@ interface ServerPrefsDoc {
   interfaceDockHeight?: number;
   /** Table column widths, keyed by table id then by column key (ADR-129). */
   tableColumnWidths?: ColumnWidthDoc;
+  /** The inventory tree's Pinned only switch (ADR-146). */
+  nodeTreePinnedOnly?: boolean;
 }
 
 /** False once the server has told us it does not serve this endpoint, so a drag on a deployment
@@ -65,13 +67,19 @@ function adopt(raw: unknown): void {
     // anything" is a claim that needs examples, and the branch above is the shape that has none.
     usePrefsStore.getState().setTableColumnWidths(adoptWidths(doc.tableColumnWidths));
   }
+  if (typeof doc.nodeTreePinnedOnly === 'boolean') {
+    usePrefsStore.getState().setNodeTreePinnedOnly(doc.nodeTreePinnedOnly);
+  }
 }
 
 /** The document to send: the account-scoped subset of `prefs.ts`. */
 function currentDoc(): ServerPrefsDoc {
-  const { interfaceDockHeight, tableColumnWidths } = usePrefsStore.getState();
+  const { interfaceDockHeight, tableColumnWidths, nodeTreePinnedOnly } = usePrefsStore.getState();
   const doc: ServerPrefsDoc = {};
   if (interfaceDockHeight != null) doc.interfaceDockHeight = interfaceDockHeight;
+  // Sent once it has been set at all — `false` included, or switching it off on one machine would
+  // leave the account saying "on" to the next.
+  if (nodeTreePinnedOnly != null) doc.nodeTreePinnedOnly = nodeTreePinnedOnly;
   // Omitted while empty rather than sent as `{}`: the account row has a 16 KiB ceiling every
   // preference shares, and an operator who never drags a column should cost it nothing.
   if (tableColumnWidths && Object.keys(tableColumnWidths).length > 0) {
@@ -127,6 +135,17 @@ function scheduleSave(): void {
  */
 export function setInterfaceDockHeight(px: number): void {
   usePrefsStore.getState().setInterfaceDockHeight(px);
+  scheduleSave();
+}
+
+/**
+ * Record the inventory tree's Pinned only switch: locally now, on the account shortly (ADR-146).
+ *
+ * A click, not a drag, so one press is one save — the debounce still folds a burst of presses into
+ * the last one, which is the answer the account should keep.
+ */
+export function setNodeTreePinnedOnly(on: boolean): void {
+  usePrefsStore.getState().setNodeTreePinnedOnly(on);
   scheduleSave();
 }
 

@@ -42,6 +42,7 @@ import {
   type NodeDetailTabStats,
 } from './tabs';
 import { SetParentModal } from '../SetParentModal/SetParentModal';
+import { PinButton } from './PinButton';
 import { nodeSubLineParts } from './nodeIdentity';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import './NodeDetail.css';
@@ -319,6 +320,13 @@ export function NodeDetail({
             {status && <StatePill state={state} />}
           </div>
           <div className="nd-actions">
+            {/* Any signed-in account, whatever its role: a pin is its own navigation (ADR-146).
+                The touch-screen way to pin — the tree's right-click menu is the other. */}
+            <PinButton
+              kind="node"
+              id={node.id}
+              onError={(e) => setPollMsg({ text: errMsg(e, t('tree.pinFailed')), tone: 'error' })}
+            />
             {canEdit && (
               <Button variant="outline" onClick={pollNow} disabled={polling}>
                 {polling ? t('detail.polling') : t('detail.pollNow')}

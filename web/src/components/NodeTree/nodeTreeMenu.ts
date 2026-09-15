@@ -23,16 +23,20 @@ export interface MenuCapabilities {
   canSuppress: boolean;
   /** The "add a monitoring node here" item is wired. */
   canAddNode: boolean;
+  /** The pin item is wired (ADR-146). Any signed-in account may pin — it is that account's own
+   *  navigation, not configuration — so this is what opens a folder's menu for a Viewer. */
+  canPin: boolean;
 }
 
 /**
  * Whether a right-click on a **group** row would produce a menu with anything in it.
  *
- * Three independent reasons for the menu to exist, and any one of them is enough. An operator who
+ * Four independent reasons for the menu to exist, and any one of them is enough — the fourth
+ * (ADR-146) is pinning, which every signed-in account may do. An operator who
  * may open a maintenance window on a folder still gets that half of the menu.
  */
 export function groupMenuHasItems(c: MenuCapabilities): boolean {
-  return c.canEdit || c.canSuppress || c.canAddNode;
+  return c.canEdit || c.canSuppress || c.canAddNode || c.canPin;
 }
 
 /**

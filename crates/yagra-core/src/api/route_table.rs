@@ -1368,6 +1368,32 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Global("the caller's own WebUI preferences; the write can only ever reach the caller's own row"),
         NO_MCP_WRITE,
     ),
+    // One account's pins on the inventory tree (ADR-146). Pinning checks the target against the
+    // caller's scope; removing a pin cannot, and need not — it only ever reaches the caller's own row.
+    (
+        "GET",
+        "/api/v1/pins",
+        GroupFiltered,
+        Exempt(
+            "which nodes and folders one person keeps within reach of their own tree — navigation \
+             state keyed by the signed-in account; every pinned node is itself readable through \
+             list_nodes and get_node_status, and an MCP client has no tree to narrow",
+        ),
+    ),
+    ("PUT", "/api/v1/pins/nodes/:node_id", NodeScoped, NO_MCP_WRITE),
+    (
+        "DELETE",
+        "/api/v1/pins/nodes/:node_id",
+        Global("removes one of the caller's own pins; the row can only ever be the caller's, and refusing one that fell out of scope would leave it counting against the cap"),
+        NO_MCP_WRITE,
+    ),
+    ("PUT", "/api/v1/pins/groups/:group_id", NodeScoped, NO_MCP_WRITE),
+    (
+        "DELETE",
+        "/api/v1/pins/groups/:group_id",
+        Global("removes one of the caller's own pins; the row can only ever be the caller's, and refusing one that fell out of scope would leave it counting against the cap"),
+        NO_MCP_WRITE,
+    ),
     ("GET", "/api/v1/profiles", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/profiles", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/profiles/:id", ADMIN_CFG, NO_MCP_WRITE),

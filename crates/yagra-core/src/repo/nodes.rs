@@ -838,6 +838,35 @@ impl NodeRepo {
         rows.iter().map(ordered_node_from_row).collect()
     }
 
+    /// The nodes among `ids` this caller may see, with their tree order (ADR-146).
+    ///
+    /// The pins read: a pinned node usually sits in a folder the tree has not loaded, so it is
+    /// fetched by id rather than by folder. An id naming a deleted node, or one outside the scope,
+    /// is simply absent — the reading [`Self::node_names`] gives an unknown id.
+    ///
+    /// Not capped here: the only caller hands in one account's pins, which `pins::PINS_MAX` bounds.
+    pub async fn list_nodes_by_ids(
+        &self,
+        groups: GroupFilter<'_>,
+        ids: &[Uuid],
+    ) -> anyhow::Result<Vec<OrderedNode>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(&format!(
+            "SELECT {}, sort_order FROM nodes \
+             WHERE {} AND id = ANY($2) \
+             ORDER BY group_id, sort_order, name, id",
+            Self::NODE_COLUMNS,
+            Self::SCOPE_PREDICATE
+        ))
+        .bind(Self::scope_bind(groups))
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(ordered_node_from_row).collect()
+    }
+
     /// Assign a node to `group` and set its order in one update (drag reorder). Returns existence.
     pub async fn place_node(
         &self,

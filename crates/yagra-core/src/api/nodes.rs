@@ -439,8 +439,8 @@ fn resolve_kinds(
 
 /// Enrich raw `Node` rows into UI [`NodeSummary`] rows: live display state, tree sort order, and
 /// the node's resolved kind. Shared by the paged fleet list and the per-group lazy tree load so both
-/// paths produce identical rows.
-async fn build_node_summaries(
+/// paths produce identical rows — and, since ADR-146, the pins read, for the same reason.
+pub(super) async fn build_node_summaries(
     st: &ApiState,
     nodes: Vec<Node>,
     known_orders: HashMap<Uuid, f64>,

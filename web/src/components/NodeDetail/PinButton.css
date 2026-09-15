@@ -1,0 +1,12 @@
+/* The detail pane's pin toggle (ADR-146). Pressed reads the way a pressed filter toggle does:
+   the accent border, never a fill — a fill is reserved for the one primary action. */
+.nd-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nd-pin.on {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}

@@ -29,6 +29,7 @@ import {
   type TreeGroup,
 } from './nodeTree';
 import type { TFunction } from 'i18next';
+import { pinnedView } from './pins';
 import { GROUP_TYPES } from '../types/api';
 import type { NodeGroup, NodeState, NodeSummary } from '../types/api';
 
@@ -112,6 +113,141 @@ describe('flattenTree', () => {
     const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
     const rows = flattenTree(t, { collapsed: {}, filter: '' });
     expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'ungrouped-head']);
+  });
+});
+
+describe('flattenTree — Pinned only (ADR-146)', () => {
+  // Japan ─┬─ Tokyo: tokyo-sw, tokyo-rt
+  //        └─ Osaka: osaka-sw
+  // US: us-sw                  (ungrouped: lone)
+  const groups = [
+    group('g1', 'Japan', null, 1),
+    group('g1a', 'Tokyo', 'g1', 1),
+    group('g1b', 'Osaka', 'g1', 2),
+    group('g2', 'US', null, 2),
+  ];
+  const nodes = [
+    node('n1', 'tokyo-sw', 'g1a', 1),
+    node('n2', 'tokyo-rt', 'g1a', 2),
+    node('n3', 'osaka-sw', 'g1b'),
+    node('n4', 'us-sw', 'g2'),
+    node('n5', 'lone', null),
+  ];
+  const view = (pinnedGroups: string[], pinnedNodes: string[]) =>
+    pinnedView(
+      groups,
+      new Set(pinnedGroups),
+      new Set(pinnedNodes),
+      nodes.filter((n) => pinnedNodes.includes(n.id)),
+    );
+  const keys = (opts: Partial<Parameters<typeof flattenTree>[1]>) =>
+    flattenTree(buildNodeTree(groups, nodes), { collapsed: {}, filter: '', ...opts }).map(flatRowKey);
+
+  it('keeps a pinned node and the folders above it, and nothing beside it', () => {
+    expect(keys({ pinned: view([], ['n1']) })).toEqual(['g:g1', 'g:g1a', 'n:n1']);
+  });
+
+  it('keeps a pinned folder with everything in it', () => {
+    expect(keys({ pinned: view(['g1a'], []) })).toEqual(['g:g1', 'g:g1a', 'n:n1', 'n:n2']);
+  });
+
+  it('keeps a pinned ungrouped node under the header, which counts only what it shows', () => {
+    const rows = flattenTree(buildNodeTree(groups, nodes), {
+      collapsed: {},
+      filter: '',
+      pinned: view([], ['n5']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['ungrouped-head', 'n:n5']);
+    expect(rows[0].kind === 'ungrouped-head' && rows[0].count).toBe(1);
+  });
+
+  it('ignores the saved layout, so a folder closed while browsing cannot hide a pin', () => {
+    expect(keys({ collapsed: { g1: true }, pinned: view([], ['n1']) })).toEqual([
+      'g:g1',
+      'g:g1a',
+      'n:n1',
+    ]);
+  });
+
+  it('combines with a term: only the pinned rows that match', () => {
+    expect(keys({ filter: 'sw', pinned: view(['g1a'], ['n4']) })).toEqual([
+      'g:g1',
+      'g:g1a',
+      'n:n1',
+      'g:g2',
+      'n:n4',
+    ]);
+  });
+
+  it('combines with a server-side filter: a returned row that is not pinned stays hidden', () => {
+    expect(keys({ narrowed: true, pinned: view([], ['n3']) })).toEqual(['g:g1', 'g:g1b', 'n:n3']);
+  });
+
+  it('shows no row at all when nothing is pinned', () => {
+    expect(keys({ pinned: view([], []) })).toEqual([]);
+  });
+
+  it('gives Pinned only a collapse set of its own, without changing any other key', () => {
+    expect(treeFilterKey('', false, '', true)).not.toBe(treeFilterKey('', false, ''));
+    expect(treeFilterKey('myj', false, '')).toBe(JSON.stringify(['myj', '']));
+  });
+});
+
+describe('flattenTree — Pinned only over the lazy tree (ADR-146)', () => {
+  const counts = (ok: number): Record<NodeState, number> => ({
+    ok,
+    warning: 0,
+    critical: 0,
+    unreachable: 0,
+    maintenance: 0,
+    unknown: 0,
+  });
+  const groups = [group('g1', 'Japan'), group('g1a', 'Tokyo', 'g1', 1), group('g1b', 'Osaka', 'g1', 2)];
+  const groupCounts = { g1: counts(4), g1a: counts(2), g1b: counts(3) };
+
+  it('asks for a pinned folder\'s members, and never for the folder above it', () => {
+    // 🚨 The failure this guards: had Pinned only borrowed the search rules, the pinned folder would
+    // read as loaded and empty — no placeholder, so nothing fetched, and no row to put members in.
+    const rows = flattenTree(buildNodeTree(groups, []), {
+      collapsed: {},
+      filter: '',
+      groupCounts,
+      loadedGroups: new Set(),
+      pinned: pinnedView(groups, new Set(['g1b']), new Set(), []),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g1b', 'loading:g1b']);
+    // The pinned folder is shown whole, so its bar is its whole membership; the folder above counts
+    // only that folder, not its own 4 or Tokyo's 2.
+    expect(rows[1].kind === 'group' && rows[1].tally?.total).toBe(3);
+    expect(rows[0].kind === 'group' && rows[0].tally?.total).toBe(3);
+  });
+
+  it('adds a pinned node filed directly in a folder above to that folder\'s count', () => {
+    const core = node('n9', 'core', 'g1', 0, 'critical');
+    const rows = flattenTree(buildNodeTree(groups, [core]), {
+      collapsed: {},
+      filter: '',
+      groupCounts,
+      loadedGroups: new Set(),
+      pinned: pinnedView(groups, new Set(['g1b']), new Set(['n9']), [core]),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g1b', 'loading:g1b', 'n:n9']);
+    const top = rows[0];
+    expect(top.kind === 'group' && top.tally?.total).toBe(4);
+    expect(top.kind === 'group' && top.tally?.counts.critical).toBe(1);
+  });
+
+  it('draws the counts as unknown while they are still on their way', () => {
+    const rows = flattenTree(buildNodeTree(groups, []), {
+      collapsed: {},
+      filter: '',
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(),
+      pinned: pinnedView(groups, new Set(['g1b']), new Set(), []),
+    });
+    expect(rows[0].kind === 'group' && rows[0].tally).toBeNull();
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g1b', 'loading:g1b']);
   });
 });
 

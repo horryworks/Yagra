@@ -65,6 +65,12 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     default_poll_interval_secs: 300,
   } satisfies Schemas['ClientConfig'] as unknown as Json,
 
+  // Pins (ADR-146). The generator fills `group_ids` with a placeholder id and `nodes` with its sample
+  // row — the same id the tree mock's first ungrouped sibling carries — so every walk would start on
+  // an account that had pinned something nobody pinned, with a mark on a row other specs count. An
+  // account with no pins is the honest start; `treePinned.spec.ts` brings its own.
+  '/api/v1/pins': { group_ids: [], nodes: [] } satisfies Schemas['Pins'] as unknown as Json,
+
   // 🚨 The generator answers a boolean with `false`, and since ADR-119 one of this body's booleans
   // decides how many tabs the node-detail screen has: `snmp_configured: false` is a ping-only
   // device, which is offered four tabs instead of six. Left generated, the route walk would visit

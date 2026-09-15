@@ -27,6 +27,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan, useNodeTabStore } from '../store';
 import { usePrefsStore } from '../prefs';
+import { setNodeTreePinnedOnly } from '../serverPrefs';
+import { usePinsStore } from '../pinsStore';
+import { pinnedView } from '../lib/pins';
+import { PinIcon } from '../components/ui/icons';
 import { useViewportMode } from '../lib/viewport';
 import type {
   FleetGroupSummary,
@@ -359,6 +363,25 @@ export function NodesPage() {
     [filterCols, searchParams, setSearchParams],
   );
 
+  // Pins (ADR-146): this account's own, from the server, and the switch that narrows the tree to
+  // them. The switch only counts once the pins have loaded — a core without the endpoint draws no
+  // button, and must not narrow the tree to nothing because the account said "on" elsewhere.
+  const pinsStatus = usePinsStore((s) => s.status);
+  const pinGroupIds = usePinsStore((s) => s.groupIds);
+  const pinNodeIds = usePinsStore((s) => s.nodeIds);
+  const pinNodes = usePinsStore((s) => s.nodes);
+  const pinsReady = pinsStatus === 'ready';
+  const storedPinnedOnly = usePrefsStore((s) => s.nodeTreePinnedOnly) === true;
+  const pinnedOnly = pinsReady && storedPinnedOnly;
+  const pins = useMemo(
+    () => (pinsReady ? pinnedView(groups, pinGroupIds, pinNodeIds, pinNodes) : undefined),
+    [pinsReady, groups, pinGroupIds, pinNodeIds, pinNodes],
+  );
+  // Re-read on every visit: pins set from another machine since sign-in show up here.
+  useEffect(() => {
+    void usePinsStore.getState().load();
+  }, []);
+
   // Members load lazily, per group, only once that group's contents are on screen (A-3). The hook
   // owns that cache; this page only says what is currently worth having loaded.
   // Any of the four puts the tree into filter mode. The state / kind / pool ones count even with
@@ -371,8 +394,10 @@ export function NodesPage() {
   // restoring what the first cleared. That bug has already shipped once (`ClearFilters`' own doc).
   const clearAllFilters = useCallback(() => {
     setFilter('');
+    // Pinned only narrows the tree too, so "clear all filters" that left it on would be untrue.
+    if (pinnedOnly) setNodeTreePinnedOnly(false);
     setInventoryFilters(defaultFilters(filterCols));
-  }, [filterCols, setInventoryFilters]);
+  }, [filterCols, setInventoryFilters, pinnedOnly]);
   // Filter mode's server-side page — the nodes that matched. One capped page, never the fleet; the
   // folders a group-name match reveals arrive separately through the per-group member cache below.
   // `appliedTerm` is the debounced term the search was issued for, so the reveal loads in step with
@@ -407,15 +432,18 @@ export function NodesPage() {
   // while the members were narrowed by neither, so a node matching the text but not the state
   // would survive the merge.
   const serverNarrowed = isInventoryFiltered(inventoryFilters);
-  const treeNodes = useMemo(
-    () =>
-      serverNarrowed
-        ? search.nodes
-        : filtering
-          ? mergeNodesById(search.nodes, members.nodes)
-          : members.nodes,
-    [serverNarrowed, filtering, search.nodes, members.nodes],
-  );
+  //
+  // Pinned only (ADR-146) adds the pinned nodes themselves: a pinned node usually sits in a folder
+  // nobody has loaded. Never under a state / kind / pool filter — those rows have not passed it, which
+  // is the same reason the members are not merged there.
+  const treeNodes = useMemo(() => {
+    const base = serverNarrowed
+      ? search.nodes
+      : filtering
+        ? mergeNodesById(search.nodes, members.nodes)
+        : members.nodes;
+    return pinnedOnly && !serverNarrowed ? mergeNodesById(base, [...pinNodes]) : base;
+  }, [serverNarrowed, filtering, search.nodes, members.nodes, pinnedOnly, pinNodes]);
 
   // Overlay the live SSE node states (S14) so the tree's status dots update without re-fetching.
   // `live` publishes a new Map on every flush (any node in the FLEET, ~10×/s during a first-observe
@@ -699,6 +727,17 @@ export function NodesPage() {
       .then(reload)
       .catch((e: unknown) => setError(errMsg(e, t('err.sortChildren'))));
 
+  // Right-click → pin or unpin (ADR-146). The mark changes at once; the store puts it back and this
+  // says why when the server refuses (the 500-pin cap, a node deleted meanwhile).
+  const togglePin = (target: { kind: 'node' | 'group'; id: string }) => {
+    const store = usePinsStore.getState();
+    const call =
+      target.kind === 'node'
+        ? store.setNodePinned(target.id, !store.nodeIds.has(target.id))
+        : store.setGroupPinned(target.id, !store.groupIds.has(target.id));
+    call.catch((e: unknown) => setError(errMsg(e, t('tree.pinFailed'))));
+  };
+
   // Header stats come from the server fleet summary (whole fleet, not the lazily-loaded subset).
   const nodeCount = fleetSummary?.total ?? treeNodes.length;
   const attention = fleetSummary
@@ -871,6 +910,21 @@ export function NodesPage() {
               filters={inventoryFilters}
               onOpen={() => setFilterSheet(true)}
             />
+            {/* Pinned only (ADR-146), right of Filter. The same button look as Filter, pressed the
+                same way, because it is the same kind of control: it narrows this tree. Not drawn
+                until the pins have loaded — a core without the endpoint gets no button. */}
+            {pinsReady && (
+              <button
+                type="button"
+                className={pinnedOnly ? 'mfilt-btn nodes-pinned-only on' : 'mfilt-btn nodes-pinned-only'}
+                aria-pressed={pinnedOnly}
+                title={t('inventory.pinnedOnlyHint')}
+                onClick={() => setNodeTreePinnedOnly(!pinnedOnly)}
+              >
+                <PinIcon />
+                {t('inventory.pinnedOnly')}
+              </button>
+            )}
             <FilterBar
               columns={filterCols}
               labels={filterLabels}
@@ -884,7 +938,7 @@ export function NodesPage() {
             <ClearFilters
               columns={filterCols}
               filters={inventoryFilters}
-              extraActive={filter.trim() !== ''}
+              extraActive={filter.trim() !== '' || pinnedOnly}
               onClear={clearAllFilters}
             />
             {filterSheet && (
@@ -967,6 +1021,10 @@ export function NodesPage() {
                 ? (g) => navigate(`/nodes/discovery?group=${encodeURIComponent(g.id)}`)
                 : undefined
             }
+            pins={pins}
+            pinnedOnly={pinnedOnly}
+            // Not permission-gated: pinning is the account's own navigation (ADR-146).
+            onTogglePin={pinsReady ? togglePin : undefined}
           />
           {/* The working set's own row (ADR-124 決定 3, moved below the tree by 増分 5). It appears
               only once something is checked, so it costs nothing until it is needed — and it
@@ -1090,6 +1148,7 @@ export function NodesPage() {
               onAddNode={() => openAddNode(selectedGroup.id)}
               onOpenGroup={(id) => select({ kind: 'group', id })}
               onOpenNode={(id) => select({ kind: 'node', id })}
+              onPinError={(e) => setError(errMsg(e, t('tree.pinFailed')))}
             />
           ) : (
             <div className="nd-empty">

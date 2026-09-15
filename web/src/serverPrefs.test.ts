@@ -31,7 +31,12 @@ vi.mock('./services/api', () => ({
 }));
 
 import { usePrefsStore } from './prefs';
-import { loadServerPrefs, resetServerPrefs, setInterfaceDockHeight } from './serverPrefs';
+import {
+  loadServerPrefs,
+  resetServerPrefs,
+  setInterfaceDockHeight,
+  setNodeTreePinnedOnly,
+} from './serverPrefs';
 
 /** The debounce in `serverPrefs.ts`. Restated rather than imported — it is not exported, and a test
  *  that read it from the module could not notice the value changing. */
@@ -45,6 +50,7 @@ beforeEach(() => {
   // Module-level `supported` / `saveTimer` survive between tests; this is the documented reset.
   resetServerPrefs();
   usePrefsStore.getState().setInterfaceDockHeight(null);
+  usePrefsStore.getState().setNodeTreePinnedOnly(null);
 });
 
 afterEach(() => {
@@ -160,6 +166,32 @@ describe('setInterfaceDockHeight', () => {
     expect(() => vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)).not.toThrow();
     await vi.runAllTimersAsync();
     expect(putPreferences).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the Pinned only switch (ADR-146)', () => {
+  it('adopts the account\'s answer, and nothing that is not a boolean', async () => {
+    getPreferences.mockResolvedValue({ nodeTreePinnedOnly: true });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().nodeTreePinnedOnly).toBe(true);
+    for (const value of ['true', 1, null, {}]) {
+      getPreferences.mockResolvedValue({ nodeTreePinnedOnly: value });
+      await loadServerPrefs();
+      expect(usePrefsStore.getState().nodeTreePinnedOnly).toBe(true);
+    }
+  });
+
+  it('saves switching it off, not only on', () => {
+    // Omitting `false` would leave the account saying "on" to the next machine.
+    setNodeTreePinnedOnly(false);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ nodeTreePinnedOnly: false });
+  });
+
+  it('sends nothing for a machine that never touched it', () => {
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
   });
 });
 
