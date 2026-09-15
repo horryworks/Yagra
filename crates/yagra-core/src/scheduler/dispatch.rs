@@ -70,7 +70,8 @@ pub struct PollDispatcher {
     env_community: Option<String>,
     /// Fallback poll interval (seconds) stamped on on-demand "poll now" jobs. The periodic
     /// scheduler resolves the effective interval per node (profile override → DB default) and
-    /// passes it explicitly; this is only the manual-poll default (the poller ignores the value).
+    /// passes it explicitly; this is only the manual-poll default (the poller sizes the job's table
+    /// budget and device wait from it, and schedules nothing).
     interval_secs: u32,
 }
 
@@ -389,14 +390,19 @@ impl PollDispatcher {
 
     /// Build and immediately publish every poll job for a node (no jitter) — the operator's
     /// "poll now" action. Returns how many jobs were published. Stamps the dispatcher's default
-    /// interval (the poller ignores the value; cadence is owned by the periodic scheduler).
+    /// interval, which sizes the poller's table budget and device wait (`table_plan.rs`) but
+    /// schedules nothing: a manual poll runs once.
+    ///
+    /// Every job carries `on_demand` (ADR-149), so the poller also reads, on this poll, what it
+    /// otherwise reads on its own hourly cadence — the node's identity and its row names.
     ///
     /// `pool` is the node's **effective** pool, resolved by the caller (which has the folder tree
     /// for inheritance) — the dispatcher deliberately doesn't own a group repo just for this.
     pub async fn poll_now(&self, node: &Node, pool: &str) -> usize {
         let jobs = self.build_node_jobs(node, self.interval_secs).await;
         let mut published = 0u64;
-        for (job, kind) in jobs {
+        for (mut job, kind) in jobs {
+            job.on_demand = true;
             if publish(self.bus.as_ref(), pool, job, kind, node.id).await {
                 published += 1;
             }
@@ -1344,9 +1350,9 @@ mod tests {
 
     /// "Poll now" stamps the dispatcher's own default interval, not the node's resolved one.
     ///
-    /// The poller ignores the value — cadence is owned by the periodic scheduler — but it is on the
-    /// wire and in the working-set spec, so a manual poll that stamped something else would show up
-    /// as a cadence change to anyone reading a job.
+    /// The poller schedules nothing from the value on a manual poll — it runs once — but it sizes the
+    /// table budget and the device wait (`table_plan.rs`), and a manual poll that stamped something
+    /// else would show up as a cadence change to anyone reading a job.
     #[tokio::test]
     async fn poll_now_stamps_the_dispatchers_default_interval() {
         let n = node("edge-9");
@@ -1361,5 +1367,52 @@ mod tests {
             .find(|(_, job)| matches!(job.check, CheckSpec::Icmp(_)))
             .expect("a manual poll always includes ICMP");
         assert_eq!(icmp.1.interval_secs, 300);
+    }
+
+    /// "Poll now" marks every job it publishes as asked for (ADR-149), so the poller reads the node's
+    /// identity and row names on this poll rather than at the hour.
+    #[tokio::test]
+    async fn poll_now_marks_every_job_as_on_demand() {
+        let n = node("edge-10");
+        let mut h = Harness::builder().env_community("public").build();
+        let published = h.dispatcher.poll_now(&n, "default").await;
+        let seen = h.published();
+        assert_eq!(seen.len(), published);
+        assert!(
+            seen.iter()
+                .any(|(_, job)| !matches!(job.check, CheckSpec::Icmp(_))),
+            "an SNMP job must be among them, or `all` below says nothing about the jobs that read"
+        );
+        assert!(
+            seen.iter().all(|(_, job)| job.on_demand),
+            "a job left unmarked reads its node at the hour, not now"
+        );
+    }
+
+    /// The scheduled path never marks a job: the sweep and a working set carry the schedule's jobs,
+    /// and marking them would read every node's identity and row names on every poll (ADR-149).
+    #[tokio::test]
+    async fn scheduled_jobs_and_specs_are_never_on_demand() {
+        let n = node("edge-11");
+        let h = Harness::builder().env_community("public").build();
+        let jobs = h
+            .dispatcher
+            .build_scheduled_jobs_hinted(
+                &n,
+                60,
+                MonitorHints::default(),
+                &AdjacencyPolicy::default(),
+            )
+            .await;
+        assert!(
+            jobs.len() >= 2,
+            "an empty build would satisfy the assertion below"
+        );
+        assert!(jobs.iter().all(|(job, _)| !job.on_demand));
+        let specs = h
+            .dispatcher
+            .build_node_specs(&n, 60, MonitorHints::default(), &AdjacencyPolicy::default())
+            .await;
+        assert!(specs.iter().all(|spec| !spec.to_job(Uuid::nil()).on_demand));
     }
 }

@@ -12,6 +12,7 @@ import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupTrail } from '../../lib/nodeTree';
 import { GroupCrumbs } from './GroupCrumbs';
+import { POLL_NOW_REFRESH_MS } from './pollNowRefresh';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { useNodeTabStore } from '../../store';
 import type {
@@ -230,7 +231,8 @@ export function NodeDetail({
     };
   }, [node?.profile_id]);
 
-  // Poll now: dispatch an immediate poll, then re-fetch the readings a few seconds later.
+  // Poll now: dispatch an immediate poll, then re-fetch the readings a few seconds later and again
+  // once the identity and row names the same press reads have had time to arrive (ADR-149).
   const pollNow = () => {
     setPolling(true);
     setPollMsg(null);
@@ -242,7 +244,9 @@ export function NodeDetail({
           text: t('detail.pollDispatched', { count: n }),
           tone: 'info',
         });
-        window.setTimeout(() => setRefreshNonce((v) => v + 1), 4000);
+        for (const ms of POLL_NOW_REFRESH_MS) {
+          window.setTimeout(() => setRefreshNonce((v) => v + 1), ms);
+        }
         window.setTimeout(() => setPollMsg(null), 8000);
       })
       .catch((e: unknown) => setPollMsg({ text: errMsg(e, t('err.requestPoll')), tone: 'error' }))

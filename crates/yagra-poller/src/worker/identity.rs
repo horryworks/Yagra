@@ -102,6 +102,33 @@ impl IdentityCadence {
         self.claim(node, now, Duration::ZERO)
     }
 
+    /// [`Self::claim`], or `true` whatever it answers when an operator asked for this poll (ADR-149).
+    ///
+    /// The claim is still taken, so a node first seen on a "poll now" gets its entry. What the
+    /// operator skips is the wait — they are looking at a node page with "—" on it, not at the hour.
+    /// A read that answers moves the node a full period out through [`Self::succeeded`], exactly as a
+    /// scheduled one does, so the next scheduled job does not read it again.
+    pub(super) fn claim_or_asked(
+        &mut self,
+        node: NodeId,
+        now: Instant,
+        first_offset: Duration,
+        on_demand: bool,
+    ) -> bool {
+        self.claim(node, now, first_offset) || on_demand
+    }
+
+    /// [`Self::claim_first_now`], or `true` whatever it answers when an operator asked for this poll
+    /// — the row-name walk's form of [`Self::claim_or_asked`].
+    pub(super) fn claim_first_now_or_asked(
+        &mut self,
+        node: NodeId,
+        now: Instant,
+        on_demand: bool,
+    ) -> bool {
+        self.claim_first_now(node, now) || on_demand
+    }
+
     /// A probe for this node got an answer: the next one is a full period away.
     pub(super) fn succeeded(&mut self, node: NodeId, now: Instant) {
         if let Some(entry) = self.entries.get_mut(&node) {
@@ -255,6 +282,77 @@ mod tests {
             t0 + IDENTITY_RETRY + IDENTITY_PERIOD - Duration::from_secs(1)
         ));
         assert!(c.claim_first_now(node(1), t0 + IDENTITY_RETRY + IDENTITY_PERIOD));
+    }
+
+    /// ADR-149: an operator's "poll now" reads a node the cadence would not — one seen for the first
+    /// time, and one read a moment ago.
+    #[test]
+    fn an_operators_poll_reads_whatever_the_cadence_says() {
+        let mut c = IdentityCadence::default();
+        let t0 = Instant::now();
+        let offset = Duration::from_secs(600);
+        assert!(
+            !c.claim_or_asked(node(1), t0, offset, false),
+            "a scheduled job on first sight only schedules"
+        );
+        assert!(
+            c.claim_or_asked(node(2), t0, offset, true),
+            "a poll now reads a node seen for the first time"
+        );
+
+        c.succeeded(node(1), t0);
+        let soon = t0 + Duration::from_secs(1);
+        assert!(
+            !c.claim_or_asked(node(1), soon, offset, false),
+            "a scheduled job waits the period"
+        );
+        assert!(
+            c.claim_or_asked(node(1), soon, offset, true),
+            "a poll now does not"
+        );
+    }
+
+    /// ADR-149: a read that answered on "poll now" moves the schedule a full period out — the slot the
+    /// node was first scheduled for no longer fires, so pressing the button does not cost a second read.
+    #[test]
+    fn a_poll_now_that_answered_moves_the_schedule_a_period_out() {
+        let mut c = IdentityCadence::default();
+        let t0 = Instant::now();
+        let offset = Duration::from_secs(600);
+        assert!(!c.claim_or_asked(node(1), t0, offset, false));
+        let pressed = t0 + Duration::from_secs(10);
+        assert!(c.claim_or_asked(node(1), pressed, offset, true));
+        c.succeeded(node(1), pressed);
+
+        assert!(
+            !c.claim_or_asked(node(1), t0 + offset, offset, false),
+            "the first-read slot no longer fires"
+        );
+        assert!(!c.claim_or_asked(
+            node(1),
+            pressed + IDENTITY_PERIOD - Duration::from_secs(1),
+            offset,
+            false
+        ));
+        assert!(c.claim_or_asked(node(1), pressed + IDENTITY_PERIOD, offset, false));
+    }
+
+    /// ADR-149, the row-name form: right after a walk that answered, only a poll now walks again.
+    #[test]
+    fn claim_first_now_or_asked_walks_again_only_when_asked() {
+        let mut c = IdentityCadence::default();
+        let t0 = Instant::now();
+        assert!(c.claim_first_now_or_asked(node(1), t0, false));
+        c.succeeded(node(1), t0);
+        let soon = t0 + Duration::from_secs(1);
+        assert!(
+            !c.claim_first_now_or_asked(node(1), soon, false),
+            "the schedule waits the period"
+        );
+        assert!(
+            c.claim_first_now_or_asked(node(1), soon, true),
+            "a poll now walks the names anyway"
+        );
     }
 
     #[test]

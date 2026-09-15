@@ -618,7 +618,10 @@ impl YagraMcp {
 
     #[tool(
         description = "Trigger an immediate, out-of-schedule poll of one node. Requires manage-config \
-                       permission. Returns whether a poll job was dispatched. Requires live mode."
+                       permission. Returns how many poll jobs were dispatched. The poll also reads \
+                       what is otherwise read only once an hour: the device's identity (sysDescr, \
+                       OS version, serial number) and the names of its vendor-table rows. Results \
+                       arrive asynchronously. Requires live mode."
     )]
     async fn poll_now(
         &self,
