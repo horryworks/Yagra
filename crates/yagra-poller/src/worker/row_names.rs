@@ -260,6 +260,7 @@ mod tests {
             interval_secs: 300,
             credential_ref: None,
             probe_identity: false,
+            on_demand: false,
             trace_context: TraceContext::new(),
         }
     }

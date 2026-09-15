@@ -222,6 +222,13 @@ pub struct PollJob {
     /// and simply never probes identity.
     #[serde(default)]
     pub probe_identity: bool,
+    /// An operator asked for this poll — "poll now" (ADR-149). The poller then reads, on this job,
+    /// what it otherwise reads on its own hourly cadence: a node's identity and a vendor table's row
+    /// names. Set by core on the jobs `poll_now` publishes and nowhere else. Omitted from the wire
+    /// while false, so a scheduled job's bytes are unchanged; an N-1 poller ignores it and keeps its
+    /// hourly cadence (ADR-017).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_demand: bool,
     /// W3C trace context of the core-side dispatch span, so the poller's poll span joins the same
     /// distributed trace (yagra-telemetry). Empty (and omitted from the wire) when tracing export
     /// is off — zero steady-state cost; an N-1 poller ignores it (ADR-017). Working-set jobs the
@@ -263,6 +270,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            on_demand: false,
             trace_context: TraceContext::new(),
         }
     }
@@ -628,6 +636,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            on_demand: false,
             trace_context: TraceContext::new(),
         }
     }
@@ -690,6 +699,8 @@ impl JobSpec {
             interval_secs: self.interval_secs,
             credential_ref: None,
             probe_identity: self.probe_identity,
+            // A working-set job is the schedule's, never an operator's (ADR-149).
+            on_demand: false,
             // A locally-minted working-set job is the root of its own trace (no core dispatch span
             // to inherit) — the result-side context still links it to core's ingest span.
             trace_context: TraceContext::new(),
@@ -2866,6 +2877,32 @@ mod tests {
         let job: PollJob = serde_json::from_str(json).unwrap();
         assert_eq!(job.interval_secs, 30);
         assert!(!job.probe_identity); // N-1: absent identity-probe flag defaults off
+        assert!(!job.on_demand); // N-1: an older core's job is a scheduled one (ADR-149)
+    }
+
+    /// ADR-149: `on_demand` is invisible on the wire while off — a scheduled job's bytes are what an
+    /// N-1 poller has always read — survives the trip when on, and never reaches a working-set job.
+    #[test]
+    fn on_demand_is_omitted_while_off_and_round_trips_when_on() {
+        let job = sample_job();
+        assert!(!job.on_demand);
+        let json = serde_json::to_string(&job).unwrap();
+        assert!(
+            !json.contains("on_demand"),
+            "a scheduled job's wire shape is unchanged: {json}"
+        );
+
+        let mut asked = sample_job();
+        asked.on_demand = true;
+        let json = serde_json::to_string(&asked).unwrap();
+        assert!(json.contains(r#""on_demand":true"#), "{json}");
+        let back: PollJob = serde_json::from_str(&json).unwrap();
+        assert!(back.on_demand);
+
+        assert!(
+            !JobSpec::from_job(&asked).to_job(Uuid::nil()).on_demand,
+            "a working-set job is the schedule's, even when built from an asked-for one"
+        );
     }
 
     #[test]

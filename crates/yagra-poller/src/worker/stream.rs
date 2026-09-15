@@ -185,26 +185,28 @@ pub async fn run_stream<S>(
         // The hourly identity re-probe (ADR-138). Decided here because every job — a working-set
         // one, a legacy per-job one, an operator's "poll now" — passes this point, and before the
         // spawn because the task takes the job by value. Core's own `probe_identity` (a node whose
-        // maker is still unknown) is kept as it came: this can add a probe, never remove one.
+        // maker is still unknown) is kept as it came: this can add a probe, never remove one. An
+        // operator's "poll now" (`on_demand`, ADR-149) reads whatever the cadence says.
         if identity::carries_identity_probe(&job.check) {
             let due = cadence
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .claim(
+                .claim_or_asked(
                     job.node_id,
                     Instant::now(),
                     identity::first_offset(job.node_id),
+                    job.on_demand,
                 );
             job.probe_identity |= due;
         }
         let task_cadence = cadence.clone();
         // The hourly row-name walk (ADR-143), claimed out here for the identity probe's reason: every
-        // job passes this point, and the task takes the job by value.
+        // job passes this point, and the task takes the job by value. "Poll now" walks it regardless.
         let names_due = row_names::carries_row_names(&job.check)
             && row_cadence
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .claim_first_now(job.node_id, Instant::now());
+                .claim_first_now_or_asked(job.node_id, Instant::now(), job.on_demand);
         let task_row_cadence = row_cadence.clone();
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
@@ -476,6 +478,61 @@ mod tests {
             Arc::new(AtomicU64::new(0)),
         ));
         results_rx
+    }
+
+    /// ADR-149 through the loop rather than the bookkeeping: on a node seen for the first time, a
+    /// scheduled scalar job only schedules the identity probe, and a "poll now" one runs it. This is
+    /// the half `identity.rs`'s tests cannot see — that `run_stream` hands `on_demand` on at all.
+    #[tokio::test]
+    async fn a_poll_now_reads_identity_the_schedule_would_not_read_yet() {
+        use std::net::Ipv4Addr;
+        use yagra_transport::{SnmpSample, SnmpTableString};
+
+        let scheduled = snmp_at(1, Ipv4Addr::new(10, 0, 0, 1));
+        let mut asked = snmp_at(2, Ipv4Addr::new(10, 0, 0, 2));
+        asked.on_demand = true;
+        let transport = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![SnmpTableString {
+                oid_base: "1.3.6.1.2.1.1.1".to_owned(),
+                ifindex: 0,
+                value: "Cisco IOS Software".to_owned(),
+            }]);
+        let bus = Arc::new(InMemoryBus::new(16));
+        let mut results = bus.subscribe_results();
+        tokio::spawn(run_stream(
+            Box::pin(futures::stream::iter(vec![scheduled, asked])),
+            crate::store_forward::StoreForwardSink::passthrough(bus.clone()),
+            Arc::new(transport),
+            Arc::new(PollLimiter::new(16)),
+            None,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+        ));
+
+        let mut sys_descr = HashMap::new();
+        for _ in 0..2 {
+            let r = tokio::time::timeout(Duration::from_secs(5), results.recv())
+                .await
+                .expect("both jobs produce a result")
+                .expect("the bus is open");
+            sys_descr.insert(r.node_id, r.sys_descr);
+        }
+        assert_eq!(
+            sys_descr.get(&NodeId::from(Uuid::from_u128(1))),
+            Some(&None),
+            "a scheduled job on first sight only schedules the probe"
+        );
+        assert!(
+            matches!(
+                sys_descr.get(&NodeId::from(Uuid::from_u128(2))),
+                Some(Some(_))
+            ),
+            "a poll now reads the identity at once: {sys_descr:?}"
+        );
     }
 
     /// **A device that is still being walked stalls its own next spec — and nothing else.**
