@@ -16,7 +16,7 @@
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, VisibleNode};
-use super::util::{now_unix_s, CreatedId, DEFAULT_RATE_LOOKBACK_SECS};
+use super::util::{now_unix_s, CreatedId};
 use super::{is_valid_metric_name, is_valid_oid, ApiState};
 use crate::collection::CreateTemplateOutcome;
 use axum::{
@@ -692,7 +692,7 @@ async fn list_node_interfaces(
     // switch refreshing for every open client would otherwise be ~150 sequential queries.
     let live = st
         .store
-        .node_interface_live(node_id, DEFAULT_RATE_LOOKBACK_SECS)
+        .node_interface_live(node_id, crate::poll_interval::RATE_WINDOW_FLOOR_SECS)
         .await;
     let mut out = Vec::with_capacity(metas.len());
     for m in metas {

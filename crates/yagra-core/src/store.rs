@@ -529,6 +529,9 @@ impl MetricStore for InMemorySink {
 pub struct VmStore {
     http: reqwest::Client,
     base: String,
+    /// How far apart each node's polls are (ADR-144). Every counter read widens its `rate()` window
+    /// to hold two polls; until the scheduler publishes, the windows are exactly what callers ask.
+    intervals: crate::poll_interval::PollIntervals,
 }
 
 impl VmStore {
@@ -547,7 +550,66 @@ impl VmStore {
         Self {
             http,
             base: base.into(),
+            intervals: crate::poll_interval::PollIntervals::unknown(),
         }
+    }
+
+    /// Read poll intervals from `intervals`, the handle the scheduler publishes into (ADR-144).
+    #[must_use]
+    pub fn with_poll_intervals(mut self, intervals: crate::poll_interval::PollIntervals) -> Self {
+        self.intervals = intervals;
+        self
+    }
+
+    /// The `rate()` window for a read about one node: the caller's `floor`, widened to hold two of
+    /// that node's polls.
+    fn node_window(&self, floor: u64, node: Uuid) -> u64 {
+        crate::poll_interval::rate_window_secs(floor, self.intervals.for_node(node))
+    }
+
+    /// The `rate()` window for a fleet-wide read: the caller's `floor`, widened to hold two polls of
+    /// the slowest node. A faster node's rate is smoothed by it; none is blanked.
+    fn fleet_window(&self, floor: u64) -> u64 {
+        crate::poll_interval::rate_window_secs(floor, self.intervals.fleet_max())
+    }
+
+    /// Run one interface-candidate query and parse its rows — or `None` for anything that is not a
+    /// successful answer. [`MetricStore::interface_candidates`] says why a partial answer must never
+    /// stand in for a whole one.
+    async fn candidate_batch(&self, url: &str, query: String) -> Option<Vec<(Uuid, i32, f64)>> {
+        let resp = match self.http.get(url).query(&[("query", query)]).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                // `None`, not an empty vector — see the trait doc. Treating a transport failure
+                // as "nothing is busy" would resolve every interface alert in the fleet.
+                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate query failed");
+                return None;
+            }
+        };
+        // A non-2xx is just as much a non-answer as a dropped connection: VictoriaMetrics reports a
+        // malformed query as 4xx with a JSON body that parses fine and carries no `result`, so
+        // checking the status is what stops a bad query reading as a quiet fleet.
+        if !resp.status().is_success() {
+            tracing::warn!(
+                status = %resp.status(),
+                "VictoriaMetrics refused the interface-candidate query"
+            );
+            return None;
+        }
+        let json = match resp.json::<serde_json::Value>().await {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate response was not JSON");
+                return None;
+            }
+        };
+        // VictoriaMetrics reports a query-time error in the body with `status: "error"` and HTTP
+        // 200 in some configurations, so the envelope is checked too.
+        if json.get("status").and_then(|v| v.as_str()) != Some("success") {
+            tracing::warn!("VictoriaMetrics interface-candidate query returned a non-success body");
+            return None;
+        }
+        Some(parse_top_interfaces(&json))
     }
 
     /// Run a PromQL `query_range` and parse the first series' points (oldest first). Shared
@@ -919,14 +981,18 @@ fn topk_query(metric: &str, agg: TopAgg, limit: usize) -> String {
     }
 }
 
-/// Rate lookback for interface Top-N (matches the interface-list/series default).
-const INTERFACE_RATE_LOOKBACK_SECS: u64 = 300;
+/// Step of the subquery a counter Top-N and the candidate query take their instant value from.
+///
+/// The `rate()` window used to double as this step — both were 300. Since ADR-144 the window follows
+/// the poll interval ([`crate::poll_interval::rate_window_secs`]) and the step stays where it was,
+/// so widening a window never thins how often the subquery samples.
+const RATE_SUBQUERY_STEP_SECS: u64 = 300;
 
-/// The fixed rate expression for an interface Top-N dimension over the thin counters. `in`+`out`
-/// rates share `(node,ifindex)` labels, so vector addition aligns per interface. Octet rates are
-/// scaled ×8 to bits/sec.
-fn interface_expr(metric: InterfaceTopMetric) -> String {
-    interface_expr_scoped(metric, "")
+/// The fixed rate expression for an interface Top-N dimension over the thin counters, through a
+/// `w`-second window. `in`+`out` rates share `(node,ifindex)` labels, so vector addition aligns per
+/// interface. Octet rates are scaled ×8 to bits/sec.
+fn interface_expr(metric: InterfaceTopMetric, w: u64) -> String {
+    interface_expr_scoped(metric, "", w)
 }
 
 /// [`interface_expr`] with a label selector spliced into every series name.
@@ -935,8 +1001,8 @@ fn interface_expr(metric: InterfaceTopMetric) -> String {
 /// It goes on the **series**, not around the finished expression: a selector applied outside
 /// `rate()` would filter the result *after* VictoriaMetrics had evaluated every series, which is
 /// precisely the cost this exists to avoid.
-fn interface_expr_scoped(metric: InterfaceTopMetric, sel: &str) -> String {
-    let w = INTERFACE_RATE_LOOKBACK_SECS;
+fn interface_expr_scoped(metric: InterfaceTopMetric, sel: &str, w: u64) -> String {
+    let w = w.max(1);
     match metric {
         InterfaceTopMetric::Throughput => {
             format!("(rate(if_hc_in_octets{sel}[{w}s]) + rate(if_hc_out_octets{sel}[{w}s])) * 8")
@@ -955,13 +1021,22 @@ fn interface_expr_scoped(metric: InterfaceTopMetric, sel: &str) -> String {
 /// Fleet interface Top-N PromQL: rank `(node,ifindex)` by the rate expression. `Now` takes the
 /// most recent value within the instant lookback (jitter-robust, like `instant_rate_query`);
 /// `Max1h` the trailing-hour peak. The result carries only `node`+`ifindex` labels.
-fn topk_interface_query(metric: InterfaceTopMetric, agg: TopAgg, limit: usize) -> String {
+///
+/// `w` is the `rate()` window. The subquery's range never drops below `w` (ADR-144): a range
+/// shorter than the window it samples would read a rate its own window cannot hold.
+fn topk_interface_query(metric: InterfaceTopMetric, agg: TopAgg, limit: usize, w: u64) -> String {
     let n = limit.clamp(1, 100);
-    let expr = interface_expr(metric);
-    let w = INTERFACE_RATE_LOOKBACK_SECS;
+    let expr = interface_expr(metric, w);
+    let step = RATE_SUBQUERY_STEP_SECS;
     let instant = match agg {
-        TopAgg::Now => format!("last_over_time(({expr})[{INSTANT_LOOKBACK_SECS}s:{w}s])"),
-        TopAgg::Max1h => format!("max_over_time(({expr})[{MAX_WINDOW_SECS}s:{w}s])"),
+        TopAgg::Now => {
+            let range = INSTANT_LOOKBACK_SECS.max(w);
+            format!("last_over_time(({expr})[{range}s:{step}s])")
+        }
+        TopAgg::Max1h => {
+            let range = MAX_WINDOW_SECS.max(w);
+            format!("max_over_time(({expr})[{range}s:{step}s])")
+        }
     };
     format!("topk({n}, max by (node,ifindex) ({instant}))")
 }
@@ -987,12 +1062,18 @@ fn topk_interface_query(metric: InterfaceTopMetric, agg: TopAgg, limit: usize) -
 /// took no node set, so a rule on a single port queried the whole fleet. It is implemented now
 /// (increment 6c) via `sel`. The lesson worth keeping: a doc describing an intended design reads
 /// exactly like a doc describing a shipped one.
-fn interface_candidates_query(metric: InterfaceTopMetric, floor_bps: f64, sel: &str) -> String {
-    let expr = interface_expr_scoped(metric, sel);
-    let w = INTERFACE_RATE_LOOKBACK_SECS;
+fn interface_candidates_query(
+    metric: InterfaceTopMetric,
+    floor_bps: f64,
+    sel: &str,
+    w: u64,
+) -> String {
+    let expr = interface_expr_scoped(metric, sel, w);
+    let range = INSTANT_LOOKBACK_SECS.max(w);
+    let step = RATE_SUBQUERY_STEP_SECS;
     // `last_over_time` over a subquery, exactly as `TopAgg::Now` does: an SNMP poll is jittered, so
     // an instant read of `rate()` lands between samples often enough to matter.
-    let instant = format!("last_over_time(({expr})[{INSTANT_LOOKBACK_SECS}s:{w}s])");
+    let instant = format!("last_over_time(({expr})[{range}s:{step}s])");
     // `max by` collapses any duplicate series for one port before the comparison, so a port cannot
     // appear twice in the candidate set and be observed twice in one tick.
     format!("max by (node,ifindex) ({instant}) >= {floor_bps}")
@@ -1085,6 +1166,27 @@ fn interface_delta_query(direction: DeltaDirection, window_secs: u64, limit: usi
         DeltaDirection::Up => format!("topk({n}, {delta})"),
         DeltaDirection::Down => format!("bottomk({n}, {delta})"),
     }
+}
+
+/// One node's octet rate for every interface at once, through a `w`-second window:
+/// `rate(if_hc_in_octets{node="…"}[300s])`. `node` is a UUID, so it is safe in the selector.
+fn node_interface_rate_query(counter: &str, node: Uuid, w: u64) -> String {
+    format!("rate({counter}{{node=\"{node}\"}}[{}s])", w.max(1))
+}
+
+/// The fleet's summed octet rate in bits/sec, through a `w`-second window:
+/// `sum(rate(if_hc_in_octets[300s])) * 8`.
+fn fleet_throughput_query(counter: &str, w: u64) -> String {
+    format!("sum(rate({counter}[{}s])) * 8", w.max(1))
+}
+
+/// One interface's total throughput (in + out) in bits/sec, through a `w`-second window.
+fn interface_throughput_query(node: Uuid, ifindex: i32, w: u64) -> String {
+    let w = w.max(1);
+    format!(
+        "(rate(if_hc_in_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[{w}s]) + \
+          rate(if_hc_out_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[{w}s])) * 8"
+    )
 }
 
 /// Parse a VM instant-query response into `(node_id, ifindex, value)` triples (node + ifindex
@@ -1500,7 +1602,10 @@ impl MetricStore for VmStore {
         step_s: u64,
         lookback_s: u64,
     ) -> Vec<MetricPoint> {
-        self.query_range_points(rate_query(key, lookback_s), from_s, to_s, step_s)
+        // The caller's lookback is a floor: a window holding fewer than two of this node's polls
+        // draws the counter as alternating value and gap (ADR-144).
+        let window = self.node_window(lookback_s, key.node.as_uuid());
+        self.query_range_points(rate_query(key, window), from_s, to_s, step_s)
             .await
     }
 
@@ -1512,9 +1617,9 @@ impl MetricStore for VmStore {
         // Three node-scoped instant queries (in-rate / out-rate / oper-status), each returning
         // every interface at once, run concurrently — a constant 3 round-trips regardless of the
         // node's interface count. `node` is a UUID (no injection risk in the selector).
-        let w = lookback_s.max(1);
-        let in_q = format!("rate(if_hc_in_octets{{node=\"{node}\"}}[{w}s])");
-        let out_q = format!("rate(if_hc_out_octets{{node=\"{node}\"}}[{w}s])");
+        let w = self.node_window(lookback_s, node);
+        let in_q = node_interface_rate_query("if_hc_in_octets", node, w);
+        let out_q = node_interface_rate_query("if_hc_out_octets", node, w);
         let status_q =
             format!("last_over_time(if_oper_status{{node=\"{node}\"}}[{INSTANT_LOOKBACK_SECS}s])");
         let (ins, outs, status) = tokio::join!(
@@ -1620,7 +1725,15 @@ impl MetricStore for VmStore {
         let resp = match self
             .http
             .get(&url)
-            .query(&[("query", topk_interface_query(metric, agg, limit))])
+            .query(&[(
+                "query",
+                topk_interface_query(
+                    metric,
+                    agg,
+                    limit,
+                    self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS),
+                ),
+            )])
             .send()
             .await
         {
@@ -1642,25 +1755,19 @@ impl MetricStore for VmStore {
         floor_bps: f64,
         nodes: Option<&[Uuid]>,
     ) -> Option<Vec<(Uuid, i32, f64)>> {
-        let selectors = match nodes {
-            // Not enumerable: some rule is scoped broadly enough to mean the whole fleet.
-            None => vec![String::new()],
+        if matches!(nodes, Some([])) {
             // Nothing is covered. The store *did* answer, with nothing. Falling through would
             // build `{node=~""}`, which is not "no nodes" to VictoriaMetrics.
-            Some([]) => return Some(Vec::new()),
-            Some(ids) => candidate_selectors(ids).unwrap_or_else(|| {
-                // Not silent. Falling back to the whole fleet is exactly the slow path this
-                // increment exists to avoid, and an operator whose rules quietly stopped being
-                // narrowed would have no way to find out. The counter is the durable signal.
-                metrics::counter!("yagra_interface_candidate_unscoped_total").increment(1);
-                tracing::debug!(
-                    nodes = ids.len(),
-                    max_batches = CANDIDATE_MAX_BATCHES,
-                    "too many scoped nodes to name; querying interface candidates fleet-wide"
-                );
-                vec![String::new()]
-            }),
-        };
+            return Some(Vec::new());
+        }
+        // One query per window class (ADR-144). Every node reads through a window holding two of its
+        // own polls; a fleet that shares one window — every fleet polling at 150s or faster — is one
+        // class, and the query is exactly what it was before.
+        let classes = self
+            .intervals
+            .window_classes(crate::poll_interval::RATE_WINDOW_FLOOR_SECS, nodes);
+        // Only a split query can answer about a node twice, so only a split query is filtered.
+        let owners = (classes.len() > 1).then(|| crate::poll_interval::ClassOwners::of(&classes));
         let url = format!("{}/api/v1/query", self.base);
         let mut all = Vec::new();
         // 🚨 Every `return None` below abandons the **whole** call, not just this batch, and that
@@ -1668,50 +1775,39 @@ impl MetricStore for VmStore {
         // returning the batches that did come back would resolve every interface alert on the
         // nodes whose batch failed, then re-fire them on the next tick. A partial answer here is
         // worse than no answer.
-        for sel in &selectors {
-            let resp = match self
-                .http
-                .get(&url)
-                .query(&[("query", interface_candidates_query(metric, floor_bps, sel))])
-                .send()
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => {
-                    // `None`, not an empty vector — see the trait doc. Treating a transport failure
-                    // as "nothing is busy" would resolve every interface alert in the fleet.
-                    tracing::warn!(error = %e, "VictoriaMetrics interface-candidate query failed");
-                    return None;
-                }
+        for (index, class) in classes.iter().enumerate() {
+            let selectors = match class.nodes.as_deref() {
+                // Not enumerable: some rule is scoped broadly enough to mean the whole fleet — or
+                // this is the remainder of a fleet split into classes.
+                None => vec![String::new()],
+                Some([]) => continue,
+                Some(ids) => candidate_selectors(ids).unwrap_or_else(|| {
+                    // Not silent. Falling back to the whole fleet is exactly the slow path this
+                    // increment exists to avoid, and an operator whose rules quietly stopped being
+                    // narrowed would have no way to find out. The counter is the durable signal.
+                    metrics::counter!("yagra_interface_candidate_unscoped_total").increment(1);
+                    tracing::debug!(
+                        nodes = ids.len(),
+                        max_batches = CANDIDATE_MAX_BATCHES,
+                        "too many scoped nodes to name; querying interface candidates fleet-wide"
+                    );
+                    vec![String::new()]
+                }),
             };
-            // A non-2xx is just as much a non-answer as a dropped connection: VictoriaMetrics
-            // reports a malformed query as 4xx with a JSON body that parses fine and carries no
-            // `result`, so checking the status is what stops a bad query reading as a quiet fleet.
-            if !resp.status().is_success() {
-                tracing::warn!(
-                    status = %resp.status(),
-                    "VictoriaMetrics refused the interface-candidate query"
-                );
-                return None;
-            }
-            let json = match resp.json::<serde_json::Value>().await {
-                Ok(json) => json,
-                Err(e) => {
-                    tracing::warn!(error = %e, "VictoriaMetrics interface-candidate response was not JSON");
-                    return None;
+            for sel in &selectors {
+                let query = interface_candidates_query(metric, floor_bps, sel, class.window_secs);
+                let rows = self.candidate_batch(&url, query).await?;
+                // Batches within a class are disjoint by construction (one node is in exactly one
+                // chunk). Across classes they are not — the remainder, or a fleet-wide fallback,
+                // answers for named nodes too — so each row is kept by the class that owns it.
+                match &owners {
+                    None => all.extend(rows),
+                    Some(owners) => all.extend(
+                        rows.into_iter()
+                            .filter(|(node, _, _)| owners.owns(index, *node)),
+                    ),
                 }
-            };
-            // VictoriaMetrics reports a query-time error in the body with `status: "error"` and
-            // HTTP 200 in some configurations, so the envelope is checked too.
-            if json.get("status").and_then(|v| v.as_str()) != Some("success") {
-                tracing::warn!(
-                    "VictoriaMetrics interface-candidate query returned a non-success body"
-                );
-                return None;
             }
-            // Batches are disjoint by construction (one node is in exactly one chunk), so the
-            // concatenation cannot double-count a port.
-            all.extend(parse_top_interfaces(&json));
         }
         Some(all)
     }
@@ -1784,7 +1880,9 @@ impl MetricStore for VmStore {
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)> {
         let url = format!("{}/api/v1/query", self.base);
-        let query = interface_delta_query(direction, window_secs, limit);
+        // The comparison window is also each rate's window, so it must hold two polls of the
+        // slowest node or "now" and "then" are both empty for it (ADR-144).
+        let query = interface_delta_query(direction, self.fleet_window(window_secs), limit);
         let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
             Ok(resp) => resp,
             Err(e) => {
@@ -1811,10 +1909,12 @@ impl MetricStore for VmStore {
         to_s: i64,
         step_s: u64,
     ) -> (Vec<MetricPoint>, Vec<MetricPoint>) {
-        // Fleet sum of per-interface octet rates ×8 = bits/sec. 300s rate window is robust to
-        // poll jitter; sampled at the requested step across the range.
-        let in_q = "sum(rate(if_hc_in_octets[300s])) * 8".to_string();
-        let out_q = "sum(rate(if_hc_out_octets[300s])) * 8".to_string();
+        // Fleet sum of per-interface octet rates ×8 = bits/sec, sampled at the requested step across
+        // the range. The window is at least five minutes (robust to poll jitter) and at least two
+        // polls of the slowest node, or that node drops out of the sum every other window (ADR-144).
+        let w = self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS);
+        let in_q = fleet_throughput_query("if_hc_in_octets", w);
+        let out_q = fleet_throughput_query("if_hc_out_octets", w);
         // The in/out range queries are independent — run them concurrently.
         let (in_pts, out_pts) = tokio::join!(
             self.query_range_points(in_q, from_s, to_s, step_s),
@@ -1833,10 +1933,8 @@ impl MetricStore for VmStore {
     ) -> Vec<MetricPoint> {
         // node is a UUID and ifindex an i32 (both bounded types from the topk result), so they're
         // safe to interpolate into the thin-label selector.
-        let q = format!(
-            "(rate(if_hc_in_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[300s]) + \
-              rate(if_hc_out_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[300s])) * 8"
-        );
+        let w = self.node_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS, node);
+        let q = interface_throughput_query(node, ifindex, w);
         self.query_range_points(q, from_s, to_s, step_s).await
     }
 
@@ -2455,7 +2553,7 @@ mod tests {
     #[test]
     fn topk_interface_throughput_sums_in_out_rate_scaled_to_bits() {
         assert_eq!(
-            topk_interface_query(InterfaceTopMetric::Throughput, TopAgg::Now, 5),
+            topk_interface_query(InterfaceTopMetric::Throughput, TopAgg::Now, 5, 300),
             "topk(5, max by (node,ifindex) (last_over_time(((rate(if_hc_in_octets[300s]) + rate(if_hc_out_octets[300s])) * 8)[1800s:300s])))"
         );
     }
@@ -2473,10 +2571,87 @@ mod tests {
         assert!(interface_delta_query(DeltaDirection::Down, 300, 5).starts_with("bottomk(5,"));
     }
 
+    /// ADR-144. At the 300s floor every query string in this module is byte-for-byte what shipped
+    /// before; this pins what a slower fleet asks instead. The window widens and a subquery's range
+    /// grows to hold it, while the subquery step stays 300s.
+    #[test]
+    fn a_slow_fleet_widens_every_rate_window_and_keeps_the_subquery_step() {
+        assert_eq!(
+            topk_interface_query(InterfaceTopMetric::Throughput, TopAgg::Now, 5, 600),
+            "topk(5, max by (node,ifindex) (last_over_time(((rate(if_hc_in_octets[600s]) + rate(if_hc_out_octets[600s])) * 8)[1800s:300s])))"
+        );
+        assert_eq!(
+            topk_interface_query(InterfaceTopMetric::InBps, TopAgg::Max1h, 5, 7200),
+            "topk(5, max by (node,ifindex) (max_over_time((rate(if_hc_in_octets[7200s]) * 8)[7200s:300s])))"
+        );
+        assert_eq!(
+            interface_candidates_query(InterfaceTopMetric::InBps, 1.0, "", 2400),
+            "max by (node,ifindex) (last_over_time((rate(if_hc_in_octets[2400s]) * 8)[2400s:300s])) >= 1"
+        );
+        assert!(
+            interface_delta_query(DeltaDirection::Up, 600, 5)
+                .contains("rate(if_hc_in_octets[600s] offset 600s)"),
+            "the comparison offset moves with the window"
+        );
+    }
+
+    #[test]
+    fn the_node_and_fleet_throughput_reads_are_unchanged_at_the_floor() {
+        let node = Uuid::nil();
+        assert_eq!(
+            node_interface_rate_query("if_hc_in_octets", node, 300),
+            "rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\"}[300s])"
+        );
+        assert_eq!(
+            fleet_throughput_query("if_hc_out_octets", 300),
+            "sum(rate(if_hc_out_octets[300s])) * 8"
+        );
+        assert_eq!(
+            interface_throughput_query(node, 7, 300),
+            "(rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"7\"}[300s]) + rate(if_hc_out_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"7\"}[300s])) * 8"
+        );
+        assert!(fleet_throughput_query("if_hc_in_octets", 1200).contains("[1200s]"));
+    }
+
+    #[test]
+    fn the_store_widens_a_callers_window_only_once_intervals_are_published() {
+        let intervals = crate::poll_interval::PollIntervals::unknown();
+        let store = VmStore::new("http://vm.invalid").with_poll_intervals(intervals.clone());
+        let slow = Uuid::from_u128(1);
+        let fast = Uuid::from_u128(2);
+        assert_eq!(
+            store.node_window(300, slow),
+            300,
+            "unknown asks what the caller asked"
+        );
+        assert_eq!(store.fleet_window(60), 60);
+
+        intervals.publish(crate::poll_interval::IntervalSnapshot::build(
+            30,
+            [(slow, 600)],
+        ));
+        assert_eq!(store.node_window(300, slow), 1200);
+        assert_eq!(
+            store.node_window(300, fast),
+            300,
+            "a 30s node keeps the floor"
+        );
+        assert_eq!(
+            store.node_window(60, fast),
+            60,
+            "and a caller's own narrower floor"
+        );
+        assert_eq!(
+            store.fleet_window(300),
+            1200,
+            "a fleet read holds the slowest node"
+        );
+    }
+
     #[test]
     fn topk_interface_errors_uses_error_counters_and_hourly_peak() {
         assert_eq!(
-            topk_interface_query(InterfaceTopMetric::Errors, TopAgg::Max1h, 3),
+            topk_interface_query(InterfaceTopMetric::Errors, TopAgg::Max1h, 3, 300),
             "topk(3, max by (node,ifindex) (max_over_time(((rate(if_in_errors[300s]) + rate(if_out_errors[300s])))[3600s:300s])))"
         );
     }
@@ -2716,7 +2891,7 @@ mod tests {
         // A string regression, because this query is assembled by `format!` and nothing else
         // checks what VictoriaMetrics is actually asked. The unscoped form must stay byte-for-byte
         // what shipped before increment 6c, or the fleet-wide path changes meaning silently.
-        let fleet = interface_candidates_query(InterfaceTopMetric::InBps, 900_000_000.0, "");
+        let fleet = interface_candidates_query(InterfaceTopMetric::InBps, 900_000_000.0, "", 300);
         assert_eq!(
             fleet,
             "max by (node,ifindex) (last_over_time((rate(if_hc_in_octets[300s]) * 8)[1800s:300s])) >= 900000000"
@@ -2725,7 +2900,7 @@ mod tests {
         let a = Uuid::nil();
         let sel = candidate_selectors(&[a]).expect("one node fits in one batch");
         assert_eq!(sel.len(), 1);
-        let scoped = interface_candidates_query(InterfaceTopMetric::InBps, 0.0, &sel[0]);
+        let scoped = interface_candidates_query(InterfaceTopMetric::InBps, 0.0, &sel[0], 300);
         // The selector sits on the SERIES, inside `rate()`. Outside it, VictoriaMetrics would
         // evaluate every series first and filter after — the exact cost this exists to remove.
         assert!(
@@ -2736,7 +2911,7 @@ mod tests {
 
         // Throughput names two series, and both must carry the selector — missing one would query
         // the whole fleet for half the expression and silently undo the narrowing.
-        let both = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &sel[0]);
+        let both = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &sel[0], 300);
         assert_eq!(
             both.matches("node=~").count(),
             2,
@@ -2758,7 +2933,7 @@ mod tests {
         // CANDIDATE_MAX_SELECTOR_BYTES past what the server accepts.
         // The widest dimension, because the budget has to hold for the expression that repeats
         // the selector most — not for the one the watch loop happens to use today.
-        let q = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &one[0]);
+        let q = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &one[0], 300);
         assert!(
             q.len() < VM_MAX_QUERY_LEN,
             "query is {} bytes, over the server's {VM_MAX_QUERY_LEN}",
@@ -2794,7 +2969,7 @@ mod tests {
         // whole tick starts being refused. Checked over `ALL`, so a new variant has to face it.
         let mut worst = 0;
         for m in InterfaceTopMetric::ALL {
-            let n = interface_expr_scoped(m, "{SELECTOR}")
+            let n = interface_expr_scoped(m, "{SELECTOR}", 300)
                 .matches("{SELECTOR}")
                 .count();
             assert!(

@@ -27,6 +27,16 @@ impl FlapDetector {
         }
     }
 
+    /// Change the window, keeping the transitions already recorded.
+    ///
+    /// The window is a property of how far apart a check's samples are, and that can change while
+    /// the check lives (ADR-144): a five-minute poll needs a far wider window than a thirty-second
+    /// one to see five transitions at all. Widening applies to the transitions still held —
+    /// anything an earlier, narrower window already pruned on [`Self::record`] is gone.
+    pub fn set_window_ms(&mut self, window_ms: i64) {
+        self.window_ms = window_ms.max(0);
+    }
+
     /// Record a transition at `at_ms`, pruning anything older than the window.
     pub fn record(&mut self, at_ms: i64) {
         self.transitions.push_back(at_ms);
@@ -74,6 +84,31 @@ mod tests {
         f.record(40_000);
         // Only the last one is inside the 10s window ending at 40s.
         assert!(!f.is_flapping(40_000));
+    }
+
+    #[test]
+    fn a_changed_window_judges_the_transitions_already_held() {
+        // Recorded under a wide window, so nothing is pruned on the way in.
+        let mut f = FlapDetector::new(60_000, 3);
+        f.record(0);
+        f.record(20_000);
+        f.record(40_000);
+        assert!(f.is_flapping(40_000), "three flips inside a 60s window");
+        f.set_window_ms(10_000);
+        assert!(
+            !f.is_flapping(40_000),
+            "the same three flips are not three in 10s"
+        );
+        f.set_window_ms(60_000);
+        assert!(
+            f.is_flapping(40_000),
+            "narrowing prunes nothing by itself, so widening again sees all three"
+        );
+        f.set_window_ms(-5);
+        assert!(
+            !f.is_flapping(40_000),
+            "a negative window is clamped to zero"
+        );
     }
 
     #[test]

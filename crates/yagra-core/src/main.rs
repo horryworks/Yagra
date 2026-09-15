@@ -85,6 +85,8 @@ mod pgtest;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
+/// How far apart each node's polls are, shared with the readers outside the scheduler (ADR-144).
+mod poll_interval;
 mod pollers;
 mod pool_coverage;
 /// Effective poll-pool resolution (node > ancestor folder > default).
@@ -424,8 +426,15 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tracing::warn!(error = %e, "failed to load classification rules; discovery will use the generic fallback");
     }
 
+    // Every node's effective poll interval, as the scheduler last resolved it (ADR-144). Made before
+    // the two readers that size a `rate()` window, a dwell or a flap window from it. Only the
+    // leader's scheduler publishes, so until its first rebuild — and on a standby — every reader
+    // answers exactly as it did before the handle existed.
+    let poll_intervals = poll_interval::PollIntervals::unknown();
+
     // TSDB + bus.
-    let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));
+    let store: Arc<dyn MetricStore> =
+        Arc::new(VmStore::new(cfg.tsdb_url.clone()).with_poll_intervals(poll_intervals.clone()));
     let bus = Arc::new(connect_bus(&cfg.bus_url).await?);
 
     // Event log store (ADR-024, 4th data class). Optional: when a URL is set, passive events are
@@ -465,7 +474,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let ipasn: crate::ipasn::IpAsnHandle = ipasn::open(cfg.ipasn_db_path.as_deref());
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
-    let alerts = Arc::new(AlertManager::new());
+    let alerts = Arc::new(AlertManager::with_poll_intervals(poll_intervals.clone()));
     let notifier = Arc::new(Notifier::from_env());
     let notifications = Arc::new(NotificationRepo::new(repo.pool(), kek.clone()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
@@ -802,6 +811,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         history: history.clone(),
         alerts: alerts.clone(),
         scheduler_stats: scheduler_stats.clone(),
+        poll_intervals: poll_intervals.clone(),
         meraki_inflight: meraki_inflight.clone(),
         meraki_devices: meraki_devices.clone(),
         meraki_orgs: meraki_orgs.clone(),
@@ -1063,6 +1073,8 @@ struct LeaderTasks {
     history: Arc<AlertHistoryStore>,
     alerts: Arc<AlertManager>,
     scheduler_stats: Arc<scheduler::SchedulerStats>,
+    /// Published into by the scheduler after every rebuild whose reads all succeeded (ADR-144).
+    poll_intervals: poll_interval::PollIntervals,
     meraki_inflight: Arc<meraki::MerakiInflight>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
@@ -1349,6 +1361,7 @@ impl LeaderTasks {
                 self.scheduler_stats.clone(),
                 self.meraki_devices.clone(),
                 self.coordinator.clone(),
+                self.poll_intervals.clone(),
             ),
         );
         spawn_cancellable(

@@ -127,6 +127,14 @@ impl CheckState {
         self.dwell.set_dwell(dwell);
     }
 
+    /// Re-point the flap window at how far apart this check's samples are now — the twin of
+    /// [`Self::set_dwell`] (ADR-144). A fixed window stops seeing flapping once polls are slow
+    /// enough that the required transitions cannot fit inside it; see
+    /// [`flapping::FlapDetector::set_window_ms`].
+    pub fn set_flap_window_ms(&mut self, window_ms: i64) {
+        self.flap.set_window_ms(window_ms);
+    }
+
     /// Feed one raw sample observed at `now_ms`. Returns a [`Transition`] iff the
     /// committed state changed.
     pub fn observe(&mut self, raw: NodeState, now_ms: i64) -> Option<Transition> {
@@ -187,5 +195,37 @@ mod tests {
         assert!(!a.flapping); // 1 transition
         assert!(!b.flapping); // 2 transitions
         assert!(c.flapping); // 3 transitions in window → flapping
+    }
+
+    /// Why the flap window grows with the poll interval (ADR-144): with a three-sample dwell and a
+    /// 300-second poll, a transition needs 900 seconds, so five of them span 3,600 seconds. The
+    /// fixed ten-minute window could never hold five, and neither can one sized to only half the
+    /// span; twenty polls (6,000 seconds) can.
+    #[test]
+    fn a_flap_window_sized_to_the_poll_interval_sees_what_a_fixed_one_misses() {
+        let fifth_transition = |window_ms: i64| {
+            let mut cs = CheckState::new(NodeState::Ok, 3, 600_000, 5);
+            cs.set_flap_window_ms(window_ms);
+            let mut at_ms = 0;
+            let mut raw = NodeState::Critical;
+            let mut last = None;
+            for _ in 0..5 {
+                for _ in 0..3 {
+                    at_ms += 300_000;
+                    if let Some(t) = cs.observe(raw, at_ms) {
+                        last = Some(t);
+                    }
+                }
+                raw = if raw == NodeState::Critical {
+                    NodeState::Ok
+                } else {
+                    NodeState::Critical
+                };
+            }
+            last.expect("every third poll commits a transition")
+        };
+        assert!(fifth_transition(6_000_000).flapping, "twenty 300s polls");
+        assert!(!fifth_transition(3_000_000).flapping, "half the span");
+        assert!(!fifth_transition(600_000).flapping, "the old fixed window");
     }
 }

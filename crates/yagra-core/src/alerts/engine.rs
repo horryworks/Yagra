@@ -21,13 +21,14 @@ use yagra_common::{
     CheckId, Direction, EffectiveThreshold, IfIndex, MetricKind, NodeId, NodeState, Severity,
 };
 
+use crate::poll_interval::{self, PollIntervals};
 use crate::thresholds::StoredThreshold;
 
 use super::rules::*;
 use super::{NotifyAction, StreamFrame};
 
-/// Flapping detection window and threshold.
-const FLAP_WINDOW_MS: i64 = 600_000;
+/// How many transitions inside the flap window make a check flapping. The window itself follows the
+/// node's poll interval ([`crate::poll_interval::flap_window_ms`], ADR-144).
 const FLAP_THRESHOLD: usize = 5;
 
 /// SSE broadcast buffer. Sized generously so a briefly-slow subscriber doesn't lag past the
@@ -57,6 +58,19 @@ enum CheckOn<'a> {
 
 /// What each vendor-table row is called, per node: node → metric → row key → name (ADR-143).
 type RowNamesByNode = HashMap<NodeId, HashMap<String, HashMap<u32, String>>>;
+
+/// When one batch of samples was observed, and how often such a batch arrives (ADR-144).
+///
+/// Bundled because every threshold observation needs all four together and the functions that pass
+/// them along were already at clippy's argument limit.
+#[derive(Debug, Clone, Copy)]
+struct Moment {
+    at_unix_ms: i64,
+    in_maintenance: bool,
+    cadence: Cadence,
+    /// The node's poll interval, read once for the whole batch.
+    interval: Option<u32>,
+}
 
 /// In-memory alert engine: per-check state, active alerts, an SSE broadcast, the committed
 /// per-node liveness map (inventory roll-up + suppression down-set), and the
@@ -94,6 +108,9 @@ pub struct AlertManager {
     /// Node-wide threshold checks restored from before a table row alerted on its own (ADR-143
     /// decision 6). The first per-row observation of the same metric closes the matching one here.
     legacy_node_checks: Mutex<HashSet<CheckId>>,
+    /// How far apart each node's polls are, as the scheduler last published it (ADR-144). Read once
+    /// per observation to size the flap window and, for a check read once a tick, the dwell.
+    intervals: PollIntervals,
 }
 
 /// One open alert a store can still be asked about, and the series that would answer.
@@ -116,9 +133,17 @@ pub struct FreshnessCandidate {
 }
 
 impl AlertManager {
-    /// New manager with an empty config (no thresholds until [`Self::set_config`]).
+    /// New manager with an empty config (no thresholds until [`Self::set_config`]) and no poll
+    /// intervals, so every dwell and flap window is what it was before ADR-144.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_poll_intervals(PollIntervals::unknown())
+    }
+
+    /// New manager that reads each node's poll interval from `intervals` — the handle the scheduler
+    /// publishes into (ADR-144).
+    #[must_use]
+    pub fn with_poll_intervals(intervals: PollIntervals) -> Self {
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
         let (node_tx, _) = broadcast::channel(NODE_EVENT_BUFFER);
         Self {
@@ -132,6 +157,7 @@ impl AlertManager {
             row_names: RwLock::new(HashMap::new()),
             row_states: Mutex::new(HashMap::new()),
             legacy_node_checks: Mutex::new(HashSet::new()),
+            intervals,
         }
     }
 
@@ -287,10 +313,11 @@ impl AlertManager {
             let mut states = self.states.lock().expect("states mutex poisoned");
             for a in alerts {
                 states.entry(a.check).or_insert_with(|| {
+                    // Both the dwell and the flap window are re-pointed by the first observation.
                     CheckState::restored(
                         a.state,
                         DEFAULT_LIVENESS_DWELL,
-                        FLAP_WINDOW_MS,
+                        poll_interval::flap_window_ms(None),
                         FLAP_THRESHOLD,
                     )
                 });
@@ -604,6 +631,14 @@ impl AlertManager {
                 CheckOutcome::Error => NodeState::Unknown,
             }
         };
+        // One read of the node's poll interval for the whole result (ADR-144). A poll result is
+        // one poll, so its checks count polls as they are.
+        let moment = Moment {
+            at_unix_ms: result.at_unix_ms,
+            in_maintenance,
+            cadence: Cadence::EveryPoll,
+            interval: self.intervals.for_node(node.as_uuid()),
+        };
         actions.extend(self.process_check(
             node,
             raw,
@@ -620,6 +655,8 @@ impl AlertManager {
                 ifindex: None,
                 row: None,
                 row_name: None,
+                cadence: moment.cadence,
+                interval: moment.interval,
             },
         ));
 
@@ -660,8 +697,7 @@ impl AlertManager {
                 // One port, one check, one observation (ADR-076).
                 (Some(idx), _) => actions.extend(self.observe_threshold_sample(
                     node,
-                    result.at_unix_ms,
-                    in_maintenance,
+                    moment,
                     sample,
                     eff,
                     CheckOn::Port(idx),
@@ -687,17 +723,10 @@ impl AlertManager {
             }
         }
         for (_, sample, eff) in folded {
-            actions.extend(self.observe_threshold_sample(
-                node,
-                result.at_unix_ms,
-                in_maintenance,
-                sample,
-                eff,
-                CheckOn::Node,
-            ));
+            actions.extend(self.observe_threshold_sample(node, moment, sample, eff, CheckOn::Node));
         }
         if !rows.is_empty() {
-            actions.extend(self.observe_rows(node, result.at_unix_ms, in_maintenance, rows));
+            actions.extend(self.observe_rows(node, moment, rows));
         }
 
         // Push an incremental node-state event only when the rolled-up display state actually moved
@@ -730,8 +759,7 @@ impl AlertManager {
     fn observe_threshold_sample(
         &self,
         node: NodeId,
-        at_unix_ms: i64,
-        in_maintenance: bool,
+        moment: Moment,
         sample: &Sample,
         eff: &EffectiveThreshold,
         on: CheckOn<'_>,
@@ -752,7 +780,7 @@ impl AlertManager {
                 (id, None, None, None)
             }
         };
-        let raw = if in_maintenance {
+        let raw = if moment.in_maintenance {
             NodeState::Maintenance
         } else if sample.kind == MetricKind::Counter {
             // A raw monotonic counter has no meaningful fixed bound: `above` latches
@@ -787,7 +815,7 @@ impl AlertManager {
         self.process_check(
             node,
             raw,
-            at_unix_ms,
+            moment.at_unix_ms,
             CheckSpec {
                 check,
                 metric: &sample.metric,
@@ -799,6 +827,8 @@ impl AlertManager {
                 ifindex,
                 row,
                 row_name,
+                cadence: moment.cadence,
+                interval: moment.interval,
             },
         )
     }
@@ -832,8 +862,7 @@ impl AlertManager {
     fn observe_rows(
         &self,
         node: NodeId,
-        at_unix_ms: i64,
-        in_maintenance: bool,
+        moment: Moment,
         rows: Vec<(&Sample, &EffectiveThreshold, u32, Option<&str>)>,
     ) -> Vec<NotifyAction> {
         let mut actions = Vec::new();
@@ -862,7 +891,7 @@ impl AlertManager {
         for ((sample, eff, row, name), held) in rows.into_iter().zip(held) {
             // A counter is never evaluated (ADR-012) and maintenance breaches nothing, so neither is
             // a reason to create a state — only to keep feeding one that exists.
-            let breaching = !in_maintenance
+            let breaching = !moment.in_maintenance
                 && sample.kind != MetricKind::Counter
                 && eff.evaluate(sample.value) != NodeState::Ok;
             if !breaching && !held {
@@ -870,8 +899,7 @@ impl AlertManager {
             }
             actions.extend(self.observe_threshold_sample(
                 node,
-                at_unix_ms,
-                in_maintenance,
+                moment,
                 sample,
                 eff,
                 CheckOn::Row(row, name),
@@ -942,17 +970,29 @@ impl AlertManager {
             ifindex,
             row,
             row_name,
+            cadence,
+            interval,
         } = spec;
+        // The rule's dwell counts polls. A check read once a tick counts enough ticks to span that
+        // many polls, and the flap window spans twenty of them (ADR-144). This is the one place
+        // either conversion happens; with no interval published both come out as they always were.
+        let dwell = match cadence {
+            Cadence::EveryPoll => dwell,
+            Cadence::EveryTick(tick) => poll_interval::dwell_ticks(dwell, interval, tick),
+        };
+        let flap_window = poll_interval::flap_window_ms(interval);
         let (transition, observed) = {
             let mut states = self.states.lock().expect("states mutex poisoned");
             let cs = states.entry(check).or_insert_with(|| {
-                CheckState::new(NodeState::Ok, dwell.max(1), FLAP_WINDOW_MS, FLAP_THRESHOLD)
+                CheckState::new(NodeState::Ok, dwell.max(1), flap_window, FLAP_THRESHOLD)
             });
             // A check's state lives for the process, so the dwell captured at first observation
             // would otherwise outlive every edit to the rule that set it — an operator raising
             // "3 breaches" to "5" would see no effect until the next core restart, with the UI
-            // showing 5. Re-point it every observation instead (ADR-075).
+            // showing 5. Re-point it every observation instead (ADR-075). The flap window follows
+            // the node's poll interval the same way.
             cs.set_dwell(dwell.max(1));
+            cs.set_flap_window_ms(flap_window);
             let t = cs.observe(raw, at_unix_ms);
             (t, cs.observed())
         };
@@ -1410,6 +1450,9 @@ impl AlertManager {
                 ifindex: Some(ifindex),
                 row: None,
                 row_name: None,
+                // Read once a tick by the utilisation evaluator, not once a poll (ADR-144).
+                cadence: Cadence::EveryTick(crate::interface_util::WATCH_TICK),
+                interval: self.intervals.for_node(node.as_uuid()),
             },
         ))
     }
@@ -1496,6 +1539,9 @@ impl AlertManager {
                 ifindex: None,
                 row: None,
                 row_name: None,
+                // Read once a tick by the derived-metric evaluator, not once a poll (ADR-144).
+                cadence: Cadence::EveryTick(crate::derived::WATCH_TICK),
+                interval: self.intervals.for_node(node.as_uuid()),
             },
         ))
     }
@@ -1551,7 +1597,14 @@ impl AlertManager {
             .zip(&effs)
             .filter_map(|((sample, row, name), eff)| Some((sample, eff.as_ref()?, *row, *name)))
             .collect();
-        Some(self.observe_rows(node, at_unix_ms, in_maintenance, observed))
+        let moment = Moment {
+            at_unix_ms,
+            in_maintenance,
+            // Read once a tick by the derived-metric evaluator, not once a poll (ADR-144).
+            cadence: Cadence::EveryTick(crate::derived::WATCH_TICK),
+            interval: self.intervals.for_node(node.as_uuid()),
+        };
+        Some(self.observe_rows(node, moment, observed))
     }
 
     /// What the threshold rules in force for `metric` cover — an evaluator plans its query from
@@ -4408,6 +4461,179 @@ mod tests {
             mgr.observe_interface_metric(node, IfIndex(8), "if_in_util_pct", 99.0, 1_000)
                 .is_none(),
             "port 8 has no rule, so nothing should be observed for it"
+        );
+    }
+
+    /// A manager whose every node polls every `secs` seconds — or one nothing was published into.
+    fn manager_polling_every(
+        secs: Option<u32>,
+    ) -> (AlertManager, crate::poll_interval::PollIntervals) {
+        let intervals = crate::poll_interval::PollIntervals::unknown();
+        if let Some(secs) = secs {
+            intervals.publish(crate::poll_interval::IntervalSnapshot::build(secs, []));
+        }
+        (
+            AlertManager::with_poll_intervals(intervals.clone()),
+            intervals,
+        )
+    }
+
+    /// A three-breach `if_in_util_pct` rule on port 7 of `node`.
+    fn three_breach_port_rule(node: NodeId) -> StoredThreshold {
+        StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Interface,
+            vec![format!("{}:7", node.as_uuid())],
+            yagra_common::ThresholdRule::new(
+                "if_in_util_pct",
+                ThresholdBounds::above(None, Some(90.0)),
+                3,
+            ),
+        )
+    }
+
+    /// ADR-144 decision 5. The utilisation evaluator ticks every minute whatever the node's poll
+    /// interval, so on a node polled every five minutes one reading arrives five times. A
+    /// three-breach rule has to see three polls — fifteen ticks — not one poll read three times.
+    #[test]
+    fn a_tick_counted_dwell_spans_the_polls_on_a_slow_node() {
+        let fires_on_tick = |interval: Option<u32>| {
+            let node = NodeId::from(Uuid::new_v4());
+            let (mgr, _) = manager_polling_every(interval);
+            mgr.set_config(cfg(vec![three_breach_port_rule(node)], HashMap::new()));
+            (1..=30_i64).find(|tick| {
+                mgr.observe_interface_metric(
+                    node,
+                    IfIndex(7),
+                    "if_in_util_pct",
+                    95.0,
+                    tick * 60_000,
+                )
+                .expect("a rule is in force")
+                .iter()
+                .any(|a| matches!(a, NotifyAction::Fire(_)))
+            })
+        };
+        assert_eq!(
+            fires_on_tick(None),
+            Some(3),
+            "nothing published: three ticks, as before"
+        );
+        assert_eq!(
+            fires_on_tick(Some(30)),
+            Some(3),
+            "faster than the tick: unchanged"
+        );
+        assert_eq!(
+            fires_on_tick(Some(300)),
+            Some(15),
+            "three five-minute polls"
+        );
+    }
+
+    /// The derived node metrics tick the same way and convert the same way — through the per-row
+    /// path when the metric is a table.
+    #[test]
+    fn a_derived_metrics_dwell_spans_the_polls_on_a_slow_node() {
+        use yagra_common::ThresholdRule;
+        let node = NodeId::new();
+        let (mgr, _) = manager_polling_every(Some(300));
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "huawei_mem_used_pct",
+                    ThresholdBounds::above(Some(1.0), Some(99.0)),
+                    2,
+                ),
+            )],
+            meta_for(node),
+        ));
+        let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        let fired_on = (1..=20_i64).find(|tick| {
+            mgr.observe_derived_metric(node, "huawei_mem_used_pct", &[(0, 80.0)], tick * 60_000)
+                .expect("a rule is in force")
+                .iter()
+                .any(|a| matches!(a, NotifyAction::Fire(_)))
+        });
+        assert_eq!(fired_on, Some(10), "two five-minute polls are ten ticks");
+    }
+
+    /// The poll path already sees each poll once, so a published interval must not stretch it.
+    #[test]
+    fn a_poll_result_counts_polls_whatever_the_interval() {
+        let node = NodeId::new();
+        let (mgr, _) = manager_polling_every(Some(300));
+        mgr.set_config(cfg(Vec::new(), HashMap::new()));
+        let dwell = i64::from(liveness_rule().rule.dwell_samples);
+        let fired_on = (1..=20_i64).find(|poll| {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, poll * 300_000))
+                .iter()
+                .any(|a| matches!(a, NotifyAction::Fire(_)))
+        });
+        assert_eq!(fired_on, Some(dwell));
+    }
+
+    /// Publishing a slower interval while a port is already breaching keeps the run it has made:
+    /// the count grows, it does not start over (the `set_dwell` contract, ADR-075).
+    #[test]
+    fn raising_the_interval_mid_breach_extends_the_count_without_restarting_it() {
+        let node = NodeId::from(Uuid::new_v4());
+        let (mgr, intervals) = manager_polling_every(Some(30));
+        mgr.set_config(cfg(vec![three_breach_port_rule(node)], HashMap::new()));
+        let breach = |tick: i64| {
+            mgr.observe_interface_metric(node, IfIndex(7), "if_in_util_pct", 95.0, tick * 60_000)
+                .expect("a rule is in force")
+                .iter()
+                .any(|a| matches!(a, NotifyAction::Fire(_)))
+        };
+        assert!(!breach(1));
+        assert!(!breach(2));
+        intervals.publish(crate::poll_interval::IntervalSnapshot::build(300, []));
+        assert_eq!((3..=30_i64).find(|tick| breach(*tick)), Some(15));
+    }
+
+    /// ADR-144 decision 6. A port that changes state once every five-minute poll is flapping, and a
+    /// fixed ten-minute window can never say so: five transitions take twenty minutes. The same
+    /// readings with nothing published keep today's answer, which is "not flapping".
+    #[test]
+    fn flapping_is_detected_on_a_slowly_polled_node() {
+        let flapping_on_each_fire = |interval: Option<u32>| {
+            let node = NodeId::from(Uuid::new_v4());
+            let (mgr, _) = manager_polling_every(interval);
+            mgr.set_config(cfg(vec![port_rule(node, IfIndex(7), 50.0)], HashMap::new()));
+            let mut fires = Vec::new();
+            for tick in 1..=25_i64 {
+                // Five minutes over the bound, five minutes under it: one change per poll.
+                let value = if (tick - 1) / 5 % 2 == 0 { 95.0 } else { 10.0 };
+                for action in mgr
+                    .observe_interface_metric(
+                        node,
+                        IfIndex(7),
+                        "if_in_util_pct",
+                        value,
+                        tick * 60_000,
+                    )
+                    .expect("a rule is in force")
+                {
+                    if let NotifyAction::Fire(alert) = action {
+                        fires.push(alert.flapping);
+                    }
+                }
+            }
+            fires
+        };
+        assert_eq!(
+            flapping_on_each_fire(Some(300)),
+            vec![false, false, true],
+            "the fifth transition lands inside a twenty-poll window"
+        );
+        assert_eq!(
+            flapping_on_each_fire(None),
+            vec![false, false, false],
+            "nothing published: the ten-minute window, as before"
         );
     }
 

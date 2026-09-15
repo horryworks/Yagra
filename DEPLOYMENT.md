@@ -472,7 +472,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` bind address |
 | `YAGRA_ADMIN_PASSWORD` | unset ⇒ one-time random (logged) | Bootstrap `admin` password, first boot only |
 | **Polling & notifications** | | |
-| `YAGRA_POLL_INTERVAL_SECS` | `30` (clamp 10–3600) | Initial default poll interval (seeded on first boot; DB-authoritative after) |
+| `YAGRA_POLL_INTERVAL_SECS` | `300` (clamp 10–3600) | Initial default poll interval (seeded on first boot; DB-authoritative after) |
 | `YAGRA_SNMP_COMMUNITY` | unset | Fallback SNMP v2c community for nodes without a bound credential |
 | `YAGRA_MERAKI_POOL` | `default` | Poller pool that Meraki cloud-collect jobs route to |
 | `YAGRA_WEBHOOK_URL` | unset ⇒ off | Default alert webhook channel |

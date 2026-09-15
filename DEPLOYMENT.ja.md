@@ -465,7 +465,7 @@ export RUST_LOG=info
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` のバインドアドレス |
 | `YAGRA_ADMIN_PASSWORD` | 未設定 ⇒ 一度限りのランダム値（ログ出力） | ブートストラップ `admin` パスワード（初回起動のみ） |
 | **ポーリングと通知** | | |
-| `YAGRA_POLL_INTERVAL_SECS` | `30`（10–3600 にクランプ） | 初期の既定ポーリング間隔（初回起動でシード。以後は DB が権威） |
+| `YAGRA_POLL_INTERVAL_SECS` | `300`（10–3600 にクランプ） | 初期の既定ポーリング間隔（初回起動でシード。以後は DB が権威） |
 | `YAGRA_SNMP_COMMUNITY` | 未設定 | 資格情報が未バインドのノードに使うフォールバック SNMP v2c コミュニティ |
 | `YAGRA_MERAKI_POOL` | `default` | Meraki クラウド収集ジョブを振り分けるポーラプール |
 | `YAGRA_WEBHOOK_URL` | 未設定 ⇒ 無効 | 既定のアラート Webhook チャネル |

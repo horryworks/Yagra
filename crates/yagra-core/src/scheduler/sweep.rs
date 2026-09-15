@@ -113,6 +113,10 @@ fn group_by_pool(
 /// both (no double-polling). The effective interval per node is `profile override → global default`
 /// (both re-read each round, so a UI edit applies next round). The loop wakes at the smallest
 /// interval in play; legacy jitter spans that window.
+///
+/// Every rebuild whose interval reads all succeeded publishes the resolved intervals into
+/// `intervals`, which is how the `rate()` windows, the tick-counted dwells and the flap windows
+/// outside this module learn how far apart a node's polls are (ADR-144).
 pub(crate) async fn run_scheduler(
     repo: Arc<NodeRepo>,
     groups_repo: Arc<groups::GroupRepo>,
@@ -120,6 +124,7 @@ pub(crate) async fn run_scheduler(
     stats: Arc<scheduler::SchedulerStats>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     coordinator: Arc<Coordinator>,
+    intervals: crate::poll_interval::PollIntervals,
 ) {
     use std::collections::HashSet;
     use std::time::Instant;
@@ -149,7 +154,7 @@ pub(crate) async fn run_scheduler(
         let now = Instant::now();
         let live = coordinator.live_pools(now);
         // 🚨 Read from the registry, never sampled here. A sweep observes liveness once a round and
-        // rounds are one poll interval apart (60s by default), so its own observations are up to
+        // rounds are one poll interval apart (300s by default since ADR-144), so its own observations are up to
         // twice as stale as the 30s window `pool_mode` compares them against — measured on hardware
         // as a graceful poller restart that still published the pool's whole inventory, because the
         // last sample was 36 seconds old. The coordinator knows to the second, including the
@@ -168,12 +173,7 @@ pub(crate) async fn run_scheduler(
                 stats.set_pool_modes(c.desired_by_pool.len() as u64, 0);
                 let sleep_secs = c.min_interval;
                 metrics::counter!("yagra_sweep_cache_hits_total").increment(1);
-                // Wake early if a poller announced it is leaving: the ring changed, so the desired
-                // set must be re-pushed now rather than after a full poll interval.
-                tokio::select! {
-                    () = tokio::time::sleep(Duration::from_secs(u64::from(sleep_secs))) => {}
-                    () = coordinator.sweep_nudged() => {}
-                }
+                wait_for_next_round(&coordinator, u64::from(sleep_secs)).await;
                 continue;
             }
         }
@@ -187,11 +187,12 @@ pub(crate) async fn run_scheduler(
         // Resolve the round's intervals: the global default (DB-backed) and any per-profile
         // overrides. On a read failure, degrade to the compiled default / no overrides rather than
         // stalling the poll loop.
-        let default_secs = repo
-            .get_default_poll_interval()
-            .await
-            .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
-        let overrides = repo.profile_interval_overrides().await.unwrap_or_default();
+        let default_read = repo.get_default_poll_interval().await;
+        let overrides_read = repo.profile_interval_overrides().await;
+        // Whether this round's intervals may be published — see `IntervalSnapshot::publishable`.
+        let intervals_read = default_read.is_ok() && overrides_read.is_ok();
+        let default_secs = default_read.unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
+        let overrides = overrides_read.unwrap_or_default();
         // Adjacency policy (ADR-038): read once per rebuild, exactly like the intervals above, so
         // no per-node settings query enters the sweep. Degrades to the compiled default.
         //
@@ -210,12 +211,7 @@ pub(crate) async fn run_scheduler(
                         "scheduler: loading folder pools failed and none is cached — skipping the round \
                          rather than routing the fleet to the wrong pool"
                     );
-                    // Wake early if a poller announced it is leaving: the ring changed, so the desired
-                    // set must be re-pushed now rather than after a full poll interval.
-                    tokio::select! {
-                        () = tokio::time::sleep(Duration::from_secs(u64::from(default_secs))) => {}
-                        () = coordinator.sweep_nudged() => {}
-                    }
+                    wait_for_next_round(&coordinator, u64::from(default_secs)).await;
                     continue;
                 };
                 tracing::warn!(error = %e, "scheduler: loading folder pools failed; reusing the last-known map");
@@ -246,6 +242,15 @@ pub(crate) async fn run_scheduler(
                     .collect();
                 for (_, secs) in &resolved {
                     min_interval = min_interval.min(*secs);
+                }
+                if let Some(snapshot) = crate::poll_interval::IntervalSnapshot::publishable(
+                    intervals_read,
+                    default_secs,
+                    resolved
+                        .iter()
+                        .map(|(node, secs)| (node.id.as_uuid(), *secs)),
+                ) {
+                    intervals.publish(snapshot);
                 }
                 let window_ms = (u64::from(min_interval).saturating_mul(1000)).max(1);
                 let node_count = resolved.len();
@@ -451,7 +456,7 @@ pub(crate) async fn run_scheduler(
         }
         // ADR-009 Increment 1: a round that held a pool back looks again as soon as that pool's
         // grace runs out, not after a whole poll interval. Without this the fallback for a pool
-        // whose poller really is gone waits out `min_interval` (60s by default) instead of one
+        // whose poller really is gone waits out `min_interval` (300s by default) instead of one
         // offline window, and the trade this increment claims — "at most 30 seconds unpolled" —
         // would not be true. `+1` so the re-check lands past the boundary rather than on it.
         let sleep_secs = match wait_recheck {
@@ -461,12 +466,23 @@ pub(crate) async fn run_scheduler(
         if waiting_pools > 0 {
             metrics::counter!("yagra_sweep_pools_waiting_total").increment(waiting_pools);
         }
-        // Wake early if a poller announced it is leaving: the ring changed, so the desired
-        // set must be re-pushed now rather than after a full poll interval.
-        tokio::select! {
-            () = tokio::time::sleep(Duration::from_secs(sleep_secs)) => {}
-            () = coordinator.sweep_nudged() => {}
-        }
+        wait_for_next_round(&coordinator, sleep_secs).await;
+    }
+}
+
+/// Sleep until the next round is due, or until waiting has stopped being right.
+///
+/// Two things end the wait early. A poller joining or announcing it is leaving changes the ring, so
+/// the desired sets must be re-pushed now rather than after a full poll interval. And a config
+/// write through the API (ADR-144): the round is one poll interval long, so at the 300-second
+/// default a node added through the API would otherwise wait up to five minutes before core even
+/// told a poller about it, and an interval edit as long to apply. Waking costs nothing when the
+/// write changed nothing a sweep reads — the generation check sends it down the cached fast path.
+async fn wait_for_next_round(coordinator: &Coordinator, secs: u64) {
+    tokio::select! {
+        () = tokio::time::sleep(Duration::from_secs(secs)) => {}
+        () = coordinator.sweep_nudged() => {}
+        () = config_gen::changed() => {}
     }
 }
 

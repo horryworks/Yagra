@@ -454,7 +454,7 @@ impl YagraMcp {
         let live = self
             .state
             .store
-            .node_interface_live(p.node_id, crate::api::DEFAULT_RATE_LOOKBACK_SECS)
+            .node_interface_live(p.node_id, crate::poll_interval::RATE_WINDOW_FLOOR_SECS)
             .await;
         let now_s = crate::api::util::now_unix_s();
         let kind = crate::api::nodes::node_kinds(admin, &[p.node_id])

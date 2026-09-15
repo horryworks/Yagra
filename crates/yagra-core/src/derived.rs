@@ -45,10 +45,10 @@ use yagra_common::{MetricKind, NodeId};
 
 /// How often the evaluator ticks.
 ///
-/// The same cadence as the interface evaluator, and the same consequence: a rule's
-/// `dwell_samples` counts **ticks**, not polls, for every metric in this table. The alert-rules
-/// screen says so, because "3 consecutive breaches" means three minutes here and three polls
-/// everywhere else.
+/// The same cadence as the interface evaluator, and the same conversion (ADR-144,
+/// `poll_interval::dwell_ticks`): a rule's `dwell_samples` counts ticks on a node polling at least
+/// once a minute — "3 consecutive breaches" is three minutes — and enough ticks to span that many
+/// polls on a slower node, where every tick between two polls re-reads the same values.
 pub const WATCH_TICK: Duration = Duration::from_secs(60);
 
 /// How far back a series may have last been seen and still count as current.

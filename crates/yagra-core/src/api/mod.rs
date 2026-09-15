@@ -103,7 +103,6 @@ pub(crate) use extract::bearer;
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
 pub(crate) use util::{
     audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339, pool_resolver,
-    DEFAULT_RATE_LOOKBACK_SECS,
 };
 
 use crate::ack::AckRepo;

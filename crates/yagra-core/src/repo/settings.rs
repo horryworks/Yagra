@@ -384,6 +384,40 @@ mod tests {
     }
 
     /// Every retention window round-trips, including the one added after the first release.
+    /// ADR-144: the five-minute default reaches a new installation and nothing else.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_new_installation_polls_every_five_minutes_and_an_existing_one_keeps_its_interval(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = pgtest::repo(pool.clone());
+        repo.seed_app_settings(crate::config::DEFAULT_POLL_INTERVAL_SECS, 7)
+            .await
+            .expect("first boot");
+        assert_eq!(repo.get_default_poll_interval().await.expect("read"), 300);
+
+        // A deployment that was polling every thirty seconds before the upgrade.
+        repo.set_default_poll_interval(30).await.expect("stored");
+        repo.seed_app_settings(crate::config::DEFAULT_POLL_INTERVAL_SECS, 7)
+            .await
+            .expect("boot after the upgrade");
+        assert_eq!(
+            repo.get_default_poll_interval().await.expect("read"),
+            30,
+            "an upgrade must not change the interval a deployment already runs at"
+        );
+
+        // Migration 0117: the column's own default agrees with the compiled one.
+        let column_default: Option<String> = sqlx::query_scalar(
+            "SELECT column_default FROM information_schema.columns \
+             WHERE table_name = 'app_settings' AND column_name = 'default_poll_interval_secs'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("column default");
+        assert_eq!(column_default.as_deref(), Some("300"));
+    }
+
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_retention_windows_round_trip(pool: sqlx::PgPool) {

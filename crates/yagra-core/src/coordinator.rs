@@ -418,7 +418,7 @@ impl Coordinator {
         // A poller we did not have joined the ring — nudge the sweep instead of letting its share sit
         // with whoever covered for it until the next tick. The departure side has done this since the
         // `leaving` beat landed; the arrival side had not, so a poller coming back from an upgrade or
-        // a restart waited out one sweep period (the fleet-minimum interval, 30s by default) before
+        // a restart waited out one sweep period (the fleet-minimum interval, 300s by default) before
         // core even told it what to poll — and then re-jittered everything on top of that (ADR-051).
         if is_new {
             self.wake_sweep();

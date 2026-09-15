@@ -677,6 +677,25 @@ pub(super) struct CheckSpec<'a> {
     /// Descriptive only, like `ifindex` — [`row_check_id`] put the row into `check`.
     pub(super) row: Option<u32>,
     pub(super) row_name: Option<&'a str>,
+    /// How often this check is observed, which decides what the rule's dwell counts (ADR-144).
+    pub(super) cadence: Cadence,
+    /// The node's effective poll interval in seconds, or `None` before the scheduler has published
+    /// one — in which case the dwell and the flap window are exactly what they were before ADR-144.
+    pub(super) interval: Option<u32>,
+}
+
+/// How often a check is observed.
+///
+/// A rule's dwell means consecutive **polls**. A check fed by the poll path sees each poll once, so
+/// the number needs no conversion; a check fed by an evaluator that ticks on its own clock can read
+/// one poll several times, so [`crate::poll_interval::dwell_ticks`] converts it. An enum rather
+/// than an `Option<Duration>` so each call site has to say which it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Cadence {
+    /// Once per poll result.
+    EveryPoll,
+    /// Once per evaluator tick of this length, whatever the node's poll interval.
+    EveryTick(std::time::Duration),
 }
 
 /// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a

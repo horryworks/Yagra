@@ -49,7 +49,7 @@ const TICK: Duration = Duration::from_secs(300);
 /// `observational`, so it never reaches the alert engine and can never produce a candidate.
 ///
 /// So a series may miss five consecutive polls at the slowest legal setting and still count as
-/// flowing; at the 30-second default it is 720 missed polls. Measured against the real strandings
+/// flowing; at the 300-second default it is 72 missed polls, and at thirty seconds 720. Measured against the real strandings
 /// this shipped for: 4.33 days, 8.5 hours, and two with no sample in 30 days.
 ///
 /// ⚠️ **This number rests on that 3600-second cap.** Raise it, or add a check that alerts on a
