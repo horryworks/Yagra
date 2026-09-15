@@ -1,0 +1,117 @@
+# Build ONE Yagra image into an OCI archive and hand it to the `publish` job as an artifact
+# (ADR-152). Shared by `images-rust` and `images-web` in `.github/workflows/ci.yml` so the two jobs
+# cannot drift apart on how an image is built — the only things that differ between them are the
+# inputs below.
+#
+# It never pushes. Publishing belongs to the `publish` job alone, which runs only after the tests
+# AND all three builds are green, so a failure here can no longer leave some images published and
+# others not.
+name: Build one image to an OCI archive
+description: Build a Yagra image with buildx, check the archive is readable, and upload it as an artifact.
+
+inputs:
+  name:
+    description: Short image name — core, poller or web. The archive is yagra-<name>.tar, the artifact image-<name>.
+    required: true
+  context:
+    description: Build context.
+    required: true
+  dockerfile:
+    description: Dockerfile path.
+    required: true
+  target:
+    description: Stage to build. Empty for the web image, whose last stage is the image.
+    required: false
+    default: ''
+  cache-scope:
+    description: GHA cache scope. core and poller share one so poller can reuse core's build stage.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The default `docker-container` driver, NOT `driver: docker`. On the self-hosted host the
+    # latter was correct: it used the host's persistent BuildKit, so `RUN --mount=type=cache`
+    # storage survived between runs. On a hosted runner there is no persistent host BuildKit to
+    # inherit — the machine is new every job. The container driver can import/export the GHA cache,
+    # which is the only cache that crosses runs here, and it is also the driver that can write an
+    # OCI archive at all.
+    - uses: docker/setup-buildx-action@v4
+
+    # Compile profile for the Rust images (the web image takes no profile). Only a real release
+    # (`/release` → v* tag → :v<version>) is built fully optimized; PR and dispatch builds use the
+    # fast-compile `ci-fast` profile. `/flashdeploy` builds its own `ci-fast` binaries outside CI.
+    # See [profile.ci-fast] in Cargo.toml.
+    #
+    # The profile is baked into the image as `/etc/yagra-build-profile`, because a release and a
+    # flash build of the same commit are different binaries that write the *same*
+    # `/etc/yagra-source-ref`.
+    #
+    # `SOURCE_REF` is the cache-bust. It changes every commit, and the Dockerfile *uses* it before
+    # `COPY . .` — an unused ARG does not affect the cache at all. Without it, BuildKit has been
+    # observed reporting `COPY . .` as CACHED against a changed context, which ships the previous
+    # commit's binary with every job green (2026-07-31; see the comment in yagra-rust.Dockerfile).
+    - name: Build arguments
+      id: buildargs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        REF: ${{ github.ref }}
+        SHA: ${{ github.sha }}
+      run: |
+        {
+          echo "list<<EOF"
+          echo "SOURCE_REF=${SHA}"
+          if [[ -n "$TARGET" ]]; then
+            if [[ "$REF" == refs/tags/v* ]]; then
+              echo "CARGO_PROFILE=release"
+            else
+              echo "CARGO_PROFILE=ci-fast"
+            fi
+          fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build ${{ inputs.name }}
+      uses: docker/build-push-action@v7
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        target: ${{ inputs.target }}
+        build-args: ${{ steps.buildargs.outputs.list }}
+        # A label only. Keep it free of a registry host so the archive cannot be mistaken for a
+        # destination; `publish` decides where it goes.
+        tags: yagra-${{ inputs.name }}:ci
+        # An OCI archive, not `load` into a daemon: `publish` copies it byte for byte with skopeo,
+        # so what reaches GHCR is the same OCI index (with its provenance attestation) that buildx
+        # produced. `docker load` + `docker push` would re-encode it.
+        outputs: type=oci,dest=${{ runner.temp }}/yagra-${{ inputs.name }}.tar
+        # `mode=max` exports intermediate stages, not just the final image — that is what makes the
+        # shared `build` stage available to `poller` after `core` has produced it.
+        #
+        # This does NOT restore the Dockerfile's `RUN --mount=type=cache` cargo directories — no
+        # cache backend exports cache mounts. Layers are reused; the compile is not.
+        cache-from: type=gha,scope=${{ inputs.cache-scope }}
+        cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
+
+    # Fail HERE, with the build log beside it, rather than twenty minutes later in `publish`.
+    # No tag in the reference on purpose: the archive holds exactly one image, and skopeo picks the
+    # sole entry when none is named, whatever `ref.name` annotation buildx did or did not write.
+    - name: The archive is readable
+      shell: bash
+      env:
+        ARCHIVE: ${{ runner.temp }}/yagra-${{ inputs.name }}.tar
+      run: |
+        set -euo pipefail
+        ls -l "$ARCHIVE"
+        skopeo inspect --raw "oci-archive:$ARCHIVE" | sha256sum
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: image-${{ inputs.name }}
+        path: ${{ runner.temp }}/yagra-${{ inputs.name }}.tar
+        # The layers inside are already gzip; zipping them again costs time and saves nothing.
+        compression-level: 0
+        # Only `publish` in this same run reads it.
+        retention-days: 1
+        if-no-files-found: error

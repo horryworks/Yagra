@@ -2371,6 +2371,195 @@ mod tests {
         );
     }
 
+    // ── Every route has a caller, or says why it has none (ADR-150 決定 4(d)) ──────────
+
+    /// Routes the WebUI never calls, and why each one exists anyway.
+    ///
+    /// The question `CLAUDE.md`'s "Has API Boundary" asks — *is any endpoint dead: defined but
+    /// called by neither the WebUI nor documented external automation* — was answered by reading
+    /// 300 operations by hand on every `/verify`. This asks it of the tree: a route's OpenAPI
+    /// spelling must appear in `web/src` as a path literal (a plain string or a template with
+    /// `${…}` in a parameter slot), or its line must be here with a reason.
+    ///
+    /// **A reason is not a way to keep a route.** The reasons below describe callers that are not
+    /// a browser. A route with no caller of any kind is a finding for a person — deleting an
+    /// endpoint is an API change (`/release-full` §2a) — and does not belong in this list.
+    ///
+    /// Note what is *not* here: `POST /api/v1/ingest/webhook/{source_id}` is machine-to-machine
+    /// ingest, but `EventSourcesPage` prints the URL for the operator to paste into the device,
+    /// so the tree names it and the check is satisfied — a literal that is *shown* counts the
+    /// same as one that is *sent*, because both mean the WebUI knows the route exists.
+    const ROUTES_WITHOUT_A_WEBUI_CALLER: &[(&str, &str, &str)] = &[
+        (
+            "GET",
+            "/healthz",
+            "liveness probe — compose healthchecks and orchestrators call it, never a browser",
+        ),
+        (
+            "GET",
+            "/readyz",
+            "readiness probe — the same callers as /healthz, gated on the stores being reachable",
+        ),
+        (
+            "GET",
+            "/api/v1/openapi.json",
+            "the contract itself; the WebUI's types are generated from the committed copy \
+             (ADR-035), so nothing in the bundle fetches it",
+        ),
+        (
+            "POST",
+            "/api/v1/alerts/ack",
+            "acknowledgement is delegated to external incident tools (ADR-015): the WebUI \
+             deliberately offers no ack action (`ActiveAlertsPage`), and the callers are the MCP \
+             `ack_alert` tool and inbound PagerDuty/JSM acknowledgements",
+        ),
+        (
+            "GET",
+            "/api/v1/metric-meanings",
+            "the WebUI reads the i18n bundle whose English half is generated from the same Rust \
+             table (ADR-079 決定 4); the OpenAPI document and `get_config(kind=metric_meanings)` \
+             are its documented consumers — see this route's own ledger comment",
+        ),
+        (
+            "PUT",
+            "/api/v1/nodes/:node_id/group",
+            "the WebUI moved every move to `POST /nodes/move` in ADR-124 Inc.4 and `services/api.ts` \
+             says the endpoint stays for external clients that hold it, with no second WebUI \
+             client on purpose",
+        ),
+    ];
+
+    /// Every production `.ts`/`.tsx` under `web/src`, as `(relative path, text)`.
+    ///
+    /// Skips the generated `api/` (whose `schema.d.ts` names every path and would make every
+    /// route look called) and `*.test.ts` (a test mentioning a path is not a caller).
+    fn web_sources() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+            for entry in std::fs::read_dir(dir).expect("read web/src") {
+                let path = entry.expect("dir entry").path();
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_owned();
+                if path.is_dir() {
+                    if name != "api" {
+                        walk(&path, root, out);
+                    }
+                } else if (name.ends_with(".ts") || name.ends_with(".tsx"))
+                    && !name.ends_with(".test.ts")
+                {
+                    let rel = path
+                        .strip_prefix(root)
+                        .expect("under root")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    out.push((rel, std::fs::read_to_string(&path).expect("read source")));
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src");
+        let mut out = Vec::new();
+        walk(&root, &root, &mut out);
+        out.sort();
+        out
+    }
+
+    /// Does any source mention this OpenAPI path as a literal the client would send?
+    ///
+    /// A `{param}` segment matches one path segment of anything — `${id}` in a template literal,
+    /// `${encodeURIComponent(name)}`, or a value written out — and the path must end where a
+    /// literal would: at a quote, a backtick, a query string, an appended `${…}` (the support
+    /// bundle's optional query) or a line end. Without that boundary `/api/v1/nodes` is "called"
+    /// wherever `/api/v1/nodes/{node_id}` is, and a dead list route hides behind its own detail
+    /// route.
+    fn is_called_from(sources: &[(String, String)], openapi_path: &str) -> bool {
+        let pattern = openapi_path
+            .split('/')
+            .map(|seg| {
+                if seg.starts_with('{') && seg.ends_with('}') {
+                    "[^/'\"`?]+".to_owned()
+                } else {
+                    regex::escape(seg)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        let re = regex::Regex::new(&format!("{pattern}(?:['\"`?$]|$)")).expect("a valid pattern");
+        sources.iter().any(|(_, text)| re.is_match(text))
+    }
+
+    /// The matcher, proven on a positive and a negative before the tree is trusted to it.
+    #[test]
+    fn the_caller_matcher_sees_a_template_literal_and_refuses_a_prefix_match() {
+        let fake = vec![(
+            "services/api.ts".to_owned(),
+            "get(`/api/v1/nodes/${id}/interfaces?limit=${n}`);\nget('/api/v1/alerts');\n\
+             get(`/api/v1/system/support-bundle${qs ? `?${qs}` : ''}`);"
+                .to_owned(),
+        )];
+        assert!(is_called_from(&fake, "/api/v1/nodes/{node_id}/interfaces"));
+        assert!(is_called_from(&fake, "/api/v1/alerts"));
+        assert!(is_called_from(&fake, "/api/v1/system/support-bundle"));
+        // The list route is NOT called just because its detail route is.
+        assert!(!is_called_from(&fake, "/api/v1/nodes"));
+        assert!(!is_called_from(&fake, "/api/v1/nodes/{node_id}"));
+        assert!(!is_called_from(&fake, "/api/v1/zzz"));
+    }
+
+    #[test]
+    fn every_route_has_a_webui_caller_or_states_why() {
+        let sources = web_sources();
+        assert!(
+            sources.len() > 100,
+            "read only {} files under web/src — the walk drifted",
+            sources.len()
+        );
+        assert!(ROUTES.len() > 150, "the ledger has {} routes", ROUTES.len());
+
+        let mut uncalled = Vec::new();
+        for (method, path, _, _) in ROUTES {
+            let openapi = super::super::route_path::to_openapi(path);
+            let exempt = ROUTES_WITHOUT_A_WEBUI_CALLER
+                .iter()
+                .any(|(m, p, _)| m == method && p == path);
+            if !exempt && !is_called_from(&sources, &openapi) {
+                uncalled.push(format!("{method} {openapi}"));
+            }
+        }
+        assert!(
+            uncalled.is_empty(),
+            "no path literal in web/src reaches these routes. If a caller that is not a browser \
+             exists, add the route to ROUTES_WITHOUT_A_WEBUI_CALLER with what calls it; if none \
+             does, this is a dead endpoint to report, not to exempt: {uncalled:#?}"
+        );
+    }
+
+    /// The exemption list is an exemption list, so it needs the same hygiene as the others: every
+    /// entry names a route the ledger serves, gives a reason, and is still uncalled — a route that
+    /// gained a WebUI caller leaves the list, so the list never becomes a place for stale claims.
+    #[test]
+    fn every_uncalled_route_exemption_is_still_true() {
+        let sources = web_sources();
+        for (method, path, why) in ROUTES_WITHOUT_A_WEBUI_CALLER {
+            assert!(
+                ROUTES.iter().any(|(m, p, _, _)| m == method && p == path),
+                "ROUTES_WITHOUT_A_WEBUI_CALLER names `{method} {path}`, which the ledger does not \
+                 serve"
+            );
+            assert!(
+                why.trim().len() >= 20,
+                "`{method} {path}` is exempt without saying what calls it"
+            );
+            let openapi = super::super::route_path::to_openapi(path);
+            assert!(
+                !is_called_from(&sources, &openapi),
+                "`{method} {path}` is exempt as having no WebUI caller, but web/src now names it — \
+                 drop the entry"
+            );
+        }
+    }
+
     // ── The MCP column, checked against the tool source (ADR-042) ─────────────
 
     /// Tools with no REST counterpart, and why.

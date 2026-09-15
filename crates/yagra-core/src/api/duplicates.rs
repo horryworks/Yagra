@@ -68,8 +68,9 @@ pub(crate) struct DuplicateGroup {
     confidence: DuplicateConfidence,
     /// What the members share, strongest first.
     evidence: Vec<DuplicateEvidence>,
-    /// What says the members are not one device. Never empty on a `confident` group's opposite:
-    /// a contradiction always makes the group `possible`.
+    /// What says the members are not one device. Always empty on a `confident` group, because a
+    /// contradiction always makes the group `possible`. A `possible` group can also have none, when
+    /// only weak evidence joins it.
     contradictions: Vec<DuplicateContradiction>,
     /// The member suggested to keep first, then the rest from the oldest registration.
     members: Vec<DuplicateMember>,

@@ -10,7 +10,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.3.21"
+    "version": "0.3.22"
   },
   "paths": {
     "/api/v1/alerts": {
@@ -27036,7 +27036,7 @@
             "items": {
               "$ref": "#/components/schemas/DuplicateContradiction"
             },
-            "description": "What says the members are not one device. Never empty on a `confident` group's opposite:\na contradiction always makes the group `possible`."
+            "description": "What says the members are not one device. Always empty on a `confident` group, because a\ncontradiction always makes the group `possible`. A `possible` group can also have none, when\nonly weak evidence joins it."
           },
           "evidence": {
             "type": "array",
