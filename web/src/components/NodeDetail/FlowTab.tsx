@@ -35,7 +35,8 @@ import type {
   FlowTalker,
   NodeDetail,
 } from '../../types/api';
-import { MetricChart, PALETTE } from '../MetricChart/MetricChart';
+import { MetricChart } from '../MetricChart/MetricChart';
+import { PALETTE } from '../MetricChart/palette';
 import { RankedBars } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
 import { RangeControl, resolveRange } from './RangeControl';

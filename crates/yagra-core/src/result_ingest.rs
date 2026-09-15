@@ -680,16 +680,11 @@ fn persist_metrics_and_meta(
     let routing = result.routing.clone();
     // Row names ride the same shed-able tier (ADR-143): they are re-read hourly, so a dropped record
     // costs an hour's delay on a name the engine already holds from the result itself.
-    let row_names: Vec<(String, i64, String)> = result
-        .row_names
-        .iter()
-        .filter_map(|n| {
-            Some((
-                n.metric.clone(),
-                i64::from(n.row),
-                yagra_common::row_names::sanitize_row_name(&n.name)?,
-            ))
-        })
+    // Through the same function the alert engine uses, so the name stored and the name an alert
+    // carries are one answer (ADR-143 Inc.2).
+    let row_names: Vec<(String, i64, String)> = yagra_bus::RowName::cleaned(&result.row_names)
+        .into_iter()
+        .map(|n| (n.metric, i64::from(n.row), n.name))
         .collect();
     if !row_names.is_empty()
         || !interfaces.is_empty()

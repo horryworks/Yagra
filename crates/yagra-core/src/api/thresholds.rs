@@ -472,10 +472,9 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
             }
         }
     }
-    // ADR-143: which rows the rule reaches, normalized through the one function the bundle importer
-    // also uses — blank means every row. Refused on an interface rule, which already names one port:
-    // a pattern there would be stored, listed, and never match anything.
-    let row_match = yagra_common::row_names::normalize_row_match(body.row_match.as_deref())
+    // ADR-143: which rows the rule reaches — blank means every row — through the one validator the
+    // bundle importer also uses, which refuses a pattern on an interface rule as well.
+    let row_match = yagra_common::row_names::row_match_for_level(level, body.row_match.as_deref())
         .map_err(|e| {
             ApiError::bad_request(
                 "invalid_row_match",
@@ -487,15 +486,13 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
                     yagra_common::row_names::RowMatchError::ControlCharacter => {
                         "row_match must not contain control characters".to_owned()
                     }
+                    yagra_common::row_names::RowMatchError::OnInterfaceRule => {
+                        "an interface rule already names one port and cannot carry a row pattern"
+                            .to_owned()
+                    }
                 },
             )
         })?;
-    if row_match.is_some() && level == ScopeLevel::Interface {
-        return Err(ApiError::bad_request(
-            "invalid_row_match",
-            "an interface rule already names one port and cannot carry a row pattern",
-        ));
-    }
     Ok(ParsedThreshold {
         scope_level: &body.scope_level,
         scope_ids,

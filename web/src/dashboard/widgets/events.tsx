@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Field';
-import { useEntityNames } from '../../components/ui/EntityName';
+import { useEntityNames } from '../../components/ui/entityNames';
 import { relativeTime } from '../../lib/format';
 import { api } from '../../services/api';
 import { Donut, type DonutSegment } from '../primitives/Donut';

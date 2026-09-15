@@ -19,7 +19,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AnchoredPopover, focusPopoverTrigger } from '../ui/AnchoredPopover';
+import { AnchoredPopover } from '../ui/AnchoredPopover';
+import { focusPopoverTrigger } from '../ui/focusPopoverTrigger';
 import { SearchField } from '../ui/SearchField';
 import { api } from '../../services/api';
 import type { MibCatalogEntry } from '../../types/api';

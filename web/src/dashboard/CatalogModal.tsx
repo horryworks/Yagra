@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { useLayoutStoreContext } from './LayoutStoreContext';
+import { useLayoutStoreContext } from './layoutStoreHook';
 import { SearchField } from '../components/ui/SearchField';
 import { catalogBySection } from './registry';
 import { catalogFor } from './publicCatalog';

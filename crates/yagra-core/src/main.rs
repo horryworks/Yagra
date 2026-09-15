@@ -954,10 +954,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // switch. On every core; `upgrade::start` carries why, and why it is not awaited.
     upgrade::start(
         &upgrade,
-        audit_repo.clone(),
-        maintenance.clone(),
-        bus.clone(),
-        coordinator.clone(),
+        upgrade::SettleHandles {
+            audit: audit_repo.clone(),
+            maintenance: maintenance.clone(),
+            bus: bus.clone(),
+            coordinator: coordinator.clone(),
+            pollers: poller_repo.clone(),
+            is_leader: is_leader.clone(),
+        },
         &shutdown,
     )
     .await;

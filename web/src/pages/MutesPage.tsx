@@ -31,7 +31,8 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { useClientFilters } from '../lib/useClientFilters';
 import { TrashIcon } from '../components/ui/icons';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
-import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { EntityName } from '../components/ui/EntityName';
+import { useEntityNames } from '../components/ui/entityNames';
 import { formatScheduleTime } from '../lib/format';
 import { muteFilters } from './suppressionFilters';
 import './MutesPage.css';

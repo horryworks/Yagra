@@ -174,6 +174,7 @@
     "applying": "replacing container",
     "returned": "done",
     "failed": "did not come back",
-    "skipped": "not reached"
+    "skipped": "not reached",
+    "not_connected": "not connected — nothing sent"
   }
 }

@@ -22,7 +22,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
-import { AnchoredPopover, focusPopoverTrigger } from './AnchoredPopover';
+import { AnchoredPopover } from './AnchoredPopover';
+import { focusPopoverTrigger } from './focusPopoverTrigger';
 import './ActionMenu.css';
 
 export interface ActionMenuItem {

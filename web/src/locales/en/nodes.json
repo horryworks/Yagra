@@ -310,6 +310,7 @@
     "noHistory": "No history yet…",
     "breakdown": "Per row",
     "unnamedRow": "Row {{row}}",
+    "moreRows": "and {{count}} more",
     "followsRow": "Showing the fullest pool: {{name}}",
     "systemSnmp": "System (SNMP)",
     "systemSnmpNote": "Metrics not already shown in Device health.",

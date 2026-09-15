@@ -16,7 +16,7 @@ import {
 } from '../../lib/format';
 import { api } from '../../services/api';
 import { sortedAlerts, useAlertStore } from '../../store';
-import { useEntityNames } from '../../components/ui/EntityName';
+import { useEntityNames } from '../../components/ui/entityNames';
 import { AlertRows } from '../../widgets/AlertRows';
 import { AlertSubjectName } from '../../widgets/AlertSubjectName';
 import { AlertWhatText } from '../../widgets/AlertWhatText';

@@ -12,7 +12,8 @@ import { useTranslation } from 'react-i18next';
 import { rootCause, type HasSubject } from '../../lib/alertSubject';
 import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Badge } from '../ui/Badge';
-import { EntityName, useEntityNames } from '../ui/EntityName';
+import { EntityName } from '../ui/EntityName';
+import { useEntityNames } from '../ui/entityNames';
 import { api } from '../../services/api';
 import {
   alertWhatOf,
@@ -49,6 +50,7 @@ import type {
 import { MetricChart } from '../MetricChart/MetricChart';
 import {
   followedRow,
+  limitRows,
   memHeadline,
   memRangeQuery,
   memRows,
@@ -957,22 +959,42 @@ function MetricCard({
       ) : (
         <p className="nd-muted">{t('overview.noHistory')}</p>
       )}
-      {rows.length > 1 && (
-        <ul className="nd-row-list" aria-label={t('overview.breakdown')}>
-          {rows.map((r) => {
-            const name = r.name ?? t('overview.unnamedRow', { row: r.row });
-            return (
-              <li key={r.row} className="nd-row">
-                <span className="nd-row-name" title={name}>
-                  {name}
-                </span>
-                <span className="nd-row-value mono">{fmt(r.value)}</span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <RowList
+        rows={rows}
+        render={(r) => {
+          const name = r.name ?? t('overview.unnamedRow', { row: r.row });
+          return (
+            <li key={r.row} className="nd-row">
+              <span className="nd-row-name" title={name}>
+                {name}
+              </span>
+              <span className="nd-row-value mono">{fmt(r.value)}</span>
+            </li>
+          );
+        }}
+      />
     </div>
+  );
+}
+
+/** A Device-health card's per-row list (ADR-143): nothing for a single row, and at most
+ *  `ROW_LIST_MAX` lines followed by an "and N more" line (Inc.2). The rows differ per card, so each
+ *  card says how one is drawn. */
+function RowList<T extends { row: number }>({
+  rows,
+  render,
+}: {
+  rows: readonly T[];
+  render: (row: T) => React.ReactNode;
+}) {
+  const { t } = useTranslation('nodes');
+  if (rows.length <= 1) return null;
+  const { shown, more } = limitRows(rows);
+  return (
+    <ul className="nd-row-list" aria-label={t('overview.breakdown')}>
+      {shown.map(render)}
+      {more > 0 && <li className="nd-row nd-muted">{t('overview.moreRows', { count: more })}</li>}
+    </ul>
   );
 }
 
@@ -1096,24 +1118,23 @@ function MemHealth({
       ) : (
         <p className="nd-muted">{t('overview.noHistory')}</p>
       )}
-      {pools.length > 1 && (
-        <ul className="nd-row-list" aria-label={t('overview.breakdown')}>
-          {pools.map((p) => {
-            const name = p.name ?? t('overview.unnamedRow', { row: p.row });
-            return (
-              <li key={p.row} className="nd-row nd-row-mem">
-                <span className="nd-row-name" title={name}>
-                  {name}
-                </span>
-                <span className="nd-row-value mono">
-                  {formatBytes(p.usedBytes)} / {formatBytes(p.totalBytes)}
-                </span>
-                <span className="nd-row-value mono">{formatUtil(p.pct)}</span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <RowList
+        rows={pools}
+        render={(p) => {
+          const name = p.name ?? t('overview.unnamedRow', { row: p.row });
+          return (
+            <li key={p.row} className="nd-row nd-row-mem">
+              <span className="nd-row-name" title={name}>
+                {name}
+              </span>
+              <span className="nd-row-value mono">
+                {formatBytes(p.usedBytes)} / {formatBytes(p.totalBytes)}
+              </span>
+              <span className="nd-row-value mono">{formatUtil(p.pct)}</span>
+            </li>
+          );
+        }}
+      />
     </div>
   );
 }

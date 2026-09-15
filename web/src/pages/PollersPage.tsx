@@ -36,7 +36,8 @@ import { pollerFilters } from './pollerFilters';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
 import { ActionMenu } from '../components/ui/ActionMenu';
 import { NodePicker } from '../components/NodePicker/NodePicker';
-import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { EntityName } from '../components/ui/EntityName';
+import { useEntityNames } from '../components/ui/entityNames';
 import { dateOnly, formatCount, formatUtil, formatExactTime, relativeTime } from '../lib/format';
 import {
   buildPollerEnv,

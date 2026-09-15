@@ -37,7 +37,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Select, TextInput } from '../ui/Field';
 import { MultiSelectList } from '../ui/MultiSelectList';
-import { useEntityNames } from '../ui/EntityName';
+import { useEntityNames } from '../ui/entityNames';
 import { groupOptions } from '../../lib/nodeTree';
 
 /** The target control for the level the operator has chosen.

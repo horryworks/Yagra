@@ -572,8 +572,9 @@ describe('convergePhase', () => {
     expect(convergeProgress(p)).toBe(0.5);
   });
 
-  // Failed and skipped both count as finished-with-nothing-more-coming, or the bar would sit short
-  // of the end for ever on a pool that stopped.
+  // Failed, skipped and not-connected all count as finished-with-nothing-more-coming, or the bar
+  // would sit short of the end for ever on a pool that stopped — and a site that was never reached
+  // would read as still to come (ADR-051 Inc.8).
   it('finishes the bar when a pool stops rather than leaving it short', () => {
     const p = convergePhase(
       status({
@@ -583,6 +584,7 @@ describe('convergePhase', () => {
             { id: 'a', pool: 'default', state: 'returned' },
             { id: 'b', pool: 'default', state: 'failed' },
             { id: 'c', pool: 'default', state: 'skipped' },
+            { id: 'd', pool: 'site', state: 'not_connected' },
           ],
         }),
       } as Partial<UpgradeStatus>),
@@ -591,7 +593,7 @@ describe('convergePhase', () => {
     expect(p.kind).toBe('done');
     if (p.kind !== 'done') return;
     expect(p.done).toBe(1);
-    expect(p.failed).toBe(2);
+    expect(p.failed).toBe(3);
     expect(convergeProgress(p)).toBe(1);
   });
 

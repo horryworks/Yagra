@@ -4,6 +4,7 @@ import i18n from '../i18n';
 import metricUnits from '../api/metricUnits.json';
 import {
   agoSec,
+  alertRowPart,
   alertWhat,
   alertWhatOf,
   deriveMem,
@@ -194,6 +195,21 @@ describe('format', () => {
         row_name: 'I/O',
       }),
     );
+  });
+
+  // ADR-143 Inc.2: the name-or-key decision used to sit in AlertWhatText.tsx, where no test runs.
+  it('names a row when it can, keys it when it cannot, and says nothing about no row (alertRowPart)', () => {
+    const named = alertRowPart({ row: 2, rowName: 'I/O' });
+    expect(named).toEqual({ text: i18n.t('format:alertOnRow', { name: 'I/O' }), mono: false });
+    expect(named?.text).toContain('I/O');
+
+    // Row 0 is a real row, and a row with no name yet is keyed in mono — a number, not a word.
+    const keyed = alertRowPart({ row: 0, rowName: null });
+    expect(keyed).toEqual({ text: i18n.t('format:alertOnRowKey', { row: 0 }), mono: true });
+    expect(keyed?.text).toContain('0');
+    expect(alertRowPart({ row: 7, rowName: '' })?.mono).toBe(true);
+
+    expect(alertRowPart({ row: null, rowName: null })).toBeNull();
   });
 
   it('describes a LIVE alert the same way as its history row (alertWhatOf)', () => {

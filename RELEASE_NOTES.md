@@ -10,6 +10,19 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Device health cards list at most five rows.** A card for a CPU, a sensor or a memory pool used to list every row the device reports — 64 lines for a 64-core host. It now lists the five highest and ends with "and N more".
+- **New self-metrics for the fleet-wide traffic reads.** `yagra_vm_read_seconds{read="interface_top"|"interface_delta"|"fleet_throughput"}` records how long the interface Top-N, the interface spikes and drops, and the fleet throughput chart take to read from VictoriaMetrics, and `yagra_vm_fleet_window_secs` the `rate()` window they read with. That window widens to twice the slowest poll interval in the fleet; these say whether that costs anything before it is changed.
+
+### Bug Fixes
+
+- **Upgrading core no longer leaves a chosen remote-site poller behind without saying so.** Core decided which pollers to upgrade a few seconds after it restarted, and a poller that had not sent its first heartbeat yet was not counted: it stayed on its old build while Settings ▸ Upgrade reported the pollers aligned. Core now waits up to 60 seconds for every poller that was ticked. One that has not reconnected by then is sent nothing, is listed as "not connected — nothing sent", and gets an audit log entry; bring it across with the align button once it is back.
+
+### Security
+
+- **Row names are cleaned and capped where core receives them.** A vendor-table row name (a memory pool, a CPU) is device text, and it reaches notifications and alert history. The poller already removed control characters, cut names at 128 characters and sent at most 512; core now does all three itself, for the alert engine as well as for the database, instead of relying on the poller having done it.
+
 ## v0.3.21 — Memory, CPU and temperature judged per row with row-name threshold rules, a Neighbors column on Interfaces, new installations poll every 5 minutes, traffic charts no longer go blank on slowly polled nodes
 
 ### New Features

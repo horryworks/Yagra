@@ -16,22 +16,7 @@ import './MetricChart.css';
 import { applyIdleLegend, resolveColor } from './chartColor';
 import { LABEL_ROTATION, gutterLabels, labelFits, mirrorLayout, type MirrorAxis } from './mirror';
 import { usePrefsStore } from '../../prefs';
-
-/** Default series palette (In / Out / aux …), indexed by series position, as theme tokens. In a DOM
- *  or SVG (via inline `style`/CSS) `var(--series-N)` resolves directly; passed to MetricChart as a
- *  series `color` it's resolved against computed style at build (canvas can't read CSS vars). One
- *  source of truth so legend swatches mirror the chart instead of re-hardcoding a hex. */
-export const PALETTE = [
-  'var(--series-1)',
-  'var(--series-2)',
-  'var(--series-3)',
-  'var(--series-4)',
-  'var(--series-5)',
-  'var(--series-6)',
-];
-/** Canonical In / Out series colors (used by both the chart strokes and the legend swatches). */
-export const SERIES_IN = PALETTE[0];
-export const SERIES_OUT = PALETTE[1];
+import { PALETTE } from './palette';
 
 /** Static fallbacks for the `--series-*` tokens, used only if computed style can't resolve them
  *  (e.g. the var is missing). Mirror tokens.css so a fallback still looks right. */

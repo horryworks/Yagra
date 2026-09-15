@@ -64,7 +64,8 @@ import { Button } from '../components/ui/Button';
 import { TextInput, Select, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
-import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { EntityName } from '../components/ui/EntityName';
+import { useEntityNames } from '../components/ui/entityNames';
 import { coverageOf, isUnmonitored } from './discoveredEndpoints';
 import { existingByAddress, importableCandidates, selectedForImport } from './discoveryExisting';
 import {

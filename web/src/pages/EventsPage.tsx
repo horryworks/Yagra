@@ -15,7 +15,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { useEntityNames } from '../components/ui/EntityName';
+import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable } from '../components/ui/DataTable';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';

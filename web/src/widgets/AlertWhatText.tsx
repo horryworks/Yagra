@@ -7,7 +7,7 @@
 // Writing the eight lines twice is how the pair drifts.
 
 import { useTranslation } from 'react-i18next';
-import type { AlertWhat } from '../lib/format';
+import { alertRowPart, type AlertWhat } from '../lib/format';
 
 /** Liveness up/down reads as "Reachability" (never the raw `__liveness__` sentinel); a row with no
  *  captured metric — an alert raised before migration 0036 — reads as "—".
@@ -34,12 +34,9 @@ export function AlertWhatText({ what }: { what: AlertWhat }) {
     parts.push({ text: t('format:alertOnPort', { ifindex: what.ifindex }), mono: true });
   }
   // The table row in the same place and for the same reason (ADR-143): "this metric, on this row".
-  // Its name when one was read, since `I/O` is what the operator can act on; the key otherwise.
-  if (what.rowName) {
-    parts.push({ text: t('format:alertOnRow', { name: what.rowName }), mono: false });
-  } else if (what.row != null) {
-    parts.push({ text: t('format:alertOnRowKey', { row: what.row }), mono: true });
-  }
+  // Which spelling it takes — the name or the key — is `alertRowPart`'s decision.
+  const rowPart = alertRowPart(what);
+  if (rowPart) parts.push(rowPart);
   if (what.condition) parts.push({ text: what.condition, mono: false });
   if (what.observed) parts.push({ text: `(${what.observed})`, mono: false });
   return (

@@ -22,7 +22,8 @@
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MetricChart, PALETTE } from '../../components/MetricChart/MetricChart';
+import { MetricChart } from '../../components/MetricChart/MetricChart';
+import { PALETTE } from '../../components/MetricChart/palette';
 import { NodePicker } from '../../components/NodePicker/NodePicker';
 import { Button } from '../../components/ui/Button';
 import { Select, TextInput } from '../../components/ui/Field';

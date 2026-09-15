@@ -107,7 +107,10 @@ describe('MAX_VPN_NODES', () => {
   // someone adds a seventh series colour.
   it('is exactly the chart palette length', () => {
     const src = readFileSync(
-      join(__dirname, '..', '..', 'components', 'MetricChart', 'MetricChart.tsx'),
+      // `palette.ts`, not `MetricChart.tsx`: the palette moved out so the chart component's file
+      // exports only a component (react-refresh). A reader left on the old file stops matching,
+      // which is what the floor below reports.
+      join(__dirname, '..', '..', 'components', 'MetricChart', 'palette.ts'),
       'utf8',
     );
     const start = src.indexOf('export const PALETTE = [');

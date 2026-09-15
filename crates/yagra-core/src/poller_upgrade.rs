@@ -187,6 +187,10 @@ pub enum ConvergeState {
     Failed,
     /// Its pool stopped before reaching it, because an earlier poller in that pool failed.
     Skipped,
+    /// It was chosen, but had not connected to the bus when the run began, so nothing was sent to
+    /// it and it is still on its old build. Nothing upstream failed — unlike `skipped`, it was
+    /// never there to be asked.
+    NotConnected,
 }
 
 /// One poller of a convergence, and where it has got to.
@@ -332,38 +336,118 @@ pub struct Run {
     pub requested_by: String,
 }
 
+/// A poller a convergence was asked to move and could not reach (ADR-051 Inc.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Absent {
+    /// Sanitized poller id.
+    pub id: String,
+    /// The pool it last reported serving — from the durable inventory, because the live registry
+    /// has not heard from it since core restarted.
+    pub pool: String,
+}
+
+/// The queue entries for `ids`, read from the live registry.
+///
+/// One place for both starts. The buttons and the tail of core's own upgrade decide *who* through
+/// `upgrade::movable_to`; this turns that answer into the version and incarnation a return is judged
+/// against. An id the registry does not hold is left out, and neither caller passes one.
+#[must_use]
+pub fn targets(coordinator: &Coordinator, ids: &[String]) -> Vec<Target> {
+    coordinator
+        .poller_views(std::time::Instant::now())
+        .into_iter()
+        .filter(|v| ids.contains(&v.id))
+        .map(|v| Target {
+            id: v.id,
+            pool: v.pool,
+            version: v.version,
+            incarnation: v.incarnation,
+        })
+        .collect()
+}
+
+/// The record a convergence publishes before its first command goes out: every queued poller
+/// `waiting`, in queue order, then every absent one `not_connected`.
+///
+/// Pure, so the rows a screen will show can be tested without a bus, a coordinator or the audit log
+/// a convergence writes to.
+fn opening_snapshot(
+    run_id: &str,
+    tag: &str,
+    requested_by: &str,
+    started_at: i64,
+    by_pool: &BTreeMap<String, Vec<Target>>,
+    absent: &[Absent],
+) -> Convergence {
+    Convergence {
+        run_id: run_id.to_owned(),
+        tag: tag.to_owned(),
+        requested_by: requested_by.to_owned(),
+        started_at,
+        finished_at: None,
+        targets: by_pool
+            .values()
+            .flatten()
+            .map(|t| ConvergingTarget {
+                id: t.id.clone(),
+                pool: t.pool.clone(),
+                state: ConvergeState::Waiting,
+            })
+            .chain(absent.iter().map(|a| ConvergingTarget {
+                id: a.id.clone(),
+                pool: a.pool.clone(),
+                state: ConvergeState::NotConnected,
+            }))
+            .collect(),
+    }
+}
+
 /// Drive every pool's queue to the target release. Returns once every pool has finished or given up.
 ///
 /// Started either by the task that settles a finished run — so, only after core's own upgrade is
 /// known to have succeeded — or by `POST /api/v1/system/upgrade/pollers`, which aligns a fleet that
 /// has drifted since (ADR-051 Inc.4 decision 17). The [`ConvergeGuard`] is what makes those two
 /// mutually exclusive, and it is taken by value so that cannot be forgotten.
-pub async fn converge(run: Run, targets: Vec<Target>, _lock: ConvergeGuard) {
-    if targets.is_empty() {
+///
+/// `absent` is the pollers the run was asked to move that were not connected when it started. They
+/// are sent nothing and still appear on the record, so a site left behind says why instead of
+/// vanishing from the run (ADR-051 Inc.8).
+pub async fn converge(run: Run, targets: Vec<Target>, absent: Vec<Absent>, _lock: ConvergeGuard) {
+    if targets.is_empty() && absent.is_empty() {
         return;
     }
     let by_pool = queues(targets);
     // Published before the first command goes out, so a page that polls in the next second already
     // knows a convergence exists. `waiting` is the honest starting state: nothing has been asked of
     // any site yet.
-    with_progress(|p| {
-        *p = Some(Convergence {
-            run_id: run.run_id.clone(),
-            tag: run.tag.clone(),
-            requested_by: run.requested_by.clone(),
-            started_at: crate::api::util::now_unix_s(),
-            finished_at: None,
-            targets: by_pool
-                .values()
-                .flatten()
-                .map(|t| ConvergingTarget {
-                    id: t.id.clone(),
-                    pool: t.pool.clone(),
-                    state: ConvergeState::Waiting,
-                })
-                .collect(),
-        });
-    });
+    let opening = opening_snapshot(
+        &run.run_id,
+        &run.tag,
+        &run.requested_by,
+        crate::api::util::now_unix_s(),
+        &by_pool,
+        &absent,
+    );
+    with_progress(|p| *p = Some(opening));
+    for a in &absent {
+        tracing::warn!(
+            poller = %a.id,
+            pool = %a.pool,
+            tag = %run.tag,
+            "this poller was chosen for the upgrade but was not connected when it started; nothing \
+             was sent to it, so it stays on its current build until it is aligned"
+        );
+        let action = format!(
+            "upgrade poller {} -> {} (not connected, nothing sent)",
+            a.id, run.tag
+        );
+        if let Err(e) = run.audit.record(&run.requested_by, &action, 503).await {
+            tracing::warn!(error = %e, "could not record the poller upgrade in the audit log");
+        }
+    }
+    if by_pool.is_empty() {
+        return;
+    }
     tracing::info!(
         pools = by_pool.len(),
         pollers = by_pool.values().map(Vec::len).sum::<usize>(),
@@ -676,6 +760,45 @@ mod tests {
             version: "0.2.2".to_owned(),
             incarnation: Uuid::from_u128(1),
         }
+    }
+
+    /// ADR-051 Inc.8: a chosen site that was not connected is on the record from the first second,
+    /// after the queued ones, and says so — rather than being left out of the run altogether, which
+    /// is how 192.168.1.212 stayed behind under a screen that read "aligned".
+    #[test]
+    fn the_opening_record_lists_the_absent_pollers_as_not_connected() {
+        let by_pool = queues(vec![target("edge-tokyo-1", "tokyo")]);
+        let absent = [Absent {
+            id: "edge-osaka-1".to_owned(),
+            pool: "osaka".to_owned(),
+        }];
+        let c = opening_snapshot("run-1", "v0.3.22", "horry", 7, &by_pool, &absent);
+        assert_eq!(c.started_at, 7);
+        assert_eq!(c.finished_at, None);
+        let rows: Vec<(&str, &str, ConvergeState)> = c
+            .targets
+            .iter()
+            .map(|t| (t.id.as_str(), t.pool.as_str(), t.state))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("edge-tokyo-1", "tokyo", ConvergeState::Waiting),
+                ("edge-osaka-1", "osaka", ConvergeState::NotConnected),
+            ]
+        );
+
+        // Nothing movable at all still produces a record: the site left behind is the whole story.
+        let only_absent =
+            opening_snapshot("run-2", "v0.3.22", "horry", 7, &BTreeMap::new(), &absent);
+        assert_eq!(only_absent.targets.len(), 1);
+        assert_eq!(only_absent.targets[0].state, ConvergeState::NotConnected);
+
+        // The WebUI builds a `t()` key from this token, so its spelling is part of the contract.
+        assert_eq!(
+            serde_json::to_value(ConvergeState::NotConnected).expect("serializes"),
+            serde_json::json!("not_connected")
+        );
     }
 
     #[test]

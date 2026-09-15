@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { isEntityResolved, resolveName } from './EntityName';
+import { isEntityResolved, resolveName } from './entityNames';
 
 describe('EntityName helpers', () => {
   const nodes = [
