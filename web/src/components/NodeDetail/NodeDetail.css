@@ -688,6 +688,11 @@ html[data-viewport='mobile'] .nd-extract-row {
    carries a title with the whole string, and it is the one flexible column here whose content the
    operator wrote rather than the device.
 
+   Ten tracks since ADR-145: NEIGHBORS sits between DESCRIPTION and OPER on a 120px floor, which
+   moves the minimum from 874px to 994px and the sideways scroll to roughly 1260px of browser. The
+   same ADR-054 rule accepts that. Its cell carries a `title` naming every neighbour, so the
+   ellipsis loses nothing, and nothing else gave up width to pay for it.
+
    ⚠️ **Splitting In/Out cost the table nothing, and the two numbers here are measured, not
    estimated.** The widest string formatBps can produce is nine characters ("99.9 Gbps"), which
    renders at 53px; with the 10px side padding those two cells carry (not the 14px the rest use)
@@ -718,8 +723,8 @@ html[data-viewport='mobile'] .nd-extract-row {
      file and fails when the two disagree. */
   grid-template-columns: var(
     --nd-if-cols,
-    minmax(140px, 1.4fr) minmax(88px, 1.3fr) 94px minmax(112px, 1fr) 84px 76px 132px
-      minmax(74px, 0.7fr) minmax(74px, 0.7fr)
+    minmax(140px, 1.4fr) minmax(88px, 1.3fr) minmax(120px, 1fr) 94px minmax(112px, 1fr) 84px
+      76px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr)
   );
   align-items: center;
 }
@@ -802,16 +807,129 @@ html[data-viewport='mobile'] .nd-extract-row {
   padding: 0 14px;
 }
 
+/* A <button> since ADR-145, and the row's keyboard handle: the row itself became a <div> so the
+   Neighbors cell can hold a control of its own (a button inside a button is invalid and cannot be
+   focused). Enter or Space here opens the dock by the click bubbling up to the row. Everything a UA
+   gives a button is reset, so it still reads as the port's name; the 3px negative margin gives back
+   the padding and border the focus mark needs. `align-self` keeps it content-wide, so the ellipsis
+   still works and a click beside a short name still lands on the row. */
 .nd-if-name {
+  align-self: flex-start;
+  max-width: 100%;
+  margin-left: -3px;
+  padding: 0 2px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font-family: var(--font-family);
+  font-size: inherit;
   font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.nd-if-name:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
 /* Operator-configured interface description (ifAlias); secondary to the mono name. */
 .nd-if-desc {
   color: var(--text-secondary);
+}
+
+/* The Neighbors cell (ADR-145): the first peer's name as a link-styled button, then `+N`. A button
+   rather than an <a>, because it opens a popover and navigates nowhere. The ellipsis sits on the
+   button, not the cell — a flex container does not ellipsize its children. */
+.nd-if-nb {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.nd-if-nb-link {
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-bottom: var(--border-width) solid transparent;
+  background: none;
+  color: var(--accent-color);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nd-if-nb-link:hover {
+  color: var(--accent-hover);
+}
+
+.nd-if-nb-link:focus-visible {
+  outline: none;
+  border-bottom-color: var(--accent-color);
+}
+
+.nd-if-nb-more {
+  flex: none;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+/* The popover that lists every neighbour on one port. Same vocabulary as the Neighbors tab — its
+   capability chips and protocol tag come from `NeighborsTab.css`. Device-supplied strings wrap
+   anywhere rather than widening the panel past the viewport clamp. */
+.nd-if-nbpop {
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: var(--space-3);
+  font-size: var(--font-sm);
+}
+
+.nd-if-nbpop-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
+.nd-if-nbpop-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.nd-if-nbpop-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nd-if-nbpop-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.nd-if-nbpop-peer {
+  font-weight: var(--weight-medium);
+}
+
+.nd-if-nbpop-item .mono {
+  font-size: var(--font-xs);
 }
 
 .nd-if-oper {
@@ -1717,6 +1835,7 @@ html[data-viewport='mobile'] .nd-if-oper {
    facts rather than triage signals — the phone's job here is "which port is down and how busy is
    it" — and they stay reachable one tap away in the dock, which mobile keeps (ADR-063 decision 9). */
 html[data-viewport='mobile'] .nd-if-desc,
+html[data-viewport='mobile'] .nd-if-nb,
 html[data-viewport='mobile'] .nd-if-media,
 html[data-viewport='mobile'] .nd-if-speed,
 html[data-viewport='mobile'] .nd-if-duplex {

@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   diffNeighbors,
   emptyReason,
+  neighborCellText,
   neighborKey,
+  neighborsByPort,
   peerLabel,
   peerLabelIsChassis,
 } from './neighbors';
@@ -133,5 +135,79 @@ describe('labels', () => {
   it('keys rows by identity so two links on one port stay distinct', () => {
     expect(neighborKey(n())).not.toBe(neighborKey(n({ remote_port: 'Gi1/0/25' })));
     expect(neighborKey(n())).toBe(neighborKey(n({ remote_sys_name: 'renamed' })));
+  });
+});
+
+describe('neighborsByPort', () => {
+  const ports = [
+    { ifindex: 1, if_name: 'Gi0/1' },
+    { ifindex: 2, if_name: 'Gi0/2' },
+    { ifindex: 7, if_name: 'GigabitEthernet0/7' },
+  ];
+
+  it('places a CDP neighbour by its ifIndex, whatever it calls the port', () => {
+    // CDP falls back to `ifindex <n>` when the naming table has no row, so the name is not evidence.
+    const cdp = n({ proto: 'cdp', local_port: 'ifindex 7', local_ifindex: 7 });
+    expect(neighborsByPort([cdp], ports).get(7)).toEqual([cdp]);
+  });
+
+  it('does not place a CDP neighbour by name when its ifIndex names another port', () => {
+    // The accepting case above could pass by name; this one names Gi0/1 and carries ifIndex 2.
+    const cdp = n({ proto: 'cdp', local_port: 'Gi0/1', local_ifindex: 2 });
+    const by = neighborsByPort([cdp], ports);
+    expect(by.get(1)).toBeUndefined();
+    expect(by.get(2)).toEqual([cdp]);
+  });
+
+  it('drops a CDP neighbour whose ifIndex is not in the list', () => {
+    const cdp = n({ proto: 'cdp', local_port: 'Gi0/1', local_ifindex: 99 });
+    expect([...neighborsByPort([cdp], ports).keys()]).toEqual([]);
+  });
+
+  it('places an LLDP neighbour by name, ignoring case and surrounding space', () => {
+    const lldp = n({ local_port: '  gi0/2 ' });
+    expect(neighborsByPort([lldp], ports).get(2)).toEqual([lldp]);
+  });
+
+  it('does not place an LLDP neighbour whose port name is spelled differently', () => {
+    // The known limit, pinned so nobody "fixes" it by accident into guessing: a short name against
+    // a long one, and Junos's bare number against its ifIndex (ADR-145 決定 2).
+    const short = n({ local_port: 'Gi0/7' });
+    const numeric = n({ local_port: '7', remote_chassis: 'aa:bb:cc:dd:ee:07' });
+    expect([...neighborsByPort([short, numeric], ports).keys()]).toEqual([]);
+  });
+
+  it('places nothing on a name two rows share', () => {
+    const dup = [
+      { ifindex: 1, if_name: 'port' },
+      { ifindex: 2, if_name: 'PORT' },
+    ];
+    expect([...neighborsByPort([n({ local_port: 'port' })], dup).keys()]).toEqual([]);
+  });
+
+  it('keeps several neighbours on one port, in the order the server sent them', () => {
+    const a = n({ remote_sys_name: 'a' });
+    const b = n({ remote_chassis: 'aa:bb:cc:dd:ee:02', remote_sys_name: 'b' });
+    expect(neighborsByPort([a, b], ports).get(1)).toEqual([a, b]);
+  });
+});
+
+describe('neighborCellText', () => {
+  it('is null for a port with no neighbour', () => {
+    expect(neighborCellText(undefined)).toBeNull();
+    expect(neighborCellText([])).toBeNull();
+  });
+
+  it('shows the first peer and counts the rest', () => {
+    const cell = neighborCellText([
+      n(),
+      n({ remote_chassis: 'aa:bb:cc:dd:ee:02', remote_sys_name: null, remote_port: '' }),
+    ]);
+    expect(cell).toEqual({
+      label: 'core-sw-01',
+      more: 1,
+      // Every neighbour is in the title, because the cell itself ellipsizes.
+      title: 'core-sw-01 Gi1/0/24\naa:bb:cc:dd:ee:02',
+    });
   });
 });

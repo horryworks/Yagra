@@ -269,7 +269,7 @@ test.describe('the node-detail Interfaces list', () => {
     await expect(page.locator('.nd-if-row').first()).toBeVisible({ timeout: 15_000 });
 
     const grips = page.locator('.nd-if-head .colresize');
-    await expect(grips).toHaveCount(9);
+    await expect(grips).toHaveCount(10);
 
     // 🚨 The symptom the operator actually reported: `.nd-if-head` is `min-height: 32px`, so a
     // heading pushed into an implicit second row does not clip — the band doubles and the labels

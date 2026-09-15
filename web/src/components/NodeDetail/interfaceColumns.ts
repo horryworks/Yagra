@@ -25,18 +25,21 @@ export interface InterfaceColumn {
 }
 
 /**
- * The nine columns, in the order the header draws them.
+ * The ten columns, in the order the header draws them.
  *
- * ⚠️ The order is load-bearing three times over: it is the grid, it is the order
- * `ColumnFilterRow`'s `slots` array is written in, and it is the index a resize grip is placed at.
- * Inserting one in the middle means touching all three.
+ * ⚠️ The order is load-bearing three times over: it is the grid, it is the order of
+ * `ColumnFilterRow`'s slots (derived by `filterSlots` below), and it is the index a resize grip is
+ * placed at. Inserting a column in the middle also means the header cells' explicit `gridColumn`
+ * numbers in `InterfacesTab.tsx` move.
  *
- * The numbers themselves are ADR-126's — measured, not estimated. The note above the declaration in
- * `NodeDetail.css` explains where each came from; do not change one here without reading it.
+ * The numbers themselves are ADR-126's — measured, not estimated — plus ADR-145's NEIGHBORS. The
+ * note above the declaration in `NodeDetail.css` explains where each came from; do not change one
+ * here without reading it.
  */
 export const INTERFACE_COLUMNS: readonly InterfaceColumn[] = [
   { key: 'if_name', width: 'minmax(140px, 1.4fr)' },
   { key: 'if_alias', width: 'minmax(88px, 1.3fr)' },
+  { key: 'neighbors', width: 'minmax(120px, 1fr)' },
   { key: 'oper', width: '94px' },
   { key: 'media', width: 'minmax(112px, 1fr)' },
   { key: 'speed', width: '84px' },
@@ -45,3 +48,16 @@ export const INTERFACE_COLUMNS: readonly InterfaceColumn[] = [
   { key: 'in', width: 'minmax(74px, 0.7fr)' },
   { key: 'out', width: 'minmax(74px, 0.7fr)' },
 ];
+
+/**
+ * The filter row's slots, one per column in `INTERFACE_COLUMNS` order: the column's key where a
+ * filter spec exists for it, `null` where the column carries no control.
+ *
+ * Derived rather than written out. It used to be a literal in `InterfacesTab.tsx`, guarded only by a
+ * test that restated it — and ADR-145 inserting NEIGHBORS as the third column would have slid every
+ * control after it one heading to the left while that test still passed.
+ */
+export function filterSlots(filterKeys: readonly string[]): (string | null)[] {
+  const keys = new Set(filterKeys);
+  return INTERFACE_COLUMNS.map((c) => (keys.has(c.key) ? c.key : null));
+}

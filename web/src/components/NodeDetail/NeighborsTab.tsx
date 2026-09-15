@@ -213,8 +213,9 @@ export function NeighborsTab({ node }: Props) {
 }
 
 /** The peer's advertised roles, as chips. Rendered from the tokens the backend normalized both
- *  protocols onto, so there is no per-protocol legend to keep in sync. */
-function Capabilities({ neighbor }: { neighbor: Neighbor }) {
+ *  protocols onto, so there is no per-protocol legend to keep in sync. Also drawn by the Interfaces
+ *  list's neighbour popover (ADR-145), so the two surfaces cannot name a role differently. */
+export function Capabilities({ neighbor }: { neighbor: Neighbor }) {
   const { t } = useTranslation('nodes');
   const caps = neighbor.capabilities ?? [];
   if (caps.length === 0) return <span className="nd-muted">—</span>;
