@@ -78,6 +78,10 @@ async fn open_session(
 
 /// Fetch `oids` from `target` via SNMP v3 (USM). Per-OID failures are logged and skipped
 /// so a single bad OID doesn't fail the whole poll; an auth/engine failure fails the call.
+///
+/// As the v2c GET: `Ok(vec![])` means the agent answered and implements none of these OIDs,
+/// and a session that then heard nothing is [`TransportError::Silent`] (ADR-138 Increment 5).
+/// A device silent from the start fails engine discovery instead, as an `Io` error.
 pub async fn snmp_get_v3(
     target: IpAddr,
     params: &SnmpV3Params,
@@ -119,11 +123,22 @@ pub async fn snmp_get_v3(
             }
         }
     }
+    // As the v2c GET: a session that opened and then heard nothing is reported as silent, so the
+    // caller can tell it from an agent that answered `noSuchObject` to everything (ADR-138
+    // Increment 5). A device that is silent from the start never reaches here — engine discovery
+    // in [`open_session`] fails first, as an `Io` error.
+    if budget.heard_nothing() {
+        return Err(TransportError::Silent(target));
+    }
     Ok(samples)
 }
 
 /// Fetch string-valued scalar `oids` (e.g. `sysDescr.0` / `sysName.0`) from `target` via
 /// SNMP v3 (USM). Non-string values are skipped. Used by discovery for device identity.
+///
+/// Unlike [`snmp_get_v3`], a session that heard nothing is `Ok(vec![])` here, not
+/// [`TransportError::Silent`]: its one caller, the identity probe's string read, treats an error
+/// and an empty answer alike, so the distinction would decide nothing (ADR-138 Increment 5).
 pub async fn snmp_get_v3_strings(
     target: IpAddr,
     params: &SnmpV3Params,

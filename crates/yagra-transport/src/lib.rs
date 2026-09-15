@@ -333,13 +333,17 @@ pub enum TransportError {
     #[error("transport not implemented: {0}")]
     Unimplemented(&'static str),
     /// The device answered nothing at all: a multi-column walk stopped on
-    /// `walk_budget::Truncation::Silent` having collected no rows (ADR-110 Increment 4).
+    /// `walk_budget::Truncation::Silent` having collected no rows (ADR-110 Increment 4), or a
+    /// scalar GET whose every OID went unanswered (ADR-138 Increment 5).
     ///
     /// 🚨 **Distinct from an empty `Ok`, and that distinction is the whole point.**
     /// `Ok(vec![])` means "the agent answered, and does not implement these columns" — the property
     /// `walk_budget`'s safety argument rests on. This means nothing came back at all, which is what
     /// lets a caller that would otherwise fire more walks at the same silent device stop after the
-    /// first. `execute_mau` fires three, and paid 10,006 ms instead of 4,002 for exactly that.
+    /// first. `execute_mau` fires three, and paid 10,006 ms instead of 4,002 for exactly that. The
+    /// scalar GET's caller reads it the same way: the identity probe that rides the GET runs on an
+    /// empty `Ok` — a device that answers `noSuchObject` to its whole profile still says what it
+    /// is — and is not sent after this.
     #[error("no answer from {0}")]
     Silent(IpAddr),
 }
@@ -565,6 +569,14 @@ pub struct FakeTransport {
     /// "The agent refused" and "the agent answered with nothing" are different device states
     /// that a caller can easily conflate, and the empty-vec default can only express the second.
     pub snmp_get_error: Option<String>,
+    /// When set, every scalar SNMP GET (v2c and v3) reports the device as silent —
+    /// `TransportError::Silent` — instead of returning [`Self::snmp`].
+    ///
+    /// The third device state a scalar GET can be in (ADR-138 Increment 5): not refused, not
+    /// answered with nothing, but never answered at all. The identity probe rides the scalar GET
+    /// and runs on the empty answer and not on this, and a test that cannot produce this cannot
+    /// see the probe sent at a device that is not there.
+    pub snmp_gets_silent: bool,
     /// When set, every **instance** walk (v2c and v3) reports the device as silent —
     /// `TransportError::Silent` — instead of returning [`Self::snmp_instances`].
     ///
@@ -768,6 +780,7 @@ impl FakeTransport {
             meraki: Vec::new(),
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
+            snmp_gets_silent: false,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
             instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
@@ -804,6 +817,7 @@ impl FakeTransport {
             meraki: Vec::new(),
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
+            snmp_gets_silent: false,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
             instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
@@ -825,6 +839,14 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp_get_error(mut self, message: &str) -> Self {
         self.snmp_get_error = Some(message.to_owned());
+        self
+    }
+
+    /// Make every scalar SNMP GET (v2c and v3) report the device as silent, as the real GET does
+    /// when not one of the OIDs it asked for was answered (ADR-138 Increment 5).
+    #[must_use]
+    pub fn with_silent_snmp_gets(mut self) -> Self {
+        self.snmp_gets_silent = true;
         self
     }
 
@@ -915,12 +937,16 @@ impl Transport for FakeTransport {
 
     async fn snmp_get(
         &self,
-        _target: IpAddr,
+        target: IpAddr,
         _community: &str,
         oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
+        // Recorded before the verdict, as the real GET is sent before the device is silent.
         self.record_asked(oids);
+        if self.snmp_gets_silent {
+            return Err(TransportError::Silent(target));
+        }
         match &self.snmp_get_error {
             Some(e) => Err(TransportError::Io(e.clone())),
             None => Ok(self.snmp.clone()),
@@ -929,12 +955,15 @@ impl Transport for FakeTransport {
 
     async fn snmp_v3_get(
         &self,
-        _target: IpAddr,
+        target: IpAddr,
         _params: &SnmpV3Params,
         oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
         self.record_asked(oids);
+        if self.snmp_gets_silent {
+            return Err(TransportError::Silent(target));
+        }
         match &self.snmp_get_error {
             Some(e) => Err(TransportError::Io(e.clone())),
             None => Ok(self.snmp.clone()),

@@ -216,6 +216,20 @@ impl WalkBudget {
         self.answered == asked
     }
 
+    /// Whether the device answered **nothing** of what it was asked: at least one column was asked
+    /// and not one was recorded as [`ColumnOutcome::Answered`] (ADR-138 Increment 5).
+    ///
+    /// A different question from [`Self::spent`]: [`Truncation::Silent`] needs two failures in a
+    /// row, and the scalar GET most profiles issue asks for one OID (`sysUpTime.0`), so a silent
+    /// device can never trip it there. This is what lets that GET tell "the agent answered, and
+    /// implements none of these" — `Ok(vec![])`, a state the identity probe should still run in —
+    /// from "nothing came back", which it must not spend a probe on. A [`ColumnOutcome::Skipped`]
+    /// column neither accuses nor forgives, as in [`Self::record`]: a call whose every OID was
+    /// malformed asked the device nothing, and this says `false`.
+    pub(crate) fn heard_nothing(&self) -> bool {
+        self.answered == 0 && self.consecutive_failures > 0
+    }
+
     /// Wall-clock left before the deadline, saturating at zero.
     ///
     /// Test-only: the walkers ask [`Self::spent`], never how much is left. It exists so
@@ -573,6 +587,53 @@ mod tests {
         );
     }
 
+    /// **Every scalar GET reports a device that answered nothing** (ADR-138 Increment 5) — and,
+    /// as above, reading the source is all there is: both GET loops call the real client.
+    ///
+    /// The identity probe rides the scalar GET and runs whenever the agent answered, so a GET that
+    /// folded "nothing came back" into `Ok(vec![])` again would send that probe at every silent
+    /// device — the cost [`MAX_CONSECUTIVE_COLUMN_FAILURES`] exists to avoid. The shape matched is
+    /// the one both loops share: a list of OIDs in, a list of samples out; the walks return a
+    /// `TableWalk` and the v3 string GET a different sample type, so neither is examined here.
+    #[test]
+    fn every_scalar_get_reports_a_device_that_answered_nothing() {
+        use crate::module_source::{files_no_comments, roots};
+
+        let mut files = files_no_comments(&roots("src", "snmp"));
+        files.extend(files_no_comments(&roots("src", "snmp_v3")));
+
+        let mut checked = 0usize;
+        for (name, code) in &files {
+            for (at, _) in code.match_indices("pub async fn ") {
+                let body = &code[at..];
+                let end = body
+                    .find("\n}")
+                    .expect("a top-level fn closes with a brace at column zero");
+                let body = &body[..end];
+                if !body.contains("oids: &[String]") || !body.contains("Result<Vec<SnmpSample>") {
+                    continue;
+                }
+                let signature = body
+                    .lines()
+                    .next()
+                    .unwrap_or(body)
+                    .trim_end_matches('(')
+                    .to_owned();
+                checked += 1;
+                assert!(
+                    body.contains("heard_nothing()") && body.contains("TransportError::Silent("),
+                    "yagra-transport/src/{name}: `{signature}` answers `Ok(vec![])` for a device \
+                     that answered nothing, and the identity probe would then be sent to it \
+                     (ADR-138 Increment 5)"
+                );
+            }
+        }
+        assert_eq!(
+            checked, 2,
+            "the two scalar GETs, v2c and v3, are what this crate has; {checked} were examined"
+        );
+    }
+
     /// **The accepting side, and it comes first on purpose.**
     ///
     /// Every other assertion here is of the form "the walk stops". A budget that stopped
@@ -584,6 +645,10 @@ mod tests {
         let budget = WalkBudget::new(Duration::from_secs(2));
         assert_eq!(budget.spent(), None);
         assert!(budget.remaining() > Duration::from_secs(1));
+        assert!(
+            !budget.heard_nothing(),
+            "nothing asked is not nothing answered"
+        );
     }
 
     /// The measured failure: a device that answers nothing costs two columns, not eighteen.
@@ -596,8 +661,12 @@ mod tests {
             None,
             "one failure is a column, not a device"
         );
+        // …but for a call that asked one thing — the scalar GET of most profiles — one failure is
+        // already everything unanswered (ADR-138 Increment 5).
+        assert!(budget.heard_nothing());
         budget.record(ColumnOutcome::Failed);
         assert_eq!(budget.spent(), Some(Truncation::Silent));
+        assert!(budget.heard_nothing());
     }
 
     /// 🚨 A success between two failures resets the run.
@@ -610,6 +679,10 @@ mod tests {
         let mut budget = WalkBudget::new(Duration::from_secs(2));
         budget.record(ColumnOutcome::Failed);
         budget.record(ColumnOutcome::Answered);
+        assert!(
+            !budget.heard_nothing(),
+            "one answer is an agent that is there"
+        );
         budget.record(ColumnOutcome::Failed);
         assert_eq!(
             budget.spent(),
@@ -618,12 +691,21 @@ mod tests {
         );
         budget.record(ColumnOutcome::Failed);
         assert_eq!(budget.spent(), Some(Truncation::Silent), "…now they are");
+        assert!(
+            !budget.heard_nothing(),
+            "silence by the run is a different question: this device did answer once"
+        );
     }
 
     /// A column nothing was asked of says nothing about the device, in either direction.
     #[test]
     fn a_skipped_column_neither_accuses_the_device_nor_forgives_it() {
         let mut budget = WalkBudget::new(Duration::from_secs(2));
+        budget.record(ColumnOutcome::Skipped);
+        assert!(
+            !budget.heard_nothing(),
+            "a malformed OID asked the device nothing"
+        );
         budget.record(ColumnOutcome::Failed);
         budget.record(ColumnOutcome::Skipped);
         assert_eq!(
@@ -631,6 +713,7 @@ mod tests {
             None,
             "a malformed OID is not a second failure"
         );
+        assert!(budget.heard_nothing(), "…and it is not an answer either");
         budget.record(ColumnOutcome::Failed);
         assert_eq!(
             budget.spent(),

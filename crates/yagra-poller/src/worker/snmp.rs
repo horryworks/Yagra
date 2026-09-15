@@ -16,7 +16,9 @@ use yagra_discovery::{os_version, serial};
 /// table does not cover it or it reports none), `unread` (the device answered but the patch table
 /// the version's row walks did not answer to its end, so the version went out without its patch, in
 /// a field core writes only where it cannot strip one — ADR-138 Increments 3 and 4) or `no_answer`
-/// (not even `sysDescr` came back).
+/// (not even `sysDescr` came back). Since Increment 5 the probe also runs on a device that answered
+/// its scalar GET with no value at all, so `no_answer` counts real traffic: an agent that is there
+/// and implements neither the profile's scalars nor `sysDescr`.
 /// The ratio of the first two is the table's real coverage of a fleet (ADR-138).
 pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_total";
 
@@ -531,7 +533,9 @@ impl SnmpWalker {
 /// Execute an SNMP scalar-GET check (v2c or v3, selected by `walker`): GET the bare OIDs and the
 /// explicitly-named scalar columns together, name each sample (a configured column keeps its metric
 /// name and kind; a bare OID falls back to the poller's built-in naming), and run the identity
-/// probe when core asked for one.
+/// probe when it was asked for and the agent answered — with values or without (ADR-138
+/// Increment 5). The transport tells the two apart from a device that answered nothing
+/// ([`TransportError::Silent`]), which gets the same `Unreachable` and no probe.
 ///
 /// The v2c and v3 arms of [`execute`] used to carry a copy of this each — ~48 lines apiece that
 /// differed only in the credential type and which transport method was called. The table path had
@@ -559,7 +563,10 @@ pub(super) async fn execute_scalar_get(
     all_oids.extend(columns.iter().map(|c| c.oid.clone()));
     match walker.get(transport, job.target, &all_oids, timeout).await {
         Ok(samples) => {
-            // No values back ⇒ treat as unreachable (agent down / wrong credential).
+            // The agent answered. No values back — every OID it was asked is one it does not
+            // implement — is still `Unreachable` and `snmp_up = 0` (ADR-075 decision 3): the
+            // scalar set is dead, and the rule that says so is what an operator corrects the
+            // profile from. What an empty answer no longer withholds is the identity probe below.
             let outcome = if samples.is_empty() {
                 CheckOutcome::Unreachable
             } else {
@@ -582,7 +589,12 @@ pub(super) async fn execute_scalar_get(
                 .collect();
             mapped.push(Sample::gauge(METRIC_SNMP_UP, answered));
             let mut r = result(job, at_unix_ms, outcome, mapped);
-            if job.probe_identity && outcome == CheckOutcome::Reachable {
+            // Whenever the agent answered, not only when it answered with a value (ADR-138
+            // Increment 5). A device that implements none of its profile's scalars still says what
+            // it is — `sysDescr`, its OS version, its serial — and that is the device an operator
+            // most needs identified, to correct its profile. A silent agent never reaches here, so
+            // this adds no wait to an outage.
+            if job.probe_identity {
                 let probe = walker.fetch_identity(transport, job.target, timeout).await;
                 metrics::counter!(IDENTITY_PROBES_METRIC, "result" => probe.outcome()).increment(1);
                 r.sys_descr = probe.sys_descr;
@@ -593,7 +605,20 @@ pub(super) async fn execute_scalar_get(
             }
             r
         }
-        Err(err) => {
+        Err(TransportError::Silent(_)) => {
+            // Not one OID answered, not even with "no such object": nobody is home. The same
+            // `Unreachable` and `snmp_up = 0` an empty answer gets — what a silent agent means for
+            // liveness has not changed — but no identity probe, which would only wait on the same
+            // silence again. Debug rather than warn: an outage is every device in this state.
+            tracing::debug!(job_id = %job.job_id, "snmp agent answered nothing");
+            result(
+                job,
+                at_unix_ms,
+                CheckOutcome::Unreachable,
+                vec![Sample::gauge(METRIC_SNMP_UP, 0.0)],
+            )
+        }
+        Err(err @ (TransportError::Io(_) | TransportError::Unimplemented(_))) => {
             tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
             // `snmp_up = 0` on the error path too: a GET that could not be issued is an agent the
             // operator cannot reach, and emitting nothing here would leave the rule with no
@@ -649,7 +674,8 @@ mod tests {
 
     #[tokio::test]
     async fn snmp_no_values_is_unreachable() {
-        // FakeTransport with no canned SNMP samples -> empty -> unreachable.
+        // FakeTransport with no canned SNMP samples: the agent answered and implements none of
+        // what it was asked — the real transport's `Ok(vec![])` — which is still unreachable.
         let t = FakeTransport::reachable(0.0);
         let r = execute(&snmp_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
@@ -663,6 +689,8 @@ mod tests {
     /// so with ICMP polling more often than SNMP an SNMP-only failure never reaches the
     /// consecutive-sample count and commits nothing. Both directions are asserted — a gauge that
     /// only ever reads 0 would satisfy a rejection-only test while alerting on every healthy node.
+    /// The two ways an agent gives no value — answering with none, and not answering — read 0
+    /// alike (ADR-138 Increment 5 tells them apart for the identity probe, not for this gauge).
     #[tokio::test]
     async fn every_snmp_scalar_result_says_whether_the_agent_answered() {
         use yagra_transport::SnmpSample;
@@ -673,18 +701,19 @@ mod tests {
         let r = execute(&snmp_job(), &answered, 1_000).await;
         assert_eq!(sample(&r, METRIC_SNMP_UP), Some(1.0));
 
-        let silent = FakeTransport::reachable(0.0);
+        let empty = FakeTransport::reachable(0.0);
+        let r = execute(&snmp_job(), &empty, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
+
+        let silent = FakeTransport::reachable(0.0).with_silent_snmp_gets();
         let r = execute(&snmp_job(), &silent, 1_000).await;
         assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
     }
 
-    /// v3 goes through the same `execute_scalar_get`, but "the same function" is exactly the claim
-    /// that stops being true when someone splits the arms again — so assert it rather than assume.
-    #[tokio::test]
-    async fn the_v3_scalar_path_reports_the_agent_the_same_way() {
+    /// A v3 scalar job with one OID, the shape of the v2c [`snmp_job`].
+    fn snmp_v3_job() -> PollJob {
         use yagra_bus::SnmpV3Check;
-        use yagra_transport::SnmpSample;
-        let job = PollJob::snmp_v3(
+        PollJob::snmp_v3(
             Uuid::nil(),
             NodeId::from(Uuid::nil()),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
@@ -702,7 +731,15 @@ mod tests {
                 timeout_ms: 2000,
             },
             30,
-        );
+        )
+    }
+
+    /// v3 goes through the same `execute_scalar_get`, but "the same function" is exactly the claim
+    /// that stops being true when someone splits the arms again — so assert it rather than assume.
+    #[tokio::test]
+    async fn the_v3_scalar_path_reports_the_agent_the_same_way() {
+        use yagra_transport::SnmpSample;
+        let job = snmp_v3_job();
         let answered = FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
             oid: "1.3.6.1.2.1.1.3.0".to_owned(),
             value: 7.0,
@@ -718,6 +755,18 @@ mod tests {
             ),
             Some(0.0)
         );
+        assert_eq!(
+            sample(
+                &execute(
+                    &job,
+                    &FakeTransport::reachable(0.0).with_silent_snmp_gets(),
+                    1_000
+                )
+                .await,
+                METRIC_SNMP_UP
+            ),
+            Some(0.0)
+        );
     }
 
     /// The failure mode this closes: with no sample on the error path, whether the operator gets
@@ -728,6 +777,85 @@ mod tests {
         let t = FakeTransport::reachable(0.0).with_snmp_get_error("snmp connect refused");
         let r = execute(&snmp_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Error);
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
+    }
+
+    /// ADR-138 Increment 5, the shape of `.210`'s `sim-cisco-n9k`: the agent answers, and
+    /// implements none of the profile's scalars. `snmp_up` still says the scalar set is dead, and
+    /// the identity probe still runs — the device it would otherwise never identify is exactly the
+    /// one whose profile an operator has to correct.
+    #[tokio::test]
+    async fn an_agent_that_answers_nothing_it_was_asked_is_still_probed_for_identity() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = with_entity_rows(
+            FakeTransport::reachable(0.0).with_snmp_table_strings(vec![
+                string_row(
+                    "1.3.6.1.2.1.1.1",
+                    0,
+                    "Cisco NX-OS(tm) Nexus9000 C93180YC-FX3, Software (NXOS 64-bit), Version 10.5(2)",
+                ),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.9.12.3.1.3.2193"),
+            ]),
+            &[(149, 3, "FDO2750P")],
+        );
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
+        assert!(
+            r.sys_descr
+                .as_deref()
+                .is_some_and(|d| d.starts_with("Cisco NX-OS")),
+            "{:?}",
+            r.sys_descr
+        );
+        assert_eq!(r.serial_number.as_deref(), Some("FDO2750P"));
+        assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// The other side of the same increment: a device that answered nothing is not asked for its
+    /// identity — one silent GET is the whole cost of a device that is not there, and the probe
+    /// would only add its own timeouts to it. The rows are all there, so only the probe not being
+    /// sent explains the missing identity.
+    #[tokio::test]
+    async fn a_silent_agent_is_not_asked_for_its_identity() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = with_entity_rows(
+            FakeTransport::reachable(0.0)
+                .with_snmp_table_strings(vec![string_row("1.3.6.1.2.1.1.1", 0, "Anything")])
+                .with_silent_snmp_gets(),
+            &[(1, 3, "SN1")],
+        );
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.outcome,
+            CheckOutcome::Unreachable,
+            "silence is not an error"
+        );
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
+        assert!(r.sys_descr.is_none());
+        assert_eq!(r.serial_number, None);
+        let asked = t.asked();
+        assert_eq!(
+            asked.len(),
+            1,
+            "the scalar GET and nothing after it: {asked:?}"
+        );
+        assert!(!walked_for_a_serial(&t));
+    }
+
+    /// A silent agent is `Unreachable` on both protocols, never `Error`: the alert engine reads
+    /// `Error` as unknown, and a device that is not there is not unknown — it is down, which is
+    /// what an empty answer already said before the transport could tell the two apart.
+    #[tokio::test]
+    async fn a_silent_snmp_get_is_unreachable_not_an_error() {
+        let silent = FakeTransport::reachable(0.0).with_silent_snmp_gets();
+        let r = execute(&snmp_job(), &silent, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+        assert_eq!(r.samples.len(), 1, "only the agent-health gauge");
+        let r = execute(&snmp_v3_job(), &silent, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
         assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
     }
 
@@ -1141,21 +1269,56 @@ mod tests {
     async fn no_serial_walk_without_an_identity_answer() {
         let mut job = snmp_job();
         job.probe_identity = true;
-        let silent = with_entity_rows(
+        // Answers its scalar, but not `sysDescr`.
+        let no_sysdescr = with_entity_rows(
             FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
                 oid: "1.3.6.1.2.1.1.3.0".to_owned(),
                 value: 1.0,
             }]),
             &[(1, 3, "SN1")],
         );
-        let r = execute(&job, &silent, 1_000).await;
+        let r = execute(&job, &no_sysdescr, 1_000).await;
         assert_eq!(r.serial_number, None);
-        assert!(!walked_for_a_serial(&silent), "{:?}", silent.asked());
+        assert!(
+            !walked_for_a_serial(&no_sysdescr),
+            "{:?}",
+            no_sysdescr.asked()
+        );
 
         let unasked = catalyst_stack();
         let r = execute(&snmp_job(), &unasked, 1_000).await;
         assert_eq!(r.serial_number, None);
         assert!(!walked_for_a_serial(&unasked), "{:?}", unasked.asked());
+    }
+
+    /// ADR-147 Increment 3, the shape of `.210`'s `sim-cisco-c3560`: the recording has no class
+    /// column and one serial — and, like the n9k, no scalar the profile asks for, so this is the
+    /// ADR-138 Increment 5 gate too. The fake answers a column with no rows as answered, which is
+    /// what the real walker does for a column the agent does not implement, so the walk finishes
+    /// and decision 16 applies. The serial row goes in by hand: [`with_entity_rows`] would put a
+    /// class row beside it, which is the whole thing this device does not have.
+    #[tokio::test]
+    async fn a_device_with_no_class_column_and_one_serial_gets_it() {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let mut t = FakeTransport::reachable(0.0).with_snmp_table_strings(vec![
+            string_row(
+                "1.3.6.1.2.1.1.1",
+                0,
+                "Cisco IOS Software, C3560 Software (C3560-IPSERVICESK9-M), Version 12.2(55)SE",
+            ),
+            string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.9.1.634"),
+        ]);
+        t.snmp_instances.push(SnmpInstanceRow {
+            oid_base: serial::OID_ENT_PHYSICAL_SERIAL_NUM.to_owned(),
+            instance: vec![1001],
+            value: SnmpValue::Bytes(b"CAT0912N0CU".to_vec()),
+        });
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Unreachable, "no scalar answered");
+        assert_eq!(r.serial_number.as_deref(), Some("CAT0912N0CU"));
+        assert!(walked_for_a_serial(&t), "{:?}", t.asked());
     }
 
     /// A Juniper device as the identity probe meets it (ADR-147 Increment 2): `sysDescr` and
