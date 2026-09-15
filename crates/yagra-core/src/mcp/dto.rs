@@ -422,6 +422,13 @@ pub struct NodeStatusDto {
     /// for the reason `notes` is. ⚠️ Observed state: up to an hour behind an upgrade, and left in
     /// place when a later poll cannot read it — so treat it as "last known", not "confirmed now".
     pub os_version: Option<String>,
+    /// The device's serial number (ADR-147); a stack lists every member, joined with `, `. `null`
+    /// ⇒ not known.
+    ///
+    /// Mirrors `NodeDetail.serial_number` on `GET /api/v1/nodes/{node_id}` — the same fallback to a
+    /// Meraki binding's serial, from the same function — and is a sibling of `node` for the reason
+    /// `notes` is. ⚠️ Observed state, up to an hour behind a chassis swap: "last known".
+    pub serial_number: Option<String>,
     /// Whether a person fixed this node's profile, so reclassification never offers to change it
     /// (ADR-140). Mirrors `NodeDetail.profile_locked`, a sibling of `node` for the reason `notes` is.
     pub profile_locked: bool,
@@ -996,6 +1003,7 @@ mod tests {
             snmp_configured: true,
             notes: Some("reachable only from the jump host".to_owned()),
             os_version: Some("15.0(2a)EX5".to_owned()),
+            serial_number: Some("FCW1929B68S, FCW1931A06Z".to_owned()),
             profile_locked: true,
             interfaces: vec![InterfaceDto {
                 ifindex: 1,

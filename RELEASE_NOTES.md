@@ -13,6 +13,7 @@
 ### New Features
 
 - **Pin nodes and folders, and show only what you pinned.** Right-click a node or folder in All nodes and choose Pin, or press Pin in its detail pane. A new "Pinned only" button right of Filter narrows the tree to the pinned nodes, the pinned folders with everything inside them, and the folders above both. Pins belong to your account, so they follow you to another machine, and so does the button's state; deleting a node or folder removes its pins. Any signed-in account can pin, up to 500 pins. The API is `GET /api/v1/pins` plus `PUT` / `DELETE` on `/api/v1/pins/nodes/{node_id}` and `/api/v1/pins/groups/{group_id}` — each pin change is written to the audit log, and a pin on a node or folder outside your scope answers 404.
+- **A node's Overview shows its serial number.** A new Serial number row under Model shows the serial the device reports for its chassis in ENTITY-MIB, which the poller reads once an hour together with the OS version. A stack or an SVL pair lists every member, in order, separated by commas. A Meraki device shows the serial it was imported with. A device that keeps no chassis serial in ENTITY-MIB — Juniper Junos, for example — shows "—". The value appears within an hour of the poller being upgraded. `GET /api/v1/nodes/{node_id}` and the MCP `get_node_status` tool return it as `serial_number`.
 
 ### Improvements
 

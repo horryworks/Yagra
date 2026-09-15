@@ -497,6 +497,9 @@ pub(crate) struct MetaRecord {
     /// and a `None` writes nothing to that column.
     sys_object_id: Option<String>,
     sys_descr: Option<String>,
+    /// The serial number the device reported (ADR-147), sanitized again here for the reason
+    /// `os_version` is. `None` means nothing was read and nothing is written.
+    serial_number: Option<String>,
     /// The DNS resolution chain observed on this poll (DNS monitors only, ADR-033). Same tier as
     /// the fields above: poller-returned structured strings that belong in PostgreSQL, never in the
     /// TSDB.
@@ -663,6 +666,11 @@ fn persist_metrics_and_meta(
         .sys_descr
         .as_deref()
         .and_then(yagra_discovery::sanitize_sys_descr);
+    // The serial rides the same identity probe (ADR-147), so it too arrives hourly.
+    let serial_number = result
+        .serial_number
+        .as_deref()
+        .and_then(yagra_discovery::serial::sanitize);
     // A DNS chain rides the same shed-able meta tier. Dropping one only defers recording a change
     // by a poll — the next observation re-reports the current chain — so the only thing genuinely
     // lost is a transient change that reverts before the next poll.
@@ -693,6 +701,7 @@ fn persist_metrics_and_meta(
         || os_version_without_patch.is_some()
         || sys_object_id.is_some()
         || sys_descr.is_some()
+        || serial_number.is_some()
         || dns_chain.is_some()
         || neighbors.is_some()
         || l3.is_some()
@@ -707,6 +716,7 @@ fn persist_metrics_and_meta(
             os_version_without_patch,
             sys_object_id,
             sys_descr,
+            serial_number,
             dns_chain,
             neighbors,
             l3,
@@ -1074,6 +1084,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut os_version_rows: Vec<(Uuid, String)> = Vec::new();
     let mut os_version_without_patch_rows: Vec<(Uuid, String)> = Vec::new();
     let mut snmp_identity_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
+    let mut serial_number_rows: Vec<(Uuid, String)> = Vec::new();
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
@@ -1098,6 +1109,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if rec.sys_object_id.is_some() || rec.sys_descr.is_some() {
             snmp_identity_rows.push((rec.node_id, rec.sys_object_id, rec.sys_descr));
+        }
+        if let Some(serial_number) = rec.serial_number {
+            serial_number_rows.push((rec.node_id, serial_number));
         }
         if let Some(chain) = rec.dns_chain {
             dns_rows.push((rec.node_id, chain));
@@ -1143,6 +1157,11 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !snmp_identity_rows.is_empty() {
         if let Err(e) = repo.update_snmp_identity_batch(&snmp_identity_rows).await {
             tracing::warn!(error = %e, "batch node snmp-identity update failed");
+        }
+    }
+    if !serial_number_rows.is_empty() {
+        if let Err(e) = repo.update_serial_number_batch(&serial_number_rows).await {
+            tracing::warn!(error = %e, "batch node serial-number update failed");
         }
     }
     // One statement per observation, in arrival order. Deliberately NOT coalesced per node the way
@@ -1267,6 +1286,7 @@ mod tests {
             sys_descr: None,
             os_version: None,
             os_version_without_patch: None,
+            serial_number: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,
@@ -1315,6 +1335,39 @@ mod tests {
             Some("5.170 (V200R021C00SPC100)")
         );
         assert_eq!(rec.os_version, None);
+    }
+
+    /// ADR-147: a serial reaches the PG writer cleaned on this edge as well — core cannot assume the
+    /// poller that sent it capped it — and a result carrying nothing else still makes a record.
+    #[test]
+    fn a_serial_number_reaches_the_pg_writer_sanitized() {
+        let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
+        let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+        let mut result: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable"}"#,
+        )
+        .expect("a result");
+        result.serial_number = Some(format!(
+            "FCW1929B68S,{}FCW1931A06Z{}",
+            char::from(9),
+            "x".repeat(300)
+        ));
+        persist_metrics_and_meta(&Arc::new(result), &vm, &meta_tx);
+        let rec = meta_rx
+            .try_recv()
+            .expect("the record reaches the PG writer");
+        let serial_number = rec.serial_number.expect("a serial");
+        assert!(
+            serial_number.starts_with("FCW1929B68S, FCW1931A06Z"),
+            "{serial_number}"
+        );
+        assert_eq!(
+            serial_number.chars().count(),
+            yagra_discovery::serial::SERIAL_MAX_CHARS
+        );
     }
 
     /// One result through `ingest_result`, returning everything the alert engine produced.
@@ -1386,6 +1439,7 @@ mod tests {
             sys_descr: None,
             os_version: None,
             os_version_without_patch: None,
+            serial_number: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
@@ -1579,6 +1633,7 @@ mod tests {
             sys_descr: None,
             os_version: None,
             os_version_without_patch: None,
+            serial_number: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,

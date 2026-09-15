@@ -1,0 +1,31 @@
+-- 0119_node_serial_number — the serial number a device reports over SNMP (ADR-147).
+--
+-- reversible: additive only — one nullable column on `nodes`, nothing narrowed and nothing
+-- rewritten. An older core projects a node row through an explicit column list
+-- (`NodeRepo::NODE_COLUMNS`), so it never selects this column: rolling the binary back leaves the
+-- value in place, unread, and rolling forward again finds it. No `schema_compat` floor is owed, for
+-- the reason 0083 and 0115 record: every release from 0.2.2 on tolerates a database carrying
+-- migrations it does not embed, so this does not move the oldest core that can start afterwards.
+--
+-- WHAT IT HOLDS
+-- The serial of every chassis row in the device's ENTITY-MIB (`entPhysicalClass = chassis(3)`),
+-- joined with ', ' in index order when there are several — a Catalyst stack, an SVL pair. Capped at
+-- 128 characters where it is resolved and again at ingest. A Meraki node's serial is NOT copied
+-- here: `meraki_devices.serial` already holds it, and the node detail falls back to that at read
+-- time rather than keeping a second copy that could disagree with it.
+--
+-- WHY IT IS NOT A FIELD ON `yagra_common::Node`
+-- The argument 0111 makes for `os_version`: `Node` is materialized fleet-wide by the alert engine's
+-- config snapshot, the scheduler's sweep and maintenance-window matching, and none of them read a
+-- serial. `NodeRepo::get_node_with_notes` is the only reader — for the REST node detail and the MCP
+-- `get_node_status` tool that mirrors it.
+--
+-- WHO WRITES IT
+-- Only the result-ingest metadata writer, from `PollResult.serial_number`, and only when the value
+-- differs (`IS DISTINCT FROM`); the poller re-reads it hourly. A read that finds nothing writes
+-- nothing, so a failed walk never blanks a serial that was read before. It is observed state, not
+-- configuration: no API route writes it, and the configuration bundle (ADR-040) does not carry it.
+--
+-- NO LENGTH CHECK CONSTRAINT, deliberately, for the reason 0111 gives: one over-long value from an
+-- older or misbehaving poller must not fail the batch UPDATE for every node in it.
+ALTER TABLE nodes ADD COLUMN serial_number TEXT;

@@ -74,6 +74,11 @@ pub struct NodeWithNotes {
     /// [`NodeRepo::update_os_version_without_patch_batch`] — observed state, which no API route
     /// writes and the configuration bundle does not carry.
     pub os_version: Option<String>,
+    /// The serial number the device last reported from its ENTITY-MIB chassis rows (ADR-147), a
+    /// stack's members joined with `, `; `None` ⇒ never read. Written only by
+    /// [`NodeRepo::update_serial_number_batch`]. A Meraki node's serial is not here — the detail
+    /// surfaces fall back to `meraki_devices.serial` when this is `None`.
+    pub serial_number: Option<String>,
     /// Whether a person fixed this node's profile, so Nodes ▸ Reclassify never offers to change it
     /// (ADR-140). Read here because the edit dialog shows it and writes it back.
     pub profile_locked: bool,
@@ -174,7 +179,7 @@ impl NodeRepo {
     /// interpolated from the same constant, so the two cannot disagree about the node half.
     pub async fn get_node_with_notes(&self, id: Uuid) -> anyhow::Result<Option<NodeWithNotes>> {
         let row = sqlx::query(&format!(
-            "SELECT {}, notes, os_version, profile_locked FROM nodes WHERE id = $1",
+            "SELECT {}, notes, os_version, serial_number, profile_locked FROM nodes WHERE id = $1",
             Self::NODE_COLUMNS
         ))
         .bind(id)
@@ -186,6 +191,7 @@ impl NodeRepo {
                     node: node_from_row(row)?,
                     notes: row.try_get("notes")?,
                     os_version: row.try_get("os_version")?,
+                    serial_number: row.try_get("serial_number")?,
                     profile_locked: row.try_get("profile_locked")?,
                 })
             })
@@ -997,6 +1003,31 @@ impl NodeRepo {
         Ok(res.rows_affected())
     }
 
+    /// Record the serial number each node's device reported (ADR-147) — its ENTITY-MIB chassis
+    /// rows, a stack's members joined — for MANY nodes in one `UPDATE`. Returns how many rows
+    /// actually changed.
+    ///
+    /// ⚠️ **Only a value that differs is written** (`IS DISTINCT FROM`), for the reason
+    /// [`Self::update_os_version_batch`] gives: the poller re-reads it hourly for every SNMP node.
+    /// There is no "clear" row — a read that found nothing sends nothing, so a failed walk never
+    /// blanks a serial read before. Dedups keeping the last occurrence per node.
+    pub async fn update_serial_number_batch(&self, rows: &[(Uuid, String)]) -> anyhow::Result<u64> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let (ids, serials) = last_version_per_node(rows);
+        let res = sqlx::query(
+            "UPDATE nodes SET serial_number = t.serial_number, updated_at = now() \
+             FROM unnest($1::uuid[], $2::text[]) AS t(id, serial_number) \
+             WHERE nodes.id = t.id AND nodes.serial_number IS DISTINCT FROM t.serial_number",
+        )
+        .bind(&ids)
+        .bind(&serials)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Record what each node's device says it is — `sysObjectID` and `sysDescr` (ADR-140) — for MANY
     /// nodes in one `UPDATE` (the async ingest writer). Returns how many rows actually changed.
     ///
@@ -1526,6 +1557,59 @@ mod tests {
         assert_eq!(read(&repo, id).await.as_deref(), Some("15.2(7)E9"));
 
         assert_eq!(repo.update_os_version_batch(&[]).await.expect("empty"), 0);
+    }
+
+    /// A serial number is written when it changes, and only then (ADR-147).
+    ///
+    /// 🚨 As for the version, **the repeated write is the assertion that matters**: a serial read
+    /// back after the first write passes against an implementation with no `IS DISTINCT FROM`, and
+    /// that one rewrites every SNMP node's row every hour.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_serial_number_is_written_only_when_it_changes(pool: sqlx::PgPool) {
+        let id = pgtest::node(&pool, "sw-1", 1, None).await;
+        let repo = pgtest::repo(pool);
+        async fn read(repo: &NodeRepo, id: uuid::Uuid) -> Option<String> {
+            repo.get_node_with_notes(id)
+                .await
+                .expect("read")
+                .expect("the node")
+                .serial_number
+        }
+        assert_eq!(read(&repo, id).await, None, "a fresh node has no serial");
+
+        const STACK: &str = "FCW1929B68S, FCW1931A06Z, FCW1929B6BP";
+        let first = repo
+            .update_serial_number_batch(&[(id, STACK.to_owned())])
+            .await
+            .expect("write");
+        assert_eq!(first, 1);
+        assert_eq!(read(&repo, id).await.as_deref(), Some(STACK));
+
+        let again = repo
+            .update_serial_number_batch(&[(id, STACK.to_owned())])
+            .await
+            .expect("rewrite");
+        assert_eq!(again, 0, "an unchanged serial must not be written");
+
+        // A member swapped out, polled twice in one batch: the later answer wins, as one write.
+        let swapped = repo
+            .update_serial_number_batch(&[
+                (id, "FCW1929B68S, FCW1931A06Z".to_owned()),
+                (id, "FCW1929B68S, FCW2000ZZZZ".to_owned()),
+            ])
+            .await
+            .expect("swap");
+        assert_eq!(swapped, 1);
+        assert_eq!(
+            read(&repo, id).await.as_deref(),
+            Some("FCW1929B68S, FCW2000ZZZZ")
+        );
+
+        assert_eq!(
+            repo.update_serial_number_batch(&[]).await.expect("empty"),
+            0
+        );
     }
 
     /// A version read without its patch fills an empty row and follows an upgrade, but never

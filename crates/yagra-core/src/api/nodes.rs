@@ -1031,6 +1031,14 @@ pub(crate) struct NodeDetail {
     /// hourly, so it can trail an upgrade by up to an hour, and a poll that cannot read it leaves
     /// the last value in place. Detail-only, like `notes`.
     os_version: Option<String>,
+    /// The device's serial number (ADR-147), e.g. `FCW1929B68S`; a stack lists every member in
+    /// order, joined with `, `. For an SNMP device it is the serial of each chassis in ENTITY-MIB,
+    /// read hourly; for a Meraki device it is the serial the node was imported with. `null` ⇒ not
+    /// known — the device keeps no chassis serial in ENTITY-MIB, or it has not been read yet.
+    ///
+    /// ⚠️ **Observed, not configured**, like `os_version`: it can trail a chassis swap by up to an
+    /// hour, and a read that fails leaves the last value in place. Detail-only.
+    serial_number: Option<String>,
     /// Whether a person fixed this node's profile (ADR-140). A locked node is never offered on
     /// Nodes ▸ Reclassify; the edit dialog is where it is set and cleared. Detail-only.
     profile_locked: bool,
@@ -1099,6 +1107,24 @@ pub(crate) struct NodeDetail {
     tags_excluded: Vec<String>,
 }
 
+/// The serial number a node's detail shows (ADR-147 decision 7): what the identity probe stored,
+/// or — for a node that has none — the serial its Meraki binding was imported with.
+///
+/// One function because two surfaces answer the question: `GET /api/v1/nodes/{node_id}` and the MCP
+/// `get_node_status` tool that folds it. Written out in each, the fallback is the half that would go
+/// missing from one of them.
+pub(crate) fn serial_number_of(
+    stored: Option<String>,
+    meraki: Option<&yagra_common::MerakiDeviceConfig>,
+) -> Option<String> {
+    stored.or_else(|| {
+        meraki
+            .map(|m| m.serial.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    })
+}
+
 #[utoipa::path(
     get, path = "/api/v1/nodes/{node_id}", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
@@ -1125,6 +1151,7 @@ async fn get_node(
         mut node,
         notes,
         os_version,
+        serial_number,
         profile_locked,
     } = admin
         .repo
@@ -1138,6 +1165,7 @@ async fn get_node(
     let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
     let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
     let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
+    let serial_number = serial_number_of(serial_number, meraki_device.as_ref());
     // Asked of the dispatcher, which is the only holder of the environment community — before the
     // struct literal below moves `node`'s fields out.
     let snmp_configured = admin.dispatcher.snmp_configured_for(&node);
@@ -1165,6 +1193,7 @@ async fn get_node(
         vendor: node.vendor,
         model: node.model,
         os_version,
+        serial_number,
         profile_locked,
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
@@ -2540,6 +2569,7 @@ mod tests {
             sys_descr: None,
             os_version: None,
             os_version_without_patch: None,
+            serial_number: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,
@@ -3148,6 +3178,61 @@ mod tests {
             detail["os_version"], "v7.2.6,build1575,230926 (GA.F)",
             "{detail}"
         );
+    }
+
+    /// The node detail shows the serial number the poll path recorded (ADR-147), to a caller
+    /// holding only View. The `null` before the write proves only that the field exists.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_detail_shows_the_serial_number_the_poll_path_recorded(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Viewer);
+        let id = crate::pgtest::node(&pool, "sw-stack", 1, None).await;
+        let path = format!("/api/v1/nodes/{id}");
+
+        let (status, detail) = send(&st, "GET", &path, &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
+        assert_eq!(detail["serial_number"], serde_json::Value::Null, "{detail}");
+
+        crate::pgtest::repo(pool.clone())
+            .update_serial_number_batch(&[(id, "FCW1929B68S, FCW1931A06Z".to_owned())])
+            .await
+            .expect("record a serial");
+        let (status, detail) = send(&st, "GET", &path, &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
+        assert_eq!(
+            detail["serial_number"], "FCW1929B68S, FCW1931A06Z",
+            "{detail}"
+        );
+    }
+
+    /// ADR-147 decision 7: what was read wins, a Meraki binding fills in for a node with nothing
+    /// read, and a blank Meraki serial is not shown as a value.
+    #[test]
+    fn a_stored_serial_wins_and_a_meraki_serial_fills_in() {
+        let meraki = |serial: &str| yagra_common::MerakiDeviceConfig {
+            org_uuid: Uuid::nil(),
+            org_id: "123456".to_owned(),
+            serial: serial.to_owned(),
+            network_id: "N_1".to_owned(),
+            product_type: "switch".to_owned(),
+            model: Some("MS120-8".to_owned()),
+        };
+        assert_eq!(
+            serial_number_of(
+                Some("FCW1929B68S".to_owned()),
+                Some(&meraki("Q2XX-AAAA-BBBB"))
+            )
+            .as_deref(),
+            Some("FCW1929B68S")
+        );
+        assert_eq!(
+            serial_number_of(None, Some(&meraki("Q2XX-AAAA-BBBB"))).as_deref(),
+            Some("Q2XX-AAAA-BBBB")
+        );
+        assert_eq!(serial_number_of(None, Some(&meraki("  "))), None);
+        assert_eq!(serial_number_of(None, None), None);
     }
 
     /// A bulk tag edit is **accepted**, it **merges**, and the node detail shows the result.

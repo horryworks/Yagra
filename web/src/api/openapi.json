@@ -31518,6 +31518,13 @@
             "type": "boolean",
             "description": "Whether a person fixed this node's profile (ADR-140). A locked node is never offered on\nNodes ▸ Reclassify; the edit dialog is where it is set and cleared. Detail-only."
           },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device's serial number (ADR-147), e.g. `FCW1929B68S`; a stack lists every member in\norder, joined with `, `. For an SNMP device it is the serial of each chassis in ENTITY-MIB,\nread hourly; for a Meraki device it is the serial the node was imported with. `null` ⇒ not\nknown — the device keeps no chassis serial in ENTITY-MIB, or it has not been read yet.\n\n⚠️ **Observed, not configured**, like `os_version`: it can trail a chassis swap by up to an\nhour, and a read that fails leaves the last value in place. Detail-only."
+          },
           "snmp_configured": {
             "type": "boolean",
             "description": "Whether SNMP polling is **configured** for this node — not whether it is answering.\n\n🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the\ndeployment-wide `YAGRA_SNMP_COMMUNITY` for every node with no bound credential, so on such a\ndeployment a `credential_id` of `null` still means a device that is walked, has interface\nrows and has neighbours. The WebUI uses this to hide the tabs whose only data source is an\nSNMP walk (Interfaces, Neighbors — ADR-119); deriving it client-side would hide them on\nexactly the nodes that have the data.\n\n⚠️ Over-reports rather than under-reports — see\n`PollDispatcher::snmp_configured_for`, which is the one place the rule lives."

@@ -16,12 +16,15 @@
 //!  - [`os_version`] — where each OS family keeps its version and how to read it out of what an
 //!    identity probe returned (ADR-138). The poller asks it which OIDs to read and what they mean;
 //!    core asks it only to [`os_version::sanitize`] what arrived.
+//!  - [`serial`] — which of ENTITY-MIB's rows hold the device's serial number, and the cap on it
+//!    (ADR-147). The poller walks the two columns it names; core asks it only to [`serial::sanitize`].
 //!  - [`normalize_sys_object_id`] / [`sanitize_sys_descr`] — what a node keeps of the two values the
 //!    classification rules match on, so they can be re-run on a node that already exists (ADR-140).
 //!    Applied by the poller and again by core, which cannot assume which poller sent them.
 
 mod credential_finder;
 pub mod os_version;
+pub mod serial;
 
 pub use credential_finder::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 

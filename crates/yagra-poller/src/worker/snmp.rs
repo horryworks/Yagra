@@ -10,7 +10,7 @@
 //! rule must not depend on *how* the agent failed.
 
 use super::*;
-use yagra_discovery::os_version;
+use yagra_discovery::{os_version, serial};
 
 /// Identity probes run, by what they found: `version`, `no_version` (the device answered but the
 /// table does not cover it or it reports none), `unread` (the device answered but the patch table
@@ -24,6 +24,18 @@ pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_tota
 /// holds a handful per slot; the cap is what stops a device that answers with thousands of rows
 /// from turning an hourly probe into a table dump.
 const IDENTITY_COLUMN_ROWS: usize = 256;
+
+/// Serial-number reads (ADR-147), by what they found: `serial` (a chassis row carried one), `none`
+/// (the walk finished and no chassis row did — no ENTITY-MIB, or an empty serial) or `unread` (the
+/// walk failed or did not finish, so nothing was sent). The first against the second is how much
+/// of a fleet the chassis-row rule actually covers.
+pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
+
+/// The most rows the serial read takes from ENTITY-MIB's two columns together. A chassis with every
+/// line card, power supply and transceiver is some hundreds of rows per column; the cap is what
+/// keeps an hourly read from turning into a dump of a device listing thousands of sensors. A walk it
+/// stops sends no serial rather than a partial list (ADR-147 decision 4).
+const SERIAL_ENTITY_ROWS: usize = 4096;
 
 /// The shortest per-round-trip wait the identity probe gives the table columns it walks whole
 /// (ADR-138 Increment 4).
@@ -54,6 +66,10 @@ pub(super) struct IdentityProbe {
     /// Always read by the first GET, to pick the version rows; kept since ADR-140 so core can
     /// re-run the classification rules on an existing node.
     pub(super) sys_object_id: Option<String>,
+    /// The device's serial number from ENTITY-MIB's chassis rows (ADR-147), a stack's members
+    /// joined with `, `. `None` when `sysDescr` did not answer, the walk did not finish, or no
+    /// chassis row carries one.
+    pub(super) serial_number: Option<String>,
     /// A column the version's row walks did not answer, so the full version was withheld
     /// (ADR-138 Increment 3) and only [`os_version_without_patch`](Self::os_version_without_patch)
     /// can carry one (Increment 4).
@@ -109,6 +125,9 @@ impl SnmpWalker {
     /// built from half a table (ADR-138 Increment 3), and the version without its patch goes out in
     /// its own field, which core writes only where no patch can be stripped (Increment 4). That walk
     /// also waits longer per round trip than the job does — see [`IDENTITY_COLUMN_TIMEOUT`].
+    ///
+    /// A device that answered `sysDescr` is also asked for its serial number, out of ENTITY-MIB's
+    /// chassis rows (ADR-147) — see [`Self::read_serial_number`].
     async fn fetch_identity(
         &self,
         transport: &dyn Transport,
@@ -170,13 +189,78 @@ impl SnmpWalker {
                 "identity probe sent the OS version without its patch: the patch table did not answer"
             );
         }
+        // Only a device that answered `sysDescr` is walked for a serial: one that did not is not
+        // going to answer a table, and the walk would spend the probe's time waiting on silence.
+        let serial_number = if sys_descr.is_some() {
+            self.read_serial_number(transport, target, identity_column_timeout(timeout))
+                .await
+        } else {
+            None
+        };
         IdentityProbe {
             os_version,
             os_version_without_patch,
             sys_object_id: sys_object_id.and_then(yagra_discovery::normalize_sys_object_id),
             sys_descr,
+            serial_number,
             unread,
         }
+    }
+
+    /// The serial number from ENTITY-MIB (ADR-147): walk `entPhysicalClass` and
+    /// `entPhysicalSerialNum` together, and let [`serial::resolve`] take the chassis rows.
+    ///
+    /// Nothing is sent unless the walk heard both columns out — a stack read halfway would replace
+    /// three members' serials with one (decision 4). The wait is the one the patch table gets, for
+    /// the same reason: a whole-column walk on a slow agent is not a scalar GET.
+    async fn read_serial_number(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        timeout: Duration,
+    ) -> Option<String> {
+        let columns = [
+            serial::OID_ENT_PHYSICAL_CLASS.to_owned(),
+            serial::OID_ENT_PHYSICAL_SERIAL_NUM.to_owned(),
+        ];
+        let walk = match self
+            .walk_instance_columns(transport, target, &columns, timeout, SERIAL_ENTITY_ROWS)
+            .await
+        {
+            Ok(walk) if walk.every_column_answered => walk,
+            Ok(_) | Err(_) => {
+                metrics::counter!(SERIAL_PROBES_METRIC, "result" => "unread").increment(1);
+                return None;
+            }
+        };
+        let mut classes = std::collections::BTreeMap::new();
+        let mut serials = std::collections::BTreeMap::new();
+        for row in walk.rows {
+            // Both columns are indexed by `entPhysicalIndex` alone; a longer index is not a row of
+            // this table.
+            let [index] = row.instance.as_slice() else {
+                continue;
+            };
+            let index = *index;
+            match row.value {
+                yagra_transport::SnmpValue::Int(class)
+                    if row.oid_base == serial::OID_ENT_PHYSICAL_CLASS =>
+                {
+                    classes.insert(index, class);
+                }
+                yagra_transport::SnmpValue::Bytes(bytes)
+                    if row.oid_base == serial::OID_ENT_PHYSICAL_SERIAL_NUM =>
+                {
+                    serials.insert(index, String::from_utf8_lossy(&bytes).into_owned());
+                }
+                // A class that is not an integer, or a serial that is not a string, says nothing.
+                _ => {}
+            }
+        }
+        let resolved = serial::resolve(&classes, &serials);
+        let found = if resolved.is_some() { "serial" } else { "none" };
+        metrics::counter!(SERIAL_PROBES_METRIC, "result" => found).increment(1);
+        resolved
     }
 
     /// Read integer-valued instance OIDs, keyed by the instance OID — the scalar GET, which both
@@ -452,6 +536,7 @@ pub(super) async fn execute_scalar_get(
                 r.os_version = probe.os_version;
                 r.os_version_without_patch = probe.os_version_without_patch;
                 r.sys_object_id = probe.sys_object_id;
+                r.serial_number = probe.serial_number;
             }
             r
         }
@@ -681,8 +766,9 @@ mod tests {
         );
     }
 
-    /// A device the table does not cover costs what the identity probe always cost — the second
-    /// read is not made — and reports its `sysDescr` with no version.
+    /// A device the version table does not cover is not asked a second time for a version, and
+    /// reports its `sysDescr` with no version. It is still walked once for a serial (ADR-147), which
+    /// does not depend on that table.
     #[tokio::test]
     async fn an_unknown_device_is_not_asked_a_second_time() {
         let mut job = snmp_job();
@@ -699,8 +785,8 @@ mod tests {
         let r = execute(&job, &t, 1_000).await;
         assert_eq!(r.os_version, None);
         assert_eq!(r.sys_descr.as_deref(), Some("Acme Widget Controller rev B"));
-        // The scalar GET, then one identity walk — nothing else.
-        assert_eq!(t.asked().len(), 2, "{:?}", t.asked());
+        // The scalar GET, one identity walk and the serial walk (ADR-147) — no version read.
+        assert_eq!(t.asked().len(), 3, "{:?}", t.asked());
     }
 
     /// A Huawei on YunShan OS keeps its version in `sysDescr` and its running patch in
@@ -857,7 +943,11 @@ mod tests {
             .fetch_identity(&t, target, Duration::from_secs(2))
             .await;
         assert!(walked_the_patch_table(&t), "{:?}", t.asked());
-        assert_eq!(t.instance_walk_timeouts(), vec![IDENTITY_COLUMN_TIMEOUT]);
+        // The patch table, then the serial read (ADR-147), which takes the same wait.
+        assert_eq!(
+            t.instance_walk_timeouts(),
+            vec![IDENTITY_COLUMN_TIMEOUT, IDENTITY_COLUMN_TIMEOUT]
+        );
 
         let patient = huawei_usg(true);
         walker
@@ -865,7 +955,7 @@ mod tests {
             .await;
         assert_eq!(
             patient.instance_walk_timeouts(),
-            vec![Duration::from_secs(8)]
+            vec![Duration::from_secs(8), Duration::from_secs(8)]
         );
     }
 
@@ -900,6 +990,119 @@ mod tests {
         assert_eq!(probe.os_version.as_deref(), Some("V600R024C00SPC100"));
         assert!(!probe.unread);
         assert_eq!(probe.outcome(), "version");
+    }
+
+    /// ENTITY-MIB's class and serial columns as `(entPhysicalIndex, class, serial)`, put where the
+    /// fake answers instance walks from — the two columns the serial read walks (ADR-147).
+    fn with_entity_rows(mut t: FakeTransport, rows: &[(u32, i64, &str)]) -> FakeTransport {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        for (index, class, serial_number) in rows {
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_CLASS.to_owned(),
+                instance: vec![*index],
+                value: SnmpValue::Int(*class),
+            });
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_SERIAL_NUM.to_owned(),
+                instance: vec![*index],
+                value: SnmpValue::Bytes(serial_number.as_bytes().to_vec()),
+            });
+        }
+        t
+    }
+
+    /// A Catalyst 2960X stack as LibreNMS recorded it (`ios_2960x`, which `.210` replays): the stack
+    /// row at index 1 carries no serial, and the three members are the chassis rows.
+    fn catalyst_stack() -> FakeTransport {
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row(
+                    "1.3.6.1.2.1.1.1",
+                    0,
+                    "Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.0(2a)EX5, RELEASE SOFTWARE (fc3)",
+                ),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.9.1.1208"),
+            ]);
+        with_entity_rows(
+            t,
+            &[
+                (1, 11, ""),
+                (1001, 3, "FCW1929B68S"),
+                (1002, 9, ""),
+                (2001, 3, "FCW1931A06Z"),
+                (3001, 3, "FCW1929B6BP"),
+            ],
+        )
+    }
+
+    fn walked_for_a_serial(t: &FakeTransport) -> bool {
+        t.asked().iter().any(|call| {
+            call.iter()
+                .any(|o| o == serial::OID_ENT_PHYSICAL_SERIAL_NUM)
+        })
+    }
+
+    /// The whole path of ADR-147 on the poller: the probe walks the two columns and the result it
+    /// sends core carries every member of the stack, in index order.
+    #[tokio::test]
+    async fn the_identity_probe_lists_every_member_of_a_stack() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = catalyst_stack();
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some("FCW1929B68S, FCW1931A06Z, FCW1929B6BP")
+        );
+        assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// 🚨 ADR-147 decision 4. The rows are all in hand here on purpose: a read that decided from the
+    /// rows would still send three serials, and only the walk's own verdict can stop a half-read
+    /// stack from replacing a full one.
+    #[tokio::test]
+    async fn a_serial_walk_that_did_not_finish_sends_no_serial() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let r = execute(
+            &job,
+            &catalyst_stack().with_unanswered_instance_columns(),
+            1_000,
+        )
+        .await;
+        assert_eq!(r.serial_number, None);
+        assert!(r.sys_descr.is_some(), "the device did answer");
+
+        let r = execute(&job, &catalyst_stack().with_silent_instance_walks(), 1_000).await;
+        assert_eq!(r.serial_number, None, "a walk that failed outright");
+    }
+
+    /// No serial walk for a device that did not answer `sysDescr`, nor for a poll that was not asked
+    /// to probe identity — the rows are there both times, so only the walk not being made explains
+    /// the missing serial.
+    #[tokio::test]
+    async fn no_serial_walk_without_an_identity_answer() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let silent = with_entity_rows(
+            FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }]),
+            &[(1, 3, "SN1")],
+        );
+        let r = execute(&job, &silent, 1_000).await;
+        assert_eq!(r.serial_number, None);
+        assert!(!walked_for_a_serial(&silent), "{:?}", silent.asked());
+
+        let unasked = catalyst_stack();
+        let r = execute(&snmp_job(), &unasked, 1_000).await;
+        assert_eq!(r.serial_number, None);
+        assert!(!walked_for_a_serial(&unasked), "{:?}", unasked.asked());
     }
 
     /// Over v3 the version instance is fetched with a GET, not by walking its column, and a value

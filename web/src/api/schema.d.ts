@@ -8834,6 +8834,16 @@ export interface components {
              */
             profile_locked: boolean;
             /**
+             * @description The device's serial number (ADR-147), e.g. `FCW1929B68S`; a stack lists every member in
+             *     order, joined with `, `. For an SNMP device it is the serial of each chassis in ENTITY-MIB,
+             *     read hourly; for a Meraki device it is the serial the node was imported with. `null` ⇒ not
+             *     known — the device keeps no chassis serial in ENTITY-MIB, or it has not been read yet.
+             *
+             *     ⚠️ **Observed, not configured**, like `os_version`: it can trail a chassis swap by up to an
+             *     hour, and a read that fails leaves the last value in place. Detail-only.
+             */
+            serial_number?: string | null;
+            /**
              * @description Whether SNMP polling is **configured** for this node — not whether it is answering.
              *
              *     🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the
