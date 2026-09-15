@@ -2,12 +2,14 @@
 //! A device's serial number, read out of a vendor's own MIB or ENTITY-MIB's chassis rows (ADR-147).
 //!
 //! Pure, like [`crate::os_version`]: the poller holds the SNMP session and walks the columns named
-//! here, and this module decides what the rows mean. Four questions, one function each:
+//! here, and this module decides what the rows mean. Five questions, one function each:
 //!
 //!  - [`vendor_read`] — whether this device's vendor keeps its serial in a MIB of its own, and which
 //!    columns to walk for it;
 //!  - [`resolve_vendor`] — given those rows, the serial number to show, or `None`;
 //!  - [`resolve`] — given ENTITY-MIB's rows, the serial number to show, or `None`;
+//!  - [`resolve_huawei_boards`] — given a Huawei's ENTITY-MIB rows with their names, its members'
+//!    main-board serials, or `None` when the chassis rows should decide;
 //!  - [`sanitize`] — the one cap every serial passes, applied on **both** sides of the bus.
 //!
 //! ## Why only the chassis rows
@@ -43,6 +45,17 @@
 //! The vendor is recognised by its enterprise number in `sysObjectID`, not by the OS-version table's
 //! rows: those also match on `sysDescr` text, which says nothing about whether the vendor's MIB is
 //! there (decision 14).
+//!
+//! ## A Huawei lists its members' main boards (Increment 4)
+//!
+//! A Huawei stack keeps **one** chassis row for the whole stack, and it holds the first member's
+//! serial or nothing: measured on a two-member S6730-H (S90003CO01, whose chassis row repeats
+//! `MPU Board 0` and whose `MPU Board 1` serial had never been shown), and in LibreNMS's
+//! `vrp_5720-vrf`, a three-member S5720 whose chassis row is empty. Each member's serial is on its
+//! main board, a module row named `MPU Board N` — `SRU Board N` on a wireless controller or a small
+//! router. So a Huawei is walked for `entPhysicalName` as well (decision 17), and those boards are
+//! listed by member number (decision 18) — unless a chassis row carries a serial no board does,
+//! which is a chassis with a serial of its own, and the chassis rule stands (decision 19).
 
 use std::collections::BTreeMap;
 
@@ -61,6 +74,17 @@ pub const OID_JNX_BOX_SERIAL: &str = "1.3.6.1.4.1.2636.3.1.3";
 pub const SERIAL_MAX_CHARS: usize = 128;
 /// The most chassis, or Virtual Chassis members, whose serials are listed for one node.
 pub const SERIAL_MAX_CHASSIS: usize = 8;
+/// `entPhysicalName` — the name of an ENTITY-MIB row. Walked beside the class and serial columns on
+/// a Huawei only, where it is what tells a member's main board from every other module (Increment 4).
+pub const OID_ENT_PHYSICAL_NAME: &str = yagra_common::row_names::ENT_PHYSICAL_NAME;
+/// `entPhysicalClass`'s `module(9)` — the class of a board.
+pub const CLASS_MODULE: i64 = 9;
+/// Huawei's enterprise number, which a device's `sysObjectID` starts with (Increment 4, decision 17).
+const HUAWEI_ENTERPRISE: &str = "1.3.6.1.4.1.2011";
+/// What a Huawei calls one member's main board, each followed by the member number: `MPU Board` on a
+/// switch stack (S5720, S6730) and `SRU Board` on a wireless controller or small router (AC6605,
+/// AR169) — decision 18.
+const HUAWEI_BOARD_NAMES: &[&str] = &["MPU Board ", "SRU Board "];
 
 /// What goes between two members' serials.
 const SEPARATOR: &str = ", ";
@@ -117,12 +141,29 @@ const VENDOR_READS: &[VendorRead] = &[VendorRead {
 /// leading-dot spelling is accepted.
 #[must_use]
 pub fn vendor_read(sys_object_id: Option<&str>) -> Option<&'static VendorRead> {
-    let oid = sys_object_id?.trim();
+    VENDOR_READS
+        .iter()
+        .find(|read| names_enterprise(sys_object_id, read.enterprise))
+}
+
+/// Whether this device's ENTITY-MIB walk also reads `entPhysicalName`, for
+/// [`resolve_huawei_boards`]: a Huawei, by the enterprise its `sysObjectID` names (Increment 4,
+/// decision 17). Every other device is walked for the class and serial columns alone.
+#[must_use]
+pub fn reads_board_names(sys_object_id: Option<&str>) -> bool {
+    names_enterprise(sys_object_id, HUAWEI_ENTERPRISE)
+}
+
+/// Whether `sys_object_id` sits under `enterprise`. The match must end on an arc boundary —
+/// `1.3.6.1.4.1.26360` is not Juniper — and net-snmp's leading-dot spelling is accepted.
+fn names_enterprise(sys_object_id: Option<&str>, enterprise: &str) -> bool {
+    let Some(oid) = sys_object_id else {
+        return false;
+    };
+    let oid = oid.trim();
     let oid = oid.strip_prefix('.').unwrap_or(oid);
-    VENDOR_READS.iter().find(|read| {
-        oid.strip_prefix(read.enterprise)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
-    })
+    oid.strip_prefix(enterprise)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
 /// The serial number a vendor's own MIB gives, from the string rows its walk returned: keyed by
@@ -179,6 +220,58 @@ pub fn resolve(classes: &BTreeMap<u32, i64>, serials: &BTreeMap<u32, String>) ->
             .filter(|(_, class)| **class == CLASS_CHASSIS)
             .filter_map(|(index, _)| serials.get(index).map(String::as_str)),
     )
+}
+
+/// A Huawei's serial number, read from its members' main boards rather than its chassis row
+/// (Increment 4): every module row named exactly `MPU Board N` or `SRU Board N`, listed by `N` and
+/// joined the way [`resolve`] joins chassis rows. `None` — so the caller reads the chassis rows —
+/// when no such board carries a serial, or when a chassis row carries one that no board does.
+///
+/// That second condition is decision 19. A stack's chassis row holds the first member's serial or
+/// nothing, so on a stack every chassis serial is also a board's; a chassis row with a serial no
+/// board carries is a chassis with a serial of its own, and a slot's board is not what that device
+/// is. Without names — every device that is not a Huawei — this is always `None`.
+#[must_use]
+pub fn resolve_huawei_boards(
+    classes: &BTreeMap<u32, i64>,
+    names: &BTreeMap<u32, String>,
+    serials: &BTreeMap<u32, String>,
+) -> Option<String> {
+    let mut boards: Vec<(u32, u32, String)> = names
+        .iter()
+        .filter(|(index, _)| classes.get(index) == Some(&CLASS_MODULE))
+        .filter_map(|(index, name)| {
+            let member = board_member(name)?;
+            let serial = serials.get(index).map(String::as_str).and_then(sanitize)?;
+            Some((member, *index, serial))
+        })
+        .collect();
+    if boards.is_empty() {
+        return None;
+    }
+    boards.sort_unstable();
+    let every_chassis_serial_is_a_board = classes
+        .iter()
+        .filter(|(_, class)| **class == CLASS_CHASSIS)
+        .filter_map(|(index, _)| serials.get(index).map(String::as_str).and_then(sanitize))
+        .all(|chassis| boards.iter().any(|(_, _, serial)| *serial == chassis));
+    if !every_chassis_serial_is_a_board {
+        return None;
+    }
+    join(boards.iter().map(|(_, _, serial)| serial.as_str()))
+}
+
+/// The member number in a Huawei main board's name — `MPU Board 1` is member 1 — or `None` for any
+/// other name. The whole name must match (decision 18): `MPU Board 1x`, a padded name and a data
+/// centre switch's `CE-MPUA 1/5` are not a member's main board.
+fn board_member(name: &str) -> Option<u32> {
+    HUAWEI_BOARD_NAMES.iter().find_map(|prefix| {
+        let digits = name.strip_prefix(prefix)?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse().ok()
+    })
 }
 
 /// Several members' serials as one value, in the order given: each cleaned by [`sanitize`], empty
@@ -425,6 +518,226 @@ mod tests {
             sanitize("FCW1929B68S, FCW1931A06Z").as_deref(),
             Some("FCW1929B68S, FCW1931A06Z")
         );
+    }
+
+    /// The three maps the poller builds from a Huawei's walk: classes, names and serials.
+    type HuaweiMaps = (
+        BTreeMap<u32, i64>,
+        BTreeMap<u32, String>,
+        BTreeMap<u32, String>,
+    );
+
+    /// `(entPhysicalIndex, entPhysicalClass, entPhysicalName, entPhysicalSerialNum)` rows, split into
+    /// the three maps the poller builds.
+    fn huawei_rows(entries: &[(u32, i64, &str, &str)]) -> HuaweiMaps {
+        let classes = entries.iter().map(|(i, c, _, _)| (*i, *c)).collect();
+        let names = entries
+            .iter()
+            .map(|(i, _, n, _)| (*i, (*n).to_owned()))
+            .collect();
+        let serials = entries
+            .iter()
+            .map(|(i, _, _, s)| (*i, (*s).to_owned()))
+            .collect();
+        (classes, names, serials)
+    }
+
+    /// One Huawei device's ENTITY-MIB rows, trimmed to its chassis rows, its main boards and a
+    /// component or two carrying a serial of their own — with what the chassis rule alone shows and
+    /// what is shown now.
+    struct HuaweiRecording {
+        name: &'static str,
+        rows: &'static [(u32, i64, &'static str, &'static str)],
+        chassis_rule: Option<&'static str>,
+        shown: Option<&'static str>,
+        /// Whether the main boards decided `shown`, rather than the chassis rows.
+        by_boards: bool,
+    }
+
+    /// Every shape Increment 4 was decided on. The first is a real device, walked once from the
+    /// PoC box on 2026-09-15; the rest are LibreNMS's recordings (`tests/snmpsim/<name>.snmprec`).
+    const HUAWEI_RECORDINGS: &[HuaweiRecording] = &[
+        HuaweiRecording {
+            name: "PoC S90003CO01, a two-member S6730-H48X6C stack",
+            rows: &[
+                (67_108_867, 3, "HUAWEI S6730 Routing Switch", "1021A0000448"),
+                (67_108_873, 9, "MPU Board 0", "1021A0000448"),
+                (67_190_797, 9, "POWER Card 0/PWR1", "21021317408NM0000774"),
+                (67_223_565, 9, "FAN Card 0/FAN1", ""),
+                (68_157_449, 9, "MPU Board 1", "1021A0000352"),
+                (68_239_373, 9, "POWER Card 1/PWR1", "21021317408NM0000530"),
+            ],
+            chassis_rule: Some("1021A0000448"),
+            shown: Some("1021A0000448, 1021A0000352"),
+            by_boards: true,
+        },
+        HuaweiRecording {
+            name: "vrp_5720-vrf, a three-member S5720 stack with an empty chassis row",
+            rows: &[
+                (67_108_867, 3, "HUAWEI S5720 Routing Switch", ""),
+                (67_108_873, 9, "MPU Board 0", "2102359576DMHC000235"),
+                (67_190_797, 9, "POWER Card 0/PWR1", "2102311BXVHVHC001000"),
+                (68_157_449, 9, "MPU Board 1", "21359576DMHC000248"),
+                (68_173_837, 9, "ES5D21VST000 Card 1/1", "02DWDMHB001394"),
+                (69_206_025, 9, "MPU Board 2", "21359576DMHC000230"),
+            ],
+            chassis_rule: None,
+            shown: Some("2102359576DMHC000235, 21359576DMHC000248, 21359576DMHC000230"),
+            by_boards: true,
+        },
+        HuaweiRecording {
+            name: "vrp_s5328c-ei, one switch with an empty chassis row",
+            rows: &[
+                (67_108_867, 3, "Quidway S5300 Routing Switch", ""),
+                (67_108_873, 9, "MPU Board 0", "21023516106TD5001077"),
+                (67_158_029, 9, "FAN Card 0/3", "2102351651N0D5001624"),
+            ],
+            chassis_rule: None,
+            shown: Some("21023516106TD5001077"),
+            by_boards: true,
+        },
+        HuaweiRecording {
+            name: "vrp_ac6605-26, a wireless controller with an empty chassis row",
+            rows: &[
+                (3, 3, "AC6605-26-PWR", ""),
+                (9, 9, "SRU Board 0", "21023579169WJ6000038"),
+            ],
+            chassis_rule: None,
+            shown: Some("21023579169WJ6000038"),
+            by_boards: true,
+        },
+        HuaweiRecording {
+            name: "vrp_5720, one switch (.210's sim-huawei-vrp)",
+            rows: &[
+                (
+                    67_108_867,
+                    3,
+                    "HUAWEI S5720 Routing Switch",
+                    "2102359576DMHC000120",
+                ),
+                (67_108_873, 9, "MPU Board 0", "2102359576DMHC000120"),
+            ],
+            chassis_rule: Some("2102359576DMHC000120"),
+            shown: Some("2102359576DMHC000120"),
+            by_boards: true,
+        },
+        HuaweiRecording {
+            name: "vrp_ar169sfp, a small router",
+            rows: &[
+                (3, 3, "AR169F", "21500101573GK1000299"),
+                (9, 9, "SRU Board 0", "21500101573GK1000299"),
+            ],
+            chassis_rule: Some("21500101573GK1000299"),
+            shown: Some("21500101573GK1000299"),
+            by_boards: true,
+        },
+        HuaweiRecording {
+            name: "vrp_ce12804-entity, two chassis whose boards are named CE-MPUA",
+            rows: &[
+                (16_777_216, 3, "CE12804 frame1", "2102113774P0HC000023"),
+                (17_104_897, 9, "CE-MPUA 1/5", "021NUD6THC600230"),
+                (17_760_257, 7, "FAN 1/1", "2102120699P0HB003529"),
+                (33_554_432, 3, "CE12804 frame2", "2102113774P0HC000040"),
+                (33_882_113, 9, "CE-MPUA 2/5", "021NUD6THC600151"),
+            ],
+            chassis_rule: Some("2102113774P0HC000023, 2102113774P0HC000040"),
+            shown: Some("2102113774P0HC000023, 2102113774P0HC000040"),
+            by_boards: false,
+        },
+    ];
+
+    #[test]
+    fn every_huawei_recording_shows_its_members() {
+        for recording in HUAWEI_RECORDINGS {
+            let (classes, names, serials) = huawei_rows(recording.rows);
+            assert_eq!(
+                resolve(&classes, &serials).as_deref(),
+                recording.chassis_rule,
+                "{} under the chassis rule alone",
+                recording.name
+            );
+            let boards = resolve_huawei_boards(&classes, &names, &serials);
+            assert_eq!(boards.is_some(), recording.by_boards, "{}", recording.name);
+            let shown = boards.or_else(|| resolve(&classes, &serials));
+            assert_eq!(shown.as_deref(), recording.shown, "{}", recording.name);
+        }
+        assert_eq!(HUAWEI_RECORDINGS.len(), 7);
+    }
+
+    /// ADR-147 decision 19: a chassis row carrying a serial no board carries is a chassis with a
+    /// serial of its own, so the boards in its slots do not replace it.
+    #[test]
+    fn a_chassis_with_a_serial_of_its_own_keeps_the_chassis_rule() {
+        let (classes, names, serials) = huawei_rows(&[
+            (1, 3, "HUAWEI S12708", "CHASSIS-SN"),
+            (2, 9, "MPU Board 7", "MPU-CARD-SN"),
+        ]);
+        assert_eq!(resolve_huawei_boards(&classes, &names, &serials), None);
+        assert_eq!(resolve(&classes, &serials).as_deref(), Some("CHASSIS-SN"));
+    }
+
+    #[test]
+    fn only_a_whole_main_board_name_names_a_member() {
+        for name in [
+            "MPU Board",
+            "MPU Board ",
+            "MPU Board 1x",
+            "MPU Board -1",
+            " MPU Board 1",
+            "mpu board 1",
+            "CE-MPUA 1/5",
+            "POWER Card 0/PWR1",
+        ] {
+            assert_eq!(board_member(name), None, "{name:?}");
+        }
+        assert_eq!(board_member("MPU Board 0"), Some(0));
+        assert_eq!(board_member("SRU Board 12"), Some(12));
+    }
+
+    /// Member numbers decide the order, not the row index.
+    #[test]
+    fn members_are_listed_by_member_number_not_by_row_index() {
+        let (classes, names, serials) = huawei_rows(&[
+            (20, 9, "MPU Board 0", "SN-A"),
+            (10, 9, "MPU Board 2", "SN-C"),
+            (15, 9, "MPU Board 1", "SN-B"),
+        ]);
+        assert_eq!(
+            resolve_huawei_boards(&classes, &names, &serials).as_deref(),
+            Some("SN-A, SN-B, SN-C")
+        );
+    }
+
+    /// A row that is named like a main board but is not a module is not one.
+    #[test]
+    fn a_main_board_name_on_a_row_that_is_not_a_module_is_not_taken() {
+        let (classes, names, serials) = huawei_rows(&[(1, 5, "MPU Board 0", "SN")]);
+        assert_eq!(resolve_huawei_boards(&classes, &names, &serials), None);
+    }
+
+    /// Main boards that carry no serial leave the chassis rows to decide, exactly as before.
+    #[test]
+    fn main_boards_with_no_serial_fall_through_to_the_chassis_rows() {
+        let (classes, names, serials) = huawei_rows(&[
+            (1, 3, "HUAWEI S5720 Routing Switch", "CH"),
+            (2, 9, "MPU Board 0", ""),
+            (3, 9, "MPU Board 1", "  "),
+        ]);
+        assert_eq!(resolve_huawei_boards(&classes, &names, &serials), None);
+        assert_eq!(resolve(&classes, &serials).as_deref(), Some("CH"));
+    }
+
+    #[test]
+    fn a_huawei_is_recognised_by_its_enterprise_on_an_arc_boundary() {
+        assert!(reads_board_names(Some("1.3.6.1.4.1.2011.2.23.291")));
+        assert!(
+            reads_board_names(Some(" .1.3.6.1.4.1.2011.2.239.1 ")),
+            "net-snmp's leading dot and surrounding whitespace"
+        );
+        assert!(!reads_board_names(Some("1.3.6.1.4.1.20110.1")));
+        assert!(!reads_board_names(Some("1.3.6.1.4.1.2636.1.1.1.2.108")));
+        assert!(!reads_board_names(Some("")));
+        assert!(!reads_board_names(None));
     }
 
     fn juniper() -> &'static VendorRead {
