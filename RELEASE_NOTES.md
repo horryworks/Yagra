@@ -1,7 +1,7 @@
 # Release Notes
 
 <!-- ## Unreleased is where a shipped behaviour change waits for a version.
-     Yagra deploys to the test server on every push to main, so changes go live long before a
+     Yagra deploys to the two verification boxes on every push to main, so changes go live long before a
      release is tagged. Add a bullet here in the SAME commit that ships the change — anything an
      operator or an API client could notice: response shapes, status codes, defaults, the meaning of
      a query, removed behaviour. At release time `/docs` folds this section into the new `## v<x>`
@@ -9,6 +9,8 @@
      missing one means someone deleted the mechanism. -->
 
 ## Unreleased
+
+## v0.3.22 — Find and delete nodes registered more than once, pin nodes and folders, serial numbers on a node's Overview, Poll now reads identity and row names at once, a core upgrade no longer leaves a chosen remote poller behind
 
 ### New Features
 

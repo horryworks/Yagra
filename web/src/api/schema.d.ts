@@ -6645,8 +6645,9 @@ export interface components {
              */
             confidence: components["schemas"]["DuplicateConfidence"];
             /**
-             * @description What says the members are not one device. Never empty on a `confident` group's opposite:
-             *     a contradiction always makes the group `possible`.
+             * @description What says the members are not one device. Always empty on a `confident` group, because a
+             *     contradiction always makes the group `possible`. A `possible` group can also have none, when
+             *     only weak evidence joins it.
              */
             contradictions: components["schemas"]["DuplicateContradiction"][];
             /** @description What the members share, strongest first. */

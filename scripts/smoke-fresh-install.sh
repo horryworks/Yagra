@@ -153,7 +153,7 @@ fi
 #     just published is the one that booted. A smoke test that cannot tell v0.3.11 from v0.3.12 is
 #     testing that Yagra exists.
 GOT=$(ssh "$HOST" 'curl -fsS --max-time 10 http://localhost:8080/api/v1/version' 2>/dev/null || true)
-if printf '%s' "$GOT" | grep -q "\"core\":\"${BARE}\""; then
+if printf '%s' "$GOT" | grep -qF "\"core\":\"${BARE}\""; then
   ok "/api/v1/version reports ${BARE}"
 else
   bad "/api/v1/version says ${GOT:-<nothing>}, expected core=${BARE}"; FAIL=1
@@ -210,7 +210,7 @@ SMOKE FAIL — $VERSION did not come up from the documented path.
 
 The GitHub release already exists at this point, so this is a decision, not an automatic action:
   · fix and re-cut     — gh release delete $VERSION --yes && git tag -d $VERSION && git push origin :$VERSION
-  · ship it knowingly  — continue to /release Step 8 and record what is broken
+  · ship it knowingly  — continue to /release Step 9 and record what is broken
 
 Do NOT push the website until that is decided: the version badge is what announces this release.
 EOF

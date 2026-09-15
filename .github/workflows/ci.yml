@@ -1,9 +1,17 @@
 # Continuous integration: validate the workspace on every **pull request** and every **v* tag**.
-# Pushes to `main` are deliberately NOT a trigger — see the long note above `on:` below. The
-# `images` job builds the Docker images so build breakage — including the Dockerfile's pinned Rust
-# version (MSRV) — is caught here. It publishes to GHCR on a **v* release tag only**: development
-# builds never reach the registry at all (see the tag-computation step). CI does NOT deploy: see
-# the note where the `deploy` job used to be, at the bottom of this file.
+# Pushes to `main` are deliberately NOT a trigger — see the long note above `on:` below.
+#
+# Shape (ADR-152): the tests and the three image builds run SIDE BY SIDE, and nothing is published
+# until every one of them is green. `images-rust` and `images-web` each build into an OCI archive and
+# upload it as an artifact; `publish` is the only job holding `packages: write`, and it copies the
+# three archives to GHCR on a v* release tag. On a PR or a manual dispatch the same `publish` job
+# copies them to a throwaway registry inside the job instead, so the publishing steps themselves run
+# on every PR rather than for the first time during a release. CI does NOT deploy: see the note at
+# the bottom of this file.
+#
+# Before ADR-152 the four stages were strictly serial (v0.3.21: backend 10m35s, then core 14m23s,
+# then poller 1m47s, then web 1m42s — 28m33s), and each image was pushed the moment it built, so a
+# web failure left core and poller already published under `:latest`.
 #
 # Everything runs on GITHUB-HOSTED runners. It used to run on self-hosted runners (label
 # `yagra-build`) on the build host, to avoid Actions-minute billing — which is free for a public
@@ -11,12 +19,12 @@
 #
 #   A `pull_request` run uses the workflow file **from the pull request**, not from `main`. So a
 #   fork could delete the fork-PR guard below (or add a second workflow file naming the
-#   `yagra-build` label) and run arbitrary code on the build host — a machine that answers on
-#   192.168.1.2:22 and 192.168.1.1:22 (the test server and the firewall), whose dockerd a workflow
-#   step can drive as root, and which carries a persistent cargo/BuildKit cache that the next `v*`
-#   release build compiles against. **Poisoning that cache ships a backdoored image to GHCR with
-#   every job green** — the same failure shape as the stale-layer incident, except deliberate.
-#   Nothing written in this file can prevent it, because the attacker supplies this file.
+#   `yagra-build` label) and run arbitrary code on the build host — a machine that answered on
+#   the LAN's SSH ports, whose dockerd a workflow step can drive as root, and which carries a
+#   persistent cargo/BuildKit cache that the next `v*` release build compiles against.
+#   **Poisoning that cache ships a backdoored image to GHCR with every job green** — the same
+#   failure shape as the stale-layer incident, except deliberate. Nothing written in this file can
+#   prevent it, because the attacker supplies this file.
 #
 #   What the host did NOT hold is a registry credential: `~/.docker/config.json` was checked for
 #   both the login user and root and has no auth entries. Publishing is CI's, with `GITHUB_TOKEN`;
@@ -36,13 +44,7 @@
 # `img/core` is the whole story. `Swatinem/rust-cache` and the BuildKit GHA cache carry what they
 # can, but **no cache backend exports the Dockerfile's `RUN --mount=type=cache` cargo directories**,
 # so the image build recompiles the workspace every run and that ~14 min is a floor, not a cold-start
-# cost that later runs recover. `img/poller` staying at 1m22s is the `max-parallel: 1` design
-# working — it imported `core`'s shared `build` stage instead of compiling again.
-#
-# **A release tag is slower still and always was**: v0.1.19…v0.2.0 ran 24m51s–33m47s on self-hosted
-# (v0.2.0: 29m48s), because a tag builds `release` rather than `ci-fast` and pushes to GHCR. Expect
-# that to grow by roughly what `img/core` grew here. Do not quote "~10 minutes" for a release; that
-# figure only ever described a `ci-fast` branch build.
+# cost that later runs recover. ADR-152 does not shrink it; it stops the tests being added on top.
 #
 # That is the price of not having a build machine inside the network reachable from a stranger's
 # pull request.
@@ -50,34 +52,28 @@
 name: ci
 
 # **There is deliberately no `branches: [main]` trigger.** It was removed because it was pure
-# contention with no gate behind it: `/flashdeploy` ships every main push to the test server, does
-# not wait for CI's verdict, and runs its own fmt/clippy/build/test on this same host — so a main
-# push started a second full compile of the same commit on the same box, competing for the CPU and
-# the shared BuildKit/cargo caches with the deploy that was already underway. Every job it ran was
-# something the flash path had already run locally, and the `images` job was a verbatim repeat of
-# the three images `/flashdeploy` had just built.
+# contention with no gate behind it: `/flashdeploy` ships every main push to the verification boxes,
+# does not wait for CI's verdict, and runs its own fmt/clippy/build/test — so a main push started a
+# second full compile of the same commit that gated nothing.
 #
 # What still gates what:
 #   * `/flashdeploy`'s local guard (fmt, clippy, the OpenAPI contract, web tests) gates the ship,
-#     and its asynchronous pass (`cargo clippy --all-targets` + `cargo test --workspace`) reports
-#     after the deploy — the same verdict this workflow used to give, minus the queue.
+#     and its asynchronous pass (`scripts/flash-verify.sh`) reports after the deploy.
 #   * `pull_request` still runs everything, for contributions that do not come through the flash path.
 #   * `v*` still runs everything and is the only thing that publishes to GHCR.
 #
 # Accepted cost: a push to `main` that does NOT come from `/flashdeploy` (a `/docs` commit, a hand
-# edit) gets no automatic check. `/docs` and `/release` both run `/verify` first, which is why that
-# was judged acceptable rather than papered over with a `[skip ci]` convention.
+# edit) gets no automatic check. `/docs` and `/release` both expect `/verify` to have run first,
+# which is why that was judged acceptable rather than papered over with a `[skip ci]` convention.
 on:
   push:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
 
-# Serialise runs of the same commit. The original reason is gone — the self-hosted runners shared
-# one `~/.cargo`/`~/.rustup` and one dockerd, and concurrent builds corrupted that shared home —
-# because hosted runners are isolated per job. What is left is the GHA cache: two runs of the same
-# commit would write the same `Swatinem/rust-cache` and BuildKit scopes at once, which wastes a full
-# cold build and can evict the entry the other run is about to read.
+# Serialise runs of the same commit. Two runs of the same commit would write the same
+# `Swatinem/rust-cache` and BuildKit scopes at once, which wastes a full cold build and can evict the
+# entry the other run is about to read.
 #
 # **`cancel-in-progress` must stay `false`.** A release fires one run, but a re-run or a
 # `workflow_dispatch` racing the `v*` tag would otherwise cancel the run that publishes to GHCR.
@@ -87,21 +83,26 @@ concurrency:
 
 # **Fork pull requests do not run these jobs.** Yagra is not accepting pull requests
 # (`CONTRIBUTING.md`, and `no-pull-requests.yml` closes them), so building one is wasted work. The
-# guard below limits these jobs to PRs whose head is a branch of this repository, which is the
-# maintainer's own feature-branch → main flow. Tags and `workflow_dispatch` are unaffected.
-# `images` needs all three jobs, so it skips with them.
+# guard below limits every job to PRs whose head is a branch of this repository, which is the
+# maintainer's own feature-branch → main flow. Tags and `workflow_dispatch` are unaffected. Since
+# ADR-152 the image jobs no longer `need` the tests, so each carries the guard itself.
 #
 # **This guard is not a security control, and must never be treated as one.** A `pull_request` run
-# executes the workflow file from the pull request, so a fork can delete these three `if:` lines in
-# the same PR they are meant to stop. It saves wasted minutes; it does not keep anyone out. What
-# keeps a stranger's code off the build host is that the build host is no longer registered as a
-# runner for this repository — see the note at the top of this file.
+# executes the workflow file from the pull request, so a fork can delete these `if:` lines in the
+# same PR they are meant to stop. It saves wasted minutes; it does not keep anyone out. What keeps a
+# stranger's code off the build host is that the build host is no longer registered as a runner for
+# this repository — see the note at the top of this file.
+#
+# **Every job has a `timeout-minutes`.** Without one a job runs to GitHub's six-hour ceiling: v0.2.15's
+# tag run did exactly that when `apt-get update` hung inside the mold step, and a `cancelled` run
+# publishes nothing. ⚠️ A timeout added here does not reach a tag that already exists — a tag run
+# reads the workflow file as it was at that tag.
 jobs:
   backend:
     name: backend (rust)
-    # See the note above `jobs:` — fork PRs are not built.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # The database tests (ADR-114) need a running PostgreSQL, not a compile-time one: the workspace
     # has no `sqlx::query!` macros and no `.sqlx` directory, so the *build* still needs nothing.
     # `#[sqlx::test]` creates one throwaway database per test from this server, which is why the
@@ -131,7 +132,11 @@ jobs:
       # mold can't be installed or `cc` won't accept `-fuse-ld=mold` (gcc < 12), we leave RUSTFLAGS
       # unset and fall back to the default linker rather than failing the job. Set before rust-cache
       # so the cache key is consistent across runs (no restore/save key drift).
+      #
+      # 🚨 `|| true` covers a failing apt, not a HANGING one — a hang returns no exit code at all.
+      # That is what the step timeout is for (v0.2.15: six hours, then `cancelled`).
       - name: Enable mold linker (best-effort)
+        timeout-minutes: 10
         run: |
           if ! command -v mold >/dev/null 2>&1; then
             sudo apt-get update && sudo apt-get install -y --no-install-recommends mold || true
@@ -167,9 +172,9 @@ jobs:
 
   frontend:
     name: frontend (web)
-    # See the note above `jobs:` — fork PRs are not built.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: web
@@ -196,15 +201,13 @@ jobs:
         run: npm run build
 
   # Compose files are configuration nothing else parses: `docker compose up` on a deployed machine
-  # was the first thing that ever read them, so a typo surfaced as a failed deploy. ADR-044 touches
-  # all four at once (a new service, a new volume, changed ports), which is what finally made this
-  # worth a job. Seconds to run, and it gates `images` because a stack that cannot be composed is
-  # not worth building.
+  # was the first thing that ever read them, so a typo surfaced as a failed deploy. Seconds to run,
+  # and `publish` needs it because a stack that cannot be composed is not worth publishing.
   compose:
     name: compose files parse
-    # See the note above `jobs:` — fork PRs are not built.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - name: Validate every composition
@@ -224,29 +227,30 @@ jobs:
             docker compose -f docker-compose.poller.yml config -q
           docker compose -f docker-compose.registry.yml config -q
 
-  images:
-    name: docker image
+  # The two Rust images. **No `needs`** (ADR-152): the compile starts at the same moment as the
+  # tests instead of after them, because `publish` is what waits for both.
+  #
+  # **`max-parallel: 1` is load-bearing.** Every matrix entry gets its own hosted machine, and the
+  # serialisation is what lets `poller` reuse `core`'s work: both target the same
+  # yagra-rust.Dockerfile and share the `build` stage that runs
+  # `cargo build --bin yagra-core --bin yagra-poller`, so `core` compiles the workspace, exports that
+  # stage to the `rust` GHA cache scope, and `poller` imports it and only assembles its runtime layer.
+  # Run them in parallel and the workspace is compiled twice from cold.
+  images-rust:
+    name: docker image (${{ matrix.name }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    needs: [backend, frontend, compose]
+    # core's cold `release` compile is ~15 min; poller is ~2 min unless the GHA cache was evicted,
+    # in which case it compiles cold too.
+    timeout-minutes: 45
     permissions:
       contents: read
-      # `permissions` cannot be conditional, so this grant is declared for every ref. What actually
-      # gates registry access is the login step below, which runs on a v* tag only.
-      packages: write          # push to GHCR on a v* release tag
     strategy:
-      # **`max-parallel: 1` is load-bearing, for a different reason than it used to be.** It once
-      # stopped concurrent builds contending on the self-hosted host's single dockerd. Now every
-      # matrix entry gets its own hosted machine, and the serialisation is what lets `poller` reuse
-      # `core`'s work: both target the same yagra-rust.Dockerfile and share the `build` stage that
-      # runs `cargo build --bin core --bin poller`, so `core` compiles the workspace, exports that
-      # stage to the `rust` BuildKit cache scope, and `poller` imports it and only assembles its
-      # runtime layer. Run them in parallel and the workspace is compiled twice from cold.
       max-parallel: 1
       matrix:
         include:
-          - { name: core, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: core, cache_scope: rust }
-          - { name: poller, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: poller, cache_scope: rust }
-          - { name: web, context: ./web, dockerfile: docker/web.Dockerfile, target: "", cache_scope: web }
+          - { name: core, target: core }
+          - { name: poller, target: poller }
     steps:
       - uses: actions/checkout@v6
       # The hosted image ships toolchains this build never uses, and a release-profile Rust build
@@ -256,119 +260,176 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
-      # The default `docker-container` driver, NOT `driver: docker`. On the self-hosted host the
-      # latter was correct: it used the host's persistent BuildKit, so `RUN --mount=type=cache`
-      # storage (the compiled cargo `target/` + registry) survived between runs. On a hosted runner
-      # there is no persistent host BuildKit to inherit — the machine is new every job — so that
-      # driver would give up layer caching for nothing. The container driver can import/export the
-      # GHA cache instead, which is the only cache that crosses runs here.
-      - uses: docker/setup-buildx-action@v4
-      # Publish to GHCR on a v* release tag ONLY. PRs build without pushing: development builds
-      # reach the test server through `/flashdeploy`'s private registry and never appear in GHCR,
-      # so the package list is the release history and nothing else.
+      - uses: ./.github/actions/build-image
+        with:
+          name: ${{ matrix.name }}
+          context: .
+          dockerfile: docker/yagra-rust.Dockerfile
+          target: ${{ matrix.target }}
+          cache-scope: rust
+
+  # A different Dockerfile with its own cache scope, so it waits for nothing — before ADR-152 it sat
+  # in the Rust matrix and queued behind both Rust images.
+  images-web:
+    name: docker image (web)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/build-image
+        with:
+          name: web
+          context: ./web
+          dockerfile: docker/web.Dockerfile
+          cache-scope: web
+
+  # The ONLY job that writes to a registry, and it runs only when the tests and all three builds are
+  # green (ADR-152). That is what makes a partial release impossible: before, each matrix entry
+  # pushed as soon as it built, so a failing `web` left `core` and `poller` already under `:latest`,
+  # and every default `docker compose up` pulled a mixed stack.
+  #
+  # **It runs on every event; only the destination changes.** A v* tag publishes to GHCR — and so
+  # does a `workflow_dispatch` on a tag ref, which is the documented recovery when a tag push
+  # produced no run at all, because the test is on `github.ref`, not on the event name. Anything
+  # else copies to the throwaway `registry:2` service below. The steps between the two are
+  # identical, so a PR exercises the same copy and the same digest check a release depends on.
+  #
+  # GHCR holds releases and nothing else (ADR-036): `:v<version>` is what consumers pin, `:<sha>` is
+  # that release's immutable reference, and `:latest` means THE LATEST STABLE RELEASE, so it moves
+  # only when the version has no pre-release suffix — that test is what stops `/release-beta` from
+  # hijacking `:latest` (`v0.2.0-beta1` and `v0.2.0-rc1` both contain a `-`). Known and accepted:
+  # `:latest` follows the most recently pushed stable tag, not the highest version.
+  publish:
+    name: publish images
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [backend, frontend, compose, images-rust, images-web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # `permissions` cannot be conditional, so this is declared for every ref. What actually gates
+      # registry access is the login step, which runs on a v* tag only.
+      packages: write
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: image-*
+          path: ${{ runner.temp }}/images
+          merge-multiple: true
+
+      # All three, before the first byte goes anywhere.
+      - name: All three archives are here
+        run: |
+          set -euo pipefail
+          for n in core poller web; do
+            test -s "$RUNNER_TEMP/images/yagra-$n.tar" || { echo "::error::yagra-$n.tar is missing"; exit 1; }
+          done
+          ls -l "$RUNNER_TEMP/images"
+
+      - name: Destination and tags
+        id: dest
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" == refs/tags/v* ]]; then
+            registry=ghcr.io/horryworks
+            tls=true
+            # Immutable tags first, `latest` last: if anything fails mid-copy, the tag that every
+            # default install pulls is the one that has not moved yet.
+            tags="$REF_NAME $SHA"
+            if [[ "$REF_NAME" != *-* ]]; then
+              tags="$tags latest"
+            fi
+          else
+            registry=localhost:5000/horryworks
+            tls=false
+            # The same three-tag shape a stable release has, so the digest check below is exercised.
+            tags="ci $SHA latest"
+          fi
+          {
+            echo "registry=$registry"
+            echo "tls=$tls"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+          echo "publishing to $registry as: $tags"
+
+      - name: Wait for the throwaway registry
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:5000/v2/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::the registry service did not answer in 30 s"
+          exit 1
+
       - name: Log in to GHCR
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # Image tags.
-      #
-      # PR — one FIXED local tag. Nothing is pushed and nothing is loaded into a daemon, so on a
-      # hosted runner this is only a label on a build that dies with the machine; the job's value is
-      # that the Dockerfile still builds. (Under the self-hosted scheme it mattered more: a
-      # per-commit tag piled images up in the shared daemon, reaching 363 images / 13 GB.) Keep the
-      # name free of a registry host so it cannot be pushed anywhere by accident.
-      #
-      # v* tag — the release. `:v<version>` is what consumers pin, `:<sha>` is that release's
-      # immutable reference, and `:latest` means THE LATEST STABLE RELEASE, so it moves only when
-      # the version has no pre-release suffix. That test is what stops `/release-beta` from
-      # hijacking `:latest` (`v0.2.0-beta1` and `v0.2.0-rc1` both contain a `-`).
-      #
-      # Known and accepted: `:latest` follows the most recently pushed stable tag, not the highest
-      # version — a hotfix `v0.1.20` cut after `v0.2.0` moves it backwards. Pin `:v<version>` if
-      # that matters.
-      - name: Compute image tags
-        id: tags
-        run: |
-          {
-            echo "list<<EOF"
-            if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-              echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:${{ github.ref_name }}"
-              echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:${{ github.sha }}"
-              if [[ "${{ github.ref_name }}" != *-* ]]; then
-                echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:latest"
-              fi
-            else
-              echo "yagra-${{ matrix.name }}:ci"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-      # Compile profile for the Rust images (the web image takes no profile). Only a real release
-      # (`/release` → v* tag → :v<version>) is built fully optimized; PR validation builds use the
-      # fast-compile `ci-fast` profile so the dev cycle stays short. `/flashdeploy` builds its own
-      # `ci-fast` binaries outside CI. See [profile.ci-fast] in Cargo.toml.
-      #
-      # The profile is also baked into the image as `/etc/yagra-build-profile`, because a release
-      # and a flash build of the same commit are different binaries that write the *same*
-      # `/etc/yagra-source-ref` — without the profile marker, re-flashing a released commit would
-      # silently downgrade the test server with every provenance check still green.
-      #
-      # `SOURCE_REF` is the cache-bust. It changes every commit, and the Dockerfile *uses* it before
-      # `COPY . .` — an unused ARG does not affect the cache at all, since Docker invalidates at an
-      # ARG's first use rather than its definition. Without it, BuildKit has been observed reporting
-      # `COPY . .` as CACHED against a changed context, which ships the previous commit's binary
-      # with every job green (2026-07-31; see the comment in yagra-rust.Dockerfile). The cargo
-      # `target/` cache mount is not part of the layer cache and survives this, so builds stay
-      # incremental.
-      - name: Build arguments
-        id: buildargs
-        run: |
-          {
-            echo "list<<EOF"
-            echo "SOURCE_REF=${{ github.sha }}"
-            if [[ -n "${{ matrix.target }}" ]]; then
-              if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-                echo "CARGO_PROFILE=release"
-              else
-                echo "CARGO_PROFILE=ci-fast"
-              fi
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-      - name: Build and push ${{ matrix.name }}
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          # core/poller share yagra-rust.Dockerfile and select a stage; web has no target (last stage).
-          target: ${{ matrix.target }}
-          # SOURCE_REF for all three; CARGO_PROFILE for the Rust targets only. See the step above.
-          build-args: ${{ steps.buildargs.outputs.list }}
-          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          tags: ${{ steps.tags.outputs.list }}
-          # `mode=max` exports intermediate stages, not just the final image — that is what makes the
-          # shared `build` stage available to `poller` after `core` has produced it (see the
-          # `max-parallel` note). `core` and `poller` therefore share one scope; `web` is a different
-          # Dockerfile and gets its own so the two do not evict each other out of the repository's
-          # 10 GB Actions cache.
-          #
-          # This does NOT restore the Dockerfile's `RUN --mount=type=cache` cargo directories — no
-          # cache backend exports cache mounts. Layers are reused; the compile is not. A cold cargo
-          # build per release is the accepted cost of moving off the self-hosted host.
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | skopeo login ghcr.io --username "$ACTOR" --password-stdin
 
-  # There is deliberately no `deploy` job. CI's responsibility ends at publishing the images;
-  # deployment to the test server is an explicit act, run from a workstation over SSH by the
-  # `/deploy` command. Three reasons this was split out:
+      # `--all` keeps the whole OCI index (the image and its provenance attestation) and
+      # `--preserve-digests` refuses to re-encode anything, so the digest a consumer pins is the one
+      # buildx produced. Tags are the outer loop so every image gets `:v<version>` before any image
+      # gets `:latest`. A second copy of the same archive uploads no blobs — only the manifest.
+      - name: Copy the archives
+        env:
+          REGISTRY: ${{ steps.dest.outputs.registry }}
+          TLS: ${{ steps.dest.outputs.tls }}
+          TAGS: ${{ steps.dest.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for t in $TAGS; do
+            for n in core poller web; do
+              echo "== yagra-$n:$t"
+              skopeo copy --all --preserve-digests --dest-tls-verify="$TLS" \
+                "oci-archive:$RUNNER_TEMP/images/yagra-$n.tar" "docker://$REGISTRY/yagra-$n:$t"
+            done
+          done
+
+      # The registry, asked directly: every tag of an image must name the exact index the archive
+      # holds. This is where "`:latest` did not move" or "a copy re-encoded the image" is caught,
+      # instead of by whoever pulls it. `/release` Step 6 still checks `:latest` from outside.
+      - name: Every tag names the digest that was built
+        env:
+          REGISTRY: ${{ steps.dest.outputs.registry }}
+          TLS: ${{ steps.dest.outputs.tls }}
+          TAGS: ${{ steps.dest.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for n in core poller web; do
+            want=$(skopeo inspect --raw "oci-archive:$RUNNER_TEMP/images/yagra-$n.tar" | sha256sum | cut -d' ' -f1)
+            echo "yagra-$n built   sha256:$want"
+            for t in $TAGS; do
+              got=$(skopeo inspect --raw --tls-verify="$TLS" "docker://$REGISTRY/yagra-$n:$t" | sha256sum | cut -d' ' -f1)
+              echo "yagra-$n:$t sha256:$got"
+              if [[ "$got" != "$want" ]]; then
+                echo "::error::yagra-$n:$t is sha256:$got, but the archive that was built is sha256:$want"
+                exit 1
+              fi
+            done
+          done
+
+  # There is deliberately no `deploy` job. CI's responsibility ends at publishing the images; every
+  # deployment upgrades itself from Settings ▸ Upgrade in its own WebUI (ADR-050). Two reasons this
+  # stays out of CI:
   #
   #   1. A deploy job means the target host runs a GitHub-controlled agent. For a public
   #      repository that is a standing inbound path into a private network.
-  #   2. Every push to `main` rewrote a live environment, whether or not that was the intent.
-  #   3. The deploy procedure was only reachable through CI, so a broken pipeline meant no
-  #      deploy and no rollback either.
+  #   2. Every push would rewrite a live environment, whether or not that was the intent.
   #
-  # Server-side configuration (`YAGRA_ENABLE_MCP`, `POSTGRES_PASSWORD`, …) now lives in
-  # `~/yagra-deploy/.env` on the test server rather than in Actions secrets/variables.
+  # (`/deploy`, the workstation command that once did this over SSH, was retired on 2026-09-06 with
+  # its only target, the test server.)

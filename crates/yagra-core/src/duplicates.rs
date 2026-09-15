@@ -212,9 +212,11 @@ pub struct PeerReport {
     pub protocol: NeighborProto,
 }
 
-/// What the stores beside `nodes` observed. The reader narrows every list to rows that name some
-/// candidate's monitored address, so none of this grows with the parts of the fleet the caller cannot
-/// see; rows about any other node are ignored here as well.
+/// What the stores beside `nodes` observed. The reader narrows the three address lists to rows that
+/// name some candidate's monitored address, so they do not grow with the parts of the fleet the caller
+/// cannot see. `meraki_serials` is the exception: it is every Meraki node's serial, read whole,
+/// because it is keyed by node rather than by address. Rows about any node that is not a candidate
+/// are ignored here, so none of them reaches a group.
 #[derive(Debug, Default)]
 pub struct Observations {
     /// Interface-address rows that name a candidate's address (ADR-043).

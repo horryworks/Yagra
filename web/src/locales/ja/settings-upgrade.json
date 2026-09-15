@@ -174,7 +174,7 @@
     "applying": "コンテナ作り直し中",
     "returned": "完了",
     "failed": "戻ってこなかった",
-    "not_connected": "未接続のため送らず",
-    "skipped":"未到達"
+    "skipped": "未到達",
+    "not_connected": "未接続のため送らず"
   }
 }

@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// i18n smoke + EN/JA parity tests. Covers three things:
+// i18n smoke + EN/JA parity tests. Covers four things:
 //   1. The global instance resolves keys and interpolates (the mechanism format.ts relies on).
 //   2. Switching language actually swaps strings (lazy JA load works in the node env too).
-//   3. Every namespace's JA mirrors EN's keys (same rules as scripts/i18n-parity.mjs) so CI —
-//      which runs `npm run test` — gates on translation completeness, not just the CLI.
+//   3. Every namespace's JA mirrors EN's keys, so CI — which runs `npm run test` — gates on
+//      translation completeness.
+//   4. Every JA value keeps its English original's `{{placeholders}}` and `<tags>` (ADR-150
+//      決定 4(b)). This used to live only in a CLI whose header claimed the suite ran the same
+//      logic; it did not, so a dropped `{{count}}` passed CI. `npm run i18n:check` now runs THIS
+//      file — one implementation, and the CLI cannot say something the gate does not.
 
 import { afterAll, describe, expect, it } from 'vitest';
 import i18n, { NAMESPACES as REGISTERED_NAMESPACES } from './i18n';
 import { alertWhat } from './lib/format';
+import { flattenValues, tokenDiff } from './lib/i18nTokens';
 
 // English namespaces are bundled; import them directly for the parity check (type-safe, no fs).
 import enCommon from './locales/en/common.json';
@@ -168,6 +173,21 @@ describe('i18n EN/JA parity', () => {
       const extra = [...jaKeys].filter((k) => !enKeys.has(k));
       const missing = [...enKeys].filter((k) => !jaKeys.has(k) && !k.endsWith('_one'));
       expect({ ns, extra, missing }).toEqual({ ns, extra: [], missing: [] });
+    });
+
+    it(`${ns}: JA values keep EN's {{placeholders}} and <tags>`, () => {
+      // Same names, same counts, any position: Japanese word order legitimately moves a slot or a
+      // tag, so only the multiset is compared. A key JA has and EN lacks is the previous test's
+      // finding, not this one's.
+      const enVals = flattenValues(en);
+      const drifted: string[] = [];
+      for (const [key, jaText] of flattenValues(ja)) {
+        const enText = enVals.get(key);
+        if (enText === undefined) continue;
+        const diff = tokenDiff(enText, jaText);
+        if (diff) drifted.push(`${key} (${diff})`);
+      }
+      expect({ ns, drifted }).toEqual({ ns, drifted: [] });
     });
   }
 });

@@ -46,9 +46,45 @@ pub(crate) fn from_openapi(openapi_path: &str) -> String {
         .join("/")
 }
 
+/// The inverse: rewrite the spelling axum registers into the one the OpenAPI document — and
+/// therefore every path literal in `web/src` — uses.
+///
+/// Test-only because its one reader is `route_table`'s caller check (ADR-150): production code
+/// converts in the other direction, and a `pub(crate)` function nothing calls is a clippy failure
+/// under `-D warnings`.
+#[cfg(test)]
+pub(crate) fn to_openapi(router_path: &str) -> String {
+    router_path
+        .split('/')
+        .map(|seg| match seg.strip_prefix(':') {
+            Some(name) => format!("{{{name}}}"),
+            None => seg.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::from_openapi;
+    use super::{from_openapi, to_openapi};
+
+    #[test]
+    fn the_two_conversions_are_inverses() {
+        for openapi in [
+            "/api/v1/nodes",
+            "/api/v1/nodes/{node_id}/interfaces",
+            "/api/v1/nodes/{node_id}/interfaces/{ifindex}/series",
+        ] {
+            let router = from_openapi(openapi);
+            assert_eq!(to_openapi(&router), openapi);
+            assert_eq!(from_openapi(&to_openapi(&router)), router);
+        }
+        // A brace segment is left alone in this direction, as a colon one is in the other.
+        assert_eq!(
+            to_openapi("/api/v1/nodes/{node_id}"),
+            "/api/v1/nodes/{node_id}"
+        );
+    }
 
     #[test]
     fn rewrites_every_brace_segment_and_leaves_the_rest_alone() {

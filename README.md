@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.21 — Memory, CPU and temperature judged per row with row-name threshold rules, a Neighbors column on Interfaces, new installations poll every 5 minutes, traffic charts no longer go blank on slowly polled nodes**
+> Status: **v0.3.22 — Find and delete nodes registered more than once, pin nodes and folders, serial numbers on a node's Overview, Poll now reads identity and row names at once, a core upgrade no longer leaves a chosen remote poller behind**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

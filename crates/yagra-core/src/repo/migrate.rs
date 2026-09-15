@@ -364,6 +364,179 @@ mod tests {
         assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 0);
     }
 
+    /// Foreign-key columns deliberately left without an index, and why each one is safe.
+    ///
+    /// PostgreSQL runs one referential action per deleted row against every table whose foreign
+    /// key points at it; where the referencing column has no index, each action reads the whole
+    /// table. ADR-124 増分 7 found six such columns to `nodes` by querying the catalog by hand —
+    /// the review that prompted it had listed three — and indexed the two that grow with the
+    /// fleet. The first run of this check (2026-09-15, ADR-150) asked the same question of every
+    /// foreign key in the schema and found eighteen, in three classes:
+    ///
+    /// * **rows an operator writes by hand** — the table stays small whatever the inventory does
+    ///   (ADR-124 Inc.7 decision B, and the same reason for the fourteen it did not look at);
+    /// * **one deployment-wide row**;
+    /// * **the referenced row is deleted one at a time**: `nodes`, `url_checks`, `events` and
+    ///   `report_runs` do grow, but their referenced tables (credentials, event sources, report
+    ///   definitions) are edited by an operator one row at a time with `ON DELETE SET NULL`, so
+    ///   the action is **one** sequential scan per delete — not one per deleted row, which was
+    ///   the ADR-124 Inc.7 shape — and no query filters by the column (`grep '<col> = $'`, none).
+    ///
+    /// **An entry here is a decision about growth, not a way to silence the test.** A column on a
+    /// table that grows with nodes, interfaces or events, whose referenced rows are deleted in
+    /// bulk or read by that column, wants a migration, not a line. ⚠️ The third class is the one
+    /// to revisit: the day a "which nodes use this credential" read is added, `nodes.credential_id`
+    /// wants its index for the read, whatever the delete costs.
+    const OPERATOR_ROWS: &str =
+        "rows an operator writes by hand; the table does not grow with the \
+                                 fleet (ADR-124 Inc.7 decision B)";
+    const ONE_ROW: &str = "a single deployment-wide row; the whole-table read is one row";
+    const REFERENCED_DELETED_SINGLY: &str =
+        "the table grows with the fleet, but the referenced row is deleted one at a time by an \
+         operator (ON DELETE SET NULL), so the action is one sequential scan per delete rather \
+         than one per deleted row, and no query filters by this column (ADR-150 first run)";
+    const FOREIGN_KEYS_WITHOUT_AN_INDEX: &[(&str, &str, &str)] = &[
+        ("bus_tls_config", "issued_by", ONE_ROW),
+        ("classification_rules", "profile_id", OPERATOR_ROWS),
+        ("event_rules", "node_id", OPERATOR_ROWS),
+        ("event_rules", "source_id", OPERATOR_ROWS),
+        ("event_sources", "node_id", OPERATOR_ROWS),
+        (
+            "events",
+            "source_id",
+            "grows with traffic, but a source is deleted one at a time by an operator (ON DELETE \
+             SET NULL) and no query filters events by source; `events` is the hot insert path and \
+             already carries the six indexes ADR-024 wants fewer of — an index here would cost \
+             every insert to speed a rare delete (ADR-150 first run)",
+        ),
+        ("meraki_orgs", "group_id", OPERATOR_ROWS),
+        ("netbox_servers", "credential_id", OPERATOR_ROWS),
+        ("nodes", "credential_id", REFERENCED_DELETED_SINGLY),
+        (
+            "pollers",
+            "anchor_node_id",
+            "one row per poller, registered by an operator — tens, never tens of thousands \
+             (ADR-124 Inc.7 decision B)",
+        ),
+        (
+            "pollers",
+            "token_issued_by",
+            "one row per poller, registered by an operator — tens, never tens of thousands",
+        ),
+        ("profile_collection_templates", "template_id", OPERATOR_ROWS),
+        ("profiles", "parent_id", OPERATOR_ROWS),
+        (
+            "report_runs",
+            "definition_id",
+            "one row per report run and pruned by retention; a definition is deleted one at a time \
+             (ON DELETE SET NULL) and the runs are not read by definition (ADR-150 first run)",
+        ),
+        ("report_schedules", "definition_id", OPERATOR_ROWS),
+        (
+            "suppression_exemptions",
+            "node_id",
+            "rows an operator writes by hand; `UNIQUE (kind, node_id)` leads on `kind`, so it \
+             cannot serve the lookup either (ADR-124 Inc.7 decision B)",
+        ),
+        ("url_checks", "credential_id", REFERENCED_DELETED_SINGLY),
+        ("web_tls_config", "imported_by", ONE_ROW),
+    ];
+
+    /// Every foreign key whose **leading** column no index leads on, as `(table, column,
+    /// referenced table)`.
+    ///
+    /// A partial index counts (`WHERE col IS NOT NULL`, migration 0115): the referential action
+    /// looks rows up by equality with a real id, which a NULL row can never match. A composite
+    /// index counts when the key's first column is its first column, which is what
+    /// `indkey[0] = conkey[1]` says — `pg_index.indkey` is zero-based and `pg_constraint.conkey`
+    /// one-based, and getting that wrong reports every key as unindexed.
+    async fn unindexed_foreign_keys(pool: &sqlx::PgPool) -> Vec<(String, String, String)> {
+        sqlx::query_as::<_, (String, String, String)>(
+            "SELECT c.conrelid::regclass::text, a.attname::text, c.confrelid::regclass::text \
+             FROM pg_constraint c \
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] \
+             WHERE c.contype = 'f' \
+               AND NOT EXISTS (\
+                 SELECT 1 FROM pg_index i \
+                 WHERE i.indrelid = c.conrelid AND i.indkey[0] = c.conkey[1]\
+               ) \
+             ORDER BY 1, 2",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("query the catalog for unindexed foreign keys")
+    }
+
+    /// **Every foreign key column has an index leading on it, or a written reason not to**
+    /// (ADR-150 決定 4(c)).
+    ///
+    /// The detector is proven before the schema is judged by it: a throwaway table with an
+    /// unindexed key to `nodes` must be reported, or the catalog query has drifted and the empty
+    /// answer below means nothing. The floor on the key count is the same defence from the other
+    /// side.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_foreign_key_column_has_an_index_or_states_why(pool: sqlx::PgPool) {
+        sqlx::query(
+            "CREATE TABLE _probe_fk (id serial PRIMARY KEY, node uuid REFERENCES nodes (id))",
+        )
+        .execute(&pool)
+        .await
+        .expect("create the probe table");
+        let seen = unindexed_foreign_keys(&pool).await;
+        assert!(
+            seen.iter()
+                .any(|(t, c, r)| t == "_probe_fk" && c == "node" && r == "nodes"),
+            "the catalog query no longer reports a plainly unindexed foreign key: {seen:?}"
+        );
+        sqlx::query("DROP TABLE _probe_fk")
+            .execute(&pool)
+            .await
+            .expect("drop the probe table");
+
+        let total: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM pg_constraint WHERE contype = 'f'")
+                .fetch_one(&pool)
+                .await
+                .expect("count foreign keys");
+        assert!(
+            total >= 40,
+            "only {total} foreign keys in the schema — the query drifted"
+        );
+
+        let unindexed = unindexed_foreign_keys(&pool).await;
+        let unexplained: Vec<String> = unindexed
+            .iter()
+            .filter(|(t, c, _)| {
+                !FOREIGN_KEYS_WITHOUT_AN_INDEX
+                    .iter()
+                    .any(|(et, ec, _)| et == t && ec == c)
+            })
+            .map(|(t, c, r)| format!("{t}.{c} -> {r}"))
+            .collect();
+        assert!(
+            unexplained.is_empty(),
+            "these foreign key columns have no index leading on them. Deleting from the referenced \
+             table reads the whole referencing table once per deleted row; add a migration with the \
+             index, or — only if the table cannot grow with the fleet — an entry in \
+             FOREIGN_KEYS_WITHOUT_AN_INDEX saying why: {unexplained:#?}"
+        );
+
+        // The exemption list needs the hygiene every exemption list here has: each entry still
+        // names a real unindexed key (an index added later means the line comes out), and says why.
+        for (t, c, why) in FOREIGN_KEYS_WITHOUT_AN_INDEX {
+            assert!(
+                why.trim().len() >= 20,
+                "FOREIGN_KEYS_WITHOUT_AN_INDEX exempts {t}.{c} without saying why"
+            );
+            assert!(
+                unindexed.iter().any(|(ut, uc, _)| ut == t && uc == c),
+                "FOREIGN_KEYS_WITHOUT_AN_INDEX names {t}.{c}, which now has an index or no longer \
+                 exists — drop the entry"
+            );
+        }
+    }
+
     /// **Migrating twice does nothing the second time**, which is what every restart does.
     #[sqlx::test(migrations = false)]
     #[ignore = "needs DATABASE_URL"]
