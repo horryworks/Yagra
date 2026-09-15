@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn bus_freshness_window_tracks_the_default_interval() {
-        // Default 30s ⇒ window = 30*2 + 60 = 120s. A sweep 100s ago is fresh; 200s ago is stale.
+        // A 30s interval ⇒ window = 30*2 + 60 = 120s. A sweep 100s ago is fresh; 200s ago is stale.
         let now = 1_000_000i64;
         assert!(bus_sweep_is_fresh(Some(now - 100_000), 30, now));
         assert!(!bus_sweep_is_fresh(Some(now - 200_000), 30, now));

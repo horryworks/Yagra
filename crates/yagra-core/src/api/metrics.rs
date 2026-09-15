@@ -21,7 +21,7 @@ use super::extract::{Admin, RequireView, Scoped, VisibleNode};
 use super::util::Ranked;
 use super::{
     clamp_range_step, is_valid_metric_name, ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS,
-    DEFAULT_RATE_LOOKBACK_SECS, DEFAULT_STEP_SECS,
+    DEFAULT_STEP_SECS,
 };
 use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, NodeSeries, TopAgg};
 use axum::{
@@ -747,10 +747,16 @@ async fn get_interface_series(
 /// Pure, and separated because it is the part that can be silently wrong: too coarse a step hides a
 /// spike, and too short a lookback turns one missed poll into a hole in the line. ~120 points across
 /// the window, with the lookback spanning a few steps.
+///
+/// The lookback returned here is a floor: the store widens it further to hold two of the node's own
+/// polls (ADR-144), which is what a step this function knows nothing about cannot promise.
 pub(crate) fn interface_series_step(from: i64, to: i64, requested: Option<u64>) -> (u64, u64) {
     let span = u64::try_from((to - from).max(1)).unwrap_or(DEFAULT_RANGE_SECS as u64);
     let step = clamp_range_step(from, to, requested.unwrap_or((span / 120).max(60)), 1);
-    (step, (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS))
+    (
+        step,
+        (step * 4).max(crate::poll_interval::RATE_WINDOW_FLOOR_SECS),
+    )
 }
 
 /// One interface's ten raw series, before alignment onto a shared axis.
@@ -1210,7 +1216,9 @@ pub(crate) async fn build_interface_entries(
 pub(super) struct InterfaceDeltaQuery {
     /// `up` (spikes) | `down` (drops).
     direction: String,
-    /// Comparison window in seconds (default 300 = now vs 5m ago).
+    /// Comparison window in seconds (60–3600, default 300 = now vs 5m ago). Widened to at least
+    /// twice the slowest poll interval in the fleet, because a rate over a shorter window has no
+    /// samples to compare.
     window: Option<u64>,
     limit: Option<usize>,
 }

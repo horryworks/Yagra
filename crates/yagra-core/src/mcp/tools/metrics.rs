@@ -83,7 +83,8 @@ pub(super) struct TopInterfacesParams {
     rank_by: String,
     /// now (default) | max_1h. Applies to the rate kinds only.
     agg: Option<String>,
-    /// Comparison window in seconds (60–3600, default 300). Applies to delta_up/delta_down only.
+    /// Comparison window in seconds (60–3600, default 300), widened to at least two polls of the
+    /// slowest node. Applies to delta_up/delta_down only.
     window_secs: Option<u64>,
     /// Max interfaces to return (1–50, default 6).
     limit: Option<usize>,
@@ -538,7 +539,8 @@ impl YagraMcp {
                        `rank_by` is throughput | in_bps | out_bps | errors | discards (current \
                        rate), or delta_up | delta_down (biggest traffic spikes or drops vs a while \
                        ago). `agg` is now (default) or max_1h and applies to the rate kinds only; \
-                       `window_secs` (60–3600, default 300) is the comparison window and applies to \
+                       `window_secs` (60–3600, default 300) is the comparison window — widened to \
+                       at least two polls of the slowest node — and applies to \
                        the delta kinds only. `limit` is 1–50 (default 6)."
     )]
     async fn top_interfaces(

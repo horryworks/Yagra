@@ -126,10 +126,12 @@ pub fn may_observe_ports(liveness: Option<NodeState>) -> bool {
 
 /// How often the evaluator ticks.
 ///
-/// One tick is **one sample** for a rule's breach count, which is the thing an operator has to be
-/// told: a rule saying "5 breaches" damps for five minutes here, not five polls. 60s is chosen
-/// against the 300s `rate()` lookback — ticking faster would re-read the same VictoriaMetrics
-/// window and inflate the dwell without adding information.
+/// The engine converts a rule's breach count into ticks (ADR-144, `poll_interval::dwell_ticks`):
+/// never fewer ticks than breaches — "5 breaches" damps for five minutes on a node polling at least
+/// once a minute, which is what an operator is told — and enough ticks to span that many polls on a
+/// slower node, where every tick between two polls re-reads the same counters and would otherwise
+/// let one poll satisfy the whole count. 60s is chosen against the five-minute `rate()` floor —
+/// ticking faster would re-read the same VictoriaMetrics window without adding information.
 pub const WATCH_TICK: Duration = Duration::from_secs(60);
 
 /// Utilisation as a percentage of a port's own speed.

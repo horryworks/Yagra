@@ -18278,7 +18278,11 @@ export interface operations {
             query: {
                 /** @description `up` (spikes) | `down` (drops). */
                 direction: string;
-                /** @description Comparison window in seconds (default 300 = now vs 5m ago). */
+                /**
+                 * @description Comparison window in seconds (60–3600, default 300 = now vs 5m ago). Widened to at least
+                 *     twice the slowest poll interval in the fleet, because a rate over a shorter window has no
+                 *     samples to compare.
+                 */
                 window?: number;
                 limit?: number;
             };

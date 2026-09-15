@@ -446,7 +446,10 @@ impl Engine {
     /// Best-effort current total interface throughput (bits/sec) for a node from the TSDB — context
     /// for the saturation finding. `None` when the node has no interface series.
     async fn node_throughput_bps(&self, node: Uuid) -> Option<f64> {
-        let live = self.store.node_interface_live(node, 300).await;
+        let live = self
+            .store
+            .node_interface_live(node, crate::poll_interval::RATE_WINDOW_FLOOR_SECS)
+            .await;
         if live.is_empty() {
             return None;
         }

@@ -413,7 +413,8 @@ function PortRuleFormView({
           <span className="ifrules-unit">
             {/* Deliberately different wording per subject: the derived metrics are evaluated once
                 a minute by a leader loop, the polled ones once per poll. Calling both "samples"
-                is what made the delay unguessable. */}
+                is what made the delay unguessable. On a node polled less often than once a minute
+                the minutes become polls (ADR-144), which the minutes wording says. */}
             {t(
               spec.cadence === 'minutes'
                 ? 'interfaces.rules.dwellMinutes'

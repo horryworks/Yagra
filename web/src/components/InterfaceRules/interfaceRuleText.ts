@@ -41,8 +41,10 @@ export function isOwnRule(row: MatchingThreshold, nodeId: string, ifindex: numbe
  *    With no known speed the percentage stands alone — inventing a bit rate from a missing
  *    `ifSpeed` is the ADR-063 accident in another place.
  * 3. **Dwell is counted in whatever the subject counts in.** A minutes-cadence subject says
- *    minutes; everything else says polls. Saying "3 polls" about a minutes-cadence rule is wrong by
- *    the poll interval, which is exactly the kind of error nobody notices in a summary line.
+ *    minutes, and says that a slowly polled node counts polls instead (ADR-144: the engine never
+ *    lets one poll satisfy the count); everything else says polls. Saying "3 polls" about a
+ *    minutes-cadence rule is wrong by the poll interval, which is exactly the kind of error nobody
+ *    notices in a summary line.
  *
  * A subject with fixed bounds has no bounds to state, so the sentence says what the rule is instead.
  */

@@ -62,7 +62,7 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     sso_enabled: false,
     rca_enabled: true,
     flow_enabled: true,
-    default_poll_interval_secs: 30,
+    default_poll_interval_secs: 300,
   } satisfies Schemas['ClientConfig'] as unknown as Json,
 
   // 🚨 The generator answers a boolean with `false`, and since ADR-119 one of this body's booleans
