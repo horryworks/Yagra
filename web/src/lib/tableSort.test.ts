@@ -2,7 +2,15 @@
 // Unit tests for the DataTable sort helpers (no DOM — Vitest node env).
 
 import { describe, expect, it } from 'vitest';
-import { nextSort, sortRows, type SortState, type SortValues } from './tableSort';
+import {
+  nextSort,
+  readSortParams,
+  sortRows,
+  writeSortParams,
+  type SortState,
+  type SortValues,
+} from './tableSort';
+import { RESERVED_URL_KEYS } from './columnFilter';
 
 interface Row {
   name: string;
@@ -26,6 +34,42 @@ const values: SortValues<Row> = {
 const names = (out: Row[]) => out.map((r) => r.name);
 const asc = (by: string): SortState => ({ by, dir: 'asc' });
 const desc = (by: string): SortState => ({ by, dir: 'desc' });
+
+describe('the sort in the URL (ADR-153)', () => {
+  const FALLBACK: SortState = { by: 'created', dir: 'desc' };
+  const SORTABLE = ['name', 'created', 'last_used'];
+
+  it('round-trips a sort that is not the default', () => {
+    const p = new URLSearchParams('name=x');
+    writeSortParams(p, { by: 'name', dir: 'asc' }, FALLBACK);
+    expect(p.toString()).toBe('name=x&sort=name&dir=asc');
+    expect(readSortParams(p, SORTABLE, FALLBACK)).toEqual({ by: 'name', dir: 'asc' });
+  });
+
+  it('writes no key at the default, so a bare URL is the default order', () => {
+    const p = new URLSearchParams('sort=name&dir=asc&q=x');
+    writeSortParams(p, FALLBACK, FALLBACK);
+    expect(p.toString()).toBe('q=x');
+    expect(readSortParams(p, SORTABLE, FALLBACK)).toEqual(FALLBACK);
+  });
+
+  it('reads a column this table does not sort on as the default', () => {
+    // A stale bookmark, or a hand-edited URL: the header could not draw an arrow for it.
+    expect(readSortParams(new URLSearchParams('sort=bogus&dir=asc'), SORTABLE, FALLBACK)).toEqual(FALLBACK);
+  });
+
+  it('reads anything but desc as asc, where a click starts', () => {
+    expect(readSortParams(new URLSearchParams('sort=name'), SORTABLE, FALLBACK).dir).toBe('asc');
+    expect(readSortParams(new URLSearchParams('sort=name&dir=up'), SORTABLE, FALLBACK).dir).toBe('asc');
+    expect(readSortParams(new URLSearchParams('sort=name&dir=desc'), SORTABLE, FALLBACK).dir).toBe('desc');
+  });
+
+  it('uses keys no filter column may take', () => {
+    // Both are reserved, which is what makes it safe to put a sort beside a filter row's keys.
+    expect(RESERVED_URL_KEYS).toContain('sort');
+    expect(RESERVED_URL_KEYS).toContain('dir');
+  });
+});
 
 describe('nextSort', () => {
   it('flips direction on the active column', () => {

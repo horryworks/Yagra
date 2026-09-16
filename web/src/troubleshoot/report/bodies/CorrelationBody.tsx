@@ -8,7 +8,8 @@
 // scaled against `max={1}` (not the best row) because a correlation bar has to read against a true
 // 1.0 ceiling — normalizing by the peak would make r=0.86 look maximal.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -62,8 +63,8 @@ function CorrelationRow({ finding }: { finding: AnalysisFinding }) {
 
 export function CorrelationBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'coRising' | 'inverse'>('all');
-  const [sort, setSort] = useState<'r' | 'samples' | 'node'>('r');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'coRising', 'inverse'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['r', 'samples', 'node'] as const, 'r');
 
   const top = useMemo<RankedRow[]>(
     () =>

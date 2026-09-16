@@ -17,6 +17,7 @@
 // in the action row — this ADR moves filtering, not ordering (決定 L).
 
 import { useMemo, useState } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
@@ -29,7 +30,8 @@ import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/T
 import { Donut, type DonutSegment } from '../../../dashboard/primitives/Donut';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { Select } from '../../../components/ui/Field';
-import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../../../lib/columnFilter';
+import { useFilterParams } from '../../../lib/useFilterParams';
 import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
 import { fmtCount, sortByDetail } from '../format';
@@ -47,12 +49,11 @@ const countOf = gapCount;
 export function RuleGapBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
   const filterCols = useMemo(() => ruleGapColumns(t), [t]);
-  // Component state rather than the URL: a report body is mounted under `?job=…` and several bodies
-  // share that route, so a URL-backed key would be claimed by whichever one rendered (the same
-  // reason `AnalysisRuns` keeps its filters local).
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  // In the URL (ADR-153). Several report bodies share the `/troubleshoot/report/…` shell, but each
+  // tool is its own path, so this body's keys are the only filter keys on its route.
+  const { filters, setFilters } = useFilterParams(filterCols);
   const [sheet, setSheet] = useState(false);
-  const [sort, setSort] = useState<'count' | 'signature'>('count');
+  const [sort, setSort] = useEnumParam('sort', ['count', 'signature'] as const, 'count');
   const narrowed = isAnyFiltered(filterCols, filters);
 
   /** Unmatched volume by source kind — a genuine mix, so a donut is the right shape. */

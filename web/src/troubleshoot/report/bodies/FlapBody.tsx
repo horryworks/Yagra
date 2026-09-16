@@ -9,7 +9,8 @@
 // drawn from two numbers would be decoration pretending to be data. The ranked bars carry the
 // comparison instead.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -44,8 +45,8 @@ function FlapRow({ finding }: { finding: AnalysisFinding }) {
 
 export function FlapBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'chronic' | 'intermittent'>('all');
-  const [sort, setSort] = useState<'rate' | 'flaps' | 'node'>('rate');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'chronic', 'intermittent'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['rate', 'flaps', 'node'] as const, 'rate');
 
   const top = useMemo<RankedRow[]>(
     () =>

@@ -9,7 +9,8 @@
 // from the TSDB at analysis time), a Gauge shows the concentration as percent-of-capacity — the one
 // place in these reports where "% of a known whole" is literally the semantic Gauge exists for.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -71,8 +72,8 @@ function SaturationRow({ finding }: { finding: AnalysisFinding }) {
 
 export function SaturationBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'high' | 'mid'>('all');
-  const [sort, setSort] = useState<'share' | 'bytes' | 'node'>('share');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'high', 'mid'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['share', 'bytes', 'node'] as const, 'share');
 
   const top = useMemo<RankedRow[]>(
     () =>

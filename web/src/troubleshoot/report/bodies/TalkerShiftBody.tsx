@@ -6,7 +6,8 @@
 // from a new #7 — so the rank gets the strongest visual weight (a chip whose tone mirrors the
 // backend's own `novelty_score` bands) and is a filter axis in its own right.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -52,8 +53,8 @@ function TalkerRow({ finding }: { finding: AnalysisFinding }) {
 
 export function TalkerShiftBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'top1' | 'top3'>('all');
-  const [sort, setSort] = useState<'bytes' | 'rank' | 'node'>('bytes');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'top1', 'top3'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['bytes', 'rank', 'node'] as const, 'bytes');
 
   const top = useMemo<RankedRow[]>(
     () =>

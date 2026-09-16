@@ -16,6 +16,8 @@
 // row (決定 E/K), and `ReportToolbar` keeps only the sort control, so the row count is unchanged.
 
 import { useMemo, useState } from 'react';
+import { useFilterParams } from '../../../lib/useFilterParams';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -23,7 +25,7 @@ import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { FilterBar } from '../../../components/ui/FilterBar';
 import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
 import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
-import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../../../lib/columnFilter';
 import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
 import { EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
@@ -69,10 +71,11 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
   const filterCols = useMemo(() => authProbeColumns(t), [t]);
   const labels = useMemo(() => authProbeFilterLabels(t), [t]);
-  // Component state, not the URL — several report bodies share the `?job=…` route.
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  // In the URL (ADR-153). Several report bodies share the `/troubleshoot/report/…` shell, but each
+  // tool is its own path, so this body's keys are the only filter keys on its route.
+  const { filters, setFilters } = useFilterParams(filterCols);
   const [sheet, setSheet] = useState(false);
-  const [sort, setSort] = useState<'count' | 'source' | 'node'>('count');
+  const [sort, setSort] = useEnumParam('sort', ['count', 'source', 'node'] as const, 'count');
   const narrowed = isAnyFiltered(filterCols, filters);
 
   const top = useMemo<RankedRow[]>(

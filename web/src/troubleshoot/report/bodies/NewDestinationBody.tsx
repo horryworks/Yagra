@@ -11,7 +11,8 @@
 // count depending on whether the ASN resolved, so it isn't a stable field. Everything comes from the
 // tested `classifyNewDestination` classifier instead.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -53,7 +54,7 @@ function DestRow({
 
 export function NewDestinationBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [show, setShow] = useState<'both' | 'as' | 'ports'>('both');
+  const [show, setShow] = useEnumParam('show', ['both', 'as', 'ports'] as const, 'both');
   const { as, ports } = useMemo(() => splitDestinations(findings), [findings]);
 
   const asBars = useMemo<RankedRow[]>(

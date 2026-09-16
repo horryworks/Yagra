@@ -19,6 +19,8 @@
 // more than 500 destinations" was unsayable from a toolbar. Sort stays in the action row (決定 L).
 
 import { useMemo, useState } from 'react';
+import { useFilterParams } from '../../../lib/useFilterParams';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '../../../components/ui/Badge';
 import { Card } from '../../../components/ui/Card';
@@ -28,7 +30,7 @@ import { EntityName } from '../../../components/ui/EntityName';
 import { Select } from '../../../components/ui/Field';
 import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
 import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
-import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../../../lib/columnFilter';
 import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
 import { formatSi } from '../../../lib/format';
@@ -56,10 +58,11 @@ const patternOf = scanShape;
 export function FlowScanBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
   const filterCols = useMemo(() => flowScanColumns(t), [t]);
-  // Component state, not the URL — several report bodies share the `?job=…` route.
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  // In the URL (ADR-153). Several report bodies share the `/troubleshoot/report/…` shell, but each
+  // tool is its own path, so this body's keys are the only filter keys on its route.
+  const { filters, setFilters } = useFilterParams(filterCols);
   const [sheet, setSheet] = useState(false);
-  const [sort, setSort] = useState<'dst' | 'ports' | 'flows' | 'score'>('dst');
+  const [sort, setSort] = useEnumParam('sort', ['dst', 'ports', 'flows', 'score'] as const, 'dst');
   const narrowed = isAnyFiltered(filterCols, filters);
 
   const plotPoints = useMemo<ScanPoint[]>(
