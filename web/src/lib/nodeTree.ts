@@ -381,6 +381,41 @@ export function filterCollapsedFrom(
   return out ?? NOTHING_COLLAPSED;
 }
 
+/**
+ * Read a pressed-folder record back out of the tab's storage (ADR-154 increment 2), or
+ * {@link NO_FILTER_TOUCHED} when there is nothing usable.
+ *
+ * The record lives in sessionStorage so that pressing a folder under a search survives a reload of
+ * the same tab — the search term already does, through `?q=`. Anything could be sitting under that
+ * key (an older build, a hand edit), so only a non-empty string `key` and `true`-valued ids of a
+ * plausible length survive, capped like the saved layout. A record with nothing pressed is the
+ * shared empty value, so an unchanged "nothing" stays a stable reference.
+ */
+export function adoptFilterTouched(raw: unknown): FilterTouched {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return NO_FILTER_TOUCHED;
+  const { key, ids } = raw as { key?: unknown; ids?: unknown };
+  if (typeof key !== 'string' || key.length === 0) return NO_FILTER_TOUCHED;
+  const kept = adoptCollapsed(ids);
+  if (kept === null || Object.keys(kept).length === 0) return NO_FILTER_TOUCHED;
+  return { key, ids: kept };
+}
+
+/**
+ * Whether the pressed-folder record should be thrown away (ADR-154 decision 11): only when the page
+ * has not asked for a search (`searchRequested`) AND the tree is not showing one (`searching`).
+ *
+ * 🚨 **Asking the tree alone is the trap, and it is the rule increment 1 used.** On the first render
+ * after a reload the term the tree is handed (`useFilterSearch`'s `appliedTerm`) is still empty — it
+ * is set by an effect — while the page already holds the term it read from `?q=`. A rule that asked
+ * only the tree would throw the restored record away in that one frame, and the feature would do
+ * nothing while every test of the record itself stayed green. Asking the page alone fails the other
+ * way: clearing the box empties the page's term a tick before the tree stops searching, and a folder
+ * pressed under the search would flash open for that tick.
+ */
+export function shouldForgetTouched(searching: boolean, searchRequested: boolean): boolean {
+  return !searching && !searchRequested;
+}
+
 /** Everything one press of a folder's twisty reads and writes. */
 export interface TwistyState {
   readonly collapsed: Readonly<Record<string, true>>;

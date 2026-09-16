@@ -29,13 +29,12 @@ import {
   filterTerm,
   flattenTree,
   flatRowKey,
-  NO_FILTER_TOUCHED,
   pendingGroupKeys,
   pressTwisty,
   sameNameNodeIds,
+  shouldForgetTouched,
   touchedFor,
   treeFilterKey,
-  type FilterTouched,
   type FlatRow,
   type StateCounts,
   type TreeGroup,
@@ -43,6 +42,7 @@ import {
 import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { usePrefsStore } from '../../prefs';
 import { setNodeTreeCollapsed } from '../../serverPrefs';
+import { useTreeTouchedStore } from '../../store';
 import {
   DURATION_PRESETS,
   type ReleaseAction,
@@ -170,6 +170,15 @@ interface Props {
    *  one filter must not stay collapsed under the next, and `narrowed` cannot tell Critical from
    *  Warning. */
   narrowKey?: string;
+  /** The page has asked for a search — a term typed or restored from `?q=`, or a state / kind / pool
+   *  filter — whether or not it has reached `filter` yet (ADR-154 decision 11).
+   *
+   *  🚨 **`filter` lags it, and on a reload the lag is the whole first render**: the page reads `?q=`
+   *  at once, while `filter` is set by the search hook's effect. The tree forgets which folders were
+   *  pressed under a search only when neither this nor its own filtering says a search is on — ask
+   *  `filter` alone and a reload erases the record the moment it is restored. Omit it where there is
+   *  no search to wait for; the tree then decides from `filter` and `narrowed` alone. */
+  searchRequested?: boolean;
   /** Render the internal Add-group / drag-hint toolbar (the split hosts Add-group in its pane head). */
   showToolbar?: boolean;
   onOpenNode: (node: NodeSummary) => void;
@@ -292,6 +301,7 @@ export function NodeTree({
   filter,
   narrowed,
   narrowKey,
+  searchRequested,
   showToolbar = true,
   onOpenNode,
   onAddGroup,
@@ -353,11 +363,18 @@ export function NodeTree({
   const searching = q.length > 0 || narrowed === true;
   // The folders pressed under THIS filter (ADR-053 Inc.11, reshaped by ADR-154). The press itself
   // wrote the saved layout; this set is only what lets the filtered tree show that folder closed.
-  const [touched, setTouched] = useState<FilterTouched>(NO_FILTER_TOUCHED);
+  // Kept in the tab's storage (ADR-154 increment 2), so a reload under the same `?q=` still shows
+  // the folder closed.
+  const touched = useTreeTouchedStore((s) => s.touched);
   // Leaving the filter forgets it, so typing the same term again starts open too — and the saved
-  // layout keeps what was pressed. Adjusted during render rather than in an effect, which would
-  // paint one frame of the stale set first.
-  if (!searching && touched !== NO_FILTER_TOUCHED) setTouched(NO_FILTER_TOUCHED);
+  // layout keeps what was pressed. 🚨 Both halves of `shouldForgetTouched`, never `searching` alone:
+  // on the first render after a reload `filter` is still empty while the page already holds `?q=`.
+  // An effect is fine here, unlike increment 1's in-render reset: the record is read only while
+  // searching, and forgetting only happens while not, so the one late frame never reaches the screen.
+  const forgetTouched = shouldForgetTouched(searching, searchRequested === true);
+  useEffect(() => {
+    if (forgetTouched) useTreeTouchedStore.getState().forget();
+  }, [forgetTouched, touched]);
   const collapseKey = treeFilterKey(
     filter ?? '',
     narrowed === true,
@@ -841,11 +858,14 @@ export function NodeTree({
             // layout is read from the store rather than this render's copy, so two presses inside
             // one frame cannot write from the same stale set.
             const next = pressTwisty(
-              { collapsed: usePrefsStore.getState().nodeTreeCollapsed, touched },
+              {
+                collapsed: usePrefsStore.getState().nodeTreeCollapsed,
+                touched: useTreeTouchedStore.getState().touched,
+              },
               { id: group.id, isOpen, searching, key: collapseKey },
             );
             setNodeTreeCollapsed(next.collapsed);
-            if (next.touched !== touched) setTouched(next.touched);
+            if (next.touched !== touched) useTreeTouchedStore.getState().setTouched(next.touched);
           }}
           aria-label={isOpen ? t('nav:shell.collapse') : t('nav:shell.expand')}
           disabled={!hasChildren}

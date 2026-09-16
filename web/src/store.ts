@@ -12,6 +12,7 @@ import type { Viewer } from './dashboard/layoutAccess';
 import type { Alert, Permission, RoleMatrix, Scope, UserKind } from './types/api';
 import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
 import { normalizeNodeDetailTab, type NodeDetailTab } from './components/NodeDetail/tabs';
+import { adoptFilterTouched, NO_FILTER_TOUCHED, type FilterTouched } from './lib/nodeTree';
 
 // sessionStorage when available (browser), else a no-op — keeps the store working in the Vitest
 // node env (no sessionStorage) without a persist warning.
@@ -143,6 +144,46 @@ export const useRangeStore = create<RangeStore>()(
       setRange: (range) => set({ range }),
     }),
     { name: 'yagra.range', storage: createJSONStorage(sessionStore) },
+  ),
+);
+
+// The inventory-tree folders pressed while a search is on, and which search that was (ADR-154
+// increment 2). The press itself is saved on the account (`prefs.ts::nodeTreeCollapsed`); this record
+// is only what lets the searched tree show that folder closed (`lib/nodeTree.ts::filterCollapsedFrom`).
+//
+// sessionStorage, because the search it belongs to lives in the tab's URL (`?q=`): a reload of the
+// same tab restores both, and a new tab, a bookmark or another browser starts every folder open, as a
+// new search always has. Read back through `adoptFilterTouched`, so a malformed value is "nothing
+// pressed" rather than a crash in the tree.
+//
+// ⚠️ **Forgetting it is the tree's call, and the condition has two halves** (`shouldForgetTouched`):
+// on the first render after a reload the tree has not been handed the term yet, and forgetting then
+// would erase the record this store exists to keep.
+interface TreeTouchedStore {
+  touched: FilterTouched;
+  setTouched: (touched: FilterTouched) => void;
+  /** Drop the record. A no-op when there is none, so an idle tree writes nothing to storage. */
+  forget: () => void;
+}
+
+export const useTreeTouchedStore = create<TreeTouchedStore>()(
+  persist(
+    (set, get) => ({
+      touched: NO_FILTER_TOUCHED,
+      setTouched: (touched) => set({ touched }),
+      forget: () => {
+        if (get().touched !== NO_FILTER_TOUCHED) set({ touched: NO_FILTER_TOUCHED });
+      },
+    }),
+    {
+      name: 'yagra.treetouched',
+      storage: createJSONStorage(sessionStore),
+      partialize: (s) => ({ touched: s.touched }),
+      merge: (persisted, current) => ({
+        ...current,
+        touched: adoptFilterTouched((persisted as { touched?: unknown } | undefined)?.touched),
+      }),
+    },
   ),
 );
 

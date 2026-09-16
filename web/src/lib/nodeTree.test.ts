@@ -5,6 +5,7 @@ import {
   buildNodeTree,
   descendantNodes,
   adoptCollapsed,
+  adoptFilterTouched,
   filterCollapsedFrom,
   filterGroupOptions,
   filterTerm,
@@ -23,6 +24,7 @@ import {
   pressTwisty,
   revealedGroupKeys,
   sameNameNodeIds,
+  shouldForgetTouched,
   subtreeGroupIds,
   setCollapsed,
   tallyStates,
@@ -382,6 +384,50 @@ describe('what a filter remembers about presses (ADR-053 Inc.11, ADR-154)', () =
     expect(treeFilterKey('', true, 'critical  ')).not.toBe(treeFilterKey('', true, 'warning  '));
     // Values the tree was not told are narrowing it do not make a different filter.
     expect(treeFilterKey('x', false, 'critical  ')).toBe(treeFilterKey('x', false, ''));
+  });
+});
+
+describe('the pressed-folder record a tab keeps across a reload (ADR-154 increment 2)', () => {
+  it('reads back a well-formed record, and drops what does not read as one', () => {
+    const key = treeFilterKey('region', false, '');
+    expect(adoptFilterTouched({ key, ids: { g1: true, g2: false, g3: 'true' } })).toEqual({
+      key,
+      ids: { g1: true },
+    });
+    for (const raw of [
+      undefined,
+      null,
+      'x',
+      [],
+      { ids: { g1: true } },
+      { key: '', ids: { g1: true } },
+      { key: 42, ids: { g1: true } },
+      { key, ids: 'g1' },
+      { key, ids: {} },
+      { key, ids: { g1: false } },
+    ]) {
+      // The shared empty value, not merely an equal one: the tree compares by reference.
+      expect(adoptFilterTouched(raw)).toBe(NO_FILTER_TOUCHED);
+    }
+  });
+
+  it('caps the ids like the saved layout', () => {
+    const ids: Record<string, true> = {};
+    for (let i = 0; i < MAX_STORED_COLLAPSED + 3; i += 1) ids[`g${i}`] = true;
+    expect(Object.keys(adoptFilterTouched({ key: 'k', ids }).ids)).toHaveLength(MAX_STORED_COLLAPSED);
+  });
+
+  it('is forgotten only when the page has not asked for a search AND the tree shows none', () => {
+    // 🚨 The first render after a reload: the page holds `?q=` already, the tree has not been handed
+    // the term yet. Forgetting here is what would make the record useless.
+    expect(shouldForgetTouched(false, true), 'forgot the record on the first frame of a reload').toBe(
+      false,
+    );
+    // The box was just cleared: the page's term is empty a tick before the tree stops searching.
+    expect(shouldForgetTouched(true, false)).toBe(false);
+    expect(shouldForgetTouched(true, true)).toBe(false);
+    // Both agree the search is gone: typing the same term again starts every folder open.
+    expect(shouldForgetTouched(false, false)).toBe(true);
   });
 });
 
