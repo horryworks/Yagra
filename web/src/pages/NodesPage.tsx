@@ -334,8 +334,8 @@ export function NodesPage() {
   // lists above because a released node is *not* suppressed — the tree needs all three to draw the
   // markers correctly, and the release panel needs them to offer the undo.
   const [exemptions, setExemptions] = useState<SuppressionExemption[]>([]);
-  const [maintenanceTarget, setMaintenanceTarget] = useState<SuppressionTarget | null>(null);
-  const [muteTarget, setMuteTarget] = useState<SuppressionTarget | null>(null);
+  const [maintenanceTarget, setMaintenanceTarget] = useState<ActionTarget | null>(null);
+  const [muteTarget, setMuteTarget] = useState<ActionTarget | null>(null);
   // Poll-pool assignment from the tree's right-click chips (ADR-009/020). `pools` feeds the chips;
   // `poolTarget` holds the target whose "Custom…" dialog is open.
   const [pools, setPools] = useState<PoolOption[]>([]);
@@ -534,27 +534,61 @@ export function NodesPage() {
   // "Custom…" item (durationMs === null) opens the full create form prefilled with the scope.
   const scopeError = (e: unknown, fallback: string) => setError(errMsg(e, fallback));
 
-  const setMaintenance = (target: SuppressionTarget, durationMs: number | null) => {
+  const setMaintenance = (target: ActionTarget, durationMs: number | null) => {
     if (durationMs === null) {
       setMaintenanceTarget(target);
       return;
     }
     const now = new Date();
+    const ends = new Date(now.getTime() + durationMs).toISOString();
+    if (target.kind === 'nodes') {
+      // One window per node, because a window's scope is a single id. The partial result goes on
+      // the page's error band, **after** the refresh — reporting it first would be wiped by
+      // `reloadSuppression`'s own `setError(null)` and a half-covered fleet would read as covered.
+      api
+        .createMaintenanceWindows({
+          node_ids: targetNodeIds(target),
+          name: t('maintenanceWindowNameMany', { count: target.nodes.length }),
+          starts_at: now.toISOString(),
+          ends_at: ends,
+        })
+        .then(async (r) => {
+          clearChecked();
+          await reloadSuppression();
+          if (r.created < r.requested) setError(t('err.setMaintenancePartial', { ...r }));
+        })
+        .catch((e: unknown) => scopeError(e, t('err.setMaintenance')));
+      return;
+    }
     api
       .createMaintenanceWindow({
         name: t('maintenanceWindowName', { name: target.name }),
         scope_level: target.kind === 'group' ? 'group_id' : 'node',
         scope_id: target.id,
         starts_at: now.toISOString(),
-        ends_at: new Date(now.getTime() + durationMs).toISOString(),
+        ends_at: ends,
       })
       .then(reloadSuppression)
       .catch((e: unknown) => scopeError(e, t('err.setMaintenance')));
   };
 
-  const setMute = (target: SuppressionTarget, durationMs: number | null) => {
+  const setMute = (target: ActionTarget, durationMs: number | null) => {
     if (durationMs === null) {
       setMuteTarget(target);
+      return;
+    }
+    if (target.kind === 'nodes') {
+      api
+        .createMutes({
+          node_ids: targetNodeIds(target),
+          until: new Date(Date.now() + durationMs).toISOString(),
+        })
+        .then(async (r) => {
+          clearChecked();
+          await reloadSuppression();
+          if (r.created < r.requested) setError(t('err.mutePartial', { ...r }));
+        })
+        .catch((e: unknown) => scopeError(e, t('err.mute')));
       return;
     }
     api
@@ -668,8 +702,22 @@ export function NodesPage() {
         onSelect: () => setPoolTarget({ kind: 'nodes', nodes }),
       });
     }
+    if (canMaintenance) {
+      items.push({
+        key: 'maintenance',
+        label: t('select.maintenance'),
+        onSelect: () => setMaintenanceTarget({ kind: 'nodes', nodes }),
+      });
+    }
+    if (canAck) {
+      items.push({
+        key: 'mute',
+        label: t('select.mute'),
+        onSelect: () => setMuteTarget({ kind: 'nodes', nodes }),
+      });
+    }
     return items;
-  }, [checked, canConfig, t]);
+  }, [checked, canConfig, canMaintenance, canAck, t]);
 
   // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
   // back to the first problem node (warning/critical/unreachable), else clear it. The fallback is
@@ -1027,10 +1075,17 @@ export function NodesPage() {
             onDeleteChecked={canConfig ? () => setDeletingNodes([...checked.values()]) : undefined}
             checked={checked}
             anchorId={anchorId}
-            onCheckedChange={(next, anchor) => {
-              setChecked(next);
-              setAnchorId(anchor);
-            }}
+            // ⚠️ Ctrl / Shift marking is offered for any of the three permissions, not just
+            // `canConfig` — since 増分 11 an operator who may only suppress still has batch verbs
+            // to reach, and gating the *selection* on the strictest of them would hide them all.
+            onCheckedChange={
+              canConfig || canMaintenance || canAck
+                ? (next, anchor) => {
+                    setChecked(next);
+                    setAnchorId(anchor);
+                  }
+                : undefined
+            }
             onRequestMoveNode={(n) => setMoving([n])}
             onMoveChecked={canConfig ? () => setMoving([...checked.values()]) : undefined}
             onMoveCheckedByPrefix={
@@ -1073,14 +1128,20 @@ export function NodesPage() {
               🚨 **Do not "fix" that by writing `scrollTop`** the way
               `NodeDetail/InterfacesTab.tsx`'s `keepSelectedInView` does. Scrolling the tree for the
               operator is precisely what 増分 5 exists to stop. */}
-          {canConfig && checked.size > 0 && (
+          {/* ⚠️ The bar itself opens for **any** of the three permissions, and each control
+              inside it is gated on its own (ADR-056). It was `canConfig` alone, so an operator
+              who may silence a fleet but not reshape it had no bar at all — and since 増分 11 the
+              bar is where the batch suppression lives. */}
+          {(canConfig || canMaintenance || canAck) && checked.size > 0 && (
             <div className="nodes-selbar">
               <span className="nodes-selbar-count">
                 {t('select.count', { count: checked.size })}
               </span>
-              <Button variant="outline" onClick={() => setMoving([...checked.values()])}>
-                {t('select.move')}
-              </Button>
+              {canConfig && (
+                <Button variant="outline" onClick={() => setMoving([...checked.values()])}>
+                  {t('select.move')}
+                </Button>
+              )}
               {canMoveByPrefix(groups, canConfig) && (
                 <Button variant="outline" onClick={() => setMovingByPrefix([...checked.values()])}>
                   {t('select.moveByPrefix')}
@@ -1090,9 +1151,11 @@ export function NodesPage() {
                   was reachable only by right-clicking a checked row, so an operator working from
                   the bar had no way to know bulk tagging exists at all — the shape ADR-055 R6
                   is about, with the feature present rather than absent. */}
-              <Button variant="outline" onClick={() => setTaggingNodes([...checked.values()])}>
-                {t('select.tag')}
-              </Button>
+              {canConfig && (
+                <Button variant="outline" onClick={() => setTaggingNodes([...checked.values()])}>
+                  {t('select.tag')}
+                </Button>
+              )}
               {/* The verbs that are not the common two. They go in a menu rather than as buttons
                   because `.nodes-selbar` is one wrapping flex line above the tree, and every line
                   it wraps to covers another row of the inventory (増分 5 決定 A). */}
@@ -1107,9 +1170,11 @@ export function NodesPage() {
                   )}
                 />
               )}
-              <Button variant="outline" onClick={() => setDeletingNodes([...checked.values()])}>
-                {t('select.delete')}
-              </Button>
+              {canConfig && (
+                <Button variant="outline" onClick={() => setDeletingNodes([...checked.values()])}>
+                  {t('select.delete')}
+                </Button>
+              )}
               <Button variant="outline" onClick={clearChecked}>
                 {t('select.clear')}
               </Button>
@@ -1349,7 +1414,10 @@ export function NodesPage() {
           groups={groups}
           initialScope={maintenanceTarget}
           onClose={() => setMaintenanceTarget(null)}
-          onSaved={reloadSuppression}
+          onSaved={() => {
+            if (maintenanceTarget.kind === 'nodes') clearChecked();
+            void reloadSuppression();
+          }}
         />
       )}
       {muteTarget && (
@@ -1357,7 +1425,10 @@ export function NodesPage() {
           groups={groups}
           initialScope={muteTarget}
           onClose={() => setMuteTarget(null)}
-          onSaved={reloadSuppression}
+          onSaved={() => {
+            if (muteTarget.kind === 'nodes') clearChecked();
+            void reloadSuppression();
+          }}
         />
       )}
       {poolTarget && (

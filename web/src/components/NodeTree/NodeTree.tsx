@@ -239,11 +239,14 @@ interface Props {
   /** Act on a suppression from the panel or the context menu. One callback over a union so the
    *  page answers with a single exhaustive switch. Omit to hide every release control. */
   onRelease?: (action: ReleaseAction) => void;
-  /** Right-click → put a node/group into maintenance. `durationMs` = preset length from now;
-   *  `null` = open the full create form prefilled with the scope ("Custom…"). */
-  onSetMaintenance?: (target: SuppressionTarget, durationMs: number | null) => void;
+  /** Right-click → put a node, folder or the working set into maintenance. `durationMs` = preset
+   *  length from now; `null` = open the full create form prefilled with the scope ("Custom…").
+   *
+   *  🚨 **The target is an `ActionTarget` since ADR-124 増分 11**: it was a single row, so a preset
+   *  pressed with a dozen nodes selected covered exactly one of them. */
+  onSetMaintenance?: (target: ActionTarget, durationMs: number | null) => void;
   /** Right-click → mute a node/group. `durationMs`/`null` as for `onSetMaintenance`. */
-  onSetMute?: (target: SuppressionTarget, durationMs: number | null) => void;
+  onSetMute?: (target: ActionTarget, durationMs: number | null) => void;
   /** Pools offered by the right-click poll-pool chips (`GET /api/v1/pools`). */
   pools?: PoolOption[];
   /** Right-click → assign a node, a folder, or the whole working set to a poll-pool. A pool name
@@ -557,15 +560,29 @@ export function NodeTree({
   // and so a mis-aimed click lands on a panel that names what it would release rather than on an
   // action. The chips create suppression, which is safe to get wrong; releasing is what makes a
   // fleet page during planned work.
+  // 🚨 **Since ADR-124 増分 11 the presets act on the working set when the row carries it.** Until
+  // then they wrote one node while sitting in a menu headed "Move 20 selected…" — so an operator
+  // silencing a dozen devices for tonight's work covered exactly one, and found out by being paged.
+  // The scope is `nodeActionItems`, the same answer the moves, Delete and the pool chips read.
+  //
+  // ⚠️ **The release panel stays about the row.** It is opened from a row's own marker and names
+  // what it would release; a batch release would have to reconcile causes that differ per node.
   const suppressionMenu = (
-    target: SuppressionTarget,
+    target: ActionTarget,
+    rowTarget: SuppressionTarget,
     node: NodeSummary | undefined,
     at: { x: number; y: number },
   ): React.ReactNode => {
     if (!onSetMaintenance && !onSetMute) return null;
-    const row = (label: string, handler: (t: SuppressionTarget, ms: number | null) => void) => (
+    const many = target.kind === 'nodes';
+    const count = targetNodeCount(target);
+    const row = (
+      label: string,
+      manyLabel: string,
+      handler: (t: ActionTarget, ms: number | null) => void,
+    ) => (
       <div className="ntree-menu-section">
-        <div className="ntree-menu-label">{label}</div>
+        <div className="ntree-menu-label">{many ? manyLabel : label}</div>
         <div className="ntree-menu-durs">
           {DURATION_PRESETS.map((p) => (
             <button
@@ -596,13 +613,16 @@ export function NodeTree({
     return (
       <>
         <div className="ntree-menu-sep" />
-        {onSetMaintenance && row(t('tree.maintenance'), onSetMaintenance)}
-        {onSetMute && row(t('tree.mute'), onSetMute)}
-        {onRelease && hasSuppression(suppression, target, node) && (
+        {onSetMaintenance &&
+          row(t('tree.maintenance'), t('tree.maintenanceSelected', { count }), onSetMaintenance)}
+        {onSetMute && row(t('tree.mute'), t('tree.muteSelected', { count }), onSetMute)}
+        {/* ⚠️ Asks about `rowTarget`, never `target`: the presets above may be acting on the
+            batch, but a release is about what is suppressing *this* row and names it. */}
+        {onRelease && hasSuppression(suppression, rowTarget, node) && (
           <button
             type="button"
             onClick={() =>
-              setMenu({ x: at.x, y: at.y, kind: 'suppress', target, node })
+              setMenu({ x: at.x, y: at.y, kind: 'suppress', target: rowTarget, node })
             }
           >
             {t('tree.suppression.act.open')}
@@ -1406,6 +1426,7 @@ export function NodeTree({
               )}
               {suppressionMenu(
                 { kind: 'group', id: menu.group.id, name: menu.group.name },
+                { kind: 'group', id: menu.group.id, name: menu.group.name },
                 undefined,
                 menu,
               )}
@@ -1520,7 +1541,10 @@ export function NodeTree({
                 batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
                 batchTarget ? sharedOwnPool([...checkedNodes.values()]) : menu.node.pool,
               )}
+              {/* The presets act on the batch when this row carries it (増分 11); the release
+                  panel below them stays about the row, so it is passed the row's own node. */}
               {suppressionMenu(
+                batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
                 { kind: 'node', id: menu.node.id, name: menu.node.name },
                 menu.node,
                 menu,

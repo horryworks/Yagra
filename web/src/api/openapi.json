@@ -7168,6 +7168,78 @@
         }
       }
     },
+    "/api/v1/maintenance-windows/bulk": {
+      "post": {
+        "tags": [
+          "maintenance"
+        ],
+        "summary": "Open a maintenance window over each of many nodes at once (ADR-124 増分 11).",
+        "description": "\"This dozen, tonight\" rarely follows a folder boundary, so the folder-scoped window cannot\nexpress it and the single-node form meant one request each.\n\n**One window per node rather than one window naming many**: a window's scope is a single id\n(migration 0011), and widening that is a schema change the alert engine, the suppression index\nand `list_suppressions` all read.\n\n⚠️ **Only the `node` level.** The class levels (`profile`, `group`) already reach many nodes by\nnaming a class, and the folder level reaches a subtree — a batch of ids is the case none of them\ncovers. The scope check is therefore the node one, applied by the store's `JOIN nodes` rather\nthan a pre-check, so a node deleted between the check and the write cannot get a window.",
+        "operationId": "create_maintenance_windows_bulk",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many windows were opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkSuppressionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty name, unparseable or backwards bounds, or more ids than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageMaintenance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/maintenance-windows/{id}": {
       "put": {
         "tags": [
@@ -9032,6 +9104,77 @@
           },
           "404": {
             "description": "A group scope naming a group that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mutes/bulk": {
+      "post": {
+        "tags": [
+          "maintenance"
+        ],
+        "summary": "Mute many nodes at once (ADR-124 増分 11) — the mute twin of the bulk window above, and a\nseparate route because it asks for a different permission: muting is `AckAlerts`, opening a\nwindow is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them\nfor both.",
+        "operationId": "create_mutes_bulk",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkMute"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many mutes were created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkSuppressionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unparseable or past `until`, an illegal metric name, or more ids than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks AckAlerts",
             "content": {
               "application/json": {
                 "schema": {
@@ -24057,6 +24200,38 @@
           }
         }
       },
+      "BulkMute": {
+        "type": "object",
+        "description": "Mute each of many nodes until one moment.",
+        "required": [
+          "node_ids",
+          "until"
+        ],
+        "properties": {
+          "metric_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "until": {
+            "type": "string"
+          }
+        }
+      },
       "BulkNodeDelete": {
         "type": "object",
         "description": "The nodes to delete.",
@@ -24186,6 +24361,27 @@
           }
         }
       },
+      "BulkSuppressionResult": {
+        "type": "object",
+        "description": "What a bulk suppression write actually did. Shared by the window and the mute form: they answer\nthe same question and a second shape would be two names for one fact.",
+        "required": [
+          "requested",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows actually written. **Lower than `requested` is normal**: an id can name a node that has\nsince been deleted, or one outside the caller's scope. The two are not distinguished.",
+            "minimum": 0
+          },
+          "requested": {
+            "type": "integer",
+            "description": "Distinct node ids the request named, after de-duplication.",
+            "minimum": 0
+          }
+        }
+      },
       "BulkTagResult": {
         "type": "object",
         "description": "What a bulk tag edit actually did.",
@@ -24204,6 +24400,34 @@
             "type": "integer",
             "description": "Distinct ids the request named, after de-duplication.",
             "minimum": 0
+          }
+        }
+      },
+      "BulkWindow": {
+        "type": "object",
+        "description": "Open one window over each of many nodes.",
+        "required": [
+          "node_ids",
+          "name",
+          "starts_at",
+          "ends_at"
+        ],
+        "properties": {
+          "ends_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "starts_at": {
+            "type": "string"
           }
         }
       },

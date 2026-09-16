@@ -736,6 +736,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("open_maintenance"),
     ),
     (
+        "POST",
+        "/api/v1/maintenance-windows/bulk",
+        // `GroupFiltered`, unlike the single-window `POST` above it, which is `NodeScoped` because
+        // it addresses one stored row's target. This one names a set of nodes and pushes the
+        // caller's scope into the store's `JOIN nodes`, which is what `GroupFiltered` describes
+        // (ADR-124 増分 11). A node outside the scope is not suppressed and not counted.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
         "DELETE",
         "/api/v1/maintenance-windows/:id",
         NodeScoped,
@@ -855,6 +865,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("list_suppressions"),
     ),
     ("POST", "/api/v1/mutes", NodeScoped, NO_MCP_WRITE),
+    (
+        "POST",
+        "/api/v1/mutes/bulk",
+        // `GroupFiltered` for the reason `/maintenance-windows/bulk` is: it names a set of nodes
+        // and the scope becomes a predicate in the write (ADR-124 増分 11).
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
     ("DELETE", "/api/v1/mutes/:id", NodeScoped, NO_MCP_WRITE),
     (
         "GET",

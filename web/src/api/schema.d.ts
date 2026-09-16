@@ -1393,6 +1393,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance-windows/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a maintenance window over each of many nodes at once (ADR-124 増分 11).
+         * @description "This dozen, tonight" rarely follows a folder boundary, so the folder-scoped window cannot
+         *     express it and the single-node form meant one request each.
+         *
+         *     **One window per node rather than one window naming many**: a window's scope is a single id
+         *     (migration 0011), and widening that is a schema change the alert engine, the suppression index
+         *     and `list_suppressions` all read.
+         *
+         *     ⚠️ **Only the `node` level.** The class levels (`profile`, `group`) already reach many nodes by
+         *     naming a class, and the folder level reaches a subtree — a batch of ids is the case none of them
+         *     covers. The scope check is therefore the node one, applied by the store's `JOIN nodes` rather
+         *     than a pre-check, so a node deleted between the check and the write cannot get a window.
+         */
+        post: operations["create_maintenance_windows_bulk"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/maintenance-windows/{id}": {
         parameters: {
             query?: never;
@@ -1790,6 +1820,28 @@ export interface paths {
         get: operations["list_mutes"];
         put?: never;
         post: operations["create_mute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mutes/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mute many nodes at once (ADR-124 増分 11) — the mute twin of the bulk window above, and a
+         *     separate route because it asks for a different permission: muting is `AckAlerts`, opening a
+         *     window is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them
+         *     for both.
+         */
+        post: operations["create_mutes_bulk"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5331,6 +5383,13 @@ export interface components {
             /** @description Distinct ids the request named, after de-duplication. */
             requested: number;
         };
+        /** @description Mute each of many nodes until one moment. */
+        BulkMute: {
+            metric_name?: string | null;
+            node_ids: string[];
+            reason?: string | null;
+            until: string;
+        };
         /** @description The nodes to delete. */
         BulkNodeDelete: {
             node_ids: string[];
@@ -5395,6 +5454,20 @@ export interface components {
             /** @description Distinct ids the request named, after de-duplication. */
             requested: number;
         };
+        /**
+         * @description What a bulk suppression write actually did. Shared by the window and the mute form: they answer
+         *     the same question and a second shape would be two names for one fact.
+         */
+        BulkSuppressionResult: {
+            /**
+             * Format: int64
+             * @description Rows actually written. **Lower than `requested` is normal**: an id can name a node that has
+             *     since been deleted, or one outside the caller's scope. The two are not distinguished.
+             */
+            created: number;
+            /** @description Distinct node ids the request named, after de-duplication. */
+            requested: number;
+        };
         /** @description What a bulk tag edit actually did. */
         BulkTagResult: {
             /**
@@ -5406,6 +5479,13 @@ export interface components {
             applied: number;
             /** @description Distinct ids the request named, after de-duplication. */
             requested: number;
+        };
+        /** @description Open one window over each of many nodes. */
+        BulkWindow: {
+            ends_at: string;
+            name: string;
+            node_ids: string[];
+            starts_at: string;
         };
         /** @description One note, with the table it concerns and how many rows it covers. */
         BundleNote: {
@@ -17626,6 +17706,66 @@ export interface operations {
             };
         };
     };
+    create_maintenance_windows_bulk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkWindow"];
+            };
+        };
+        responses: {
+            /** @description How many windows were opened */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkSuppressionResult"];
+                };
+            };
+            /** @description Empty name, unparseable or backwards bounds, or more ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageMaintenance */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     set_maintenance_window_enabled: {
         parameters: {
             query?: never;
@@ -19117,6 +19257,66 @@ export interface operations {
             };
             /** @description A group scope naming a group that does not exist */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    create_mutes_bulk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkMute"];
+            };
+        };
+        responses: {
+            /** @description How many mutes were created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkSuppressionResult"];
+                };
+            };
+            /** @description An unparseable or past `until`, an illegal metric name, or more ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks AckAlerts */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

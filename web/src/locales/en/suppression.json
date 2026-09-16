@@ -78,7 +78,10 @@
     "tzHint": "“From”/“To” are in {{tz}} (your browser’s local time) and are stored as UTC.",
     "err": {
       "add": "failed to add window"
-    }
+    },
+    "defaultNameMany": "Maintenance — {{count}} nodes",
+    "lockedNodes": "These {{count}} selected nodes, each with its own window:",
+    "partial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
   },
   "mutes": {
     "note": "Silence notifications for a node (or one check) until a time — the alert still fires and node state / SLA are unaffected. For planned work, use <maintenanceLink>Maintenance windows</maintenanceLink>.",
@@ -145,6 +148,8 @@
     "reasonPlaceholder": "reason (optional)",
     "err": {
       "add": "failed to add mute"
-    }
+    },
+    "lockedNodes": "These {{count}} selected nodes, each with its own mute:",
+    "partial": "Muted {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
   }
 }

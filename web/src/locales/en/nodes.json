@@ -198,7 +198,9 @@
     "prefixTooMany": "A folder can carry at most 64 ranges.",
     "prefixDescTooLong": "The description for {{prefix}} is too long (200 characters at most).",
     "savePrefixes": "Failed to save the IP ranges",
-    "setPoolPartial": "Set the pool on {{applied}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
+    "setPoolPartial": "Set the pool on {{applied}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
+    "setMaintenancePartial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
+    "mutePartial": "Muted {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
   },
   "maintenanceWindowName": "Maintenance — {{name}}",
   "detail": {
@@ -638,7 +640,9 @@
     "pinFailed": "failed to change the pin",
     "menuFor": "Actions for {{name}}",
     "menuRoot": "Tree actions",
-    "poolSelected": "Poller pool — {{count}} selected"
+    "poolSelected": "Poller pool — {{count}} selected",
+    "maintenanceSelected": "Maintenance — {{count}} selected",
+    "muteSelected": "Mute — {{count}} selected"
   },
   "moveNode": {
     "title": "Move {{name}}",
@@ -805,7 +809,9 @@
     "clear": "Clear",
     "hint": "Ctrl-click to add one, Shift-click to add a run.",
     "pool": "Poller pool…",
-    "more": "More…"
+    "more": "More…",
+    "maintenance": "Maintenance…",
+    "mute": "Mute…"
   },
   "groupPicker": {
     "none": "No folder",
@@ -829,5 +835,6 @@
       "noMatch": "No address falls inside a folder range.",
       "allAmbiguous": "Every match was claimed by more than one folder."
     }
-  }
+  },
+  "maintenanceWindowNameMany": "Maintenance — {{count}} nodes"
 }
