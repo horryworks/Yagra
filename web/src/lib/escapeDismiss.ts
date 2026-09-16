@@ -8,6 +8,16 @@
 // ordering, not novelty — **the innermost open surface wins**, and the page's own selection is only
 // touched when nothing is open above it.
 //
+// 🚨 **"What is open above" is not enough on its own, because listeners run in registration order.**
+// Every surface here listens on `document`, so which one hears a press first is whichever
+// registered first — and a page that re-registers its listener (the Nodes split does, whenever the
+// URL changes) ends up *behind* a popover opened before it. The popover then closes, React removes
+// it between the two listeners, and the page looks up, finds nothing open, and clears its selection
+// too. ADR-153 made that the normal case: a filter written to the URL re-registers the split's
+// listener, so closing a node tab's filter popover with Escape threw away the node. So a surface
+// that acts on Escape **marks it used** (`preventDefault()`), and nothing below acts on a used one —
+// which holds in either order. `consumeEscape` is the one spelling of the mark.
+//
 // **Why a `.ts`.** The callers are all `.tsx`, and a `.tsx` test is a file nothing runs
 // (`environment: 'node'` + `include: ['src/**/*.test.ts']`, see testing.md). Writing the same
 // four-clause condition in three components is also how the third copy ends up wrong
@@ -63,6 +73,14 @@ export interface EscapeContext {
   tagName?: string;
   /** `document.activeElement`'s `isContentEditable`. */
   isEditable: boolean;
+  /** Whether a surface already acted on this press (`KeyboardEvent.defaultPrevented`). */
+  handled?: boolean;
+}
+
+/** Mark an Escape as acted on, so the layers below it leave it alone. Call it from the handler that
+ *  closes something, before or after closing — the mark is on the event, not on the DOM. */
+export function consumeEscape(e: KeyboardEvent): void {
+  e.preventDefault();
 }
 
 /** Whether this key press should dismiss what the caller owns.
@@ -72,6 +90,7 @@ export interface EscapeContext {
  *  same reasoning as `searchBox.ts::shouldFocusOnSlash`, which refuses to steal `/` out of an input. */
 export function shouldDismissOnEscape(ctx: EscapeContext): boolean {
   if (ctx.key !== 'Escape') return false;
+  if (ctx.handled) return false;
   if (ctx.overlayOpen) return false;
   if (ctx.isEditable) return false;
   switch ((ctx.tagName ?? '').toUpperCase()) {
@@ -91,6 +110,7 @@ function ask(e: KeyboardEvent, selector: string): boolean {
     overlayOpen: document.querySelector(selector) !== null,
     tagName: active?.tagName,
     isEditable: active?.isContentEditable ?? false,
+    handled: e.defaultPrevented,
   });
 }
 
@@ -119,5 +139,9 @@ export function escapeClosesInPageSurface(e: KeyboardEvent): boolean {
  *  rule behind it. Nothing had noticed because the metric picker is the first popover this product
  *  has ever put inside a dialog. */
 export function escapeClosesDialog(e: KeyboardEvent): boolean {
-  return e.key === 'Escape' && document.querySelector(ABOVE_DIALOG_SELECTOR) === null;
+  return (
+    e.key === 'Escape' &&
+    !e.defaultPrevented &&
+    document.querySelector(ABOVE_DIALOG_SELECTOR) === null
+  );
 }

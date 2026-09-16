@@ -29,7 +29,7 @@ import { filterSlots, INTERFACE_COLUMNS } from './interfaceColumns';
 import { ColumnResizeHandles, ColumnWidthReset } from '../ui/ColumnResizeHandles';
 import { useColumnWidths } from '../ui/useColumnWidths';
 import { useRefreshTick } from '../../lib/refreshTick';
-import { escapeClosesInPageSurface } from '../../lib/escapeDismiss';
+import { consumeEscape, escapeClosesInPageSurface } from '../../lib/escapeDismiss';
 import {
   FAULT_SERIES,
   faultValues,
@@ -63,7 +63,9 @@ import { duplexState } from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../../lib/columnFilter';
+import { useFilterParams } from '../../lib/useFilterParams';
+import { nodeTabFilterPrefix } from './tabs';
 import { facetCounts } from '../../lib/filterCounts';
 import { buildPredicate } from '../../lib/filterPredicate';
 import { dockBudget, stickyChromeHeight } from './interfaceDockHeight';
@@ -118,7 +120,11 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   // The predicate lives in `tabFilters.ts`: it was hand-rolled here and searched two fields
   // where the row shows five, and a `.tsx` is a file no test runs (testing.md).
   const columns = useMemo(() => interfaceColumns(t), [t]);
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
+  // In the URL under `interfaces.` (ADR-153 決定 4): a reload keeps it, and so does walking the tree
+  // to the next device — "which ports are down" is the question an operator carries from switch to
+  // switch. ADR-134 had declined this, and its reason (`ifindex` names a different port on the next
+  // device) is about the SELECTED row below, which stays local.
+  const { filters, setFilters } = useFilterParams(columns, nodeTabFilterPrefix('interfaces'));
   const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   // Escape closes the dock (ADR-073). It was the one dismissal this tab lacked — re-clicking the
@@ -132,7 +138,10 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   useEffect(() => {
     if (selected === null) return;
     const onKey = (e: KeyboardEvent) => {
-      if (escapeClosesInPageSurface(e)) setSelected(null);
+      if (escapeClosesInPageSurface(e)) {
+        consumeEscape(e);
+        setSelected(null);
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);

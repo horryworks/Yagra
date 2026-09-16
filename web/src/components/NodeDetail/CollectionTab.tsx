@@ -28,7 +28,9 @@ import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
-import { defaultFilters, type FilterState } from '../../lib/columnFilter';
+import { defaultFilters } from '../../lib/columnFilter';
+import { useFilterParams } from '../../lib/useFilterParams';
+import { nodeTabFilterPrefix } from './tabs';
 import { facetCounts } from '../../lib/filterCounts';
 import { buildPredicate } from '../../lib/filterPredicate';
 import { metricColumns } from './tabFilters';
@@ -177,7 +179,8 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const [data, setData] = useState<Loaded | null>(null);
   // Client-side: one node has metrics in the dozens, and the tab already has them all.
   const columns = useMemo(() => metricColumns(t), [t]);
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
+  // In the URL under `collection.` (ADR-153): survives a reload and the walk to the next node.
+  const { filters, setFilters } = useFilterParams(columns, nodeTabFilterPrefix('collection'));
   const [sheet, setSheet] = useState(false);
   // The shared window, not a local one: an operator who picks 24h on the Interfaces pane and then
   // opens a metric here expects the same 24 hours (`store.ts` persists it across the panes).

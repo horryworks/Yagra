@@ -42,6 +42,7 @@ import {
   type Placement,
   type Point,
 } from './popoverPlacement';
+import { consumeEscape } from '../../lib/escapeDismiss';
 import './AnchoredPopover.css';
 
 /** Roles a popover may take. Each is also a valid `aria-haspopup` value, which is what lets the
@@ -166,7 +167,12 @@ export function AnchoredPopover({
       if (!anchorRef?.current?.contains(t) && !popRef.current?.contains(t)) onDismiss(false);
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') onDismiss(true);
+      // Marked used, so the page behind does not act on the same press once this has closed —
+      // see `escapeDismiss.ts` on why "is a popover still open" cannot answer that on its own.
+      if (e.key === 'Escape') {
+        consumeEscape(e);
+        onDismiss(true);
+      }
     };
     // Capture phase, because scroll does not bubble: the popover is positioned from the trigger's
     // rect, so it has to be re-placed whenever an ancestor scrolls. It must NOT close instead — a

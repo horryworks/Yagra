@@ -11,7 +11,8 @@
 // URL-backed have their own round-trip tests (`columnFilter.spec.ts` for the Events log).
 
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
+import { BOOTSTRAP_OVERRIDES, TREE_SIBLING_IDS } from '../support/bootstrap';
+import { defaultBodyFor, type Json } from '../support/openapi';
 
 type Page = import('@playwright/test').Page;
 type Locator = import('@playwright/test').Locator;
@@ -59,6 +60,74 @@ test.describe('Reports — three tables and a tab on one route', () => {
     // The same column on another tab is a different table: it must not arrive filtered.
     await page.getByRole('tab', { name: /Saved reports/ }).click();
     await expect(page.getByRole('button', { name: /Clear all filters/ })).toHaveCount(0);
+  });
+});
+
+test.describe('a node-detail tab', () => {
+  /** Every node in the tree is an SNMP-polled device, so every one has an Interfaces tab. */
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/nodes/{node_id}': (url) => {
+          const id = url.pathname.split('/').pop() ?? '';
+          const body = defaultBodyFor(`/api/v1/nodes/${id}`) as { id: string; kind: string; snmp_configured: boolean };
+          body.id = id;
+          body.kind = 'device';
+          body.snmp_configured = true;
+          return body as unknown as Json;
+        },
+      },
+    },
+  });
+
+  const pane = (page: Page) => page.locator('.nodes-detail-pane');
+
+  test('shares the URL with the tree without reading or clearing the tree’s filter', async ({ page }) => {
+    // The tree's `kind` and the Events tab's `kind` are one column name on one URL. Arrive with the
+    // tree's set: a tab that read it bare would show as filtered before anything was typed.
+    await page.goto(`/nodes?kind=device&sel=node:${TREE_SIBLING_IDS[0]}&tab=events`);
+    await expect(page.getByRole('tab', { selected: true })).toHaveText(/^Events/);
+    await expect(pane(page).getByRole('group', { name: 'Column filters' })).toBeVisible();
+    await expect(pane(page).getByRole('button', { name: /Clear all filters/ }), 'the tab read the tree’s key').toHaveCount(0);
+
+    await typeFilter(page, pane(page), 'Message', NEEDLE);
+    // 🚨 The Escape that closed the filter popover is not the page's. Since the filter writes the URL,
+    // the page's own Escape listener is re-registered behind the popover's, and without the popover
+    // marking the press as used the second listener cleared the selection this tab belongs to.
+    await expect(page, 'closing the filter popover with Escape also cleared the selection').toHaveURL(/[?&]sel=node/);
+    await expect(page).toHaveURL(new RegExp(`[?&]events\\.message=[^&]*${NEEDLE}`));
+    expect(new URL(page.url()).searchParams.get('kind'), 'the tab’s filter overwrote the tree’s').toBe('device');
+
+    await reload(page);
+    await expect(pane(page).getByRole('button', { name: /Clear all filters/ }), 'the reload lost the filter').toHaveCount(1);
+    await pane(page).getByRole('button', { name: /Clear all filters/ }).click();
+    await expect(page).not.toHaveURL(/events\.message=/);
+    expect(new URL(page.url()).searchParams.get('kind'), 'the tab’s clear-all took the tree’s filter').toBe('device');
+  });
+
+  test('keeps its filter on the next node and after a reload', async ({ page }) => {
+    await page.goto(`/nodes?sel=node:${TREE_SIBLING_IDS[0]}`);
+    // Pressed rather than arrived at by URL: the tab carries to the next node only once it has been
+    // clicked (ADR-134 決定 2), and the next node is where this test looks.
+    await page.getByRole('tab', { name: /^Interfaces/ }).click();
+    await expect(page.getByRole('tab', { selected: true })).toHaveText(/^Interfaces/);
+
+    await typeFilter(page, pane(page), 'Interface', NEEDLE);
+    await expect(page).toHaveURL(new RegExp(`[?&]interfaces\\.if_name=[^&]*${NEEDLE}`));
+
+    // Walk to another switch in the tree: the filter is still in force there.
+    await page.locator('.ntree-node').nth(2).click();
+    await expect(page).toHaveURL(new RegExp(`sel=node%3A${TREE_SIBLING_IDS[2]}`));
+    await expect(page.getByRole('tab', { selected: true })).toHaveText(/^Interfaces/);
+    await expect(pane(page).getByRole('button', { name: /Clear all filters/ }), 'the next node lost the filter').toHaveCount(1);
+
+    await reload(page);
+    await expect(page.getByRole('tab', { selected: true })).toHaveText(/^Interfaces/);
+    await expect(pane(page).getByRole('button', { name: /Clear all filters/ }), 'the reload lost the filter').toHaveCount(1);
+
+    await pane(page).getByRole('button', { name: /Clear all filters/ }).click();
+    await expect(page).not.toHaveURL(/interfaces\.if_name=/);
   });
 });
 

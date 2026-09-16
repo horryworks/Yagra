@@ -4,12 +4,15 @@
 // Source column and its filter are both dropped — every row is this node — and "Open in Events →"
 // deep-links to the node-filtered Events page.
 //
-// The filters are **local state, not the URL**, and that is the one deliberate difference from the
-// Events page. This tab's own identity already lives in the query string (`?tab=events`), and a
-// node page's URL is shared to mean "this node", not "this node filtered like so"; putting five
-// more keys there would also collide with whatever the *next* tab wants to store.
+// The filters live in the URL under `events.` (ADR-153). They used to be local state, on the
+// argument that a node page's URL means "this node" and that more keys would collide with the next
+// tab's — and a reload threw them away. The collision was real (the inventory tree on `/nodes` owns
+// a bare `kind` too), which is what the prefix answers; the route ledger in
+// `filterSpecRegistry.test.ts` checks the keys stay disjoint.
 
 import { useMemo, useState } from 'react';
+import { useFilterParams } from '../../lib/useFilterParams';
+import { nodeTabFilterPrefix } from './tabs';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { NodeDetail } from '../../types/api';
@@ -30,7 +33,7 @@ import {
   useSearchSemantics,
   useWidenedEventLog,
 } from '../EventLog/useEventFilters';
-import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../../lib/columnFilter';
 import { ClearFilters } from '../ui/ClearFilters';
 
 export function EventsTab({ node }: { node: NodeDetail }) {
@@ -43,11 +46,11 @@ export function EventsTab({ node }: { node: NodeDetail }) {
     () => eventFilterColumns(t, { showSource: false, semantics }),
     [t, semantics],
   );
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
-  // Resolved when the range changes, never per request — a lower bound that creeps forward between
-  // "load older" pages drops rows the keyset cursor was walking towards (`boundsFor`).
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const rangeValue = filters.at ?? '';
+  // `nowMs` is resolved when the range changes, never per request — a lower bound that creeps
+  // forward between "load older" pages drops rows the keyset cursor was walking towards
+  // (`boundsFor`). `useFilterParams` pins it on exactly that rule; this tab used to hold a second
+  // copy of it.
+  const { filters, setFilters, nowMs } = useFilterParams(filterCols, nodeTabFilterPrefix('events'));
 
   const query = useMemo(() => eventFilterQuery(filters, nowMs), [filters, nowMs]);
   const facets = useEventFacets(filterCols, filters, nowMs, { node_id: node.id });
@@ -75,10 +78,6 @@ export function EventsTab({ node }: { node: NodeDetail }) {
     prefixMiss: t('events.emptyPrefixMiss'),
   }[eventEmptyKind(filters, semantics, isAnyFiltered(filterCols, filters))];
 
-  const apply = (next: FilterState) => {
-    if ((next.at ?? '') !== rangeValue) setNowMs(Date.now());
-    setFilters(next);
-  };
 
   return (
     <div className="nd-ev">
@@ -99,7 +98,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
         <ClearFilters
           columns={filterCols}
           filters={filters}
-          onClear={() => apply(defaultFilters(filterCols))}
+          onClear={() => setFilters(defaultFilters(filterCols))}
         />
         <TableSpacer />
         <ResultCount
@@ -113,7 +112,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
         rows={rows}
         columns={columns}
         filters={filters}
-        onFiltersChange={apply}
+        onFiltersChange={setFilters}
         filterCounts={facets.counts}
         onFilterOpen={facets.load}
         renderCard={renderCard}
@@ -127,7 +126,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
         <MobileFilterSheet
           columns={filterCols}
           filters={filters}
-          onChange={apply}
+          onChange={setFilters}
           counts={facets.counts}
           labels={eventColumnLabels(t)}
           onClose={() => setSheet(false)}

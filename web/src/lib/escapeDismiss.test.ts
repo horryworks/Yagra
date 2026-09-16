@@ -29,6 +29,13 @@ describe('shouldDismissOnEscape', () => {
     }
   });
 
+  it('leaves alone a press a surface already acted on, whatever is still in the document', () => {
+    // The listener-order case (ADR-153): a popover heard the press first, closed, and was gone from
+    // the DOM by the time the page asked — so `overlayOpen` is false and only the mark says no.
+    expect(shouldDismissOnEscape({ ...plain, handled: true })).toBe(false);
+    expect(shouldDismissOnEscape({ ...plain, handled: false })).toBe(true);
+  });
+
   it('defers to whatever is open above the page', () => {
     // The layering rule (ADR-073 decision 4): a modal, a popover or the tree's context menu gets
     // the press, and the selection behind it is left alone.
