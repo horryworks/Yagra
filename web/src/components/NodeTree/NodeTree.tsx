@@ -71,6 +71,7 @@ import {
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  nodeActionItems,
   nodeDeleteItems,
   nodeMoveItems,
   rootMenuHasItems,
@@ -1123,6 +1124,22 @@ export function NodeTree({
   const deleteItems =
     menu?.kind === 'node' ? nodeDeleteItems(checkedNodes, menu.node.id, !!onDeleteNode) : null;
 
+  /** Whether the open node menu is one where a *batch* is in play — either because this row
+   *  carries the set, or because the set exists on other rows. The row-scoped items name their
+   *  node in both cases: the danger is a menu that offers "Move 20 selected…" and "Edit node…"
+   *  together, where the second silently means one (ADR-124 増分 9).
+   *
+   *  ⚠️ Asked through `nodeActionItems` with `true`, not by reading `checkedNodes.size` here — the
+   *  question "does this row's gesture involve the batch" has one answer in this codebase, and a
+   *  second copy of it is exactly what Inc.4 had to undo in the drag path. */
+  const actsOnBatch =
+    menu?.kind === 'node'
+      ? (() => {
+          const items = nodeActionItems(checkedNodes, menu.node.id, true);
+          return items?.scope === 'selection' || !!items?.nameTheRow;
+        })()
+      : false;
+
   /** The two items that act on the working set. Rendered in the single item's place when the
    *  right-clicked row is in the set, and below a separator when it is not. */
   const selectionMoveItems = (count: number): React.ReactNode => (
@@ -1383,6 +1400,10 @@ export function NodeTree({
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
                 {t('tree.open')}
               </button>
+              {/* 🚨 These two act on the row even while the menu also carries
+                  "Move N selected…" above them, so while a batch is in play they name the node
+                  (ADR-124 増分 9 / ADR-055 R1). Neither has a batch form: a pin is this account's
+                  own navigation and the edit dialog shows one node's whole binding. */}
               {onTogglePin && (
                 <button
                   type="button"
@@ -1391,12 +1412,20 @@ export function NodeTree({
                     setMenu(null);
                   }}
                 >
-                  {pins?.nodes.has(menu.node.id) ? t('tree.unpin') : t('tree.pin')}
+                  {pins?.nodes.has(menu.node.id)
+                    ? actsOnBatch
+                      ? t('tree.unpinNamed', { name: menu.node.name })
+                      : t('tree.unpin')
+                    : actsOnBatch
+                      ? t('tree.pinNamed', { name: menu.node.name })
+                      : t('tree.pin')}
                 </button>
               )}
               {onEditNode && (
                 <button type="button" onClick={() => { onEditNode(menu.node); setMenu(null); }}>
-                  {t('tree.editNodeEllipsis')}
+                  {actsOnBatch
+                    ? t('tree.editNodeNamed', { name: menu.node.name })
+                    : t('tree.editNodeEllipsis')}
                 </button>
               )}
               {/* The move items, and what they act on (ADR-124 Inc.2). A right-click on a row that

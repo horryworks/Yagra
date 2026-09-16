@@ -1049,6 +1049,13 @@ export function NodesPage() {
                   {t('select.moveByPrefix')}
                 </Button>
               )}
+              {/* 🚨 The bar and the context menu must offer the same verbs (ADR-124 増分 9). Tag
+                  was reachable only by right-clicking a checked row, so an operator working from
+                  the bar had no way to know bulk tagging exists at all — the shape ADR-055 R6
+                  is about, with the feature present rather than absent. */}
+              <Button variant="outline" onClick={() => setTaggingNodes([...checked.values()])}>
+                {t('select.tag')}
+              </Button>
               <Button variant="outline" onClick={() => setDeletingNodes([...checked.values()])}>
                 {t('select.delete')}
               </Button>

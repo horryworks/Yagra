@@ -7,6 +7,7 @@ import {
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  nodeActionItems,
   nodeDeleteItems,
   nodeMoveItems,
   nodeMenuHasItems,
@@ -15,6 +16,11 @@ import {
 } from './nodeTreeMenu';
 import type { SuppressionIndex, SuppressionTarget } from '../../lib/suppression';
 import type { NodeGroup, NodeSummary } from '../../types/api';
+
+/** A working set, as the menu judgement reads it: ids to node-ish values it never looks inside.
+ *  One copy — it was declared separately inside two `describe` blocks, and ADR-124 増分 9 would
+ *  have made that three. */
+const set = (...ids: string[]) => new Map(ids.map((id) => [id, { id }]));
 
 const caps = (over: Partial<MenuCapabilities> = {}): MenuCapabilities => ({
   canEdit: false,
@@ -177,7 +183,6 @@ describe('canMoveByPrefix', () => {
 });
 
 describe('nodeDeleteItems', () => {
-  const set = (...ids: string[]) => new Map(ids.map((id) => [id, { id }]));
 
   it('deletes the working set when the right-clicked row is in it', () => {
     // 🚨 THE REGRESSION (ADR-124 増分 6). An operator removing duplicates selected a run of rows,
@@ -212,7 +217,6 @@ describe('nodeDeleteItems', () => {
 });
 
 describe('nodeMoveItems', () => {
-  const set = (...ids: string[]) => new Map(ids.map((id) => [id, { id }]));
 
   it('moves the working set when the right-clicked row is in it, and offers no single move', () => {
     // 🚨 THE REGRESSION (ADR-124 Inc.2). Three rows Shift-selected, a right-click on one of them,
@@ -254,5 +258,61 @@ describe('nodeMoveItems', () => {
   it('offers nothing without ManageConfig', () => {
     expect(nodeMoveItems(set('a', 'b'), 'a', false)).toBeNull();
     expect(nodeMoveItems(set(), 'a', false)).toBeNull();
+  });
+});
+
+describe('nodeActionItems', () => {
+  // 🚨 ADR-124 増分 9. Move and Delete each carried their own copy of this rule, and the actions
+  // with no copy at all — pool, maintenance, mute, Poll now — kept acting on one row while sitting
+  // in a menu headed "Move 20 selected…". One function now, so a new batch-aware action cannot
+  // quietly answer differently.
+  it('gives the set to a row inside it, and the row to one outside', () => {
+    expect(nodeActionItems(set('a', 'b'), 'a', true)).toEqual({
+      scope: 'selection',
+      count: 2,
+      nameTheRow: false,
+    });
+    expect(nodeActionItems(set('a', 'b'), 'z', true)).toEqual({
+      scope: 'row',
+      count: 2,
+      nameTheRow: true,
+    });
+  });
+
+  it('treats a set of just this row as the row, unnamed', () => {
+    // Nothing else is in the batch, so naming the row would distinguish it from nothing.
+    expect(nodeActionItems(set('a'), 'a', true)).toEqual({
+      scope: 'row',
+      count: 1,
+      nameTheRow: false,
+    });
+    expect(nodeActionItems(set(), 'a', true)).toEqual({
+      scope: 'row',
+      count: 0,
+      nameTheRow: false,
+    });
+  });
+
+  it('draws nothing without the permission the action needs', () => {
+    // ADR-056: a control the caller may not use is not drawn, rather than drawn disabled.
+    expect(nodeActionItems(set('a', 'b'), 'a', false)).toBeNull();
+  });
+
+  it('is what the move and delete items are built from', () => {
+    // The property that keeps the three in step: Move is this plus `alsoSelection`, Delete is this
+    // unchanged. If either grows a second answer, one of these fails.
+    for (const [checked, row] of [
+      [set('a', 'b'), 'a'],
+      [set('a', 'b'), 'z'],
+      [set('a'), 'a'],
+      [set(), 'a'],
+    ] as const) {
+      const base = nodeActionItems(checked, row, true);
+      expect(nodeDeleteItems(checked, row, true)).toEqual(base);
+      expect(nodeMoveItems(checked, row, true)).toEqual({
+        ...base,
+        alsoSelection: base?.nameTheRow,
+      });
+    }
   });
 });
