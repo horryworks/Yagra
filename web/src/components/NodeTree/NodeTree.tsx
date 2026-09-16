@@ -15,7 +15,7 @@
 // group inside its own subtree are refused (cycle guard). This component is presentation +
 // interaction only; the page owns the data and turns the callbacks into API calls + a reload.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
@@ -80,7 +80,26 @@ import {
   rootMenuHasItems,
   type MenuCapabilities,
 } from './nodeTreeMenu';
-import { clickOutcome, toggleChecked, type CheckedNodes } from './nodeTreeSelect';
+import { clickOutcome, rowNode, toggleChecked, type CheckedNodes } from './nodeTreeSelect';
+import {
+  anchorOnSettle,
+  ariaLevel,
+  CURSOR_SETTLE_MS,
+  cursorAfterSelection,
+  cursorForMove,
+  indexOfSelection,
+  keyBelongsToTree,
+  menuStep,
+  moveCheckedChange,
+  pageRows,
+  rowDomId,
+  rowSelection,
+  settleCursor,
+  shouldRefocusTree,
+  spaceCheckedChange,
+  treeKeyAction,
+  type MoveGesture,
+} from './nodeTreeKeys';
 import { pinFocusScroll, restoreScroll, type ScrollAt } from './nodeTreeScroll';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
@@ -95,6 +114,9 @@ const BASE_PAD = 6;
 /** Fixed row height (matches `--row-h` in tokens.css) — every tree row is one line, so the
  *  flattened list virtualizes with a uniform estimate (S13). */
 const ROW_H = 30;
+/** How far in from a row's left edge a menu opened from the keyboard appears (ADR-155 決定 7) — past
+ *  the twisty and the icon, where a right-click on the name would have put it. */
+const MENU_KEY_INSET_PX = 40;
 
 /** How long the viewport must settle before its folders are fetched (ADR-125).
  *
@@ -350,6 +372,16 @@ export function NodeTree({
   const [menu, setMenu] = useState<Menu>(null);
   /** Group row whose ＋ menu is open — keeps that row's hover-revealed actions on screen. */
   const [addMenuGroup, setAddMenuGroup] = useState<string | null>(null);
+  /** Where the keyboard has put the selection before `?sel=` has been written (ADR-155 決定 3).
+   *  Null outside that window. The rows draw `shown`, so a held arrow key moves `.sel` at once
+   *  while the URL — and the detail pane keyed on it — waits for the keys to rest. */
+  const [cursor, setCursor] = useState<TreeSelection>(null);
+  const shown: TreeSelection = cursor ?? selected ?? null;
+  /** The selection this tree last wrote to `?sel=`, from a key or a click. Two readers: the settle
+   *  effect, which re-runs on every render and must not write the same press again while the URL
+   *  catches up; and the selection effect, which tells "the URL caught up with us" apart from
+   *  "something else moved the selection" (`cursorAfterSelection`). */
+  const committed = useRef<TreeSelection>(null);
 
   // Active name filter (case-insensitive). While filtering, every group starts open and
   // non-matching rows are hidden, so matches are always revealed — and a group matched by its own
@@ -434,13 +466,38 @@ export function NodeTree({
   // its pane does not have, and Escape needs a keyboard.
   const isSelected = (kind: 'node' | 'group', id: string) =>
     selected?.kind === kind && selected.id === id;
+  // A click overtakes a key press still waiting to be written (ADR-155 決定 3). While one is pending
+  // the rows show the cursor, not `?sel=`, so a click on the row `?sel=` holds is "go back there" —
+  // it drops the cursor rather than clearing a selection the operator could not see was current.
+  //
+  // 🚨 **A click shows its row at once, through the same cursor a key uses.** The URL write is
+  // rendered as a transition, so for a moment after a click `selected` still names the previous row
+  // — and a key pressed in that moment started from it. Measured in the full Tier1 run: a click on a
+  // folder followed at once by Down selected the first row of the tree (the tree read "nothing
+  // selected", and Down from nothing is the first row). Marking the click as written is what lets the
+  // URL catching up clear the cursor, and stops the settle effect writing it a second time.
+  const showClicked = (sel: NonNullable<TreeSelection>) => {
+    const next = cursorForMove(sel, selected ?? null, committed.current);
+    if (next) committed.current = next;
+    setCursor(next);
+  };
   const selectNode = (node: NodeSummary) => {
-    if (onSelectNone && isSelected('node', node.id)) return onSelectNone();
-    return onSelectNode ? onSelectNode(node) : onOpenNode(node);
+    if (cursor) {
+      setCursor(null);
+      if (isSelected('node', node.id)) return;
+    } else if (onSelectNone && isSelected('node', node.id)) return onSelectNone();
+    if (!onSelectNode) return onOpenNode(node);
+    showClicked({ kind: 'node', id: node.id });
+    onSelectNode(node);
   };
   const selectGroup = (group: NodeGroup) => {
-    if (onSelectNone && isSelected('group', group.id)) return onSelectNone();
-    onSelectGroup?.(group);
+    if (cursor) {
+      setCursor(null);
+      if (isSelected('group', group.id)) return;
+    } else if (onSelectNone && isSelected('group', group.id)) return onSelectNone();
+    if (!onSelectGroup) return;
+    showClicked({ kind: 'group', id: group.id });
+    onSelectGroup(group);
   };
 
   const checkedNodes: CheckedNodes = checked ?? EMPTY_CHECKED;
@@ -818,6 +875,25 @@ export function NodeTree({
     reset();
   };
 
+  /** Open or close a folder — the ▶'s press, and Right / Left / Enter's (ADR-155 決定 6). One path,
+   *  so a folder closed from the keyboard is saved to the account exactly as the ▶ saves it.
+   *
+   *  One rule in every mode (ADR-154): the saved layout gets the opposite of what this row shows, and
+   *  a press under a search is also recorded so the row can show it. The layout is read from the
+   *  store rather than this render's copy, so two presses inside one frame cannot write from the
+   *  same stale set. */
+  const pressFolder = (id: string, isOpen: boolean) => {
+    const next = pressTwisty(
+      {
+        collapsed: usePrefsStore.getState().nodeTreeCollapsed,
+        touched: useTreeTouchedStore.getState().touched,
+      },
+      { id, isOpen, searching, key: collapseKey },
+    );
+    setNodeTreeCollapsed(next.collapsed);
+    if (next.touched !== touched) useTreeTouchedStore.getState().setTouched(next.touched);
+  };
+
   /** Drop-feedback class for a row that is the current target. */
   const dropClass = (id: string): string => {
     if (!dropTarget || dropTarget.id !== id) return '';
@@ -826,10 +902,15 @@ export function NodeTree({
 
   const groupRow = (row: Extract<FlatRow, { kind: 'group' }>): React.ReactNode => {
     const { group, depth, isOpen, hasChildren, tally } = row;
-    const isSel = selected?.kind === 'group' && selected.id === group.id;
+    const isSel = shown?.kind === 'group' && shown.id === group.id;
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id ?? null };
     return (
       <div
+        id={rowDomId({ kind: 'group', id: group.id })}
+        role="treeitem"
+        aria-level={ariaLevel(row)}
+        aria-selected={isSel}
+        aria-expanded={hasChildren ? isOpen : undefined}
         className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${draggingIds.has(group.id) ? ' dragging' : ''}`}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
         draggable={canEdit}
@@ -848,24 +929,15 @@ export function NodeTree({
           setMenu({ x: e.clientX, y: e.clientY, kind: 'group', group });
         }}
       >
+        {/* Out of the Tab order, like the name beside it (ADR-155 決定 1): the tree is one Tab stop,
+            and Right / Left / Enter open and close from the keyboard. */}
         <button
           type="button"
+          tabIndex={-1}
           className={`ntree-twisty${isOpen ? ' open' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            // One rule in every mode (ADR-154): the saved layout gets the opposite of what this row
-            // shows, and a press under a search is also recorded so the row can show it. The
-            // layout is read from the store rather than this render's copy, so two presses inside
-            // one frame cannot write from the same stale set.
-            const next = pressTwisty(
-              {
-                collapsed: usePrefsStore.getState().nodeTreeCollapsed,
-                touched: useTreeTouchedStore.getState().touched,
-              },
-              { id: group.id, isOpen, searching, key: collapseKey },
-            );
-            setNodeTreeCollapsed(next.collapsed);
-            if (next.touched !== touched) useTreeTouchedStore.getState().setTouched(next.touched);
+            pressFolder(group.id, isOpen);
           }}
           aria-label={isOpen ? t('nav:shell.collapse') : t('nav:shell.expand')}
           disabled={!hasChildren}
@@ -877,6 +949,7 @@ export function NodeTree({
         </span>
         <button
           type="button"
+          tabIndex={-1}
           className="ntree-grp-name"
           onClick={(e) => {
             e.stopPropagation();
@@ -977,15 +1050,19 @@ export function NodeTree({
     );
   };
 
-  const renderNode = (node: NodeSummary, depth: number): React.ReactNode => {
+  const renderNode = (node: NodeSummary, depth: number, level: number): React.ReactNode => {
     const target: Target = { kind: 'node', id: node.id, scope: node.group_id ?? null };
-    const isSel = selected?.kind === 'node' && selected.id === node.id;
+    const isSel = shown?.kind === 'node' && shown.id === node.id;
     // 🚨 A class of its own, never `sel`. `tests/ui/treeDeselect.spec.ts` pins `.ntree-row.sel`
     // at exactly one row, which is the property that proves the pane's selection is single.
     const isChecked = checkedNodes.has(node.id);
     const move = nodeMoveItems(checkedNodes, node.id, canEdit);
     return (
       <div
+        id={rowDomId({ kind: 'node', id: node.id })}
+        role="treeitem"
+        aria-level={level}
+        aria-selected={isSel}
         className={`ntree-row ntree-node${isSel ? ' sel' : ''}${isChecked ? ' checked' : ''}${dropClass(node.id)}${draggingIds.has(node.id) ? ' dragging' : ''}`}
         key={node.id}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
@@ -1013,6 +1090,7 @@ export function NodeTree({
         </span>
         <button
           type="button"
+          tabIndex={-1}
           className="ntree-node-name"
           // Every row: the name can be cut off, and the address is how two rows are told apart.
           title={`${node.name} — ${node.address}`}
@@ -1085,6 +1163,7 @@ export function NodeTree({
     const rootDropActive = dropTarget?.id === 'root' && !!drag;
     return (
       <div
+        role="none"
         className={`ntree-row ntree-ungrouped-head${rootDropActive ? ' drop-inside' : ''}`}
         style={{ paddingLeft: BASE_PAD }}
         onDragOver={(e) => {
@@ -1112,7 +1191,7 @@ export function NodeTree({
 
   // Placeholder shown under an open group whose members are still being lazily fetched (A-3).
   const loadingRow = (depth: number): React.ReactNode => (
-    <div className="ntree-row ntree-loading" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
+    <div className="ntree-row ntree-loading" role="none" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
       <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
       <span className="ntree-loading-label muted">{t('tree.loadingNodes')}</span>
     </div>
@@ -1122,7 +1201,7 @@ export function NodeTree({
   // nothing retries on its own any more, and a row that only said "loading" would be a lie the
   // operator waits on forever (ADR-055 R6: say it where they are looking).
   const failedRow = (depth: number, groupId: string): React.ReactNode => (
-    <div className="ntree-row ntree-failed" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
+    <div className="ntree-row ntree-failed" role="none" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
       <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
       <span className="ntree-failed-label">{t('tree.loadFailed')}</span>
       {onRetryGroup && (
@@ -1139,7 +1218,7 @@ export function NodeTree({
         return groupRow(row);
       case 'node':
       case 'ungrouped-node':
-        return renderNode(row.node, row.depth);
+        return renderNode(row.node, row.depth, ariaLevel(row));
       case 'group-loading':
         return loadingRow(row.depth);
       case 'group-failed':
@@ -1187,6 +1266,197 @@ export function NodeTree({
     publishedOnce.current = true;
     onPendingGroupsChange(settledKey ? settledKey.split(',') : []);
   }, [settledKey, onPendingGroupsChange]);
+
+  // ---- The keyboard (ADR-155). Every decision is `nodeTreeKeys.ts`'s; this block applies them. ----
+
+  const settledCursor = useDebouncedValue(cursor, CURSOR_SETTLE_MS);
+  // `selected` and the page's callbacks are new objects on every render, so this runs on most renders
+  // anyway; `settleCursor` holds the identity checks that make a re-run a no-op.
+  useEffect(() => {
+    const index = indexOfSelection(flat, settledCursor);
+    switch (settleCursor(settledCursor, cursor, selected ?? null, committed.current, index >= 0)) {
+      case 'wait':
+        return;
+      case 'clear':
+        setCursor(null);
+        return;
+      case 'commit': {
+        committed.current = settledCursor;
+        const row = flat[index];
+        if (row.kind === 'group') {
+          if (onSelectGroup) onSelectGroup(row.group);
+          else setCursor(null);
+          return;
+        }
+        const node = rowNode(row);
+        if (!node || !onSelectNode) {
+          setCursor(null);
+          return;
+        }
+        // The anchor catches up once, here, rather than on every repeat (`moveCheckedChange`).
+        const anchor = anchorOnSettle(checkedNodes.size, anchorId ?? null, node.id);
+        if (anchor !== null && onCheckedChange) onCheckedChange(new Map(), anchor);
+        onSelectNode(node);
+      }
+    }
+  }, [
+    flat,
+    settledCursor,
+    cursor,
+    selected,
+    onSelectNode,
+    onSelectGroup,
+    checkedNodes.size,
+    anchorId,
+    onCheckedChange,
+  ]);
+
+  /** `selected` is rebuilt from the URL on every render, so the effect below is keyed on this. */
+  const selectedKey = selected ? rowDomId(selected) : '';
+  useEffect(() => {
+    const wrote = committed.current;
+    committed.current = null;
+    setCursor((c) => cursorAfterSelection(c, selected ?? null, wrote));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the selection's identity; `selected` itself is a new object every render
+  }, [selectedKey]);
+
+  /** Put the cursor on a row: the working set first (it is page state, and not debounced), then the
+   *  cursor, then the scroll — the one scroll this tree writes (ADR-155 決定 4). */
+  const moveCursor = (index: number, gesture: MoveGesture) => {
+    const row = flat[index];
+    const sel = rowSelection(row);
+    if (!sel) return;
+    const node = rowNode(row);
+    if (node && onCheckedChange) {
+      const change = moveCheckedChange(gesture, node, {
+        flat,
+        anchorId: anchorId ?? null,
+        selection: shown,
+        checked: checkedNodes,
+      });
+      if (change) onCheckedChange(change.checked, change.anchorId);
+    }
+    setCursor(cursorForMove(sel, selected ?? null, committed.current));
+    rowVirtualizer.scrollToIndex(index, { align: 'auto' });
+  };
+
+  /** Set by a menu opened from the keyboard, read when the menu has been placed (focus the first
+   *  item) and when it closes (give focus back to the tree). A pointer open sets neither. */
+  const menuOpenedByKey = useRef(false);
+  const focusMenuOnPlace = useRef(false);
+  /** `AnchoredPopover` reports being placed, but not being unmounted — so this is reset when the
+   *  menu closes, or the next keyboard open would focus an item that is still hidden. */
+  const [menuPlaced, setMenuPlaced] = useState(false);
+
+  const menuItems = (root: ParentNode | null): HTMLButtonElement[] =>
+    root ? [...root.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')] : [];
+
+  const openMenuFromKey = (index: number) => {
+    const row = flat[index];
+    const sel = rowSelection(row);
+    if (!sel) return;
+    rowVirtualizer.scrollToIndex(index, { align: 'auto' });
+    const box = (document.getElementById(rowDomId(sel)) ?? scrollRef.current)?.getBoundingClientRect();
+    if (!box) return;
+    const x = box.left + MENU_KEY_INSET_PX;
+    const y = box.bottom;
+    if (row.kind === 'group') {
+      if (!groupMenuHasItems(caps)) return;
+      setMenu({ x, y, kind: 'group', group: row.group });
+    } else {
+      const node = rowNode(row);
+      if (!node) return;
+      setMenu({ x, y, kind: 'node', node });
+    }
+    menuOpenedByKey.current = true;
+    focusMenuOnPlace.current = true;
+  };
+
+  // A hidden element cannot take focus, and the popover is hidden until measured — hence placed.
+  useLayoutEffect(() => {
+    if (!menu || !menuPlaced || !focusMenuOnPlace.current) return;
+    focusMenuOnPlace.current = false;
+    menuItems(document.querySelector('.ntree-menu'))[0]?.focus({ preventScroll: true });
+  }, [menu, menuPlaced]);
+
+  useEffect(() => {
+    if (menu) return;
+    setMenuPlaced(false);
+    focusMenuOnPlace.current = false;
+    if (!menuOpenedByKey.current) return;
+    menuOpenedByKey.current = false;
+    const active = document.activeElement;
+    const onDocument = active === null || active === document.body;
+    if (shouldRefocusTree(onDocument, document.querySelector('[role="dialog"]') !== null)) {
+      scrollRef.current?.focus({ preventScroll: true });
+    }
+  }, [menu]);
+
+  /** Up / Down / Home / End inside the tree's own menu. Tab closes it and gives focus back to the
+   *  tree — the item holding focus goes with the menu, so letting Tab move on from it would start
+   *  from nowhere. */
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      setMenu(null);
+      return;
+    }
+    const items = menuItems(e.currentTarget);
+    const next = menuStep(e.key, items.indexOf(document.activeElement as HTMLButtonElement), items.length);
+    if (next === null) return;
+    e.preventDefault();
+    items[next].focus({ preventScroll: true });
+  };
+
+  const onTreeKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // A menu open over the tree owns the keyboard; the tree moving under it would leave the menu
+    // naming a row that is no longer the current one.
+    if (e.defaultPrevented || menu) return;
+    const body = e.currentTarget;
+    const target = e.target as HTMLElement;
+    if (!keyBelongsToTree(target, body, body.contains(target))) return;
+    const outcome = treeKeyAction(e, {
+      flat,
+      cursor: indexOfSelection(flat, shown),
+      page: pageRows(body.clientHeight, ROW_H),
+    });
+    if (!outcome) return;
+    e.preventDefault();
+    // After a click, focus sits on the row's name button, where a claimed Space or Enter would
+    // still activate the button when the key comes up. On the body it activates nothing.
+    if (document.activeElement !== body) body.focus({ preventScroll: true });
+    switch (outcome.kind) {
+      case 'none':
+        return;
+      case 'move':
+        return moveCursor(outcome.index, outcome.gesture);
+      case 'set-open': {
+        const row = flat[outcome.index];
+        if (row.kind === 'group') pressFolder(row.group.id, row.isOpen);
+        return;
+      }
+      case 'check': {
+        const node = rowNode(flat[outcome.index]);
+        if (!node || !onCheckedChange) return;
+        const change = spaceCheckedChange(node, checkedNodes);
+        onCheckedChange(change.checked, change.anchorId);
+        return;
+      }
+      case 'open-node': {
+        const node = rowNode(flat[outcome.index]);
+        if (node) onOpenNode(node);
+        return;
+      }
+      case 'menu':
+        return openMenuFromKey(outcome.index);
+    }
+  };
+
+  /** `aria-activedescendant` only while the current row is rendered: a reference to an id that is not
+   *  in the document (a row scrolled out of the virtualized window) is an error, not a hint. */
+  const activeIndex = indexOfSelection(flat, shown);
+  const activeDescendant =
+    shown && virtualRows.some((v) => v.index === activeIndex) ? rowDomId(shown) : undefined;
 
   /** What the open node menu's move items act on (ADR-124 Inc.2). Decided in `nodeTreeMenu.ts`;
    *  here it is only applied. */
@@ -1293,6 +1563,13 @@ export function NodeTree({
       <div
         className="ntree-body"
         ref={scrollRef}
+        // One Tab stop for the whole tree, and the rows named through `aria-activedescendant`
+        // (ADR-155 決定 1) — a virtualized row that held focus would take it away when scrolled out.
+        tabIndex={0}
+        role="tree"
+        aria-label={t('inventory.treeLabel')}
+        aria-activedescendant={activeDescendant}
+        onKeyDown={onTreeKeyDown}
         // ADR-124 増分 5 決定 B, both halves, from one place. Capture phase, so a descendant that
         // ever stops mousedown propagation cannot disarm either of them — and `menuAtDown` is the
         // ADR-073 決定 4 ordering, which must not become optional. Same element, same event.
@@ -1318,7 +1595,10 @@ export function NodeTree({
           menuAtDown.current = false;
           pinned.current = null;
           if (wasOpen || !onSelectNone) return;
-          if (e.target === e.currentTarget) onSelectNone();
+          if (e.target === e.currentTarget) {
+            setCursor(null);
+            onSelectNone();
+          }
         }}
       >
         {flat.length === 0 ? (
@@ -1386,6 +1666,9 @@ export function NodeTree({
           }
           className="ntree-menu"
           onDismiss={closeMenu}
+          onPlacedChange={setMenuPlaced}
+          // The release panel is a dialog of its own, not a list of items to walk.
+          onKeyDown={menu.kind === 'suppress' ? undefined : onMenuKeyDown}
         >
           {menu.kind === 'suppress' ? (
             suppressionPanel(menu)

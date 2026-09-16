@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The inventory tree can be driven from the keyboard.** In All nodes, select a node or folder and press **↑ / ↓** to move the selection; the detail pane follows once the key comes to rest, so holding a key down scrolls through the tree without reloading the pane at every row. **→** opens a closed folder or steps into an open one, **←** closes an open folder or steps out to its parent, **Enter** opens or closes a folder and opens a node's own page, and **Home / End / Page Up / Page Down** jump through long trees. **Space** adds the current node to the selection bar below the tree or takes it out, **Shift+↑ / ↓** extends that selection the way a Shift click does, and **Ctrl+↑ / ↓** moves without changing it. The **context-menu key** or **Shift+F10** opens the row's right-click menu, which can now be walked with the arrow keys. The whole tree is a single Tab stop — Tab moves past it in one press instead of stopping on every row — and it is announced to screen readers as a tree. Escape clears the selection as before.
+
 ## v0.3.24 — Filters, sort orders and the inventory search survive a reload, folders closed in the inventory tree stay closed and follow your account, CloudEngine S5735-L stacks show every member's serial, closing a popover with Escape keeps the selected node
 
 ### Improvements
