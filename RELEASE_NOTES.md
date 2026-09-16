@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.24 — Filters, sort orders and the inventory search survive a reload, folders closed in the inventory tree stay closed and follow your account, CloudEngine S5735-L stacks show every member's serial, closing a popover with Escape keeps the selected node
+
 ### Improvements
 
 - **The folders you close in the inventory tree follow your account.** Which folders are closed in All nodes is now saved with your other account preferences (column widths, the Interfaces chart height, Pinned only), so another browser or machine opens the tree the same way once you sign in. Up to 300 closed folders are remembered; past that, the one closed longest ago opens again. With **Pinned only** on and nothing typed in the search box, the tree now keeps the folders you closed as well — it used to reopen every folder on every visit. A closed folder above a pin still counts that pin in its bar.
