@@ -138,17 +138,50 @@ export function canMoveByPrefix(groups: readonly NodeGroup[], canEdit: boolean):
 
 /** What the move items on a node row act on — this one row, or the working set it belongs to
  *  (ADR-124 Inc.2). */
-export interface MoveItems {
-  /** `selection`: the items move every checked node. `row`: they move the right-clicked one. */
+/**
+ * What an action on a node row acts on: that row, or the whole working set.
+ *
+ * 🚨 **One shape for every batch-aware action** (ADR-124 増分 9). Move and Delete each had their
+ * own near-identical answer to this, and the actions that had *neither* — pool, maintenance, mute,
+ * Poll now — were the ones that silently kept acting on one row while sitting in a menu headed
+ * "Move 20 selected…". A new batch-aware action reads this rather than growing a third copy.
+ */
+export interface ActionItems {
+  /** `selection`: the item acts on every checked node. `row`: on the right-clicked one. */
   scope: 'row' | 'selection';
   /** How many nodes are checked. Read for a `selection` label, and for `alsoSelection`. */
   count: number;
   /** Row scope while a working set exists *elsewhere*: the row items carry the node's name, so
    *  "Move to group…" beside "Move 3 selected…" cannot be read as the batch (ADR-055 R1). */
   nameTheRow: boolean;
+}
+
+export interface MoveItems extends ActionItems {
   /** Row scope while a working set exists elsewhere: the selection items are offered too, below a
    *  separator — the batch is still there, and the operator may have meant it. */
   alsoSelection: boolean;
+}
+
+/**
+ * Which scope an action on this row has, and whether to name the row in its label.
+ *
+ * The file manager's rule, in one place: **a row that is in the working set carries the set**, and
+ * a row outside it acts on itself, named so it cannot be misread as the batch. `allowed` is the
+ * permission the action's own handler checks — `null` means do not draw the item at all
+ * (ADR-056: a control the caller may not use is not drawn).
+ *
+ * ⚠️ **The row-vs-selection question itself is `actsOnSelection`**, one import away and shared
+ * with the drag. This function decides what to *draw*; that one decides what is in a batch.
+ */
+export function nodeActionItems(
+  checked: ReadonlyMap<string, unknown>,
+  nodeId: string,
+  allowed: boolean,
+): ActionItems | null {
+  if (!allowed) return null;
+  const count = checked.size;
+  if (actsOnSelection(checked, nodeId)) return { scope: 'selection', count, nameTheRow: false };
+  return { scope: 'row', count, nameTheRow: count > 0 && !checked.has(nodeId) };
 }
 
 /**
@@ -165,42 +198,27 @@ export interface MoveItems {
  * the wrong one where it is easiest to reach. A row *outside* the set keeps its own move, named,
  * with the set's items below a separator; a set of just this row is the row.
  *
- * ⚠️ Only the moves and Delete are batch-aware — Delete since ADR-124 増分 6, by
- * {@link nodeDeleteItems}. Edit, pool and suppression stay about the row: none has a batch form to
- * switch to.
+ * The moves add one thing to {@link nodeActionItems}: a row *outside* the set is offered the set's
+ * moves as well, below a separator. Nothing else does — see {@link nodeDeleteItems}.
  *
  * Takes the permission rather than `MenuCapabilities` for the reason `canMoveByPrefix` does: the
  * row's ↗ is the second caller and has no capabilities object to hand over.
- *
- * ⚠️ **The row-vs-selection question is `actsOnSelection`, not a line of its own** (Inc.4). It
- * was written here first, and the drag path then answered it differently by not asking at all.
- * This function is now about which *items* to draw and what to call them; which nodes they act
- * on is one import away, shared with the drag.
  */
 export function nodeMoveItems(
   checked: ReadonlyMap<string, unknown>,
   nodeId: string,
   canEdit: boolean,
 ): MoveItems | null {
-  if (!canEdit) return null;
-  const count = checked.size;
-  if (actsOnSelection(checked, nodeId)) {
-    return { scope: 'selection', count, nameTheRow: false, alsoSelection: false };
-  }
-  const elsewhere = count > 0 && !checked.has(nodeId);
-  return { scope: 'row', count, nameTheRow: elsewhere, alsoSelection: elsewhere };
+  const items = nodeActionItems(checked, nodeId, canEdit);
+  if (!items) return null;
+  // The row's own move is offered beside the batch's only when the row is not in the batch —
+  // `nameTheRow` already answers exactly that question, so it is not asked twice.
+  return { ...items, alsoSelection: items.nameTheRow };
 }
 
-/** What the delete item on a node row acts on (ADR-124 増分 6). */
-export interface DeleteItems {
-  /** `selection`: the item deletes every checked node. `row`: the right-clicked one. */
-  scope: 'row' | 'selection';
-  /** How many nodes are checked. Read for a `selection` label. */
-  count: number;
-  /** Row scope while a working set exists elsewhere: the item carries the node's name, so a plain
-   *  "Delete…" cannot be read as deleting the batch. */
-  nameTheRow: boolean;
-}
+/** What the delete item on a node row acts on (ADR-124 増分 6). Unlike the moves it adds nothing
+ *  to {@link ActionItems} — see {@link nodeDeleteItems} for why it has no `alsoSelection`. */
+export type DeleteItems = ActionItems;
 
 /**
  * Which delete item a node row's menu carries, and what it deletes.
@@ -210,18 +228,16 @@ export interface DeleteItems {
  * duplicates on the PoC box selected a run, pressed Delete, and saw only one node go — the defect
  * {@link nodeMoveItems} fixed for moving, left in place for the one action that cannot be undone.
  *
- * Same rule as the moves, through the same function (`actsOnSelection`). Unlike the moves, a row
- * outside the set is **not** offered the set's delete as well: the batch has its own button on the
- * selection bar, and a destructive batch item in the menu of a row it does not include is easy to
- * press for the wrong reason.
+ * Same rule as the moves, through the same function. Unlike the moves, a row outside the set is
+ * **not** offered the set's delete as well: the batch has its own button on the selection bar, and
+ * a destructive batch item in the menu of a row it does not include is easy to press for the wrong
+ * reason. That is the whole of the difference, which is why this is {@link nodeActionItems}
+ * unchanged and the moves are the ones that wrap it.
  */
 export function nodeDeleteItems(
   checked: ReadonlyMap<string, unknown>,
   nodeId: string,
   canDelete: boolean,
 ): DeleteItems | null {
-  if (!canDelete) return null;
-  const count = checked.size;
-  if (actsOnSelection(checked, nodeId)) return { scope: 'selection', count, nameTheRow: false };
-  return { scope: 'row', count, nameTheRow: count > 0 && !checked.has(nodeId) };
+  return nodeActionItems(checked, nodeId, canDelete);
 }

@@ -228,3 +228,62 @@ test('the hover ↗ on a checked row moves the batch', async ({ page }) => {
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.movenode-list li')).toHaveCount(3);
 });
+
+test('a row-only action names its node while a batch is on screen', async ({ page }) => {
+  // 🚨 ADR-124 増分 9. Edit and Pin act on the right-clicked row and have no batch form, but they
+  // sat in a menu headed "Move 3 selected…" and said plainly "Edit node…" / "Pin" — so the menu
+  // offered twenty-node verbs and one-node verbs in the same list with nothing to tell them apart.
+  // This is the ADR-055 R1 rule the moves already follow, applied to the items that cannot switch.
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(3);
+
+  const name = await rows.nth(1).locator('.ntree-node-name').innerText();
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Edit node…', exact: true })).toHaveCount(0);
+  await expect(
+    menu.getByRole('button', { name: `Edit "${name}"…`, exact: true }),
+  ).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Pin', exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('button', { name: `Pin "${name}"`, exact: true })).toBeVisible();
+});
+
+test('a row-only action is unqualified when nothing else is selected', async ({ page }) => {
+  // The other half: naming the row on every menu would be noise, and would stop the name from
+  // meaning "careful, this one is not the batch".
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Edit node…', exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Pin', exact: true })).toBeVisible();
+});
+
+test('the selection bar offers tagging, the verb that was right-click only', async ({ page }) => {
+  // 🚨 ADR-124 増分 9. `POST /nodes/tags` and `BulkTagModal` both shipped in 増分 6's wake, reachable
+  // only by right-clicking a checked row — so an operator working from the bar could not learn that
+  // bulk tagging exists. The bar and the menu must offer the same verbs.
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
+
+  const bar = page.locator('.nodes-selbar');
+  await expect(bar).toBeVisible();
+  const tag = bar.getByRole('button', { name: 'Tag…', exact: true });
+  await expect(tag).toBeVisible();
+  await tag.click();
+  // The dialog acts on the whole working set, not on whichever row was clicked last.
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('2');
+});
