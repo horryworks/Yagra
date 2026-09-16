@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.22 — Find and delete nodes registered more than once, pin nodes and folders, serial numbers on a node's Overview, Poll now reads identity and row names at once, a core upgrade no longer leaves a chosen remote poller behind**
+> Status: **v0.3.23 — Set the poller pool, open maintenance and poll every selected node at once, drag several nodes between two rows and have them land there, the node Overview files its metrics by source, Huawei stacks show every member's serial**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

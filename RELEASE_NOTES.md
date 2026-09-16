@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.23 — Set the poller pool, open maintenance and poll every selected node at once, drag several nodes between two rows and have them land there, the node Overview files its metrics by source, Huawei stacks show every member's serial
+
 ### Improvements
 
 - **A node’s Overview files its remaining metrics by where they come from.** The single “System (SNMP)” section is now one section per source: **SNMP** (did the agent answer, how far the walk got, what it found, and sysUpTime), one per built-in metric set under that set’s own name (for example “Huawei VRP health” or “Host resources”), and **Other metrics** for collection items with no built-in definition. The **ICMP** section now also charts packet loss beside the round-trip time. A metric already drawn by the URL, DNS or Meraki card, or by Device health, is no longer charted a second time below it — a URL monitor used to show its five card metrics twice, under an “SNMP” heading. The built-in catalog the WebUI ships (`metricCatalog.json`) now carries each metric’s source and metric set, and `GET /api/v1/metric-meanings` (and `get_config(kind=metric_meanings)` over MCP) gains a nullable `family` field naming the probe a check metric comes from.
