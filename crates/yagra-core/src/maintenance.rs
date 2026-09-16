@@ -243,6 +243,62 @@ impl MaintenanceRepo {
         Ok(id)
     }
 
+    /// Open one node-scoped window over each of MANY nodes, in a single statement (ADR-124 増分 11).
+    /// Returns `(requested, created)` — the de-duplicated id count, and how many windows exist now.
+    ///
+    /// "This dozen, tonight" rarely follows a folder boundary, and the alternative was one request
+    /// per node. **One window per node rather than one window naming many** because the `Subject`
+    /// of a window is a single scope id (migration 0011) — widening that is a schema change the
+    /// alert engine, the suppression index and the MCP tool all read, and this feature does not
+    /// need it.
+    ///
+    /// ⚠️ **`created < requested` is normal**: an id can name a node deleted since the page loaded,
+    /// or one outside the caller's scope. The `JOIN nodes` is what enforces both, and the two are
+    /// deliberately indistinguishable in the count — saying which would confirm that a node the
+    /// caller may not see exists.
+    ///
+    /// ⚠️ **This is the one statement in this module that names `nodes`**, and it does so to put the
+    /// caller's scope into the write rather than trusting a pre-check: a node that disappears
+    /// between a `SELECT` and an `INSERT` would otherwise get a window pointing at nothing.
+    ///
+    /// Ids are generated here rather than by the database: this crate has no `gen_random_uuid()`
+    /// call site, and passing them in keeps the statement one `unnest` like its siblings.
+    pub async fn create_windows_for_nodes(
+        &self,
+        node_ids: &[Uuid],
+        name: &str,
+        starts_at: DateTime<Utc>,
+        ends_at: DateTime<Utc>,
+        scope: Option<&[Uuid]>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = node_ids
+            .iter()
+            .copied()
+            .filter(|id| seen.insert(*id))
+            .collect();
+        if ids.is_empty() {
+            return Ok((0, 0));
+        }
+        let window_ids: Vec<Uuid> = ids.iter().map(|_| Uuid::new_v4()).collect();
+        let res = sqlx::query(
+            "INSERT INTO maintenance_windows (id, name, scope_level, scope_id, starts_at, ends_at) \
+             SELECT t.window_id, $3, 'node', n.id::text, $4, $5 \
+               FROM unnest($1::uuid[], $2::uuid[]) AS t(node_id, window_id) \
+               JOIN nodes n ON n.id = t.node_id \
+              WHERE ($6::uuid[] IS NULL OR n.group_id = ANY($6))",
+        )
+        .bind(&ids)
+        .bind(&window_ids)
+        .bind(name)
+        .bind(starts_at)
+        .bind(ends_at)
+        .bind(scope)
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
+    }
+
     /// Enable/disable a window. Returns whether it exists.
     pub async fn set_window_enabled(&self, id: Uuid, enabled: bool) -> anyhow::Result<bool> {
         let res = sqlx::query("UPDATE maintenance_windows SET enabled = $2 WHERE id = $1")
@@ -448,6 +504,48 @@ impl MaintenanceRepo {
         .execute(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    /// Mute MANY nodes until one moment, in a single statement (ADR-124 増分 11). Returns
+    /// `(requested, created)` with the same meaning as [`Self::create_windows_for_nodes`], and the
+    /// same `JOIN nodes` carrying the caller's scope into the write.
+    ///
+    /// `check_name` narrows every one of them to a single metric, exactly as the single-node form
+    /// does — it is validated at the API edge, because the value reaches a PromQL selector.
+    pub async fn create_mutes_for_nodes(
+        &self,
+        node_ids: &[Uuid],
+        check_name: Option<&str>,
+        until_at: DateTime<Utc>,
+        reason: Option<&str>,
+        scope: Option<&[Uuid]>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = node_ids
+            .iter()
+            .copied()
+            .filter(|id| seen.insert(*id))
+            .collect();
+        if ids.is_empty() {
+            return Ok((0, 0));
+        }
+        let mute_ids: Vec<Uuid> = ids.iter().map(|_| Uuid::new_v4()).collect();
+        let res = sqlx::query(
+            "INSERT INTO mutes (id, scope_kind, node_id, group_id, check_name, until_at, reason) \
+             SELECT t.mute_id, 'node', n.id, NULL, $3, $4, $5 \
+               FROM unnest($1::uuid[], $2::uuid[]) AS t(node_id, mute_id) \
+               JOIN nodes n ON n.id = t.node_id \
+              WHERE ($6::uuid[] IS NULL OR n.group_id = ANY($6))",
+        )
+        .bind(&ids)
+        .bind(&mute_ids)
+        .bind(check_name)
+        .bind(until_at)
+        .bind(reason)
+        .bind(scope)
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
     }
 
     // ── Exemptions: one node released from a suppression it inherited (migration 0081) ──────

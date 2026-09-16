@@ -16,7 +16,7 @@ import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
 import { localTimeZone, LIVENESS_METRIC } from '../../lib/format';
-import { type SuppressionTarget } from '../../lib/suppression';
+import { targetNodeNames, type ActionTarget } from '../../lib/actionTarget';
 import { MetricPicker } from '../MetricPicker/MetricPicker';
 import { toRfc3339 } from '../../lib/format';
 
@@ -24,8 +24,9 @@ const TZ = localTimeZone();
 interface Props {
   /** Only consulted when the scope is chosen here — a locked scope names its own entity. */
   groups?: NodeGroup[];
-  /** When set, the scope is fixed to this node/group (the All Nodes right-click "Custom…" path). */
-  initialScope?: SuppressionTarget;
+  /** When set, the scope is fixed to this node, folder or working set (the All Nodes right-click
+   *  "Custom…" path, and the selection bar's More… menu since ADR-124 増分 11). */
+  initialScope?: ActionTarget;
   /** Metric to pre-fill for a node scope (the per-alert Mute action seeds the metric that fired). */
   initialMetric?: string;
   onClose: () => void;
@@ -41,8 +42,15 @@ export function AddMuteModal({
 }: Props) {
   const { t } = useTranslation('suppression');
   const locked = !!initialScope;
-  const [scopeKind, setScopeKind] = useState<'node' | 'group'>(initialScope?.kind ?? 'node');
-  const [scopeId, setScopeId] = useState(initialScope?.id ?? '');
+  // A set of nodes goes through the bulk endpoint, which takes ids rather than one scope.
+  const batch = initialScope?.kind === 'nodes' ? initialScope : null;
+  const names = initialScope ? targetNodeNames(initialScope) : [];
+  const [scopeKind, setScopeKind] = useState<'node' | 'group'>(
+    initialScope && initialScope.kind !== 'nodes' ? initialScope.kind : 'node',
+  );
+  const [scopeId, setScopeId] = useState(
+    initialScope && initialScope.kind !== 'nodes' ? initialScope.id : '',
+  );
   // Resolved name for the node picker's trigger. NodePicker is a typeahead over the lazily-loaded
   // inventory, so it scales past the old flat <select> of the first 100 nodes (S12).
   const [nodeLabel, setNodeLabel] = useState(
@@ -57,14 +65,41 @@ export function AddMuteModal({
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [partial, setPartial] = useState(false);
 
   const groupItems = groupOptions(groups);
-  const ready = !!scopeId && !!until;
+  // A batch supplies its targets as ids, so there is no single `scopeId` to require.
+  const ready = (!!batch || !!scopeId) && !!until;
 
   const submit = () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
+    if (batch) {
+      // 🚨 A shortfall keeps the dialog open: closing would read as "all of them are quiet".
+      api
+        .createMutes({
+          node_ids: batch.nodes.map((n) => n.id),
+          until: toRfc3339(until),
+          metric_name: check.trim() || undefined,
+          reason: reason.trim() || undefined,
+        })
+        .then((r) => {
+          if (r.created < r.requested) {
+            setPartial(true);
+            setError(t('muteForm.partial', { created: r.created, requested: r.requested }));
+            setBusy(false);
+            return;
+          }
+          onSaved();
+          onClose();
+        })
+        .catch((e: unknown) => {
+          setError(errMsg(e, t('muteForm.err.add')));
+          setBusy(false);
+        });
+      return;
+    }
     api
       .createMute({
         scope_kind: scopeKind,
@@ -90,7 +125,7 @@ export function AddMuteModal({
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
+            {partial ? t('common:actions.close') : t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!ready || busy}>
             {t('muteForm.submit')}
@@ -98,7 +133,17 @@ export function AddMuteModal({
         </>
       }
     >
-      {locked ? (
+      {batch ? (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('muteForm.scope')}</label>
+          <p className="modal-hint">{t('muteForm.lockedNodes', { count: names.length })}</p>
+          <ul className="form-targets scroll-y">
+            {names.map((n, i) => (
+              <li key={`${n}-${i}`}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      ) : locked ? (
         <div className="modal-field">
           <label className="modal-field-label">{t('muteForm.scope')}</label>
           <p className="modal-hint">
@@ -106,7 +151,7 @@ export function AddMuteModal({
               ? t('muteForm.lockedGroup')
               : t('muteForm.lockedNode')}
             :{' '}
-            <strong>{initialScope?.name}</strong>
+            <strong>{initialScope && initialScope.kind !== 'nodes' ? initialScope.name : ''}</strong>
             {initialScope?.kind === 'group' && t('muteForm.inclSubgroups')}
           </p>
         </div>

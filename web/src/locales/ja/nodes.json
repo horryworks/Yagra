@@ -198,7 +198,9 @@
     "prefixTooMany": "1 つのフォルダーが持てるレンジは最大 64 件です。",
     "prefixDescTooLong": "{{prefix}} の呼び名が長すぎます（最大 200 文字）。",
     "savePrefixes": "IP レンジを保存できませんでした",
-    "setPoolPartial": "{{requested}} 台のうち {{applied}} 台にプールを設定しました。残りは削除済みか、スコープの外です。"
+    "setPoolPartial": "{{requested}} 台のうち {{applied}} 台にプールを設定しました。残りは削除済みか、スコープの外です。",
+    "setMaintenancePartial": "{{requested}} 台のうち {{created}} 台にメンテナンス窓を開きました。残りは削除済みか、スコープの外です。",
+    "mutePartial": "{{requested}} 台のうち {{created}} 台をミュートしました。残りは削除済みか、スコープの外です。"
   },
   "maintenanceWindowName": "メンテナンス — {{name}}",
   "detail": {
@@ -638,7 +640,9 @@
     "pinFailed": "ピン留めを変更できませんでした",
     "menuFor": "{{name}} の操作",
     "menuRoot": "ツリーの操作",
-    "poolSelected": "ポーラープール — 選択した {{count}} 件"
+    "poolSelected": "ポーラープール — 選択した {{count}} 件",
+    "maintenanceSelected": "メンテナンス — 選択した {{count}} 件",
+    "muteSelected": "ミュート — 選択した {{count}} 件"
   },
   "moveNode": {
     "title": "{{name}} を移動",
@@ -804,7 +808,9 @@
     "clear": "解除",
     "hint": "Ctrl クリックで 1 件ずつ、Shift クリックでまとめて追加",
     "pool": "ポーラープール…",
-    "more": "その他…"
+    "more": "その他…",
+    "maintenance": "メンテナンス…",
+    "mute": "ミュート…"
   },
   "groupPicker": {
     "none": "フォルダなし",
@@ -828,5 +834,6 @@
       "noMatch": "どのアドレスもフォルダの IP レンジに入りません。",
       "allAmbiguous": "該当したものはすべて、複数のフォルダが同じだけ該当しました。"
     }
-  }
+  },
+  "maintenanceWindowNameMany": "メンテナンス — {{count}} 台"
 }

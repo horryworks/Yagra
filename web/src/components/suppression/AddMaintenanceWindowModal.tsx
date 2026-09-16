@@ -17,7 +17,7 @@ import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
 import { localTimeZone } from '../../lib/format';
-import type { SuppressionTarget } from '../../lib/suppression';
+import { targetNodeNames, type ActionTarget } from '../../lib/actionTarget';
 import { toRfc3339 } from '../../lib/format';
 
 const TZ = localTimeZone();
@@ -28,8 +28,9 @@ interface Props {
   groups: NodeGroup[];
   /** Offered as the "profile" scope when present; omit (or empty) to hide that choice. */
   profiles?: ProfileSummary[];
-  /** When set, the scope is fixed to this node/group (the All Nodes right-click "Custom…" path). */
-  initialScope?: SuppressionTarget;
+  /** When set, the scope is fixed to this node, folder or working set (the All Nodes right-click
+   *  "Custom…" path, and the selection bar's More… menu since ADR-124 増分 11). */
+  initialScope?: ActionTarget;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -43,30 +44,68 @@ export function AddMaintenanceWindowModal({
 }: Props) {
   const { t } = useTranslation('suppression');
   const locked = !!initialScope;
+  // A set of nodes is written through the bulk endpoint, which takes ids rather than one scope —
+  // so the scope controls below are locked exactly as they are for a single target.
+  const batch = initialScope?.kind === 'nodes' ? initialScope : null;
+  const names = initialScope ? targetNodeNames(initialScope) : [];
   const [name, setName] = useState(
-    initialScope ? t('maintenanceForm.defaultName', { name: initialScope.name }) : '',
+    batch
+      ? t('maintenanceForm.defaultNameMany', { count: batch.nodes.length })
+      : initialScope && initialScope.kind !== 'nodes'
+        ? t('maintenanceForm.defaultName', { name: initialScope.name })
+        : '',
   );
   const [scope, setScope] = useState<CreateScope>(
-    initialScope ? (initialScope.kind === 'group' ? 'group_id' : 'node') : 'node',
+    initialScope && initialScope.kind === 'group' ? 'group_id' : 'node',
   );
-  const [scopeId, setScopeId] = useState(initialScope?.id ?? '');
+  const [scopeId, setScopeId] = useState(
+    initialScope && initialScope.kind !== 'nodes' ? initialScope.id : '',
+  );
   // Resolved name for the node picker's trigger (typeahead over the lazily-loaded inventory, so it
   // scales past the old flat <select> of the first 100 nodes — S12).
   const [nodeLabel, setNodeLabel] = useState(
     initialScope?.kind === 'node' ? (initialScope.name ?? '') : '',
   );
+  const [partial, setPartial] = useState(false);
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const groupItems = groupOptions(groups);
-  const ready = !!name.trim() && !!scopeId.trim() && !!startsAt && !!endsAt;
+  // A batch supplies its targets as ids, so there is no single `scopeId` to require.
+  const ready = !!name.trim() && (!!batch || !!scopeId.trim()) && !!startsAt && !!endsAt;
 
   const submit = () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
+    if (batch) {
+      // 🚨 A shortfall keeps the dialog open. Closing on `created < requested` would read as "every
+      // node is covered tonight", which is the belief a maintenance window exists to make true.
+      api
+        .createMaintenanceWindows({
+          node_ids: batch.nodes.map((n) => n.id),
+          name: name.trim(),
+          starts_at: toRfc3339(startsAt),
+          ends_at: toRfc3339(endsAt),
+        })
+        .then((r) => {
+          if (r.created < r.requested) {
+            setPartial(true);
+            setError(t('maintenanceForm.partial', { created: r.created, requested: r.requested }));
+            setBusy(false);
+            return;
+          }
+          onSaved();
+          onClose();
+        })
+        .catch((e: unknown) => {
+          setError(errMsg(e, t('maintenanceForm.err.add')));
+          setBusy(false);
+        });
+      return;
+    }
     api
       .createMaintenanceWindow({
         name: name.trim(),
@@ -92,7 +131,7 @@ export function AddMaintenanceWindowModal({
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
+            {partial ? t('common:actions.close') : t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!ready || busy}>
             {t('maintenanceForm.submit')}
@@ -110,7 +149,17 @@ export function AddMaintenanceWindowModal({
         />
       </div>
 
-      {locked ? (
+      {batch ? (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
+          <p className="modal-hint">{t('maintenanceForm.lockedNodes', { count: names.length })}</p>
+          <ul className="form-targets scroll-y">
+            {names.map((n, i) => (
+              <li key={`${n}-${i}`}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      ) : locked ? (
         <div className="modal-field">
           <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
           <p className="modal-hint">
@@ -118,7 +167,7 @@ export function AddMaintenanceWindowModal({
               ? t('maintenanceForm.lockedGroup')
               : t('maintenanceForm.lockedNode')}
             :{' '}
-            <strong>{initialScope?.name}</strong>
+            <strong>{initialScope && initialScope.kind !== 'nodes' ? initialScope.name : ''}</strong>
             {initialScope?.kind === 'group' && t('maintenanceForm.inclSubgroups')}
           </p>
         </div>

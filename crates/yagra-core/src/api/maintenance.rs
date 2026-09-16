@@ -35,12 +35,14 @@ use uuid::Uuid;
 #[openapi(paths(
     list_maintenance_windows,
     create_maintenance_window,
+    create_maintenance_windows_bulk,
     clear_ended_maintenance_windows,
     set_maintenance_window_enabled,
     end_maintenance_window,
     delete_maintenance_window,
     list_mutes,
     create_mute,
+    create_mutes_bulk,
     delete_mute,
     list_suppression_exemptions,
     set_node_maintenance_exemption,
@@ -65,7 +67,12 @@ pub(crate) fn routes() -> Router<ApiState> {
             "/api/v1/maintenance-windows/:id/end",
             post(end_maintenance_window),
         )
+        .route(
+            "/api/v1/maintenance-windows/bulk",
+            post(create_maintenance_windows_bulk),
+        )
         .route("/api/v1/mutes", get(list_mutes).post(create_mute))
+        .route("/api/v1/mutes/bulk", post(create_mutes_bulk))
         .route("/api/v1/mutes/:id", delete(delete_mute))
         // Suppression exemptions. The two writes hang off `/nodes/:node_id/…` because that is what
         // they address — and it is what earns them the `VisibleNode` extractor — but they belong to
@@ -96,6 +103,14 @@ pub(crate) fn routes() -> Router<ApiState> {
 const WINDOW_SCOPE_LEVELS: [&str; 4] = ["profile", "group", "node", "group_id"];
 /// The scope kinds a mute may target.
 const MUTE_SCOPE_KINDS: [&str; 2] = ["node", "group"];
+
+/// Ceiling on one bulk suppression request (ADR-124 増分 11).
+///
+/// 🚨 **Over the ceiling is a refusal, not a truncation**, for the reason `NODE_MOVE_BATCH_MAX`
+/// gives: a truncated write would answer "suppressed" while leaving everything past the cut paging
+/// someone, with no way to see which half. Deliberately the same number as the node batches — a
+/// second ceiling would be a second answer to "how many is too many".
+const SUPPRESSION_BATCH_MAX: usize = 1000;
 
 /// Parse and sanity-check a window's bounds.
 ///
@@ -401,6 +416,183 @@ async fn create_maintenance_window(
             )
         })?;
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
+}
+
+/// Open one window over each of many nodes.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct BulkWindow {
+    node_ids: Vec<Uuid>,
+    name: String,
+    starts_at: String,
+    ends_at: String,
+}
+
+/// What a bulk suppression write actually did. Shared by the window and the mute form: they answer
+/// the same question and a second shape would be two names for one fact.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct BulkSuppressionResult {
+    /// Distinct node ids the request named, after de-duplication.
+    requested: usize,
+    /// Rows actually written. **Lower than `requested` is normal**: an id can name a node that has
+    /// since been deleted, or one outside the caller's scope. The two are not distinguished.
+    created: u64,
+}
+
+/// Open a maintenance window over each of many nodes at once (ADR-124 増分 11).
+///
+/// "This dozen, tonight" rarely follows a folder boundary, so the folder-scoped window cannot
+/// express it and the single-node form meant one request each.
+///
+/// **One window per node rather than one window naming many**: a window's scope is a single id
+/// (migration 0011), and widening that is a schema change the alert engine, the suppression index
+/// and `list_suppressions` all read.
+///
+/// ⚠️ **Only the `node` level.** The class levels (`profile`, `group`) already reach many nodes by
+/// naming a class, and the folder level reaches a subtree — a batch of ids is the case none of them
+/// covers. The scope check is therefore the node one, applied by the store's `JOIN nodes` rather
+/// than a pre-check, so a node deleted between the check and the write cannot get a window.
+#[utoipa::path(
+    post, path = "/api/v1/maintenance-windows/bulk", tag = "maintenance",
+    request_body = BulkWindow,
+    responses(
+        (status = 200, description = "How many windows were opened", body = BulkSuppressionResult),
+        (status = 400, description = "Empty name, unparseable or backwards bounds, or more ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageMaintenance", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn create_maintenance_windows_bulk(
+    _perm: RequireManageMaintenance,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<BulkWindow>,
+) -> ApiResult<Json<BulkSuppressionResult>> {
+    if body.node_ids.len() > SUPPRESSION_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {SUPPRESSION_BATCH_MAX} nodes may be suppressed in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    if body.name.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_window",
+            "name must not be empty",
+        ));
+    }
+    // The same bounds check every creation path makes, including the MCP tool: a window that ends
+    // before it begins suppresses nothing while reading as success.
+    let (starts, ends) = window_bounds(&body.starts_at, &body.ends_at)?;
+    let (requested, created) = admin
+        .maintenance
+        .create_windows_for_nodes(
+            &body.node_ids,
+            body.name.trim(),
+            starts,
+            ends,
+            scope.group_filter(),
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "create maintenance windows",
+                "failed to create maintenance windows",
+            )
+        })?;
+    // The audit middleware records method and path only, so without this the log says that someone
+    // suppressed something and never how much (the bulk move and bulk clear do the same).
+    tracing::info!(requested, created, "bulk maintenance window");
+    Ok(Json(BulkSuppressionResult { requested, created }))
+}
+
+/// Mute each of many nodes until one moment.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct BulkMute {
+    node_ids: Vec<Uuid>,
+    until: String,
+    #[serde(default)]
+    metric_name: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Mute many nodes at once (ADR-124 増分 11) — the mute twin of the bulk window above, and a
+/// separate route because it asks for a different permission: muting is `AckAlerts`, opening a
+/// window is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them
+/// for both.
+#[utoipa::path(
+    post, path = "/api/v1/mutes/bulk", tag = "maintenance",
+    request_body = BulkMute,
+    responses(
+        (status = 200, description = "How many mutes were created", body = BulkSuppressionResult),
+        (status = 400, description = "An unparseable or past `until`, an illegal metric name, or more ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks AckAlerts", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn create_mutes_bulk(
+    _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<BulkMute>,
+) -> ApiResult<Json<BulkSuppressionResult>> {
+    if body.node_ids.len() > SUPPRESSION_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {SUPPRESSION_BATCH_MAX} nodes may be muted in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    let check = body
+        .metric_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    if let Some(check) = check {
+        // The metric name reaches a PromQL selector, so it is parsed at the edge rather than
+        // interpolated (security.md) — the same check the single-node form makes.
+        if !is_valid_metric_name(check) {
+            return Err(ApiError::bad_request(
+                "invalid_mute",
+                "metric_name must be a valid metric name (or omitted for the whole node)",
+            ));
+        }
+    }
+    let Some(until) = parse_rfc3339(&body.until) else {
+        return Err(ApiError::bad_request(
+            "invalid_mute",
+            "until must be an RFC 3339 timestamp",
+        ));
+    };
+    // A mute that has already expired silences nothing while reading as success.
+    if until <= Utc::now() {
+        return Err(ApiError::bad_request(
+            "invalid_mute",
+            "until must be in the future",
+        ));
+    }
+    let (requested, created) = admin
+        .maintenance
+        .create_mutes_for_nodes(
+            &body.node_ids,
+            check,
+            until,
+            body.reason.as_deref(),
+            scope.group_filter(),
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "create mutes", "failed to create mutes")
+        })?;
+    tracing::info!(requested, created, "bulk mute");
+    Ok(Json(BulkSuppressionResult { requested, created }))
 }
 
 #[utoipa::path(
@@ -1466,5 +1658,129 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "maintenance_windows").await, 1);
+    }
+
+    /// One window per selected node, and a node the caller cannot see gets none.
+    ///
+    /// 🚨 The scope is carried by the store's `JOIN nodes`, not by a pre-check, so this is the
+    /// test that would notice it being dropped — and it has to pass a real filter, because a
+    /// `None` scope short-circuits that predicate entirely.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_maintenance_window_covers_each_node_it_may_see(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let a = crate::pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let b = crate::pgtest::node(&pool, "b", 2, Some(mine)).await;
+        let hidden = crate::pgtest::node(&pool, "hidden", 3, Some(theirs)).await;
+        let tok = scoped_token(&st, &[mine]);
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/maintenance-windows/bulk",
+            &tok,
+            Some(serde_json::json!({
+                "node_ids": [a, b, hidden],
+                "name": "tonight",
+                "starts_at": "2030-01-01T00:00:00Z",
+                "ends_at": "2030-01-01T02:00:00Z",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 3, "{body}");
+        assert_eq!(
+            body["created"], 2,
+            "the scope did not hold, or a window was not opened: {body}"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "maintenance_windows").await, 2);
+
+        // A window that ends before it begins suppresses nothing while reading as success — the
+        // same refusal every other creation path makes.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/maintenance-windows/bulk",
+            &tok,
+            Some(serde_json::json!({
+                "node_ids": [a],
+                "name": "backwards",
+                "starts_at": "2030-01-01T02:00:00Z",
+                "ends_at": "2030-01-01T00:00:00Z",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_window", "{body}");
+    }
+
+    /// The mute twin: one mute per node, the scope held, and a past `until` refused.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_mute_covers_each_node_it_may_see(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let a = crate::pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let hidden = crate::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
+        let tok = scoped_token(&st, &[mine]);
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/mutes/bulk",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, hidden], "until": "2030-01-01T00:00:00Z" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["created"], 1, "the scope did not hold: {body}");
+        assert_eq!(crate::pgtest::rows(&pool, "mutes").await, 1);
+
+        // A mute that has already expired silences nothing while reading as success.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/mutes/bulk",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a], "until": "2020-01-01T00:00:00Z" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_mute", "{body}");
+    }
+
+    /// A Viewer holds neither permission, so both bulk routes refuse before touching the store.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_viewer_cannot_suppress_a_batch(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let node = crate::pgtest::node(&pool, "a", 1, None).await;
+
+        for (path, body) in [
+            (
+                "/api/v1/maintenance-windows/bulk",
+                serde_json::json!({
+                    "node_ids": [node], "name": "n",
+                    "starts_at": "2030-01-01T00:00:00Z", "ends_at": "2030-01-01T02:00:00Z",
+                }),
+            ),
+            (
+                "/api/v1/mutes/bulk",
+                serde_json::json!({ "node_ids": [node], "until": "2030-01-01T00:00:00Z" }),
+            ),
+        ] {
+            let (status, out) = send(&st, "POST", path, &viewer, Some(body)).await;
+            assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{path}: {out}");
+        }
+        assert_eq!(crate::pgtest::rows(&pool, "maintenance_windows").await, 0);
+        assert_eq!(crate::pgtest::rows(&pool, "mutes").await, 0);
     }
 }

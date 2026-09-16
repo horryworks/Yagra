@@ -2274,6 +2274,31 @@ export const api = {
   /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
   listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => apiGet('/api/v1/maintenance-windows'),
 
+  /** Open one maintenance window over **each** of these nodes, in one request (ADR-124 増分 11).
+   *
+   *  "This dozen, tonight" rarely follows a folder boundary, which is the case neither the
+   *  folder-scoped window nor the single-node one serves.
+   *
+   *  ⚠️ `created` can be lower than `requested`: an id may name a node deleted since the page
+   *  loaded, or one outside this token's scope. Show both numbers. */
+  createMaintenanceWindows: (body: {
+    node_ids: string[];
+    name: string;
+    starts_at: string;
+    ends_at: string;
+  }): Promise<{ requested: number; created: number }> =>
+    apiPost('/api/v1/maintenance-windows/bulk', { body }),
+
+  /** Mute **each** of these nodes until one moment, in one request (ADR-124 増分 11). The mute
+   *  twin of `createMaintenanceWindows`, and a separate call because muting asks for `AckAlerts`
+   *  where a window asks for `ManageMaintenance`. */
+  createMutes: (body: {
+    node_ids: string[];
+    until: string;
+    metric_name?: string;
+    reason?: string;
+  }): Promise<{ requested: number; created: number }> => apiPost('/api/v1/mutes/bulk', { body }),
+
   /** Create a maintenance window. Times are RFC 3339; scope mirrors thresholds plus `group_id`
    *  (a folder group, resolved recursively). */
   createMaintenanceWindow: (body: {

@@ -382,3 +382,110 @@ test('the selection bar can set the pool on every selected node', async ({ page 
   expect(seen[0].node_ids).toHaveLength(2);
   expect(seen[0].pool).toBe('osaka');
 });
+
+test('a maintenance preset covers the whole selection, not the row that was clicked', async ({
+  page,
+}) => {
+  // 🚨 ADR-124 増分 11, and the worst instance of the Inc.2 defect: an operator silencing a dozen
+  // devices for tonight's work covered exactly one, and found out by being paged during it.
+  const seen: { node_ids: string[] }[] = [];
+  await page.route('**/api/v1/maintenance-windows/bulk', async (route) => {
+    const body = route.request().postDataJSON() as { node_ids: string[] };
+    seen.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ requested: body.node_ids.length, created: body.node_ids.length }),
+    });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(3);
+
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText('Maintenance — 3 selected');
+  await expect(menu).toContainText('Mute — 3 selected');
+  await menu.getByRole('button', { name: '4h', exact: true }).first().click();
+
+  await expect.poll(() => seen.length).toBe(1);
+  expect(seen[0].node_ids, 'the preset suppressed fewer nodes than were marked').toHaveLength(3);
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(0);
+});
+
+test('a mute preset on a lone row still writes the single-node mute', async ({ page }) => {
+  // The other half: one row keeps the single write, so the batch route does not become the only
+  // way to mute one node.
+  const bulk: unknown[] = [];
+  const single: unknown[] = [];
+  await page.route('**/api/v1/mutes/bulk', async (route) => {
+    bulk.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  await page.route('**/api/v1/mutes', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    single.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: '00000000-0000-4000-8000-00000000000f' }),
+    });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText('Mute');
+  await expect(menu).not.toContainText('selected');
+  // Two sections carry a "1h" chip; the mute one is the second.
+  await menu.getByRole('button', { name: '1h', exact: true }).nth(1).click();
+
+  await expect.poll(() => single.length).toBe(1);
+  expect(bulk, 'a lone row went through the batch endpoint').toHaveLength(0);
+});
+
+test('the selection bar can open a maintenance window over every selected node', async ({
+  page,
+}) => {
+  const seen: { node_ids: string[]; name: string }[] = [];
+  await page.route('**/api/v1/maintenance-windows/bulk', async (route) => {
+    const body = route.request().postDataJSON() as { node_ids: string[]; name: string };
+    seen.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ requested: body.node_ids.length, created: body.node_ids.length }),
+    });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
+
+  await page
+    .locator('.nodes-selbar')
+    .getByRole('button', { name: 'More…', exact: true })
+    .click();
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Maintenance…' }).click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  // The scope controls are locked and the nodes are listed, so what is about to be written is on
+  // screen before the operator presses the button.
+  await expect(dialog.locator('.form-targets li')).toHaveCount(2);
+  const boxes = dialog.locator('input[type="datetime-local"]');
+  await boxes.nth(0).fill('2030-01-01T00:00');
+  await boxes.nth(1).fill('2030-01-01T02:00');
+  await dialog.getByRole('button', { name: 'Add window', exact: true }).click();
+
+  await expect.poll(() => seen.length).toBe(1);
+  expect(seen[0].node_ids).toHaveLength(2);
+});
