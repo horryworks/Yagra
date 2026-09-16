@@ -12,7 +12,8 @@
 // `detail.rule_id` is a grouping key only and is never rendered (no raw UUIDs); the rule *name*
 // comes from `metric`, which the backend encodes as `event:{rule_name}`.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -70,9 +71,9 @@ function FlapRow({ finding }: { finding: AnalysisFinding }) {
 
 export function EventFlapBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [groupBy, setGroupBy] = useState<'finding' | 'rule'>('finding');
-  const [filter, setFilter] = useState<'all' | 'cycles5' | 'rate1'>('all');
-  const [sort, setSort] = useState<'cycles' | 'rate' | 'rule' | 'node'>('cycles');
+  const [groupBy, setGroupBy] = useEnumParam('group_by', ['finding', 'rule'] as const, 'finding');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'cycles5', 'rate1'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['cycles', 'rate', 'rule', 'node'] as const, 'cycles');
 
   const groups = useMemo(() => groupByRule(findings), [findings]);
 

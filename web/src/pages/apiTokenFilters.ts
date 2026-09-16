@@ -130,3 +130,6 @@ export function tokenSortValues(now: Date): SortValues<ApiTokenSummary> {
 
 /** The tokens table's initial order: newest first, which is what the API already returns. */
 export const DEFAULT_TOKEN_SORT: SortState = { by: 'created', dir: 'desc' };
+
+/** The columns the tokens table sorts on, derived from the sort values rather than listed again. */
+export const TOKEN_SORT_KEYS: readonly string[] = Object.keys(tokenSortValues(new Date(0)));

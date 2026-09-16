@@ -47,12 +47,13 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { sortRows, type SortState } from '../lib/tableSort';
+import { sortRows } from '../lib/tableSort';
+import { useSortParams } from '../lib/useSortParams';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
-import { DEFAULT_TOKEN_SORT, tokenFilters, tokenSortValues } from './apiTokenFilters';
+import { DEFAULT_TOKEN_SORT, TOKEN_SORT_KEYS, tokenFilters, tokenSortValues } from './apiTokenFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
@@ -486,7 +487,9 @@ export function ApiTokensPage() {
   // The table sorts in the browser, and legitimately: every token is here. `DataTable` renders the
   // header affordance and reports the click — it never reorders `rows` itself, so a keyset-paged
   // screen cannot accidentally sort a prefix and present it as the order (`lib/tableSort.ts`).
-  const [sort, setSort] = useState<SortState>(DEFAULT_TOKEN_SORT);
+  // In the URL (ADR-153), so a reload keeps the order. The sortable keys are the ones the sort
+  // values name — a key nothing can sort on reads as the default.
+  const [sort, setSort] = useSortParams(TOKEN_SORT_KEYS, DEFAULT_TOKEN_SORT);
   // One clock reading, shared by the filter specs, the sort and the status badge — see
   // `tokenColumns`. Re-read only when the rows are replaced, so a relative window ("used in the
   // last 24 hours") does not creep forward while the operator reads the screen. Same shape as

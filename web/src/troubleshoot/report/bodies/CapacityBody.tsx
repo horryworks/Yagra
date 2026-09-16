@@ -9,7 +9,8 @@
 // All labels are derived from `detail` (`current`, `slope_per_day`, `tte_days`) rather than the
 // backend's pre-rendered `"0% now"` / `"~5mo to 100%"`, which are English-only.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -60,8 +61,8 @@ function CapacityRow({ finding }: { finding: AnalysisFinding }) {
 
 export function CapacityBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'soon' | 'mid' | 'far'>('all');
-  const [sort, setSort] = useState<'tte' | 'growth' | 'node'>('tte');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'soon', 'mid', 'far'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['tte', 'growth', 'node'] as const, 'tte');
 
   const top = useMemo<RankedRow[]>(
     () =>

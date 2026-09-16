@@ -27,7 +27,8 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
-import { sortRows, type SortState } from '../lib/tableSort';
+import { sortRows } from '../lib/tableSort';
+import { useSortParams } from '../lib/useSortParams';
 import { SealedSecret, CopyableId } from '../components/ui/tableCells';
 import { HashIcon, ShieldIcon, KeyIcon, EditIcon, TrashIcon } from '../components/ui/icons';
 import type { ComponentType } from 'react';
@@ -51,6 +52,7 @@ import {
 import {
   credentialFilters,
   credentialSortValues,
+  CREDENTIAL_SORT_KEYS,
   DEFAULT_CREDENTIAL_SORT,
 } from './credentialList';
 import { CREDENTIAL_KINDS, type CredentialKind } from '../lib/credentialKinds';
@@ -489,7 +491,8 @@ export function CredentialsPage() {
   const canCredentials = useCan('manage_credentials');
   const [rows, setRows] = useState<CredentialSummary[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [sort, setSort] = useState<SortState>(DEFAULT_CREDENTIAL_SORT);
+  // In the URL (ADR-153), so a reload keeps the order.
+  const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, DEFAULT_CREDENTIAL_SORT);
   const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);

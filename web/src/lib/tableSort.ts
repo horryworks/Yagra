@@ -40,6 +40,39 @@ export function nextSort(current: SortState, key: string): SortState {
   return { by: key, dir: current.dir === 'asc' ? 'desc' : 'asc' };
 }
 
+/** The URL keys a sort is held under (ADR-153). Both are in `RESERVED_URL_KEYS`, which is what stops
+ *  a filter column from ever taking either. */
+export const SORT_PARAM = 'sort';
+export const DIR_PARAM = 'dir';
+
+/** Read a sort out of the query string.
+ *
+ *  A column this table does not sort on falls back to the table's default — a stale bookmark from a
+ *  build with one more sortable column opens the default order, never an order the header cannot
+ *  show an arrow for. A `dir` that is not `desc` reads as `asc`, which is where a click starts. */
+export function readSortParams(
+  params: URLSearchParams,
+  sortable: readonly string[],
+  fallback: SortState,
+): SortState {
+  const by = params.get(SORT_PARAM);
+  if (!by || !sortable.includes(by)) return fallback;
+  return { by, dir: params.get(DIR_PARAM) === 'desc' ? 'desc' : 'asc' };
+}
+
+/** Write a sort into `params`, deleting both keys when it is the table's default — so a bare URL is
+ *  the default order, the same rule every filter key follows. Both keys move together: a sort is one
+ *  state, and `?dir=` with no `?sort=` would be a key nothing reads. */
+export function writeSortParams(params: URLSearchParams, next: SortState, fallback: SortState): void {
+  if (next.by === fallback.by && next.dir === fallback.dir) {
+    params.delete(SORT_PARAM);
+    params.delete(DIR_PARAM);
+    return;
+  }
+  params.set(SORT_PARAM, next.by);
+  params.set(DIR_PARAM, next.dir);
+}
+
 /** How one column's value is extracted for comparison, per column key.
  *
  *  A `Record` keyed by the column key rather than a `compare` on the column itself: the value a

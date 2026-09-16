@@ -14,7 +14,8 @@
 // (metric names, IPs, byte counts, device message text) rather than prose, so they render verbatim in
 // mono and are NOT localized. Structuring them backend-side is a clean follow-up.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { Donut, type DonutSegment } from '../../../dashboard/primitives/Donut';
@@ -108,8 +109,8 @@ function IncidentCard({ finding }: { finding: AnalysisFinding }) {
 
 export function IncidentCorrelateBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'metric' | 'event' | 'flow'>('all');
-  const [sort, setSort] = useState<'score' | 'earliest' | 'signals' | 'node'>('score');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'metric', 'event', 'flow'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['score', 'earliest', 'signals', 'node'] as const, 'score');
 
   /** Signal-kind mix across every incident — metric-led or flow-led? */
   const mix = useMemo<DonutSegment[]>(() => {

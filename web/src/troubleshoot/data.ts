@@ -295,7 +295,8 @@ export function toolById(id: string): Tool | undefined {
 }
 
 /** Anomaly shape — colours the kind chip and the redrawn anomalous segment (series palette). */
-export type Kind = 'spike' | 'level' | 'drift' | 'flat' | 'season';
+export const KIND_KEYS = ['spike', 'level', 'drift', 'flat', 'season'] as const;
+export type Kind = (typeof KIND_KEYS)[number];
 
 export interface KindMeta {
   /** i18next key (troubleshoot ns) for the kind label — resolve with `t()` at the call site. */

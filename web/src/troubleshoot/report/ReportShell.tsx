@@ -162,7 +162,11 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
       setRows([]);
       setLoadedFor(null);
       setFetched(null);
-      setParams({ job: j.id });
+      // Only `job` changes: the body's chips, sort and filter row are the operator's view of this
+      // tool's findings (ADR-153), and a new run of the same tool is still the same view.
+      const next = new URLSearchParams(params);
+      next.set('job', j.id);
+      setParams(next);
     } catch {
       showToast(t('toast.startFailed'));
     }

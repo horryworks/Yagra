@@ -9,7 +9,8 @@
 // from the additive `detail.peak_at` (unix seconds) and formatted with the shared `relTime`. Rows
 // written by an older core lack the key and fall back to the backend string.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -73,8 +74,8 @@ function StormRow({ finding }: { finding: AnalysisFinding }) {
 
 export function EventStormBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'x10' | 'x3' | 'low'>('all');
-  const [sort, setSort] = useState<'peak' | 'ratio' | 'node'>('ratio');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'x10', 'x3', 'low'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['peak', 'ratio', 'node'] as const, 'ratio');
 
   const top = useMemo<RankedRow[]>(
     () =>

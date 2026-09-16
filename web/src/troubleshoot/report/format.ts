@@ -118,8 +118,10 @@ export function nodeSummaryStats(): SummaryStat[] {
   ];
 }
 
-/** Sort modes every report supports; bodies add their own on top. */
-export type CommonSort = 'score' | 'node';
+/** Sort modes every report supports; bodies add their own on top. An array, because the Anomaly
+ *  report reads its `?sort=` against it (ADR-153). */
+export const COMMON_SORTS = ['score', 'node'] as const;
+export type CommonSort = (typeof COMMON_SORTS)[number];
 
 /** Sort a findings list by a common mode (returns a new array). */
 export function sortCommon(findings: AnalysisFinding[], mode: CommonSort): AnalysisFinding[] {

@@ -296,9 +296,9 @@ const REGISTRY: readonly Entry[] = [
 //
 // So each route declares what shares its query string — the page's own keys and every table with its
 // prefix — and the tests below check the union is disjoint. ⚠️ The paths are labels for the reader;
-// nothing compares them with `routes.tsx`. What IS pinned: every builder in REGISTRY is on a route
-// (or waiting below with a reason), every prefix is the constant the screen itself imports, and every
-// prefixed table's file spells that constant — so a screen that forgot to pass it fails here.
+// nothing compares them with `routes.tsx`. What IS pinned: every builder in REGISTRY is on a route,
+// every prefix is the constant the screen itself imports, and every prefixed table's file spells that
+// constant — so a screen that forgot to pass it fails here.
 
 interface RouteTable {
   /** REGISTRY names. More than one when a table has shapes (a column that comes and goes). */
@@ -351,7 +351,7 @@ const ROUTES: readonly Route[] = [
     tables: [{ entries: ['inventoryFilterSpecs'], prefix: '' }, ...NODE_TABS],
   },
   { path: '/nodes/:nodeId', own: ['tab'], tables: NODE_TABS },
-  { path: '/nodes/credentials', own: [], tables: [{ entries: ['credentialFilters'], prefix: '' }] },
+  { path: '/nodes/credentials', own: ['sort', 'dir'], tables: [{ entries: ['credentialFilters'], prefix: '' }] },
   {
     path: '/nodes/classification-rules',
     own: [],
@@ -413,7 +413,7 @@ const ROUTES: readonly Route[] = [
     tables: [{ entries: ['dependencyFilters', 'dependencyFilters (comparing)'], prefix: '' }],
   },
   { path: '/settings/pollers', own: [], tables: [{ entries: ['pollerFilters'], prefix: '' }] },
-  { path: '/settings/api-tokens', own: [], tables: [{ entries: ['tokenFilters'], prefix: '' }] },
+  { path: '/settings/api-tokens', own: ['sort', 'dir'], tables: [{ entries: ['tokenFilters'], prefix: '' }] },
   { path: '/troubleshoot/scheduled', own: [], tables: [{ entries: ['scheduleFilters'], prefix: '' }] },
   { path: '/troubleshoot/runs', own: [], tables: [{ entries: ['runFilters'], prefix: '' }] },
   {
@@ -446,16 +446,24 @@ const ROUTES: readonly Route[] = [
       },
     ],
   },
+  // A Troubleshoot report is one path per tool, so each body with a filter row has its route to
+  // itself. `job` is the shell's; `filter` / `sort` are the body's chips (ADR-153 Inc.5).
+  {
+    path: '/troubleshoot/report/rule_gap',
+    own: ['job', 'sort'],
+    tables: [{ entries: ['ruleGapFilters'], prefix: '' }],
+  },
+  {
+    path: '/troubleshoot/report/flow_scan',
+    own: ['job', 'sort'],
+    tables: [{ entries: ['flowScanFilters'], prefix: '' }],
+  },
+  {
+    path: '/troubleshoot/report/auth_probe',
+    own: ['job', 'sort'],
+    tables: [{ entries: ['authProbeFilters'], prefix: '' }],
+  },
 ];
-
-/** Builders whose table does not live in the URL yet, each with the ADR-153 increment that moves it.
- *  ⚠️ This list is meant to reach empty — an entry is a table that still loses its filter on a
- *  reload. It is not an exemption table. */
-const NOT_YET_IN_THE_URL: Readonly<Record<string, string>> = {
-  ruleGapFilters: 'ADR-153 Inc.5 — Troubleshoot report body',
-  flowScanFilters: 'ADR-153 Inc.5 — Troubleshoot report body',
-  authProbeFilters: 'ADR-153 Inc.5 — Troubleshoot report body',
-};
 
 /** Modules that name `ColumnFilterSpec` but build none — the machinery, not a screen.
  *
@@ -554,9 +562,6 @@ describe('the route ledger (ADR-153)', () => {
         }
       }
     }
-    for (const name of Object.keys(NOT_YET_IN_THE_URL)) {
-      expect(byName.has(name), `NOT_YET_IN_THE_URL names ${name}, which REGISTRY does not have`).toBe(true);
-    }
   });
 
   it('gives every key on a route exactly one writer', () => {
@@ -584,18 +589,13 @@ describe('the route ledger (ADR-153)', () => {
     }
   });
 
-  it('puts every builder on a route, or names the increment that will', () => {
+  it('puts every builder on a route', () => {
+    // There is no "not in the URL" list to escape to (ADR-153 決定 1): a filter row that is not on a
+    // route here is a filter a reload throws away. ADR-153 carried a waiting list while the screens
+    // moved over, and deleted it once it was empty.
     const onARoute = new Set(ROUTES.flatMap((r) => r.tables.flatMap((t) => t.entries)));
-    const waiting = new Set(Object.keys(NOT_YET_IN_THE_URL));
     for (const e of REGISTRY) {
-      expect(
-        onARoute.has(e.name) || waiting.has(e.name),
-        `${e.name} (${e.module}) is on no route — declare where its table lives`,
-      ).toBe(true);
-      expect(
-        onARoute.has(e.name) && waiting.has(e.name),
-        `${e.name} is on a route AND waiting to be moved there — drop it from NOT_YET_IN_THE_URL`,
-      ).toBe(false);
+      expect(onARoute.has(e.name), `${e.name} (${e.module}) is on no route — declare where its table lives`).toBe(true);
     }
   });
 

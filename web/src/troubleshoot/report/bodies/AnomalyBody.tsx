@@ -8,12 +8,13 @@
 // Extracted verbatim (behaviour-wise) from the former AnomalyReportPage so the shared descriptor
 // contract was proven against the one report already known to work.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { AnomalyChart } from '../../AnomalyChart';
-import { KINDS, kindMeta, type Kind } from '../../data';
+import { KIND_KEYS, KINDS, kindMeta } from '../../data';
 import { Chips, EmptyList, FindingRow, KindTag, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
-import { sevOf, sortCommon, type CommonSort } from '../format';
+import { COMMON_SORTS, sevOf, sortCommon, type CommonSort } from '../format';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding, AnomalyDetail } from '../../../types/api';
 
@@ -39,13 +40,13 @@ function AnomalyRow({ finding }: { finding: AnalysisFinding }) {
 
 export function AnomalyBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | Kind>('all');
-  const [sort, setSort] = useState<CommonSort>('score');
+  const [filter, setFilter] = useEnumParam('filter', ['all', ...KIND_KEYS] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', COMMON_SORTS, 'score');
 
   const chipOptions = useMemo(
     () => [
       { value: 'all' as const, label: t('report.common.filters.all') },
-      ...(Object.keys(KINDS) as Kind[]).map((k) => ({
+      ...KIND_KEYS.map((k) => ({
         value: k,
         label: t(KINDS[k].label),
         color: KINDS[k].color,

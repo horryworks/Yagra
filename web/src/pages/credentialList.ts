@@ -37,6 +37,9 @@ type CredentialRow = Pick<CredentialSummary, 'id' | 'name' | 'kind' | 'used_by'>
 /** The name column sorts ascending by default — the order an operator scanning a list expects. */
 export const DEFAULT_CREDENTIAL_SORT: SortState = { by: 'name', dir: 'asc' };
 
+/** The columns the credentials table sorts on, derived from the sort values rather than listed again. */
+export const CREDENTIAL_SORT_KEYS: readonly string[] = Object.keys(credentialSortValues());
+
 /** Per-column sort accessors. `used_by` is a number, so it sorts numerically rather than as text —
  *  a string sort would put 10 before 9. */
 export function credentialSortValues<T extends CredentialRow>(): SortValues<T> {

@@ -9,7 +9,8 @@
 //
 // Volume is shown alongside, because +40 pp out of 12 events is noise and out of 4,000 is an incident.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { DeltaBars, type DeltaRow } from '../../../dashboard/primitives/DeltaBars';
@@ -63,8 +64,8 @@ function ShiftRow({ finding }: { finding: AnalysisFinding }) {
 
 export function SeverityShiftBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [filter, setFilter] = useState<'all' | 'big' | 'mid'>('all');
-  const [sort, setSort] = useState<'delta' | 'recent' | 'volume' | 'node'>('delta');
+  const [filter, setFilter] = useEnumParam('filter', ['all', 'big', 'mid'] as const, 'all');
+  const [sort, setSort] = useEnumParam('sort', ['delta', 'recent', 'volume', 'node'] as const, 'delta');
 
   const top = useMemo<DeltaRow[]>(
     () =>

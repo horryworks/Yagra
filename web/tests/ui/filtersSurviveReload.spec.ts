@@ -11,7 +11,7 @@
 // URL-backed have their own round-trip tests (`columnFilter.spec.ts` for the Events log).
 
 import { expect, test } from '../support/app';
-import { BOOTSTRAP_OVERRIDES, TREE_SIBLING_IDS } from '../support/bootstrap';
+import { BOOTSTRAP_OVERRIDES, REPORT_TOOL, TREE_SIBLING_IDS } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
 
 type Page = import('@playwright/test').Page;
@@ -152,6 +152,37 @@ test.describe('a one-table screen that kept its filter in component state', () =
     await page.getByRole('button', { name: /Clear all filters/ }).click();
     await expect(page).not.toHaveURL(/node_id=/);
     await expect(picker).toHaveText('All nodes');
+  });
+});
+
+test.describe('a chip, a sort select and a sortable header', () => {
+  test('a Troubleshoot report keeps its chip and its sort after a reload, and keeps its job', async ({ page }) => {
+    const job = '00000000-0000-4000-8000-000000000002';
+    await page.goto(`/troubleshoot/report/${REPORT_TOOL}?job=${job}`);
+    const chip = page.getByRole('button', { name: 'Level shift' });
+    await chip.click();
+    await expect(page).toHaveURL(/[?&]filter=level(&|$)/);
+    await page.locator('#tsr-anomaly-sort').selectOption('node');
+    await expect(page).toHaveURL(/[?&]sort=node(&|$)/);
+
+    await reload(page);
+    await expect(chip, 'the reload dropped the chip').toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#tsr-anomaly-sort'), 'the reload dropped the sort').toHaveValue('node');
+    expect(new URL(page.url()).searchParams.get('job'), 'the chip write took the job with it').toBe(job);
+  });
+
+  test('API tokens keeps its sort after a reload', async ({ page }) => {
+    await page.goto('/settings/api-tokens');
+    const header = page.getByRole('button', { name: /^Name/ });
+    await header.click();
+    await expect(header).toHaveAttribute('aria-sort', 'ascending');
+    await expect(page).toHaveURL(/[?&]sort=name&dir=asc/);
+
+    await reload(page);
+    await expect(page.getByRole('button', { name: /^Name/ }), 'the reload dropped the sort').toHaveAttribute(
+      'aria-sort',
+      'ascending',
+    );
   });
 });
 
