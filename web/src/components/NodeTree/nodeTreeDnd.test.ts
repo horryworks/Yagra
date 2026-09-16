@@ -81,13 +81,18 @@ describe('dropPosition', () => {
     for (const y of [0, 5, 15, 29]) expect(dropPosition(y, 30, true, nodeDrag('n1'))).toBe('inside');
   });
 
-  it('gives a batch over a node row no insertion point at all', () => {
-    // 🚨 Inc.4 決定 C. There is no bulk placement endpoint, and calling the single one N times is a
-    // write that can fail halfway with nothing to read. So a batch appends into that row's folder,
-    // and the indicator says so — a row outline, never an insertion line.
-    for (const y of [0, 1, 14, 15, 29]) {
-      expect(dropPosition(y, 30, false, nodeDrag('n1', 'n2', 'n3'))).toBe('inside');
-    }
+  it('splits a node row the same way however many nodes are being dragged', () => {
+    // 🚨 THE 増分 8 REGRESSION. This used to answer `inside` for every Y once the batch held more
+    // than one node — an append — because there was no bulk placement endpoint to carry an
+    // insertion point. `POST /nodes/move` takes `before`/`after` now, so the count is not part of
+    // the question: the same gesture must answer the same way at one node and at three.
+    const batch = nodeDrag('n1', 'n2', 'n3');
+    expect(dropPosition(0, 30, false, batch)).toBe('before');
+    expect(dropPosition(14, 30, false, batch)).toBe('before');
+    expect(dropPosition(15, 30, false, batch)).toBe('after');
+    expect(dropPosition(29, 30, false, batch)).toBe('after');
+    // And a batch over a *group* is still always `inside` — a node is never a group's sibling.
+    for (const y of [0, 5, 15, 29]) expect(dropPosition(y, 30, true, batch)).toBe('inside');
   });
 
   it('splits a group row into quarter / half / quarter', () => {
@@ -101,8 +106,6 @@ describe('dropPosition', () => {
   });
 
   it('splits a node row in half for ONE node — there is no inside a node', () => {
-    // The half Inc.4 must not take away: dragging a single node between two rows still places it
-    // there. Only a batch loses the insertion point.
     expect(dropPosition(0, 30, false, nodeDrag('n1'))).toBe('before');
     expect(dropPosition(14, 30, false, nodeDrag('n1'))).toBe('before');
     expect(dropPosition(15, 30, false, nodeDrag('n1'))).toBe('after'); // exactly half is after
@@ -142,11 +145,15 @@ describe('dropAllowed', () => {
     // ⚠️ "Not onto itself" generalises to "not onto anything I am carrying" (Inc.4): the second of
     // three would otherwise name a destination that is one of the things being moved. Checking
     // `drag.id` alone — the grabbed row — permits exactly that.
+    //
+    // ⚠️ The positions here are the ones a node row can actually produce. They were `inside` until
+    // 増分 8, which was the only answer a batch over a node row used to get — a refusal asserted
+    // against a position the cursor can no longer report proves nothing.
     const batch = nodeDrag('n1', 'n2', 'n3');
-    expect(dropAllowed(GROUPS, batch, nodeTarget('n2', 'site'), 'inside')).toBe(false);
-    expect(dropAllowed(GROUPS, batch, nodeTarget('n3', 'site'), 'inside')).toBe(false);
+    expect(dropAllowed(GROUPS, batch, nodeTarget('n2', 'site'), 'before')).toBe(false);
+    expect(dropAllowed(GROUPS, batch, nodeTarget('n3', 'site'), 'after')).toBe(false);
     // A row outside the batch is a destination like any other.
-    expect(dropAllowed(GROUPS, batch, nodeTarget('n9', 'site'), 'inside')).toBe(true);
+    expect(dropAllowed(GROUPS, batch, nodeTarget('n9', 'site'), 'before')).toBe(true);
     expect(dropAllowed(GROUPS, batch, groupTarget('site'), 'inside')).toBe(true);
   });
 
@@ -198,34 +205,40 @@ describe('dropAction', () => {
     });
   });
 
-  it('puts a batch dropped on a node row into that row’s folder', () => {
-    // Not "into that node", which is not a thing — into the folder it sits in, appended. `scope`
-    // is that folder, and `null` is the top level.
-    expect(dropAction(nodeDrag('n1', 'n2'), nodeTarget('n9', 'rack'), 'inside')).toEqual({
-      kind: 'move-nodes',
-      nodeIds: ['n1', 'n2'],
-      groupId: 'rack',
-    });
-    expect(dropAction(nodeDrag('n1', 'n2'), nodeTarget('n9', null), 'inside')).toEqual({
-      kind: 'move-nodes',
-      nodeIds: ['n1', 'n2'],
-      groupId: null,
-    });
-  });
-
-  it('orders ONE node against a sibling, in the TARGET’s group', () => {
+  it('orders a WHOLE BATCH against a sibling, in the TARGET’s group', () => {
+    // 🚨 THE 増分 8 FIX. This branch used to be `reorder-node`, which held a single `nodeId`, so a
+    // multi-node drop could not reach it at all — `dropPosition` sent batches to an append
+    // instead. Every id must arrive, in the working set's order, with the anchor.
+    //
     // 🚨 `groupId` is the target's scope, not the dragged node's. Dropping a node beside a node in
     // another group both moves and orders it; reading the dragged node's own group would leave it
     // where it was while claiming to have moved it.
+    expect(dropAction(grabbed('n2', 'n1', 'n2'), nodeTarget('n9', 'rack'), 'before')).toEqual({
+      kind: 'move-nodes',
+      nodeIds: ['n1', 'n2'],
+      groupId: 'rack',
+      before: 'n9',
+    });
+    expect(dropAction(grabbed('n2', 'n1', 'n2'), nodeTarget('n9', null), 'after')).toEqual({
+      kind: 'move-nodes',
+      nodeIds: ['n1', 'n2'],
+      groupId: null,
+      after: 'n9',
+    });
+  });
+
+  it('orders ONE node against a sibling through the same shape', () => {
+    // One node is a list of one (Inc.4 決定 D), so the drag has one answer to give whatever it is
+    // carrying — there is no longer a separate single-node action for the server to serve.
     expect(dropAction(nodeDrag('n1'), nodeTarget('n2', 'rack'), 'before')).toEqual({
-      kind: 'reorder-node',
-      nodeId: 'n1',
+      kind: 'move-nodes',
+      nodeIds: ['n1'],
       groupId: 'rack',
       before: 'n2',
     });
     expect(dropAction(nodeDrag('n1'), nodeTarget('n2', 'rack'), 'after')).toEqual({
-      kind: 'reorder-node',
-      nodeId: 'n1',
+      kind: 'move-nodes',
+      nodeIds: ['n1'],
       groupId: 'rack',
       after: 'n2',
     });

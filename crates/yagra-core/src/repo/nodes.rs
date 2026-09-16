@@ -611,7 +611,9 @@ impl NodeRepo {
     /// Move a node into a group (or `None` to ungroup it), appending it to the **end** of the
     /// destination scope (max sort_order + 1) so it lands predictably at the bottom. Returns
     /// whether the node exists. Used by the "Move to…" picker and a drop directly onto a group;
-    /// drag-reorder between siblings goes through [`Self::place_node`] instead.
+    /// drag-reorder between siblings goes through [`Self::place_node_batch`] instead (the WebUI
+    /// sends every move through the bulk path since ADR-124 増分 4; [`Self::place_node`] is what
+    /// the single-node `PUT /nodes/{id}/placement` still serves for an external client).
     pub async fn set_node_group(&self, id: Uuid, group: Option<Uuid>) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE nodes SET group_id = $2, updated_at = now(), \
@@ -678,6 +680,66 @@ impl NodeRepo {
         Ok((ids.len(), res.rows_affected()))
     }
 
+    /// Move MANY nodes into one group **and place them at a position inside it**, next to a
+    /// sibling (`before`/`after`, at most one), in the order given. Returns `(requested, moved)`
+    /// the same way [`Self::set_node_group_batch`] does, and with the same meaning for a shortfall.
+    ///
+    /// 🚨 **This is what a multi-node drag had no way to express** (ADR-124 増分 4 決定 C → 増分 8).
+    /// `PUT /nodes/{id}/placement` takes one node, and calling it N times is a write that can fail
+    /// halfway with no way to read how far it got. This is one statement: either the batch lands or
+    /// nothing does.
+    ///
+    /// ⚠️ **The whole decision lives here, not in the caller.** De-duplication has to happen before
+    /// the orders are computed — a handler that computed N orders from an un-deduplicated list
+    /// would hand this function two arrays of different lengths, and `unnest` would silently pair
+    /// them off against the shorter one.
+    ///
+    /// ⚠️ **The anchor is looked up among the destination's *other* nodes.** The moving ids are
+    /// removed from the sibling list first, so a batch cannot anchor against itself; and if the
+    /// anchor is not there at all — deleted since the page loaded, or one of the nodes being moved
+    /// — [`crate::groups::placement_orders`] appends, exactly as the single-node writer does
+    /// rather than answering 404 for a stale anchor.
+    ///
+    /// `scope` narrows which nodes may move, written out rather than reusing
+    /// [`Self::SCOPE_PREDICATE`] for the reason [`Self::set_node_group_batch`] gives — that
+    /// constant binds `$1`, and this statement needs `$1` for the id array.
+    pub async fn place_node_batch(
+        &self,
+        ids: &[Uuid],
+        group: Option<Uuid>,
+        before: Option<Uuid>,
+        after: Option<Uuid>,
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+        if ids.is_empty() {
+            return Ok((0, 0));
+        }
+        // The destination's current members, minus whatever is moving, so the gap is measured
+        // against the rows that will still be there afterwards.
+        let siblings: Vec<(Uuid, f64)> = self
+            .ordered_nodes_in_group(group)
+            .await?
+            .into_iter()
+            .filter(|(sid, _)| !seen.contains(sid))
+            .collect();
+        let orders = crate::groups::placement_orders(&siblings, before, after, ids.len());
+        let res = sqlx::query(
+            "UPDATE nodes SET group_id = $3, sort_order = t.ord, updated_at = now() \
+             FROM unnest($1::uuid[], $2::float8[]) AS t(id, ord) \
+             WHERE nodes.id = t.id \
+               AND ($4::uuid[] IS NULL OR nodes.group_id = ANY($4))",
+        )
+        .bind(&ids)
+        .bind(&orders)
+        .bind(group)
+        .bind(Self::scope_bind(scope))
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
+    }
+
     /// Set (or clear with `None`) a node's own poll-pool (ADR-009/020). `None` ⇒ NULL, so the node
     /// falls back to its folder's pool, else the default pool. Returns whether the node exists.
     ///
@@ -719,7 +781,13 @@ impl NodeRepo {
     }
 
     /// The `(id, sort_order)` of the nodes in `group` (NULL ⇒ ungrouped), ordered. Feeds
-    /// [`crate::groups::placement_order`] when a drag drops a node before/after a sibling.
+    /// [`crate::groups::placement_orders`] when a drag drops one or more nodes before/after a
+    /// sibling — read by [`Self::place_node_batch`] and by the single-node placement endpoint.
+    ///
+    /// ⚠️ **Deliberately not scope-narrowed.** It only ever answers "what is already in this
+    /// folder", and the folder itself has been checked against the caller's scope before anything
+    /// reads this; every member of a visible folder is visible. Narrowing here would make the
+    /// anchor invisible to a scoped caller and silently turn their drop into an append.
     pub async fn ordered_nodes_in_group(
         &self,
         group: Option<Uuid>,
@@ -2782,6 +2850,127 @@ mod tests {
             still.group.map(|g| g.0),
             Some(theirs),
             "an out-of-scope node was moved"
+        );
+    }
+
+    /// 🚨 **The batch lands where it was dropped, in its own order** (ADR-124 増分 8).
+    ///
+    /// The property the append-only writer beside this one cannot express: three nodes dropped
+    /// before a sibling sit between that sibling and the one above it, keeping the order the
+    /// operator checked them in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_placed_batch_lands_between_the_anchor_and_its_neighbour(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        // Two nodes already filed, with a gap between them to land in.
+        let top = pgtest::node(&pool, "top", 1, Some(dest)).await;
+        let bottom = pgtest::node(&pool, "bottom", 2, Some(dest)).await;
+        repo.place_node(top, Some(dest), 1.0).await.expect("top");
+        repo.place_node(bottom, Some(dest), 2.0)
+            .await
+            .expect("bottom");
+        let c = pgtest::node(&pool, "c", 3, None).await;
+        let a = pgtest::node(&pool, "a", 4, None).await;
+
+        let (requested, moved) = repo
+            .place_node_batch(&[c, a], Some(dest), Some(bottom), None, None)
+            .await
+            .expect("place");
+        assert_eq!((requested, moved), (2, 2));
+
+        let order = repo
+            .node_sort_orders(&[top, bottom, c, a])
+            .await
+            .expect("orders");
+        let of = |id: uuid::Uuid| *order.get(&id).expect("an order");
+        assert!(
+            of(top) < of(c) && of(c) < of(a) && of(a) < of(bottom),
+            "the batch did not land inside the gap, in its own order: {order:?}"
+        );
+    }
+
+    /// An anchor that is not in the destination appends, rather than refusing.
+    ///
+    /// The row can have been deleted between the page load and the drop, and the single-node
+    /// placement writer has always appended in that case rather than answering 404.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_placed_batch_with_a_stale_anchor_appends(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        let sitting = pgtest::node(&pool, "sitting", 1, Some(dest)).await;
+        repo.place_node(sitting, Some(dest), 5.0)
+            .await
+            .expect("sitting");
+        let a = pgtest::node(&pool, "a", 2, None).await;
+
+        repo.place_node_batch(
+            &[a],
+            Some(dest),
+            Some(uuid::Uuid::new_v4()), // never existed
+            None,
+            None,
+        )
+        .await
+        .expect("place");
+
+        let order = repo.node_sort_orders(&[sitting, a]).await.expect("orders");
+        let of = |id: uuid::Uuid| *order.get(&id).expect("an order");
+        assert!(
+            of(a) > of(sitting),
+            "a stale anchor did not append: {order:?}"
+        );
+    }
+
+    /// 🚨 The scope predicate is `$4` here and `$3` in the appending writer, and nothing checks a
+    /// bind position. A test passing `None` for the scope short-circuits that argument entirely,
+    /// so it has to be exercised with a real filter or a swapped bind would ship green.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_placed_batch_leaves_nodes_outside_the_scope_where_they_are(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let mine = pgtest::group(&pool, "Mine").await;
+        let theirs = pgtest::group(&pool, "Theirs").await;
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        let anchor = pgtest::node(&pool, "anchor", 1, Some(dest)).await;
+        let ours = pgtest::node(&pool, "ours", 2, Some(mine)).await;
+        let hidden = pgtest::node(&pool, "hidden", 3, Some(theirs)).await;
+
+        let (requested, moved) = repo
+            .place_node_batch(
+                &[ours, hidden],
+                Some(dest),
+                Some(anchor),
+                None,
+                Some(&[mine, dest]),
+            )
+            .await
+            .expect("place");
+        assert_eq!((requested, moved), (2, 1), "the scope did not hold");
+        let still = repo
+            .get_node(hidden)
+            .await
+            .expect("read")
+            .expect("the node");
+        assert_eq!(
+            still.group.map(|g| g.0),
+            Some(theirs),
+            "an out-of-scope node was moved"
+        );
+    }
+
+    /// An empty batch is a no-op, and does not go near the database.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_empty_placed_batch_moves_nothing(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let dest = pgtest::group(&pool, "Tokyo").await;
+        assert_eq!(
+            repo.place_node_batch(&[], Some(dest), None, None, None)
+                .await
+                .expect("place"),
+            (0, 0)
         );
     }
 

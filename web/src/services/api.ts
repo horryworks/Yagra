@@ -1241,14 +1241,23 @@ export const api = {
 
   /** Move MANY nodes into one folder (or `null` to ungroup them all) in one request.
    *
+   *  `placement` names the sibling node to land next to (`before` or `after`, not both); omitted
+   *  appends to the end of the folder, which is what the dialogs and the selection bar send.
+   *  🚨 **This is the whole of ADR-124 増分 8** — a drag between two rows used to call the
+   *  single-node `placeNode` for one node and silently append for several, so the same gesture
+   *  answered differently at one node and at three.
+   *
    *  ⚠️ `moved` can be lower than `requested`: an id may name a node deleted since the page
    *  loaded, or one outside this token's scope. Show both numbers rather than the count that was
    *  asked for — that is the whole reason the endpoint returns two. */
   moveNodes: (
     nodeIds: string[],
     groupId: string | null,
+    placement?: { before?: string; after?: string },
   ): Promise<{ requested: number; moved: number }> =>
-    apiPost('/api/v1/nodes/move', { body: { node_ids: nodeIds, group_id: groupId } }),
+    apiPost('/api/v1/nodes/move', {
+      body: { node_ids: nodeIds, group_id: groupId, ...placement },
+    }),
 
   /** Delete MANY nodes in one request (ADR-124 増分 6).
    *
@@ -1283,12 +1292,11 @@ export const api = {
       body: { opt_out: optOut },
     }),
 
-  /** Drag-reorder a node: place it in `group_id` (`null` ⇒ ungrouped) next to a sibling node.
-   *  `before`/`after` name the sibling (at most one; omit both to append). */
-  placeNode: (
-    id: string,
-    body: { group_id: string | null; before?: string; after?: string },
-  ): Promise<void> => apiPut('/api/v1/nodes/{node_id}/placement', { path: { node_id: id }, body }),
+  // `placeNode` (`PUT /nodes/{node_id}/placement`) was here until ADR-124 増分 8 and is gone, for
+  // the same reason `setNodeGroup` above went in Inc.4: the drag was its only caller, and a drop
+  // beside a sibling now sends `moveNodes` with `before`/`after` whether it carries one node or
+  // thirty. **The endpoint stays** — published in the OpenAPI document, and an external client may
+  // hold it — but nothing in the WebUI reaches it. Do not add a second client for it.
 
   /** The node groups (the inventory folder tree; flat list with parent links). */
   listNodeGroups: (): Promise<NodeGroup[]> => apiGet('/api/v1/node-groups'),

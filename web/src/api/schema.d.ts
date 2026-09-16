@@ -2012,9 +2012,9 @@ export interface paths {
          *     the folder it acts on, which is the same consent a file manager asks for.
          *
          *     ⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per
-         *     child would be a partial write with nothing to read back when it fails halfway, which is the
-         *     same reason a multi-node drag appends rather than inserting (`nodeTreeDnd.ts`). One request,
-         *     one transaction.
+         *     child would be a partial write with nothing to read back when it fails halfway. One request,
+         *     one transaction — the same shape `POST /nodes/move` takes for a multi-node drag, which places
+         *     the whole batch in a single statement rather than calling the single-node writer N times.
          */
         post: operations["sort_group_children"];
         delete?: never;
@@ -5307,8 +5307,23 @@ export interface components {
         BulkNodeDelete: {
             node_ids: string[];
         };
-        /** @description Move many nodes into one folder (or `null` to ungroup them all). */
+        /**
+         * @description Move many nodes into one folder (or `null` to ungroup them all), optionally placing them at a
+         *     position inside it rather than at the end.
+         */
         BulkNodeMove: {
+            /**
+             * Format: uuid
+             * @description Place the nodes immediately **after** this sibling. See `before`.
+             */
+            after?: string | null;
+            /**
+             * Format: uuid
+             * @description Place the nodes immediately **before** this sibling, keeping the order they were given in.
+             *     At most one of `before`/`after`; both omitted appends to the end, which is what every
+             *     caller did before ADR-124 増分 8 and what an N-1 WebUI still sends.
+             */
+            before?: string | null;
             /** Format: uuid */
             group_id?: string | null;
             node_ids: string[];
@@ -20572,7 +20587,7 @@ export interface operations {
                     "application/json": components["schemas"]["BulkMoveResult"];
                 };
             };
-            /** @description Unknown destination folder, or more ids than one request may carry */
+            /** @description Unknown destination folder, both `before` and `after` given, or more ids than one request may carry */
             400: {
                 headers: {
                     [name: string]: unknown;

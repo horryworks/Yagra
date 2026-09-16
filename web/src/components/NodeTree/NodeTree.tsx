@@ -203,18 +203,21 @@ interface Props {
   onTagChecked?: () => void;
   /** Propose a folder for this one node by IP range. Omit to hide it. */
   onMoveNodeByPrefix?: (node: NodeSummary) => void;
-  /** Move nodes into a group (or null = ungroup), appending them — a drop, of one row or of the
-   *  whole working set. **A list even for one** (ADR-124 Inc.4): the drag used to hand over a
-   *  single id and the page used to answer it with the single-node endpoint, which is how a
-   *  three-row selection moved one node. */
-  onMoveNodes: (nodeIds: readonly string[], groupId: string | null) => void;
+  /** Move nodes into a group (or null = ungroup) — a drop, of one row or of the whole working set.
+   *  **A list even for one** (ADR-124 Inc.4): the drag used to hand over a single id and the page
+   *  used to answer it with the single-node endpoint, which is how a three-row selection moved one
+   *  node.
+   *
+   *  `placement` names the sibling node to land next to; omitted appends to the end of the folder.
+   *  🚨 **A batch carries it too since 増分 8** — there used to be a separate `onReorderNode` that
+   *  took one id, so dropping several nodes between two rows silently appended them instead. */
+  onMoveNodes: (
+    nodeIds: readonly string[],
+    groupId: string | null,
+    placement?: { before?: string; after?: string },
+  ) => void;
   /** Re-parent a group (or null = top level), appending it — drop into a group / onto Ungrouped. */
   onMoveGroup: (groupId: string, parentId: string | null) => void;
-  /** Drag-reorder a node next to a sibling node (before/after) within a group. */
-  onReorderNode: (
-    nodeId: string,
-    dest: { groupId: string | null; before?: string; after?: string },
-  ) => void;
   /** Arrange one folder's **direct** children in name order (ADR-130). Subfolders and member
    *  nodes are renumbered in their own scopes, so folders stay above nodes whatever the direction;
    *  folders deeper down are untouched. 🚨 **Overwrites a hand-arranged order with no undo** — by
@@ -296,7 +299,6 @@ export function NodeTree({
   onMoveNodes,
   onMoveGroup,
   onSortGroupChildren,
-  onReorderNode,
   onReorderGroup,
   suppression,
   suppressionRows,
@@ -725,14 +727,19 @@ export function NodeTree({
   const perform = (a: DropAction) => {
     switch (a.kind) {
       case 'move-nodes':
-        return onMoveNodes(a.nodeIds, a.groupId);
+        // The placement is passed only when the drop actually named a sibling — a `{}` would put
+        // two absent keys on the request body for every plain "move into this folder".
+        return onMoveNodes(
+          a.nodeIds,
+          a.groupId,
+          a.before || a.after
+            ? a.before
+              ? { before: a.before }
+              : { after: a.after }
+            : undefined,
+        );
       case 'move-group':
         return onMoveGroup(a.groupId, a.parentId);
-      case 'reorder-node':
-        return onReorderNode(a.nodeId, {
-          groupId: a.groupId,
-          ...(a.before ? { before: a.before } : { after: a.after }),
-        });
       case 'reorder-group':
         return onReorderGroup(a.groupId, {
           parentId: a.parentId,

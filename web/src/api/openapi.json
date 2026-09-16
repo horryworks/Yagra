@@ -10236,7 +10236,7 @@
           "groups"
         ],
         "summary": "Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.",
-        "description": "Subfolders and member nodes are renumbered within their own sibling scopes, so the two never\ninterleave — the tree draws every folder above every node whatever the values are. Folders\ndeeper down are untouched: the operator right-clicked one folder.\n\n🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is\nthe decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking\nthe folder it acts on, which is the same consent a file manager asks for.\n\n⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per\nchild would be a partial write with nothing to read back when it fails halfway, which is the\nsame reason a multi-node drag appends rather than inserting (`nodeTreeDnd.ts`). One request,\none transaction.",
+        "description": "Subfolders and member nodes are renumbered within their own sibling scopes, so the two never\ninterleave — the tree draws every folder above every node whatever the values are. Folders\ndeeper down are untouched: the operator right-clicked one folder.\n\n🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is\nthe decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking\nthe folder it acts on, which is the same consent a file manager asks for.\n\n⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per\nchild would be a partial write with nothing to read back when it fails halfway. One request,\none transaction — the same shape `POST /nodes/move` takes for a multi-node drag, which places\nthe whole batch in a single statement rather than calling the single-node writer N times.",
         "operationId": "sort_group_children",
         "parameters": [
           {
@@ -10859,7 +10859,7 @@
             }
           },
           "400": {
-            "description": "Unknown destination folder, or more ids than one request may carry",
+            "description": "Unknown destination folder, both `before` and `after` given, or more ids than one request may carry",
             "content": {
               "application/json": {
                 "schema": {
@@ -24003,11 +24003,27 @@
       },
       "BulkNodeMove": {
         "type": "object",
-        "description": "Move many nodes into one folder (or `null` to ungroup them all).",
+        "description": "Move many nodes into one folder (or `null` to ungroup them all), optionally placing them at a\nposition inside it rather than at the end.",
         "required": [
           "node_ids"
         ],
         "properties": {
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Place the nodes immediately **after** this sibling. See `before`."
+          },
+          "before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Place the nodes immediately **before** this sibling, keeping the order they were given in.\nAt most one of `before`/`after`; both omitted appends to the end, which is what every\ncaller did before ADR-124 増分 8 and what an N-1 WebUI still sends."
+          },
           "group_id": {
             "type": [
               "string",
