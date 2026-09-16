@@ -163,6 +163,43 @@ describe('useFilterSearch', () => {
     expect(listNodesPage).toHaveBeenCalledTimes(1);
   });
 
+  // ── The settled term (ADR-153) ──────────────────────────────────────────────────────────────
+  // What the page writes to the URL. Three properties, each of which a wrong implementation breaks
+  // in a way the screen shows only on a reload or a Back press.
+
+  it('holds the term from the very first render, before any search has gone out', () => {
+    // A reload arrives with the term already in the box. `appliedTerm` is still '' at that point —
+    // it is set from the search effect — and a page that wrote *that* to the URL would delete the
+    // term it had just been reloaded with.
+    // `result.current` is read after the effects have run, so the first frame is recorded as it renders.
+    const frames: { applied: string; settled: string }[] = [];
+    renderHook(() => {
+      const r = useFilterSearch('TDC', DEFAULT_INVENTORY_FILTERS);
+      frames.push({ applied: r.appliedTerm, settled: r.settledTerm });
+      return r;
+    });
+    expect(frames[0]).toEqual({ applied: '', settled: 'TDC' });
+  });
+
+  it('moves only once the typing has settled, and trimmed', async () => {
+    const { result, rerender } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {
+      initialProps: 'sw',
+    });
+    rerender('sw-01 ');
+    await tick(150);
+    expect(result.current.settledTerm, 'moved mid-burst').toBe('sw');
+    await tick(50);
+    expect(result.current.settledTerm).toBe('sw-01');
+  });
+
+  it('goes blank the moment the box is cleared, without waiting out the settle', () => {
+    const { result, rerender } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {
+      initialProps: 'TDC',
+    });
+    rerender('');
+    expect(result.current.settledTerm).toBe('');
+  });
+
   it('leaves nothing loading when the box is cleared mid-request', async () => {
     // The cancelled request never resolves its own `loading`, so the not-filtering branch has to.
     // Harmless today (every reader gates on the filter being non-empty) and a stuck spinner the

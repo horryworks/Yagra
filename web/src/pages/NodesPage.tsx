@@ -45,12 +45,14 @@ import type {
 import { mergeNodesById, type StateCounts } from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { FILTER_SEARCH_LIMIT, useFilterSearch } from './useFilterSearch';
+import { useUrlTerm } from '../lib/useUrlTerm';
 import {
   inventoryColumns,
   inventoryFilterLabels,
   inventoryKey,
   isInventoryFiltered,
   readInventoryFilters,
+  TREE_SEARCH_KEY,
   truncationNotice,
   writeInventoryFilters,
 } from './inventoryFilters';
@@ -221,7 +223,7 @@ export function NodesPage() {
 
   // The right-pane selection and the inline detail tab live in the URL (`?sel=node:<id>&tab=…`)
   // so a browser reload restores the same pane instead of snapping back to the empty state
-  // (design-guidelines.md "画面状態の永続化"). The left-pane search box stays transient (local).
+  // (design-guidelines.md "画面状態の永続化"). So does the left pane's search term, since ADR-153.
   const [searchParams, setSearchParams] = useSearchParams();
   const selected: TreeSelection = parseSelection(searchParams.get('sel'));
   const tabParam = searchParams.get('tab') ?? '';
@@ -231,7 +233,12 @@ export function NodesPage() {
   // to mean re-clicking it on every row.
   const remembered = useNodeTabStore((s) => s.tab);
   const tab = requestedNodeDetailTab(tabParam, remembered);
-  const [filter, setFilter] = useState('');
+  // The search box (ADR-153). The box itself is a local draft; the URL receives the term once the
+  // typing settles — `useFilterSearch` decides when, and the effect below it commits. Until ADR-153
+  // this was plain component state and a reload threw the term away, which left three of the four
+  // controls on this row surviving a reload and the one an operator types into not.
+  const term = useUrlTerm(TREE_SEARCH_KEY);
+  const filter = term.draft;
   // Pick a row → write the selection and drop the tab param, so the pane opens on the tab the
   // operator last clicked rather than on whatever the *previous* row's URL happened to say
   // (`requestedNodeDetailTab`). Dropping it is still right: a link to one node's Flow tab must not
@@ -348,8 +355,7 @@ export function NodesPage() {
 
   // The three controls live in the URL beside the selection — they are the part someone shares
   // ("the URL monitors in the tokyo pool"), and a reload that dropped them would silently widen
-  // the list back to the whole fleet. The text box stays local, as it always has: it is a scratch
-  // typing surface, and the pane it filters is already addressable by these.
+  // the list back to the whole fleet. The search term joined them in ADR-153, for the same reason.
   //
   // Since ADR-053 Inc.6 each takes a **set**, so "everything that is not healthy" is one question
   // rather than three separate looks at the tree. Declared here rather than beside the other URL
@@ -392,22 +398,31 @@ export function NodesPage() {
   // an empty box: "show me the URL monitors" is a whole question, and browsing the folder tree
   // while one is set would show every node and look like the control did nothing.
   const filtering = filter.trim().length > 0 || isInventoryFiltered(inventoryFilters);
-  // Clearing everything is one handler, and it writes the URL exactly once. The search box is
-  // component state and the three controls are URL state, so a "clear all" split across two
-  // callbacks would be two `setSearchParams` calls from the same render snapshot — the second
-  // restoring what the first cleared. That bug has already shipped once (`ClearFilters`' own doc).
+  // Clearing everything is one handler, and it writes the URL exactly once: the three controls and
+  // the search term go into the same `URLSearchParams`. Two `setSearchParams` calls from one render
+  // snapshot and the second restores what the first cleared — that bug has already shipped once
+  // (`ClearFilters`' own doc). `term.assign` also records the cleared term, so the commit the
+  // settle triggers next finds nothing to write rather than writing from the pre-clear snapshot.
+  const assignTerm = term.assign;
   const clearAllFilters = useCallback(() => {
-    setFilter('');
     // Pinned only narrows the tree too, so "clear all filters" that left it on would be untrue.
     if (pinnedOnly) setNodeTreePinnedOnly(false);
-    setInventoryFilters(defaultFilters(filterCols));
-  }, [filterCols, setInventoryFilters, pinnedOnly]);
+    const params = new URLSearchParams(searchParams);
+    writeInventoryFilters(filterCols, params, defaultFilters(filterCols));
+    assignTerm(params, '');
+    setSearchParams(params, { replace: true });
+  }, [filterCols, pinnedOnly, searchParams, setSearchParams, assignTerm]);
   // Filter mode's server-side page — the nodes that matched. One capped page, never the fleet; the
   // folders a group-name match reveals arrive separately through the per-group member cache below.
   // `appliedTerm` is the debounced term the search was issued for, so the reveal loads in step with
   // the search rather than once per keystroke.
   const search = useFilterSearch(filter, inventoryFilters);
   const refetchSearch = search.refetch;
+  // The settled term goes to the URL. Keyed on the settled value ALONE — `commit` is stable, and an
+  // effect that also re-ran on URL changes would write the old term back over a Back navigation.
+  const commitTerm = term.commit;
+  const settledTerm = search.settledTerm;
+  useEffect(() => commitTerm(settledTerm), [commitTerm, settledTerm]);
   const members = useLazyGroupMembers({
     groups,
     visibleGroupKeys,
@@ -1009,14 +1024,15 @@ export function NodesPage() {
                 />
               )}
               {/* The clear affordance is the box's own, and it clears the box and nothing else.
-                  clearAllFilters also writes the URL, which would take the state / kind / pool
-                  controls with it — three filters the operator did not ask to drop. ClearFilters in
-                  the action row is the control that means all of them. */}
+                  clearAllFilters would take the state / kind / pool controls with it — three
+                  filters the operator did not ask to drop. ClearFilters in the action row is the
+                  control that means all of them. The ✕ empties the draft; the settle (which is
+                  immediate for an empty box) removes `q` from the URL and leaves the rest. */}
               <SearchField
                 boxClassName="nodes-pane-search"
                 value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                onClear={() => setFilter('')}
+                onChange={(e) => term.setDraft(e.target.value)}
+                onClear={() => term.setDraft('')}
                 placeholder={t('inventory.searchPlaceholder')}
               />
             </div>

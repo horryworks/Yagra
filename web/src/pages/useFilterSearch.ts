@@ -31,6 +31,15 @@ export interface FilterSearch {
    *  why it is published at issue time rather than on the answer: a folder matched by name loads
    *  its members in parallel with the search page instead of a round-trip behind it. */
   appliedTerm: string;
+  /** The term as it stands once the operator has stopped typing: trimmed, and `''` the moment the
+   *  box is cleared. The value to write to the URL (ADR-153).
+   *
+   *  ⚠️ **Not `appliedTerm`**, although the two agree once a search has gone out. `appliedTerm` is
+   *  state set from an effect, so on the first render after a reload it is still `''` while the box
+   *  already holds the term the URL arrived with — and committing that `''` deletes the term from
+   *  the URL before the search for it has even been issued. This one is computed during render, so
+   *  it is right from the first frame. */
+  settledTerm: string;
   /** Matches exist that this page does not contain.
    *
    *  ⚠️ **The server's word for it, not a length comparison.** With a state / kind / pool filter
@@ -121,5 +130,5 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term, key, nonce]);
 
-  return { nodes, loading: loading || settling, appliedTerm, truncated, refetch };
+  return { nodes, loading: loading || settling, appliedTerm, settledTerm: term, truncated, refetch };
 }

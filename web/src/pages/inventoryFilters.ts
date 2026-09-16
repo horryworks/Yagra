@@ -41,6 +41,13 @@ import { NODE_KIND_SPEC } from '../lib/nodeKind';
 import { NODE_KINDS, type NodeState } from '../types/api';
 import type { TFunction } from 'i18next';
 
+/** The URL key the tree's search box writes its term to (ADR-153).
+ *
+ *  A bare key beside `state` / `kind` / `pool`, and one of the keys the route ledger in
+ *  `filterSpecRegistry.test.ts` owns for `/nodes` — so a column that one day wanted to be called
+ *  `q` on this route fails there rather than silently sharing the term. */
+export const TREE_SEARCH_KEY = 'q';
+
 /** The states offered in the filter, in the order they are shown. */
 export const NODE_STATE_FILTERS: readonly NodeState[] = DISPLAY_ORDER;
 
