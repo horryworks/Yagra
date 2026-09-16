@@ -232,42 +232,114 @@ export function revealedGroupKeys(groups: NodeGroup[], filter: string, cap: numb
   return out;
 }
 
-/** Flip one folder in a collapse set, returning a new set. Shared by the saved layout
- *  (`prefs.ts::toggleNodeTreeGroup`) and the filter's own set below, so "collapsed" is spelled
- *  one way in both. */
-export function toggleCollapsed(
+/** How many folders the saved layout may hold (ADR-154).
+ *
+ *  ⚠️ **The cap is about the account document, not about trees.** The layout rides in
+ *  `PUT /api/v1/preferences`, whose body is capped (`MAX_USER_PREFS_BYTES`, 32 KiB) and shared with
+ *  every other WebUI preference. A group id is a UUID, so one entry is about 44 bytes and 300 of
+ *  them about 13 KiB — beside the column widths' own saturated 12 KiB (`lib/columnWidths.ts`).
+ *  `serverPrefs.test.ts` builds that saturated document and measures it.
+ *
+ *  When the cap is reached the FIRST-inserted folder is dropped: the one closed longest ago opens
+ *  again, silently. Accepted — reopening it is one press, and a 413 from the endpoint is not
+ *  recoverable from the page. */
+export const MAX_STORED_COLLAPSED = 300;
+
+/** Longest folder id the account document may carry back. A group id is a 36-character UUID; this
+ *  only bounds what a malformed row can make the browser hold. */
+const MAX_COLLAPSED_ID_CHARS = 64;
+
+/** One shared empty set, so an unchanged "nothing collapsed" is a stable `useMemo` dependency. */
+const NOTHING_COLLAPSED: Readonly<Record<string, true>> = Object.freeze({});
+
+/**
+ * The saved layout with folder `id` set to `collapsed` (ADR-154).
+ *
+ * 🚨 **Returns the very same object when nothing changes, and that is load-bearing.** The caller
+ * saves only when the reference moved, and every save is a `PUT` to the account. Pressing a folder
+ * that a filter shows open while the saved layout already has it closed — the common case under
+ * {@link pressTwisty} — writes nothing.
+ *
+ * Set, never flip: the twisty says what the operator wants (the opposite of what they see), and the
+ * saved value is not always what they see.
+ */
+export function setCollapsed(
   set: Readonly<Record<string, true>>,
   id: string,
-): Record<string, true> {
-  const next = { ...set };
-  if (next[id]) delete next[id];
-  else next[id] = true;
-  return next;
+  collapsed: boolean,
+): Readonly<Record<string, true>> {
+  if (collapsed === (set[id] === true)) return set;
+  if (!collapsed) {
+    const next = { ...set };
+    delete next[id];
+    return next;
+  }
+  return capCollapsed({ ...set, [id]: true }, id);
 }
 
-/** The folders collapsed WHILE a filter is on, and which filter they were collapsed under
- *  (ADR-053 Inc.11).
+/** Drop first-inserted folders until `set` holds at most {@link MAX_STORED_COLLAPSED}, never `keep`
+ *  — evicting the folder just closed would make the press look like it did nothing. Mutates and
+ *  returns `set`, which every caller has just built. */
+function capCollapsed(set: Record<string, true>, keep: string | undefined): Record<string, true> {
+  const ids = Object.keys(set);
+  let excess = ids.length - MAX_STORED_COLLAPSED;
+  for (const id of ids) {
+    if (excess <= 0) break;
+    if (id === keep) continue;
+    delete set[id];
+    excess -= 1;
+  }
+  return set;
+}
+
+/**
+ * Read a saved layout out of whatever the account document holds, or `null` when it is not a
+ * layout at all (ADR-154).
  *
- *  🚨 **A separate set from the saved layout, on purpose.** Filtering ignores `nodeTreeCollapsed` so
- *  a folder closed while browsing cannot hide its own match (Inc.6). The twisty used to go on writing
- *  that saved set anyway: pressing it under a filter changed nothing on screen and quietly collapsed
- *  the folder in the tree the operator came back to. */
-export interface FilterCollapse {
-  readonly key: string;
-  readonly collapsed: Readonly<Record<string, true>>;
+ * The document is opaque to the backend (ADR-058) — it validates only that the body is a JSON
+ * object — so a value of the wrong shape is a thing to survive rather than a thing the API
+ * prevents. Only `true`-valued keys of a plausible length survive, capped like a local write.
+ * `null` rather than `{}` for a non-object, so the caller can tell "the account holds nothing
+ * usable" (keep the local layout) from "the account holds an empty layout" (open everything).
+ */
+export function adoptCollapsed(raw: unknown): Record<string, true> | null {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out: Record<string, true> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value !== true || id.length === 0 || id.length > MAX_COLLAPSED_ID_CHARS) continue;
+    out[id] = true;
+  }
+  return capCollapsed(out, undefined);
 }
 
-/** Nothing collapsed, under no filter. One shared value, so it is a stable `useMemo` dependency. */
-export const NO_FILTER_COLLAPSE: FilterCollapse = Object.freeze({
+/** The folders whose twisty was pressed WHILE a filter is on, and which filter that was
+ *  (ADR-053 Inc.11, reshaped by ADR-154).
+ *
+ *  🚨 **It holds no open/closed state of its own.** Filtering ignores the saved layout, so a folder
+ *  closed while browsing cannot hide its own match (Inc.6): every folder starts open. A press under
+ *  a filter writes the saved layout ({@link pressTwisty}) and records the folder here, and what the
+ *  filtered tree shows is derived from both ({@link filterCollapsedFrom}).
+ *
+ *  The shape before ADR-154 kept a collapse set of its own and never wrote the saved layout, so a
+ *  folder closed under a filter opened again the moment the filter was cleared. Two sets written
+ *  side by side would disagree as soon as the saved one evicted an entry or another tab wrote it;
+ *  a derived one has nothing to disagree with. */
+export interface FilterTouched {
+  readonly key: string;
+  readonly ids: Readonly<Record<string, true>>;
+}
+
+/** Nothing pressed, under no filter. One shared value, so it is a stable `useMemo` dependency. */
+export const NO_FILTER_TOUCHED: FilterTouched = Object.freeze({
   key: '',
-  collapsed: Object.freeze({}),
+  ids: NOTHING_COLLAPSED,
 });
 
-/** Which filter a {@link FilterCollapse} belongs to: the term as the tree compares it, plus the
+/** Which filter a {@link FilterTouched} belongs to: the term as the tree compares it, plus the
  *  server-side state / kind / pool values (`inventoryKey`).
  *
  *  ⚠️ `narrowed` alone is not enough — it is a boolean, so Critical → Warning leaves it `true`, and a
- *  folder collapsed under the first question would stay collapsed over the second one's matches. */
+ *  folder closed under the first question would stay closed over the second one's matches. */
 export function treeFilterKey(
   filter: string,
   narrowed: boolean,
@@ -280,24 +352,68 @@ export function treeFilterKey(
   return JSON.stringify(pinnedOnly ? [...key, 'pinned'] : key);
 }
 
-/** The collapse set for the filter `key` names: what was collapsed under that same filter, and
- *  nothing for any other — a new filter starts with every folder open. */
-export function filterCollapseFor(
-  held: FilterCollapse,
-  key: string,
-): Readonly<Record<string, true>> {
-  return held.key === key ? held.collapsed : NO_FILTER_COLLAPSE.collapsed;
+/** The folders pressed under the filter `key` names — and none for any other, so a new filter
+ *  starts with every folder open (Inc.11 decision AC). */
+export function touchedFor(held: FilterTouched, key: string): Readonly<Record<string, true>> {
+  return held.key === key ? held.ids : NOTHING_COLLAPSED;
 }
 
-/** Flip one folder under the filter `key`. Starts from {@link filterCollapseFor}, so a set left
- *  over from a previous filter is dropped rather than carried into this one. */
-export function toggleFilterCollapse(held: FilterCollapse, key: string, id: string): FilterCollapse {
-  return { key, collapsed: toggleCollapsed(filterCollapseFor(held, key), id) };
+/** Record a press on folder `id` under the filter `key`. Starts from {@link touchedFor}, so what was
+ *  pressed under a previous filter is dropped rather than carried into this one. The same object
+ *  comes back when the folder was already recorded under this filter. */
+export function touchFilter(held: FilterTouched, key: string, id: string): FilterTouched {
+  if (held.key === key && held.ids[id]) return held;
+  return { key, ids: { ...touchedFor(held, key), [id]: true } };
+}
+
+/** What a filtered tree shows as closed: a folder pressed under this filter that the saved layout
+ *  now holds closed. Everything else is open, which is Inc.6. */
+export function filterCollapsedFrom(
+  collapsed: Readonly<Record<string, true>>,
+  touched: Readonly<Record<string, true>>,
+): Readonly<Record<string, true>> {
+  let out: Record<string, true> | undefined;
+  for (const id of Object.keys(touched)) {
+    if (!collapsed[id]) continue;
+    out ??= {};
+    out[id] = true;
+  }
+  return out ?? NOTHING_COLLAPSED;
+}
+
+/** Everything one press of a folder's twisty reads and writes. */
+export interface TwistyState {
+  readonly collapsed: Readonly<Record<string, true>>;
+  readonly touched: FilterTouched;
+}
+
+/**
+ * One press of folder `id`'s twisty (ADR-154). The component writes back whichever half came back
+ * as a different object — the saved layout through `serverPrefs.ts`, the touched set to its state.
+ *
+ * - The saved layout gets **the opposite of what the row shows** (`isOpen` ⇒ close it). Never a
+ *   flip: a folder closed while browsing shows open under a filter, and flipping it there would
+ *   *open* it in the saved layout while the operator watched it close.
+ * - Under a text term or a state / kind / pool filter (`searching`), the folder is also recorded
+ *   as pressed, which is what lets the filtered tree show it closed.
+ *
+ * `searching` is deliberately not "any narrowing": Pinned only on its own browses the saved layout
+ * (ADR-154 decision 7), so a press there is an ordinary browse press.
+ */
+export function pressTwisty(
+  state: TwistyState,
+  press: { id: string; isOpen: boolean; searching: boolean; key: string },
+): TwistyState {
+  const collapsed = setCollapsed(state.collapsed, press.id, press.isOpen);
+  const touched = press.searching ? touchFilter(state.touched, press.key, press.id) : state.touched;
+  return collapsed === state.collapsed && touched === state.touched
+    ? state
+    : { collapsed, touched };
 }
 
 /** Flatten the visible rows of the inventory tree in display order, honouring collapse state and
  *  the name filter — the single source of truth the virtualized `NodeTree` renders. Collapsed
- *  groups omit their descendants; while filtering, the saved collapse state is ignored (every group
+ *  groups omit their descendants; while searching, the saved collapse state is ignored (every group
  *  starts open, and only `filterCollapsed` closes one) and non-matching rows are hidden. Pure (no
  *  React) so the ordering/visibility rules are unit-tested directly.
  *
@@ -354,8 +470,9 @@ export function flattenTree(
      *  `group-loading` placeholder — otherwise a folder nobody can load is drawn exactly like one
      *  that is still arriving, forever. */
     failedGroups?: Set<string>;
-    /** The folders collapsed while this filter is on ({@link FilterCollapse}). Read only while
-     *  narrowing — browsing reads `collapsed`, and filtering never does. */
+    /** The folders shown closed while a term or a state / kind / pool filter is on
+     *  ({@link filterCollapsedFrom}). Read only while searching — browsing and Pinned only read
+     *  `collapsed`, and searching never does. */
     filterCollapsed?: Readonly<Record<string, true>>;
     /** Pinned only (ADR-146): keep what this view keeps — pinned folders whole, pinned nodes, and
      *  the folders above both as a path. Omit when the switch is off. */
@@ -468,10 +585,15 @@ export function flattenTree(
     if (!groupKept(group.id)) return;
     if (searching && !effMatch && !survivesSearch(group)) return;
 
-    // Narrowing never reads the saved layout, so a folder closed while browsing cannot hide its own
-    // match (ADR-053 Inc.6). It reads its own set instead, which starts empty for every new filter
-    // (Inc.11) — before that this was `true`, and the twisty did nothing while a filter was on.
-    const isOpen = narrowing
+    // Searching never reads the saved layout, so a folder closed while browsing cannot hide its own
+    // match (ADR-053 Inc.6). It reads the set derived from what was pressed under this filter, which
+    // starts empty for every new filter (Inc.11) — before that this was `true`, and the twisty did
+    // nothing while a filter was on.
+    // ⚠️ `searching`, not `narrowing` (ADR-154 decision 7). Pinned only is a mode an operator leaves
+    // on across reloads, so reading the filter's set there reopened every folder on every visit and
+    // the saved layout was never once shown to them. A closed folder above a pin still carries the
+    // pin's tally, so opening it is how the pin is found.
+    const isOpen = searching
       ? !opts.filterCollapsed?.[group.id]
       : !opts.collapsed[group.id];
     // 🚨 **While narrowing, the bar describes the rows on screen — not the fleet.** The server

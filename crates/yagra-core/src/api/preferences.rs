@@ -35,13 +35,18 @@ pub(super) struct Doc;
 /// Deliberately far below [`super::util::MAX_JSON_DOC_BYTES`] (256 KiB). That constant is the cap
 /// for an **operator-authored** document — a dashboard layout, a report spec — something a person
 /// composes and looks at. This is **machine-written UI chrome**: a flat map of scalars the browser
-/// writes without anyone reading it. 16 KiB holds several hundred such keys, and the difference
-/// matters because this table has one row *per account*, so the cap multiplies by the user count
-/// rather than standing alone.
+/// writes without anyone reading it. The difference matters because this table has one row *per
+/// account*, so the cap multiplies by the user count rather than standing alone.
+///
+/// 32 KiB since ADR-154, up from 16. The inventory tree's collapsed folders joined the document —
+/// up to 300 UUID keys, about 13 KiB — beside the column widths, whose own caps allow about 12 KiB.
+/// `web/src/serverPrefs.test.ts` builds that saturated document through the real setters and
+/// asserts it fits; it restates this number rather than reading it, so a change here is a change
+/// there too.
 ///
 /// ⚠️ One-way: raising it later is backward-compatible, lowering it silently 413s documents that
 /// already exist in the database.
-const MAX_USER_PREFS_BYTES: usize = 16_384;
+const MAX_USER_PREFS_BYTES: usize = 32_768;
 
 /// A save's acknowledgement. The document is not echoed back — the client already has it.
 #[derive(Serialize, utoipa::ToSchema)]
@@ -94,11 +99,11 @@ async fn get_preferences(caller: Caller, admin: Admin) -> ApiResult<Json<Value>>
     Ok(Json(prefs.unwrap_or(Value::Null)))
 }
 
-/// Save (replace) the caller's preferences. Mutating, so `audit_mw` records it automatically.
+/// Save (replace) the caller's preferences.
 ///
-/// ⚠️ There is no per-route audit opt-out, so **every** save writes one row. Debouncing on the
-/// client is therefore a precondition of this endpoint, not a nicety — a control that saved per
-/// pointer event would flood the audit log and the backend has no defence against it.
+/// Not recorded in the audit log (ADR-154): the document changes nothing but the caller's own
+/// screen, and it is written by gestures such as collapsing a folder or dragging a column edge.
+/// Clients should still coalesce a burst of adjustments into one save.
 #[utoipa::path(
     put, path = "/api/v1/preferences", tag = "preferences",
     request_body = serde_json::Value,

@@ -3374,10 +3374,10 @@ export interface paths {
          */
         get: operations["get_preferences"];
         /**
-         * Save (replace) the caller's preferences. Mutating, so `audit_mw` records it automatically.
-         * @description ⚠️ There is no per-route audit opt-out, so **every** save writes one row. Debouncing on the
-         *     client is therefore a precondition of this endpoint, not a nicety — a control that saved per
-         *     pointer event would flood the audit log and the backend has no defence against it.
+         * Save (replace) the caller's preferences.
+         * @description Not recorded in the audit log (ADR-154): the document changes nothing but the caller's own
+         *     screen, and it is written by gestures such as collapsing a folder or dragging a column edge.
+         *     Clients should still coalesce a burst of adjustments into one save.
          */
         put: operations["put_preferences"];
         post?: never;

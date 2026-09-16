@@ -9,12 +9,14 @@
 // only place either can be told from the other.
 //
 // The three properties that carry real cost if they break:
-//   1. a burst of adjustments coalesces into ONE PUT — every PUT writes an audit row, and the
-//      backend has no per-route opt-out, so this is a contract rather than a nicety;
+//   1. a burst of adjustments coalesces into ONE PUT — a drag emits a value per frame, and each PUT
+//      is a round trip and a database write (it wrote an audit row too, until ADR-154);
 //   2. a failed GET stops later saves for the session — otherwise a deployment on an N-1 core PUTs
 //      into a 404 every 800ms for as long as someone is dragging;
 //   3. sign-out cancels a pending save — a save queued by the previous account must not land on the
-//      next one's row.
+//      next one's row;
+//   4. an empty collapsed-folder layout is sent only by a browser that has held one (ADR-154) —
+//      sending `{}` from a machine that never touched the tree reopens every folder closed elsewhere.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -34,9 +36,14 @@ import { usePrefsStore } from './prefs';
 import {
   loadServerPrefs,
   resetServerPrefs,
+  mergeTableColumnWidths,
   setInterfaceDockHeight,
+  setNodeTreeCollapsed,
   setNodeTreePinnedOnly,
 } from './serverPrefs';
+import { MAX_STORED_COLLAPSED } from './lib/nodeTree';
+import { COLUMN_MAX_PX, MAX_STORED_COLUMNS, MAX_STORED_TABLES } from './lib/columnWidths';
+import type { TableId } from './lib/tableIds';
 
 /** The debounce in `serverPrefs.ts`. Restated rather than imported — it is not exported, and a test
  *  that read it from the module could not notice the value changing. */
@@ -51,6 +58,8 @@ beforeEach(() => {
   resetServerPrefs();
   usePrefsStore.getState().setInterfaceDockHeight(null);
   usePrefsStore.getState().setNodeTreePinnedOnly(null);
+  usePrefsStore.getState().setNodeTreeCollapsed({});
+  usePrefsStore.getState().setTableColumnWidths({});
 });
 
 afterEach(() => {
@@ -192,6 +201,160 @@ describe('the Pinned only switch (ADR-146)', () => {
     setInterfaceDockHeight(360);
     vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
     expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
+  });
+});
+
+describe('the inventory tree\'s collapsed folders (ADR-154)', () => {
+  const layout = () => usePrefsStore.getState().nodeTreeCollapsed;
+
+  it('adopts the account\'s layout over this browser\'s', async () => {
+    usePrefsStore.getState().setNodeTreeCollapsed({ local: true });
+    getPreferences.mockResolvedValue({ nodeTreeCollapsed: { g1: true, g2: false } });
+    await loadServerPrefs();
+    expect(layout()).toEqual({ g1: true });
+  });
+
+  it('keeps this browser\'s layout when the account holds none, or nothing that reads as one', async () => {
+    for (const body of [{}, { nodeTreeCollapsed: 'g1' }, { nodeTreeCollapsed: ['g1'] }]) {
+      usePrefsStore.getState().setNodeTreeCollapsed({ local: true });
+      getPreferences.mockResolvedValue(body);
+      await loadServerPrefs();
+      expect(layout()).toEqual({ local: true });
+    }
+  });
+
+  it('saves a press, and sends nothing for a press that changes nothing', () => {
+    // `pressTwisty` hands back the stored object for a no-op press; that must cost no request.
+    setNodeTreeCollapsed(layout());
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).not.toHaveBeenCalled();
+
+    setNodeTreeCollapsed({ g1: true });
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledTimes(1);
+    expect(putPreferences).toHaveBeenCalledWith({ nodeTreeCollapsed: { g1: true } });
+  });
+
+  it('sends the empty layout once the last folder is opened again', () => {
+    // Omitting `{}` would leave the account saying "closed" to the next machine.
+    setNodeTreeCollapsed({ g1: true });
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    setNodeTreeCollapsed({});
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenLastCalledWith({ nodeTreeCollapsed: {} });
+  });
+
+  it('carries the account\'s empty layout along when something else is saved', async () => {
+    getPreferences.mockResolvedValue({ nodeTreeCollapsed: {} });
+    await loadServerPrefs();
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360, nodeTreeCollapsed: {} });
+  });
+
+  it('seeds the account with a layout this browser kept from before the upgrade', async () => {
+    usePrefsStore.getState().setNodeTreeCollapsed({ g1: true });
+    getPreferences.mockResolvedValue({});
+    await loadServerPrefs();
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({
+      interfaceDockHeight: 360,
+      nodeTreeCollapsed: { g1: true },
+    });
+  });
+
+  it('a browser that never held a layout does not send one, even after a sign-out', async () => {
+    getPreferences.mockResolvedValue({ nodeTreeCollapsed: {} });
+    await loadServerPrefs();
+    resetServerPrefs();
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
+  });
+});
+
+describe('a save made while the account is still being read (ADR-154 decision 9)', () => {
+  /** A GET that answers only when the test says so. */
+  function heldLoad() {
+    let answer: (body: unknown) => void = () => undefined;
+    let fail: (e: Error) => void = () => undefined;
+    getPreferences.mockReturnValue(
+      new Promise((resolve, reject) => {
+        answer = resolve;
+        fail = reject;
+      }),
+    );
+    return { load: loadServerPrefs(), answer: (b: unknown) => answer(b), fail: (e: Error) => fail(e) };
+  }
+
+  it('waits for the load, then sends what the load adopted — once', async () => {
+    const held = heldLoad();
+    setNodeTreeCollapsed({ pressed: true });
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences, 'a save went out before the account was read').not.toHaveBeenCalled();
+
+    held.answer({ nodeTreeCollapsed: { g2: true } });
+    await held.load;
+    await vi.runAllTimersAsync();
+    expect(putPreferences).toHaveBeenCalledTimes(1);
+    expect(putPreferences).toHaveBeenCalledWith({ nodeTreeCollapsed: { g2: true } });
+  });
+
+  it('sends nothing when the load finds no endpoint', async () => {
+    const held = heldLoad();
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    held.fail(new Error('404 not found'));
+    await held.load;
+    await vi.runAllTimersAsync();
+    expect(putPreferences).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing when the operator signs out while it waits', async () => {
+    const held = heldLoad();
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    resetServerPrefs();
+    held.answer({});
+    await held.load;
+    await vi.runAllTimersAsync();
+    expect(putPreferences).not.toHaveBeenCalled();
+  });
+});
+
+describe('the whole document, saturated', () => {
+  it('stays inside the endpoint\'s 32 KiB with every capped preference full', () => {
+    // 🚨 The assertion the two caps are sized by (ADR-154 decision 6). `PUT /api/v1/preferences`
+    // refuses a body over `MAX_USER_PREFS_BYTES` (crates/yagra-core/src/api/preferences.rs) — this
+    // test restates that number rather than reading it, so if the Rust constant moves, this is the
+    // other place that has to. Every table id and column key is padded past anything real, and each
+    // folder id is a full 36-character UUID.
+    const widths: Record<string, Record<string, number>> = {};
+    for (let t = 0; t < MAX_STORED_TABLES; t += 1) {
+      const table: Record<string, number> = {};
+      for (let c = 0; c < MAX_STORED_COLUMNS; c += 1) {
+        table[`column_key_padded_${String(c).padStart(4, '0')}`] = COLUMN_MAX_PX;
+      }
+      widths[`table_id_padded_to_thirty_two_${String(t).padStart(4, '0')}`] = table;
+    }
+    usePrefsStore.getState().setTableColumnWidths(widths);
+    const collapsed: Record<string, true> = {};
+    for (let i = 0; i < MAX_STORED_COLLAPSED; i += 1) {
+      collapsed[`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`] = true;
+    }
+    usePrefsStore.getState().setNodeTreePinnedOnly(true);
+    setNodeTreeCollapsed(collapsed);
+    // One more width through the real setter, so the document is the one the product would send.
+    mergeTableColumnWidths('events.log' as TableId, { time: COLUMN_MAX_PX });
+    setInterfaceDockHeight(99_999);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+
+    expect(putPreferences).toHaveBeenCalledTimes(1);
+    const body = putPreferences.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(body.nodeTreeCollapsed as object)).toHaveLength(MAX_STORED_COLLAPSED);
+    const bytes = new TextEncoder().encode(JSON.stringify(body)).length;
+    expect(bytes).toBeLessThan(32 * 1024);
   });
 });
 

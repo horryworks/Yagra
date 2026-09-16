@@ -295,7 +295,7 @@ describe('the stored document', () => {
   });
 });
 
-describe('the caps that keep the account document inside its 16 KiB', () => {
+describe('the caps that keep the account document inside its 32 KiB', () => {
   it('evicts the first-inserted table and keeps the one the gesture just wrote', () => {
     let doc: ColumnWidthDoc = {};
     for (let i = 0; i < MAX_STORED_TABLES; i += 1) doc = setWidths(doc, `t${i}`, { a: 200 });
@@ -325,8 +325,9 @@ describe('the caps that keep the account document inside its 16 KiB', () => {
 
   it('a document saturated at both caps stays well inside the endpoint’s allowance', () => {
     // 🚨 This is the assertion the two caps exist for. `PUT /api/v1/preferences` refuses a body over
-    // 16 KiB (`MAX_USER_PREFS_BYTES`), the row is one per account, and every other WebUI preference
-    // shares it — so this one must not be able to fill it alone. Ids are padded far past anything
+    // 32 KiB (`MAX_USER_PREFS_BYTES`), the row is one per account, and every other WebUI preference
+    // shares it — so this one must not be able to fill it alone. The whole document, with the tree's
+    // collapsed folders saturated beside it, is measured in `serverPrefs.test.ts` (ADR-154). Ids are padded far past anything
     // real (`tableIds.ts` spells them in ~16 characters) so the bound holds for names nobody has
     // written yet.
     const doc: ColumnWidthDoc = {};
