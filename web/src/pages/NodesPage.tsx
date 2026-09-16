@@ -69,7 +69,8 @@ import {
   type ReleaseAction,
   type SuppressionTarget,
 } from '../lib/suppression';
-import { inheritedGroupPool } from '../lib/pool';
+import { inheritedGroupPool, sharedOwnPool } from '../lib/pool';
+import { targetNodeIds, type ActionTarget } from '../lib/actionTarget';
 import { escapeTarget, parseSelection, selectionToParam } from '../lib/treeSelection';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
 import {
@@ -338,7 +339,7 @@ export function NodesPage() {
   // Poll-pool assignment from the tree's right-click chips (ADR-009/020). `pools` feeds the chips;
   // `poolTarget` holds the target whose "Custom…" dialog is open.
   const [pools, setPools] = useState<PoolOption[]>([]);
-  const [poolTarget, setPoolTarget] = useState<SuppressionTarget | null>(null);
+  const [poolTarget, setPoolTarget] = useState<ActionTarget | null>(null);
   // Per-group direct counts (server rollup) → the tree's group-row health bars + the header stats.
   const groupCounts = groupSummary?.groups ?? EMPTY_GROUP_COUNTS;
 
@@ -617,9 +618,25 @@ export function NodesPage() {
   // Right-click → assign a poll-pool. A chip writes immediately (like the suppression presets);
   // "Custom…" (pool === null) opens the dialog for a pool that doesn't exist yet. Assigning a
   // folder re-pools every node beneath it that has no pool of its own.
-  const setPool = (target: SuppressionTarget, pool: string | null) => {
+  const setPool = (target: ActionTarget, pool: string | null) => {
     if (pool === null) {
       setPoolTarget(target);
+      return;
+    }
+    // 🚨 A chip has no dialog to hold a partial result in, so the page says it — and **after** the
+    // refresh, never before: `reload` opens with `setError(null)`, so a shortfall reported first is
+    // wiped in the same tick and a batch that moved half reads as a clean success. That is the
+    // failure the endpoint returns two numbers to prevent (ADR-124 増分 4's lesson, 増分 10).
+    if (target.kind === 'nodes') {
+      api
+        .setNodesPool(targetNodeIds(target), pool)
+        .then(async (r) => {
+          clearChecked();
+          reloadPools();
+          await reload();
+          if (r.applied < r.requested) setError(t('err.setPoolPartial', { ...r }));
+        })
+        .catch((e: unknown) => scopeError(e, t('err.setPool')));
       return;
     }
     const call =
@@ -633,6 +650,26 @@ export function NodesPage() {
       })
       .catch((e: unknown) => scopeError(e, t('err.setPool')));
   };
+
+  /** The working set's less-common verbs, for the selection bar's "More…" menu.
+   *
+   *  ⚠️ Each entry is gated on the permission **its own handler's `Require*` checks**, never on
+   *  `canConfig` for the lot (ADR-056): the pool write is `ManageConfig`, while the suppression
+   *  writes are `ManageMaintenance` and `AckAlerts`, which an Operator holds separately. Gating the
+   *  menu on its strictest member is the mistake that once removed the tree's whole context menu.
+   *  The menu itself is not rendered when nothing survives. */
+  const selectionMenuItems = useMemo(() => {
+    const nodes = [...checked.values()];
+    const items: { key: string; label: string; onSelect: () => void }[] = [];
+    if (canConfig) {
+      items.push({
+        key: 'pool',
+        label: t('select.pool'),
+        onSelect: () => setPoolTarget({ kind: 'nodes', nodes }),
+      });
+    }
+    return items;
+  }, [checked, canConfig, t]);
 
   // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
   // back to the first problem node (warning/critical/unreachable), else clear it. The fallback is
@@ -1056,6 +1093,20 @@ export function NodesPage() {
               <Button variant="outline" onClick={() => setTaggingNodes([...checked.values()])}>
                 {t('select.tag')}
               </Button>
+              {/* The verbs that are not the common two. They go in a menu rather than as buttons
+                  because `.nodes-selbar` is one wrapping flex line above the tree, and every line
+                  it wraps to covers another row of the inventory (増分 5 決定 A). */}
+              {selectionMenuItems.length > 0 && (
+                <ActionMenu
+                  label={t('select.more')}
+                  items={selectionMenuItems}
+                  trigger={(p) => (
+                    <Button variant="outline" {...p}>
+                      {t('select.more')}
+                    </Button>
+                  )}
+                />
+              )}
               <Button variant="outline" onClick={() => setDeletingNodes([...checked.values()])}>
                 {t('select.delete')}
               </Button>
@@ -1312,19 +1363,29 @@ export function NodesPage() {
       {poolTarget && (
         <SetPoolModal
           target={poolTarget}
+          // ⚠️ A set has a shared pool only when every node in it agrees; the first node's is not
+          // the batch's. `inheritedPool` is left off for a set for the same reason — the members
+          // can sit under different folders, so there is no one value to show as the fallback.
           currentPool={
-            poolTarget.kind === 'group'
-              ? (groups.find((g) => g.id === poolTarget.id)?.pool ?? null)
-              : (treeNodes.find((n) => n.id === poolTarget.id)?.pool ?? null)
+            poolTarget.kind === 'nodes'
+              ? sharedOwnPool(poolTarget.nodes)
+              : poolTarget.kind === 'group'
+                ? (groups.find((g) => g.id === poolTarget.id)?.pool ?? null)
+                : (treeNodes.find((n) => n.id === poolTarget.id)?.pool ?? null)
           }
-          inheritedPool={inheritedGroupPool(
-            groups,
-            poolTarget.kind === 'group'
-              ? (groups.find((g) => g.id === poolTarget.id)?.parent_id ?? null)
-              : (treeNodes.find((n) => n.id === poolTarget.id)?.group_id ?? null),
-          )}
+          inheritedPool={
+            poolTarget.kind === 'nodes'
+              ? undefined
+              : inheritedGroupPool(
+                  groups,
+                  poolTarget.kind === 'group'
+                    ? (groups.find((g) => g.id === poolTarget.id)?.parent_id ?? null)
+                    : (treeNodes.find((n) => n.id === poolTarget.id)?.group_id ?? null),
+                )
+          }
           onClose={() => setPoolTarget(null)}
           onSaved={() => {
+            if (poolTarget.kind === 'nodes') clearChecked();
             setPoolTarget(null);
             reloadPools();
             void reload();

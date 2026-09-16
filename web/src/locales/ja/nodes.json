@@ -197,7 +197,8 @@
     "prefixOwnedBySync": "{{prefix}} は同期が管理しているため、ここでは編集できません。",
     "prefixTooMany": "1 つのフォルダーが持てるレンジは最大 64 件です。",
     "prefixDescTooLong": "{{prefix}} の呼び名が長すぎます（最大 200 文字）。",
-    "savePrefixes": "IP レンジを保存できませんでした"
+    "savePrefixes": "IP レンジを保存できませんでした",
+    "setPoolPartial": "{{requested}} 台のうち {{applied}} 台にプールを設定しました。残りは削除済みか、スコープの外です。"
   },
   "maintenanceWindowName": "メンテナンス — {{name}}",
   "detail": {
@@ -636,7 +637,8 @@
     "pinnedEmpty": "ピン留めはまだありません。ノードかフォルダを右クリックして「ピン留め」を選ぶか、詳細の「ピン留め」ボタンで付けられます。",
     "pinFailed": "ピン留めを変更できませんでした",
     "menuFor": "{{name}} の操作",
-    "menuRoot": "ツリーの操作"
+    "menuRoot": "ツリーの操作",
+    "poolSelected": "ポーラープール — 選択した {{count}} 件"
   },
   "moveNode": {
     "title": "{{name}} を移動",
@@ -647,6 +649,9 @@
   },
   "setPool": {
     "title": "{{name}} のポーラープール",
+    "titleMany": "選択した {{count}} 件のポーラープール",
+    "manyHint": "選択したノードすべてを、それぞれの今の設定にかかわらずこのプールにします。空欄にすると、すべて継承に戻します。次のポーリング周期から反映されます。",
+    "partial": "{{requested}} 台のうち {{applied}} 台にプールを設定しました。残りは削除済みか、スコープの外です。",
     "groupHint": "このグループ（とサブグループ）のノードは、ノード側で個別に指定しない限りこのプールが担当します。空欄なら上位から継承します。次のポーリング周期から反映されます。"
   },
   "setParent": {
@@ -797,7 +802,9 @@
     "tag": "タグを付ける…",
     "delete": "削除…",
     "clear": "解除",
-    "hint": "Ctrl クリックで 1 件ずつ、Shift クリックでまとめて追加"
+    "hint": "Ctrl クリックで 1 件ずつ、Shift クリックでまとめて追加",
+    "pool": "ポーラープール…",
+    "more": "その他…"
   },
   "groupPicker": {
     "none": "フォルダなし",

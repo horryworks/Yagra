@@ -988,6 +988,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/nodes/pool",
+        // Scoped for the same reason `/nodes/move` and `/nodes/tags` are (ADR-124 増分 10): an
+        // Operator holds `manage_config` and can be group-scoped, and the pool decides which
+        // poller reaches a device — so an unscoped claim would let one site's operator strand
+        // another site's inventory on a poller that cannot see it. The single-node
+        // `PUT /nodes/:node_id/pool` keeps its `ADMIN_CFG` claim; that is 決定 8's known gap.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/nodes/move-preview",
         GroupFiltered,
         Exempt(

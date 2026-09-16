@@ -19,7 +19,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
-import { poolChoices } from '../../lib/pool';
+import { poolChoices, sharedOwnPool } from '../../lib/pool';
+import { targetNodeCount, type ActionTarget } from '../../lib/actionTarget';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import {
   asGroupType,
@@ -245,10 +246,13 @@ interface Props {
   onSetMute?: (target: SuppressionTarget, durationMs: number | null) => void;
   /** Pools offered by the right-click poll-pool chips (`GET /api/v1/pools`). */
   pools?: PoolOption[];
-  /** Right-click → assign a node/group to a poll-pool. A pool name sets it, `''` clears it back
-   *  to inherited, and `null` opens the Custom… dialog — the same convention as the suppression
-   *  chips above. */
-  onSetPool?: (target: SuppressionTarget, pool: string | null) => void;
+  /** Right-click → assign a node, a folder, or the whole working set to a poll-pool. A pool name
+   *  sets it, `''` clears it back to inherited, and `null` opens the Custom… dialog — the same
+   *  convention as the suppression chips above.
+   *
+   *  🚨 **The target is an `ActionTarget` since ADR-124 増分 10**: it was a single row, so the
+   *  chips wrote one node while sitting in a menu headed "Move 20 selected…". */
+  onSetPool?: (target: ActionTarget, pool: string | null) => void;
   /** Right-click → aim a discovery sweep at this folder's IP prefixes (ADR-100 decision 10).
    *  Shown only for a folder that carries some — see `canRunDiscovery`. Omit to hide the item. */
   onRunDiscovery?: (group: NodeGroup) => void;
@@ -614,11 +618,19 @@ export function NodeTree({
   //
   // `currentPool` is the target's OWN pool (`null` ⇒ inherited), which is exactly what these chips
   // write — so it is what marks the active one.
+  //
+  // 🚨 **Since ADR-124 増分 10 these chips act on the working set when the row carries it.** Until
+  // then they sat in a menu headed "Move 20 selected…" and silently wrote one node. The scope is
+  // `nodeActionItems`, the same answer the moves and Delete read; the label says which it got, and
+  // `sharedOwnPool` decides whether any chip may render as already-selected — the first node's
+  // pool is not the batch's.
   const poolMenu = (
-    target: SuppressionTarget,
+    target: ActionTarget,
     currentPool: string | null | undefined,
   ): React.ReactNode => {
     if (!onSetPool) return null;
+    const count = targetNodeCount(target);
+    const many = target.kind === 'nodes';
     const choices = poolChoices(pools ?? [], currentPool);
     const inherited = !currentPool?.trim();
     const chip = (
@@ -646,7 +658,9 @@ export function NodeTree({
       <>
         <div className="ntree-menu-sep" />
         <div className="ntree-menu-section">
-          <div className="ntree-menu-label">{t('tree.pool')}</div>
+          <div className="ntree-menu-label">
+            {many ? t('tree.poolSelected', { count }) : t('tree.pool')}
+          </div>
           <div className="ntree-menu-durs">
             {choices.map((c) =>
               chip(c.name, c.name, c.name, { current: c.current, warn: !c.live }),
@@ -1140,6 +1154,15 @@ export function NodeTree({
         })()
       : false;
 
+  /** The working set as an action target, when the open node menu's row carries it — otherwise
+   *  `null` and the item acts on the row. Every batch-aware section reads this one value rather
+   *  than re-deciding, which is the rule Inc.4 had to restore in the drag path (ADR-124 増分 10). */
+  const batchTarget: ActionTarget | null =
+    menu?.kind === 'node' &&
+    nodeActionItems(checkedNodes, menu.node.id, true)?.scope === 'selection'
+      ? { kind: 'nodes', nodes: [...checkedNodes.values()] }
+      : null;
+
   /** The two items that act on the working set. Rendered in the single item's place when the
    *  right-clicked row is in the set, and below a separator when it is not. */
   const selectionMoveItems = (count: number): React.ReactNode => (
@@ -1490,7 +1513,13 @@ export function NodeTree({
                   {t('tree.addNodeEllipsis')}
                 </button>
               )}
-              {poolMenu({ kind: 'node', id: menu.node.id, name: menu.node.name }, menu.node.pool)}
+              {/* The chips act on the batch when this row carries it (増分 10). `sharedOwnPool`
+                  is what may mark a chip selected: reading this one row's pool would claim the
+                  batch is set to it when most of the selection sits elsewhere. */}
+              {poolMenu(
+                batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
+                batchTarget ? sharedOwnPool([...checkedNodes.values()]) : menu.node.pool,
+              )}
               {suppressionMenu(
                 { kind: 'node', id: menu.node.id, name: menu.node.name },
                 menu.node,

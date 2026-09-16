@@ -1228,6 +1228,19 @@ export const api = {
   setNodePool: (id: string, pool: string): Promise<void> =>
     apiPut('/api/v1/nodes/{node_id}/pool', { path: { node_id: id }, body: { pool } }),
 
+  /** Move MANY nodes to one poll-pool (`''` ⇒ back to inherited) in one request (ADR-124 増分 10).
+   *
+   *  Re-homing a site onto different pollers rarely follows folder boundaries, so neither
+   *  `setNodeGroupPool` (a whole folder) nor `setNodePool` (one node, one request) serves it.
+   *
+   *  ⚠️ `applied` can be lower than `requested`: an id may name a node deleted since the page
+   *  loaded, or one outside this token's scope. Show both numbers. */
+  setNodesPool: (
+    nodeIds: string[],
+    pool: string,
+  ): Promise<{ requested: number; applied: number }> =>
+    apiPost('/api/v1/nodes/pool', { body: { node_ids: nodeIds, pool } }),
+
   /** Move a folder to a poll-pool (`''` ⇒ inherit). Every node beneath it without a pool of its
    *  own follows on the next sweep. */
   setNodeGroupPool: (id: string, pool: string): Promise<void> =>

@@ -58,6 +58,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     delete_nodes,
     preview_move_by_prefix,
     set_node_pool,
+    bulk_set_node_pool,
     set_node_parent,
     set_node_suppression_opt_out,
     place_node
@@ -78,6 +79,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/delete", post(delete_nodes))
         .route("/api/v1/nodes/tags", post(bulk_tag_nodes))
         .route("/api/v1/nodes/move-preview", post(preview_move_by_prefix))
+        .route("/api/v1/nodes/pool", post(bulk_set_node_pool))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
@@ -2297,6 +2299,79 @@ async fn set_node_pool(
     node_write_result(found, id)
 }
 
+/// Move MANY nodes to one poll-pool at once.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct BulkNodePool {
+    node_ids: Vec<Uuid>,
+    /// Absent or `""` clears every named node back to inherited, exactly as the single-node form
+    /// reads it. There is no "leave unchanged" case: the whole request is about this one field.
+    #[serde(default)]
+    pool: Option<String>,
+}
+
+/// What a bulk pool change actually did.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct BulkPoolResult {
+    /// Distinct ids the request named, after de-duplication.
+    requested: usize,
+    /// Rows actually written. **Lower than `requested` is normal**: an id can name a node that has
+    /// since been deleted, or one outside the caller's scope. The two are not distinguished.
+    applied: u64,
+}
+
+/// Move many nodes to one poll-pool, or clear them all back to inherited (ADR-124 増分 10).
+///
+/// Re-homing a site onto different pollers is the case the two existing writers cannot serve: the
+/// folder-wide `PUT /node-groups/{id}/pool` only reaches nodes that share a folder, and the
+/// per-node `PUT /nodes/{node_id}/pool` meant one request each.
+///
+/// ⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately
+/// (ADR-124 決定 8) rather than inheriting the single-node writer's known-wrong `ADMIN_CFG` claim.
+/// `manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which
+/// poller reaches a device, so an unscoped bulk write would let one site's operator strand
+/// another's inventory on a poller that cannot see it.
+#[utoipa::path(
+    post, path = "/api/v1/nodes/pool", tag = "nodes",
+    request_body = BulkNodePool,
+    responses(
+        (status = 200, description = "How many of the named nodes were moved to the pool", body = BulkPoolResult),
+        (status = 400, description = "Illegal pool name, or more ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn bulk_set_node_pool(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<BulkNodePool>,
+) -> ApiResult<Json<BulkPoolResult>> {
+    if body.node_ids.len() > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {NODE_MOVE_BATCH_MAX} nodes may be moved to a pool in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    // The same validator the single-node and folder writers use: a name that would sanitize to a
+    // different NATS token is refused rather than silently rewritten.
+    let pool = validate_pool_create(body.pool)?;
+    let (requested, applied) = admin
+        .repo
+        .set_node_pool_batch(&body.node_ids, pool.as_deref(), scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "bulk set node pool", "failed to set the pool")
+        })?;
+    // The audit middleware records method and path only, so without this the log says that someone
+    // re-homed something and never how much (the bulk move and the bulk tag do the same).
+    tracing::info!(requested, applied, pool = ?pool, "bulk node pool");
+    Ok(Json(BulkPoolResult { requested, applied }))
+}
+
 // ── Manual poll ──────────────────────────────────────────────────────────────
 
 /// What an out-of-schedule poll dispatched.
@@ -3544,6 +3619,104 @@ mod tests {
         );
     }
 
+    /// A bulk pool change is accepted, and clearing it puts the nodes back to inherited.
+    ///
+    /// ⚠️ The status is named, not `is_success()`: this route documents 200 with a body.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_pool_change_is_accepted_and_can_be_cleared(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/pool",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, b], "pool": "osaka" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["applied"], 2, "{body}");
+        for id in [a, b] {
+            let node = repo.get_node(id).await.expect("read").expect("the node");
+            assert_eq!(node.pool.as_deref(), Some("osaka"), "{id} kept its pool");
+        }
+
+        // 🚨 Absent and empty both mean "back to inherited", the same as the single-node form. A
+        // batch that could only ever *set* a pool would leave no way to undo a mistaken one.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/pool",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, b] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        for id in [a, b] {
+            let node = repo.get_node(id).await.expect("read").expect("the node");
+            assert_eq!(node.pool, None, "{id} was not cleared back to inherited");
+        }
+
+        // A name that would sanitize to a different NATS token is refused, not rewritten.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/pool",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a], "pool": "two words" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_pool", "{body}");
+    }
+
+    /// 🚨 **A scoped caller's bulk pool change does not reach another site's nodes.**
+    ///
+    /// The pool decides which poller reaches a device, so an unscoped write here would strand
+    /// another site's inventory on a poller that cannot see it — which is why this route is
+    /// `GroupFiltered` and the single-node one's `ADMIN_CFG` claim is a known defect.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_pool_change_does_not_reach_outside_the_callers_scope(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let own = crate::pgtest::node(&pool, "own", 1, Some(mine)).await;
+        let other = crate::pgtest::node(&pool, "other", 2, Some(theirs)).await;
+        let tok = scoped_token(&st, &[mine]);
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/pool",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [own, other], "pool": "osaka" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["applied"], 1, "{body}");
+
+        let repo = crate::pgtest::repo(pool);
+        assert_eq!(
+            repo.get_node(other)
+                .await
+                .expect("read")
+                .expect("the node")
+                .pool,
+            None,
+            "a scoped caller re-homed a node in a folder it cannot see"
+        );
+    }
+
     /// 🚨 **A scoped caller's bulk delete does not reach another site's nodes**, and the count says
     /// so rather than claiming the batch.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -3637,11 +3810,14 @@ mod tests {
         let a = crate::pgtest::node(&pool, "a", 1, None).await;
         let body = serde_json::json!({ "node_ids": [a], "group_id": null });
 
+        // ⚠️ A hand-written list, so a new bulk route does not join it by itself. Every `POST`
+        // under `/nodes/` that writes belongs here.
         let viewer = token(&st, yagra_common::Role::Viewer);
         for path in [
             "/api/v1/nodes/move",
             "/api/v1/nodes/move-preview",
             "/api/v1/nodes/delete",
+            "/api/v1/nodes/pool",
         ] {
             let (status, out) = send(&st, "POST", path, &viewer, Some(body.clone())).await;
             assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{path}: {out}");

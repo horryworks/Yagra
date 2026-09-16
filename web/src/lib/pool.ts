@@ -124,3 +124,21 @@ export function inheritedGroupPool(
   }
   return undefined;
 }
+
+/** The pool every one of these nodes is set to, or `null` when they disagree or none is set.
+ *
+ * 🚨 **A chip may only render as "current" when the answer is the same for every node in the
+ * batch** (ADR-124 増分 10). Reading the first node's pool — or the right-clicked row's — would
+ * mark a chip selected while most of the selection sits elsewhere, which is the shape of claim
+ * this feature exists to stop making.
+ *
+ * ⚠️ Reads each node's **own** pool, never the effective one. A node inheriting `osaka` from its
+ * folder and one pinned to `osaka` are not the same state: clearing the batch would move the first
+ * nowhere and the second off its pin, and the chips must not suggest otherwise.
+ */
+export function sharedOwnPool(nodes: readonly { pool?: string | null }[]): string | null {
+  if (nodes.length === 0) return null;
+  const first = nodes[0].pool?.trim() || null;
+  if (first === null) return null;
+  return nodes.every((n) => (n.pool?.trim() || null) === first) ? first : null;
+}

@@ -755,6 +755,43 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Set (or clear with `None`) the own poll-pool of MANY nodes in one statement (ADR-124
+    /// 増分 10). Returns `(requested, applied)` — the de-duplicated id count, and how many rows
+    /// were written.
+    ///
+    /// Moving a site between pollers is a fleet-shaped edit that rarely follows folder boundaries,
+    /// so the folder-wide `GroupRepo::set_pool` cannot express it and the single-node writer meant
+    /// one request per node.
+    ///
+    /// ⚠️ `applied < requested` is normal and not an error: an id can name a node deleted since
+    /// the page loaded, or one outside the caller's scope. The two are not distinguished — saying
+    /// which would confirm that a node the caller may not see exists.
+    ///
+    /// The scope predicate is written out rather than reusing [`Self::SCOPE_PREDICATE`] for the
+    /// reason [`Self::merge_node_tags`] gives: that constant binds `$1`, which is the id array here.
+    pub async fn set_node_pool_batch(
+        &self,
+        ids: &[Uuid],
+        pool: Option<&str>,
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+        if ids.is_empty() {
+            return Ok((0, 0));
+        }
+        let res = sqlx::query(
+            "UPDATE nodes SET pool = $2, updated_at = now() \
+             WHERE id = ANY($1) AND ($3::uuid[] IS NULL OR group_id = ANY($3))",
+        )
+        .bind(&ids)
+        .bind(pool)
+        .bind(Self::scope_bind(scope))
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
+    }
+
     /// The distinct non-empty pools nodes are assigned to. Feeds the pool picker; the `pool` index
     /// (migration 0001) keeps this cheap even at fleet scale.
     pub async fn distinct_pools(&self) -> anyhow::Result<Vec<String>> {

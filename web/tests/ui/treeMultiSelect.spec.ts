@@ -123,7 +123,7 @@ test('a plain click then Ctrl clicks keep the first row in the batch', async ({ 
   await menu.getByRole('button', { name: 'Move 3 selected…', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('.movenode-list li')).toHaveCount(3);
+  await expect(dialog.locator('.form-targets li')).toHaveCount(3);
 });
 
 test('Ctrl-clicking the row the pane shows takes it out of the batch', async ({ page }) => {
@@ -186,7 +186,7 @@ test('the menu on a checked row moves the whole batch, and offers nothing that m
   await bulk.click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('.movenode-list li')).toHaveCount(3);
+  await expect(dialog.locator('.form-targets li')).toHaveCount(3);
 });
 
 test('the menu on a row outside the batch names the row, and still offers the batch', async ({
@@ -226,7 +226,7 @@ test('the hover ↗ on a checked row moves the batch', async ({ page }) => {
   await act.click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('.movenode-list li')).toHaveCount(3);
+  await expect(dialog.locator('.form-targets li')).toHaveCount(3);
 });
 
 test('a row-only action names its node while a batch is on screen', async ({ page }) => {
@@ -286,4 +286,99 @@ test('the selection bar offers tagging, the verb that was right-click only', asy
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('2');
+});
+
+test('the pool chips act on the whole selection, not the row that was clicked', async ({ page }) => {
+  // 🚨 ADR-124 増分 10. The chips sat in a menu headed "Move 3 selected…" and wrote exactly one
+  // node — the same defect Inc.2 fixed for the moves, left in the section that had no bulk form.
+  const seen: { node_ids: string[]; pool?: string }[] = [];
+  await page.route('**/api/v1/nodes/pool', async (route) => {
+    const body = route.request().postDataJSON() as { node_ids: string[]; pool?: string };
+    seen.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ requested: body.node_ids.length, applied: body.node_ids.length }),
+    });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(3);
+
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  // The heading says which scope the chips have, so the label and the write cannot disagree.
+  await expect(menu).toContainText('Poller pool — 3 selected');
+  // "Inherit" is a chip like any other and is always present, so it is the one to press without
+  // depending on which pools the mock happens to offer.
+  await menu.getByRole('button', { name: 'Inherit', exact: true }).click();
+
+  await expect.poll(() => seen.length).toBe(1);
+  expect(seen[0].node_ids, 'the chip wrote fewer nodes than were marked').toHaveLength(3);
+  expect(seen[0].pool).toBe('');
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(0);
+});
+
+test('the pool chips still act on one row when nothing else is selected', async ({ page }) => {
+  // The other half: a lone row keeps the single-node write, so the batch endpoint does not become
+  // the only way to change one node's pool.
+  const bulk: unknown[] = [];
+  const single: unknown[] = [];
+  await page.route('**/api/v1/nodes/pool', async (route) => {
+    bulk.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  await page.route('**/api/v1/nodes/*/pool', async (route) => {
+    single.push(route.request().postDataJSON());
+    await route.fulfill({ status: 204, body: '' });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText('Poller pool');
+  await expect(menu).not.toContainText('selected');
+  await menu.getByRole('button', { name: 'Inherit', exact: true }).click();
+
+  await expect.poll(() => single.length).toBe(1);
+  expect(bulk, 'a lone row went through the batch endpoint').toHaveLength(0);
+});
+
+test('the selection bar can set the pool on every selected node', async ({ page }) => {
+  const seen: { node_ids: string[]; pool?: string }[] = [];
+  await page.route('**/api/v1/nodes/pool', async (route) => {
+    const body = route.request().postDataJSON() as { node_ids: string[]; pool?: string };
+    seen.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ requested: body.node_ids.length, applied: body.node_ids.length }),
+    });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
+
+  const bar = page.locator('.nodes-selbar');
+  await bar.getByRole('button', { name: 'More…', exact: true }).click();
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Poller pool…' }).click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.form-targets li')).toHaveCount(2);
+  await dialog.getByRole('textbox').first().fill('osaka');
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+
+  await expect.poll(() => seen.length).toBe(1);
+  expect(seen[0].node_ids).toHaveLength(2);
+  expect(seen[0].pool).toBe('osaka');
 });

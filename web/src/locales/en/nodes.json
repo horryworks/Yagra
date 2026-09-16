@@ -197,7 +197,8 @@
     "prefixOwnedBySync": "{{prefix}} is maintained by a sync and cannot be edited here.",
     "prefixTooMany": "A folder can carry at most 64 ranges.",
     "prefixDescTooLong": "The description for {{prefix}} is too long (200 characters at most).",
-    "savePrefixes": "Failed to save the IP ranges"
+    "savePrefixes": "Failed to save the IP ranges",
+    "setPoolPartial": "Set the pool on {{applied}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
   },
   "maintenanceWindowName": "Maintenance — {{name}}",
   "detail": {
@@ -636,7 +637,8 @@
     "pinnedEmpty": "Nothing is pinned yet. Right-click a node or folder and choose Pin, or press Pin in its detail pane.",
     "pinFailed": "failed to change the pin",
     "menuFor": "Actions for {{name}}",
-    "menuRoot": "Tree actions"
+    "menuRoot": "Tree actions",
+    "poolSelected": "Poller pool — {{count}} selected"
   },
   "moveNode": {
     "title": "Move {{name}}",
@@ -647,6 +649,9 @@
   },
   "setPool": {
     "title": "Poller pool for {{name}}",
+    "titleMany": "Poller pool for {{count}} selected nodes",
+    "manyHint": "Every selected node is set to this pool, replacing whatever it had. Leave blank to clear them all back to inherited. Takes effect on the next poll round.",
+    "partial": "Set the pool on {{applied}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
     "groupHint": "Nodes in this group (and its subgroups) are polled by this pool unless they set their own. Leave blank to inherit. Takes effect on the next poll round."
   },
   "setParent": {
@@ -798,7 +803,9 @@
     "tag": "Tag…",
     "delete": "Delete…",
     "clear": "Clear",
-    "hint": "Ctrl-click to add one, Shift-click to add a run."
+    "hint": "Ctrl-click to add one, Shift-click to add a run.",
+    "pool": "Poller pool…",
+    "more": "More…"
   },
   "groupPicker": {
     "none": "No folder",

@@ -2167,6 +2167,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move many nodes to one poll-pool, or clear them all back to inherited (ADR-124 増分 10).
+         * @description Re-homing a site onto different pollers is the case the two existing writers cannot serve: the
+         *     folder-wide `PUT /node-groups/{id}/pool` only reaches nodes that share a folder, and the
+         *     per-node `PUT /nodes/{node_id}/pool` meant one request each.
+         *
+         *     ⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately
+         *     (ADR-124 決定 8) rather than inheriting the single-node writer's known-wrong `ADMIN_CFG` claim.
+         *     `manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which
+         *     poller reaches a device, so an unscoped bulk write would let one site's operator strand
+         *     another's inventory on a poller that cannot see it.
+         */
+        post: operations["bulk_set_node_pool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/search": {
         parameters: {
             query?: never;
@@ -5328,6 +5356,15 @@ export interface components {
             group_id?: string | null;
             node_ids: string[];
         };
+        /** @description Move MANY nodes to one poll-pool at once. */
+        BulkNodePool: {
+            node_ids: string[];
+            /**
+             * @description Absent or `""` clears every named node back to inherited, exactly as the single-node form
+             *     reads it. There is no "leave unchanged" case: the whole request is about this one field.
+             */
+            pool?: string | null;
+        };
         /** @description Add and/or remove tags across many nodes at once (ADR-135). */
         BulkNodeTags: {
             /**
@@ -5346,6 +5383,17 @@ export interface components {
              *     already stored may predate the rules that now apply to new ones.
              */
             remove?: string[];
+        };
+        /** @description What a bulk pool change actually did. */
+        BulkPoolResult: {
+            /**
+             * Format: int64
+             * @description Rows actually written. **Lower than `requested` is normal**: an id can name a node that has
+             *     since been deleted, or one outside the caller's scope. The two are not distinguished.
+             */
+            applied: number;
+            /** @description Distinct ids the request named, after de-duplication. */
+            requested: number;
         };
         /** @description What a bulk tag edit actually did. */
         BulkTagResult: {
@@ -20657,6 +20705,66 @@ export interface operations {
                 };
             };
             /** @description More ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    bulk_set_node_pool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNodePool"];
+            };
+        };
+        responses: {
+            /** @description How many of the named nodes were moved to the pool */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkPoolResult"];
+                };
+            };
+            /** @description Illegal pool name, or more ids than one request may carry */
             400: {
                 headers: {
                     [name: string]: unknown;
