@@ -25,22 +25,24 @@ import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import {
   asGroupType,
   buildNodeTree,
-  filterCollapseFor,
+  filterCollapsedFrom,
   filterTerm,
   flattenTree,
   flatRowKey,
-  NO_FILTER_COLLAPSE,
+  NO_FILTER_TOUCHED,
   pendingGroupKeys,
+  pressTwisty,
   sameNameNodeIds,
-  toggleFilterCollapse,
+  touchedFor,
   treeFilterKey,
-  type FilterCollapse,
+  type FilterTouched,
   type FlatRow,
   type StateCounts,
   type TreeGroup,
 } from '../../lib/nodeTree';
 import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { usePrefsStore } from '../../prefs';
+import { setNodeTreeCollapsed } from '../../serverPrefs';
 import {
   DURATION_PRESETS,
   type ReleaseAction,
@@ -328,11 +330,11 @@ export function NodeTree({
   const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
   // Rows that would read identically by name alone get their address beside it (ADR-139 増分 2).
   const sameName = useMemo(() => sameNameNodeIds(nodes), [nodes]);
-  // Expansion defaults to fully-expanded and persists across reloads: the prefs store keeps the
-  // set of groups the user explicitly collapsed (empty ⇒ everything open), so the last layout is
-  // restored and any newly-added group shows expanded automatically.
+  // Expansion defaults to fully-expanded and persists across reloads and machines: the prefs store
+  // keeps the set of groups the user explicitly collapsed (empty ⇒ everything open), `serverPrefs.ts`
+  // carries it to the account (ADR-154), so the last layout is restored and any newly-added group
+  // shows expanded automatically.
   const collapsed = usePrefsStore((s) => s.nodeTreeCollapsed);
-  const toggle = usePrefsStore((s) => s.toggleNodeTreeGroup);
   const [drag, setDrag] = useState<DragItem | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const [menu, setMenu] = useState<Menu>(null);
@@ -343,24 +345,30 @@ export function NodeTree({
   // non-matching rows are hidden, so matches are always revealed — and a group matched by its own
   // name reveals its whole subtree, members included.
   const q = filterTerm(filter ?? '');
-  // Pinned only narrows the tree as well (ADR-146), so it takes the filter's collapse set, not the
-  // saved layout — a folder closed while browsing must not hide a pin.
+  // Pinned only narrows the tree as well (ADR-146).
   const pinnedFilter = pinnedOnly ? pins : undefined;
   const filtering = q.length > 0 || narrowed === true || pinnedFilter !== undefined;
-  // What the operator collapsed under THIS filter (ADR-053 Inc.11). Never the saved layout: the
-  // twisty used to write that one while the rows ignored it, so it did nothing on screen and
-  // changed the tree the operator came back to.
-  const [heldCollapse, setHeldCollapse] = useState<FilterCollapse>(NO_FILTER_COLLAPSE);
-  // Leaving the filter forgets it, so typing the same term again starts open too. Adjusted during
-  // render rather than in an effect, which would paint one frame of the stale set first.
-  if (!filtering && heldCollapse !== NO_FILTER_COLLAPSE) setHeldCollapse(NO_FILTER_COLLAPSE);
+  // A term or a state / kind / pool filter — the questions whose matches a closed folder must not
+  // hide. ⚠️ Not Pinned only on its own: that one browses the saved layout (ADR-154 decision 7).
+  const searching = q.length > 0 || narrowed === true;
+  // The folders pressed under THIS filter (ADR-053 Inc.11, reshaped by ADR-154). The press itself
+  // wrote the saved layout; this set is only what lets the filtered tree show that folder closed.
+  const [touched, setTouched] = useState<FilterTouched>(NO_FILTER_TOUCHED);
+  // Leaving the filter forgets it, so typing the same term again starts open too — and the saved
+  // layout keeps what was pressed. Adjusted during render rather than in an effect, which would
+  // paint one frame of the stale set first.
+  if (!searching && touched !== NO_FILTER_TOUCHED) setTouched(NO_FILTER_TOUCHED);
   const collapseKey = treeFilterKey(
     filter ?? '',
     narrowed === true,
     narrowKey ?? '',
     pinnedFilter !== undefined,
   );
-  const filterCollapsed = filterCollapseFor(heldCollapse, collapseKey);
+  const touchedIds = touchedFor(touched, collapseKey);
+  const filterCollapsed = useMemo(
+    () => filterCollapsedFrom(collapsed, touchedIds),
+    [collapsed, touchedIds],
+  );
   // The flattened, display-ordered list of visible rows — the single source of truth the virtualized
   // body renders (collapse state + filter applied). Only the on-screen window is turned into DOM, so
   // a tens-of-thousands-node inventory stays responsive (S13).
@@ -828,8 +836,16 @@ export function NodeTree({
           className={`ntree-twisty${isOpen ? ' open' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (filtering) setHeldCollapse((h) => toggleFilterCollapse(h, collapseKey, group.id));
-            else toggle(group.id);
+            // One rule in every mode (ADR-154): the saved layout gets the opposite of what this row
+            // shows, and a press under a search is also recorded so the row can show it. The
+            // layout is read from the store rather than this render's copy, so two presses inside
+            // one frame cannot write from the same stale set.
+            const next = pressTwisty(
+              { collapsed: usePrefsStore.getState().nodeTreeCollapsed, touched },
+              { id: group.id, isOpen, searching, key: collapseKey },
+            );
+            setNodeTreeCollapsed(next.collapsed);
+            if (next.touched !== touched) setTouched(next.touched);
           }}
           aria-label={isOpen ? t('nav:shell.collapse') : t('nav:shell.expand')}
           disabled={!hasChildren}

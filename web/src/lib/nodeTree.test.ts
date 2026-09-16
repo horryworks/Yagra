@@ -4,7 +4,8 @@ import {
   asGroupType,
   buildNodeTree,
   descendantNodes,
-  filterCollapseFor,
+  adoptCollapsed,
+  filterCollapsedFrom,
   filterGroupOptions,
   filterTerm,
   findTreeGroup,
@@ -15,17 +16,21 @@ import {
   groupPath,
   groupTrail,
   isSelfOrDescendant,
+  MAX_STORED_COLLAPSED,
   mergeNodesById,
-  NO_FILTER_COLLAPSE,
+  NO_FILTER_TOUCHED,
   pendingGroupKeys,
+  pressTwisty,
   revealedGroupKeys,
   sameNameNodeIds,
   subtreeGroupIds,
+  setCollapsed,
   tallyStates,
-  toggleCollapsed,
-  toggleFilterCollapse,
+  touchedFor,
+  touchFilter,
   treeFilterKey,
   type StateCounts,
+  type TwistyState,
   type TreeGroup,
 } from './nodeTree';
 import type { TFunction } from 'i18next';
@@ -161,8 +166,22 @@ describe('flattenTree — Pinned only (ADR-146)', () => {
     expect(rows[0].kind === 'ungrouped-head' && rows[0].count).toBe(1);
   });
 
-  it('ignores the saved layout, so a folder closed while browsing cannot hide a pin', () => {
-    expect(keys({ collapsed: { g1: true }, pinned: view([], ['n1']) })).toEqual([
+  it('reads the saved layout on its own, and the closed folder still counts the pin (ADR-154)', () => {
+    // Pinned only is a mode left on across reloads. Before ADR-154 it ignored the saved layout, so
+    // an operator who kept it on saw every folder reopen on every visit.
+    const rows = flattenTree(buildNodeTree(groups, nodes), {
+      collapsed: { g1: true },
+      filter: '',
+      pinned: view([], ['n1']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1']);
+    expect(rows[0].kind === 'group' && rows[0].isOpen).toBe(false);
+    expect(rows[0].kind === 'group' && rows[0].tally?.total).toBe(1);
+  });
+
+  it('still ignores the saved layout once a term is typed over it', () => {
+    // The term is a search, and a folder closed while browsing must not hide its match (Inc.6).
+    expect(keys({ collapsed: { g1: true }, filter: 'tokyo', pinned: view([], ['n1']) })).toEqual([
       'g:g1',
       'g:g1a',
       'n:n1',
@@ -187,8 +206,8 @@ describe('flattenTree — Pinned only (ADR-146)', () => {
     expect(keys({ pinned: view([], []) })).toEqual([]);
   });
 
-  it('gives Pinned only a collapse set of its own, without changing any other key', () => {
-    expect(treeFilterKey('', false, '', true)).not.toBe(treeFilterKey('', false, ''));
+  it('makes a search under Pinned only a different filter, without changing any other key', () => {
+    expect(treeFilterKey('myj', false, '', true)).not.toBe(treeFilterKey('myj', false, ''));
     expect(treeFilterKey('myj', false, '')).toBe(JSON.stringify(['myj', '']));
   });
 });
@@ -297,25 +316,64 @@ describe('flattenTree — collapsing a folder while a filter is on (ADR-053 Inc.
   });
 });
 
-describe('the collapse set a filter holds (ADR-053 Inc.11)', () => {
-  it('toggleCollapsed flips one folder and leaves its input alone', () => {
-    const before = { g1: true } as const;
-    expect(toggleCollapsed(before, 'g2')).toEqual({ g1: true, g2: true });
-    expect(toggleCollapsed(before, 'g1')).toEqual({});
-    expect(before).toEqual({ g1: true });
+describe('the saved layout a twisty writes (ADR-154)', () => {
+  it('setCollapsed hands back the same object when nothing changes', () => {
+    // Load-bearing: the caller saves to the account only when the reference moved.
+    const set = { g1: true } as const;
+    expect(setCollapsed(set, 'g1', true)).toBe(set);
+    expect(setCollapsed(set, 'g2', false)).toBe(set);
+    expect(setCollapsed(set, 'g2', true)).toEqual({ g1: true, g2: true });
+    expect(setCollapsed(set, 'g1', false)).toEqual({});
+    expect(set).toEqual({ g1: true });
   });
 
+  it('drops the folder closed longest ago past the cap, never the one just closed', () => {
+    let set: Readonly<Record<string, true>> = {};
+    for (let i = 0; i < MAX_STORED_COLLAPSED; i += 1) set = setCollapsed(set, `g${i}`, true);
+    const next = setCollapsed(set, 'newest', true);
+    expect(Object.keys(next)).toHaveLength(MAX_STORED_COLLAPSED);
+    expect(next.g0).toBeUndefined();
+    expect(next.g1).toBe(true);
+    expect(next.newest).toBe(true);
+  });
+
+  it('adoptCollapsed keeps only true-valued ids of a plausible length, and caps them', () => {
+    expect(adoptCollapsed({ a: true, b: false, c: 'true', d: 1, '': true, [`x${'y'.repeat(64)}`]: true }))
+      .toEqual({ a: true });
+    const many: Record<string, true> = {};
+    for (let i = 0; i < MAX_STORED_COLLAPSED + 5; i += 1) many[`g${i}`] = true;
+    const adopted = adoptCollapsed(many);
+    expect(Object.keys(adopted ?? {})).toHaveLength(MAX_STORED_COLLAPSED);
+    expect(adopted?.[`g${MAX_STORED_COLLAPSED + 4}`]).toBe(true);
+  });
+
+  it('adoptCollapsed tells "no layout" from "an empty layout"', () => {
+    // `null` keeps this browser's layout; `{}` is the account saying everything is open.
+    for (const raw of [undefined, null, 'x', 42, true, [], ['g1']]) expect(adoptCollapsed(raw)).toBeNull();
+    expect(adoptCollapsed({})).toEqual({});
+  });
+});
+
+describe('what a filter remembers about presses (ADR-053 Inc.11, ADR-154)', () => {
   it('is kept under the same filter and dropped under a different one', () => {
     const myj = treeFilterKey('MYJ', false, '');
-    const held = toggleFilterCollapse(NO_FILTER_COLLAPSE, myj, 'g1');
-    expect(filterCollapseFor(held, myj)).toEqual({ g1: true });
-    expect(filterCollapseFor(held, treeFilterKey('MYJ0', false, ''))).toEqual({});
+    const held = touchFilter(NO_FILTER_TOUCHED, myj, 'g1');
+    expect(touchedFor(held, myj)).toEqual({ g1: true });
+    expect(touchedFor(held, treeFilterKey('MYJ0', false, ''))).toEqual({});
+    expect(touchFilter(held, myj, 'g1')).toBe(held);
   });
 
-  it('toggling under a new filter starts from everything open, not from the old set', () => {
-    const first = toggleFilterCollapse(NO_FILTER_COLLAPSE, treeFilterKey('tokyo', false, ''), 'g1');
-    const second = toggleFilterCollapse(first, treeFilterKey('osaka', false, ''), 'g2');
-    expect(second.collapsed).toEqual({ g2: true });
+  it('a press under a new filter starts from nothing pressed, not from the old set', () => {
+    const first = touchFilter(NO_FILTER_TOUCHED, treeFilterKey('tokyo', false, ''), 'g1');
+    const second = touchFilter(first, treeFilterKey('osaka', false, ''), 'g2');
+    expect(second.ids).toEqual({ g2: true });
+  });
+
+  it('shows closed only what was pressed here AND is closed in the saved layout', () => {
+    // g1 was closed while browsing and never pressed here: open, which is Inc.6.
+    // g2 was pressed here and is closed: closed. g3 was pressed twice: open again.
+    expect(filterCollapsedFrom({ g1: true, g2: true }, { g2: true, g3: true })).toEqual({ g2: true });
+    expect(filterCollapsedFrom({ g1: true }, {})).toBe(filterCollapsedFrom({}, {}));
   });
 
   it('keys on the term as the tree compares it, and on the server-side values', () => {
@@ -324,6 +382,86 @@ describe('the collapse set a filter holds (ADR-053 Inc.11)', () => {
     expect(treeFilterKey('', true, 'critical  ')).not.toBe(treeFilterKey('', true, 'warning  '));
     // Values the tree was not told are narrowing it do not make a different filter.
     expect(treeFilterKey('x', false, 'critical  ')).toBe(treeFilterKey('x', false, ''));
+  });
+});
+
+describe('pressing a twisty, end to end (ADR-154)', () => {
+  // Tokyo ─ Rack A: sw1        (ungrouped: router)
+  const tree = () =>
+    buildNodeTree(
+      [group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1')],
+      [node('n1', 'sw1', 'g2'), node('n2', 'router', null)],
+    );
+  const key = (term: string) => treeFilterKey(term, false, '');
+
+  /** Press the twisty of `id` as the row currently shows it, the way `NodeTree.tsx` does. */
+  const press = (s: TwistyState, id: string, term: string): TwistyState => {
+    const searching = term.trim().length > 0;
+    const row = view(s, term).find((r) => r.kind === 'group' && r.group.id === id);
+    if (row?.kind !== 'group') throw new Error(`no row for ${id}`);
+    return pressTwisty(s, { id, isOpen: row.isOpen, searching, key: key(term) });
+  };
+  /** What the tree draws for `term` — the touched set as the component reads it. */
+  const view = (s: TwistyState, term: string) =>
+    flattenTree(tree(), {
+      collapsed: s.collapsed,
+      filter: term,
+      filterCollapsed: filterCollapsedFrom(s.collapsed, touchedFor(s.touched, key(term))),
+    });
+  /** Leaving the filter, as the component does: the pressed set is forgotten, the layout is not. */
+  const clear = (s: TwistyState): TwistyState => ({ ...s, touched: NO_FILTER_TOUCHED });
+  const start: TwistyState = { collapsed: {}, touched: NO_FILTER_TOUCHED };
+  const shown = (s: TwistyState, term: string) => view(s, term).map(flatRowKey);
+
+  it('a folder closed under a filter is still closed after the filter is cleared (the report)', () => {
+    let s = press(start, 'g2', 'tokyo');
+    expect(shown(s, 'tokyo'), 'the press did not close the folder under the filter').toEqual([
+      'g:g1',
+      'g:g2',
+    ]);
+    s = clear(s);
+    expect(shown(s, ''), 'clearing the filter reopened the folder').toEqual([
+      'g:g1',
+      'g:g2',
+      'ungrouped-head',
+      'n:n2',
+    ]);
+  });
+
+  it('a folder closed while browsing shows open under a filter, and one press closes it', () => {
+    // A flip here would REMOVE g2 from the saved layout while the operator watched it close.
+    let s = press(start, 'g2', '');
+    expect(shown(s, 'tokyo')).toEqual(['g:g1', 'g:g2', 'n:n1']);
+    const before = s.collapsed;
+    s = press(s, 'g2', 'tokyo');
+    expect(shown(s, 'tokyo')).toEqual(['g:g1', 'g:g2']);
+    expect(s.collapsed, 'closing an already-closed folder wrote the layout').toBe(before);
+  });
+
+  it('opening it again under the filter leaves it open after the filter is cleared', () => {
+    let s = press(start, 'g2', '');
+    s = press(s, 'g2', 'tokyo');
+    s = press(s, 'g2', 'tokyo');
+    expect(shown(s, 'tokyo')).toEqual(['g:g1', 'g:g2', 'n:n1']);
+    expect(shown(clear(s), '')).toEqual(['g:g1', 'g:g2', 'n:n1', 'ungrouped-head', 'n:n2']);
+  });
+
+  it('a different filter starts with every folder open, and keeps the layout underneath', () => {
+    let s = press(start, 'g2', 'tokyo');
+    expect(shown(s, 'rack'), 'the new filter inherited the old one\'s closed folder').toEqual([
+      'g:g1',
+      'g:g2',
+      'n:n1',
+    ]);
+    // Accepted cost (ADR-154): the folder was last SEEN open under `rack`, and is closed after.
+    s = clear(s);
+    expect(shown(s, '')).toEqual(['g:g1', 'g:g2', 'ungrouped-head', 'n:n2']);
+  });
+
+  it('a press while browsing writes the layout and records nothing', () => {
+    const s = press(start, 'g1', '');
+    expect(s.collapsed).toEqual({ g1: true });
+    expect(s.touched).toBe(NO_FILTER_TOUCHED);
   });
 });
 

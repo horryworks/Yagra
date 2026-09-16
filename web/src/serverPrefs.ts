@@ -25,11 +25,13 @@ import {
   type ColumnWidthDoc,
   type TableColumnWidths,
 } from './lib/columnWidths';
+import { adoptCollapsed } from './lib/nodeTree';
 import type { TableId } from './lib/tableIds';
 
 /** Coalesce a burst of adjustments into one write. Same value and same reason as the dashboard's
- *  (`dashboard/layoutStore.ts`): a drag emits a value per frame, and **every** PUT writes an audit
- *  row — the backend has no per-route opt-out, so debouncing here is a contract, not a nicety. */
+ *  (`dashboard/layoutStore.ts`): a drag emits a value per frame. The saves are no longer audited
+ *  (ADR-154 decision 5), but each is still a round trip and a database write, and a burst of them
+ *  must still land as one. */
 const SAVE_DEBOUNCE_MS = 800;
 
 /** The document this browser reads and writes. Every field optional: an older or newer WebUI may
@@ -41,12 +43,34 @@ interface ServerPrefsDoc {
   tableColumnWidths?: ColumnWidthDoc;
   /** The inventory tree's Pinned only switch (ADR-146). */
   nodeTreePinnedOnly?: boolean;
+  /** The inventory tree's collapsed folders, keyed by group id (ADR-154). */
+  nodeTreeCollapsed?: Record<string, true>;
 }
 
 /** False once the server has told us it does not serve this endpoint, so a drag on a deployment
  *  running an N-1 core does not PUT into a 404 every 800ms for the rest of the session. */
 let supported = true;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Whether this browser has a collapsed-folder layout worth sending even when it is empty (ADR-154
+ *  decision 8): the account's document carried one when it was read, or a folder was pressed in
+ *  this session.
+ *
+ *  🚨 **An empty layout is an answer, and so is having none.** Sending `{}` from a machine that never
+ *  touched the tree would reopen every folder the operator closed somewhere else, the first time
+ *  they dragged a column here. Never sending `{}` would leave the account saying "closed" to the
+ *  next machine after the last folder was opened here. This flag is what tells the two apart. */
+let collapsedHeld = false;
+
+/** The load in flight, if any. A save waits for it (ADR-154 decision 9): sent before the account's
+ *  document has been adopted, it would be overwritten on screen a moment later by the older value it
+ *  was meant to replace — and the next save would then send that older value back. */
+let loading: Promise<void> | undefined;
+/** Which load `loading` belongs to, so a slow one cannot clear a newer one's promise. */
+let loadSeq = 0;
+/** Bumped on sign-out. A save that was waiting on a load checks it before sending, so a document
+ *  built for the previous account cannot land on the next one's row. */
+let session = 0;
 
 /** Read the fields we understand out of whatever the server returned, ignoring the rest.
  *
@@ -70,32 +94,49 @@ function adopt(raw: unknown): void {
   if (typeof doc.nodeTreePinnedOnly === 'boolean') {
     usePrefsStore.getState().setNodeTreePinnedOnly(doc.nodeTreePinnedOnly);
   }
+  // `null` means the account holds nothing that reads as a layout — keep this browser's, which the
+  // next save then seeds the account with. An empty object is a layout: everything open.
+  const collapsed = adoptCollapsed(doc.nodeTreeCollapsed);
+  if (collapsed !== null) {
+    usePrefsStore.getState().setNodeTreeCollapsed(collapsed);
+    collapsedHeld = true;
+  }
 }
 
 /** The document to send: the account-scoped subset of `prefs.ts`. */
 function currentDoc(): ServerPrefsDoc {
-  const { interfaceDockHeight, tableColumnWidths, nodeTreePinnedOnly } = usePrefsStore.getState();
+  const { interfaceDockHeight, tableColumnWidths, nodeTreePinnedOnly, nodeTreeCollapsed } =
+    usePrefsStore.getState();
   const doc: ServerPrefsDoc = {};
   if (interfaceDockHeight != null) doc.interfaceDockHeight = interfaceDockHeight;
   // Sent once it has been set at all — `false` included, or switching it off on one machine would
   // leave the account saying "on" to the next.
   if (nodeTreePinnedOnly != null) doc.nodeTreePinnedOnly = nodeTreePinnedOnly;
-  // Omitted while empty rather than sent as `{}`: the account row has a 16 KiB ceiling every
+  // Omitted while empty rather than sent as `{}`: the account row has a 32 KiB ceiling every
   // preference shares, and an operator who never drags a column should cost it nothing.
   if (tableColumnWidths && Object.keys(tableColumnWidths).length > 0) {
     doc.tableColumnWidths = tableColumnWidths;
   }
+  // Sent empty too once this browser holds a layout — see `collapsedHeld`.
+  const collapsed = nodeTreeCollapsed ?? {};
+  if (collapsedHeld || Object.keys(collapsed).length > 0) doc.nodeTreeCollapsed = { ...collapsed };
   return doc;
 }
 
 /**
- * Pull the signed-in account's preferences and adopt them locally. Called once per sign-in.
+ * Pull the signed-in account's preferences and adopt them locally. Called once per sign-in, and on
+ * every load of the app while signed in.
  *
  * Never rejects and never surfaces anything: an unsupported endpoint, an expired session or a
  * network drop all leave the browser-local values in place, which is the correct outcome.
  */
 export async function loadServerPrefs(): Promise<void> {
   if (!getToken()) return;
+  const seq = ++loadSeq;
+  let settle: () => void = () => undefined;
+  loading = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
   try {
     adopt(await api.getPreferences());
     supported = true;
@@ -104,6 +145,9 @@ export async function loadServerPrefs(): Promise<void> {
     // Marking it unsupported on a *transient* failure only costs this session's syncing, whereas
     // retrying against a genuine 404 would PUT into it on every adjustment.
     supported = false;
+  } finally {
+    if (seq === loadSeq) loading = undefined;
+    settle();
   }
 }
 
@@ -112,17 +156,29 @@ export function resetServerPrefs(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = undefined;
   supported = true;
+  collapsedHeld = false;
+  loading = undefined;
+  session += 1;
 }
 
-/** Queue a save of the current document after a short quiet period. */
+/** Queue a save of the current document after a short quiet period — and, if the account's
+ *  document is still being read, after that as well. */
 function scheduleSave(): void {
   if (!supported || !getToken()) return;
   if (saveTimer) clearTimeout(saveTimer);
+  const queuedIn = session;
   saveTimer = setTimeout(() => {
     saveTimer = undefined;
-    // Deliberately unhandled beyond swallowing: see this file's header. A failed save leaves the
-    // local value correct for this browser, which is the state the operator can actually see.
-    api.putPreferences(currentDoc()).catch(() => undefined);
+    const send = () => {
+      // Asked again after any wait: the load may have just found an N-1 core, or the operator may
+      // have signed out while it was in flight.
+      if (queuedIn !== session || !supported || !getToken()) return;
+      // Deliberately unhandled beyond swallowing: see this file's header. A failed save leaves the
+      // local value correct for this browser, which is the state the operator can actually see.
+      api.putPreferences(currentDoc()).catch(() => undefined);
+    };
+    if (loading) void loading.then(send);
+    else send();
   }, SAVE_DEBOUNCE_MS);
 }
 
@@ -146,6 +202,20 @@ export function setInterfaceDockHeight(px: number): void {
  */
 export function setNodeTreePinnedOnly(on: boolean): void {
   usePrefsStore.getState().setNodeTreePinnedOnly(on);
+  scheduleSave();
+}
+
+/**
+ * Record the inventory tree's collapsed folders: locally now, on the account shortly (ADR-154).
+ *
+ * Takes the whole layout `lib/nodeTree.ts::pressTwisty` produced, and does nothing when it is the
+ * object already stored — that function hands the same one back for a press that changes nothing,
+ * so pressing a folder a filter shows open while it is already closed costs no request.
+ */
+export function setNodeTreeCollapsed(next: Readonly<Record<string, true>>): void {
+  if (next === usePrefsStore.getState().nodeTreeCollapsed) return;
+  usePrefsStore.getState().setNodeTreeCollapsed(next);
+  collapsedHeld = true;
   scheduleSave();
 }
 

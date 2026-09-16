@@ -5,7 +5,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { ColumnWidthDoc } from './lib/columnWidths';
-import { toggleCollapsed } from './lib/nodeTree';
 import type { DiscoveryScanMemory } from './pages/discoveryScans';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
@@ -51,8 +50,16 @@ interface PrefsStore {
   sidebarCollapsed: boolean;
   /** Inventory-tree groups the user has explicitly collapsed, keyed by group id. The tree
    *  defaults to fully expanded, so we persist the *collapsed* set (empty ⇒ all open) — this
-   *  also means a newly-created group, absent from the map, shows expanded automatically. */
-  nodeTreeCollapsed: Record<string, true>;
+   *  also means a newly-created group, absent from the map, shows expanded automatically.
+   *
+   *  ⚠️ **This one has a second, authoritative home: the server** (ADR-154, riding ADR-058's
+   *  document), the same arrangement as `interfaceDockHeight` below. A folder is the same folder on
+   *  every machine, so where it was closed follows the person. Nothing should call the setter
+   *  directly — `serverPrefs.ts::setNodeTreeCollapsed` saves it, and decides what is worth saving.
+   *
+   *  A press made while a filter is on writes here too (`lib/nodeTree.ts::pressTwisty`); before
+   *  ADR-154 it went to a set that was thrown away when the filter was cleared. */
+  nodeTreeCollapsed: Readonly<Record<string, true>>;
   /** Global Y-axis mode for interface throughput charts (see [`ThroughputScale`]). */
   throughputScale: ThroughputScale;
   /** Global unit for interface throughput charts (see [`RateUnit`]). Local-only, like
@@ -102,7 +109,7 @@ interface PrefsStore {
    *  talking to a core that predates the endpoint. Nothing should call the setter directly.
    *
    *  ⚠️ The shape is bounded on the way in (`lib/columnWidths.ts`'s two caps) because the account
-   *  document has a 16 KiB ceiling that every preference shares. */
+   *  document has a 32 KiB ceiling that every preference shares. */
   tableColumnWidths: ColumnWidthDoc;
   /** The last sweep an operator actually started on Discovery (ADR-134). `null` = never swept, so
    *  the form opens on its long-standing defaults.
@@ -132,8 +139,9 @@ interface PrefsStore {
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
   toggleSidebar: () => void;
-  /** Flip one inventory-tree group between expanded and collapsed, persisting the choice. */
-  toggleNodeTreeGroup: (id: string) => void;
+  /** Record the inventory tree's collapsed folders locally. ⚠️ Prefer `serverPrefs.ts`'s setter,
+   *  which also syncs the account (see [`nodeTreeCollapsed`]). */
+  setNodeTreeCollapsed: (collapsed: Readonly<Record<string, true>>) => void;
   setThroughputScale: (scale: ThroughputScale) => void;
   /** Flip the throughput Y-axis between fit-to-traffic and scale-to-capacity (global + persisted). */
   toggleThroughputScale: () => void;
@@ -211,8 +219,7 @@ export const usePrefsStore = create<PrefsStore>()(
         }),
       setLanguage: (language) => set({ language }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-      toggleNodeTreeGroup: (id) =>
-        set((s) => ({ nodeTreeCollapsed: toggleCollapsed(s.nodeTreeCollapsed, id) })),
+      setNodeTreeCollapsed: (nodeTreeCollapsed) => set({ nodeTreeCollapsed }),
       setThroughputScale: (throughputScale) => set({ throughputScale }),
       toggleThroughputScale: () =>
         set((s) => ({ throughputScale: s.throughputScale === 'fit' ? 'capacity' : 'fit' })),

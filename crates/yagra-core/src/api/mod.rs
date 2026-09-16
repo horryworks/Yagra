@@ -527,13 +527,7 @@ async fn resolve_auth_mw(State(st): State<ApiState>, mut req: Request, next: Nex
 async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
-    let mutating = matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH");
-    // Ingest is exempt: a per-event audit row would flood the audit log (the events table
-    // is itself the record); config changes to sources/rules stay audited as usual.
-    let audited = mutating
-        && path.starts_with("/api/v1/")
-        && !path.starts_with("/api/v1/auth/")
-        && !path.starts_with("/api/v1/ingest/");
+    let audited = is_audited(&method, &path);
     // Resolve the actor before the handler runs (the request is consumed by it). Read from the
     // extension `resolve_auth_mw` already filled rather than looking the bearer up again — that
     // second lookup consulted the session store alone, so a mutating call authenticated by an API
@@ -562,6 +556,30 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
     resp
 }
 
+/// Whether a request leaves a row in the audit log.
+///
+/// Every mutating `/api/v1` request does, with three deliberate exceptions:
+///
+/// - `auth/` — signing in and out is recorded by the auth handlers themselves, with the outcome.
+/// - `ingest/` — a per-event row would flood the log; the events table is itself the record.
+///   Config changes to sources and rules stay audited as usual.
+/// - `PUT /api/v1/preferences` — one account's own WebUI chrome (ADR-154 decision 5). The audit
+///   log answers "who changed what", and this document changes nothing but the caller's own
+///   screen: no monitoring, no notification, nobody else's view. It is written by gestures — a
+///   folder's twisty in the inventory tree, a column edge, the Interfaces dock — so auditing it
+///   filled a log kept forever (`retention.rs`, `UNLIMITED_BY_DECISION`) with rows nobody reads,
+///   and buried the ones somebody does. **Exact match**: a sibling path added later is audited
+///   until someone decides otherwise. The shared dashboard is *not* this — it changes what other
+///   people see.
+fn is_audited(method: &axum::http::Method, path: &str) -> bool {
+    let mutating = matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH");
+    mutating
+        && path.starts_with("/api/v1/")
+        && !path.starts_with("/api/v1/auth/")
+        && !path.starts_with("/api/v1/ingest/")
+        && path != "/api/v1/preferences"
+}
+
 /// Whether a mutating request can have changed the inputs to the alert-config / poll-spec rebuild.
 ///
 /// Almost everything can, so this is a deny-list of the exceptions rather than an allow-list of the
@@ -587,7 +605,8 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
 /// entries that legitimately demand `ManageConfig` — a config **test** is still a read — so the
 /// judgement above remains the rule and the test is a floor under its most obvious violation.
 ///
-/// They stay **audited**; only the dirty signal is suppressed.
+/// They stay **audited**; only the dirty signal is suppressed — except `/api/v1/preferences`, which
+/// [`is_audited`] also leaves out, for its own reason (ADR-154).
 fn changes_monitoring_config(path: &str) -> bool {
     !(path.starts_with("/api/v1/analysis/")
         || path == "/api/v1/rca"
@@ -1685,6 +1704,32 @@ mod tests {
         // that has to argue for its own exemption rather than inheriting one.
         assert!(changes_monitoring_config("/api/v1/dashboards"));
         assert!(changes_monitoring_config("/api/v1/preferences/reset"));
+    }
+
+    #[test]
+    fn ones_own_preferences_are_not_audited_and_nothing_else_rides_along() {
+        use axum::http::Method;
+        // ADR-154: the document is the caller's own screen chrome, written by gestures, and the
+        // audit log is kept forever. Both verbs are asked so the exemption is seen to be about the
+        // PUT the endpoint serves, not about the path being skipped outright.
+        assert!(!is_audited(&Method::PUT, "/api/v1/preferences"));
+        assert!(!is_audited(&Method::GET, "/api/v1/preferences"));
+        // Exact match: a sibling is a new endpoint that argues for itself.
+        assert!(is_audited(&Method::PUT, "/api/v1/preferences/reset"));
+        assert!(is_audited(&Method::PUT, "/api/v1/preferencesx"));
+        // The other presentation documents keep their rows. The shared dashboard changes what other
+        // people see, and the personal one is composed by hand rather than by a gesture.
+        assert!(is_audited(&Method::PUT, "/api/v1/dashboard"));
+        assert!(is_audited(&Method::PUT, "/api/v1/shared-dashboard"));
+        assert!(is_audited(
+            &Method::PUT,
+            "/api/v1/pins/nodes/00000000-0000-0000-0000-000000000001"
+        ));
+        // The long-standing exemptions and the ordinary case, unchanged.
+        assert!(!is_audited(&Method::POST, "/api/v1/auth/login"));
+        assert!(!is_audited(&Method::POST, "/api/v1/ingest/webhook/abc"));
+        assert!(is_audited(&Method::POST, "/api/v1/nodes"));
+        assert!(!is_audited(&Method::GET, "/api/v1/nodes"));
     }
 
     /// Pinning is one account's navigation (ADR-146): it must not rebuild the fleet's poll specs.

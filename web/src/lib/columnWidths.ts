@@ -41,7 +41,7 @@ export const COLUMN_MIN_PX = 64;
  *
  * There is no layout reason for a ceiling — the table scrolls — so this exists for two other
  * reasons: a pointer that leaves the window mid-drag must not be able to store an absurd number,
- * and every stored value counts against the account document's 16 KiB (ADR-058). 1200px is wider
+ * and every stored value counts against the account document's 32 KiB (ADR-058). 1200px is wider
  * than any single column on a 1920px screen has cause to be.
  */
 export const COLUMN_MAX_PX = 1200;
@@ -53,8 +53,9 @@ export const COLUMN_STEP_PX = 16;
  * How many tables may keep widths at once.
  *
  * ⚠️ **The cap is about the account document, not about this feature.** `PUT /api/v1/preferences`
- * refuses a document over 16 KiB (`MAX_USER_PREFS_BYTES`), the row is one per account, and every
- * other WebUI preference shares that budget. **These two caps are what bound this preference**, and
+ * refuses a document over 32 KiB (`MAX_USER_PREFS_BYTES`), the row is one per account, and every
+ * other WebUI preference shares that budget — the inventory tree's collapsed folders take up to about
+ * 13 KiB of it (ADR-154), and `serverPrefs.test.ts` measures the two saturated together. **These two caps are what bound this preference**, and
  * `columnWidths.test.ts` asserts the arithmetic: a document saturated at both caps, with
  * pessimistically long ids, stays under 12 KiB, so the widths can never consume the endpoint's
  * allowance on their own. Realistic use is closer to 2 KB.
