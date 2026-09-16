@@ -32,6 +32,26 @@
   overflow-anchor: none;
 }
 
+/* The tree is one focus stop, and the row it is on is the selected row (ADR-155 決定 1/9). Focus is
+   a colour change, never an outline: the selected row keeps its bar and gains an inset accent
+   hairline while the tree has keyboard focus. `:focus-visible` is what keeps a pointer press from
+   drawing it — a click lands focus here too (on blank space) or on a row's name button. */
+.ntree-body:focus {
+  outline: none;
+}
+
+.ntree-body:focus-visible .ntree-row.sel {
+  box-shadow:
+    inset 2px 0 0 var(--accent-color),
+    inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
+/* Tabbed in with nothing selected yet (Tab selects nothing; the first Down does), or the selected
+   row is outside the rendered window: the pane itself says where focus is. */
+.ntree-body:focus-visible:not(:has(.ntree-row.sel)) {
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
 .ntree-row {
   display: flex;
   align-items: center;

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The inventory tree does not move unless the operator scrolls it (ADR-124 増分 5).
 //
-// TWO CAUSES SHIPPED, and neither was a scroll call — `scrollTo` / `scrollIntoView` / `scrollTop`
-// are written nowhere in `NodeTree.tsx` or `NodesPage.tsx`. The browser did both, which is exactly
-// why nothing but a browser can see them:
+// TWO CAUSES SHIPPED, and neither was a scroll call — no pointer path in `NodeTree.tsx` or
+// `NodesPage.tsx` writes `scrollTo` / `scrollIntoView` / `scrollTop` (the keyboard does, since
+// ADR-155, and `treeKeyboard.spec.ts` owns that). The browser did both, which is exactly why nothing
+// but a browser can see them:
 //
 //   1. **The working-set bar stole the scroller's height.** It rendered above `.ntree-body`
 //      (`flex: 1`), so the first Ctrl click dropped the scroller's top edge ~60px and translated
@@ -21,10 +22,9 @@
 // computes `user-select: none` for a draggable element. See the Shift test for the measurement and
 // for why there is no `getSelection()` assertion in this file.
 //
-// ⚠️ **The default mock is three nodes, and a three-row tree cannot scroll.** ADR-073's rule
-// ("count the gestures against the real data, not against the layout") applies to a fixture too:
-// against a tree that fits its pane, every assertion here reports "nothing moved" for the same
-// reason a dead selector would. Hence the 60 below, and the precondition asserted in `parkAt`.
+// ⚠️ **The default mock is three nodes, and a three-row tree cannot scroll.** Against a tree that fits
+// its pane, every assertion here reports "nothing moved" for the same reason a dead selector would.
+// Hence the sixty rows of `support/ungroupedRun.ts`, and the precondition asserted in `parkAt`.
 //
 // 🚨 **No row-count assertion, and no `.nth(i)`.** With 60 rows only the virtualized window is in
 // the DOM, so a count measures the window and an index re-resolves to a different element after
@@ -32,48 +32,22 @@
 
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
-import { defaultBodyFor, MOCK_PREFIX, type Json } from '../support/openapi';
-import type { components } from '../../src/api/schema';
+import { MOCK_PREFIX } from '../support/openapi';
+import { runNodeName, ungroupedRunByGroup } from '../support/ungroupedRun';
 
 type Page = import('@playwright/test').Page;
-
-const NODE_COUNT = 60;
-
-/** The generated member row, repeated into an ungrouped bucket long enough to virtualize. Built
- *  from the generated shape rather than hand-written, so a change to `NodeSummary` reaches here.
- *  ⚠️ `group_id: null` is what files them under Ungrouped — the generator fills every nullable
- *  uuid, and a node claiming a folder nobody opened is a node with no row. */
-const UNGROUPED = (() => {
-  const body = defaultBodyFor('/api/v1/nodes/by-group') as components['schemas']['GroupNodes'];
-  const [template] = body.nodes;
-  return {
-    ...body,
-    nodes: Array.from({ length: NODE_COUNT }, (_, i) => ({
-      ...template,
-      id: `00000000-0000-4000-8000-a${String(i).padStart(11, '0')}`,
-      name: `${MOCK_PREFIX}node-${String(i).padStart(2, '0')}`,
-      group_id: null,
-      sort_order: i + 1,
-    })),
-  };
-})();
 
 test.use({
   mockConfig: {
     overrides: {
       ...BOOTSTRAP_OVERRIDES,
-      // ⚠️ One call per open folder plus one for the bucket, all landing on this key — so the
-      // answer has to depend on the query. Returning the 60 to a folder as well would put every
-      // id in the flat row list twice, which is a broken tree, not a taller one.
-      '/api/v1/nodes/by-group': (url: URL) =>
-        (url.searchParams.get('group') ? { ...UNGROUPED, nodes: [] } : UNGROUPED) as unknown as Json,
+      '/api/v1/nodes/by-group': ungroupedRunByGroup,
     },
   },
 });
 
 /** A node row by name — stable across the re-renders scrolling causes. */
-const row = (page: Page, i: number) =>
-  page.locator('.ntree-node').filter({ hasText: `${MOCK_PREFIX}node-${String(i).padStart(2, '0')}` });
+const row = (page: Page, i: number) => page.locator('.ntree-node').filter({ hasText: runNodeName(i) });
 
 const scrollTopOf = (page: Page) => page.locator('.ntree-body').evaluate((el) => el.scrollTop);
 

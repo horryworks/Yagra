@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Why the inventory tree does not move unless the operator scrolls it (ADR-124 増分 5).
 //
-// The tree never scrolled itself: `scrollTo` / `scrollIntoView` / `scrollTop` are written nowhere in
-// `NodeTree.tsx` or `NodesPage.tsx`, and the virtualizer's own scroll-writing paths are unreachable
-// at that call site (no `measureElement`, `anchorTo` left at the default `start`). What moved the
+// The tree never scrolled itself on a press: `scrollTo` / `scrollIntoView` / `scrollTop` are written
+// nowhere in `NodeTree.tsx` or `NodesPage.tsx`, and the virtualizer's own scroll-writing paths are
+// unreachable from a press (no `measureElement`, `anchorTo` left at the default `start`).
+// ⚠️ **One path does write it, since ADR-155: the keyboard.** A key that moves the cursor calls
+// `rowVirtualizer.scrollToIndex` so the row it landed on is on screen — the same thing this file
+// already allows a keyboard focus to do (`restoreScroll`'s null pin). A pointer press still moves
+// nothing. What moved the
 // pane was the **browser**: `.ntree-node-name` is a real `<button>` at `flex: 1`, so it covers
 // almost the whole row, and the browser scrolls a newly-focused element into view when it is not
 // fully visible. On a 30px row grid the first and last rows are almost always half-clipped, so
@@ -49,10 +53,15 @@ export interface PressTarget {
 /**
  * What may take focus inside a tree row.
  *
- * Every control in a row is a `<button>` today, and no row is focusable itself — there is no
- * `tabIndex` anywhere in `NodeTree.tsx`. The other forms are listed so a future link or text entry
- * is covered without a second edit, which is the point of asking the DOM rather than naming the
- * eight class names that exist right now.
+ * Every control in a row is a `<button>`, and no row is focusable itself. The other forms are listed
+ * so a future link or text entry is covered without a second edit, which is the point of asking the
+ * DOM rather than naming the eight class names that exist right now.
+ *
+ * ⚠️ **`[tabindex]` now also matches the tree body itself** (ADR-155: `.ntree-body` is the tree's one
+ * Tab stop). A press on blank space therefore resolves to the body, pins, and focuses it without a
+ * scroll — the pin is consumed by the synchronous `focusin` like any other. And the row's name
+ * buttons carry `tabIndex={-1}`, which `button` matches regardless, so a press on one still
+ * focuses that button.
  */
 export const FOCUSABLE_IN_ROW = 'button, a[href], input, select, textarea, [tabindex]';
 
