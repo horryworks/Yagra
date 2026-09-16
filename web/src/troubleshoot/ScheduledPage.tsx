@@ -166,7 +166,6 @@ export function ScheduledPage() {
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
     rows,
-    { url: true },
   );
 
   const saved = () => {

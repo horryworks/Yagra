@@ -249,7 +249,7 @@ export function DependencyPage() {
   // `ui-conventions.md` says needs a server-side path — that predates this change and is unchanged
   // by it; the filter row narrows the same array the page already held.
   const { filterCols, filters, setFilters, clear, shown: rows, counts, anyFiltered } =
-    useClientFilters(columns, nodes, { url: true });
+    useClientFilters(columns, nodes);
 
   return (
     <div className="page-fill">

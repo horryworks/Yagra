@@ -102,6 +102,24 @@ describe('useFilterParams', () => {
     expect(result.current.search).toBe('');
   });
 
+  it('reads and writes under a prefix when one is given (ADR-153)', () => {
+    const { result } = renderHook(
+      () => ({ ...useFilterParams(COLS, 'events.'), search: useLocation().search }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(MemoryRouter, { initialEntries: ['/nodes?severity=warning&events.severity=critical'] }, children),
+      },
+    );
+    expect(result.current.filters.severity).toBe('critical');
+    act(() => {
+      result.current.setFilters({ ...result.current.filters, severity: '', q: 'link' });
+    });
+    const params = new URLSearchParams(result.current.search);
+    expect(params.get('events.q')).toBe('link');
+    expect(params.has('events.severity')).toBe(false);
+    expect(params.get('severity'), 'a prefixed table cleared the bare key').toBe('warning');
+  });
+
   it('commits `also` and the filter row as ONE write', () => {
     // The regression, in its own shape: a screen with an extra URL key (alert history's `node_id`)
     // sets both in one handler. Two `setSearchParams` calls here would land only the second.

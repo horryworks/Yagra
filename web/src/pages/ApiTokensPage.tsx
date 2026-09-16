@@ -531,7 +531,7 @@ export function ApiTokensPage() {
   // URL-backed: one table on this route, so the column keys are free and a filtered view can be
   // sent to someone. Counts are exact and free here — every token is already in the browser.
   const { filterCols, filters, setFilters, clear, shown: matched, counts, anyFiltered } =
-    useClientFilters(columns, rows, { url: true });
+    useClientFilters(columns, rows);
   const shown = useMemo(
     () => sortRows(matched, sort, tokenSortValues(now)),
     [matched, sort, now],

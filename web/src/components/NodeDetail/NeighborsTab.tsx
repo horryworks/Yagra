@@ -28,6 +28,7 @@ import { ClearFilters } from '../ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { useClientFilters } from '../../lib/useClientFilters';
 import { neighborFilters } from './tabFilters';
+import { nodeTabFilterPrefix } from './tabs';
 import {
   diffNeighbors,
   emptyReason,
@@ -143,10 +144,10 @@ export function NeighborsTab({ node }: Props) {
   ];
   for (const c of columns) c.filter = specs[c.key];
 
-  // Not URL-backed: this is one tab of a node's detail view, and the page already owns `tab`/`sub`
-  // in the query string. A filter here is a glance, not a view someone sends.
+  // In the URL under `neighbors.` (ADR-153): it survives a reload, and it stays on while the
+  // operator walks the tree to the next device — the tab's own "Clear all filters (N)" says why.
   const { filterCols, filters, setFilters, clear, shown: shownNeighbors, counts, anyFiltered } =
-    useClientFilters(columns, neighbors);
+    useClientFilters(columns, neighbors, { prefix: nodeTabFilterPrefix('neighbors') });
 
   return (
     <div className="nd-nb">

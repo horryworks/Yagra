@@ -133,7 +133,6 @@ export function EventSourcesPage() {
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
     rows,
-    { url: true },
   );
 
   return (

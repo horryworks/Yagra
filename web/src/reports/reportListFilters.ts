@@ -14,11 +14,11 @@
 //
 // In a `.ts` so a test can reach it (testing.md).
 
-// **⚠️ These three are the reason `useClientFilters` takes a `url` option.** The column key IS the
-// URL key (ADR-053 decision 12 refuses a prefix so old bookmarks keep working), and all three
-// tables live on `/reports` — Templates and Schedules both have a `name` column, Saved reports and
-// Schedules both have `next`/`when`. URL-backed they would write to each other's keys and filter
-// the wrong table. So these three keep their state in the component, and the ADR records why.
+// **⚠️ These three share one route**, and Templates and Schedules both have a `name` column. The
+// column key IS the URL key (ADR-053 decision 12), so until ADR-153 these three kept their filters
+// in component state — the reason `useClientFilters` used to take a `url` option — and a reload
+// threw them away. Each now carries its tab's name as a prefix (`REPORT_TABLE_PREFIX`), and the
+// tab itself is `?tab=`.
 
 import type { TFunction } from 'i18next';
 import type { ColumnFilterSpec } from '../lib/columnFilter';
@@ -32,6 +32,18 @@ import {
   type ReportRunState,
   type ReportSchedule,
 } from '../types/api';
+
+/** The page's three tabs, in the order they are drawn. The first is what a bare URL opens. */
+export const REPORT_TABS = ['saved', 'templates', 'schedules'] as const;
+export type ReportTab = (typeof REPORT_TABS)[number];
+
+/** Each tab's URL-key prefix (ADR-153 決定 3), keyed by the tab so a fourth tab cannot be added
+ *  without one. The route ledger in `filterSpecRegistry.test.ts` checks the three are disjoint. */
+export const REPORT_TABLE_PREFIX: Record<ReportTab, string> = {
+  saved: 'saved.',
+  templates: 'templates.',
+  schedules: 'schedules.',
+};
 
 /** Templates: name and description, which is what the search box read. */
 export function definitionFilters(

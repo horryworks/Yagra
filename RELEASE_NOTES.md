@@ -13,6 +13,7 @@
 ### Bug Fixes
 
 - **The inventory tree's search term survives a reload.** Typing in the search box at the top of All nodes' left pane narrowed the tree, but a browser reload emptied the box and showed the whole fleet again — while the state, kind and pool filters beside it survived. The term is now written to the URL as `?q=` once you stop typing, so a reload, a bookmark or a shared link opens the tree narrowed the same way. **Clear all filters** removes it together with the other filters; the box's own ✕ removes only the term.
+- **Filters on Reports, Notification delivery and a node's Neighbors tab survive a reload.** These screens kept their filters out of the URL because two or three tables share each of them and their column names overlap, so a reload threw every filter away — and Reports reopened on Saved reports whichever tab you were on. Each table now writes its filters under its own name (`?schedules.name=`, `?channels.status=`, `?neighbors.proto=`), and Reports writes its tab as `?tab=`. Filters that were already in the URL keep their existing names, so saved links still work.
 
 ## v0.3.23 — Set the poller pool, open maintenance and poll every selected node at once, drag several nodes between two rows and have them land there, the node Overview files its metrics by source, Huawei stacks show every member's serial
 

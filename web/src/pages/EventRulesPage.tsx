@@ -170,7 +170,6 @@ export function EventRulesPage() {
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
     rows,
-    { url: true },
   );
 
   return (

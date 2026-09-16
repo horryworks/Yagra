@@ -653,7 +653,6 @@ export function ForwardingPage() {
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
     rows,
-    { url: true },
   );
 
   // A byte-exact destination cannot be honoured for traffic from a poller that predates raw
