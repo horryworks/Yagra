@@ -74,7 +74,8 @@ test('the top bar search clears itself and keeps the caret', async ({ page }) =>
 });
 
 test('the node tree search clears itself, and only itself', async ({ page }) => {
-  await page.goto('/nodes');
+  // Arrives with a state filter on, so "only itself" has something to leave alone.
+  await page.goto('/nodes?state=critical');
   const input = page.getByRole('searchbox', { name: 'Search' });
   await expect(input).toHaveCount(1);
 
@@ -87,13 +88,16 @@ test('the node tree search clears itself, and only itself', async ({ page }) => 
   await expect(clear).toHaveCount(1);
   await insideTheBox(input, clear);
 
-  // The three inventory controls are URL state and this box is not. The ✕ writes neither of the
-  // other two, which is why it calls `setFilter('')` and not `clearAllFilters` — one handler, one
-  // URL write, and this handler makes none.
-  const before = page.url();
+  // Since ADR-153 the term is URL state too (`?q=`), written once the typing settles. The ✕ empties
+  // the box and the settle removes `q` — and nothing else: the state filter the operator did not
+  // ask to drop stays. That is why it does not call `clearAllFilters`, which means all of them.
+  await expect(page, 'the settled term never reached the URL').toHaveURL(new RegExp(`[?&]q=${NEEDLE}`));
   await clear.click();
   await expect(input).toHaveValue('');
-  expect(page.url(), 'clearing the box wrote the URL').toBe(before);
+  await expect(page, 'the ✕ left the term in the URL').not.toHaveURL(/[?&]q=/);
+  expect(new URL(page.url()).searchParams.get('state'), 'the ✕ cleared a filter it does not own').toBe(
+    'critical',
+  );
   expect(await holdsCaret(input), 'the ✕ took the caret out of the box').toBe(true);
 });
 
