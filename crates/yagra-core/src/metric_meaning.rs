@@ -22,38 +22,111 @@
 //! evaluated against a monotonic value (ADR-012) — so the picker never offers one and the rule
 //! table never shows one; a sentence written for `if_hc_in_octets` is a sentence nobody can reach.
 
-/// Metrics Yagra's own checks emit — the reachability probes and the URL / DNS / Meraki monitors.
+/// Which of Yagra's own probes a check metric comes from (ADR-046 Inc.8).
+///
+/// The node Overview files its generic cards by this: the ICMP pair under the ICMP section, the
+/// `snmp_*` checks beside the standard-MIB readings, and a URL / DNS / Meraki monitor's leftovers
+/// under a heading of their own. It is written down here rather than inferred from the name
+/// prefix, for the reason Inc.6 decision J gave for units: a rule from the spelling reads as a
+/// measurement and is a coincidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckFamily {
+    Icmp,
+    Snmp,
+    Url,
+    Dns,
+    Meraki,
+}
+
+impl CheckFamily {
+    /// Every family, in the order the Overview sections them.
+    ///
+    /// Test vocabulary: production code reads the family *table*, never the variant list, so
+    /// this is `cfg(test)` rather than dead code with an `allow` on it.
+    #[cfg(test)]
+    pub const ALL: [CheckFamily; 5] = [
+        CheckFamily::Icmp,
+        CheckFamily::Snmp,
+        CheckFamily::Url,
+        CheckFamily::Dns,
+        CheckFamily::Meraki,
+    ];
+
+    /// The token the generated catalog carries (`web/src/api/metricCatalog.json`), and the key
+    /// the WebUI builds its section heading from (`nodes:overview.family.<token>`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            CheckFamily::Icmp => "icmp",
+            CheckFamily::Snmp => "snmp",
+            CheckFamily::Url => "url",
+            CheckFamily::Dns => "dns",
+            CheckFamily::Meraki => "meraki",
+        }
+    }
+}
+
+/// Metrics Yagra's own checks emit — the reachability probes and the URL / DNS / Meraki monitors
+/// — each with the probe it belongs to.
 ///
 /// Hand-written because these names are constants scattered across `yagra-common`,
 /// `yagra-transport` and the poller with no collection catalogue behind them, and they have no
 /// `mib_catalog` row either — which is exactly why they need listing: nothing else knows they
 /// exist. This list used to live only in `web/src/lib/metricMeaning.ts`, whose doc comment said
-/// there was "no catalog on the Rust side" to generate from. There is now.
+/// there was "no catalog on the Rust side" to generate from. There is now, and since Inc.8 the
+/// WebUI's copy is *derived* from the generated catalog rather than kept by hand.
+///
+/// `__liveness__` is the one row with no family: it is the liveness rule's sentinel, not a
+/// series, so the catalog generator skips it and no Overview card can ever carry it.
+pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 19] = [
+    ("__liveness__", None),
+    ("icmp_rtt_ms", Some(CheckFamily::Icmp)),
+    ("icmp_loss_pct", Some(CheckFamily::Icmp)),
+    ("snmp_up", Some(CheckFamily::Snmp)),
+    ("snmp_walk_complete", Some(CheckFamily::Snmp)),
+    ("snmp_neighbor_count", Some(CheckFamily::Snmp)),
+    ("snmp_l3_address_count", Some(CheckFamily::Snmp)),
+    ("snmp_routing_adjacency_count", Some(CheckFamily::Snmp)),
+    ("snmp_arp_entry_count", Some(CheckFamily::Snmp)),
+    ("http_up", Some(CheckFamily::Url)),
+    ("http_status_code", Some(CheckFamily::Url)),
+    ("http_response_time_ms", Some(CheckFamily::Url)),
+    ("http_body_match", Some(CheckFamily::Url)),
+    ("ssl_cert_days_to_expiry", Some(CheckFamily::Url)),
+    ("dns_up", Some(CheckFamily::Dns)),
+    ("dns_resolve_ms", Some(CheckFamily::Dns)),
+    ("dns_answer_count", Some(CheckFamily::Dns)),
+    ("dns_chain_length", Some(CheckFamily::Dns)),
+    ("meraki_device_up", Some(CheckFamily::Meraki)),
+];
+
+/// The names in [`CHECK_FAMILIES`], in the same order.
 ///
 /// It has two readers: [`metric_source`], which reports where a number comes from, and the test
 /// that makes [`METRIC_MEANINGS`] checkable — without the list, a sentence for a metric nothing
-/// collects would look identical to a sentence for one that does.
-pub const CHECK_METRICS: [&str; 19] = [
-    "__liveness__",
-    "icmp_rtt_ms",
-    "icmp_loss_pct",
-    "snmp_up",
-    "snmp_walk_complete",
-    "snmp_neighbor_count",
-    "snmp_l3_address_count",
-    "snmp_routing_adjacency_count",
-    "snmp_arp_entry_count",
-    "http_up",
-    "http_status_code",
-    "http_response_time_ms",
-    "http_body_match",
-    "ssl_cert_days_to_expiry",
-    "dns_up",
-    "dns_resolve_ms",
-    "dns_answer_count",
-    "dns_chain_length",
-    "meraki_device_up",
-];
+/// collects would look identical to a sentence for one that does. Derived from the family table
+/// so the two cannot disagree about a name.
+pub const CHECK_METRICS: [&str; 19] = check_names(&CHECK_FAMILIES);
+
+const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 19]) -> [&'static str; 19] {
+    let mut out = [""; 19];
+    let mut i = 0;
+    while i < rows.len() {
+        out[i] = rows[i].0;
+        i += 1;
+    }
+    out
+}
+
+/// The probe `metric` comes from, or `None` for a collected metric, a derived one, or the
+/// liveness sentinel.
+#[must_use]
+pub fn check_family(metric: &str) -> Option<CheckFamily> {
+    CHECK_FAMILIES
+        .iter()
+        .find(|(name, _)| *name == metric)
+        .and_then(|(_, family)| *family)
+}
 
 /// What a metric's number *is* — the fact that turns `0` into `0%` and `2` into `2 ms` (ADR-046
 /// Inc.7).
@@ -329,6 +402,42 @@ mod tests {
         assert_eq!(metric_source(crate::alerts::LIVENESS), "check");
         assert_eq!(metric_source("if_in_util_pct"), "derived");
         assert_eq!(metric_source("cisco_cpu_5min"), "collected");
+    }
+
+    /// The family table is the Overview's sectioning, so three things must hold: only the liveness
+    /// sentinel is unfiled (it is a rule token, not a series), every family has a member — a family
+    /// nothing emits is a heading no node can ever show — and the derived name list is the table's
+    /// names in the table's order.
+    #[test]
+    fn only_the_liveness_sentinel_has_no_family_and_every_family_has_a_member() {
+        let unfiled: Vec<&str> = CHECK_FAMILIES
+            .iter()
+            .filter(|(_, f)| f.is_none())
+            .map(|(n, _)| *n)
+            .collect();
+        assert_eq!(unfiled, [crate::alerts::LIVENESS]);
+        for family in CheckFamily::ALL {
+            assert!(
+                CHECK_FAMILIES.iter().any(|(_, f)| *f == Some(family)),
+                "family {family:?} has no check metric"
+            );
+        }
+        let tokens: BTreeSet<&str> = CheckFamily::ALL.iter().map(|f| f.as_str()).collect();
+        assert_eq!(
+            tokens.len(),
+            CheckFamily::ALL.len(),
+            "two families share a token"
+        );
+        assert_eq!(check_family("icmp_loss_pct"), Some(CheckFamily::Icmp));
+        assert_eq!(check_family("meraki_device_up"), Some(CheckFamily::Meraki));
+        assert_eq!(
+            check_family("snmp_sys_uptime_ticks"),
+            None,
+            "collected, not a check"
+        );
+        assert_eq!(check_family(crate::alerts::LIVENESS), None);
+        let names: Vec<&str> = CHECK_FAMILIES.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, CHECK_METRICS);
     }
 
     /// Every metric an operator can put a threshold rule on has a sentence, **and nothing else does**.

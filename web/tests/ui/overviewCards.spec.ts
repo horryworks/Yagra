@@ -5,7 +5,9 @@
 //
 // 1. `System (SNMP)` stopped being a `name: value` strip and became cards with charts. Whether a
 //    card *draws* is a canvas question, and `metricCards.test.ts` can only prove the list it is
-//    given is the right list.
+//    given is the right list. (Since ADR-046 Inc.8 that one section is several, filed by source —
+//    the set a metric belongs to, or "Other" — and `metricCards.test.ts` proves the filing; this
+//    file proves each section reaches the screen under its heading.)
 // 2. `SETUP RATE` was drawing `huawei_usg_session_total` — a **counter** — as a raw range and
 //    labelling its since-boot total "/s" (18,190,268/s on the real firewall). The unit test pins
 //    the *decision*; only this file can prove the decision reached the request. That is the whole
@@ -80,16 +82,17 @@ test.use({
   },
 });
 
-/** The generic section, located by its own note rather than by DOM order — Device health uses the
- *  same grid class, so `.nd-health-metrics` alone would match either one. */
-function genericSection(page: import('@playwright/test').Page) {
-  return page.locator('section', { has: page.locator('.nd-section-note') });
+/** The generic sections — everything below Device health, one per source (ADR-046 Inc.8) —
+ *  located by the attribute the component stamps rather than by DOM order: Device health and the
+ *  ICMP section use the same grid class, so `.nd-health-metrics` alone would match any of them. */
+function genericSections(page: import('@playwright/test').Page) {
+  return page.locator('section[data-overview-section]');
 }
 
 async function openOverview(page: import('@playwright/test').Page) {
   await page.goto(`/nodes/${NODE_ID}?tab=overview`);
   await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 15_000 });
-  await expect(genericSection(page).locator('.nd-health-metric').first()).toBeVisible({
+  await expect(genericSections(page).locator('.nd-health-metric').first()).toBeVisible({
     timeout: 15_000,
   });
 }
@@ -97,20 +100,33 @@ async function openOverview(page: import('@playwright/test').Page) {
 test.describe('node Overview metric cards', () => {
   test('draws a chart for every node-level metric, not a value strip', async ({ page, errors }) => {
     await openOverview(page);
-    const cards = genericSection(page).locator('.nd-health-metric');
+    const cards = genericSections(page).locator('.nd-health-metric');
     await expect(cards).toHaveCount(2);
     // A canvas per card is the change. Before Inc.6 these rows had a number and nothing else, and
     // `.nd-muted` ("No history yet…") is what a card with an unusable series renders instead —
     // which is what the 1970 sample in the generated mock would produce.
     await expect(cards.locator('canvas')).toHaveCount(2);
-    await expect(genericSection(page).locator('.nd-muted')).toHaveCount(0);
+    await expect(genericSections(page).locator('.nd-muted')).toHaveCount(0);
     expect(errors.uncaught).toEqual([]);
     expect(errors.logged).toEqual([]);
   });
 
+  test('files each leftover under its source, and no longer under "System (SNMP)"', async ({ page }) => {
+    await openOverview(page);
+    // The vendor reading sits under its metric set's own name; the operator's item, which the
+    // built-in catalog has never heard of, under Other. Headings are the change in Inc.8.
+    const huawei = page.locator('section[data-set="Huawei VRP health"]');
+    await expect(huawei.locator('.nd-health-metric')).toHaveCount(1);
+    await expect(huawei.getByText(GENERIC_EXPLAINED, { exact: true })).toBeVisible();
+    const other = page.locator('section[data-overview-section="other"]');
+    await expect(other.locator('.nd-health-metric')).toHaveCount(1);
+    await expect(other.getByText(GENERIC_UNEXPLAINED, { exact: true })).toBeVisible();
+    await expect(page.getByText('System (SNMP)', { exact: true })).toHaveCount(0);
+  });
+
   test('does not repeat a metric Device health is already charting', async ({ page }) => {
     await openOverview(page);
-    const generic = genericSection(page);
+    const generic = genericSections(page);
     await expect(generic.getByText(GENERIC_EXPLAINED, { exact: true })).toBeVisible();
     await expect(generic.getByText(GENERIC_UNEXPLAINED, { exact: true })).toBeVisible();
     // The CPU gauge is charted above under its curated name; a second chart of it below reads as a
@@ -122,7 +138,7 @@ test.describe('node Overview metric cards', () => {
 
   test('labels a generic card with its raw name and what it measures', async ({ page }) => {
     await openOverview(page);
-    const explained = genericSection(page).locator('.nd-health-metric', {
+    const explained = genericSections(page).locator('.nd-health-metric', {
       has: page.getByText(GENERIC_EXPLAINED, { exact: true }),
     });
     // Mono, because the label is an identifier — and un-uppercased, or a name this long wraps in a
@@ -133,7 +149,7 @@ test.describe('node Overview metric cards', () => {
     // The catalogue sentence, which already exists in both locales for every explained gauge.
     await expect(explained.locator('.nd-health-metric-meaning')).not.toBeEmpty();
     // A metric nothing explains gets no line at all rather than invented prose.
-    const unexplained = genericSection(page).locator('.nd-health-metric', {
+    const unexplained = genericSections(page).locator('.nd-health-metric', {
       has: page.getByText(GENERIC_UNEXPLAINED, { exact: true }),
     });
     await expect(unexplained.locator('.nd-health-metric-meaning')).toHaveCount(0);
@@ -199,6 +215,9 @@ test.describe('node Overview metric cards', () => {
   test('the ICMP section carries a range control of its own', async ({ page }) => {
     await openOverview(page);
     const icmp = page.locator('.nd-overview > section').first();
+    // One card: the RTT. The loss card is offered only when the inventory has `icmp_loss_pct`,
+    // and this fixture deliberately does not (ADR-046 Inc.8).
+    await expect(icmp.locator('.nd-health-metric')).toHaveCount(1);
     await expect(icmp.locator('canvas')).toHaveCount(1);
     await expect(icmp.getByRole('group', { name: 'Time range' })).toHaveCount(1);
   });

@@ -30892,6 +30892,13 @@
           "source"
         ],
         "properties": {
+          "family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which of Yagra's own probes emits a `check` metric — `icmp`, `snmp`, `url`, `dns` or\n`meraki` — and `null` for every other source (ADR-046 Inc.8). `snmp` here means the SNMP\nconversation itself (did the agent answer, how far the walk got, what it found), not a\nvalue read off a MIB; those are `collected`. The node Overview files its cards by this."
+          },
           "meaning": {
             "type": "string",
             "description": "One sentence, in English. English is canonical (`crate::metric_meaning`); the WebUI renders\na translation of it, so the wording here and the wording on screen may differ by language,\nnever by content."

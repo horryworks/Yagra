@@ -15,11 +15,12 @@ import {
   lastValue,
   MEM_SPECS,
   METRIC_CARDS,
-  overviewScalarCards,
+  overviewSections,
   resolveCard,
   resolveHealth,
   resolveMem,
   uncuratedCardScale,
+  type OverviewSection,
 } from './metricCards';
 import type { NodeMetricEntry } from '../../types/api';
 
@@ -247,26 +248,84 @@ describe('claimedMetrics', () => {
   });
 });
 
-describe('overviewScalarCards', () => {
-  it('subtracts what Device health already draws', () => {
+describe('overviewSections', () => {
+  /** A section as `[id, metrics]`, so an expectation reads like the screen. */
+  const shape = (s: OverviewSection): [string, string[]] => [
+    s.key.kind === 'family' ? `family:${s.key.family}` : s.key.kind === 'set' ? `set:${s.key.name}` : 'other',
+    s.cards.map((c) => c.metric),
+  ];
+  const none = new Set<string>();
+
+  it('files a check under its probe, a collected metric under its set, and the rest under other', () => {
+    // Real names on purpose: the filing is read off the generated catalog, so a made-up name
+    // would land in `other` and prove nothing about the first two branches.
+    const items = [scalar('snmp_up'), table('huawei_temp'), scalar('ymock_room_temp_c')];
+    expect(overviewSections(items, none).map(shape)).toEqual([
+      ['family:snmp', ['snmp_up']],
+      ['set:Huawei VRP health', ['huawei_temp']],
+      ['other', ['ymock_room_temp_c']],
+    ]);
+  });
+
+  it('folds the standard SNMP set into the SNMP section', () => {
+    // sysUpTime is collected by the vendor-less standard set, not emitted by a probe, and an
+    // operator reads it as part of the same story as "did the agent answer".
+    const items = [scalar('snmp_sys_uptime_ticks'), scalar('snmp_walk_complete')];
+    expect(overviewSections(items, none).map(shape)).toEqual([
+      ['family:snmp', ['snmp_sys_uptime_ticks', 'snmp_walk_complete']],
+    ]);
+  });
+
+  it('subtracts what Device health and the kind card already draw', () => {
     const cpu = METRIC_CARDS.find((c) => c.id === 'cpu')!;
-    const items = [table(cpu.candidates[0]), scalar('icmp_rtt_ms'), ...MEM_SPECS[0].metrics.map(table)];
-    const names = overviewScalarCards(items, resolveHealth(items)).map((c) => c.metric);
-    // The CPU gauge and both memory inputs are charted above; only the leftover is a card here.
-    expect(names).toEqual(['icmp_rtt_ms']);
+    const items = [
+      table(cpu.candidates[0]),
+      scalar('icmp_rtt_ms'),
+      scalar('icmp_loss_pct'),
+      ...MEM_SPECS[0].metrics.map(table),
+      scalar('http_up'),
+      scalar('ssl_cert_days_to_expiry'),
+    ];
+    // What the caller passes: Device health's resolution plus the kind card's own list.
+    const claimed = new Set([...claimedMetrics(resolveHealth(items)), 'icmp_rtt_ms', 'icmp_loss_pct', 'http_up']);
+    // The CPU gauge, both memory inputs, the ICMP pair and `http_up` are charted above; only the
+    // one URL metric no card draws is left, under the URL monitor heading.
+    expect(overviewSections(items, claimed).map(shape)).toEqual([['family:url', ['ssl_cert_days_to_expiry']]]);
+  });
+
+  it('drops an empty section rather than drawing a heading over nothing', () => {
+    expect(overviewSections([scalar('icmp_rtt_ms')], new Set(['icmp_rtt_ms']))).toEqual([]);
+    expect(overviewSections([], none)).toEqual([]);
+  });
+
+  it('orders the probes in their fixed order, then the sets by name, then other', () => {
+    const items = [
+      scalar('ymock_room_temp_c'),
+      scalar('ucd_load_1min'),
+      table('huawei_temp'),
+      scalar('dns_answer_count'),
+      scalar('snmp_up'),
+    ];
+    expect(overviewSections(items, none).map((s) => shape(s)[0])).toEqual([
+      'family:snmp',
+      'family:dns',
+      'set:Huawei VRP health',
+      'set:Linux Net-SNMP (UCD)',
+      'other',
+    ]);
   });
 
   it('carries each metric its own read and chart, so the card never picks', () => {
-    const items = [scalar('a'), table('b')];
-    expect(overviewScalarCards(items, resolveHealth(items))).toEqual([
-      { metric: 'a', read: { kind: 'latest' }, chart: { kind: 'range' } },
-      { metric: 'b', read: { kind: 'aggregate' }, chart: { kind: 'aggregate' } },
+    const items = [scalar('snmp_up'), table('huawei_temp')];
+    expect(overviewSections(items, none).flatMap((s) => s.cards)).toEqual([
+      { metric: 'snmp_up', read: { kind: 'latest' }, chart: { kind: 'range' } },
+      { metric: 'huawei_temp', read: { kind: 'aggregate' }, chart: { kind: 'aggregate' } },
     ]);
   });
 
   it('drops counters and per-interface metrics, as the Overview always has', () => {
     // Not new in Inc.6 — `overviewScalars` has always refused these. Pinned here because this is
-    // now the predicate the section renders from, and widening it would put eight octet counters
+    // the predicate the sections render from, and widening it would put eight octet counters
     // above the fold on every switch.
     const items = [
       counter('c'),
@@ -274,15 +333,7 @@ describe('overviewScalarCards', () => {
       entry('silent', { status: 'no_data', series_count: 0 }),
       scalar('keep'),
     ];
-    expect(overviewScalarCards(items, resolveHealth(items)).map((c) => c.metric)).toEqual(['keep']);
-  });
-
-  it('subtracts nothing while Device health is still resolving', () => {
-    // The caller does not render in this state; if it did, drawing the unsubtracted set first would
-    // flash the duplicates for one frame.
-    const cpu = METRIC_CARDS.find((c) => c.id === 'cpu')!;
-    const items = [table(cpu.candidates[0])];
-    expect(overviewScalarCards(items, null).map((c) => c.metric)).toEqual([cpu.candidates[0]]);
+    expect(overviewSections(items, none).flatMap((s) => s.cards.map((c) => c.metric))).toEqual(['keep']);
   });
 });
 

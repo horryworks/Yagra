@@ -286,7 +286,8 @@
     "body": "Delete node <b>{{name}}</b>? This removes its inventory entry and its discovered interfaces. Collected metrics age out of the TSDB. If this node is a parent in a dependency chain, its dependents will no longer be suppressed by it. This cannot be undone."
   },
   "overview": {
-    "icmpRttTitle": "ICMP round-trip time",
+    "icmpRtt": "Round-trip time",
+    "icmpLoss": "Packet loss",
     "noRttHistory": "No RTT history yet…",
     "unreachableDash": "— (unreachable)",
     "urlMonitor": "URL monitor",
@@ -317,8 +318,16 @@
     "unnamedRow": "Row {{row}}",
     "moreRows": "and {{count}} more",
     "followsRow": "Showing the fullest pool: {{name}}",
-    "systemSnmp": "System (SNMP)",
-    "systemSnmpNote": "Metrics not already shown in Device health.",
+    "family": {
+      "icmp": "ICMP",
+      "snmp": "SNMP",
+      "url": "URL monitor",
+      "dns": "DNS monitor",
+      "meraki": "Meraki"
+    },
+    "snmpNote": "Whether the agent answered, how far the walk got, and what it found.",
+    "other": "Other metrics",
+    "otherNote": "Metrics with no built-in definition.",
     "dnsMonitor": "DNS monitor",
     "systemResolver": "system resolver",
     "resolution": "Resolution",

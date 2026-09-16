@@ -8402,6 +8402,13 @@ export interface components {
         /** @description One metric and what it measures, in one sentence. */
         MetricMeaning: {
             /**
+             * @description Which of Yagra's own probes emits a `check` metric — `icmp`, `snmp`, `url`, `dns` or
+             *     `meraki` — and `null` for every other source (ADR-046 Inc.8). `snmp` here means the SNMP
+             *     conversation itself (did the agent answer, how far the walk got, what it found), not a
+             *     value read off a MIB; those are `collected`. The node Overview files its cards by this.
+             */
+            family?: string | null;
+            /**
              * @description One sentence, in English. English is canonical (`crate::metric_meaning`); the WebUI renders
              *     a translation of it, so the wording here and the wording on screen may differ by language,
              *     never by content.

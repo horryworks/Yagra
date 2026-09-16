@@ -7,9 +7,10 @@
 //
 // Two sources, deliberately unequal:
 //
-//  - **Yagra's own check metrics** are hard-coded (`CHECK_METRICS`) because they have no catalog
-//    row anywhere — they are emitted by the poller, not collected from a device. They lead the
-//    list because they apply to every node, whatever it is.
+//  - **Yagra's own check metrics** come from the generated built-in catalog (`CHECK_METRICS`,
+//    its `source: "check"` rows) because they have no `mib_catalog` row — they are emitted by the
+//    poller, not collected from a device. They lead the list because they apply to every node,
+//    whatever it is.
 //  - **Collected metrics** come from `GET /api/v1/mib-catalog` at runtime, so an operator's own
 //    entries appear without this file knowing about them.
 //

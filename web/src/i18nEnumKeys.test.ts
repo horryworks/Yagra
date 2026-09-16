@@ -64,7 +64,7 @@ import {
 } from './components/NodeDetail/nodeEditForm';
 import { CREDENTIAL_KINDS } from './lib/credentialKinds';
 import { TEXT_MODES } from './lib/columnFilter';
-import { EXPLAINED_METRICS } from './lib/metricMeaning';
+import { EXPLAINED_METRICS, OVERVIEW_FAMILIES } from './lib/metricMeaning';
 import metricUnits from './api/metricUnits.json';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
@@ -236,6 +236,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
 
   it('every node-group type has a label (nodes:groupType.*)', () => {
     expectKeys('group type', { en: enNodes, ja: jaNodes }, 'groupType.', GROUP_TYPES);
+  });
+
+  it('every Overview family has a section heading (nodes:overview.family.*)', () => {
+    // `OverviewSections` builds `overview.family.${family}` from the generated catalog's token
+    // (ADR-046 Inc.8), so a sixth family added in Rust without its strings would head a section
+    // with a raw key — in both locales, which parity passes.
+    expectKeys('overview family', { en: enNodes, ja: jaNodes }, 'overview.family.', OVERVIEW_FAMILIES);
   });
 
   it('every threshold scope level and direction has a label (alertsConfig)', () => {

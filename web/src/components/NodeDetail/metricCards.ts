@@ -10,10 +10,11 @@
 // So the set of cards is a list, the resolution is one function over that list, and the guards are
 // computed from its result. Adding a gauge is one entry here plus its two locale strings.
 //
-// Since ADR-046 Inc.6 it decides for the section *below* Device health too. The node's remaining
-// node-level metrics are drawn as the same card, and `overviewScalarCards` is what keeps the two
-// sections from showing the same measurement twice — subtracting what Device health already
-// claimed, including the two inputs of the derived memory card.
+// Since ADR-046 Inc.6 it decides for the sections *below* Device health too. The node's remaining
+// node-level metrics are drawn as the same card, filed by where each one comes from
+// (`overviewSections`, Inc.8), and `claimedMetrics` is what keeps the sections from showing the
+// same measurement twice — subtracting what Device health already claimed, including the two
+// inputs of the derived memory card.
 //
 // This is a `.ts` file on purpose: Vitest runs `environment: 'node'` with
 // `include: ['src/**/*.test.ts']`, so logic left in the `.tsx` is logic nothing tests.
@@ -25,6 +26,12 @@ import {
   type MetricChartQuery,
   type MetricRead,
 } from '../../lib/metricInventory';
+import {
+  builtinMetric,
+  OVERVIEW_FAMILIES,
+  STANDARD_SNMP_TEMPLATE,
+  type OverviewFamily,
+} from '../../lib/metricMeaning';
 import type { NodeMetricEntry } from '../../types/api';
 
 /** How a card's values read, which decides both the headline format and the chart's Y axis. */
@@ -275,30 +282,99 @@ export interface ScalarCard {
   chart: MetricChartQuery;
 }
 
+/** Which heading a generic Overview card sits under (ADR-046 Inc.8). */
+export type OverviewSectionKey =
+  /** One of Yagra's own probes: the heading is `nodes:overview.family.<family>`. */
+  | { kind: 'family'; family: OverviewFamily }
+  /** A built-in metric set: the heading is its name, verbatim (`Huawei VRP health`). */
+  | { kind: 'set'; name: string }
+  /** A metric the built-in catalog does not know — an operator's own collection item. */
+  | { kind: 'other' };
+
+/** One section of the generic half of the Overview: a heading and the cards under it. */
+export interface OverviewSection {
+  key: OverviewSectionKey;
+  cards: ScalarCard[];
+}
+
 /**
- * The node-level metrics the Overview draws as generic cards, in inventory order.
+ * Where one metric is filed, from the generated catalog and nothing else.
+ *
+ * A check goes under its probe; a collected metric under its set — except the vendor-less
+ * standard set, which is folded into the SNMP section beside the `snmp_*` checks, because
+ * sysUpTime and "did the agent answer" are one story to an operator. A name the catalog has never
+ * heard of is an operator's own collection item, and says so. Never from the name's prefix (Inc.6
+ * 決定 J), and never from `GET /api/v1/mib-catalog`, which needs ManageConfig and would make the
+ * sectioning vanish for a viewer — the hole Device health fell into in Inc.1.
+ */
+function sectionOf(metric: string): OverviewSectionKey {
+  const row = builtinMetric(metric);
+  if (!row) return { kind: 'other' };
+  if (row.source === 'check') return { kind: 'family', family: row.family };
+  if (row.family === STANDARD_SNMP_TEMPLATE) return { kind: 'family', family: 'snmp' };
+  return { kind: 'set', name: row.family };
+}
+
+function sectionId(key: OverviewSectionKey): string {
+  switch (key.kind) {
+    case 'family':
+      return `family:${key.family}`;
+    case 'set':
+      return `set:${key.name}`;
+    case 'other':
+      return 'other';
+  }
+}
+
+/** Families first in their fixed order, then the sets by name, then the unknown. */
+function sectionRank(key: OverviewSectionKey): [number, string] {
+  switch (key.kind) {
+    case 'family':
+      return [OVERVIEW_FAMILIES.indexOf(key.family), ''];
+    case 'set':
+      return [OVERVIEW_FAMILIES.length, key.name];
+    case 'other':
+      return [OVERVIEW_FAMILIES.length + 1, ''];
+  }
+}
+
+/**
+ * The node-level metrics the Overview draws as generic cards, filed by where each one comes from.
  *
  * `overviewScalars` decides what belongs on the Overview at all (no counters — they have no
  * glanceable value; no per-interface metrics — eight octet counters above the fold on every switch
- * is what 決定 1's "don't degrade the common case" forbids). This adds the second rule: **anything
- * Device health is already drawing is dropped.** A number beside a chart of the same metric was
- * harmless; two charts of it, stacked, read as a second measurement that happens to always agree.
+ * is what 決定 1's "don't degrade the common case" forbids). `claimed` is the second rule:
+ * **anything a section above is already drawing is dropped** — what Device health resolved onto
+ * (`claimedMetrics`) and what the kind's own card draws (`kindCardClaims`). Two charts of one
+ * metric, stacked, read as a second measurement that happens to always agree; before Inc.8 only
+ * the first half was subtracted, so a URL node charted its five card metrics twice.
  *
- * `health === null` means Device health has not resolved yet. Nothing is subtracted then, and the
- * caller should not render — drawing the unsubtracted set first would flash the duplicates.
+ * Cards keep inventory order inside a section (name order — the server sorts). An empty section
+ * is not returned: a heading over nothing reads as a broken widget.
  */
-export function overviewScalarCards(
+export function overviewSections(
   entries: readonly NodeMetricEntry[],
-  health: ResolvedHealth | null,
-): ScalarCard[] {
-  const claimed = health ? claimedMetrics(health) : new Set<string>();
-  return overviewScalars(entries)
-    .filter((e) => !claimed.has(e.metric))
-    .map((e) => ({ metric: e.metric, ...viewOf(e) }))
+  claimed: ReadonlySet<string>,
+): OverviewSection[] {
+  const groups = new Map<string, OverviewSection>();
+  for (const e of overviewScalars(entries)) {
+    if (claimed.has(e.metric)) continue;
+    const card: ScalarCard = { metric: e.metric, ...viewOf(e) };
     // The same refusal `resolveCard` applies. Unreachable while `overviewScalars` drops counters
     // and per-interface metrics — kept so that widening *that* predicate cannot silently produce a
     // card with no query behind it, which is the failure this file's whole shape exists to prevent.
-    .filter((c) => c.chart.kind !== 'none' && c.chart.kind !== 'interfaces');
+    if (card.chart.kind === 'none' || card.chart.kind === 'interfaces') continue;
+    const key = sectionOf(e.metric);
+    const id = sectionId(key);
+    const section = groups.get(id) ?? { key, cards: [] };
+    section.cards.push(card);
+    groups.set(id, section);
+  }
+  return [...groups.values()].sort((a, b) => {
+    const [ra, na] = sectionRank(a.key);
+    const [rb, nb] = sectionRank(b.key);
+    return ra - rb || na.localeCompare(nb, 'en');
+  });
 }
 
 /**
