@@ -336,3 +336,24 @@ html[data-viewport='mobile'] .nodes-pane-add {
   min-height: var(--touch-target);
   min-width: var(--touch-target);
 }
+
+/* What a manual poll dispatched (ADR-124 増分 12). Sits below the tree beside the working-set bar,
+   for the same reason it does: anything appearing *above* `.ntree-body` drops the scroller's top
+   edge and every visible row moves (増分 5 決定 A).
+
+   Its own line rather than the page's error band, because a dispatch that worked is the only
+   feedback there is — the readings arrive minutes later through the ordinary ingest. A success
+   clears itself after 8s; a shortfall stays, because it means selected nodes were not polled. */
+.nodes-pollmsg {
+  flex: none;
+  margin: 0;
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border-top: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.nodes-pollmsg.err {
+  color: var(--status-critical);
+}

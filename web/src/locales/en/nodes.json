@@ -642,7 +642,11 @@
     "menuRoot": "Tree actions",
     "poolSelected": "Poller pool — {{count}} selected",
     "maintenanceSelected": "Maintenance — {{count}} selected",
-    "muteSelected": "Mute — {{count}} selected"
+    "muteSelected": "Mute — {{count}} selected",
+    "pollNow": "Poll now",
+    "pollNodeNamed": "Poll \"{{name}}\" now",
+    "pollSelected": "Poll {{count}} selected now",
+    "pollDispatched": "{{dispatched}} of {{requested}} nodes queued for polling."
   },
   "moveNode": {
     "title": "Move {{name}}",
@@ -811,7 +815,8 @@
     "pool": "Poller pool…",
     "more": "More…",
     "maintenance": "Maintenance…",
-    "mute": "Mute…"
+    "mute": "Mute…",
+    "pollNow": "Poll now"
   },
   "groupPicker": {
     "none": "No folder",

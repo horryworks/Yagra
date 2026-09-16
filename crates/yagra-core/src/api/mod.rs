@@ -648,6 +648,21 @@ fn changes_monitoring_config(path: &str) -> bool {
         // grows on a 2s poll while a sweep runs, so a missing entry here rebuilds the whole fleet's
         // poll specs every few seconds for the length of the scan.
         || path == "/api/v1/discovery/import-preview"
+        // A manual poll (ADR-124 増分 12), in both its forms. It dispatches the node's **existing**
+        // configured check set to the bus and writes nothing the rebuilds read — no binding, no
+        // pool, no threshold, no folder. The criterion is what those rebuilds read, and a poll
+        // changes none of it.
+        //
+        // 🚨 **Both spellings, and the single-node one was not exempt before this.** Poll now is
+        // the button an operator presses right after every other edit on the Nodes screen, so
+        // every press was re-resolving the poll specs for the whole fleet — `/api/v1/node-names`'
+        // failure (v0.2.10) in a second place. The batch form would have inherited it.
+        //
+        // 🚨 The same blind spot as the two previews: the mechanical check cannot see either of
+        // these, because they demand ManageConfig rather than a read permission. The test beside
+        // this function is what keeps them honest.
+        || path == "/api/v1/nodes/poll"
+        || (path.starts_with("/api/v1/nodes/") && path.ends_with("/poll"))
         // Arranging one folder's children in name order (ADR-130 決定 4). It writes real rows —
         // `node_groups.sort_order` and `nodes.sort_order` — so the verb is not why it is here. The
         // criterion is what the rebuilds read, and **none of them reads `sort_order`**: measured
@@ -1709,6 +1724,31 @@ mod tests {
             changes_monitoring_config("/api/v1/nodes/move"),
             "a move changes which folder a node's thresholds and pool come from"
         );
+    }
+
+    /// 🚨 A manual poll dispatches existing checks and must not rebuild the fleet (ADR-124 増分 12).
+    ///
+    /// Invisible to the mechanical check below, like the two previews: the handler demands
+    /// `ManageConfig`. **Both spellings are asserted** — the single-node form was not exempt until
+    /// 増分 12, and it is the button an operator presses right after every other edit on the Nodes
+    /// screen, so every press re-resolved the poll specs for the whole fleet.
+    #[test]
+    fn polling_now_does_not_dirty_the_config_generation() {
+        for path in [
+            "/api/v1/nodes/poll",
+            "/api/v1/nodes/11111111-1111-4111-8111-111111111111/poll",
+        ] {
+            assert!(
+                !changes_monitoring_config(path),
+                "{path} dispatches existing checks and must not invalidate"
+            );
+        }
+        // The neighbouring node routes still do: the exemption is the path ending in `/poll`, not
+        // everything under `/nodes/`.
+        assert!(changes_monitoring_config("/api/v1/nodes/pool"));
+        assert!(changes_monitoring_config(
+            "/api/v1/nodes/11111111-1111-4111-8111-111111111111/pool"
+        ));
     }
 
     /// 🚨 Sorting a folder writes rows and still must not rebuild the fleet (ADR-130 決定 4).

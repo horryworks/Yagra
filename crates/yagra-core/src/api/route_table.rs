@@ -1006,6 +1006,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/nodes/poll",
+        // `GroupFiltered`: the ids are narrowed by the store read that loads them, so a node
+        // outside the caller's folders is neither polled nor counted (ADR-124 増分 12). The
+        // single-node `POST /nodes/:node_id/poll` is `NodeScoped` because it addresses one node by
+        // path; this one names a set in the body.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/nodes/pool",
         // Scoped for the same reason `/nodes/move` and `/nodes/tags` are (ADR-124 増分 10): an
         // Operator holds `manage_config` and can be group-scoped, and the pool decides which

@@ -59,6 +59,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     preview_move_by_prefix,
     set_node_pool,
     bulk_set_node_pool,
+    poll_nodes_now,
     set_node_parent,
     set_node_suppression_opt_out,
     place_node
@@ -80,6 +81,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/tags", post(bulk_tag_nodes))
         .route("/api/v1/nodes/move-preview", post(preview_move_by_prefix))
         .route("/api/v1/nodes/pool", post(bulk_set_node_pool))
+        .route("/api/v1/nodes/poll", post(poll_nodes_now))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
@@ -2404,14 +2406,125 @@ pub(crate) async fn poll_now(
             ApiError::from_internal(e.as_ref(), "poll-now: load node", "failed to load node")
         })?
         .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?;
-    let pool = pool_resolver(admin).await.resolve(&node).pool;
-    let dispatched = admin.dispatcher.poll_now(&node, &pool).await;
+    Ok(poll_now_with(admin, &pool_resolver(admin).await, &node).await)
+}
+
+/// Dispatch one node's poll set against a resolver the caller already built.
+///
+/// 🚨 **The split exists because the resolver is a whole-tree read** (`groups.pool_rows()`), and
+/// [`poll_now`] builds one per call. A batch looping over that would rebuild the folder tree once
+/// per node — the shape `MonitorHints` was introduced to remove from the sweep (ADR-111). The
+/// batch builds it once; the single-node callers are unchanged, and there is still one
+/// implementation of "which pool does this node's job go to".
+pub(crate) async fn poll_now_with(
+    admin: &super::AdminState,
+    resolver: &crate::poolres::PoolResolver,
+    node: &yagra_common::Node,
+) -> PollNowResult {
+    let node_id = node.id.0;
+    let pool = resolver.resolve(node).pool;
+    let dispatched = admin.dispatcher.poll_now(node, &pool).await;
     tracing::info!(node = %node_id, dispatched, pool = %pool, "manual poll dispatched");
-    Ok(PollNowResult {
+    PollNowResult {
         dispatched,
         node_id,
         pool,
-    })
+    }
+}
+
+/// The nodes to poll now.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct BulkPoll {
+    node_ids: Vec<Uuid>,
+}
+
+/// What a bulk manual poll dispatched.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct BulkPollResult {
+    /// Distinct ids the request named, after de-duplication.
+    requested: usize,
+    /// Nodes whose jobs were published. **Lower than `requested` is normal**: an id can name a
+    /// node that has since been deleted, or one outside the caller's scope. The two are not
+    /// distinguished.
+    dispatched: usize,
+    /// Poll jobs published in total — several per node, since a node's configured check set is
+    /// dispatched whole.
+    jobs: usize,
+}
+
+/// Poll many nodes now (ADR-124 増分 12) — the batch form of `POST /nodes/{node_id}/poll`.
+///
+/// Confirming a change across a set of devices is the case the single-node form serves badly: it
+/// is the action an operator reaches for immediately after every other bulk edit on this screen.
+///
+/// ⚠️ **The publishes are one per node and there is no transaction to roll back**, so a bus error
+/// partway leaves the earlier nodes polled. That is accepted rather than worked around: a poll
+/// writes no configuration and is idempotent, so the failure mode is "some nodes were polled
+/// twice", not a half-applied change — unlike every other bulk route on this screen, which is why
+/// they are single statements and this one is not.
+#[utoipa::path(
+    post, path = "/api/v1/nodes/poll", tag = "nodes",
+    request_body = BulkPoll,
+    responses(
+        (status = 202, description = "How many of the named nodes were dispatched", body = BulkPollResult),
+        (status = 400, description = "More ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn poll_nodes_now(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<BulkPoll>,
+) -> ApiResult<(StatusCode, Json<BulkPollResult>)> {
+    if body.node_ids.len() > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {NODE_MOVE_BATCH_MAX} nodes may be polled in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<Uuid> = body
+        .node_ids
+        .iter()
+        .copied()
+        .filter(|id| seen.insert(*id))
+        .collect();
+    let nodes = admin
+        .repo
+        .nodes_by_ids(&ids, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "poll-now: load nodes", "failed to load nodes")
+        })?;
+    // 🚨 Built once, outside the loop. `poll_now` builds one per call and it is a whole-tree read,
+    // so calling that N times would re-read the folder tree once per node.
+    let resolver = pool_resolver(&admin).await;
+    let mut jobs = 0usize;
+    for node in &nodes {
+        jobs += poll_now_with(&admin, &resolver, node).await.dispatched;
+    }
+    // The audit middleware records method and path only, so without this the log says that someone
+    // polled something and never how much (every bulk route here does the same).
+    tracing::info!(
+        requested = ids.len(),
+        dispatched = nodes.len(),
+        jobs,
+        "bulk manual poll"
+    );
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(BulkPollResult {
+            requested: ids.len(),
+            dispatched: nodes.len(),
+            jobs,
+        }),
+    ))
 }
 
 /// `ManageConfig` — an operator action, like a discovery scan. Audited by the mutation middleware.
@@ -3675,6 +3788,62 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_pool", "{body}");
+    }
+
+    /// A bulk poll is accepted, counts only the nodes it could reach, and refuses a Viewer.
+    ///
+    /// ⚠️ **The bus in this fixture is in-memory**, so what is asserted is that the jobs were
+    /// *built and published* — no poller receives them (`tests_support`'s own doc says so). A
+    /// node that reaches no poller is exactly what `dispatched` claims and no more.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_poll_dispatches_each_node_the_caller_can_see(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let a = crate::pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let hidden = crate::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
+        let gone = uuid::Uuid::new_v4();
+
+        let tok = scoped_token(&st, &[mine]);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/poll",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, hidden, gone] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED, "{body}");
+        assert_eq!(body["requested"], 3, "{body}");
+        assert_eq!(
+            body["dispatched"], 1,
+            "the scope did not hold, or a stale id was counted: {body}"
+        );
+
+        // A repeated id is one node, so the counts cannot be inflated by the caller.
+        let (_, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/poll",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, a, a] })),
+        )
+        .await;
+        assert_eq!(body["requested"], 1, "{body}");
+        assert_eq!(body["dispatched"], 1, "{body}");
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let (status, out) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/poll",
+            &viewer,
+            Some(serde_json::json!({ "node_ids": [a] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{out}");
     }
 
     /// 🚨 **A scoped caller's bulk pool change does not reach another site's nodes.**

@@ -191,6 +191,39 @@ impl NodeRepo {
         row.as_ref().map(node_from_row).transpose()
     }
 
+    /// MANY nodes by id, narrowed to the caller's scope (ADR-124 増分 11/12).
+    ///
+    /// The batch reader behind a bulk action that has to *do* something per node rather than write
+    /// one statement — a manual poll builds each node's own job set. Ids that name nothing, and
+    /// ids outside `scope`, are simply absent from the result: the caller reports how many it
+    /// found against how many were asked for, and the two reasons are not distinguished.
+    ///
+    /// ⚠️ **Not ordered by the caller's array.** PostgreSQL returns what it returns; a caller that
+    /// needs the operator's order has to impose it, as `place_node_batch` does with `unnest … WITH
+    /// ORDINALITY`. Nothing reading this cares, because dispatching N jobs has no order.
+    ///
+    /// The scope predicate is written out rather than reusing [`Self::SCOPE_PREDICATE`] for the
+    /// reason [`Self::merge_node_tags`] gives: that constant binds `$1`, which is the id array.
+    pub async fn nodes_by_ids(
+        &self,
+        ids: &[Uuid],
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<Node>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM nodes \
+             WHERE id = ANY($1) AND ($2::uuid[] IS NULL OR group_id = ANY($2))",
+            Self::NODE_COLUMNS
+        ))
+        .bind(ids)
+        .bind(Self::scope_bind(scope))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(node_from_row).collect()
+    }
+
     /// One node by id **plus its note** (ADR-135). For the two detail surfaces only.
     ///
     /// A second projection rather than a column on [`Self::NODE_COLUMNS`]: see [`NodeWithNotes`]
