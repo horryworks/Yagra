@@ -154,6 +154,29 @@ code,
   color: var(--status-critical);
 }
 
+/* The nodes a bulk dialog is about, listed so the operator can see what they picked before the
+   write (ADR-124). Bounded height so a batch of two hundred does not push the control that makes
+   the change off the bottom of the dialog — the control is the point, the list is confirmation.
+
+   🚨 It was `.movenode-list` in MoveNodeModal.css, and 増分 10/11 gave it three more users (the
+   pool, maintenance and mute dialogs). Four copies of one bounded scroller is the §3 trap, and the
+   one that would have drifted first is the height. */
+.form-targets {
+  max-height: 140px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px 8px 6px 22px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.form-targets li {
+  padding: 1px 0;
+}
+
 /* Small muted note under an inline form (e.g. timezone clarification, scope-id meaning). */
 .form-note {
   margin: 8px 0 0;

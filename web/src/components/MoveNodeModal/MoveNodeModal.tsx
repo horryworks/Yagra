@@ -21,7 +21,6 @@ import { groupOptions } from '../../lib/nodeTree';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { GroupPicker } from '../ui/GroupPicker';
-import './MoveNodeModal.css';
 
 export function MoveNodeModal({
   targets,
@@ -92,13 +91,11 @@ export function MoveNodeModal({
     >
       <div className="form-stack">
         {!one && (
-          <div className="movenode-targets">
-            <ul className="movenode-list scroll-y">
-              {targets.map((n) => (
-                <li key={n.id}>{n.name}</li>
-              ))}
-            </ul>
-          </div>
+          <ul className="form-targets scroll-y">
+            {targets.map((n) => (
+              <li key={n.id}>{n.name}</li>
+            ))}
+          </ul>
         )}
         <label className="form-label" htmlFor="movenode-group">
           {t('field.group')}

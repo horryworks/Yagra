@@ -11,6 +11,7 @@ import {
   poolFactLabel,
   polledByIsWarning,
   polledByLabel,
+  sharedOwnPool,
 } from './pool';
 
 // English is bundled synchronously (see i18n.ts), so `t` resolves the `nodes:` keys below.
@@ -198,5 +199,26 @@ describe('inheritedGroupPool', () => {
       group({ id: 'b', parent_id: 'a' }),
     ];
     expect(inheritedGroupPool(groups, 'a')).toBeUndefined();
+  });
+});
+
+describe('sharedOwnPool', () => {
+  const n = (pool: string | null) => ({ pool });
+
+  it('answers the pool only when every node agrees', () => {
+    expect(sharedOwnPool([n('osaka'), n('osaka')])).toBe('osaka');
+    expect(sharedOwnPool([n('osaka'), n('tokyo')])).toBeNull();
+  });
+
+  it('answers null when any node is inheriting', () => {
+    // 🚨 An inherited `osaka` and a pinned `osaka` are different states — clearing the batch moves
+    // one nowhere and takes the other off its pin. A chip marked current would say they are one.
+    expect(sharedOwnPool([n('osaka'), n(null)])).toBeNull();
+    expect(sharedOwnPool([n(null), n(null)])).toBeNull();
+    expect(sharedOwnPool([n('osaka'), n('  ')])).toBeNull();
+  });
+
+  it('answers null for an empty batch rather than throwing', () => {
+    expect(sharedOwnPool([])).toBeNull();
   });
 });
