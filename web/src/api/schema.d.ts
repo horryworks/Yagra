@@ -2219,6 +2219,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Poll many nodes now (ADR-124 増分 12) — the batch form of `POST /nodes/{node_id}/poll`.
+         * @description Confirming a change across a set of devices is the case the single-node form serves badly: it
+         *     is the action an operator reaches for immediately after every other bulk edit on this screen.
+         *
+         *     ⚠️ **The publishes are one per node and there is no transaction to roll back**, so a bus error
+         *     partway leaves the earlier nodes polled. That is accepted rather than worked around: a poll
+         *     writes no configuration and is idempotent, so the failure mode is "some nodes were polled
+         *     twice", not a half-applied change — unlike every other bulk route on this screen, which is why
+         *     they are single statements and this one is not.
+         */
+        post: operations["poll_nodes_now"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/pool": {
         parameters: {
             query?: never;
@@ -5442,6 +5469,26 @@ export interface components {
              *     already stored may predate the rules that now apply to new ones.
              */
             remove?: string[];
+        };
+        /** @description The nodes to poll now. */
+        BulkPoll: {
+            node_ids: string[];
+        };
+        /** @description What a bulk manual poll dispatched. */
+        BulkPollResult: {
+            /**
+             * @description Nodes whose jobs were published. **Lower than `requested` is normal**: an id can name a
+             *     node that has since been deleted, or one outside the caller's scope. The two are not
+             *     distinguished.
+             */
+            dispatched: number;
+            /**
+             * @description Poll jobs published in total — several per node, since a node's configured check set is
+             *     dispatched whole.
+             */
+            jobs: number;
+            /** @description Distinct ids the request named, after de-duplication. */
+            requested: number;
         };
         /** @description What a bulk pool change actually did. */
         BulkPoolResult: {
@@ -20902,6 +20949,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MovePreviewResult"];
+                };
+            };
+            /** @description More ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    poll_nodes_now: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkPoll"];
+            };
+        };
+        responses: {
+            /** @description How many of the named nodes were dispatched */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkPollResult"];
                 };
             };
             /** @description More ids than one request may carry */

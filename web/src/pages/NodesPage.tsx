@@ -340,6 +340,9 @@ export function NodesPage() {
   // `poolTarget` holds the target whose "Custom…" dialog is open.
   const [pools, setPools] = useState<PoolOption[]>([]);
   const [poolTarget, setPoolTarget] = useState<ActionTarget | null>(null);
+  /** The transient result of a manual poll (ADR-124 増分 12). Its own line rather than the page's
+   *  error band, because a dispatch that worked is the only feedback there is. */
+  const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
   // Per-group direct counts (server rollup) → the tree's group-row health bars + the header stats.
   const groupCounts = groupSummary?.groups ?? EMPTY_GROUP_COUNTS;
 
@@ -534,6 +537,39 @@ export function NodesPage() {
   // "Custom…" item (durationMs === null) opens the full create form prefilled with the scope.
   const scopeError = (e: unknown, fallback: string) => setError(errMsg(e, fallback));
 
+  /** Right-click / More… → poll now (ADR-124 増分 12).
+   *
+   *  ⚠️ **Not the page's error band.** A dispatch that worked is news too — "3 of 3 queued" is the
+   *  only feedback there is, since the results arrive minutes later through the ordinary ingest —
+   *  so this gets its own transient line, the same shape as the node detail header's `pollMsg`.
+   *  A failure stays until the next attempt; a success clears itself. */
+  const pollNodes = useCallback(
+    (target: ActionTarget) => {
+      const ids = targetNodeIds(target);
+      if (ids.length === 0) return;
+      setPollMsg(null);
+      api
+        .pollNodes(ids)
+        .then((r) => {
+          if (target.kind === 'nodes') clearChecked();
+          setPollMsg({
+            text: t('tree.pollDispatched', { dispatched: r.dispatched, requested: r.requested }),
+            tone: r.dispatched < r.requested ? 'error' : 'info',
+          });
+          // A shortfall is left on screen: it means nodes the operator selected were not polled.
+          if (r.dispatched >= r.requested) {
+            window.setTimeout(() => setPollMsg(null), 8000);
+          }
+        })
+        .catch((e: unknown) =>
+          setPollMsg({ text: errMsg(e, t('err.requestPoll')), tone: 'error' }),
+        );
+    },
+    // ⚠️ Stable, because `selectionMenuItems` memoizes on it — an inline definition would rebuild
+    // that array on every render, which on this page means every SSE node-state frame.
+    [t, clearChecked],
+  );
+
   const setMaintenance = (target: ActionTarget, durationMs: number | null) => {
     if (durationMs === null) {
       setMaintenanceTarget(target);
@@ -702,6 +738,13 @@ export function NodesPage() {
         onSelect: () => setPoolTarget({ kind: 'nodes', nodes }),
       });
     }
+    if (canConfig) {
+      items.push({
+        key: 'poll',
+        label: t('select.pollNow'),
+        onSelect: () => pollNodes({ kind: 'nodes', nodes }),
+      });
+    }
     if (canMaintenance) {
       items.push({
         key: 'maintenance',
@@ -717,7 +760,7 @@ export function NodesPage() {
       });
     }
     return items;
-  }, [checked, canConfig, canMaintenance, canAck, t]);
+  }, [checked, canConfig, canMaintenance, canAck, pollNodes, t]);
 
   // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
   // back to the first problem node (warning/critical/unreachable), else clear it. The fallback is
@@ -1078,6 +1121,7 @@ export function NodesPage() {
             // ⚠️ Ctrl / Shift marking is offered for any of the three permissions, not just
             // `canConfig` — since 増分 11 an operator who may only suppress still has batch verbs
             // to reach, and gating the *selection* on the strictest of them would hide them all.
+            onPollNodes={canConfig ? pollNodes : undefined}
             onCheckedChange={
               canConfig || canMaintenance || canAck
                 ? (next, anchor) => {
@@ -1180,6 +1224,14 @@ export function NodesPage() {
               </Button>
               <span className="nodes-selbar-hint">{t('select.hint')}</span>
             </div>
+          )}
+          {/* A manual poll's only feedback, below the tree like the selection bar so it cannot
+              move a row (増分 5 決定 A). Outside the bar's own gate: a poll started from a row's
+              context menu has to report itself with nothing selected. */}
+          {pollMsg && (
+            <p className={`nodes-pollmsg${pollMsg.tone === 'error' ? ' err' : ''}`}>
+              {pollMsg.text}
+            </p>
           )}
           </div>
         )}

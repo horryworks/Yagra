@@ -642,7 +642,11 @@
     "menuRoot": "ツリーの操作",
     "poolSelected": "ポーラープール — 選択した {{count}} 件",
     "maintenanceSelected": "メンテナンス — 選択した {{count}} 件",
-    "muteSelected": "ミュート — 選択した {{count}} 件"
+    "muteSelected": "ミュート — 選択した {{count}} 件",
+    "pollNow": "今すぐポーリング",
+    "pollNodeNamed": "「{{name}}」を今すぐポーリング",
+    "pollSelected": "選択した {{count}} 件を今すぐポーリング",
+    "pollDispatched": "{{requested}} 台のうち {{dispatched}} 台をポーリング待ちに入れました。"
   },
   "moveNode": {
     "title": "{{name}} を移動",
@@ -810,7 +814,8 @@
     "pool": "ポーラープール…",
     "more": "その他…",
     "maintenance": "メンテナンス…",
-    "mute": "ミュート…"
+    "mute": "ミュート…",
+    "pollNow": "今すぐポーリング"
   },
   "groupPicker": {
     "none": "フォルダなし",

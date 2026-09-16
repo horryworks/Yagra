@@ -11124,6 +11124,78 @@
         }
       }
     },
+    "/api/v1/nodes/poll": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "Poll many nodes now (ADR-124 増分 12) — the batch form of `POST /nodes/{node_id}/poll`.",
+        "description": "Confirming a change across a set of devices is the case the single-node form serves badly: it\nis the action an operator reaches for immediately after every other bulk edit on this screen.\n\n⚠️ **The publishes are one per node and there is no transaction to roll back**, so a bus error\npartway leaves the earlier nodes polled. That is accepted rather than worked around: a poll\nwrites no configuration and is idempotent, so the failure mode is \"some nodes were polled\ntwice\", not a half-applied change — unlike every other bulk route on this screen, which is why\nthey are single statements and this one is not.",
+        "operationId": "poll_nodes_now",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkPoll"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "How many of the named nodes were dispatched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkPollResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More ids than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/pool": {
       "post": {
         "tags": [
@@ -24337,6 +24409,48 @@
               "type": "string"
             },
             "description": "Labels to take off every named node. One a node does not carry is not an error.\n\n⚠️ Not length- or character-checked, for the reason `normalized_removals` records: a label\nalready stored may predate the rules that now apply to new ones."
+          }
+        }
+      },
+      "BulkPoll": {
+        "type": "object",
+        "description": "The nodes to poll now.",
+        "required": [
+          "node_ids"
+        ],
+        "properties": {
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "BulkPollResult": {
+        "type": "object",
+        "description": "What a bulk manual poll dispatched.",
+        "required": [
+          "requested",
+          "dispatched",
+          "jobs"
+        ],
+        "properties": {
+          "dispatched": {
+            "type": "integer",
+            "description": "Nodes whose jobs were published. **Lower than `requested` is normal**: an id can name a\nnode that has since been deleted, or one outside the caller's scope. The two are not\ndistinguished.",
+            "minimum": 0
+          },
+          "jobs": {
+            "type": "integer",
+            "description": "Poll jobs published in total — several per node, since a node's configured check set is\ndispatched whole.",
+            "minimum": 0
+          },
+          "requested": {
+            "type": "integer",
+            "description": "Distinct ids the request named, after de-duplication.",
+            "minimum": 0
           }
         }
       },

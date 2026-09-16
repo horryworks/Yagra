@@ -264,6 +264,9 @@ interface Props {
   pins?: PinnedView;
   /** Show only what `pins` keeps: pinned folders whole, pinned nodes, and the folders above both. */
   pinnedOnly?: boolean;
+  /** Right-click → poll this node, or the whole working set, immediately (ADR-124 増分 12).
+   *  Omit to hide the item — it is `ManageConfig`, the permission its handler checks. */
+  onPollNodes?: (target: ActionTarget) => void;
   /** Right-click → pin or unpin a node or folder. Omit to hide the item. */
   onTogglePin?: (target: { kind: 'node' | 'group'; id: string }) => void;
 }
@@ -318,6 +321,7 @@ export function NodeTree({
   onRunDiscovery,
   pins,
   pinnedOnly,
+  onPollNodes,
   onTogglePin,
 }: Props) {
   const { t } = useTranslation('nodes');
@@ -1177,6 +1181,11 @@ export function NodeTree({
   /** The working set as an action target, when the open node menu's row carries it — otherwise
    *  `null` and the item acts on the row. Every batch-aware section reads this one value rather
    *  than re-deciding, which is the rule Inc.4 had to restore in the drag path (ADR-124 増分 10). */
+  /** What the open node menu's Poll now acts on, and whether to name the row — the same answer
+   *  the moves and Delete read. */
+  const pollItems =
+    menu?.kind === 'node' ? nodeActionItems(checkedNodes, menu.node.id, !!onPollNodes) : null;
+
   const batchTarget: ActionTarget | null =
     menu?.kind === 'node' &&
     nodeActionItems(checkedNodes, menu.node.id, true)?.scope === 'selection'
@@ -1444,6 +1453,27 @@ export function NodeTree({
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
                 {t('tree.open')}
               </button>
+              {/* Poll now was reachable only from a node's detail header until ADR-124 増分 12,
+                  which is the wrong place for it: it is what an operator presses right after
+                  editing something in the tree. Batch-aware from the start, through the same
+                  `nodeActionItems` answer as the moves. */}
+              {onPollNodes && pollItems && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPollNodes(
+                      batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
+                    );
+                    setMenu(null);
+                  }}
+                >
+                  {pollItems.scope === 'selection'
+                    ? t('tree.pollSelected', { count: pollItems.count })
+                    : pollItems.nameTheRow
+                      ? t('tree.pollNodeNamed', { name: menu.node.name })
+                      : t('tree.pollNow')}
+                </button>
+              )}
               {/* 🚨 These two act on the row even while the menu also carries
                   "Move N selected…" above them, so while a batch is in play they name the node
                   (ADR-124 増分 9 / ADR-055 R1). Neither has a batch form: a pin is this account's

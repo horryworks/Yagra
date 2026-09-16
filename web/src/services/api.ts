@@ -1228,6 +1228,16 @@ export const api = {
   setNodePool: (id: string, pool: string): Promise<void> =>
     apiPut('/api/v1/nodes/{node_id}/pool', { path: { node_id: id }, body: { pool } }),
 
+  /** Poll MANY nodes now, in one request (ADR-124 増分 12) — the batch form of `pollNode`.
+   *
+   *  ⚠️ `dispatched` can be lower than `requested`: an id may name a node deleted since the page
+   *  loaded, or one outside this token's scope. `jobs` counts the poll jobs published, which is
+   *  several per node. */
+  pollNodes: (
+    nodeIds: string[],
+  ): Promise<{ requested: number; dispatched: number; jobs: number }> =>
+    apiPost('/api/v1/nodes/poll', { body: { node_ids: nodeIds } }),
+
   /** Move MANY nodes to one poll-pool (`''` ⇒ back to inherited) in one request (ADR-124 増分 10).
    *
    *  Re-homing a site onto different pollers rarely follows folder boundaries, so neither

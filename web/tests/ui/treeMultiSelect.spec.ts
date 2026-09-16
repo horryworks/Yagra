@@ -489,3 +489,71 @@ test('the selection bar can open a maintenance window over every selected node',
   await expect.poll(() => seen.length).toBe(1);
   expect(seen[0].node_ids).toHaveLength(2);
 });
+
+test('Poll now covers the whole selection and reports what it queued', async ({ page }) => {
+  // 🚨 ADR-124 増分 12. Poll now lived only on a node's detail header, which is the wrong place:
+  // it is what an operator presses right after editing something in the tree, and after a bulk
+  // edit it is the only way to see whether the change took.
+  const seen: { node_ids: string[] }[] = [];
+  await page.route('**/api/v1/nodes/poll', async (route) => {
+    const body = route.request().postDataJSON() as { node_ids: string[] };
+    seen.push(body);
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        requested: body.node_ids.length,
+        dispatched: body.node_ids.length,
+        jobs: body.node_ids.length * 2,
+      }),
+    });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(3);
+
+  await rows.nth(1).click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await menu.getByRole('button', { name: 'Poll 3 selected now', exact: true }).click();
+
+  await expect.poll(() => seen.length).toBe(1);
+  expect(seen[0].node_ids).toHaveLength(3);
+  // A dispatch that worked is the only feedback there is, so it has to be on screen.
+  await expect(page.locator('.nodes-pollmsg')).toContainText('3 of 3');
+  await expect(page.locator('.ntree-row.checked')).toHaveCount(0);
+});
+
+test('a poll that reached fewer nodes than asked says so and stays', async ({ page }) => {
+  // The shortfall is the case worth keeping on screen: nodes the operator selected were not
+  // polled, so clearing the message after a few seconds would hide the only sign of it.
+  await page.route('**/api/v1/nodes/poll', async (route) => {
+    const body = route.request().postDataJSON() as { node_ids: string[] };
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ requested: body.node_ids.length, dispatched: 1, jobs: 2 }),
+    });
+  });
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ['ControlOrMeta'] });
+
+  await page
+    .locator('.nodes-selbar')
+    .getByRole('button', { name: 'More…', exact: true })
+    .click();
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Poll now' }).click();
+
+  const msg = page.locator('.nodes-pollmsg');
+  await expect(msg).toContainText('1 of 2');
+  await expect(msg).toHaveClass(/err/);
+  // Still there well past the 8s a clean dispatch would have cleared itself in — asserted at a
+  // point the success path would already have gone.
+  await page.waitForTimeout(1000);
+  await expect(msg).toBeVisible();
+});
