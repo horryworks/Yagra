@@ -23,7 +23,8 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, type FilterState } from '../lib/columnFilter';
+import { defaultFilters } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { buildPredicate } from '../lib/filterPredicate';
 import { setColumns, setFilterLabels, metricSetFilters } from './monitoringConfigFilters';
 import { TrashIcon } from '../components/ui/icons';
@@ -37,7 +38,6 @@ export function CollectionTemplatesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<CollectionTemplate[]>([]);
-  const [filters, setFilters] = useState<FilterState>({});
   const [sheet, setSheet] = useState(false);
   const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,6 +61,8 @@ export function CollectionTemplatesPage() {
   }, [load]);
 
   const filterCols = useMemo(() => setColumns(t), [t]);
+  // In the URL (ADR-153), so a narrowed list survives a reload.
+  const { filters, setFilters } = useFilterParams(filterCols);
   const filtered = useMemo(
     () => rows.filter(buildPredicate(filterCols, filters, Date.now())),
     [rows, filterCols, filters],

@@ -32,7 +32,8 @@ import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, type FilterState } from '../lib/columnFilter';
+import { defaultFilters } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import {
@@ -109,7 +110,8 @@ export function ProfilesPage() {
     [t],
   );
   const allFilterCols = useMemo(() => [...colFilters, ...catCols], [colFilters, catCols]);
-  const [filters, setFilters] = useState<FilterState>({});
+  // In the URL (ADR-153). The category bar and the column cells are one state, so one set of keys.
+  const { filters, setFilters } = useFilterParams(allFilterCols);
   const [sheet, setSheet] = useState(false);
 
   const filtered = useMemo(

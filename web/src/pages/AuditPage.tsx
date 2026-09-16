@@ -28,7 +28,8 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, specColumns, type FilterState } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
 import { parseAction } from './auditRow';
@@ -105,9 +106,14 @@ export function AuditPage() {
   const columns = useMemo(() => auditColumns(t, specs), [t, specs]);
   // The filter row's flat state, and since Inc.10 the screen's **only** copy of it — the API-named
   // `AuditFilters` object it used to be converted into is gone, and `queryFor` reads this directly.
-  // Seeded from the specs rather than from a hand-written defaults object: `range` defaults to a
-  // preset, so `{}` would read as one active filter and force the row open.
-  const [rowFilters, setRowFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  // In the URL since ADR-153, as Alert history's twin already was, so a narrowed audit trail survives
+  // a reload. `nowMs` comes with it: the relative range resolves once, when it is chosen, so "load
+  // older" pages do not walk a lower bound that creeps forward between requests.
+  const {
+    filters: rowFilters,
+    setFilters: setRowFilters,
+    nowMs,
+  } = useFilterParams(filterCols);
   const filtered = isAnyFiltered(filterCols, rowFilters);
 
   // Refetch from the top whenever the filter changes — the cursor is only meaningful within one
@@ -118,7 +124,7 @@ export function AuditPage() {
     setLoading(true);
     setError(null);
     api
-      .listAudit(queryFor(filterCols, rowFilters, null, Date.now()))
+      .listAudit(queryFor(filterCols, rowFilters, null, nowMs))
       .then((page) => {
         if (cancelled) return;
         setRows(page);
@@ -137,13 +143,13 @@ export function AuditPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed, filterCols, rowFilters, t]);
+  }, [authed, filterCols, rowFilters, nowMs, t]);
 
   const loadMore = useCallback(() => {
     if (loadingMore.current || cursor === null) return;
     loadingMore.current = true;
     api
-      .listAudit(queryFor(filterCols, rowFilters, cursor, Date.now()))
+      .listAudit(queryFor(filterCols, rowFilters, cursor, nowMs))
       .then((page) => {
         setRows((cur) => appendPage(cur, page));
         setCursor(nextCursor(page));
@@ -152,7 +158,7 @@ export function AuditPage() {
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [cursor, filterCols, rowFilters, t]);
+  }, [cursor, filterCols, rowFilters, nowMs, t]);
 
   // The export is now everything matching the filter, not the rows that happen to be loaded — the
   // server renders it (`GET /api/v1/audit/export.csv`) with the same filter this page is showing.

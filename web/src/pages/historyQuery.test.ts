@@ -16,12 +16,10 @@ import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import {
   historyFilters,
   queryFor,
-  readScope,
   resolvedFor,
-  writeScope,
   type HistoryColumns,
 } from './historyQuery';
-import type { ScopeIds } from '../troubleshoot/findingsQuery';
+import { readScope, writeScope, type ScopeIds } from '../troubleshoot/findingsQuery';
 import { PAGE_SIZE } from './historyCursor';
 
 const NOW = Date.parse('2026-08-12T00:00:00.000Z');

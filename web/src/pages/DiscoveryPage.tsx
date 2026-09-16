@@ -73,13 +73,15 @@ import {
   candidateLabels,
   endpointColumns,
   endpointLabels,
-  ENDPOINT_DEFAULT_MONITORED,
+  CANDIDATE_FILTER_PREFIX,
+  ENDPOINT_FILTER_PREFIX,
 } from './discoveryFilters';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, type FilterState } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { isSnmpCredentialKind } from '../lib/credentialKinds';
@@ -201,7 +203,9 @@ export function DiscoveryPage() {
   // Client-side: a sweep's result set is bounded by the range an operator typed in (ui-conventions).
   const candCols = useMemo(() => candidateColumns(t), [t]);
   const candLabels = useMemo(() => candidateLabels(t), [t]);
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(candCols));
+  // In the URL under `candidates.` (ADR-153): the page also owns `?scan=` and the seen-endpoints
+  // table below owns `endpoints.`, so each table carries its own prefix.
+  const { filters, setFilters } = useFilterParams(candCols, CANDIDATE_FILTER_PREFIX);
   const [candSheet, setCandSheet] = useState(false);
   /** The `?scan=` present when the page was opened. Held in a ref because the URL is rewritten from
    *  `scanId` below, so reading the live value during the reattach would race with our own write. */
@@ -1288,14 +1292,12 @@ function SeenOnNetworkCard({
   const [error, setError] = useState<string | null>(null);
   const epCols = useMemo(() => endpointColumns(t), [t]);
   const epLabels = useMemo(() => endpointLabels(t), [t]);
-  // ⚠️ Not `defaultFilters(epCols)`: this table's default *narrows*. See
-  // `ENDPOINT_DEFAULT_MONITORED` for why, and note the consequence — `isAnyFiltered` reports true
-  // on the default view, so the row count deliberately always shows the total beside it.
-  const epDefaults = useMemo(
-    () => ({ ...defaultFilters(epCols), monitored: ENDPOINT_DEFAULT_MONITORED }),
-    [epCols],
-  );
-  const [epFilters, setEpFilters] = useState<FilterState>(epDefaults);
+  // In the URL under `endpoints.` (ADR-153). This table's default *narrows* to unmonitored
+  // endpoints — see `ENDPOINT_DEFAULT_MONITORED` — and that default is the column's own
+  // `defaultSelection`, so a bare URL opens the narrowed view and choosing "all" writes
+  // `endpoints.monitored=`. The row count always shows the total beside it, because the default
+  // hides rows.
+  const { filters: epFilters, setFilters: setEpFilters } = useFilterParams(epCols, ENDPOINT_FILTER_PREFIX);
   const [epSheet, setEpSheet] = useState(false);
 
   const load = useCallback(() => {
@@ -1351,24 +1353,14 @@ function SeenOnNetworkCard({
       </p>
       {all.length > 0 && (
         <TableToolbar>
-          <FilterButton
-            columns={epCols}
-            filters={epFilters}
-            baseline={epDefaults}
-            onOpen={() => setEpSheet(true)}
-          />
+          <FilterButton columns={epCols} filters={epFilters} onOpen={() => setEpSheet(true)} />
           <ClearFilters
             columns={epCols}
             filters={epFilters}
             // Back to *this table's* default, not to the empty state: "unmonitored only" is the
-            // view an operator expects to land on here, and a reset that showed the imported ones
-            // would look like the button had done something else.
-            //
-            // …which is also why `baseline` is the same object: counted against the spec defaults
-            // this button read "Clear all filters (1)" on a view nobody had filtered, and pressing
-            // it changed nothing on screen.
-            baseline={epDefaults}
-            onClear={() => setEpFilters(epDefaults)}
+            // view an operator expects to land on here. `defaultFilters` is that view, because the
+            // narrowing is the column's `defaultSelection`.
+            onClear={() => setEpFilters(defaultFilters(epCols))}
           />
           <TableSpacer />
           <ResultCount
@@ -1407,10 +1399,9 @@ function SeenOnNetworkCard({
               candidates table above — this one is hidden on a phone for the same reason. The
               profile and credential columns are the import form's own inputs, and the last is the
               button.
-              ⚠️ `epDefaults` as the `baseline`, here and on `FilterButton` and `ClearFilters` —
-              all three, the same object. Without it `activeFilterCount` reports 1 before the
-              operator has touched anything (the narrowing default counts as a filter), which since
-              Inc.9 forces this row open forever and locks the toggle meant to close it. */}
+              ⚠️ No `baseline` here any more: the narrowing default is the column's
+              `defaultSelection` (ADR-153), which `activeFilterCount` already reads. Without one or
+              the other, the default counts as a filter and since Inc.9 forces this row open forever. */}
           <ColumnFilterRow
             columns={epCols}
             slots={['ip', 'mac', 'via', null, null, 'monitored']}
@@ -1419,7 +1410,6 @@ function SeenOnNetworkCard({
             counts={epCounts}
             labels={epLabels}
             className="disco-seen-filters"
-            baseline={epDefaults}
           />
           {endpoints.map((e) => {
             const r = rows[e.id] ?? { profile_id: '', credential_id: '' };

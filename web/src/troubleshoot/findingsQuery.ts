@@ -8,7 +8,12 @@
 // (testing.md). Everything that decides *what is asked for* lives here; the page is layout.
 
 import type { SavedFinding, SavedFindingsQuery } from '../types/api';
-import type { ScopeValue } from '../components/ScopePicker/scope';
+import {
+  allScope,
+  groupScopeLabel,
+  nodeScopeLabel,
+  type ScopeValue,
+} from '../components/ScopePicker/scope';
 import type { TFunction } from 'i18next';
 import {
   decodeNumberRange,
@@ -133,6 +138,61 @@ export function scopeFilter(scope: ScopeValue): ScopeIds {
     nodeId: scope.kind === 'node' ? (scope.id ?? '') : '',
     groupId: scope.kind === 'group' ? (scope.id ?? '') : '',
   };
+}
+
+/**
+ * The scope ids the URL carries beside the columns, and the writer that puts them back — shared by
+ * Alert history and Saved findings (ADR-153), which ask the same "all / group / node" question.
+ *
+ * A node page linking to "this node's alert history" needs somewhere to say which node, and a
+ * reload of either screen needs the picker's choice to still be there.
+ *
+ * ⚠️ `writeScope` is meant to be handed to `setFilters(next, also)` — **never called beside a
+ * second `setSearchParams`**. Two writes in one handler are both built from this render's snapshot
+ * and React batches them, so the second silently discards the first; that is exactly how "clear all
+ * filters" once cleared the columns and restored them on the Events page.
+ */
+export function readScope(params: URLSearchParams): ScopeIds {
+  return {
+    nodeId: params.get('node_id')?.trim() ?? '',
+    groupId: params.get('group_id')?.trim() ?? '',
+  };
+}
+
+export function writeScope(scope: ScopeIds): (params: URLSearchParams) => void {
+  return (params) => {
+    for (const [key, value] of [
+      ['node_id', scope.nodeId],
+      ['group_id', scope.groupId],
+    ] as const) {
+      // Deleted rather than emptied, the same rule `writeFilterParams` follows: a bare URL is the
+      // default view, so a query string always means something is narrowing the list.
+      if (value) params.set(key, value);
+      else params.delete(key);
+    }
+  };
+}
+
+/**
+ * The picker's value for scope ids that arrived in a URL — the inverse of [`scopeFilter`].
+ *
+ * A reload or a link carries the ids and no label, so the label is whatever the name resolvers can
+ * say now, falling back to the id itself rather than to "All nodes": a picker reading "All" over a
+ * list narrowed to one node would be the untrue half of the pair. A node wins over a group when a
+ * hand-edited URL names both, because the node is the narrower of the two.
+ */
+export function scopeFromIds(
+  ids: ScopeIds,
+  names: { node: (id: string) => string | undefined; group: (id: string) => string | undefined },
+  t: TFunction,
+): ScopeValue {
+  if (ids.nodeId) {
+    return { kind: 'node', id: ids.nodeId, label: nodeScopeLabel(names.node(ids.nodeId) ?? ids.nodeId, t) };
+  }
+  if (ids.groupId) {
+    return { kind: 'group', id: ids.groupId, label: groupScopeLabel(names.group(ids.groupId) ?? ids.groupId, t) };
+  }
+  return allScope(t);
 }
 
 /** Whether the scope is narrowing the list. The columns are `isAnyFiltered`'s job; this is the

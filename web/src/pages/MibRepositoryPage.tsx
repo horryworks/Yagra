@@ -21,6 +21,7 @@
 // `auditQuery.ts` makes about its own two-column `q`.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { api, errMsg } from '../services/api';
@@ -177,7 +178,20 @@ export function MibRepositoryPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<MibCatalogEntry[]>([]);
-  const [query, setQuery] = useState('');
+  // The search term is `?q=` (ADR-153) — the API's own parameter name — so a reload keeps it. Read
+  // and written raw, not trimmed: the filter cell echoes this value back into the box it came from,
+  // and a trimmed echo would eat a trailing space while the operator is still typing. `load` trims.
+  const [params, setParams] = useSearchParams();
+  const query = params.get('q') ?? '';
+  const setQuery = useCallback(
+    (term: string) => {
+      const next = new URLSearchParams(params);
+      if (term) next.set('q', term);
+      else next.delete('q');
+      setParams(next, { replace: true });
+    },
+    [params, setParams],
+  );
   const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);

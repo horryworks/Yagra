@@ -24,7 +24,7 @@
 // report, which is where the structured detail lives.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
@@ -36,7 +36,8 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, specColumns, type FilterState } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { TimeCell } from '../components/ui/tableCells';
 import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
@@ -49,8 +50,11 @@ import {
   findingFilters,
   nextCursor,
   queryFor,
+  readScope,
   scopeFilter,
+  scopeFromIds,
   scopeIsSet,
+  writeScope,
   type FindingCursor,
 } from './findingsQuery';
 import './troubleshoot.css';
@@ -147,9 +151,8 @@ export function SavedFindingsPage() {
   const { t } = useTranslation('troubleshoot');
   const navigate = useNavigate();
   const authed = useAuthStore((s) => s.authed);
-  const { nodeName } = useEntityNames();
+  const { nodeName, groupName } = useEntityNames();
 
-  const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
   const [sheet, setSheet] = useState(false);
   const [rows, setRows] = useState<SavedFinding[]>([]);
   const [cursor, setCursor] = useState<FindingCursor | null>(null);
@@ -168,12 +171,25 @@ export function SavedFindingsPage() {
   const filterCols = useMemo(() => specColumns(specs), [specs]);
   const columns = useMemo(() => findingColumns(t, specs, nodeName), [t, specs, nodeName]);
   // The filter row's flat state, and since Inc.10 the screen's only copy of it — `queryFor` reads
-  // it directly, so there is no API-named object to convert to and back. Seeded from the specs:
-  // `range` defaults to `7d`, so `{}` would read as one active filter and force the row open.
-  const [rowFilters, setRowFilters] = useState<FilterState>(() => defaultFilters(filterCols));
-  // The scope is not a column, and it lives in the picker rather than being copied into the filter
-  // state as well — one source, so "clear all" cannot leave the two disagreeing.
-  const scopeIds = useMemo(() => scopeFilter(scope), [scope]);
+  // it directly, so there is no API-named object to convert to and back. In the URL since ADR-153,
+  // as Alert history's twin already was; `nowMs` resolves the relative range once, when it is chosen.
+  const {
+    filters: rowFilters,
+    setFilters: setRowFilters,
+    nowMs,
+  } = useFilterParams(filterCols);
+  // The scope is not a column: its ids ride beside the columns in the URL (`node_id` / `group_id`),
+  // written through `setFilters`' `also` so a change to both is ONE write. The picker's value is
+  // derived for display — seeded from the URL on arrival, then owned by the picker's own label.
+  const [params] = useSearchParams();
+  const scopeIds = useMemo(() => readScope(params), [params]);
+  const [scope, setScope] = useState<ScopeValue>(() =>
+    scopeFromIds(scopeIds, { node: nodeName, group: groupName }, t),
+  );
+  const onScope = (v: ScopeValue) => {
+    setScope(v);
+    setRowFilters(rowFilters, writeScope(scopeFilter(v)));
+  };
 
   // First page — refetched whenever a filter changes, because filtering happens server-side (the
   // table is keyset-paged, so a client-side filter would only ever narrow the pages already
@@ -184,7 +200,7 @@ export function SavedFindingsPage() {
     setLoading(true);
     setError(null);
     api
-      .searchFindings(queryFor(filterCols, rowFilters, scopeIds, null, Date.now()))
+      .searchFindings(queryFor(filterCols, rowFilters, scopeIds, null, nowMs))
       .then((page) => {
         if (cancelled) return;
         setRows(page);
@@ -200,13 +216,13 @@ export function SavedFindingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed, filterCols, rowFilters, scopeIds, t]);
+  }, [authed, filterCols, rowFilters, scopeIds, nowMs, t]);
 
   const loadMore = useCallback(() => {
     if (loadingMore.current || exhausted || !cursor) return;
     loadingMore.current = true;
     api
-      .searchFindings(queryFor(filterCols, rowFilters, scopeIds, cursor, Date.now()))
+      .searchFindings(queryFor(filterCols, rowFilters, scopeIds, cursor, nowMs))
       .then((page) => {
         setRows((cur) => appendPage(cur, page));
         const next = nextCursor(page);
@@ -217,7 +233,7 @@ export function SavedFindingsPage() {
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [cursor, exhausted, filterCols, rowFilters, scopeIds, t]);
+  }, [cursor, exhausted, filterCols, rowFilters, scopeIds, nowMs, t]);
 
   const open = (f: SavedFinding) => {
     const tool = toolById(f.tool);
@@ -245,9 +261,8 @@ export function SavedFindingsPage() {
       ) : (
         <>
           <TableToolbar>
-            {/* The picker owns the scope outright — `scopeIds` is derived from it, so there is no
-                second copy in the filter state to keep in step. */}
-            <ScopePicker value={scope} onChange={setScope} className="ts-sf-scope" />
+            {/* The scope's ids are the URL's; the picker writes them and shows a label for them. */}
+            <ScopePicker value={scope} onChange={onScope} className="ts-sf-scope" />
             <FilterButton
               columns={filterCols}
               filters={rowFilters}
@@ -261,7 +276,7 @@ export function SavedFindingsPage() {
               extraActive={scopeIsSet(scopeIds)}
               onClear={() => {
                 setScope(allScope(t));
-                setRowFilters(defaultFilters(filterCols));
+                setRowFilters(defaultFilters(filterCols), writeScope({ nodeId: '', groupId: '' }));
               }}
             />
             <TableSpacer />
