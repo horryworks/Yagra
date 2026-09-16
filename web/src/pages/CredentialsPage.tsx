@@ -599,7 +599,7 @@ export function CredentialsPage() {
 
   // URL-backed: one table on this route.
   const { filterCols, filters, setFilters, clear, shown: matched, counts, anyFiltered } =
-    useClientFilters(columns, rows, { url: true });
+    useClientFilters(columns, rows);
   // Sorting stays with the caller — `DataTable` draws the arrow and reports the click but never
   // reorders `rows`, so a keyset-paged screen cannot accidentally sort a prefix (`lib/tableSort.ts`).
   const shown = useMemo(() => sortRows(matched, sort, credentialSortValues()), [matched, sort]);

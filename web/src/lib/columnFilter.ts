@@ -334,7 +334,13 @@ export function clearFilter<T>(
  *  The column key IS the URL key — no prefix — because the existing screens spell `severity`,
  *  `state` and `q` bare and a prefix would break every bookmark taken before this shipped. The
  *  cost of that choice is this list, and `reservedKeyCollisions` is what makes the cost checkable
- *  instead of a surprise at runtime. */
+ *  instead of a surprise at runtime.
+ *
+ *  ⚠️ **Since ADR-153 a table may carry a prefix, and "no prefix" means "no prefix on a key that
+ *  already shipped".** A route with a second filterable table (a node's Interfaces tab on `/nodes`,
+ *  beside the tree's own `kind`) gives the newcomer `<table>.<column>`; what was bare stays bare.
+ *  Whether the keys on one route are disjoint is the route ledger's question, in
+ *  `filterSpecRegistry.test.ts` — this list only answers it for a single table. */
 export const RESERVED_URL_KEYS = [
   'tab',
   'sub',
@@ -374,14 +380,19 @@ export function reservedKeyCollisions<T>(columns: readonly FilterableColumn<T>[]
  *  A value this build does not understand is left as-is rather than rejected — each kind's own
  *  decoder falls back (an unknown token drops out of a set, an unknown preset becomes the default),
  *  which is `readEnumParam`'s rule and the opposite of the API edge's. A stale bookmark must show
- *  the default view, never a 400 and never a control displaying a value it does not offer. */
+ *  the default view, never a 400 and never a control displaying a value it does not offer.
+ *
+ *  `prefix` is prepended to each column key to make its URL key (ADR-153 決定 3) — `'interfaces.'`
+ *  reads `?interfaces.oper=`. The state it returns is still keyed by the bare column key, so nothing
+ *  above the codec knows a prefix exists. */
 export function readFilterParams<T>(
   columns: readonly FilterableColumn<T>[],
   params: URLSearchParams,
+  prefix = '',
 ): FilterState {
   const out = defaultFilters(columns);
   for (const c of columns) {
-    const v = params.get(c.key);
+    const v = params.get(prefix + c.key);
     if (v !== null) out[c.key] = v;
   }
   return out;
@@ -396,11 +407,12 @@ export function writeFilterParams<T>(
   columns: readonly FilterableColumn<T>[],
   params: URLSearchParams,
   next: FilterState,
+  prefix = '',
 ): void {
   for (const c of columns) {
     const value = next[c.key] ?? '';
-    if (value === defaultValue(c.filter)) params.delete(c.key);
-    else params.set(c.key, value);
+    if (value === defaultValue(c.filter)) params.delete(prefix + c.key);
+    else params.set(prefix + c.key, value);
   }
 }
 

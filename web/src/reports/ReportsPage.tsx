@@ -15,10 +15,14 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useEnumParam } from '../lib/useEnumParam';
 import {
   definitionFilters,
+  REPORT_TABLE_PREFIX,
+  REPORT_TABS,
   reportScheduleFilters,
   savedRunFilters,
+  type ReportTab,
 } from './reportListFilters';
 import { usePolled } from '../dashboard/usePolled';
 import { api } from '../services/api';
@@ -40,7 +44,6 @@ import { ReportViewer } from './ReportViewer';
 import { ScheduleModal } from './ScheduleModal';
 import './reports.css';
 
-type Tab = 'saved' | 'templates' | 'schedules';
 
 /** Status chip for a run (live progress while generating). Read from the registry rather than a
  *  switch, so a state added to the backend cannot fall through to "failed" — see `runStatus.ts`. */
@@ -59,7 +62,8 @@ export function ReportsPage() {
   // Every action below writes: definitions, schedules, run-now and deleting a run are all
   // ManageConfig at the edge (`api/reports.rs`).
   const canConfig = useCan('manage_config');
-  const [tab, setTab] = useState<Tab>('saved');
+  // The tab is `?tab=` (ADR-153), so a reload reopens the tab the operator was on.
+  const [tab, setTab] = useEnumParam('tab', REPORT_TABS, 'saved');
 
   // Saved runs: seed from the API, keep live over SSE.
   const runs = useReportRunsStore((s) => s.runs);
@@ -105,9 +109,7 @@ export function ReportsPage() {
   // an admin authored rather than by fleet size (ui-conventions); saved runs because the store
   // behind it is SSE-fed and would undo a filtered fetch on the next progress frame — the reason is
   // written out in `reportListFilters.ts`, beside the predicate it explains.
-  // ⚠️ And **not** URL-backed, unlike every other Inc.3 screen: three tables share this route and
-  // the column key is the URL key, so `name` would be written by two of them at once.
-  const [sheet, setSheet] = useState<'saved' | 'templates' | 'schedules' | null>(null);
+  const [sheet, setSheet] = useState<ReportTab | null>(null);
 
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
@@ -289,11 +291,12 @@ export function ReportsPage() {
   ];
   for (const c of schedColumns) c.filter = schedSpecs[c.key];
 
-  const runF = useClientFilters(runColumns, runs);
-  const defF = useClientFilters(defColumns, definitions);
-  const schedF = useClientFilters(schedColumns, schedules);
+  // Three tables on one route, so each carries its tab's name as a URL-key prefix (ADR-153).
+  const runF = useClientFilters(runColumns, runs, { prefix: REPORT_TABLE_PREFIX.saved });
+  const defF = useClientFilters(defColumns, definitions, { prefix: REPORT_TABLE_PREFIX.templates });
+  const schedF = useClientFilters(schedColumns, schedules, { prefix: REPORT_TABLE_PREFIX.schedules });
 
-  const tabs: { key: Tab; label: string; count: number }[] = [
+  const tabs: { key: ReportTab; label: string; count: number }[] = [
     { key: 'saved', label: t('tabs.saved'), count: runs.length },
     { key: 'templates', label: t('tabs.templates'), count: definitions.length },
     { key: 'schedules', label: t('tabs.schedules'), count: schedules.length },

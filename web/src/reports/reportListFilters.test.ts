@@ -7,6 +7,8 @@ import {
   definitionFilters,
   reportScheduleFilters,
   savedRunFilters,
+  REPORT_TABLE_PREFIX,
+  REPORT_TABS,
   RUN_STATE_FILTERS,
 } from './reportListFilters';
 import {
@@ -91,15 +93,18 @@ describe('all three Reports tables', () => {
     }
   });
 
-  it('share column keys, which is exactly why they are not URL-backed', () => {
-    // ⚠️ The column key IS the URL key (ADR-053 decision 12 refuses a prefix). All three tables sit
-    // on `/reports`, so URL-backing them would have two tables writing `name` — each clobbering the
-    // other. This asserts the collision is real, so nobody "fixes" the local state later.
+  it('share column keys, which is exactly why each carries a prefix in the URL', () => {
+    // ⚠️ The column key IS the URL key (ADR-053 decision 12). All three tables sit on
+    // `/dashboard/reports`, so unprefixed two of them would write `name` — each clobbering the other.
+    // This asserts the collision is real, so nobody "tidies" the prefixes away (ADR-153); the route
+    // ledger in `filterSpecRegistry.test.ts` checks the prefixed keys are disjoint.
     const keys = (c: FilterableColumn<unknown>[]) => c.map((x) => x.key);
     const shared = keys(DEF_COLS as FilterableColumn<unknown>[]).filter((k) =>
       keys(SCHED_COLS as FilterableColumn<unknown>[]).includes(k),
     );
     expect(shared).toContain('name');
+    expect(new Set(Object.values(REPORT_TABLE_PREFIX)).size, 'two tabs share a prefix').toBe(REPORT_TABS.length);
+    expect(Object.keys(REPORT_TABLE_PREFIX)).toEqual([...REPORT_TABS]);
   });
 });
 

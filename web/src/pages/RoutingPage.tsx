@@ -33,7 +33,12 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
-import { channelFilters, routingRuleFilters } from './routingFilters';
+import {
+  CHANNEL_FILTER_PREFIX,
+  channelFilters,
+  ROUTING_RULE_FILTER_PREFIX,
+  routingRuleFilters,
+} from './routingFilters';
 import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
@@ -222,12 +227,13 @@ function ChannelsSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t, canSystem, channels]);
 
-  // ⚠️ **Component state, not the URL.** The column key IS the URL key (ADR-053 decision 12), and
-  // this route has two tables — both with a `name` and a `status` column. URL-backing either one
-  // would make the two filter each other.
+  // In the URL, under `channels.` (ADR-153). This route has two tables and both have a `name` and a
+  // `status` column, so each carries its own prefix — which is what used to keep both of them out of
+  // the URL altogether, and a reload threw the filters away.
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
     channels,
+    { prefix: CHANNEL_FILTER_PREFIX },
   );
 
   return (
@@ -587,10 +593,11 @@ function RulesSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t, canSystem, channels]);
 
-  // Component state, not the URL — see the channels table above for why this route cannot use it.
+  // In the URL, under `rules.` — see the channels table above.
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
     rules,
+    { prefix: ROUTING_RULE_FILTER_PREFIX },
   );
 
   return (

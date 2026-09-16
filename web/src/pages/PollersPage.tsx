@@ -1541,7 +1541,6 @@ export function PollersPage() {
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
     pollers,
-    { url: true },
   );
 
   // 🚨 **The strip's selection IS the pool column filter.** Not a mirror of it and not a second

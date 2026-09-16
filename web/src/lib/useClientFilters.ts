@@ -10,7 +10,7 @@
 // What this does NOT do is decide what a column reads off a row. That stays in each screen's spec
 // module, and it is the thing `filterQuery.ts` has always argued is genuinely per-screen.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   defaultFilters,
   filterableColumns,
@@ -42,29 +42,23 @@ export interface ClientFilters<T> {
 /**
  * Filter state + predicate + counts for a list held entirely in the browser.
  *
- * **`url` decides where the state lives, and it is a real choice per screen.** URL-backed means the
- * view is linkable and survives a reload, which is what `design-guidelines.md` asks for and what
- * every single-table screen should want. It is off by default because the column key *is* the URL
- * key (ADR-053 decision 12 refuses a prefix, so existing bookmarks keep working) — and two tables on
- * one route would therefore write to the same keys and filter each other. `ReportsPage` has three.
- * A screen with one table should pass `url: true`; a screen with several must not.
+ * **The state lives in the URL, always** (ADR-153). It used to be a per-screen `url` flag, off by
+ * default, because the column key *is* the URL key and two tables on one route would filter each
+ * other — so the screens with two or three tables kept their filters in component state, and a
+ * reload threw them away. A route with more than one table now gives each table after the first a
+ * `prefix` (`{ prefix: 'channels.' }` ⇒ `?channels.status=`), and whether the keys on a route are
+ * disjoint is checked by the route ledger in `filterSpecRegistry.test.ts`.
  */
 export function useClientFilters<T>(
   columns: readonly { key: string; filter?: ColumnFilterSpec<T> }[],
   rows: readonly T[],
-  opts?: { url?: boolean },
+  opts?: { prefix?: string },
 ): ClientFilters<T> {
   const filterCols = useMemo(() => filterableColumns(columns), [columns]);
 
-  // Both are called unconditionally — hooks cannot be conditional, and the URL one only reads until
-  // something writes, so the unused half costs a `useSearchParams` subscription and nothing else.
-  const url = useFilterParams(filterCols);
-  const [local, setLocal] = useState<FilterState>(() => defaultFilters(filterCols));
-
-  const useUrl = opts?.url ?? false;
-  const filters = useUrl ? url.filters : local;
-  const setFilters = useUrl ? url.setFilters : setLocal;
-  const nowMs = url.nowMs;
+  // The prefix is read out as a string before it reaches the hook: `opts` is an object literal at
+  // every call site, and a new identity per render would rebuild `setFilters` on every render.
+  const { filters, setFilters, nowMs } = useFilterParams(filterCols, opts?.prefix ?? '');
 
   const shown = useMemo(
     () => applyFilters(rows, filterCols, filters, nowMs),

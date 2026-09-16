@@ -10,9 +10,10 @@
 // showing the *previous* filter's rows. That failure has no error and no empty state — it reads as
 // the control being slow rather than broken, so it survives a screen test and a demo.
 //
-// The `url` flag gets its own tests because choosing it wrong is silent in the other direction: two
-// tables on one route share the column keys (decision 12 refuses a prefix so bookmarks keep
-// working), so URL-backing both makes each one filter the other.
+// Where the state lives gets its own tests. It is always the URL since ADR-153 — before that a
+// per-screen `url` flag defaulted to component state, and every screen that left it off lost its
+// filters on a reload. A route with two tables gives the second one a `prefix`, and getting that
+// wrong is silent: two tables writing the same key filter each other.
 
 import { createElement, type ReactNode } from 'react';
 import { act, renderHook } from '@testing-library/react';
@@ -73,8 +74,8 @@ const ids = (rows: Row[]) => rows.map((r) => r.id);
 const wrapper = ({ children }: { children: ReactNode }) =>
   createElement(MemoryRouter, { initialEntries: ['/events'] }, children);
 
-/** The hook, plus the query string so the `url` flag's effect is observable. */
-const mount = (opts?: { url?: boolean }, rows: readonly Row[] = ROWS) =>
+/** The hook, plus the query string so where the state went is observable. */
+const mount = (opts?: { prefix?: string }, rows: readonly Row[] = ROWS) =>
   renderHook(() => ({ ...useClientFilters(COLUMNS, rows, opts), search: useLocation().search }), {
     wrapper,
   });
@@ -166,19 +167,8 @@ describe('useClientFilters', () => {
 
   // ── Where the state lives ───────────────────────────────────────────────────────────────────
 
-  it('keeps the state out of the URL by default', () => {
-    // The default a screen with several tables needs. `ReportsPage` has three, and URL-backing them
-    // all would make each one write the other's keys.
+  it('puts the state in the URL, so a reload keeps it', () => {
     const { result } = mount();
-    act(() => {
-      result.current.setFilters({ ...result.current.filters, kind: 'trap' });
-    });
-    expect(result.current.search).toBe('');
-    expect(ids(result.current.shown)).toEqual(['c', 'd']);
-  });
-
-  it('puts the state in the URL when the screen asks for it', () => {
-    const { result } = mount({ url: true });
     act(() => {
       result.current.setFilters({ ...result.current.filters, kind: 'trap' });
     });
@@ -186,22 +176,56 @@ describe('useClientFilters', () => {
     expect(ids(result.current.shown)).toEqual(['c', 'd']);
   });
 
-  it('reads an existing query string when URL-backed, and ignores it when not', () => {
-    const at = (url: boolean) =>
-      renderHook(() => useClientFilters(COLUMNS, ROWS, { url }), {
-        wrapper: ({ children }: { children: ReactNode }) =>
-          createElement(MemoryRouter, { initialEntries: ['/events?kind=trap'] }, children),
-      });
-
-    expect(ids(at(true).result.current.shown)).toEqual(['c', 'd']);
-    // Not a bug — a local-state table on a route whose query string belongs to a different table
-    // must not silently adopt it. This is the other half of decision 12's cost.
-    expect(ids(at(false).result.current.shown)).toEqual(['a', 'b', 'c', 'd']);
+  it('reads the query string it arrives with', () => {
+    const { result } = renderHook(() => useClientFilters(COLUMNS, ROWS), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: ['/events?kind=trap'] }, children),
+    });
+    expect(ids(result.current.shown)).toEqual(['c', 'd']);
   });
 
-  it('holds one instant for relative ranges, whichever store the state is in', () => {
-    // `nowMs` comes from the URL hook even in local mode, so a screen that switches has the same
-    // guarantee. Re-reading the clock per render is what drops rows between paged requests.
+  it('writes a prefixed table under its own keys, so two tables on one route do not filter each other', () => {
+    // The shape of Alerts ▸ Notification delivery: two tables, both with the same column keys. Each
+    // one gets its prefix, and narrowing one must leave the other showing every row.
+    const { result } = renderHook(
+      () => ({
+        a: useClientFilters(COLUMNS, ROWS, { prefix: 'a.' }),
+        b: useClientFilters(COLUMNS, ROWS, { prefix: 'b.' }),
+        search: useLocation().search,
+      }),
+      { wrapper },
+    );
+    act(() => {
+      result.current.a.setFilters({ ...result.current.a.filters, kind: 'trap' });
+    });
+    expect(result.current.search).toBe('?a.kind=trap');
+    expect(ids(result.current.a.shown)).toEqual(['c', 'd']);
+    expect(ids(result.current.b.shown), 'the other table picked up the filter').toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('reads a prefixed key and ignores the bare one beside it', () => {
+    // `/nodes?kind=device&events.kind=trap`: the tree's `kind` and the Events tab's, on one URL.
+    const { result } = renderHook(() => useClientFilters(COLUMNS, ROWS, { prefix: 'events.' }), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: ['/nodes?kind=syslog&events.kind=trap'] }, children),
+    });
+    expect(ids(result.current.shown)).toEqual(['c', 'd']);
+  });
+
+  it('clear() on a prefixed table removes its keys and nothing else', () => {
+    const { result } = renderHook(
+      () => ({ ...useClientFilters(COLUMNS, ROWS, { prefix: 'b.' }), search: useLocation().search }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(MemoryRouter, { initialEntries: ['/x?kind=syslog&b.kind=trap&b.q=rt'] }, children),
+      },
+    );
+    act(() => result.current.clear());
+    expect(result.current.search).toBe('?kind=syslog');
+  });
+
+  it('holds one instant for relative ranges', () => {
+    // Re-reading the clock per render is what drops rows between paged requests.
     const { result, rerender } = mount();
     const pinned = result.current.nowMs;
     vi.setSystemTime(Date.now() + 60_000);

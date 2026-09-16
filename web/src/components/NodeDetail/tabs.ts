@@ -41,6 +41,18 @@ export const NODE_DETAIL_TABS = [
 /** A valid node-detail sub-tab key. */
 export type NodeDetailTab = (typeof NODE_DETAIL_TABS)[number];
 
+/** The URL-key prefix for a tab's filter row (ADR-153 決定 3).
+ *
+ *  A node's tabs share the query string with the page that hosts them — on `/nodes` that is the
+ *  inventory tree, whose `kind` is the Events tab's `kind` too, and Neighbors and Flow both have a
+ *  `peer` and a `proto`. So every tab's keys are `<tab>.<column>`, derived from the tab key rather
+ *  than written per tab, and `filterSpecRegistry.test.ts`'s route ledger checks the result is
+ *  disjoint. ⚠️ Renaming a tab key renames its filters' URL keys, and old links to them stop
+ *  narrowing — the same trade `tableIds.ts` names for column widths. */
+export function nodeTabFilterPrefix(tab: NodeDetailTab): string {
+  return `${tab}.`;
+}
+
 /** Normalize an arbitrary tab string (URL param, stored state) to a known tab; unknown ⇒ 'overview'. */
 export function normalizeNodeDetailTab(tab: string): NodeDetailTab {
   return (NODE_DETAIL_TABS as readonly string[]).includes(tab)

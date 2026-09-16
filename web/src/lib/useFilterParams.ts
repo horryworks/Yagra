@@ -35,21 +35,35 @@ export interface FilterParams {
   nowMs: number;
 }
 
-export function useFilterParams<T>(columns: readonly FilterableColumn<T>[]): FilterParams {
+/**
+ * `prefix` names this table's keys when its route holds more than one filterable table
+ * (ADR-153 決定 3): `useFilterParams(columns, 'events.')` reads and writes `?events.kind=`.
+ * Omit it for a table whose keys already shipped bare.
+ *
+ * ⚠️ A string rather than an options object on purpose: it is a dependency of `setFilters`, and an
+ * object literal at the call site would be a new identity every render.
+ */
+export function useFilterParams<T>(
+  columns: readonly FilterableColumn<T>[],
+  prefix = '',
+): FilterParams {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const filters = useMemo(() => readFilterParams(columns, searchParams), [columns, searchParams]);
+  const filters = useMemo(
+    () => readFilterParams(columns, searchParams, prefix),
+    [columns, searchParams, prefix],
+  );
 
   const setFilters = useCallback(
     (next: FilterState, also?: (params: URLSearchParams) => void) => {
       const params = new URLSearchParams(searchParams);
-      writeFilterParams(columns, params, next);
+      writeFilterParams(columns, params, next, prefix);
       also?.(params);
       // `replace` so a settled keystroke does not push a history entry and make Back mean "the
       // previous character" instead of "the previous screen" (`filterParams.ts`).
       setSearchParams(params, { replace: true });
     },
-    [columns, searchParams, setSearchParams],
+    [columns, searchParams, setSearchParams, prefix],
   );
 
   const rangeKey = columns.find((c) => c.filter.kind === 'range')?.key;

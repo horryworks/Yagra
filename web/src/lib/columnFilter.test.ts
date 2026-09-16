@@ -182,6 +182,25 @@ describe('the URL codec', () => {
     expect(params.get('kind')).toBe('syslog');
   });
 
+  it('reads and writes under a prefix, leaving the bare keys to their owner (ADR-153)', () => {
+    // One URL, two tables: the page's own `kind` (bare, already shipped) and a tab's `events.kind`.
+    const params = new URLSearchParams('kind=device&events.kind=trap');
+    expect(readFilterParams(COLUMNS, params, 'events.').kind).toBe('trap');
+    expect(readFilterParams(COLUMNS, params).kind).toBe('device');
+
+    writeFilterParams(COLUMNS, params, { ...defaultFilters(COLUMNS), kind: 'syslog', message: 'x' }, 'events.');
+    expect(params.get('events.kind')).toBe('syslog');
+    expect(params.get('events.message')).toBe('x');
+    expect(params.get('kind'), 'the prefixed write touched the bare key').toBe('device');
+    expect(params.has('message'), 'the prefixed write created a bare key').toBe(false);
+  });
+
+  it('deletes only the prefixed key at its default', () => {
+    const params = new URLSearchParams('kind=device&events.kind=trap');
+    writeFilterParams(COLUMNS, params, defaultFilters(COLUMNS), 'events.');
+    expect(params.toString()).toBe('kind=device');
+  });
+
   it('reads an explicitly empty value as cleared, not as absent', () => {
     // `?kind=` is what a half-applied clear looks like. For a set that is the same as unfiltered;
     // for the range it must NOT be, or an empty value would silently widen a bounded default.
