@@ -1,442 +1,744 @@
 [
   {
+    "family": "Cisco ASA sessions",
     "metric_kind": "gauge",
     "metric_name": "asa_current_connections",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "BGP peers",
     "metric_kind": "gauge",
     "metric_name": "bgp_peer_admin_status",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "BGP peers",
     "metric_kind": "gauge",
     "metric_name": "bgp_peer_state",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_cemp_mem_free",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_cemp_mem_used",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_cpu_5min",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_cpu_mem_free",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_cpu_mem_used",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_env_temp",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco fan/power state",
     "metric_kind": "gauge",
     "metric_name": "cisco_fan_state",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco fan/power state",
     "metric_kind": "gauge",
     "metric_name": "cisco_fantray_state",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco fan/power state",
     "metric_kind": "gauge",
     "metric_name": "cisco_fru_power_state",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IPsec tunnels",
     "metric_kind": "gauge",
     "metric_name": "cisco_ike_active_tunnels",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IPsec tunnels",
     "metric_kind": "gauge",
     "metric_name": "cisco_ipsec_active_tunnels",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IPsec tunnels",
     "metric_kind": "counter",
     "metric_name": "cisco_ipsec_in_octets",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IPsec tunnels",
     "metric_kind": "counter",
     "metric_name": "cisco_ipsec_out_octets",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_mem_free",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
     "metric_name": "cisco_mem_used",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco fan/power state",
     "metric_kind": "gauge",
     "metric_name": "cisco_psu_state",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco remote-access VPN",
     "metric_kind": "counter",
     "metric_name": "cisco_ra_in_octets",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco remote-access VPN",
     "metric_kind": "counter",
     "metric_name": "cisco_ra_out_octets",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco remote-access VPN",
     "metric_kind": "gauge",
     "metric_name": "cisco_ra_sessions",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco remote-access VPN",
     "metric_kind": "gauge",
     "metric_name": "cisco_ra_users",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco chassis temperature",
     "metric_kind": "gauge",
     "metric_name": "cisco_temp_c",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "dns",
+    "metric_kind": "gauge",
+    "metric_name": "dns_answer_count",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "dns",
+    "metric_kind": "gauge",
+    "metric_name": "dns_chain_length",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "dns",
+    "metric_kind": "gauge",
+    "metric_name": "dns_resolve_ms",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "dns",
+    "metric_kind": "gauge",
+    "metric_name": "dns_up",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "Entity sensors",
     "metric_kind": "gauge",
     "metric_name": "ent_sensor_value",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Fortinet FortiOS health",
     "metric_kind": "gauge",
     "metric_name": "fortinet_cpu_usage",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Fortinet FortiOS health",
     "metric_kind": "gauge",
     "metric_name": "fortinet_mem_usage",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Fortinet FortiOS health",
     "metric_kind": "gauge",
     "metric_name": "fortinet_sessions",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Fortinet VPN",
     "metric_kind": "gauge",
     "metric_name": "fortinet_sslvpn_users",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Fortinet VPN",
     "metric_kind": "gauge",
     "metric_name": "fortinet_vpn_tunnels_up",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "gauge",
     "metric_name": "hr_processor_load",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Host resources",
     "metric_kind": "gauge",
     "metric_name": "hr_storage_size",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Host resources",
     "metric_kind": "gauge",
     "metric_name": "hr_storage_used",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Host resources",
     "metric_kind": "gauge",
     "metric_name": "hr_system_processes",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "url",
+    "metric_kind": "gauge",
+    "metric_name": "http_body_match",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "url",
+    "metric_kind": "gauge",
+    "metric_name": "http_response_time_ms",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "url",
+    "metric_kind": "gauge",
+    "metric_name": "http_status_code",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "url",
+    "metric_kind": "gauge",
+    "metric_name": "http_up",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "Huawei VRP health",
     "metric_kind": "gauge",
     "metric_name": "huawei_cpu_usage",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei VRP health",
     "metric_kind": "gauge",
     "metric_name": "huawei_mem_free",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei VRP health",
     "metric_kind": "gauge",
     "metric_name": "huawei_mem_total",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei VRP health",
     "metric_kind": "gauge",
     "metric_name": "huawei_mem_usage",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei VRP health",
     "metric_kind": "gauge",
     "metric_name": "huawei_temp",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei USG sessions",
     "metric_kind": "gauge",
     "metric_name": "huawei_usg_half_open_sessions",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei USG sessions",
     "metric_kind": "gauge",
     "metric_name": "huawei_usg_icmp_sessions",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei USG sessions",
     "metric_kind": "gauge",
     "metric_name": "huawei_usg_session_setup_rate",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei USG sessions",
     "metric_kind": "counter",
     "metric_name": "huawei_usg_session_total",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei USG sessions",
     "metric_kind": "gauge",
     "metric_name": "huawei_usg_tcp_sessions",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei USG sessions",
     "metric_kind": "gauge",
     "metric_name": "huawei_usg_total_sessions",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Huawei USG sessions",
     "metric_kind": "gauge",
     "metric_name": "huawei_usg_udp_sessions",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "icmp",
+    "metric_kind": "gauge",
+    "metric_name": "icmp_loss_pct",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "icmp",
+    "metric_kind": "gauge",
+    "metric_name": "icmp_rtt_ms",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "Standard SNMP",
     "metric_kind": "gauge",
     "metric_name": "if_admin_status",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_hc_in_octets",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_hc_in_ucast_pkts",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_hc_out_octets",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_hc_out_ucast_pkts",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "gauge",
     "metric_name": "if_high_speed",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_in_discards",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_in_errors",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "gauge",
     "metric_name": "if_oper_status",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_out_discards",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Standard SNMP",
     "metric_kind": "counter",
     "metric_name": "if_out_errors",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Optical transceivers (ENTITY-SENSOR)",
     "metric_kind": "gauge",
     "metric_name": "if_rx_power_dbm",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Optical transceivers (ENTITY-SENSOR)",
     "metric_kind": "gauge",
     "metric_name": "if_tx_power_dbm",
-    "per_interface": true
+    "per_interface": true,
+    "source": "collected"
   },
   {
+    "family": "Juniper Junos health",
     "metric_kind": "gauge",
     "metric_name": "juniper_buffer_util",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Juniper Junos health",
     "metric_kind": "gauge",
     "metric_name": "juniper_cpu_1min",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Juniper Junos health",
     "metric_kind": "gauge",
     "metric_name": "juniper_temp",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_device_up",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "MikroTik RouterOS health",
     "metric_kind": "gauge",
     "metric_name": "mikrotik_cpu_temp",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "MikroTik RouterOS health",
     "metric_kind": "gauge",
     "metric_name": "mikrotik_voltage",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco NX-OS health",
     "metric_kind": "gauge",
     "metric_name": "nxos_cpu_util",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Cisco NX-OS health",
     "metric_kind": "gauge",
     "metric_name": "nxos_mem_util",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Palo Alto sessions/VPN",
     "metric_kind": "gauge",
     "metric_name": "panos_gp_active_tunnels",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Palo Alto sessions/VPN",
     "metric_kind": "gauge",
     "metric_name": "panos_session_util_pct",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Palo Alto sessions/VPN",
     "metric_kind": "gauge",
     "metric_name": "panos_sessions_active",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "PoE (POWER-ETHERNET-MIB)",
     "metric_kind": "gauge",
     "metric_name": "poe_power_capacity_w",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "PoE (POWER-ETHERNET-MIB)",
     "metric_kind": "gauge",
     "metric_name": "poe_power_consumed_w",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Printer (Printer-MIB)",
     "metric_kind": "gauge",
     "metric_name": "prt_alert_severity",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Printer (Printer-MIB)",
     "metric_kind": "gauge",
     "metric_name": "prt_marker_life_count",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "snmp",
+    "metric_kind": "gauge",
+    "metric_name": "snmp_arp_entry_count",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "snmp",
+    "metric_kind": "gauge",
+    "metric_name": "snmp_l3_address_count",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "snmp",
+    "metric_kind": "gauge",
+    "metric_name": "snmp_neighbor_count",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "snmp",
+    "metric_kind": "gauge",
+    "metric_name": "snmp_routing_adjacency_count",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "Standard SNMP",
     "metric_kind": "gauge",
     "metric_name": "snmp_sys_uptime_ticks",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "snmp",
+    "metric_kind": "gauge",
+    "metric_name": "snmp_up",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "snmp",
+    "metric_kind": "gauge",
+    "metric_name": "snmp_walk_complete",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "url",
+    "metric_kind": "gauge",
+    "metric_name": "ssl_cert_days_to_expiry",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "Host resources",
     "metric_kind": "gauge",
     "metric_name": "tcp_curr_estab",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_cpu_idle_pct",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_disk_used_pct",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_load_15min",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_load_1min",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_load_5min",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_mem_avail_kb",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_mem_total_kb",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_swap_avail_kb",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "Linux Net-SNMP (UCD)",
     "metric_kind": "gauge",
     "metric_name": "ucd_swap_total_kb",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "UPS (RFC1628)",
     "metric_kind": "gauge",
     "metric_name": "ups_battery_status",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "UPS (RFC1628)",
     "metric_kind": "gauge",
     "metric_name": "ups_charge_remaining_pct",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "UPS (RFC1628)",
     "metric_kind": "gauge",
     "metric_name": "ups_minutes_remaining",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   },
   {
+    "family": "UPS (RFC1628)",
     "metric_kind": "gauge",
     "metric_name": "ups_output_load_pct",
-    "per_interface": false
+    "per_interface": false,
+    "source": "collected"
   }
 ]

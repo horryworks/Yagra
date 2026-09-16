@@ -60,6 +60,11 @@ pub(crate) struct MetricMeaning {
     /// `query_metrics` for it returns nothing), or `collected` (read off a device by a metric set,
     /// with its OID in `get_config(kind=mib_catalog)`).
     pub source: String,
+    /// Which of Yagra's own probes emits a `check` metric — `icmp`, `snmp`, `url`, `dns` or
+    /// `meraki` — and `null` for every other source (ADR-046 Inc.8). `snmp` here means the SNMP
+    /// conversation itself (did the agent answer, how far the walk got, what it found), not a
+    /// value read off a MIB; those are `collected`. The node Overview files its cards by this.
+    pub family: Option<String>,
     /// The unit the **stored** number is in, or `null` when it has none (ADR-046 Inc.7).
     ///
     /// ⚠️ **Stored, not displayed.** `query_metrics` returns the stored value and a threshold bound
@@ -110,6 +115,7 @@ pub(crate) fn metric_meanings() -> Vec<MetricMeaning> {
             metric: (*metric).to_owned(),
             meaning: (*meaning).to_owned(),
             source: crate::metric_meaning::metric_source(metric).to_owned(),
+            family: crate::metric_meaning::check_family(metric).map(|f| f.as_str().to_owned()),
             unit: unit.stored().map(str::to_owned),
             unit_kind: unit.kind().map(str::to_owned),
         })

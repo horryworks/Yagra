@@ -196,18 +196,48 @@ mod tests {
         // name-sorted file: a stable order is what makes the diff readable when one is added.
         let mut by_name: std::collections::BTreeMap<String, serde_json::Value> =
             std::collections::BTreeMap::new();
-        for (item, _vendor) in builtin_mib_rows() {
+        for (item, vendor) in builtin_mib_rows() {
             by_name.entry(item.metric_name.clone()).or_insert_with(|| {
+                // ⚠️ The one fact the API cannot supply. Whether a table's rows are
+                // interfaces is an OID rule that lives in `yagra_common`, and guessing it
+                // from the row keys is the mistake `api/metrics.rs::dimension_of_item`
+                // documents (30 of 108 chassis readings once claimed to be per-port).
+                let per_interface = item_publishes_per_interface(&item);
+                // Where it comes from, in the vocabulary `/api/v1/metric-meanings` already
+                // serves — always `collected` on this side of the loop.
+                let source = crate::metric_meaning::metric_source(&item.metric_name);
                 serde_json::json!({
                     "metric_name": item.metric_name,
                     "metric_kind": metric_kind_str(item.metric_kind),
-                    // ⚠️ The one fact the API cannot supply. Whether a table's rows are
-                    // interfaces is an OID rule that lives in `yagra_common`, and guessing it
-                    // from the row keys is the mistake `api/metrics.rs::dimension_of_item`
-                    // documents (30 of 108 chassis readings once claimed to be per-port).
-                    "per_interface": item_publishes_per_interface(&item),
+                    "per_interface": per_interface,
+                    "source": source,
+                    // The metric set it belongs to, by the template's display name — the same
+                    // string `mib_catalog.vendor` carries at runtime, so the Overview's section
+                    // heading and the picker's group heading are one string (ADR-046 Inc.8).
+                    // The vendor-less standard set is filed under its own name rather than
+                    // left blank: a blank is what an operator's own row looks like.
+                    "family": vendor.unwrap_or(TEMPLATE_STANDARD_SNMP),
                 })
             });
+        }
+        // Yagra's own checks (ADR-046 Inc.8). They have no `mib_catalog` row and never will —
+        // they are emitted by a probe, not read off a device — so this generated file is the
+        // only catalog the WebUI has for them. Appended here and NOT in `builtin_mib_rows()`,
+        // which also feeds the seeder (a check has no OID to seed). The liveness sentinel is
+        // skipped: it is a rule token, not a series, and its family is `None` for that reason.
+        for (name, family) in crate::metric_meaning::CHECK_FAMILIES {
+            let Some(family) = family else { continue };
+            let prior = by_name.insert(
+                name.to_owned(),
+                serde_json::json!({
+                    "metric_name": name,
+                    "metric_kind": "gauge",
+                    "per_interface": false,
+                    "source": "check",
+                    "family": family.as_str(),
+                }),
+            );
+            assert!(prior.is_none(), "{name} is both a check and a catalog row");
         }
         let rows: Vec<serde_json::Value> = by_name.into_values().collect();
         let mut out = serde_json::to_string_pretty(&rows).expect("serialize metric catalog");
@@ -257,6 +287,36 @@ mod tests {
         // silently empty picker.
         assert!(has("metric_name", "if_oper_status".into()));
         assert!(has("metric_name", "if_hc_in_octets".into()));
+        // ADR-046 Inc.8: both sources, the standard set filed under its own name, a vendor set
+        // filed under its template name, and every check but the liveness sentinel.
+        assert!(has("source", "check".into()), "no check row");
+        assert!(has("source", "collected".into()), "no collected row");
+        assert!(
+            has("family", TEMPLATE_STANDARD_SNMP.into()),
+            "standard set not filed"
+        );
+        assert!(
+            has("family", "Huawei VRP health".into()),
+            "vendor set not filed by its name"
+        );
+        assert!(has("family", "icmp".into()), "the ICMP pair is not filed");
+        let checks = rows.iter().filter(|r| r["source"] == "check").count();
+        let filed = crate::metric_meaning::CHECK_FAMILIES
+            .iter()
+            .filter(|(_, f)| f.is_some())
+            .count();
+        assert_eq!(checks, filed);
+        assert!(
+            !has("metric_name", crate::alerts::LIVENESS.into()),
+            "the liveness sentinel is a rule token, not a series"
+        );
+        for r in &rows {
+            assert!(
+                r["family"].as_str().is_some_and(|f| !f.is_empty()),
+                "{} has no family",
+                r["metric_name"]
+            );
+        }
     }
 
     #[test]

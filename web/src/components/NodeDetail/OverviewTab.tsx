@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Overview tab of the unified node detail. The compact core (per the redesign) is an ICMP RTT trend
-// + a two-column facts grid. Below it sit the richer, relocated sections — Active alerts, Device
-// health (CPU/Mem), System (SNMP) metric cards — each of which self-hides when the node has no such
-// data, so a simple ICMP-only node shows just the trend + facts, while a fully monitored device
-// shows everything. Nothing from the old detail page is dropped, only restyled.
+// Overview tab of the unified node detail. The compact core (per the redesign) is an ICMP section
+// (RTT + packet loss) + a two-column facts grid. Below it sit the richer, relocated sections —
+// Active alerts, Device health (CPU/Mem), and the generic metric cards filed by source (SNMP, one
+// per built-in metric set, Other; ADR-046 Inc.8) — each of which self-hides when the node has no
+// such data, so a simple ICMP-only node shows just the trend + facts, while a fully monitored
+// device shows everything. Nothing from the old detail page is dropped, only restyled.
 // The RTT chart followed the shared range control as of ADR-117; it was a fixed 30-minute sparkline
 // before that, which on an ICMP-only node was the whole reason the period buttons looked broken.
 
@@ -60,18 +61,20 @@ import {
 } from './rowBreakdown';
 import {
   cardUnit,
+  claimedMetrics,
   hasAnyHealth,
   lastValue,
   METRIC_CARDS,
-  overviewScalarCards,
+  overviewSections,
   resolveHealth,
   uncuratedCardScale,
   type MetricScale,
+  type OverviewSection,
   type ResolvedHealth,
   type ResolvedMem,
   type ResolvedMetric,
-  type ScalarCard,
 } from './metricCards';
+import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overviewClaims';
 import { formatKb, memPctSeries } from './overviewMetrics';
 import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
@@ -231,25 +234,32 @@ export function OverviewTab({
         <MerakiHealth nodeId={node.id} device={node.meraki_device} />
       )}
       <DeviceHealth nodeId={node.id} />
-      <SnmpScalars nodeId={node.id} />
+      <OverviewSections node={node} />
     </div>
   );
 }
 
-/** ICMP round-trip trend, over the shared chart window.
+/** ICMP: the round-trip time and, when the node reports it, the packet-loss share — two cards
+ *  over the shared chart window.
  *
  *  It was a fixed last-30-minute sparkline fed from `NodeDetail`'s liveness fetch, which is what
  *  made the range selector look dead on an ICMP-only node: the only chart on its Overview ignored
- *  the buttons — and Device health and the SNMP strip both self-hide there, so that tab in fact
- *  carried no range control at all. It has its own fetch now (ADR-117 決定 6).
+ *  the buttons — and Device health and the generic sections both self-hide there, so that tab in
+ *  fact carried no range control at all. It has its own fetch now (ADR-117 決定 6), and since
+ *  ADR-046 Inc.8 both charts are the same `MetricCard` every other section draws, so the loss
+ *  share is drawn once, here, instead of under a "System (SNMP)" heading below — and the RTT is
+ *  no longer drawn twice.
  *
  *  ⚠️ `NodeDetail` keeps its 30-minute fetch. That one is the source of the header's "seen …", not
  *  of this chart; widening it would coarsen the step (120s over 7d) and make "last seen" up to two
  *  minutes stale.
  *
- *  The metric comes from `NODE_KIND_SPEC` rather than being spelled `icmp_rtt_ms` here.
+ *  The RTT metric comes from `NODE_KIND_SPEC` rather than being spelled `icmp_rtt_ms` here.
  *  `overviewShowsIcmp` admits only `device`, so it is always that today — but which metric means
- *  "we heard from this kind" is already written down in one place. */
+ *  "we heard from this kind" is already written down in one place. The loss card is offered only
+ *  when the inventory has the metric with data, the rule every generic card follows; the RTT card
+ *  is always drawn, because this section *is* the liveness chart and an empty one says
+ *  "unreachable" in words. */
 function IcmpHealth({
   kind,
   nodeId,
@@ -262,51 +272,54 @@ function IcmpHealth({
   const { t } = useTranslation('nodes');
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
-  const tick = useRefreshTick();
   const metric = NODE_KIND_SPEC[kind].livenessMetric;
-  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
-    timestamps: [],
-    values: [],
-  });
-  const [win, setWin] = useState<[number, number] | null>(null);
+  const [hasLoss, setHasLoss] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    const { from, to } = resolveRange(range);
-    api
-      .getNodeMetricRange(nodeId, metric, { from, to })
-      .then((r) => {
-        if (cancelled) return;
-        setSeries(pointsToSeries(r.points));
-        setWin([from, to]);
-      })
-      .catch(() => undefined);
+    // Through the shared cache: this, Device health and the generic sections make one request.
+    void fetchNodeMetrics(nodeId).then((items) => {
+      if (cancelled) return;
+      setHasLoss(items.some((i) => i.metric === ICMP_LOSS_METRIC && i.status !== 'no_data'));
+    });
     return () => {
       cancelled = true;
     };
-  }, [nodeId, metric, range, tick]);
+  }, [nodeId]);
 
+  const rtt: ResolvedMetric = { metric, read: { kind: 'latest' }, chart: { kind: 'range' } };
+  const loss: ResolvedMetric = {
+    metric: ICMP_LOSS_METRIC,
+    read: { kind: 'latest' },
+    chart: { kind: 'range' },
+  };
   return (
     <section>
       <div className="nd-section-head">
-        <div className="nd-section-t">{t('overview.icmpRttTitle')}</div>
+        <div className="nd-section-t">{t('overview.family.icmp')}</div>
         <RangeControl value={range} onChange={setRange} />
       </div>
-      {series.timestamps.length > 0 ? (
-        <MetricChart
-          title=""
-          timestamps={series.timestamps}
-          values={series.values}
-          height={96}
-          yFormat={(v) => `${Math.round(v)}`}
-          legendFormat={formatRtt}
-          xRange={win ?? undefined}
+      <div className="nd-health-metrics">
+        <MetricCard
+          nodeId={nodeId}
+          label={t('overview.icmpRtt')}
+          scale="count"
+          unit={metricUnitSuffix(metric) ?? undefined}
+          format={formatRtt}
+          emptyText={unreachable ? t('overview.unreachableDash') : t('overview.noRttHistory')}
+          resolved={rtt}
+          range={range}
         />
-      ) : (
-        <p className="nd-muted nd-spark-empty">
-          {unreachable ? t('overview.unreachableDash') : t('overview.noRttHistory')}
-        </p>
-      )}
+        {hasLoss && (
+          <MetricCard
+            nodeId={nodeId}
+            label={t('overview.icmpLoss')}
+            scale="percent"
+            resolved={loss}
+            range={range}
+          />
+        )}
+      </div>
     </section>
   );
 }
@@ -361,14 +374,14 @@ function UrlHealth({
     const load = () => {
       const { from, to } = resolveRange(range);
       void Promise.allSettled([
-        api.getNodeMetric(nodeId, 'http_up'),
-        api.getNodeMetric(nodeId, 'http_status_code'),
-        api.getNodeMetric(nodeId, 'ssl_cert_days_to_expiry'),
-        api.getNodeMetricRange(nodeId, 'http_status_code', { from, to }),
-        api.getNodeMetric(nodeId, 'http_response_time_ms'),
-        api.getNodeMetricRange(nodeId, 'http_response_time_ms', { from, to }),
-        api.getNodeMetric(nodeId, 'http_body_match'),
-        api.getNodeMetric(nodeId, 'http_body_truncated'),
+        api.getNodeMetric(nodeId, URL_CARD.up),
+        api.getNodeMetric(nodeId, URL_CARD.status),
+        api.getNodeMetric(nodeId, URL_CARD.cert),
+        api.getNodeMetricRange(nodeId, URL_CARD.status, { from, to }),
+        api.getNodeMetric(nodeId, URL_CARD.responseMs),
+        api.getNodeMetricRange(nodeId, URL_CARD.responseMs, { from, to }),
+        api.getNodeMetric(nodeId, URL_CARD.bodyMatch),
+        api.getNodeMetric(nodeId, URL_CARD.bodyTruncated),
       ]).then(([u, s, c, r, rt, rtr, bm, bt]) => {
         if (cancelled) return;
         setUp(u.status === 'fulfilled' ? u.value.value : null);
@@ -551,10 +564,10 @@ function MerakiHealth({
     let cancelled = false;
     const load = () => {
       void Promise.allSettled([
-        api.getNodeMetric(nodeId, 'meraki_device_up'),
-        api.getNodeMetric(nodeId, 'meraki_client_count'),
-        api.getNodeMetric(nodeId, 'meraki_usage_sent_kb'),
-        api.getNodeMetric(nodeId, 'meraki_usage_recv_kb'),
+        api.getNodeMetric(nodeId, MERAKI_CARD.up),
+        api.getNodeMetric(nodeId, MERAKI_CARD.clients),
+        api.getNodeMetric(nodeId, MERAKI_CARD.sentKb),
+        api.getNodeMetric(nodeId, MERAKI_CARD.recvKb),
       ]).then(([u, c, s, r]) => {
         if (cancelled) return;
         setUp(u.status === 'fulfilled' ? u.value.value : null);
@@ -862,6 +875,7 @@ function MetricCard({
   scale,
   unit,
   format,
+  emptyText,
   resolved,
   range,
 }: {
@@ -876,6 +890,9 @@ function MetricCard({
   unit?: string;
   /** Overrides the headline and hover formatter (SNMP TimeTicks are not a count). */
   format?: (v: number) => string;
+  /** What the card says instead of a chart while it has no history — the ICMP card says
+   *  "unreachable" rather than "no history yet", because on that card the absence is the fact. */
+  emptyText?: string;
   resolved: ResolvedMetric;
   range: Range;
 }) {
@@ -960,7 +977,7 @@ function MetricCard({
           xRange={win ?? undefined}
         />
       ) : (
-        <p className="nd-muted">{t('overview.noHistory')}</p>
+        <p className="nd-muted">{emptyText ?? t('overview.noHistory')}</p>
       )}
       <RowList
         rows={rows}
@@ -1142,75 +1159,116 @@ function MemHealth({
   );
 }
 
-/** The node's remaining node-level metrics, each as a card with its own trend chart. Hidden when
- *  there are none (e.g. an ICMP-only node), so it never shows an empty section.
+/** The node's remaining node-level metrics, as one section per source (ADR-046 Inc.8): the
+ *  leftovers of the kind card's own family, then SNMP (Yagra's `snmp_*` checks and the standard
+ *  set's sysUpTime), then one section per built-in metric set under that set's own name, then
+ *  whatever the built-in catalog does not know — an operator's own collection items. Hidden when
+ *  there is nothing (an ICMP-only node), so it never shows an empty heading.
+ *
+ *  This was one section, "System (SNMP)", until Inc.8 — a heading that named none of what it held
+ *  on a URL node and half of it on a router — and it subtracted only what Device health drew, so
+ *  the URL/DNS/Meraki card's own metrics and the ICMP round-trip time were charted twice.
+ *  `overviewSections` decides the filing and `claimedMetrics` + `kindCardClaims` the subtraction,
+ *  all in a `.ts` a test reaches; this component only draws the result.
  *
  *  Sourced from the metric inventory, which is what lets this show metrics no collection set
- *  contains — the neighbour count, the URL/DNS monitor gauges, values extracted from a monitored
- *  JSON response — and lets a viewer see it at all. `overviewScalarCards` decides what belongs
- *  here: counters have no glanceable value, per-interface metrics have their own tab, and anything
- *  Device health already draws is subtracted so the same measurement is not charted twice.
+ *  contains — the neighbour count, values extracted from a monitored JSON response — and lets a
+ *  viewer see it at all. Counters have no glanceable value and per-interface metrics have their
+ *  own tab, so neither is here.
  *
- *  This was a `name: value` strip until ADR-046 Inc.6. The values were true and useless — an
- *  operator looking at `60` cannot tell a temperature that has been 60 all week from one that was
- *  40 an hour ago, and the history existed the whole time, one tab away, with nothing pointing at
- *  it. The window is the shared one (`useRangeStore`), so Device health's range picker drives this
- *  section too and it carries no control of its own.
- *  ⚠️ It is no longer the case that the tab shows only one — the ICMP section above has its own,
- *  because an ICMP-only node hides both this section and Device health and was left with no way to
- *  change the window at all (ADR-117 決定 6). The two always agree; they read the same store.
+ *  The values were a `name: value` strip until ADR-046 Inc.6 — true and useless, since `60` does
+ *  not say whether the temperature has been 60 all week or was 40 an hour ago. The window is the
+ *  shared one (`useRangeStore`), so the range picker above drives these sections too and they
+ *  carry no control of their own. The ICMP section has its own for the ICMP-only node, which hides
+ *  everything else (ADR-117 決定 6); the two always agree, they read the same store.
  *
- *  Note both effects here read the inventory through `fetchNodeMetrics`, which dedupes — this and
- *  `DeviceHealth` make one request between them. */
-function SnmpScalars({ nodeId }: { nodeId: string }) {
+ *  Every effect on this tab reads the inventory through `fetchNodeMetrics`, which dedupes — this,
+ *  `IcmpHealth` and `DeviceHealth` make one request between them. */
+function OverviewSections({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
-  const [cards, setCards] = useState<ScalarCard[] | null>(null);
+  const [sections, setSections] = useState<OverviewSection[] | null>(null);
   const range = useRangeStore((s) => s.range);
+  // A string, so the effect re-runs when the *claims* change (a URL check gained an extraction)
+  // and not on every re-render that hands down a fresh `node` object.
+  const claimKey = [...kindCardClaims(node)].sort().join('|');
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // An empty inventory (skeleton mode, or the node is gone) yields no cards; the section hides
-      // itself below. `resolveHealth` over the same items is what the subtraction needs — it is the
-      // only thing that knows which candidate each curated card actually landed on.
-      const items = await fetchNodeMetrics(nodeId);
-      if (!cancelled) setCards(overviewScalarCards(items, resolveHealth(items)));
+      // An empty inventory (skeleton mode, or the node is gone) yields no sections; the component
+      // hides itself below. `resolveHealth` over the same items is what the subtraction needs — it
+      // is the only thing that knows which candidate each curated card actually landed on.
+      const items = await fetchNodeMetrics(node.id);
+      if (cancelled) return;
+      const claimed = new Set([
+        ...claimedMetrics(resolveHealth(items)),
+        ...claimKey.split('|').filter((m) => m !== ''),
+      ]);
+      setSections(overviewSections(items, claimed));
     })();
     return () => {
       cancelled = true;
     };
-  }, [nodeId]);
+  }, [node.id, claimKey]);
 
-  if (!cards || cards.length === 0) return null;
+  if (!sections || sections.length === 0) return null;
   return (
-    <section>
-      <div className="nd-section-t">{t('overview.systemSnmp')}</div>
-      <p className="nd-section-note">{t('overview.systemSnmpNote')}</p>
-      <div className="nd-health-metrics">
-        {cards.map((c) => {
-          const { label, known } = scalarLabel(c.metric);
-          const meaning = metricMeaningKey(c.metric);
-          return (
-            <MetricCard
-              key={c.metric}
-              nodeId={nodeId}
-              label={label}
-              labelMono={!known}
-              meaning={meaning ? t(meaning) : null}
-              // Both come from the generated unit table rather than from this component
-              // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what a
-              // curated card would have drawn for the same metric; `unit` is ignored on the
-              // percent branch and by `format`, so none of the three can double up.
-              scale={uncuratedCardScale(c.metric)}
-              unit={metricUnitSuffix(c.metric) ?? undefined}
-              format={scalarValueFormat(c.metric)}
-              resolved={c}
-              range={range}
-            />
-          );
-        })}
-      </div>
-    </section>
+    <>
+      {sections.map((s) => {
+        const { key } = s;
+        const heading =
+          key.kind === 'family'
+            ? t(`overview.family.${key.family}`)
+            : key.kind === 'set'
+              ? key.name
+              : t('overview.other');
+        // Two sections explain themselves: SNMP, because sysUpTime sits beside "did the agent
+        // answer" and the pairing is not obvious; Other, because "not built in" is the whole
+        // reason a metric is there. A set's name and a probe's name need no note.
+        const note =
+          key.kind === 'family' && key.family === 'snmp'
+            ? t('overview.snmpNote')
+            : key.kind === 'other'
+              ? t('overview.otherNote')
+              : null;
+        const kindAttr = key.kind === 'family' ? key.family : key.kind;
+        const reactKey = key.kind === 'set' ? `set:${key.name}` : kindAttr;
+        return (
+          <section
+            key={reactKey}
+            data-overview-section={kindAttr}
+            data-set={key.kind === 'set' ? key.name : undefined}
+          >
+            <div className="nd-section-t">{heading}</div>
+            {note && <p className="nd-section-note">{note}</p>}
+            <div className="nd-health-metrics">
+              {s.cards.map((c) => {
+                const { label, known } = scalarLabel(c.metric);
+                const meaning = metricMeaningKey(c.metric);
+                return (
+                  <MetricCard
+                    key={c.metric}
+                    nodeId={node.id}
+                    label={label}
+                    labelMono={!known}
+                    meaning={meaning ? t(meaning) : null}
+                    // Both come from the generated unit table rather than from this component
+                    // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what
+                    // a curated card would have drawn for the same metric; `unit` is ignored on
+                    // the percent branch and by `format`, so none of the three can double up.
+                    scale={uncuratedCardScale(c.metric)}
+                    unit={metricUnitSuffix(c.metric) ?? undefined}
+                    format={scalarValueFormat(c.metric)}
+                    resolved={c}
+                    range={range}
+                  />
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </>
   );
 }
 /** How an alert's cause reads on the node's own page (ADR-087).

@@ -286,7 +286,8 @@
     "body": "ノード <b>{{name}}</b> を削除しますか？インベントリの項目と、検出済みのインターフェースが消えます。収集済みのメトリクスは TSDB の保持期間が切れ次第、順次消えます。このノードが依存関係チェーンの親だった場合、配下のノードは以後このノードでは抑制されなくなります。この操作は取り消せません。"
   },
   "overview": {
-    "icmpRttTitle": "ICMP 応答時間",
+    "icmpRtt": "応答時間",
+    "icmpLoss": "パケット損失",
     "noRttHistory": "RTT の履歴はまだありません…",
     "unreachableDash": "—（到達不能）",
     "urlMonitor": "URL 監視",
@@ -317,8 +318,16 @@
     "unnamedRow": "行 {{row}}",
     "moreRows": "ほか {{count}} 行",
     "followsRow": "使用率がいちばん高いプールを表示中: {{name}}",
-    "systemSnmp": "システム (SNMP)",
-    "systemSnmpNote": "デバイスヘルスに出ていないメトリクスです。",
+    "family": {
+      "icmp": "ICMP",
+      "snmp": "SNMP",
+      "url": "URL 監視",
+      "dns": "DNS 監視",
+      "meraki": "Meraki"
+    },
+    "snmpNote": "エージェントが答えたか、walk がどこまで進んだか、walk が見つけた件数です。",
+    "other": "その他のメトリクス",
+    "otherNote": "組込の定義が無いメトリクスです。",
     "dnsMonitor": "DNS 監視",
     "systemResolver": "システムリゾルバ",
     "resolution": "名前解決",

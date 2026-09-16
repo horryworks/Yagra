@@ -37,38 +37,73 @@ import builtinCatalog from '../api/metricCatalog.json';
 import enMetricMeanings from '../locales/en/metricMeanings.json';
 
 /**
+ * The five probes a check metric can come from (`metric_meaning.rs::CheckFamily`), in the order
+ * the node Overview sections them (ADR-046 Inc.8). A runtime array so `i18nEnumKeys.test.ts`
+ * can demand `nodes:overview.family.<token>` in both locales.
+ */
+export const OVERVIEW_FAMILIES = ['icmp', 'snmp', 'url', 'dns', 'meraki'] as const;
+export type OverviewFamily = (typeof OVERVIEW_FAMILIES)[number];
+
+/**
+ * The vendor-less standard set's name, as the generated catalog spells it
+ * (`yagra_common::TEMPLATE_STANDARD_SNMP`). The Overview folds it into the SNMP section beside
+ * Yagra's own `snmp_*` checks. A mirror of one Rust literal — `metricMeaning.test.ts` demands
+ * that at least one generated row carries it, so a rename in Rust fails there rather than moving
+ * sysUpTime silently into a section of its own.
+ */
+export const STANDARD_SNMP_TEMPLATE = 'Standard SNMP';
+
+/** One row of the generated built-in catalog (`web/src/api/metricCatalog.json`). */
+export type BuiltinMetric = {
+  metric_name: string;
+  metric_kind: 'gauge' | 'counter';
+  /** Whether this metric publishes one series per interface. Decided by an OID rule in Rust. */
+  per_interface: boolean;
+} & (
+  /** Emitted by one of Yagra's own probes; `family` is which. */
+  | { source: 'check'; family: OverviewFamily }
+  /** Collected by a built-in metric set; `family` is that set's name, verbatim. */
+  | { source: 'collected'; family: string }
+);
+
+/**
+ * Every metric a built-in metric set collects, plus every check Yagra's probes emit, generated
+ * from the Rust catalog.
+ *
+ * Generated rather than transcribed (`extensibility.md` §2): a hand-kept copy of 106 names drifts
+ * the moment someone adds a template, and the drift here is **silent** — the picker just shows an
+ * OID where a sentence should be. `mib.rs::the_committed_metric_catalog_is_current` regenerates it.
+ */
+export const BUILTIN_METRICS: readonly BuiltinMetric[] = builtinCatalog as BuiltinMetric[];
+
+/** The generated row for `metric`, or `undefined` for an operator-defined one. */
+export function builtinMetric(metric: string): BuiltinMetric | undefined {
+  return BUILTIN_METRICS.find((m) => m.metric_name === metric);
+}
+
+/**
  * Metrics Yagra's own checks emit — the reachability probes and the URL / DNS / Meraki monitors.
  *
  * These names are constants and literals scattered across `yagra-common`, `yagra-transport` and
  * the poller, and they have no `mib_catalog` row, which is exactly why they need listing —
- * nothing else knows they exist.
+ * nothing else knows they exist. The list is `metric_meaning.rs::CHECK_FAMILIES`, and since
+ * ADR-046 Inc.8 it arrives here through the generated catalog's `source: "check"` rows rather
+ * than as a second hand-written copy. The liveness sentinel leads: it is a rule token with no
+ * series and so no catalog row, but the picker offers it first, by its human name.
  *
- * ⚠️ **This list is now duplicated in Rust** (`metric_meaning::CHECK_METRICS`), where it makes
- * the sentence table checkable. It survives here because the picker's *grouping* is a WebUI
- * concern — "Yagra’s own checks" is a heading, not a fact about the backend — and a test pins it
- * to be a subset of the generated meanings, so the two cannot come to disagree about a name.
+ * Ordered by family and then by name — the catalog file is name-sorted, so the family order the
+ * picker groups by has to be put back here.
  */
-export const CHECK_METRICS = [
+export const CHECK_METRICS: readonly string[] = [
   LIVENESS_METRIC,
-  'icmp_rtt_ms',
-  'icmp_loss_pct',
-  'snmp_up',
-  'snmp_walk_complete',
-  'snmp_neighbor_count',
-  'snmp_l3_address_count',
-  'snmp_routing_adjacency_count',
-  'snmp_arp_entry_count',
-  'http_up',
-  'http_status_code',
-  'http_response_time_ms',
-  'http_body_match',
-  'ssl_cert_days_to_expiry',
-  'dns_up',
-  'dns_resolve_ms',
-  'dns_answer_count',
-  'dns_chain_length',
-  'meraki_device_up',
-] as const;
+  ...BUILTIN_METRICS.filter((m): m is BuiltinMetric & { source: 'check' } => m.source === 'check')
+    .sort(
+      (a, b) =>
+        OVERVIEW_FAMILIES.indexOf(a.family) - OVERVIEW_FAMILIES.indexOf(b.family) ||
+        a.metric_name.localeCompare(b.metric_name, 'en'),
+    )
+    .map((m) => m.metric_name),
+];
 
 /**
  * Metrics Yagra **derives** rather than collects: one port's traffic, as a percentage of its own
@@ -107,28 +142,6 @@ export const DERIVED_METRICS = [
   'ucd_mem_used_pct',
   'ucd_swap_used_pct',
 ] as const;
-
-/** One row of the generated built-in catalog (`web/src/api/metricCatalog.json`). */
-export interface BuiltinMetric {
-  metric_name: string;
-  metric_kind: 'gauge' | 'counter';
-  /** Whether this metric publishes one series per interface. Decided by an OID rule in Rust. */
-  per_interface: boolean;
-}
-
-/**
- * Every metric collected by a built-in metric set, generated from the Rust catalog.
- *
- * Generated rather than transcribed (`extensibility.md` §2): a hand-kept copy of 88 names drifts
- * the moment someone adds a template, and the drift here is **silent** — the picker just shows an
- * OID where a sentence should be. `mib.rs::the_committed_metric_catalog_is_current` regenerates it.
- */
-export const BUILTIN_METRICS: readonly BuiltinMetric[] = builtinCatalog as BuiltinMetric[];
-
-/** The generated row for `metric`, or `undefined` for an operator-defined one. */
-export function builtinMetric(metric: string): BuiltinMetric | undefined {
-  return BUILTIN_METRICS.find((m) => m.metric_name === metric);
-}
 
 /**
  * Every metric this module owes an explanation for, as a runtime array so

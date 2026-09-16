@@ -24,6 +24,7 @@ import { useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { chainSummary, chainToRows, failureLabel } from './dnsChain';
 import type { DnsChainChange, DnsChainCurrent, DnsCheckConfig } from '../../types/api';
+import { DNS_CARD } from './overviewClaims';
 import './DnsHealth.css';
 
 /** How many history rows to show. Append-on-change keeps this list short in practice. */
@@ -56,9 +57,9 @@ export function DnsHealth({
     let cancelled = false;
     const { from, to } = resolveRange(range);
     void Promise.allSettled([
-      api.getNodeMetric(nodeId, 'dns_up'),
-      api.getNodeMetric(nodeId, 'dns_resolve_ms'),
-      api.getNodeMetricRange(nodeId, 'dns_resolve_ms', { from, to }),
+      api.getNodeMetric(nodeId, DNS_CARD.up),
+      api.getNodeMetric(nodeId, DNS_CARD.resolveMs),
+      api.getNodeMetricRange(nodeId, DNS_CARD.resolveMs, { from, to }),
       api.getDnsChain(nodeId),
       api.listDnsChainHistory(nodeId, { limit: HISTORY_LIMIT }),
     ]).then(([u, ms, r, chain, hist]) => {

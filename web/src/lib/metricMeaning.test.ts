@@ -5,6 +5,8 @@ import {
   CHECK_METRICS,
   DERIVED_METRICS,
   EXPLAINED_METRICS,
+  OVERVIEW_FAMILIES,
+  STANDARD_SNMP_TEMPLATE,
   builtinMetric,
   metricMeaningKey,
 } from './metricMeaning';
@@ -74,12 +76,37 @@ describe('the generated built-in catalog', () => {
     for (const c of counters) expect(EXPLAINED_METRICS).not.toContain(c);
   });
 
-  it("does not overlap Yagra's own check metrics", () => {
-    // The two halves come from different worlds — poller-emitted vs SNMP-collected — and an
-    // overlap would mean one of them is mislabelled at the source.
+  it("files every row under a source, and derives Yagra's own check list from the check rows", () => {
+    // The two halves come from different worlds — poller-emitted vs SNMP-collected — and the
+    // generated file says which is which. `CHECK_METRICS` is no longer a hand-written copy: it
+    // is those rows, with the liveness sentinel (a rule token, not a series) put in front.
+    for (const m of BUILTIN_METRICS) expect(['check', 'collected']).toContain(m.source);
+    const checks = BUILTIN_METRICS.filter((m) => m.source === 'check').map((m) => m.metric_name);
+    // 18 = the 19 rows of `metric_meaning.rs::CHECK_FAMILIES` minus `__liveness__`.
+    expect(checks).toHaveLength(18);
+    expect(checks).not.toContain(LIVENESS_METRIC);
     for (const m of BUILTIN_METRICS) {
-      expect(CHECK_METRICS as readonly string[]).not.toContain(m.metric_name);
+      if (m.source === 'check') expect(OVERVIEW_FAMILIES).toContain(m.family);
     }
+    expect(CHECK_METRICS[0]).toBe(LIVENESS_METRIC);
+    expect([...CHECK_METRICS].sort()).toEqual([LIVENESS_METRIC, ...checks].sort());
+    // Family order first, so the picker's "Yagra's own checks" group still reads probe by probe
+    // rather than in the file's alphabetical order.
+    const families = CHECK_METRICS.slice(1).map((m) => builtinMetric(m)?.family);
+    expect(families.indexOf('snmp')).toBeGreaterThan(families.lastIndexOf('icmp'));
+    expect(families.indexOf('url')).toBeGreaterThan(families.lastIndexOf('snmp'));
+  });
+
+  it('carries the metric set each collected row belongs to (ADR-046 Inc.8)', () => {
+    expect(builtinMetric('huawei_temp')?.family).toBe('Huawei VRP health');
+    expect(builtinMetric('snmp_sys_uptime_ticks')?.family).toBe(STANDARD_SNMP_TEMPLATE);
+    expect(builtinMetric('icmp_loss_pct')?.family).toBe('icmp');
+    // `STANDARD_SNMP_TEMPLATE` mirrors one Rust literal (`TEMPLATE_STANDARD_SNMP`). A rename there
+    // must fail here rather than silently move sysUpTime out of the Overview's SNMP section.
+    expect(
+      BUILTIN_METRICS.some((m) => m.source === 'collected' && m.family === STANDARD_SNMP_TEMPLATE),
+    ).toBe(true);
+    for (const m of BUILTIN_METRICS) expect(m.family, m.metric_name).not.toBe('');
   });
 
   it('resolves a built-in by name and returns undefined for anything else', () => {
