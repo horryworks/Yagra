@@ -1121,6 +1121,10 @@ export function NodesPage() {
             // has to be told, or it does not know it is filtering and hides nothing.
             narrowed={serverNarrowed}
             narrowKey={inventoryKey(inventoryFilters)}
+            // The RAW question, which `filter` above lags — by the whole first render after a reload,
+            // while `?q=` is already in hand. The tree keeps the folders pressed under a search until
+            // both say the search is gone (ADR-154 increment 2).
+            searchRequested={filtering}
             onSelectNode={(n) => select({ kind: 'node', id: n.id })}
             onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
             onSelectNone={() => select(null)}

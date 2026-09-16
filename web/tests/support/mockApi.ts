@@ -4,7 +4,7 @@
 // handlers in reverse registration order, and a suite whose correctness depends on that ordering
 // is a suite that breaks when someone adds a route in the wrong place.
 
-import type { Page, Route } from '@playwright/test';
+import type { Page, Request, Route } from '@playwright/test';
 import {
   defaultResponse,
   isReachableOverrideKey,
@@ -13,7 +13,10 @@ import {
   type Json,
 } from './openapi';
 
-export type Override = Json | ((url: URL) => Json);
+/** A fixed body, or one computed per request. The request is there for the rare override that has to
+ *  tell a GET from a PUT on the same path — a mock that keeps what the page saved, so a reload can
+ *  read it back (`treeFilterCollapse.spec.ts`). */
+export type Override = Json | ((url: URL, request: Request) => Json);
 
 export interface MockConfig {
   /** Keyed by pathname (`/api/v1/auth/me`) or by path template (`/api/v1/analysis/jobs/{id}`),
@@ -114,7 +117,11 @@ export async function installMockApi(page: Page, config: MockConfig = {}): Promi
     const override = overrides[pathname] ?? (entry ? overrides[entry.template] : undefined);
     if (override !== undefined && entry) {
       state.served.push(label);
-      await fulfilJson(route, 200, typeof override === 'function' ? override(url) : override);
+      await fulfilJson(
+        route,
+        200,
+        typeof override === 'function' ? override(url, request) : override,
+      );
       return;
     }
 
