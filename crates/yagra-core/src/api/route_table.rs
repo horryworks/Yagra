@@ -958,10 +958,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "POST",
         "/api/v1/nodes/move",
-        // Scoped, unlike the single-node `PUT /nodes/:id/group` beside it, which claims
-        // `ADMIN_CFG`. `manage_config` is held by Operator too and an Operator can be group-scoped,
-        // so the claim is wrong there — a defect this route deliberately does not inherit
-        // (ADR-124 決定 8). Fixing the older one changes drag-and-drop, so it is filed separately.
+        // Scoped, unlike the single-node `PUT /nodes/:id/group` and `PUT /nodes/:id/placement`
+        // beside it, which claim `ADMIN_CFG`. `manage_config` is held by Operator too and an
+        // Operator can be group-scoped, so the claim is wrong there — a defect this route
+        // deliberately does not inherit (ADR-124 決定 8). Since 増分 8 this route carries the
+        // placement too, so no WebUI gesture reaches either of the older two; what is left of that
+        // defect is an external client holding the published contract.
         GroupFiltered,
         NO_MCP_WRITE,
     ),
@@ -2426,6 +2428,13 @@ mod tests {
             "the WebUI moved every move to `POST /nodes/move` in ADR-124 Inc.4 and `services/api.ts` \
              says the endpoint stays for external clients that hold it, with no second WebUI \
              client on purpose",
+        ),
+        (
+            "PUT",
+            "/api/v1/nodes/:node_id/placement",
+            "the same move as its `/group` sibling, one increment later: ADR-124 増分 8 gave \
+             `POST /nodes/move` the `before`/`after` hints, so the drag sends one request whether \
+             it carries one node or thirty and `services/api.ts` has no client for this route",
         ),
     ];
 

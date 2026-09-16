@@ -1653,12 +1653,21 @@ async fn set_node_group(
 /// which half (ADR-124 決定 7).
 const NODE_MOVE_BATCH_MAX: usize = 1000;
 
-/// Move many nodes into one folder (or `null` to ungroup them all).
+/// Move many nodes into one folder (or `null` to ungroup them all), optionally placing them at a
+/// position inside it rather than at the end.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct BulkNodeMove {
     node_ids: Vec<Uuid>,
     #[serde(default)]
     group_id: Option<Uuid>,
+    /// Place the nodes immediately **before** this sibling, keeping the order they were given in.
+    /// At most one of `before`/`after`; both omitted appends to the end, which is what every
+    /// caller did before ADR-124 増分 8 and what an N-1 WebUI still sends.
+    #[serde(default)]
+    before: Option<Uuid>,
+    /// Place the nodes immediately **after** this sibling. See `before`.
+    #[serde(default)]
+    after: Option<Uuid>,
 }
 
 /// What a bulk move actually did.
@@ -1829,7 +1838,7 @@ async fn bulk_tag_nodes(
     request_body = BulkNodeMove,
     responses(
         (status = 200, description = "How many of the named nodes moved", body = BulkMoveResult),
-        (status = 400, description = "Unknown destination folder, or more ids than one request may carry", body = super::error::ErrorBody),
+        (status = 400, description = "Unknown destination folder, both `before` and `after` given, or more ids than one request may carry", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the caller cannot see ungrouped nodes", body = super::error::ErrorBody),
         (status = 404, description = "The destination folder is not one this caller may act on", body = super::error::ErrorBody),
@@ -1851,6 +1860,14 @@ async fn move_nodes(
             ),
         ));
     }
+    // The same refusal the single-node placement endpoint makes: the two are separate ordering
+    // hints and a request carrying both has not said where it wants the nodes.
+    if body.before.is_some() && body.after.is_some() {
+        return Err(ApiError::bad_request(
+            "invalid_placement",
+            "specify at most one of before/after",
+        ));
+    }
     // The destination is checked before the ids: moving nodes *into* a folder this caller may not
     // act on would put them where that caller can no longer reach them.
     match body.group_id {
@@ -1864,16 +1881,33 @@ async fn move_nodes(
         None => {}
     }
     super::groups::require_group_exists(&admin, body.group_id).await?;
-    let (requested, moved) = admin
-        .repo
-        .set_node_group_batch(&body.node_ids, body.group_id, scope.group_filter())
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "bulk move nodes", "failed to move nodes")
-        })?;
+    // Two writers, because appending does not need to read the destination first: the plain move
+    // takes the `MAX(sort_order)` inside its own statement, and paying for a sibling read on every
+    // "Move to…" would be a round trip for an answer nobody asked for.
+    let placed = body.before.is_some() || body.after.is_some();
+    let done = if placed {
+        admin
+            .repo
+            .place_node_batch(
+                &body.node_ids,
+                body.group_id,
+                body.before,
+                body.after,
+                scope.group_filter(),
+            )
+            .await
+    } else {
+        admin
+            .repo
+            .set_node_group_batch(&body.node_ids, body.group_id, scope.group_filter())
+            .await
+    };
+    let (requested, moved) = done.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "bulk move nodes", "failed to move nodes")
+    })?;
     // The audit middleware records method and path only, so without this the log says that someone
     // moved something and never how much (`api/maintenance.rs` does the same for its bulk clear).
-    tracing::info!(requested, moved, group = ?body.group_id, "bulk node move");
+    tracing::info!(requested, moved, group = ?body.group_id, placed, "bulk node move");
     Ok(Json(BulkMoveResult { requested, moved }))
 }
 
@@ -3350,6 +3384,76 @@ mod tests {
             let node = repo.get_node(id).await.expect("read").expect("the node");
             assert_eq!(node.group.map(|g| g.0), Some(dest), "{id} did not move");
         }
+    }
+
+    /// 🚨 **A batch dropped between two rows lands there, not at the end** (ADR-124 増分 8).
+    ///
+    /// The gesture this endpoint could not express until it grew `before`/`after`: the drag had to
+    /// append a multi-node batch, so the same drop answered differently at one node and at three.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_move_places_the_batch_where_it_was_dropped(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let dest = crate::pgtest::group(&pool, "Tokyo").await;
+        let repo = crate::pgtest::repo(pool.clone());
+        let top = crate::pgtest::node(&pool, "top", 1, Some(dest)).await;
+        let anchor = crate::pgtest::node(&pool, "anchor", 2, Some(dest)).await;
+        repo.place_node(top, Some(dest), 1.0).await.expect("top");
+        repo.place_node(anchor, Some(dest), 2.0)
+            .await
+            .expect("anchor");
+        let c = crate::pgtest::node(&pool, "c", 3, None).await;
+        let a = crate::pgtest::node(&pool, "a", 4, None).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move",
+            &tok,
+            // The ids are deliberately not in name order: what arrives is the operator's tree
+            // order, and it must survive to the folder.
+            Some(serde_json::json!({ "node_ids": [c, a], "group_id": dest, "before": anchor })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["moved"], 2, "{body}");
+
+        let order = repo
+            .node_sort_orders(&[top, anchor, c, a])
+            .await
+            .expect("orders");
+        let of = |id: uuid::Uuid| *order.get(&id).expect("an order");
+        assert!(
+            of(top) < of(c) && of(c) < of(a) && of(a) < of(anchor),
+            "the batch was appended instead of placed: {order:?}"
+        );
+    }
+
+    /// Both ordering hints at once is a refusal, not a guess about which one was meant.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_bulk_move_naming_both_sides_of_a_sibling_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let dest = crate::pgtest::group(&pool, "Tokyo").await;
+        let anchor = crate::pgtest::node(&pool, "anchor", 1, Some(dest)).await;
+        let a = crate::pgtest::node(&pool, "a", 2, None).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move",
+            &tok,
+            Some(serde_json::json!({
+                "node_ids": [a], "group_id": dest, "before": anchor, "after": anchor
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_placement", "{body}");
     }
 
     /// An unknown destination is a 400 that names it, not the foreign key's 500 that names nothing.

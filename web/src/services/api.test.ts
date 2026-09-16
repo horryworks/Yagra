@@ -1194,15 +1194,32 @@ describe('api client', () => {
     expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ parent_id: null });
   });
 
-  it('drag-reorders a node before a sibling (placement)', async () => {
+  it('drag-reorders nodes before a sibling through the bulk move (placement)', async () => {
+    // 🚨 ADR-124 増分 8: one request whether the drag carried one node or several. The single-node
+    // `PUT /nodes/{id}/placement` had no batch form, so a multi-node drop had to append instead.
     const spy = vi
       .fn()
-      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
     globalThis.fetch = spy;
-    await api.placeNode('n1', { group_id: 'g2', before: 'n3' });
-    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/n1/placement');
-    expect(spy.mock.calls[0][1].method).toBe('PUT');
-    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ group_id: 'g2', before: 'n3' });
+    await api.moveNodes(['n1', 'n2'], 'g2', { before: 'n3' });
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/move');
+    expect(spy.mock.calls[0][1].method).toBe('POST');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({
+      node_ids: ['n1', 'n2'],
+      group_id: 'g2',
+      before: 'n3',
+    });
+  });
+
+  it('omits the ordering hints entirely when a move just appends', async () => {
+    // ⚠️ Not `before: null`. The server reads an absent field as "append", and sending the key
+    // with a null would put two meaningless fields on every "Move to…" the dialogs make.
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.moveNodes(['n1'], 'g2');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ node_ids: ['n1'], group_id: 'g2' });
   });
 
   it('drag-reorders a group after a sibling (placement)', async () => {

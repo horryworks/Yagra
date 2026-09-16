@@ -285,17 +285,22 @@ where
     fold
 }
 
-/// A fractional sort_order that places an item between `prev` and `next` — the order values of
-/// its new neighbours in the destination scope (either side absent at an edge). Midpoint inserts
-/// keep reordering to a single-row update; values are seeded with integer spacing (migration
-/// 0015) so a long run of midpoints stays well within `f64` precision. Pure for unit tests.
-#[must_use]
-pub fn order_between(prev: Option<f64>, next: Option<f64>) -> f64 {
-    match (prev, next) {
-        (Some(p), Some(n)) => (p + n) / 2.0,
-        (Some(p), None) => p + 1.0,
-        (None, Some(n)) => n - 1.0,
-        (None, None) => 0.0,
+/// The gap a drop lands in: the order values on either side of it, within `siblings` — the
+/// destination scope's current items, ordered ascending and **not** including whatever is moving.
+/// `before`/`after` name the drop target (at most one is set); if neither matches a sibling the
+/// drop appends, which is the gap after the last one.
+fn placement_gap(
+    siblings: &[(Uuid, f64)],
+    before: Option<Uuid>,
+    after: Option<Uuid>,
+) -> (Option<f64>, Option<f64>) {
+    let pos = |id: Uuid| siblings.iter().position(|(s, _)| *s == id);
+    if let Some(i) = before.and_then(pos) {
+        (i.checked_sub(1).map(|j| siblings[j].1), Some(siblings[i].1))
+    } else if let Some(i) = after.and_then(pos) {
+        (Some(siblings[i].1), siblings.get(i + 1).map(|(_, o)| *o))
+    } else {
+        (siblings.last().map(|(_, o)| *o), None)
     }
 }
 
@@ -305,15 +310,45 @@ pub fn order_between(prev: Option<f64>, next: Option<f64>) -> f64 {
 /// last one. Pure so the placement maths is unit-tested without a database.
 #[must_use]
 pub fn placement_order(siblings: &[(Uuid, f64)], before: Option<Uuid>, after: Option<Uuid>) -> f64 {
-    let pos = |id: Uuid| siblings.iter().position(|(s, _)| *s == id);
-    if let Some(i) = before.and_then(pos) {
-        let prev = i.checked_sub(1).map(|j| siblings[j].1);
-        order_between(prev, Some(siblings[i].1))
-    } else if let Some(i) = after.and_then(pos) {
-        let next = siblings.get(i + 1).map(|(_, o)| *o);
-        order_between(Some(siblings[i].1), next)
-    } else {
-        order_between(siblings.last().map(|(_, o)| *o), None)
+    // One item is a batch of one, so there is one answer to where a drop lands (ADR-124 増分 8).
+    placement_orders(siblings, before, after, 1)[0]
+}
+
+/// The new sort_orders for **`n` items dropped together**, in the order they are to appear.
+///
+/// The same gap [`placement_order`] finds, divided into `n + 1` steps so every item lands inside
+/// it and their relative order is the one the caller passed. At an edge the step is 1.0, matching
+/// the integer spacing migration 0015 seeded and the `MAX + 1` an append writes.
+///
+/// 🚨 **This is what a multi-node drag needed and did not have** (ADR-124 増分 4 決定 C): with only
+/// the single-item form, dropping three nodes between two rows had to append them instead, so the
+/// same gesture answered differently at one node and at three. Calling the single form `n` times
+/// would give all `n` the *same* order, because none of them is in `siblings`.
+///
+/// ⚠️ The gap shrinks by `1 / (n + 1)` each time a batch lands in the same place, the same way the
+/// single form halves it. Seeded integer spacing keeps a long run well inside `f64` precision.
+///
+/// `n == 0` returns empty — the caller has nothing to place.
+#[must_use]
+pub fn placement_orders(
+    siblings: &[(Uuid, f64)],
+    before: Option<Uuid>,
+    after: Option<Uuid>,
+    n: usize,
+) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let steps = n as f64 + 1.0;
+    match placement_gap(siblings, before, after) {
+        // Inside the list: divide the gap evenly, so the batch keeps its own order between them.
+        (Some(p), Some(next)) => (1..=n).map(|k| p + (next - p) * k as f64 / steps).collect(),
+        // Past the end: integer spacing, which is what an append has always written.
+        (Some(p), None) => (1..=n).map(|k| p + k as f64).collect(),
+        // Before the first: integer spacing below it, landing the last item just under `next`.
+        (None, Some(next)) => (1..=n).map(|k| next - (steps - k as f64)).collect(),
+        // An empty scope: start at 0 and count up, matching a freshly seeded list.
+        (None, None) => (0..n).map(|k| k as f64).collect(),
     }
 }
 
@@ -1530,16 +1565,24 @@ mod tests {
         assert_eq!(geo_of(&groups, 2).2, GeoSource::Inherited);
     }
 
+    /// The four edge conventions a single drop has always written, kept named after
+    /// `order_between` was folded into [`placement_orders`] (ADR-124 増分 8): it was that function
+    /// at `n = 1`, so keeping both would have been two copies of these four numbers.
     #[test]
-    fn order_between_interpolates_and_extends() {
+    fn one_item_keeps_the_midpoint_and_integer_edge_conventions() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
         // Between two neighbours → midpoint.
-        assert_eq!(order_between(Some(1.0), Some(3.0)), 2.0);
+        assert_eq!(
+            placement_orders(&[(a, 1.0), (b, 3.0)], Some(b), None, 1),
+            vec![2.0]
+        );
         // Append after the last → +1.
-        assert_eq!(order_between(Some(5.0), None), 6.0);
+        assert_eq!(placement_orders(&[(a, 5.0)], None, Some(a), 1), vec![6.0]);
         // Prepend before the first → -1.
-        assert_eq!(order_between(None, Some(2.0)), 1.0);
+        assert_eq!(placement_orders(&[(a, 2.0)], Some(a), None, 1), vec![1.0]);
         // Only element.
-        assert_eq!(order_between(None, None), 0.0);
+        assert_eq!(placement_orders(&[], None, None, 1), vec![0.0]);
     }
 
     #[test]
@@ -1563,6 +1606,81 @@ mod tests {
         assert_eq!(placement_order(&sibs, Some(Uuid::from_u128(9)), None), 4.0);
         // Empty scope → 0.
         assert_eq!(placement_order(&[], None, None), 0.0);
+    }
+
+    /// 🚨 The property ADR-124 増分 8 turns on: **N items land inside the gap, in the order given.**
+    ///
+    /// Calling the single form N times cannot do this — none of the moving items is in `siblings`,
+    /// so every call finds the same gap and answers with the same number, and the batch arrives
+    /// with N identical sort_orders (i.e. in whatever order PostgreSQL feels like).
+    #[test]
+    fn placement_orders_divides_the_gap_it_lands_in() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let sibs = [(a, 1.0), (b, 2.0), (c, 3.0)];
+
+        // Three dropped before b → three values strictly between a and b, ascending.
+        let got = placement_orders(&sibs, Some(b), None, 3);
+        assert_eq!(got, vec![1.25, 1.5, 1.75]);
+        assert!(
+            got.windows(2).all(|w| w[0] < w[1]),
+            "not ascending: {got:?}"
+        );
+        assert!(
+            got.iter().all(|o| *o > 1.0 && *o < 2.0),
+            "a value escaped the gap: {got:?}"
+        );
+
+        // After b → between b and c.
+        assert_eq!(
+            placement_orders(&sibs, None, Some(b), 3),
+            vec![2.25, 2.5, 2.75]
+        );
+
+        // Past the end (append, and the no-target case): integer spacing above the last.
+        assert_eq!(
+            placement_orders(&sibs, None, Some(c), 3),
+            vec![4.0, 5.0, 6.0]
+        );
+        assert_eq!(placement_orders(&sibs, None, None, 3), vec![4.0, 5.0, 6.0]);
+        // An unknown anchor appends rather than failing — the row was deleted since the page load.
+        assert_eq!(
+            placement_orders(&sibs, Some(Uuid::from_u128(9)), None, 2),
+            vec![4.0, 5.0]
+        );
+
+        // Before the first: integer spacing below it, the last one just under `a`.
+        assert_eq!(
+            placement_orders(&sibs, Some(a), None, 3),
+            vec![-2.0, -1.0, 0.0]
+        );
+
+        // An empty scope counts up from 0, the shape migration 0015 seeded.
+        assert_eq!(placement_orders(&[], None, None, 3), vec![0.0, 1.0, 2.0]);
+
+        // Nothing to place is not an error, and must not be a one-element vec.
+        assert!(placement_orders(&sibs, Some(b), None, 0).is_empty());
+    }
+
+    /// The single form is the batch form at `n = 1` — so the two cannot answer differently.
+    #[test]
+    fn one_item_is_a_batch_of_one() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let sibs = [(a, 1.0), (b, 2.0)];
+        for (before, after) in [
+            (Some(b), None),
+            (None, Some(a)),
+            (Some(a), None),
+            (None, None),
+        ] {
+            assert_eq!(
+                vec![placement_order(&sibs, before, after)],
+                placement_orders(&sibs, before, after, 1),
+                "the two forms disagree for before={before:?} after={after:?}"
+            );
+        }
     }
 
     #[test]

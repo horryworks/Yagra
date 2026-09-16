@@ -177,7 +177,6 @@
     "moveNode": "failed to move node",
     "movePartial": "Moved {{moved}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
     "moveGroup": "failed to move group",
-    "reorderNode": "failed to reorder node",
     "reorderGroup": "failed to reorder group",
     "sortChildren": "failed to sort this folder",
     "deleteGroup": "failed to delete group",

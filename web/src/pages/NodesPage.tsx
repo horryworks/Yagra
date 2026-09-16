@@ -675,9 +675,13 @@ export function NodesPage() {
   // ⚠️ **A drop has no dialog to hold a partial result in.** `MoveNodeModal` stays open on
   // `moved < requested` so the operator reads it; a drop has nothing open, so the page says it.
   // Reporting a short move as success is the failure this endpoint returns two numbers for.
-  const moveNodes = (nodeIds: readonly string[], groupId: string | null) =>
+  const moveNodes = (
+    nodeIds: readonly string[],
+    groupId: string | null,
+    placement?: { before?: string; after?: string },
+  ) =>
     api
-      .moveNodes([...nodeIds], groupId)
+      .moveNodes([...nodeIds], groupId, placement)
       .then(async (r) => {
         // Only when the drag actually took the batch. Grabbing a row outside it leaves it
         // alone, which is what the right-click menu does with the same row (`nodeMoveItems`).
@@ -699,15 +703,8 @@ export function NodesPage() {
       .catch((e: unknown) => setError(errMsg(e, t('err.moveGroup'))));
 
   // Drag-reorder (before/after a sibling): place the item relative to a neighbour and refresh.
-  const reorderNode = (
-    nodeId: string,
-    dest: { groupId: string | null; before?: string; after?: string },
-  ) =>
-    api
-      .placeNode(nodeId, { group_id: dest.groupId, before: dest.before, after: dest.after })
-      .then(reload)
-      .catch((e: unknown) => setError(errMsg(e, t('err.reorderNode'))));
-
+  // ⚠️ There is no node twin of this any more — a node drop, at an edge or not, goes through
+  // `moveNodes` above (ADR-124 増分 8), so "what happens when you move a node" has one answer.
   const reorderGroup = (
     groupId: string,
     dest: { parentId: string | null; before?: string; after?: string },
@@ -720,7 +717,7 @@ export function NodesPage() {
   // Arrange one folder's direct children in name order (ADR-130). One request, not one per child:
   // the browser does not hold a folder's whole membership (it is fetched lazily and capped
   // server-side), and a per-child loop would be a partial write with nothing to read back when it
-  // fails halfway — the same reason a multi-node drag appends rather than inserting.
+  // fails halfway — the same shape a multi-node drag takes, placing the whole batch in one request.
   const sortGroupChildren = (groupId: string, direction: 'asc' | 'desc') =>
     api
       .sortNodeGroupChildren(groupId, direction)
@@ -1006,7 +1003,6 @@ export function NodesPage() {
             onTagChecked={canConfig ? () => setTaggingNodes([...checked.values()]) : undefined}
             onMoveNodes={moveNodes}
             onMoveGroup={moveGroup}
-            onReorderNode={reorderNode}
             onReorderGroup={reorderGroup}
             onSortGroupChildren={sortGroupChildren}
             suppression={suppression}

@@ -75,20 +75,17 @@ export type Target =
  *
  * - A **node over a group** is always `inside`: a node cannot be a sibling of a group, so the
  *   before/after bands would offer a placement that has no meaning.
- * - A **batch over a node** is always `inside` too, meaning "into that row's folder, appended" —
- *   see below.
  * - Over a **group**, the top and bottom quarters are before/after and the middle half is `inside`.
  *   The middle is the widest band because nesting is the common intent and the one with no
  *   keyboard alternative.
  * - Over a **node**, the row splits in half: there is no `inside` a node.
  *
- * 🚨 **A batch has no insertion point, deliberately** (ADR-124 Inc.4 決定 C). Placing N nodes
- * between two rows would need a bulk placement endpoint, and there is none —
- * `PUT /nodes/{id}/placement` takes one node. Calling it N times is a write that can fail halfway
- * with no way for the operator to read how far it got, which is the failure 決定 7 refuses when it
- * rejects an oversized batch instead of truncating it. So the batch appends, and the indicator says
- * so: a row outline rather than an insertion line. ⚠️ The cost is that the same gesture answers
- * differently at one node and at three; it is on the backlog with its unblocking condition.
+ * 🚨 **The number of nodes being dragged does not change the answer** (ADR-124 増分 8). It used to:
+ * a batch over a node row read `inside`, meaning "into that row's folder, appended", because
+ * placing N nodes between two rows needed a bulk placement endpoint and there was none — so the
+ * same gesture answered differently at one node and at three. `POST /nodes/move` now carries
+ * `before`/`after` and writes the whole batch in one statement, so this reads the cursor and
+ * nothing else.
  *
  * ⚠️ `height` of 0 is treated as 1. A row measured mid-layout reports 0, and dividing by it would
  * make every comparison `NaN` — which compares false, so every drop would silently read `after`.
@@ -99,7 +96,7 @@ export function dropPosition(
   targetIsGroup: boolean,
   drag: DragItem | null,
 ): DropPos {
-  if (drag?.kind === 'node' && (targetIsGroup || drag.ids.length > 1)) return 'inside';
+  if (drag?.kind === 'node' && targetIsGroup) return 'inside';
   const h = height || 1;
   if (targetIsGroup) {
     if (offsetY < h * 0.25) return 'before';
@@ -147,16 +144,22 @@ export function dropAllowed(
  * argument that reaches a write is decided here.
  */
 export type DropAction =
-  /** Assign nodes into a group (`null` = top level), appending them. One node is a list of one:
-   *  since Inc.4 every node move — drag, menu, dialog — goes through `POST /nodes/move`, so there
-   *  is one answer to what moving something does. */
-  | { kind: 'move-nodes'; nodeIds: readonly string[]; groupId: string | null }
+  /** Assign nodes into a group (`null` = top level). One node is a list of one: since Inc.4 every
+   *  node move — drag, menu, dialog — goes through `POST /nodes/move`, so there is one answer to
+   *  what moving something does.
+   *
+   *  `before`/`after` name the sibling node to land next to, at most one; neither means append.
+   *  🚨 **Since 増分 8 a batch carries them too** — there used to be a separate `reorder-node`
+   *  shape that could only hold one id, so a multi-node drop had to fall back to appending. */
+  | {
+      kind: 'move-nodes';
+      nodeIds: readonly string[];
+      groupId: string | null;
+      before?: string;
+      after?: string;
+    }
   /** Re-parent a group, appending it. */
   | { kind: 'move-group'; groupId: string; parentId: string | null }
-  /** Place **one** node next to a sibling node inside `groupId`. ⚠️ Unreachable for a batch by
-   *  construction — `dropPosition` returns `inside` above one — because there is no bulk placement
-   *  endpoint to carry it. */
-  | { kind: 'reorder-node'; nodeId: string; groupId: string | null; before?: string; after?: string }
   /** Place a group next to a sibling group under `parentId`. */
   | {
       kind: 'reorder-group';
@@ -179,13 +182,11 @@ export function dropAction(drag: DragItem, target: Target, position: DropPos): D
     if (target.kind === 'group') {
       return { kind: 'move-nodes', nodeIds: drag.ids, groupId: target.id };
     }
-    // A batch over a node row: into the folder that row sits in, appended (see `dropPosition`).
-    if (position === 'inside') {
-      return { kind: 'move-nodes', nodeIds: drag.ids, groupId: target.scope };
-    }
+    // Beside a node row: into the folder that row sits in, at that row's edge. One id or thirty —
+    // `dropPosition` never answers `inside` over a node, so there is no third case here.
     return {
-      kind: 'reorder-node',
-      nodeId: drag.id,
+      kind: 'move-nodes',
+      nodeIds: drag.ids,
       groupId: target.scope,
       ...(position === 'before' ? { before: target.id } : { after: target.id }),
     };

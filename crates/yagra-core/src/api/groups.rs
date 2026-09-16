@@ -363,9 +363,9 @@ pub(super) struct SortChildren {
 /// the folder it acts on, which is the same consent a file manager asks for.
 ///
 /// ⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per
-/// child would be a partial write with nothing to read back when it fails halfway, which is the
-/// same reason a multi-node drag appends rather than inserting (`nodeTreeDnd.ts`). One request,
-/// one transaction.
+/// child would be a partial write with nothing to read back when it fails halfway. One request,
+/// one transaction — the same shape `POST /nodes/move` takes for a multi-node drag, which places
+/// the whole batch in a single statement rather than calling the single-node writer N times.
 #[utoipa::path(
     post, path = "/api/v1/node-groups/{id}/sort", tag = "groups",
     params(("id" = Uuid, Path, description = "Group id")),
