@@ -317,9 +317,29 @@ interface Route {
 /** The node-detail tabs a host renders, each under its tab's prefix. Both hosts render the same set. */
 const NODE_TABS: readonly RouteTable[] = [
   {
+    entries: ['interfaceFilters'],
+    prefix: nodeTabFilterPrefix('interfaces'),
+    wiredIn: { file: 'components/NodeDetail/InterfacesTab.tsx', spelling: "nodeTabFilterPrefix('interfaces')" },
+  },
+  {
     entries: ['neighborFilters'],
     prefix: nodeTabFilterPrefix('neighbors'),
     wiredIn: { file: 'components/NodeDetail/NeighborsTab.tsx', spelling: "nodeTabFilterPrefix('neighbors')" },
+  },
+  {
+    entries: ['metricFilters'],
+    prefix: nodeTabFilterPrefix('collection'),
+    wiredIn: { file: 'components/NodeDetail/CollectionTab.tsx', spelling: "nodeTabFilterPrefix('collection')" },
+  },
+  {
+    entries: ['eventFilters (showSource: false)'],
+    prefix: nodeTabFilterPrefix('events'),
+    wiredIn: { file: 'components/NodeDetail/EventsTab.tsx', spelling: "nodeTabFilterPrefix('events')" },
+  },
+  {
+    entries: ['flowFilters'],
+    prefix: nodeTabFilterPrefix('flow'),
+    wiredIn: { file: 'components/NodeDetail/FlowTab.tsx', spelling: "nodeTabFilterPrefix('flow')" },
   },
 ];
 
@@ -400,10 +420,6 @@ const ROUTES: readonly Route[] = [
  *  ⚠️ This list is meant to reach empty — an entry is a table that still loses its filter on a
  *  reload. It is not an exemption table. */
 const NOT_YET_IN_THE_URL: Readonly<Record<string, string>> = {
-  interfaceFilters: 'ADR-153 Inc.3 — node-detail Interfaces tab',
-  metricFilters: 'ADR-153 Inc.3 — node-detail Collection tab',
-  'eventFilters (showSource: false)': 'ADR-153 Inc.3 — node-detail Events tab',
-  flowFilters: 'ADR-153 Inc.3 — node-detail Flow tab',
   userFilters: 'ADR-153 Inc.4 — Settings ▸ Users',
   auditFilters: 'ADR-153 Inc.4 — Settings ▸ Audit',
   findingFilters: 'ADR-153 Inc.4 — Troubleshoot ▸ Saved findings',

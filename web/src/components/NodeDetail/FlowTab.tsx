@@ -17,7 +17,9 @@ import { useRefreshTick } from '../../lib/refreshTick';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterBar } from '../ui/FilterBar';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
-import { defaultFilters, type FilterState } from '../../lib/columnFilter';
+import { defaultFilters } from '../../lib/columnFilter';
+import { useFilterParams } from '../../lib/useFilterParams';
+import { nodeTabFilterPrefix } from './tabs';
 import {
   chartIgnoresFilters,
   flowFilterColumns,
@@ -69,7 +71,8 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const filterCols = useMemo(() => flowFilterColumns(t), [t]);
   const specs = useMemo(() => flowFilters(t), [t]);
   const labels = useMemo(() => flowFilterLabels(t), [t]);
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  // In the URL under `flow.` (ADR-153): survives a reload and the walk to the next node.
+  const { filters, setFilters } = useFilterParams(filterCols, nodeTabFilterPrefix('flow'));
   const [sheet, setSheet] = useState(false);
   const [asDir, setAsDir] = useState<'src' | 'dst'>('dst');
   const [loading, setLoading] = useState(true);
@@ -90,13 +93,17 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   // silently dropped the first, and there was no way to ask "these two hosts". Adding is what the
   // ✕ on each trigger already implied. `toggleFlowValue` normalizes through the column's own parser
   // so a clicked value and a typed one cannot end up as two entries for the same port.
+  //
+  // Built from this render's `filters` rather than a functional update, because the state is the URL
+  // now (ADR-153) and a URL write has no functional form. Two clicks inside one render would lose the
+  // first — which takes two clicks faster than React paints.
   const toggle = useCallback(
     (key: 'proto' | 'port' | 'peer' | 'asn', clicked: string) =>
-      setFilters((cur) => ({
-        ...cur,
-        [key]: toggleFlowValue(cur[key] ?? '', clicked, specs[key]),
-      })),
-    [specs],
+      setFilters({
+        ...filters,
+        [key]: toggleFlowValue(filters[key] ?? '', clicked, specs[key]),
+      }),
+    [filters, setFilters, specs],
   );
   const applyPeer = useCallback((addr: string) => toggle('peer', addr), [toggle]);
   const applyPort = useCallback((p: string) => toggle('port', p), [toggle]);

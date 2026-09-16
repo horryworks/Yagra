@@ -8,7 +8,7 @@ import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FOCUSABLE_SELECTOR, trapTarget } from '../../lib/focusTrap';
-import { escapeClosesDialog } from '../../lib/escapeDismiss';
+import { consumeEscape, escapeClosesDialog } from '../../lib/escapeDismiss';
 import './Modal.css';
 
 interface Props {
@@ -36,7 +36,10 @@ export function Modal({ title, onClose, footer, size = 'default', children }: Pr
       if (e.key === 'Escape') {
         // Not unconditionally: a popover or menu opened from a control inside this dialog owns the
         // press first, and closing the dialog under it would discard the form (escapeDismiss.ts).
-        if (escapeClosesDialog(e)) onClose();
+        if (escapeClosesDialog(e)) {
+          consumeEscape(e);
+          onClose();
+        }
         return;
       }
       if (e.key !== 'Tab') return;
