@@ -51,11 +51,8 @@ const cf = (over: FilterState): FilterState => ({ ...C_DEFAULTS, ...over });
 const hasCand = (row: DiscoveryCandidate, s: FilterState) => buildPredicate(C_COLS, s, 0)(row);
 
 const E_COLS = endpointColumns(t);
-// ⚠️ Not `defaultFilters`: this table's default narrows. The page builds the same object.
-const E_DEFAULTS: FilterState = {
-  ...defaultFilters(E_COLS),
-  monitored: ENDPOINT_DEFAULT_MONITORED,
-};
+// The spec's own defaults: the narrowing one is `defaultSelection` on the column (ADR-153).
+const E_DEFAULTS: FilterState = defaultFilters(E_COLS);
 const ef = (over: FilterState): FilterState => ({ ...E_DEFAULTS, ...over });
 const hasEp = (row: DiscoveredEndpoint, s: FilterState) => buildPredicate(E_COLS, s, 0)(row);
 
@@ -149,10 +146,12 @@ describe('the seen-endpoints filter row', () => {
     for (const c of E_COLS) expect(labels[c.key]).toBeTruthy();
   });
 
-  it('reports the default view as filtered, because it is', () => {
-    // ⚠️ Deliberate, and the reason the page always shows the total beside the count: the default
-    // hides rows, so claiming "nothing is narrowing this" would be the untrue half of the pair.
-    expect(isAnyFiltered(E_COLS, E_DEFAULTS)).toBe(true);
-    expect(isAnyFiltered(E_COLS, defaultFilters(E_COLS))).toBe(false);
+  it('counts the narrowing default as no filter, and showing everything as one', () => {
+    // Since ADR-153 the default is the column's `defaultSelection`, so the default view is "nothing
+    // the operator set" — which is what "Clear all filters (N)" and the row's lock need to read. It
+    // still hides rows, which is why the page always shows the total beside the count.
+    expect(E_DEFAULTS.monitored).toBe(ENDPOINT_DEFAULT_MONITORED);
+    expect(isAnyFiltered(E_COLS, E_DEFAULTS)).toBe(false);
+    expect(isAnyFiltered(E_COLS, ef({ monitored: '' })), 'showing imported endpoints too is a choice').toBe(true);
   });
 });

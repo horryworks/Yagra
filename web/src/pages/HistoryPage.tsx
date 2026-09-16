@@ -28,14 +28,14 @@ import { useFilterParams } from '../lib/useFilterParams';
 import { AlertSubjectName } from '../widgets/AlertSubjectName';
 import { AlertWhatText } from '../widgets/AlertWhatText';
 import { appendPage, nextCursor } from './historyCursor';
-import { historyFilters, queryFor, readScope, writeScope } from './historyQuery';
+import { historyFilters, queryFor } from './historyQuery';
 // Reused in place rather than moved: ScopePicker already answers "all / this group / this node"
 // with a server-side node typeahead, which is exactly the node_id + group_id pair this screen
 // filters on. It is mounted on the `troubleshoot` i18n namespace, so moving it to components/ means
 // moving its strings and its consumers too — worth doing, but not inside this change.
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import { allScope, nodeScopeLabel, type ScopeValue } from '../components/ScopePicker/scope';
-import { scopeFilter } from '../troubleshoot/findingsQuery';
+import { readScope, scopeFilter, writeScope } from '../troubleshoot/findingsQuery';
 
 export function HistoryPage() {
   const { t } = useTranslation('alerts');

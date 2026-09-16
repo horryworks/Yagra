@@ -82,12 +82,10 @@ test('typing a term reaches the server, and clearing it comes back', async ({ pa
   );
   expect(asked.length, 'the filter never reached the request').toBeGreaterThan(0);
 
-  // ⚠️ **This screen deliberately does NOT put its filter in the URL.** The first version of this
-  // test asserted it did — an expectation taken from a habit rather than from anything the repo
-  // declares, which is the failure 決定 7 names outright. `MibRepositoryPage` says so at the call
-  // site: "the filter row is a *view* of `query`, not a second copy of it". The URL contract is
-  // declared for the Events screens (ADR-053 Inc.2, "Events の絞り込みは全部 URL") and is asserted
-  // there, below.
+  // Since ADR-153 the term is also in the URL, as `?q=` — the API's own parameter name. The filter
+  // row is still a *view* of that one value (`MibRepositoryPage` says so at the call site); what
+  // changed is where the value lives, so a reload keeps it.
+  await expect(page, 'the term never reached the URL').toHaveURL(new RegExp(`[?&]q=${NEEDLE}`));
   //
   // 🚨 The clear-all regression: two `setSearchParams` calls in one handler, the second undoing
   // the first, and the button doing nothing at all.

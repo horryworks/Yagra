@@ -38,7 +38,8 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, type FilterState } from '../lib/columnFilter';
+import { defaultFilters } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { userColumns, userFilterLabels } from './userFilters';
@@ -63,7 +64,8 @@ export function UsersPage() {
   const [me, setMe] = useState<string | null>(null);
   const filterCols = useMemo(() => userColumns(t), [t]);
   const filterLabels = useMemo(() => userFilterLabels(t), [t]);
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  // In the URL (ADR-153), so a narrowed list survives a reload.
+  const { filters, setFilters } = useFilterParams(filterCols);
   const [sheet, setSheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [block, setBlock] = useState<LoadBlock | null>(null);

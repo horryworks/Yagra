@@ -131,6 +131,30 @@ test.describe('a node-detail tab', () => {
   });
 });
 
+test.describe('a one-table screen that kept its filter in component state', () => {
+  test('Settings ▸ Users keeps a narrowed list after a reload', async ({ page }) => {
+    await page.goto('/settings/users');
+    await typeFilter(page, page, 'Username', NEEDLE);
+    await expect(page).toHaveURL(new RegExp(`[?&]q=[^&]*${NEEDLE}`));
+    await reload(page);
+    await expect(page.getByRole('button', { name: /Clear all filters/ }), 'the reload lost the filter').toHaveCount(1);
+  });
+
+  test('Saved findings opens on the scope its URL names, not on All nodes', async ({ page }) => {
+    // The scope is not a column: its ids ride beside the columns, and the picker's label is derived
+    // from them on arrival. A picker reading "All nodes" over a list narrowed to one node is the
+    // untrue half of the pair.
+    await page.goto(`/troubleshoot/findings?node_id=${TREE_SIBLING_IDS[1]}`);
+    const picker = page.locator('.scope-picker-label');
+    await expect(picker).toHaveText(/^node: /);
+    await expect(page.getByRole('button', { name: /Clear all filters/ })).toHaveCount(1);
+
+    await page.getByRole('button', { name: /Clear all filters/ }).click();
+    await expect(page).not.toHaveURL(/node_id=/);
+    await expect(picker).toHaveText('All nodes');
+  });
+});
+
 test.describe('Notification delivery — two tables with the same column keys', () => {
   const section = (page: Page, title: string) =>
     page.locator('section').filter({ has: page.getByRole('heading', { name: title }) });

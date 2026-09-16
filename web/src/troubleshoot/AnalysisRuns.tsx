@@ -14,11 +14,8 @@ import { ResultCount, TableSpacer, TableToolbar } from '../components/ui/TableTo
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import {
-  defaultFilters,
-  isAnyFiltered,
-  type FilterState,
-} from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { runColumns, runFilterLabels } from './runFilters';
@@ -142,11 +139,10 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
   // summary where three controls above five rows would be noise.
   const columns = useMemo(() => runColumns(t), [t]);
   const labels = useMemo(() => runFilterLabels(t), [t]);
-  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
+  // In the URL (ADR-153). This used to be component state because the list was also embedded in
+  // the catalog; it no longer is (`TroubleshootCatalogPage.tsx`), so the Runs page is its one host.
+  const { filters, setFilters } = useFilterParams(columns);
   const [sheet, setSheet] = useState(false);
-  // Component state, not the URL: this list is embedded in two places on the same route (the
-  // catalog's summary and the Runs page), and a URL-backed key would be claimed by whichever
-  // mounted — the same reason ReportsPage's three tables keep their filters local (Inc.4).
   const narrowed = filterable && isAnyFiltered(columns, filters);
   const shown = useMemo(
     () => (filterable ? jobs.filter(buildPredicate(columns, filters, Date.now())) : jobs),

@@ -10,6 +10,7 @@ import {
   nextCursor,
   queryFor,
   scopeFilter,
+  scopeFromIds,
   scopeIsSet,
   type ScopeIds,
 } from './findingsQuery';
@@ -181,6 +182,37 @@ describe('scopeFilter', () => {
       groupId: 'g1',
     });
     expect(scopeFilter({ kind: 'all', id: null, label: '' })).toEqual(NO_SCOPE);
+  });
+});
+
+describe('scopeFromIds (ADR-153)', () => {
+  const names = {
+    node: (id: string) => (id === 'n1' ? 'core-sw-01' : undefined),
+    group: (id: string) => (id === 'g1' ? 'Tokyo' : undefined),
+  };
+
+  it('is scopeFilter run backwards, for every kind', () => {
+    for (const v of [
+      { kind: 'node', id: 'n1', label: '' },
+      { kind: 'group', id: 'g1', label: '' },
+      { kind: 'all', id: null, label: '' },
+    ] as const) {
+      const back = scopeFromIds(scopeFilter(v), names, t);
+      expect({ kind: back.kind, id: back.id }).toEqual({ kind: v.kind, id: v.id });
+    }
+  });
+
+  it('labels a scope with the name when it is known, and with the id when it is not', () => {
+    // Never with "All nodes": a picker reading All over a list narrowed to one node is the untrue half.
+    const tn = ((k: string, o?: { name?: string }) => `${k}(${o?.name ?? ''})`) as unknown as TFunction;
+    expect(scopeFromIds({ nodeId: 'n1', groupId: '' }, names, tn).label).toBe('common:scope.nodeLabel(core-sw-01)');
+    expect(scopeFromIds({ nodeId: 'n-x', groupId: '' }, names, tn).label).toBe('common:scope.nodeLabel(n-x)');
+    expect(scopeFromIds({ nodeId: '', groupId: 'g1' }, names, tn).label).toBe('common:scope.groupLabel(Tokyo)');
+    expect(scopeFromIds({ nodeId: '', groupId: 'g-x' }, names, tn).label).toBe('common:scope.groupLabel(g-x)');
+  });
+
+  it('takes the node when a hand-edited URL names both', () => {
+    expect(scopeFromIds({ nodeId: 'n1', groupId: 'g1' }, names, t).kind).toBe('node');
   });
 });
 

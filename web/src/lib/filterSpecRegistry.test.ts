@@ -68,6 +68,7 @@ import { scheduleFilters } from '../troubleshoot/scheduleFilters';
 import { nodeTabFilterPrefix } from '../components/NodeDetail/tabs';
 import { TREE_SEARCH_KEY } from '../pages/inventoryFilters';
 import { CHANNEL_FILTER_PREFIX, ROUTING_RULE_FILTER_PREFIX } from '../pages/routingFilters';
+import { CANDIDATE_FILTER_PREFIX, ENDPOINT_FILTER_PREFIX } from '../pages/discoveryFilters';
 import { REPORT_TABLE_PREFIX } from '../reports/reportListFilters';
 
 const t = ((k: string) => k) as unknown as TFunction;
@@ -414,21 +415,43 @@ const ROUTES: readonly Route[] = [
   { path: '/settings/pollers', own: [], tables: [{ entries: ['pollerFilters'], prefix: '' }] },
   { path: '/settings/api-tokens', own: [], tables: [{ entries: ['tokenFilters'], prefix: '' }] },
   { path: '/troubleshoot/scheduled', own: [], tables: [{ entries: ['scheduleFilters'], prefix: '' }] },
+  { path: '/troubleshoot/runs', own: [], tables: [{ entries: ['runFilters'], prefix: '' }] },
+  {
+    path: '/troubleshoot/findings',
+    own: ['node_id', 'group_id'],
+    tables: [{ entries: ['findingFilters'], prefix: '' }],
+  },
+  { path: '/settings/users', own: [], tables: [{ entries: ['userFilters'], prefix: '' }] },
+  { path: '/settings/audit', own: [], tables: [{ entries: ['auditFilters'], prefix: '' }] },
+  {
+    // One table: the category bar and the column cells are one filter state.
+    path: '/nodes/profiles',
+    own: [],
+    tables: [{ entries: ['profileFilters', 'profileCategoryFilter'], prefix: '' }],
+  },
+  { path: '/nodes/collection-templates', own: [], tables: [{ entries: ['metricSetFilters'], prefix: '' }] },
+  {
+    path: '/nodes/discovery',
+    own: ['scan', 'group'],
+    tables: [
+      {
+        entries: ['candidateFilters'],
+        prefix: CANDIDATE_FILTER_PREFIX,
+        wiredIn: { file: 'pages/DiscoveryPage.tsx', spelling: 'CANDIDATE_FILTER_PREFIX' },
+      },
+      {
+        entries: ['endpointFilters'],
+        prefix: ENDPOINT_FILTER_PREFIX,
+        wiredIn: { file: 'pages/DiscoveryPage.tsx', spelling: 'ENDPOINT_FILTER_PREFIX' },
+      },
+    ],
+  },
 ];
 
 /** Builders whose table does not live in the URL yet, each with the ADR-153 increment that moves it.
  *  ⚠️ This list is meant to reach empty — an entry is a table that still loses its filter on a
  *  reload. It is not an exemption table. */
 const NOT_YET_IN_THE_URL: Readonly<Record<string, string>> = {
-  userFilters: 'ADR-153 Inc.4 — Settings ▸ Users',
-  auditFilters: 'ADR-153 Inc.4 — Settings ▸ Audit',
-  findingFilters: 'ADR-153 Inc.4 — Troubleshoot ▸ Saved findings',
-  profileFilters: 'ADR-153 Inc.4 — Nodes ▸ Device profiles',
-  profileCategoryFilter: 'ADR-153 Inc.4 — Nodes ▸ Device profiles',
-  metricSetFilters: 'ADR-153 Inc.4 — Nodes ▸ Metric sets',
-  runFilters: 'ADR-153 Inc.4 — Troubleshoot ▸ Runs',
-  candidateFilters: 'ADR-153 Inc.4 — Nodes ▸ Discovery',
-  endpointFilters: 'ADR-153 Inc.4 — Nodes ▸ Discovery',
   ruleGapFilters: 'ADR-153 Inc.5 — Troubleshoot report body',
   flowScanFilters: 'ADR-153 Inc.5 — Troubleshoot report body',
   authProbeFilters: 'ADR-153 Inc.5 — Troubleshoot report body',

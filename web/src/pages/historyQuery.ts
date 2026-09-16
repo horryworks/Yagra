@@ -211,34 +211,6 @@ export function queryFor(
   };
 }
 
-/**
- * The scope ids the URL carries beside the columns, and the writer that puts them back.
- *
- * They are the reason this screen keeps its filters in the URL at all: a node page linking to
- * "this node's alert history" needs somewhere to say which node, and nothing else holds that.
- *
- * ⚠️ `writeScope` is meant to be handed to `setFilters(next, also)` — **never called beside a
- * second `setSearchParams`**. Two writes in one handler are both built from this render's snapshot
- * and React batches them, so the second silently discards the first; that is exactly how "clear all
- * filters" once cleared the columns and restored them on the Events page.
- */
-export function readScope(params: URLSearchParams): ScopeIds {
-  return {
-    nodeId: params.get('node_id')?.trim() ?? '',
-    groupId: params.get('group_id')?.trim() ?? '',
-  };
-}
-
-export function writeScope(scope: ScopeIds): (params: URLSearchParams) => void {
-  return (params) => {
-    for (const [key, value] of [
-      ['node_id', scope.nodeId],
-      ['group_id', scope.groupId],
-    ] as const) {
-      // Deleted rather than emptied, the same rule `writeFilterParams` follows: a bare URL is the
-      // default view, so a query string always means something is narrowing the list.
-      if (value) params.set(key, value);
-      else params.delete(key);
-    }
-  };
-}
+// `readScope` / `writeScope` lived here until ADR-153 gave Troubleshoot ▸ Saved findings the same
+// URL scope; they moved beside `ScopeIds` in `troubleshoot/findingsQuery.ts`, which both screens
+// already imported `scopeFilter` from.

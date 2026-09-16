@@ -97,6 +97,12 @@ export const ENDPOINT_MONITORED = ['unmonitored', 'monitored'] as const;
  */
 export const ENDPOINT_DEFAULT_MONITORED = 'unmonitored';
 
+/** URL-key prefixes for the page's two tables (ADR-153 決定 3). Both live on `/nodes/discovery`
+ *  beside the page's own `?scan=` and `?group=`, and the route ledger in
+ *  `filterSpecRegistry.test.ts` checks the four are disjoint. */
+export const CANDIDATE_FILTER_PREFIX = 'candidates.';
+export const ENDPOINT_FILTER_PREFIX = 'endpoints.';
+
 /**
  * The seen-endpoints filter row.
  *
@@ -140,6 +146,10 @@ export function endpointFilters(
       readValue: (e) => (isUnmonitored(e) ? 'unmonitored' : 'monitored'),
       allLabel: t('discovery.seen.filter.allStates'),
       counts: 'client',
+      // The narrowing default belongs to the column (ADR-153 決定 6), so `defaultFilters`, the URL
+      // codec, the "Clear all filters (N)" count and the row's visibility all agree about it. It was
+      // a `baseline` object handed to three components, which the codec could not have seen.
+      defaultSelection: ENDPOINT_DEFAULT_MONITORED,
     },
   };
 }
