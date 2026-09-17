@@ -133,6 +133,14 @@ export interface NodeEditKindSpec {
 }
 
 export const NODE_EDIT_KIND_SPEC: Record<NodeKind, NodeEditKindSpec> = {
+  // An imported AP keeps the device wording: it is a device, just one its controller reports on.
+  // Its picker offers only the AP category, because a device profile's SNMP templates would never
+  // run against it.
+  wireless_ap: {
+    titleKey: 'detail.editNode',
+    profileLabelKey: 'field.deviceProfile',
+    profileCategory: 'wireless-ap',
+  },
   device: {
     titleKey: 'detail.editNode',
     profileLabelKey: 'field.deviceProfile',

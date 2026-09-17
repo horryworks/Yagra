@@ -47,7 +47,7 @@ mod testkit;
 pub use assemble::{assemble_node_jobs, AdjacencyPolicy, MonitorHints, SpecialMonitor};
 pub use dispatch::{PollDispatcher, PollDispatcherStores};
 pub use stats::{SchedulerStats, SchedulerStatsSnapshot};
-pub(crate) use sweep::run_scheduler;
+pub(crate) use sweep::{run_scheduler, CollectedElsewhere};
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
 /// the global default. Pure (no I/O) so the scheduler's resolution is unit-testable.

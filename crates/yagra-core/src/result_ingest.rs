@@ -45,6 +45,7 @@ use crate::history::AlertHistoryStore;
 use crate::no_reading_filter::{Admitted, NoReadingHandle};
 use crate::repo::{self, NodeRepo};
 use crate::store::MetricStore;
+use crate::wireless_fanout::{ApFanout, Replay};
 use crate::{arp, dns_check, l3, l3_routing, meraki, neighbors, scheduler};
 
 /// Bounded queue between the single result matcher and each async batch persist writer (ADR-025,
@@ -560,11 +561,16 @@ pub(crate) async fn consume_results<S>(
     stats: Arc<scheduler::SchedulerStats>,
     meraki_inflight: Arc<meraki::MerakiInflight>,
     coordinator: Arc<Coordinator>,
+    ap_fanout: Arc<ApFanout>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
     use tracing::Instrument as _;
     while let Some(result) = results.next().await {
+        // A wireless controller's AP inventory stands for one result per imported AP (ADR-064 B2).
+        // Decided here, in arrival order, so the two members of an HA pair are judged one after
+        // the other against the same record of who serves each AP.
+        let aps = ap_fanout.results_for(&result, Replay::Live);
         let admitted = no_reading.admit(result);
         // Result-ingest span: child of the poller's poll span (via the result's carried trace
         // context), completing the poll's end-to-end distributed trace. Secret-free fields only.
@@ -574,18 +580,38 @@ pub(crate) async fn consume_results<S>(
             job_id = %admitted.result().job_id,
         );
         yagra_telemetry::set_span_parent(&ingest_span, &admitted.result().trace_context);
-        ingest_result(
-            admitted,
-            &alerts,
-            &notify_tx,
-            &vm,
-            &meta_tx,
-            &history_tx,
-            &history,
-            &stats,
-            &meraki_inflight,
-            &coordinator,
-        )
+        async {
+            ingest_result(
+                admitted,
+                &alerts,
+                &notify_tx,
+                &vm,
+                &meta_tx,
+                &history_tx,
+                &history,
+                &stats,
+                &meraki_inflight,
+                &coordinator,
+            )
+            .await;
+            // Each AP's result goes through the same door as any other node's: the no-reading
+            // filter, the stores, and the alert engine, which is what makes a down AP an alert.
+            for ap in aps {
+                ingest_result(
+                    no_reading.admit(ap),
+                    &alerts,
+                    &notify_tx,
+                    &vm,
+                    &meta_tx,
+                    &history_tx,
+                    &history,
+                    &stats,
+                    &meraki_inflight,
+                    &coordinator,
+                )
+                .await;
+            }
+        }
         .instrument(ingest_span)
         .await;
     }
@@ -604,14 +630,21 @@ pub(crate) async fn consume_results_backfill<S>(
     no_reading: NoReadingHandle,
     vm: VmWriters,
     meta_tx: tokio::sync::mpsc::Sender<MetaRecord>,
+    ap_fanout: Arc<ApFanout>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_core_backfill_results_total").increment(1);
+        // A replayed inventory's APs are stored at their own time too — judged against who serves
+        // each AP now, and never moving it (ADR-064 B2).
+        let aps = ap_fanout.results_for(&result, Replay::Backfill);
         // A replayed placeholder is not stored either — and, arriving hours late, it is not evidence
         // about anything now, so it is dropped rather than handed to an engine this path never has.
         persist_metrics_and_meta(&no_reading.admit(result), &vm, &meta_tx);
+        for ap in aps {
+            persist_metrics_and_meta(&no_reading.admit(ap), &vm, &meta_tx);
+        }
     }
     tracing::warn!("backfill result stream ended");
 }
@@ -1388,6 +1421,7 @@ mod tests {
             NoReadingHandle::default(),
             vm,
             meta_tx,
+            Arc::new(ApFanout::new()),
         )
         .await;
         assert!(
@@ -1514,6 +1548,15 @@ mod tests {
             .actions
     }
 
+    /// [`drive_ingest_with`] with no AP imported.
+    async fn drive_ingest_into(
+        alerts: &Arc<AlertManager>,
+        no_reading: &NoReadingHandle,
+        results: Vec<PollResult>,
+    ) -> Ingested {
+        drive_ingest_with(alerts, no_reading, Arc::new(ApFanout::new()), results).await
+    }
+
     /// Everything one run of [`drive_ingest_into`] handed onward, per channel.
     struct Ingested {
         actions: Vec<crate::alerts::NotifyAction>,
@@ -1521,11 +1564,13 @@ mod tests {
         metrics: Vec<Arc<PollResult>>,
     }
 
-    /// [`drive_ingest`] with the engine and the no-reading table supplied by the test (ADR-156), and
-    /// with what reached the VM writer and the history writer kept rather than dropped.
-    async fn drive_ingest_into(
+    /// [`drive_ingest`] with the engine, the no-reading table and the AP fan-out supplied by the test
+    /// (ADR-156, ADR-064), and with what reached the VM writer and the history writer kept rather
+    /// than dropped. Runs the real [`consume_results`] loop over the results.
+    async fn drive_ingest_with(
         alerts: &Arc<AlertManager>,
         no_reading: &NoReadingHandle,
+        ap_fanout: Arc<ApFanout>,
         results: Vec<PollResult>,
     ) -> Ingested {
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(64);
@@ -1550,21 +1595,23 @@ mod tests {
             stats.clone(),
             None,
         ));
-        for r in results {
-            ingest_result(
-                no_reading.admit(r),
-                alerts,
-                &notify_tx,
-                &vm,
-                &meta_tx,
-                &history_tx,
-                &history,
-                &stats,
-                &inflight,
-                &coordinator,
-            )
-            .await;
-        }
+        let (history_tx_, notify_tx_) = (history_tx.clone(), notify_tx.clone());
+        consume_results(
+            futures::stream::iter(results),
+            no_reading.clone(),
+            alerts.clone(),
+            notify_tx_,
+            vm,
+            meta_tx,
+            history_tx_,
+            history,
+            stats,
+            inflight,
+            coordinator,
+            ap_fanout,
+        )
+        .await;
+        drop(history_tx);
         drop(notify_tx);
         let mut out = Ingested {
             actions: Vec::new(),
@@ -1731,6 +1778,7 @@ mod tests {
             ac6508_handle(),
             vm,
             meta_tx,
+            Arc::new(ApFanout::new()),
         )
         .await;
         let stored = metrics_rx
@@ -1820,6 +1868,115 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, crate::alerts::NotifyAction::Fire(_))),
             "the genuine outage must still fire despite the interleaved observational results"
+        );
+    }
+
+    /// A controller's inventory result, from `controller`, saying `state` about the AP `mac`.
+    fn wlan_result(
+        controller: NodeId,
+        mac: [u8; 6],
+        state: yagra_common::WlanApState,
+        at: i64,
+    ) -> PollResult {
+        let mut r = observational_result(controller, CheckOutcome::Reachable, at);
+        r.neighbors = None;
+        r.judge_samples = true;
+        r.samples = vec![Sample::gauge(
+            yagra_common::METRIC_WLAN_AP_WALK_COMPLETE,
+            1.0,
+        )];
+        r.wlan = Some(yagra_common::WlanInventory::bounded(
+            yagra_common::WlanFlavor::Huawei,
+            vec![yagra_common::WlanApObservation {
+                mac: yagra_common::ApMac::new(mac),
+                name: Some("ap-1".into()),
+                serial: None,
+                model: None,
+                sw_version: None,
+                ip: None,
+                vendor_group: None,
+                run_state: "fault".into(),
+                state,
+                clients: Some(2),
+                cpu_pct: Some(5),
+                mem_pct: None,
+                temp_c: None,
+            }],
+            1024,
+        ));
+        r
+    }
+
+    /// ADR-064 B2 through the real consumer loop: a controller that reports an imported AP down
+    /// raises the AP node's own liveness alert — and the controller itself stays up, and the
+    /// standby's view, arriving between the active's, neither clears nor doubles it.
+    #[tokio::test]
+    async fn an_ap_its_controller_reports_down_fires_on_the_ap_node_not_the_controller() {
+        use yagra_common::WlanApState;
+        let active = NodeId::new();
+        let standby = NodeId::new();
+        let mac = [0x60, 0x10, 0x9e, 0x1e, 0xfc, 0xa0];
+        let ap_node = uuid::Uuid::new_v4();
+        let fanout = Arc::new(ApFanout::new());
+        fanout.install(&[crate::wireless::ApBinding {
+            ap_id: yagra_common::ap_id(yagra_common::ApMac::new(mac)),
+            node_id: ap_node,
+            owner: None,
+        }]);
+        let mut stream = Vec::new();
+        // The active serves the AP first, then reports it failed; the standby reports it standby.
+        stream.push(wlan_result(active, mac, WlanApState::Associated, 1_000));
+        for i in 1..8 {
+            stream.push(wlan_result(
+                active,
+                mac,
+                WlanApState::NotAssociated,
+                1_000 + i * 2,
+            ));
+            stream.push(wlan_result(
+                standby,
+                mac,
+                WlanApState::Backup,
+                1_001 + i * 2,
+            ));
+        }
+        let alerts = Arc::new(AlertManager::new());
+        alerts.set_config(crate::alerts::AlertConfig::new(
+            vec![crate::alerts::seeded_liveness_rule()],
+            std::collections::HashMap::new(),
+        ));
+        let out = drive_ingest_with(&alerts, &NoReadingHandle::default(), fanout, stream).await;
+        let fired: Vec<uuid::Uuid> = out
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                crate::alerts::NotifyAction::Fire(alert) => {
+                    alert.subject.node().map(|n| n.as_uuid())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fired,
+            vec![ap_node],
+            "exactly one down alert, on the AP's node"
+        );
+        assert_eq!(
+            alerts.node_state(NodeId::from(ap_node)),
+            Some(yagra_common::NodeState::Unreachable)
+        );
+        let ap_samples: Vec<f64> = out
+            .metrics
+            .iter()
+            .filter(|m| m.node_id.as_uuid() == ap_node)
+            .flat_map(|m| m.samples.iter())
+            .filter(|s| s.metric == yagra_common::METRIC_WLAN_AP_UP)
+            .map(|s| s.value)
+            .collect();
+        assert_eq!(ap_samples.first(), Some(&1.0), "the AP was up while served");
+        assert!(
+            ap_samples[1..].iter().all(|v| *v == 0.0),
+            "the standby's view published a reading: {ap_samples:?}"
         );
     }
 

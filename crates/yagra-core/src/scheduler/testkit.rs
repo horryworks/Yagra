@@ -93,6 +93,7 @@ pub(super) fn dns_cfg(name: &str) -> DnsCheckConfig {
 #[derive(Default)]
 pub(super) struct BindingCalls {
     pub(super) meraki_bound: AtomicUsize,
+    pub(super) wireless_ap_bound: AtomicUsize,
     pub(super) url_config: AtomicUsize,
     pub(super) dns_config: AtomicUsize,
     pub(super) url_node_ids: AtomicUsize,
@@ -111,6 +112,7 @@ pub(super) struct FakeBindings {
     url: HashMap<Uuid, UrlCheckConfig>,
     dns: HashMap<Uuid, DnsCheckConfig>,
     meraki: HashSet<Uuid>,
+    wireless_aps: HashSet<Uuid>,
     /// Which reads answer with `Err` instead of a value — the degradation paths this file's
     /// production code all has an opinion about.
     fail_meraki: bool,
@@ -138,6 +140,11 @@ impl FakeBindings {
 
     pub(super) fn with_meraki(mut self, node: Uuid) -> Self {
         self.meraki.insert(node);
+        self
+    }
+
+    pub(super) fn with_wireless_ap(mut self, node: Uuid) -> Self {
+        self.wireless_aps.insert(node);
         self
     }
 
@@ -171,6 +178,11 @@ impl MonitorBindings for FakeBindings {
             anyhow::bail!("meraki read failed");
         }
         Ok(self.meraki.contains(&node))
+    }
+
+    async fn wireless_ap_bound(&self, node: Uuid) -> anyhow::Result<bool> {
+        BindingCalls::bump(&self.calls.wireless_ap_bound);
+        Ok(self.wireless_aps.contains(&node))
     }
 
     async fn url_config(&self, node: Uuid) -> anyhow::Result<Option<UrlCheckConfig>> {

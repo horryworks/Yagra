@@ -145,6 +145,9 @@ export function sendCreate(req: CreateRequest): Promise<{ id: string }> {
 const MEANS_A_DEVICE_AT_THE_ADDRESS: Record<NodeKind, boolean> = {
   device: true,
   meraki: true,
+  // An AP is a device at its address — while the controller reports one. An AP it reports no
+  // address for sits at 0.0.0.0, which no operator types into this form.
+  wireless_ap: true,
   url: false,
   dns: false,
 };

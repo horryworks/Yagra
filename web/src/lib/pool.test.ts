@@ -78,6 +78,7 @@ describe('polledByLabel', () => {
     expect(polledByLabel(state('legacy_fanout'), t)).toBe('No live poller');
     expect(polledByLabel(state('pending'), t)).toBe('Not yet assigned');
     expect(polledByLabel(state('meraki'), t)).toBe('Meraki collector');
+    expect(polledByLabel(state('wireless_controller'), t)).toBe('Its wireless controller');
     expect(polledByLabel(state('unknown'), t)).toBe('Unknown');
   });
 

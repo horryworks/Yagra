@@ -117,16 +117,17 @@ pub enum SpecialMonitor<'a> {
 impl<'a> SpecialMonitor<'a> {
     /// The single-purpose monitor a node's rows resolve to, if any.
     ///
-    /// Meraki is passed as `false` because **both callers have already excluded Meraki nodes** —
-    /// the sweep by its preloaded id set, the on-demand path by its short-circuit — which is what
-    /// lets this skip a `meraki_devices` round trip per node per round. It is an invariant of the
-    /// call sites, not an assumption about the data.
+    /// Meraki and wireless AP are passed as `false` because **both callers have already excluded
+    /// those nodes** — the sweep by its preloaded id sets, the on-demand path by its short-circuit —
+    /// which is what lets this skip a `meraki_devices` and a `wireless_aps` round trip per node per
+    /// round. It is an invariant of the call sites, not an assumption about the data.
     #[must_use]
     pub fn resolve(
         url: Option<&'a UrlCheckConfig>,
         dns: Option<&'a DnsCheckConfig>,
     ) -> Option<Self> {
         let rows = NodeRows {
+            wireless_ap: false,
             meraki: false,
             url: url.is_some(),
             dns: dns.is_some(),
@@ -134,7 +135,7 @@ impl<'a> SpecialMonitor<'a> {
         match NodeKind::resolve(rows) {
             NodeKind::Url => url.map(|cfg| Self::Url { cfg, auth: None }),
             NodeKind::Dns => dns.map(Self::Dns),
-            NodeKind::Meraki | NodeKind::Device => None,
+            NodeKind::WirelessAp | NodeKind::Meraki | NodeKind::Device => None,
         }
     }
 
@@ -750,6 +751,7 @@ mod tests {
             (Some(&url), Some(&dns)),
         ] {
             let rows = NodeRows {
+                wireless_ap: false,
                 meraki: false,
                 url: u.is_some(),
                 dns: d.is_some(),
@@ -757,7 +759,7 @@ mod tests {
             let expected = match NodeKind::resolve(rows) {
                 NodeKind::Url => Some("url"),
                 NodeKind::Dns => Some("dns"),
-                NodeKind::Meraki | NodeKind::Device => None,
+                NodeKind::WirelessAp | NodeKind::Meraki | NodeKind::Device => None,
             };
             let actual = SpecialMonitor::resolve(u, d).map(|m| match m {
                 SpecialMonitor::Url { .. } => "url",

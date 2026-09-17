@@ -33,7 +33,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use uuid::Uuid;
-use yagra_common::{HostSample, NodeId};
+use yagra_common::{HostSample, NodeId, NodeKind};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -414,7 +414,8 @@ pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
 /// Which poller currently polls a node — the node detail's "Polled by" fact.
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
 pub(crate) struct PolledBy {
-    /// One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`.
+    /// One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `wireless_controller` (an imported
+    /// access point, reported by its controller), `unknown`.
     state: &'static str,
     /// The owning poller; set only in the `assigned` state.
     poller_id: Option<String>,
@@ -432,17 +433,19 @@ pub(crate) struct NodeAssignment {
     polled_by: PolledBy,
 }
 
-/// The five distinct answers to "who polls this node". Pure, so every branch is testable without a
+/// The six distinct answers to "who polls this node". Pure, so every branch is testable without a
 /// coordinator or a database.
 ///
 /// The order matters. Leadership is checked first because an HA standby runs no coordinator
 /// (`run_heartbeat_consumer` is leader-only), so its empty registry would otherwise report the
-/// plausible-looking but wrong `legacy_fanout` for the entire fleet. Meraki devices come next:
-/// core's own org collector polls them, so no pool poller ever will. Only then does the published
-/// owner — and failing that, the pool's dispatch mode — decide.
+/// plausible-looking but wrong `legacy_fanout` for the entire fleet. The kinds no pool poller ever
+/// polls come next: core's org collector polls a Meraki device, and an imported AP is reported by
+/// its controller's AP walk (ADR-064) — which would otherwise read `legacy_fanout`, the one state the
+/// page paints as a warning. Only then does the published owner — and failing that, the pool's
+/// dispatch mode — decide.
 fn resolve_polled_by(
     is_leader: bool,
-    is_meraki: bool,
+    kind: NodeKind,
     owner: Option<String>,
     pool_has_live_poller: bool,
 ) -> PolledBy {
@@ -452,9 +455,14 @@ fn resolve_polled_by(
             poller_id: None,
         };
     }
-    if is_meraki {
+    let elsewhere = match kind {
+        NodeKind::Meraki => Some("meraki"),
+        NodeKind::WirelessAp => Some("wireless_controller"),
+        NodeKind::Url | NodeKind::Dns | NodeKind::Device => None,
+    };
+    if let Some(state) = elsewhere {
         return PolledBy {
-            state: "meraki",
+            state,
             poller_id: None,
         };
     }
@@ -529,17 +537,16 @@ pub(crate) async fn node_assignment_of(
         .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?;
     let resolved = pool_resolver(admin).await.resolve(&node);
     let now = Instant::now();
-    // Best-effort, like the node detail's own Meraki lookup: a read failure just means the Meraki
-    // case below is not special-cased.
-    let is_meraki = admin
-        .meraki_devices
-        .get(node_id)
+    // Best-effort, like the node detail's own side-table lookups: a read failure resolves toward
+    // `Device`, so the Meraki and AP cases below are simply not special-cased.
+    let kind = super::nodes::node_kinds(admin, &[node_id])
         .await
-        .unwrap_or(None)
-        .is_some();
+        .get(&node_id)
+        .copied()
+        .unwrap_or(NodeKind::Device);
     let polled_by = resolve_polled_by(
         st.is_leader.load(std::sync::atomic::Ordering::Acquire),
-        is_meraki,
+        kind,
         admin.coordinator.owner_of(node.id, now),
         admin.coordinator.live_pools(now).contains(&resolved.pool),
     );
@@ -1345,33 +1352,37 @@ mod tests {
 
         // A standby core runs no coordinator, so its empty registry must read as "unknown" rather
         // than as the plausible-but-wrong "legacy_fanout" it would otherwise produce fleet-wide.
-        for (meraki, owner, live) in [
-            (false, None, false),
-            (true, assigned(), true),
-            (false, assigned(), true),
+        for (kind, owner, live) in [
+            (NodeKind::Device, None, false),
+            (NodeKind::Meraki, assigned(), true),
+            (NodeKind::WirelessAp, None, false),
+            (NodeKind::Device, assigned(), true),
         ] {
-            assert_eq!(
-                resolve_polled_by(false, meraki, owner, live).state,
-                "unknown"
-            );
+            assert_eq!(resolve_polled_by(false, kind, owner, live).state, "unknown");
         }
         // Meraki devices are polled by core's org collector — outranks any ring answer.
         assert_eq!(
-            resolve_polled_by(true, true, assigned(), true).state,
+            resolve_polled_by(true, NodeKind::Meraki, assigned(), true).state,
             "meraki"
         );
+        // An imported AP is reported by its controller (ADR-064). With no live poller in its pool it
+        // would otherwise read `legacy_fanout`, which the page shows as a warning.
+        assert_eq!(
+            resolve_polled_by(true, NodeKind::WirelessAp, None, false).state,
+            "wireless_controller"
+        );
         // The normal case: the node is in a live poller's published working set.
-        let owned = resolve_polled_by(true, false, assigned(), true);
+        let owned = resolve_polled_by(true, NodeKind::Device, assigned(), true);
         assert_eq!(owned.state, "assigned");
         assert_eq!(owned.poller_id.as_deref(), Some("edge-1"));
         // In a working-set pool but not (yet) in anyone's set: added since the last sweep, or it
         // builds no specs at all.
-        let pending = resolve_polled_by(true, false, None, true);
+        let pending = resolve_polled_by(true, NodeKind::Url, None, true);
         assert_eq!(pending.state, "pending");
         assert_eq!(pending.poller_id, None);
         // No live poller in the pool: the scheduler falls back to legacy per-job publish, whose
         // subject has no subscriber — i.e. possibly unmonitored, and definitely no single owner.
-        let legacy = resolve_polled_by(true, false, None, false);
+        let legacy = resolve_polled_by(true, NodeKind::Dns, None, false);
         assert_eq!(legacy.state, "legacy_fanout");
         assert_eq!(legacy.poller_id, None);
     }

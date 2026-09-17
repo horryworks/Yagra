@@ -34,6 +34,23 @@ use uuid::Uuid;
 /// (ADR-064 決定 9b: a walk that is not complete publishes no inventory at all).
 pub const METRIC_WLAN_AP_WALK_COMPLETE: &str = "wlan_ap_walk_complete";
 
+/// An AP node's liveness: 1 while the controller serving it reports it in service, 0 while the
+/// controller answering for it reports it down (ADR-064). The liveness metric of
+/// [`crate::NodeKind::WirelessAp`].
+pub const METRIC_WLAN_AP_UP: &str = "wlan_ap_up";
+/// Wireless clients online through an AP, as the controller serving it reports.
+pub const METRIC_WLAN_AP_CLIENT_COUNT: &str = "wlan_ap_client_count";
+/// An AP's CPU in use, percent, as its controller reports.
+pub const METRIC_WLAN_AP_CPU_PCT: &str = "wlan_ap_cpu_pct";
+/// An AP's memory in use, percent, as its controller reports.
+pub const METRIC_WLAN_AP_MEM_PCT: &str = "wlan_ap_mem_pct";
+/// An AP's operating temperature, °C, as its controller reports. Absent for an AP with no sensor.
+pub const METRIC_WLAN_AP_TEMP_C: &str = "wlan_ap_temp_c";
+
+/// The built-in profile an imported AP node carries (ADR-064). It attaches no template: an AP is
+/// never polled itself — its controller's walk answers for it.
+pub const WIRELESS_AP_PROFILE: &str = "Wireless AP (via controller)";
+
 /// The AP cap a controller gets unless an operator sets another (ADR-064 決定 8 / 改訂 R12).
 pub const MAX_APS_PER_CONTROLLER_DEFAULT: u32 = 1024;
 
@@ -197,6 +214,15 @@ impl WlanFlavor {
     pub const fn template_name(self) -> &'static str {
         match self {
             Self::Huawei => "Huawei WLAN access points (AC)",
+        }
+    }
+
+    /// The vendor an AP imported from this dialect's controller is filed under — the node's
+    /// `vendor` column (ADR-064 increment B2).
+    #[must_use]
+    pub const fn vendor(self) -> &'static str {
+        match self {
+            Self::Huawei => "Huawei",
         }
     }
 }

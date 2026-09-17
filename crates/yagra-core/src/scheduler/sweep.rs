@@ -7,7 +7,7 @@
 
 use crate::coordinator::Coordinator;
 use crate::repo::NodeRepo;
-use crate::{config_gen, groups, meraki, poolres, scheduler};
+use crate::{config_gen, groups, meraki, poolres, scheduler, wireless};
 use futures::stream::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -77,10 +77,11 @@ fn cache_seedable(legacy_pools: u64, waiting_pools: u64) -> bool {
 /// have since moved elsewhere. `reconcile_pool` with an empty desired set publishes one empty
 /// snapshot and is idempotent afterwards, so seeding costs nothing in steady state.
 ///
-/// Meraki device nodes are dropped: core's org collector owns them, not a pool poller.
+/// Nodes in `collected_elsewhere` are dropped: a Meraki device is owned by core's org collector and
+/// an imported wireless AP by its controller's AP walk (ADR-064), not by a pool poller.
 fn group_by_pool(
     resolved: Vec<(yagra_common::Node, u32)>,
-    meraki_node_ids: &std::collections::HashSet<Uuid>,
+    collected_elsewhere: &std::collections::HashSet<Uuid>,
     live: &std::collections::HashSet<String>,
     resolver: &poolres::PoolResolver,
 ) -> HashMap<String, Vec<(yagra_common::Node, u32)>> {
@@ -89,13 +90,24 @@ fn group_by_pool(
         groups.entry(pool.clone()).or_default();
     }
     for (node, secs) in resolved {
-        if meraki_node_ids.contains(&node.id.as_uuid()) {
+        if collected_elsewhere.contains(&node.id.as_uuid()) {
             continue;
         }
         let pool = resolver.resolve_pool(&node).to_owned();
         groups.entry(pool).or_default().push((node, secs));
     }
     groups
+}
+
+/// The side tables naming nodes no pool poller polls — a Meraki device is owned by core's org
+/// collector, an imported wireless AP by its controller's AP walk (ADR-064). Both are read once per
+/// rebuilt round and their nodes dropped from every pool's desired set.
+///
+/// A struct because the second one made [`run_scheduler`]'s argument list eight long, and two
+/// `Arc<…Repo>` parameters next to each other are where a swap compiles (`extensibility.md` §3).
+pub(crate) struct CollectedElsewhere {
+    pub(crate) meraki: Arc<meraki::MerakiDeviceRepo>,
+    pub(crate) wireless: Arc<wireless::WirelessRepo>,
 }
 
 /// Periodically turn the inventory into polling work, choosing per pool (ADR-009/020) between:
@@ -122,7 +134,7 @@ pub(crate) async fn run_scheduler(
     groups_repo: Arc<groups::GroupRepo>,
     dispatcher: Arc<scheduler::PollDispatcher>,
     stats: Arc<scheduler::SchedulerStats>,
-    meraki_devices: Arc<meraki::MerakiDeviceRepo>,
+    elsewhere: CollectedElsewhere,
     coordinator: Arc<Coordinator>,
     intervals: crate::poll_interval::PollIntervals,
 ) {
@@ -138,6 +150,10 @@ pub(crate) async fn run_scheduler(
     // inheritance": that would silently move every folder-assigned node to the default pool for one
     // round, churning both pools' working sets. Reusing the last-known map is the safe failure.
     let mut resolver: Option<poolres::PoolResolver> = None;
+    // Last successfully-read set of imported AP nodes (ADR-064). Reused on a failed read for the
+    // resolver's reason, with a sharper edge: an AP node's address is usually `0.0.0.0`, so letting
+    // the fleet's APs fall through to ICMP for one round is a false outage for every one of them.
+    let mut ap_node_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     // ADR-009 Increment 1. Three facts the three-way mode decision needs, and none of them can come
     // from the coordinator's live registry — which is exactly the point, because that registry is
     // in-memory and therefore empty for the first beat-interval of every core process.
@@ -183,7 +199,7 @@ pub(crate) async fn run_scheduler(
         // once per round (like the interval overrides) and skip them, so no per-node lookup runs in
         // the hot loop. A load failure degrades to an empty set (they'd fall through to the
         // per-node dispatcher, which then short-circuits them anyway).
-        let meraki_node_ids = meraki_devices.node_ids().await.unwrap_or_default();
+        let meraki_node_ids = elsewhere.meraki.node_ids().await.unwrap_or_default();
         // Resolve the round's intervals: the global default (DB-backed) and any per-profile
         // overrides. On a read failure, degrade to the compiled default / no overrides rather than
         // stalling the poll loop.
@@ -230,6 +246,19 @@ pub(crate) async fn run_scheduler(
 
         match repo.list_nodes().await {
             Ok(nodes) => {
+                // The imported APs, read AFTER the node list and not before it (ADR-064). The
+                // importer commits a node and its `wireless_aps` binding in one transaction, so any
+                // AP node this list holds is already in a set read after it — read the other way
+                // round, a node imported between the two reads would be pinged at `0.0.0.0` for a
+                // round.
+                match elsewhere.wireless.ap_node_ids().await {
+                    Ok(ids) => ap_node_ids = ids,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "scheduler: loading wireless AP nodes failed; reusing the last-known set");
+                    }
+                }
+                let collected_elsewhere: HashSet<Uuid> =
+                    meraki_node_ids.union(&ap_node_ids).copied().collect();
                 // Pair each node with its resolved interval, and find the round's smallest so the
                 // jitter window matches the sleep period (a node is never double-scheduled per round).
                 let resolved: Vec<_> = nodes
@@ -255,10 +284,10 @@ pub(crate) async fn run_scheduler(
                 let window_ms = (u64::from(min_interval).saturating_mul(1000)).max(1);
                 let node_count = resolved.len();
 
-                // Group the non-Meraki nodes by their effective pool so each pool's mode is decided
+                // Group the nodes a pool poller polls by their effective pool so each pool's mode is decided
                 // once — and seed every live pool so one that has lost all its nodes still gets
                 // reconciled (see `group_by_pool`).
-                let groups = group_by_pool(resolved, &meraki_node_ids, &live, &pool_resolver);
+                let groups = group_by_pool(resolved, &collected_elsewhere, &live, &pool_resolver);
 
                 tracing::debug!(
                     count = node_count,

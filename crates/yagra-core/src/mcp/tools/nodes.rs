@@ -487,6 +487,8 @@ impl YagraMcp {
         // effort for the reason it is there: a failed Meraki lookup reads as "no binding".
         let meraki = admin.meraki_devices.get(p.node_id).await.unwrap_or(None);
         let serial_number = crate::api::nodes::serial_number_of(serial_number, meraki.as_ref());
+        let wireless =
+            crate::api::wireless::node_wireless(&self.state, admin, scope, p.node_id).await;
         let dto = NodeStatusDto {
             node: NodeSummaryDto::from_node(
                 &node,
@@ -501,6 +503,7 @@ impl YagraMcp {
             os_version,
             serial_number,
             profile_locked,
+            wireless,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()

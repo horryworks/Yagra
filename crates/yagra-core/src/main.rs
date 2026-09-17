@@ -149,6 +149,7 @@ mod url_check;
 mod volatile;
 mod webtls;
 mod wireless;
+mod wireless_fanout;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -656,11 +657,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let arp_repo = Arc::new(arp::ArpRepo::new(repo.pool()));
     let routing_repo = Arc::new(l3_routing::RoutingRepo::new(repo.pool()));
     let discovered_repo = Arc::new(arp::DiscoveredRepo::new(repo.pool()));
-    // Wireless controllers and their APs (ADR-064): written by the result-ingest metadata tier,
-    // read by the AP list.
-    let wireless_repo = Arc::new(wireless::WirelessRepo::new(repo.pool()));
     let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
     let link_override_repo = Arc::new(link_overrides::LinkOverrideRepo::new(repo.pool()));
+
+    // Wireless controllers and their APs (ADR-064): written by the result-ingest metadata tier, read
+    // by the AP list, and asked by the dispatcher which nodes are APs it must not poll.
+    let wireless_repo = Arc::new(wireless::WirelessRepo::new(repo.pool()));
 
     // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors, or DNS for
     // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
@@ -673,6 +675,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             url_checks: url_checks.clone(),
             dns_checks: dns_checks.clone(),
             meraki_devices: meraki_devices.clone(),
+            wireless: wireless_repo.clone(),
             settings: repo.clone(),
             l3: l3_repo.clone(),
             env_community: env_community.clone(),
@@ -1233,6 +1236,21 @@ impl LeaderTasks {
         let (history_tx, history_rx) = tokio::sync::mpsc::channel::<result_ingest::HistoryRecord>(
             result_ingest::RESULT_PERSIST_CHANNEL_CAP,
         );
+        // Who serves each imported AP, restored before either consumer takes a result (ADR-064 B2):
+        // a standby's view arriving first after a promotion must meet the owner the last leader
+        // recorded, not an empty map that would let it take the AP down. A failed read starts empty
+        // and the upkeep loop retries it — the cost is APs publishing nothing until it succeeds.
+        let ap_fanout = Arc::new(wireless_fanout::ApFanout::new());
+        match self.wireless.ap_bindings().await {
+            Ok(bindings) => ap_fanout.install(&bindings),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not restore wireless AP bindings; retrying in the background");
+            }
+        }
+        spawn_cancellable(
+            &self.shutdown,
+            wireless_fanout::run_upkeep(ap_fanout.clone(), self.wireless.clone()),
+        );
         tokio::spawn(result_ingest::run_pg_writer(
             meta_rx,
             history_rx,
@@ -1264,6 +1282,7 @@ impl LeaderTasks {
                     self.scheduler_stats.clone(),
                     self.meraki_inflight.clone(),
                     self.coordinator.clone(),
+                    ap_fanout.clone(),
                 ),
             );
         }
@@ -1276,6 +1295,7 @@ impl LeaderTasks {
                     self.no_reading.clone(),
                     vm,
                     meta_tx,
+                    ap_fanout,
                 ),
             );
         }
@@ -1395,7 +1415,10 @@ impl LeaderTasks {
                 self.groups.clone(),
                 self.dispatcher.clone(),
                 self.scheduler_stats.clone(),
-                self.meraki_devices.clone(),
+                scheduler::CollectedElsewhere {
+                    meraki: self.meraki_devices.clone(),
+                    wireless: self.wireless.clone(),
+                },
                 self.coordinator.clone(),
                 self.poll_intervals.clone(),
             ),

@@ -2913,11 +2913,11 @@ mod tests {
         let sel = name_selector(&NodeKind::LIVENESS_METRICS);
         assert_eq!(
             sel,
-            "__name__=~\"meraki_device_up|http_up|dns_up|icmp_rtt_ms\""
+            "__name__=~\"wlan_ap_up|meraki_device_up|http_up|dns_up|icmp_rtt_ms\""
         );
         assert_eq!(
             format!("last_over_time({{{sel}}}[600s])"),
-            "last_over_time({__name__=~\"meraki_device_up|http_up|dns_up|icmp_rtt_ms\"}[600s])"
+            "last_over_time({__name__=~\"wlan_ap_up|meraki_device_up|http_up|dns_up|icmp_rtt_ms\"}[600s])"
         );
     }
 

@@ -45,6 +45,7 @@ export function nodeSubLineParts(node: NodeDetail, t: TFunction): SubLinePart[] 
     }
     case 'device':
     case 'meraki':
+    case 'wireless_ap':
       return [
         { id: 'address', text: node.address, mono: true },
         {

@@ -95,6 +95,8 @@ pub struct PollDispatcherStores {
     pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
     pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
     pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
+    /// Imported wireless access points (ADR-064), which are answered for by their controller.
+    pub wireless: Arc<crate::wireless::WirelessRepo>,
     /// Deployment-wide settings — half of the adjacency seam.
     pub settings: Arc<crate::repo::NodeRepo>,
     /// Interface addresses, read only to rebuild the route-probe plan (ADR-043 Increment 4).
@@ -116,6 +118,7 @@ impl PollDispatcher {
             url_checks,
             dns_checks,
             meraki_devices,
+            wireless,
             settings,
             l3,
             env_community,
@@ -125,7 +128,12 @@ impl PollDispatcher {
             bus,
             creds,
             collection,
-            Arc::new(RepoBindings::new(meraki_devices, url_checks, dns_checks)),
+            Arc::new(RepoBindings::new(
+                meraki_devices,
+                wireless,
+                url_checks,
+                dns_checks,
+            )),
             Arc::new(RepoAdjacency::new(settings, l3)),
             env_community,
             interval_secs,
@@ -263,10 +271,11 @@ impl PollDispatcher {
         node: &Node,
         interval_secs: u32,
     ) -> Vec<(PollJob, &'static str)> {
-        // Meraki short-circuit: a node with a Meraki binding is polled by the org collector, so it
-        // emits no per-node ICMP/SNMP/HTTP job. This guards the on-demand "poll now" path; the
-        // periodic scheduler already excludes these nodes (it preloads their ids) and calls
-        // `build_scheduled_jobs`, which skips this per-node lookup.
+        // Meraki and wireless-AP short-circuit: a node with a Meraki binding is polled by the org
+        // collector, and an imported AP is answered for by its controller's AP walk (ADR-064), so
+        // neither emits a per-node ICMP/SNMP/HTTP job. This guards the on-demand "poll now" path;
+        // the periodic scheduler already excludes these nodes (it preloads their ids) and calls
+        // `build_scheduled_jobs`, which skips these per-node lookups.
         let bound = match self.bindings.meraki_bound(node.id.as_uuid()).await {
             Ok(bound) => bound,
             Err(e) => {
@@ -274,9 +283,20 @@ impl PollDispatcher {
                 false
             }
         };
+        // ⚠️ A failed read here is treated as "an AP", unlike Meraki's: an AP node's address is
+        // usually `0.0.0.0`, so pinging one by mistake is a guaranteed false outage, while skipping
+        // one poll-now of a real device costs nothing that the next sweep does not repay.
+        let wireless_ap = match self.bindings.wireless_ap_bound(node.id.as_uuid()).await {
+            Ok(bound) => bound,
+            Err(e) => {
+                tracing::warn!(node = %node.id, error = %e, "wireless-AP load failed; not polling the node now");
+                true
+            }
+        };
         // Asked as "is this kind scheduled per node" rather than "is it Meraki", so a future kind
         // that is also collected elsewhere does not have to remember to add itself here.
         let kind = NodeKind::resolve(NodeRows {
+            wireless_ap,
             meraki: bound,
             ..NodeRows::default()
         });
@@ -745,12 +765,38 @@ mod tests {
             0,
             "the sweep excludes Meraki nodes by id set; re-querying is the cost this split removed"
         );
+        assert_eq!(
+            h.bindings.calls.wireless_ap_bound.load(Ordering::Relaxed),
+            0,
+            "the sweep excludes wireless AP nodes by id set too (ADR-064)"
+        );
 
         h.dispatcher.build_node_jobs(&n, 60).await;
         assert_eq!(
             h.bindings.calls.meraki_bound.load(Ordering::Relaxed),
             1,
             "the on-demand path has no preloaded set, so it must still ask"
+        );
+        assert_eq!(
+            h.bindings.calls.wireless_ap_bound.load(Ordering::Relaxed),
+            1,
+            "…and it must ask whether the node is an AP as well"
+        );
+    }
+
+    /// An imported wireless AP is answered for by its controller's AP walk (ADR-064), so "poll now"
+    /// emits nothing for it — not even ICMP, which at its usual `0.0.0.0` address would be a
+    /// guaranteed false outage.
+    #[tokio::test]
+    async fn an_imported_wireless_ap_gets_no_per_node_job() {
+        let n = node("ap-1");
+        let h = Harness::builder()
+            .bindings(FakeBindings::new().with_wireless_ap(n.id.as_uuid()))
+            .build();
+        assert!(h.dispatcher.build_node_jobs(&n, 60).await.is_empty());
+        assert_eq!(
+            h.bindings.calls.wireless_ap_bound.load(Ordering::Relaxed),
+            1
         );
     }
 

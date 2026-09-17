@@ -404,7 +404,14 @@ pub(crate) async fn filtered_node_page(
 /// Shared with the MCP `list_nodes` / `get_node_status` tools (ADR-042 read parity) so the two
 /// surfaces answer "what is this node" from one place rather than two.
 pub(crate) async fn node_kinds(admin: &AdminState, ids: &[Uuid]) -> HashMap<Uuid, NodeKind> {
-    let (meraki, url, dns) = tokio::join!(
+    let (wireless_ap, meraki, url, dns) = tokio::join!(
+        async {
+            admin
+                .wireless
+                .filter_ap_nodes(ids)
+                .await
+                .unwrap_or_default()
+        },
         async {
             admin
                 .meraki_devices
@@ -415,26 +422,41 @@ pub(crate) async fn node_kinds(admin: &AdminState, ids: &[Uuid]) -> HashMap<Uuid
         async { admin.url_checks.filter_url(ids).await.unwrap_or_default() },
         async { admin.dns_checks.filter_dns(ids).await.unwrap_or_default() },
     );
-    resolve_kinds(ids, &meraki, &url, &dns)
+    resolve_kinds(
+        ids,
+        &KindSets {
+            wireless_ap,
+            meraki,
+            url,
+            dns,
+        },
+    )
 }
 
-/// The pure half of [`node_kinds`]: three membership sets into one kind per id.
+/// One membership set per side table a node's kind is read from — the inputs to [`resolve_kinds`].
+/// A struct rather than four `&HashSet` parameters of the same type, which is exactly where two get
+/// swapped without a compile error (`extensibility.md` §3).
+#[derive(Default)]
+struct KindSets {
+    wireless_ap: HashSet<Uuid>,
+    meraki: HashSet<Uuid>,
+    url: HashSet<Uuid>,
+    dns: HashSet<Uuid>,
+}
+
+/// The pure half of [`node_kinds`]: four membership sets into one kind per id.
 ///
 /// Split out so the precedence can be tested without a database. It must stay a *call* to
 /// `NodeKind::resolve` — writing the `if meraki … else if url …` chain here would be a second
 /// answer to "what is this node", which is the thing `NodeKind` exists to prevent.
-fn resolve_kinds(
-    ids: &[Uuid],
-    meraki: &HashSet<Uuid>,
-    url: &HashSet<Uuid>,
-    dns: &HashSet<Uuid>,
-) -> HashMap<Uuid, NodeKind> {
+fn resolve_kinds(ids: &[Uuid], sets: &KindSets) -> HashMap<Uuid, NodeKind> {
     ids.iter()
         .map(|id| {
             let kind = NodeKind::resolve(NodeRows {
-                meraki: meraki.contains(id),
-                url: url.contains(id),
-                dns: dns.contains(id),
+                wireless_ap: sets.wireless_ap.contains(id),
+                meraki: sets.meraki.contains(id),
+                url: sets.url.contains(id),
+                dns: sets.dns.contains(id),
             });
             (*id, kind)
         })
@@ -1067,6 +1089,9 @@ pub(crate) struct NodeDetail {
     dns_check: Option<DnsCheckConfig>,
     /// Cisco Meraki binding when this node carries a `meraki_devices` row; `null` otherwise.
     meraki_device: Option<yagra_common::MerakiDeviceConfig>,
+    /// What this node is to the wireless inventory: a controller's AP inventory and import settings,
+    /// or an imported access point's entry in the AP list. `null` for a node that is neither.
+    wireless: Option<super::wireless::NodeWireless>,
     /// Whether SNMP polling is **configured** for this node — not whether it is answering.
     ///
     /// 🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the
@@ -1142,6 +1167,7 @@ pub(crate) fn serial_number_of(
 async fn get_node(
     _perm: RequireView,
     _visible: VisibleNode,
+    Scoped(scope): Scoped,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<NodeDetail>> {
@@ -1169,6 +1195,7 @@ async fn get_node(
     let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
     let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
     let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
+    let wireless = super::wireless::node_wireless(&st, admin, &scope, node_id).await;
     let serial_number = serial_number_of(serial_number, meraki_device.as_ref());
     // Asked of the dispatcher, which is the only holder of the environment community — before the
     // struct literal below moves `node`'s fields out.
@@ -1181,6 +1208,7 @@ async fn get_node(
     let tags_excluded = std::mem::take(&mut node.tags_excluded);
     Ok(Json(NodeDetail {
         kind: NodeKind::resolve(NodeRows {
+            wireless_ap: wireless.as_ref().is_some_and(|w| w.ap.is_some()),
             meraki: meraki_device.is_some(),
             url: url_check.is_some(),
             dns: dns_check.is_some(),
@@ -1188,6 +1216,7 @@ async fn get_node(
         url_check,
         dns_check,
         meraki_device,
+        wireless,
         id: node.id,
         name: node.name,
         address: node.address.to_string(),
@@ -3003,6 +3032,7 @@ mod tests {
         // non-null is what made the node page show a URL-monitor health card for a node the poller
         // was treating as a Meraki device.
         let both = NodeRows {
+            wireless_ap: false,
             meraki: true,
             url: true,
             dns: false,
@@ -3018,6 +3048,11 @@ mod tests {
         // from "no row", which is only safe because the scheduler degrades identically (its own
         // lookups warn and treat the node as not-that-kind). Both sides fall toward `Device`, so a
         // transient database error cannot make the API and the poller disagree about a node.
+        //
+        // ⚠️ One deliberate exception: the scheduler does NOT treat a failed `wireless_aps` read as
+        // "not an AP" (ADR-064). An AP node's address is usually `0.0.0.0`, so polling it by mistake
+        // is a false outage; the sweep keeps its last-known AP set and poll-now skips the node. Here
+        // the page may badge such a node `device` for one read — a display error, not a page.
         assert_eq!(NodeKind::resolve(NodeRows::default()), NodeKind::Device);
         assert!(NodeKind::Device.is_polled_per_node());
     }
@@ -3032,8 +3067,9 @@ mod tests {
         // practice — the stray-row cases are exactly where a re-derived precedence would differ.
         let id = Uuid::from_u128(1);
         let ids = [id];
-        for bits in 0u8..8 {
+        for bits in 0u8..16 {
             let rows = NodeRows {
+                wireless_ap: bits & 8 != 0,
                 meraki: bits & 1 != 0,
                 url: bits & 2 != 0,
                 dns: bits & 4 != 0,
@@ -3045,7 +3081,13 @@ mod tests {
                     HashSet::new()
                 }
             };
-            let got = resolve_kinds(&ids, &set(rows.meraki), &set(rows.url), &set(rows.dns));
+            let sets = KindSets {
+                wireless_ap: set(rows.wireless_ap),
+                meraki: set(rows.meraki),
+                url: set(rows.url),
+                dns: set(rows.dns),
+            };
+            let got = resolve_kinds(&ids, &sets);
             assert_eq!(
                 got.get(&id).copied(),
                 Some(NodeKind::resolve(rows)),
@@ -3056,17 +3098,17 @@ mod tests {
 
     #[test]
     fn a_failed_side_table_read_degrades_a_list_row_toward_device() {
-        // Each of the three reads behind `node_kinds` is `unwrap_or_default()`, so a database
+        // Each of the four reads behind `node_kinds` is `unwrap_or_default()`, so a database
         // hiccup looks exactly like "no row" — the empty-set case. It must land on `Device`, the
         // same direction `get_node` and the scheduler degrade in, or a transient error would badge
         // a URL monitor as a device on one surface and not the other.
         let id = Uuid::from_u128(2);
-        let empty = HashSet::new();
-        let got = resolve_kinds(&[id], &empty, &empty, &empty);
+        let empty = KindSets::default();
+        let got = resolve_kinds(&[id], &empty);
         assert_eq!(got.get(&id).copied(), Some(NodeKind::Device));
         // An id nobody asked about is not invented, and an empty page is an empty map.
         assert_eq!(got.len(), 1);
-        assert!(resolve_kinds(&[], &empty, &empty, &empty).is_empty());
+        assert!(resolve_kinds(&[], &empty).is_empty());
     }
 
     // ── Filter mode ─────────────────────────────────────────────────────────────────────────────

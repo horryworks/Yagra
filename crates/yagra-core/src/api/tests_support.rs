@@ -316,6 +316,7 @@ async fn live_state_with(
                 url_checks: url_checks.clone(),
                 dns_checks: dns_checks.clone(),
                 meraki_devices: meraki_devices.clone(),
+                wireless: Arc::new(crate::wireless::WirelessRepo::new(pool.clone())),
                 settings: repo.clone(),
                 l3: l3_repo.clone(),
                 env_community,

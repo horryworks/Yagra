@@ -14756,6 +14756,100 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/wireless-controller": {
+      "put": {
+        "tags": [
+          "wireless"
+        ],
+        "summary": "Set how a wireless controller's access points are imported as nodes.",
+        "description": "Import is off until switched on here. An imported AP is a node of kind `wireless_ap`: it is never\npolled itself — the controller's AP walk reports it — and it goes down when the controller serving\nit reports it down. A node deleted afterwards is not imported again automatically; use\n`POST /api/v1/wireless/aps/{ap_id}/import` to bring it back.",
+        "operationId": "set_wireless_controller",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "The controller's node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WirelessControllerSettingsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Settings stored; the controller as it now stands",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WirelessControllerSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "max_aps outside 1–2048",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node or folder, or one outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notification-channels": {
       "get": {
         "tags": [
@@ -22894,6 +22988,90 @@
           },
           "403": {
             "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wireless/aps/{ap_id}/import": {
+      "post": {
+        "tags": [
+          "wireless"
+        ],
+        "summary": "Import one access point as a node now.",
+        "description": "Whatever its state, whether or not its controller imports automatically, and even if its node was\ndeleted before — asking for one AP is the decision the importer otherwise waits for. The node's id\nis derived from the AP's MAC address, so an AP imported again gets back the node id, and the\nhistory, it had.",
+        "operationId": "import_wireless_ap",
+        "parameters": [
+          {
+            "name": "ap_id",
+            "in": "path",
+            "description": "The access point's id, from the AP list",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The AP's new node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such access point, or none a controller in the caller's scope reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The access point is already a node (`ap_already_imported`), or no controller that reports it is monitored any more (`ap_has_no_controller`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -32482,6 +32660,17 @@
               "null"
             ],
             "description": "Descriptive maker/model, editable from the node detail."
+          },
+          "wireless": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NodeWireless",
+                "description": "What this node is to the wireless inventory: a controller's AP inventory and import settings,\nor an imported access point's entry in the AP list. `null` for a node that is neither."
+              }
+            ]
           }
         }
       },
@@ -32633,6 +32822,7 @@
         "type": "string",
         "description": "A node's monitoring kind: the thing that decides which poll jobs it produces.\n\nVariants are declared in **precedence order**, which is the order [`NodeKind::resolve`] applies.\nA node should carry at most one single-purpose row — the API edge refuses the second — but a row\ncan predate that guard, so resolution has to be deterministic rather than depend on which lookup\nhappened to run first.\n\nBefore this type the same question was answered in three places that could disagree: the\nscheduler's Meraki short-circuit, the scheduler's URL-beats-DNS resolution, and the node-detail\nAPI — which applied no precedence at all and handed the UI every config it found, so a node the\nscheduler polled as Meraki could render a URL-monitor health card next to it.",
         "enum": [
+          "wireless_ap",
           "meraki",
           "url",
           "dns",
@@ -33002,6 +33192,34 @@
           }
         }
       },
+      "NodeWireless": {
+        "type": "object",
+        "description": "What a node is to the wireless inventory.",
+        "properties": {
+          "ap": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WirelessApRow",
+                "description": "Set when the node is an imported access point: its entry in the AP list. The controllers in\nit are limited to the ones the caller can see."
+              }
+            ]
+          },
+          "controller": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WirelessControllerSummary",
+                "description": "Set when the node is a wireless controller that has reported an AP inventory or been given\nimport settings."
+              }
+            ]
+          }
+        }
+      },
       "NoteCode": {
         "type": "string",
         "description": "Something the export or the import did that the operator would not otherwise see.\n\nA silent drop is the failure mode that matters here: a bundle that quietly left out half the\nrules imports without error and the operator finds out during an incident.",
@@ -33327,7 +33545,7 @@
           },
           "state": {
             "type": "string",
-            "description": "One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`."
+            "description": "One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `wireless_controller` (an imported\naccess point, reported by its controller), `unknown`."
           }
         }
       },
@@ -38916,14 +39134,59 @@
           }
         }
       },
-      "WirelessControllerSummary": {
+      "WirelessControllerSettingsBody": {
         "type": "object",
-        "description": "What a controller's last complete AP inventory said about the controller itself.",
+        "description": "How a controller's access points are imported.",
         "required": [
-          "node_id",
-          "aps_reported"
+          "import_aps"
         ],
         "properties": {
+          "ap_group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The folder to file imported AP nodes in. Omitted or `null` ⇒ a folder named\n\"<controller> APs\" beside the controller."
+          },
+          "import_aps": {
+            "type": "boolean",
+            "description": "Whether access points this controller reports become nodes. Only APs that have been in\nservice at least once are imported automatically; importing starts within a minute."
+          },
+          "max_aps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The most access points this controller imports, 1–2048. Omitted ⇒ 1024."
+          }
+        }
+      },
+      "WirelessControllerSummary": {
+        "type": "object",
+        "description": "What a controller's last complete AP inventory said about the controller itself, and how its\naccess points are imported as nodes.",
+        "required": [
+          "node_id",
+          "aps_reported",
+          "import_aps",
+          "max_aps",
+          "aps_over_cap"
+        ],
+        "properties": {
+          "ap_group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The folder imported AP nodes are filed in. `null` ⇒ a folder named \"<controller> APs\" beside\nthe controller."
+          },
+          "aps_over_cap": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many access points the `max_aps` cap left out on the last import pass."
+          },
           "aps_reported": {
             "type": "integer",
             "format": "int32",
@@ -38944,9 +39207,13 @@
               },
               {
                 "$ref": "#/components/schemas/WlanFlavor",
-                "description": "The vendor dialect its AP table was read in."
+                "description": "The vendor dialect its AP table was read in. `null` until an inventory has arrived."
               }
             ]
+          },
+          "import_aps": {
+            "type": "boolean",
+            "description": "Whether access points this controller reports become nodes. Only APs that have been in\nservice at least once are imported automatically."
           },
           "last_inventory_at": {
             "type": [
@@ -38954,6 +39221,11 @@
               "null"
             ],
             "description": "When its last complete inventory arrived (RFC 3339). `null` if none has."
+          },
+          "max_aps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most access points this controller imports (1–2048)."
           },
           "node_id": {
             "type": "string",

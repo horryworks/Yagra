@@ -26,6 +26,9 @@ export interface NodeKindSpec {
 }
 
 export const NODE_KIND_SPEC: Record<NodeKind, NodeKindSpec> = {
+  // An access point imported from its wireless controller (ADR-064): never polled itself, so its
+  // liveness is what the controller serving it reports.
+  wireless_ap: { badge: 'AP', labelKey: 'kind.wireless_ap', livenessMetric: 'wlan_ap_up' },
   meraki: {
     badge: 'Meraki',
     labelKey: 'kind.meraki',

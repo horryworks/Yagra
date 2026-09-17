@@ -57,6 +57,10 @@ export const FACT_ROWS_BY_KIND: Record<NodeKind, readonly FactRow[]> = {
   // on every one of them.
   device: [...PLACEMENT, ...DEVICE_IDENTITY, 'osVersion', 'uptime'],
   meraki: [...PLACEMENT, ...DEVICE_IDENTITY],
+  // An imported AP (ADR-064): its address, maker and model follow what its controller reports. No
+  // credential — nothing polls it — and no serial row, because the node-level serial is read from
+  // ENTITY-MIB, which nobody walks on an AP; the AP list carries the controller's serial instead.
+  wireless_ap: [...PLACEMENT, 'address', 'maker', 'model'],
   // The URL itself is the header's sub line, so it is not repeated here.
   url: PLACEMENT,
   // A DNS monitor's `address` is its resolver, or 0.0.0.0 when it uses the system one — so it gets

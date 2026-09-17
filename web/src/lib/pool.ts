@@ -73,6 +73,8 @@ export function polledByLabel(polledBy: PolledBy | undefined, t: TFunction): str
       return t('nodes:field.polledByPending');
     case 'meraki':
       return t('nodes:field.polledByMeraki');
+    case 'wireless_controller':
+      return t('nodes:field.polledByWirelessController');
     default:
       return t('nodes:field.polledByUnknown');
   }

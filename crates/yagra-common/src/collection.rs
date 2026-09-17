@@ -20,7 +20,7 @@
 use crate::metric::MetricKind;
 use crate::profile::ProfileCategory;
 use crate::thresholds::ScopeLevel;
-use crate::wlan::{WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE};
+use crate::wlan::{WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, WIRELESS_AP_PROFILE};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -1669,6 +1669,11 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             Some("Ruckus"),
             vec![TEMPLATE_STANDARD_SNMP],
         ),
+        // An access point imported from its wireless controller's AP list (ADR-064 increment B2).
+        // No template, deliberately: the AP is never polled itself — its controller's walk answers
+        // for it — so any collection set here would list metrics as `no_data` forever. It exists to
+        // group AP nodes and to host rules written for them. Vendor none: the node carries its own.
+        prof(WIRELESS_AP_PROFILE, C::WirelessAp, None, Vec::new()),
     ]
 }
 
@@ -1712,7 +1717,7 @@ mod tests {
         let profiles = builtin_profiles();
         assert_eq!(
             profiles.last().map(|p| p.name),
-            Some("Ruckus wireless controller"),
+            Some(WIRELESS_AP_PROFILE),
             "append new built-in profiles; never insert mid-array"
         );
     }
@@ -2249,14 +2254,15 @@ mod tests {
     #[test]
     fn every_profile_has_templates_except_ping_only() {
         for p in builtin_profiles() {
-            // ICMP-only (ping), URL/HTTP monitors, DNS monitors, and Cisco Meraki *Dashboard API*
-            // profiles carry no SNMP collection templates — the metrics come from the per-node
-            // config / the org collector, not an OID set. (The SNMP "Cisco Meraki MX/MS" profiles
-            // still do.)
+            // ICMP-only (ping), URL/HTTP monitors, DNS monitors, Cisco Meraki *Dashboard API*
+            // profiles, and an AP answered for by its controller carry no SNMP collection templates
+            // — the metrics come from the per-node config / the org collector / the controller's
+            // AP walk, not an OID set. (The SNMP "Cisco Meraki MX/MS" profiles still do.)
             if matches!(
                 p.category,
                 ProfileCategory::PingOnly | ProfileCategory::UrlCheck | ProfileCategory::DnsCheck
             ) || p.name.ends_with("(API)")
+                || p.name == WIRELESS_AP_PROFILE
             {
                 assert!(
                     p.templates.is_empty(),

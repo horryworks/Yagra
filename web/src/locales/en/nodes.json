@@ -27,6 +27,7 @@
     "polledBy": "Polled by",
     "polledByLegacy": "No live poller",
     "polledByPending": "Not yet assigned",
+    "polledByWirelessController": "Its wireless controller",
     "polledByMeraki": "Meraki collector",
     "polledByUnknown": "Unknown",
     "nameRequired": "A name is required.",
@@ -51,6 +52,7 @@
     "resolver": "Resolver"
   },
   "kind": {
+    "wireless_ap": "Wireless AP (via its controller)",
     "device": "Device (ICMP / SNMP)",
     "url": "URL monitor (HTTP / HTTPS)",
     "dns": "DNS monitor (name resolution)",
@@ -328,7 +330,8 @@
       "snmp": "SNMP",
       "url": "URL monitor",
       "dns": "DNS monitor",
-      "meraki": "Meraki"
+      "meraki": "Meraki",
+      "wlan": "Wireless AP"
     },
     "snmpNote": "Whether the agent answered, how far the walk got, and what it found.",
     "other": "Other metrics",

@@ -27,6 +27,7 @@
     "polledBy": "担当ポーラー",
     "polledByLegacy": "稼働中のポーラーなし",
     "polledByPending": "未割り当て",
+    "polledByWirelessController": "担当の無線コントローラ",
     "polledByMeraki": "Meraki コレクタ",
     "polledByUnknown": "不明",
     "nameRequired": "名前は必須です。",
@@ -51,6 +52,7 @@
     "resolver": "リゾルバ"
   },
   "kind": {
+    "wireless_ap": "無線 AP（コントローラ経由）",
     "device": "デバイス（ICMP / SNMP）",
     "url": "URL 監視（HTTP / HTTPS）",
     "dns": "DNS 監視（名前解決）",
@@ -328,7 +330,8 @@
       "snmp": "SNMP",
       "url": "URL 監視",
       "dns": "DNS 監視",
-      "meraki": "Meraki"
+      "meraki": "Meraki",
+      "wlan": "無線 AP"
     },
     "snmpNote": "エージェントが答えたか、walk がどこまで進んだか、walk が見つけた件数です。",
     "other": "その他のメトリクス",
