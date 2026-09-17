@@ -569,9 +569,6 @@ impl AlertManager {
         self.down.lock().expect("down mutex poisoned").clone()
     }
 
-    /// Feed one poll result through the engine: a liveness check from the outcome plus a
-    /// threshold check per sample that has a resolved threshold. Returns notify actions for
-    /// every committed transition (also broadcast to SSE subscribers here).
     /// Tests' shorthand for [`Self::observe_with_no_reading`] on a result that carried no vendor
     /// placeholder — every result but the ones ADR-156 is about. Production always goes through the
     /// ingest boundary, which is why this does not exist outside tests.
@@ -580,8 +577,12 @@ impl AlertManager {
         self.observe_with_no_reading(result, &[])
     }
 
-    /// Judge one poll result for a result whose vendor placeholders were taken out at ingest
-    /// (ADR-156) — the engine's entry point from `result_ingest`.
+    /// Feed one poll result through the engine: a liveness check from the outcome plus a
+    /// threshold check per sample that has a resolved threshold. Returns notify actions for
+    /// every committed transition (also broadcast to SSE subscribers here).
+    ///
+    /// This is the engine's entry point from `result_ingest`, for a result whose vendor placeholders
+    /// were taken out at ingest (ADR-156).
     ///
     /// `no_reading` is what [`crate::no_reading_filter::NoReadingHandle::admit`] removed. Each one is
     /// resolved exactly like a sample, and then observed only where it is evidence: on a table row
