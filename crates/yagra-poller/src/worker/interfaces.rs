@@ -152,24 +152,23 @@ async fn execute_table_walk(
             truncated = stopped;
             spoke = answered || stopped != Some(Truncation::Silent);
             for row in walk.rows {
-                // 🚨 `ifHighSpeed` is TWO things at once and must feed both.
+                // 🚨 **An inventory column can be TWO things at once and must feed both.**
                 //
-                // It is a declared metric column in the built-in interface template
-                // (`if_high_speed`, a gauge) *and* the 64-bit source `resolve_if_speed` needs. It
-                // used to sit in the `else if` chain below, where the metric arm matched first and
-                // this insert was **unreachable on every node whose profile carries the standard
-                // interface template** — i.e. every SNMP node. The visible effect was a permanently
-                // empty speed column wherever `ifSpeed` could not answer: a device that reports only
-                // ifXTable (measured: 19 of 21 lab devices) got nothing at all, and a real 10G+ port
-                // whose 32-bit `ifSpeed` saturates got nothing either, because decision 7 refuses the
-                // sentinel and then had no fallback left to reach.
+                // `ifHighSpeed` is a declared metric column in the built-in interface template
+                // (`if_high_speed`, a gauge) *and* the 64-bit source `resolve_if_speed` needs. Its
+                // capture used to sit in an `else if` chain after the metric arm, which matched
+                // first, so the capture was **unreachable on every node whose profile carries the
+                // standard interface template** — i.e. every SNMP node. The visible effect was a
+                // permanently empty speed column wherever `ifSpeed` could not answer: a device that
+                // reports only ifXTable (measured: 19 of 21 lab devices) got nothing at all.
                 //
-                // Hoisted out of the chain rather than reordered: the metric sample is still owed,
-                // so this is an `and`, not an `or`. `the_high_speed_column_is_both_a_metric_and_the_
-                // speed_source` pins the overlap so a catalog edit cannot quietly make this dead code.
-                if row.oid_base == OID_IF_HIGH_SPEED {
-                    raw.high.insert(row.ifindex, row.value);
-                }
+                // The other five inventory columns stayed in that chain until ADR-158 C11. No
+                // built-in item charts them, but the collection editor accepts any table OID, and
+                // an operator who charted `ifType` or `ifSpeed` emptied that column on every new
+                // port, silently. So every capture now runs first and unconditionally, and the
+                // metric sample is still owed: this is an `and`, not an `or`.
+                // `a_metadata_column_also_declared_as_a_metric_feeds_both` pins all six.
+                raw.capture(&row.oid_base, row.ifindex, row.value, &speed_oids);
                 if let Some(col) = by_base.get(row.oid_base.as_str()) {
                     samples.push(Sample::interface(
                         col.metric_name.clone(),
@@ -177,20 +176,6 @@ async fn execute_table_walk(
                         row.value,
                         col.kind,
                     ));
-                } else if row.oid_base == OID_IF_HIGH_SPEED {
-                    // Already captured above; kept as an explicit no-op arm so the chain still
-                    // enumerates every OID this walk appends and nothing falls through to
-                    // `speed_oids` by accident.
-                } else if row.oid_base == OID_DOT3_DUPLEX_STATUS {
-                    raw.duplex.insert(row.ifindex, row.value);
-                } else if row.oid_base == OID_HW_ETHERNET_DUPLEX {
-                    raw.hw_duplex.insert(row.ifindex, row.value);
-                } else if row.oid_base == OID_HW_ETHERNET_PORT_TYPE {
-                    raw.hw_port_type.insert(row.ifindex, row.value);
-                } else if row.oid_base == OID_IF_TYPE {
-                    raw.if_type.insert(row.ifindex, row.value);
-                } else if speed_oids.iter().any(|o| o == &row.oid_base) {
-                    raw.speed.insert(row.ifindex, row.value);
                 }
             }
         }
@@ -209,11 +194,12 @@ async fn execute_table_walk(
     // `Unreachable` (`outcome` below is decided from `samples`), so what is lost is inventory for a
     // node Yagra is simultaneously calling unreachable. Declared rather than silent — it is in the
     // release notes.
-    let interfaces = if answered {
+    let (interfaces, names_complete) = if answered {
         let limits = WalkLimits::until(timeout, deadlines.names);
         walk_interface_metadata(job, transport, walker, meta_columns, &raw, limits).await
     } else {
-        Vec::new()
+        // Not asked, so nothing was cut: whether this poll is complete is the numeric walk's to say.
+        (Vec::new(), true)
     };
 
     // Reachable iff the agent returned at least one value (matches the scalar SNMP arm).
@@ -247,10 +233,14 @@ async fn execute_table_walk(
     //
     // Only when the device spoke (`spoke`, above — ADR-110 Increment 7): a silent agent is
     // `snmp_up`'s to report, and a second incident for the same fault is what this must not add.
+    //
+    // ⚠️ **Both walks count** (ADR-158 C5). The name walk runs on what the numeric walk left of the
+    // budget, so on a large slow switch it is the one cut — and it used to leave this reading `1`.
     if spoke {
+        let complete = truncated.is_none() && names_complete;
         samples.push(Sample::gauge(
             METRIC_SNMP_WALK_COMPLETE,
-            if truncated.is_some() { 0.0 } else { 1.0 },
+            if complete { 1.0 } else { 0.0 },
         ));
     }
 
@@ -350,10 +340,40 @@ struct RawInterfaceNumerics {
     if_type: HashMap<u32, f64>,
 }
 
+impl RawInterfaceNumerics {
+    /// Keep `value` when `oid_base` is one of the columns the inventory is folded from.
+    ///
+    /// Called for **every** row, before and regardless of whether the row is also a metric column
+    /// — see the note at the call site for the two times an `else` here emptied a column.
+    fn capture(&mut self, oid_base: &str, ifindex: u32, value: f64, speed_oids: &[String]) {
+        let column = if oid_base == OID_IF_HIGH_SPEED {
+            &mut self.high
+        } else if oid_base == OID_DOT3_DUPLEX_STATUS {
+            &mut self.duplex
+        } else if oid_base == OID_HW_ETHERNET_DUPLEX {
+            &mut self.hw_duplex
+        } else if oid_base == OID_HW_ETHERNET_PORT_TYPE {
+            &mut self.hw_port_type
+        } else if oid_base == OID_IF_TYPE {
+            &mut self.if_type
+        } else if speed_oids.iter().any(|o| o == oid_base) {
+            &mut self.speed
+        } else {
+            return;
+        };
+        column.insert(ifindex, value);
+    }
+}
+
 /// Fold interface metadata into [`DiscoveredInterface`]s: walk the `ifName`/`ifAlias` **string**
 /// columns (the poll's second and only other SNMP session) within `limits` — the rest of the job's
 /// budget — and resolve `if_speed` from the `ifSpeed`/`ifHighSpeed` values already gathered by the
 /// combined numeric walk in the caller (S5).
+///
+/// The `bool` says whether the string walk asked every column to its end — `true` when there were
+/// no string columns to ask. It judges by each column's own ending, not by `stopped`: a walk whose
+/// columns all failed reports no `stopped` until two fail in a row (ADR-158 A5), so `stopped`
+/// alone would call that walk whole.
 async fn walk_interface_metadata(
     job: &PollJob,
     transport: &dyn Transport,
@@ -361,7 +381,7 @@ async fn walk_interface_metadata(
     meta_columns: &[SnmpMetaColumn],
     raw: &RawInterfaceNumerics,
     limits: WalkLimits,
-) -> Vec<DiscoveredInterface> {
+) -> (Vec<DiscoveredInterface>, bool) {
     let RawInterfaceNumerics {
         speed: raw_speed,
         high: raw_high,
@@ -398,12 +418,14 @@ async fn walk_interface_metadata(
         tx_power_high_dbm: None,
     };
 
+    let mut names_complete = true;
     if !string_oids.is_empty() {
         match walker
             .walk_strings(transport, job.target, &string_oids, limits)
             .await
         {
             Ok(walk) => {
+                names_complete = walk.stopped.is_none() && walk.every_column_answered();
                 for row in walk.rows {
                     let Some(field) = field_by_base.get(row.oid_base.as_str()) else {
                         continue;
@@ -417,6 +439,7 @@ async fn walk_interface_metadata(
                 }
             }
             Err(err) => {
+                names_complete = false;
                 tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifName/ifAlias walk failed");
             }
         }
@@ -508,7 +531,7 @@ async fn walk_interface_metadata(
         }
     }
 
-    ifs.into_values().collect()
+    (ifs.into_values().collect(), names_complete)
 }
 
 /// Resolve the effective interface bandwidth (bits/sec) from `ifSpeed` (32-bit) and `ifHighSpeed`
@@ -552,7 +575,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use uuid::Uuid;
     use yagra_common::{NodeId, SnmpV3Auth};
-    use yagra_transport::FakeTransport;
+    use yagra_transport::{FakeTransport, StringWalkFault};
 
     fn snmp_table_job() -> PollJob {
         use yagra_bus::{SnmpColumn, SnmpMetaColumn, SnmpTableCheck};
@@ -1313,6 +1336,80 @@ mod tests {
         assert_eq!(r.outcome, CheckOutcome::Reachable);
     }
 
+    /// A device that answered its metric columns and one interface name, with the name walk then
+    /// cut at the job's deadline.
+    fn names_cut_short(fault: StringWalkFault, names: Vec<SnmpTableString>) -> FakeTransport {
+        FakeTransport::reachable(1.0)
+            .with_snmp_table(vec![SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.2.2.1.8".to_owned(),
+                ifindex: 1,
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(names)
+            .with_string_walk_fault(fault)
+    }
+
+    fn gi0_1() -> Vec<SnmpTableString> {
+        vec![SnmpTableString {
+            oid_base: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+            ifindex: 1,
+            value: "Gi0/1".to_owned(),
+        }]
+    }
+
+    /// 🚨 **A table poll is two walks, and completeness has to speak for both** (ADR-158 C5).
+    ///
+    /// The second walk — `ifName`/`ifAlias` — gets whatever the numeric walk left of the job's
+    /// budget, so on a large slow switch it is the one that runs out. It used to report `1`
+    /// regardless: the ports past the cut kept no name, a changed description never arrived, and
+    /// the gauge built to stop the 229-port switch's 14 silent days said the poll was whole.
+    /// What the walk did get is still published — being honest about the cut costs nothing.
+    #[tokio::test]
+    async fn a_name_walk_cut_at_its_deadline_reports_the_poll_incomplete() {
+        let t = names_cut_short(StringWalkFault::CutAtDeadline, gi0_1());
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(0.0));
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert_eq!(
+            r.interfaces
+                .iter()
+                .find(|i| i.ifindex == IfIndex(1))
+                .and_then(|i| i.if_name.as_deref()),
+            Some("Gi0/1"),
+            "the name that did arrive is kept"
+        );
+    }
+
+    /// The shape `stopped` cannot see: every name column failed, and the budget never called the
+    /// device silent because it takes two failures in a row per walk (`every_column_answered`, A5).
+    #[tokio::test]
+    async fn a_failed_name_column_reports_the_poll_incomplete() {
+        let t = names_cut_short(StringWalkFault::ColumnsFailed, Vec::new());
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(0.0));
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+    }
+
+    /// The accepting side of the two above: a name walk that answered every column leaves the poll
+    /// complete, so a gauge that went to 0 whenever a name walk ran would not pass.
+    #[tokio::test]
+    async fn a_poll_whose_names_all_answered_is_complete() {
+        let t = FakeTransport::reachable(1.0)
+            .with_snmp_table(vec![SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.2.2.1.8".to_owned(),
+                ifindex: 1,
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(gi0_1());
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_WALK_COMPLETE), Some(1.0));
+        assert_eq!(
+            t.walk_limits().len(),
+            2,
+            "the name walk really ran, so its answer is what this measured"
+        );
+    }
+
     #[test]
     fn resolve_if_speed_prefers_ifspeed_below_cap() {
         // A 1 Gbps link: ifSpeed is exact and below the 32-bit cap, so it wins.
@@ -1481,6 +1578,89 @@ mod tests {
             "`unknown(1)` must store as unknown, not as a duplex"
         );
         assert_eq!(loopback.if_type, Some(24));
+    }
+
+    /// 🚨 **Every inventory column the walk appends is two things when a profile also charts it**
+    /// (ADR-158 C11) — the same overlap `if_high_speed` had, for the other five.
+    ///
+    /// Nothing in the built-in catalog declares these as metrics today, but the collection editor
+    /// accepts any table OID, and an operator who charts `ifType` or `ifSpeed` used to make the
+    /// metric arm match first: the capture below it was skipped and the column went empty on every
+    /// new port, with no error anywhere. Both halves are asserted, because reordering the chain
+    /// instead of hoisting would swap one silent loss for the other.
+    #[tokio::test]
+    async fn a_metadata_column_also_declared_as_a_metric_feeds_both() {
+        use yagra_bus::{SnmpColumn, SnmpMetaColumn, SnmpTableCheck};
+        use yagra_common::InterfaceField;
+        const IF_SPEED: &str = "1.3.6.1.2.1.2.2.1.5";
+        let charted = [
+            ("if_speed_raw", IF_SPEED),
+            ("if_type_raw", OID_IF_TYPE),
+            ("dot3_duplex_raw", OID_DOT3_DUPLEX_STATUS),
+            ("hw_duplex_raw", OID_HW_ETHERNET_DUPLEX),
+            ("hw_port_type_raw", OID_HW_ETHERNET_PORT_TYPE),
+        ];
+        let job = PollJob::snmp_table(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            SnmpTableCheck {
+                community: "public".to_owned(),
+                columns: charted
+                    .iter()
+                    .map(|(name, oid)| SnmpColumn {
+                        metric_name: (*name).to_owned(),
+                        oid: (*oid).to_owned(),
+                        kind: MetricKind::Gauge,
+                    })
+                    .collect(),
+                meta_columns: vec![SnmpMetaColumn {
+                    field: InterfaceField::Speed,
+                    oid: IF_SPEED.to_owned(),
+                }],
+                timeout_ms: 2000,
+            },
+            60,
+        );
+        let row = |oid: &str, ifindex: u32, value: f64| SnmpTableSample {
+            oid_base: oid.to_owned(),
+            ifindex,
+            value,
+        };
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            // ifIndex 1: the standard columns — 1 Gbit/s, ethernetCsmacd, full duplex.
+            row(IF_SPEED, 1, 1_000_000_000.0),
+            row(OID_IF_TYPE, 1, 6.0),
+            row(OID_DOT3_DUPLEX_STATUS, 1, 3.0),
+            // ifIndex 2: a Huawei port — 100 Mbit/s copper, `full(1)` in Huawei's enumeration.
+            row(IF_SPEED, 2, 100_000_000.0),
+            row(OID_HW_ETHERNET_DUPLEX, 2, 1.0),
+            row(OID_HW_ETHERNET_PORT_TYPE, 2, 2.0),
+        ]);
+        let r = execute(&job, &t, 1_000).await;
+        let iface = |ix: u32| {
+            r.interfaces
+                .iter()
+                .find(|i| i.ifindex == IfIndex(ix))
+                .unwrap_or_else(|| panic!("ifIndex {ix} discovered"))
+        };
+
+        assert_eq!(iface(1).if_speed, Some(1_000_000_000));
+        assert_eq!(iface(1).if_type, Some(6));
+        assert_eq!(iface(1).if_duplex, Some(yagra_common::Duplex::Full));
+        assert_eq!(iface(2).if_speed, Some(100_000_000));
+        assert_eq!(iface(2).if_duplex, Some(yagra_common::Duplex::Full));
+        assert!(
+            iface(2).if_media.is_some(),
+            "the Huawei medium reached the media fold"
+        );
+
+        for (name, _) in charted {
+            assert!(
+                r.samples.iter().any(|s| s.metric == name),
+                "{name} is still charted"
+            );
+        }
     }
 
     /// A device with no EtherLike-MIB still reports duplex, via Huawei's column (ADR-063 Inc.3).

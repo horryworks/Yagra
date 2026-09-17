@@ -878,4 +878,45 @@ mod tests {
             "the row is still counted; only the opening fails"
         );
     }
+
+    /// A stored nonce of the wrong length — a damaged restore, a hand edit — is reported as a row
+    /// that will not open, by all three readers, rather than panicking the one that meets it
+    /// (ADR-158 C8). Before the length check `Nonce::from_slice` asserted, so the credentials
+    /// health report and `verify-secrets` died on exactly the row they exist to name.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_credential_with_a_corrupt_nonce_is_reported_unopenable(pool: PgPool) {
+        let kek: Kek = Arc::new(StaticKeyProvider::single([9u8; 32]));
+        let store = CredentialStore::new(pool.clone(), kek.clone());
+        let intact = store.create("intact", "snmp_v2c", b"public").await.unwrap();
+        let corrupt = store
+            .create("corrupt", "snmp_v2c", b"private")
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE credentials SET dek_nonce = substring(dek_nonce FROM 1 FOR 11) WHERE id = $1",
+        )
+        .bind(corrupt)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let report = store.decrypt_report().await.unwrap();
+        let opens: Vec<(Uuid, bool)> = report.iter().map(|(id, _, _, ok)| (*id, *ok)).collect();
+        assert_eq!(opens.len(), 2, "both rows are reported: {opens:?}");
+        assert!(opens.contains(&(intact, true)), "{opens:?}");
+        assert!(opens.contains(&(corrupt, false)), "{opens:?}");
+
+        assert!(
+            store.open(corrupt).await.is_err(),
+            "opening the corrupt row is an error"
+        );
+        assert_eq!(
+            store.open(intact).await.unwrap().map(|(_, bytes)| bytes),
+            Some(b"public".to_vec())
+        );
+
+        let counted = count_sealed(&pool, kek).await.unwrap();
+        assert_eq!((counted.total(), counted.decryptable()), (2, 1));
+    }
 }
