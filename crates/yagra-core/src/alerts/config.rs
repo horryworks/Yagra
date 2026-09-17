@@ -19,7 +19,7 @@
 //!
 //! 🚨 **A failed read must never become an empty value here** (ADR-080). A ruleset that comes back
 //! empty is indistinguishable from "every rule was deleted", and
-//! [`super::engine::AlertManager::observe`] closes every alert on one of those — so one failed
+//! [`super::engine::AlertManager::observe_with_no_reading`] closes every alert on one of those — so one failed
 //! threshold query would resolve the whole fleet's alerts and page a recovery for each. Every load
 //! in [`load_alert_config_base`] therefore propagates with `?` rather than carrying its own
 //! `unwrap_or`, and `guards.rs`-style structural tests at the bottom of this file pin both that
@@ -34,6 +34,7 @@ use yagra_common::NodeId;
 
 use super::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use crate::maintenance::MaintenanceRepo;
+use crate::no_reading_filter::{NoReadingHandle, NoReadingMarkers};
 use crate::notifications::NotificationRepo;
 use crate::repo::NodeRepo;
 use crate::thresholds::ThresholdStore;
@@ -69,6 +70,11 @@ pub(crate) struct AlertConfigBase {
     /// Metric names that publish one series per interface, so each port gets its own check
     /// (ADR-076). Rebuilt on the same config-generation gate as everything else here.
     per_interface: std::collections::BTreeSet<String>,
+    /// Metric names whose vendor column answers a fixed placeholder for a row with no reading
+    /// (ADR-156). Derived from the same collection read as `per_interface`, so the two cannot come
+    /// from different states of the tables. Not part of [`AlertConfig`]: the ingest paths strip the
+    /// placeholders before the engine sees a sample, and the backfill path has no engine at all.
+    no_reading: NoReadingMarkers,
 }
 
 /// The reads [`load_alert_config_base`] is assembled from.
@@ -105,8 +111,9 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     async fn folder_tags(&self) -> anyhow::Result<Vec<crate::groups::LabelRow>>;
     /// `(group, parent)` for every folder group, for the ancestor walk.
     async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>>;
-    /// Metric names that publish one series per interface (ADR-076).
-    async fn per_interface_metrics(&self) -> anyhow::Result<std::collections::BTreeSet<String>>;
+    /// Every collection item the deployment knows — what the per-interface names (ADR-076) and the
+    /// no-reading placeholders (ADR-156) are both derived from.
+    async fn collection_items(&self) -> anyhow::Result<Vec<yagra_common::CollectionItem>>;
     /// Which graph the deployment is configured to suppress with.
     ///
     /// Not a `Result`: it degrades to `Manual` inside the repository, which is the mode that
@@ -141,11 +148,11 @@ impl AlertConfigSources for LiveConfigSources {
     async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
         self.groups.edges().await
     }
-    async fn per_interface_metrics(&self) -> anyhow::Result<std::collections::BTreeSet<String>> {
+    async fn collection_items(&self) -> anyhow::Result<Vec<yagra_common::CollectionItem>> {
         // Constructed here rather than held as a field: it is a handle on the pool `repo` already
         // owns, and this runs only when the config generation advances.
         crate::collection::CollectionRepo::new(self.repo.pool())
-            .per_interface_metric_names()
+            .collected_items()
             .await
     }
     async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
@@ -217,11 +224,14 @@ pub(crate) async fn load_alert_config_base(
         .map_err(|e| anyhow::anyhow!("load group edges: {e}"))?;
     // Which metrics are per-interface (ADR-076). Built from the collection catalogue, never from
     // whether a sample carries an `ifindex` label — that label is a row key, so a chassis reading
-    // would otherwise be split into one bogus check per "port" (ADR-011).
-    let per_interface = sources
-        .per_interface_metrics()
+    // would otherwise be split into one bogus check per "port" (ADR-011). The no-reading placeholders
+    // (ADR-156) come from the same read, for the same reason: only the OID can decide either.
+    let items = sources
+        .collection_items()
         .await
-        .map_err(|e| anyhow::anyhow!("load per-interface metric names: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("load collection items: {e}"))?;
+    let per_interface = crate::collection::per_interface_metric_names(&items);
+    let no_reading = NoReadingMarkers::from_items(&items);
     let mut meta = HashMap::new();
     let mut pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>> = HashMap::new();
     for node in &nodes {
@@ -278,6 +288,7 @@ pub(crate) async fn load_alert_config_base(
         pool_groups,
         topology,
         per_interface,
+        no_reading,
     })
 }
 
@@ -367,22 +378,28 @@ async fn exempt_nodes(
     }
 }
 
-/// Assemble the full alert config (config base + current maintenance). Used for the initial
-/// synchronous load at startup; the refresh loop uses the two halves directly with generation
-/// caching so the base isn't rebuilt when config is unchanged (S6).
+/// Assemble the full alert config (config base + current maintenance), with the no-reading
+/// placeholders read alongside it (ADR-156). Used for the initial synchronous load at startup; the
+/// refresh loop uses the two halves directly with generation caching so the base isn't rebuilt when
+/// config is unchanged (S6).
+///
+/// The two are returned together so a caller cannot install one from a load whose other half failed.
 pub(crate) async fn load_alert_config(
     sources: &dyn AlertConfigSources,
     maintenance: &MaintenanceRepo,
     groups: &groups::GroupRepo,
     repo: &NodeRepo,
-) -> anyhow::Result<AlertConfig> {
+) -> anyhow::Result<(AlertConfig, NoReadingMarkers)> {
     let base = load_alert_config_base(sources).await?;
     let in_maintenance = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
-    Ok(AlertConfig::new(base.rules, base.meta)
-        .with_topology(base.topology)
-        .with_maintenance(in_maintenance)
-        .with_pool_groups(base.pool_groups)
-        .with_per_interface(base.per_interface))
+    Ok((
+        AlertConfig::new(base.rules, base.meta)
+            .with_topology(base.topology)
+            .with_maintenance(in_maintenance)
+            .with_pool_groups(base.pool_groups)
+            .with_per_interface(base.per_interface),
+        base.no_reading,
+    ))
 }
 
 /// Load the unexpired mutes into the notifier (check ids recomputed from names here). A
@@ -480,6 +497,7 @@ pub(crate) async fn run_alert_config_refresh(
     classification: Arc<classification::ClassificationRepo>,
     event_engine: Arc<events::EventEngine>,
     topo_sources: topology_projection::TopologySources,
+    no_reading: NoReadingHandle,
 ) {
     // Cache the config-derived alert base keyed by the config generation, so the full node scan +
     // meta/topology rebuild runs only after an actual config change (S6). Maintenance windows are
@@ -506,7 +524,12 @@ pub(crate) async fn run_alert_config_refresh(
             // the loop itself. Installing a partial base instead is what made a single database
             // blip resolve every open threshold alert in the fleet and page a recovery for each.
             match load_alert_config_base(&sources).await {
-                Ok(base) => cached_base = Some((generation, base)),
+                Ok(base) => {
+                    // Published only from a base whose every read succeeded, so a failed rebuild
+                    // keeps the previous table exactly as it keeps the previous rules (ADR-080).
+                    no_reading.publish(base.no_reading.clone());
+                    cached_base = Some((generation, base));
+                }
                 Err(e) => {
                     metrics::counter!("yagra_alert_config_load_failures_total").increment(1);
                     tracing::warn!(error = %e, "rebuilding the alert config failed; keeping the previous one");
@@ -577,7 +600,7 @@ mod tests {
         FolderPools,
         FolderTags,
         GroupEdges,
-        PerInterface,
+        CollectionItems,
     }
 
     /// Every fallible read. An eighth added to the trait makes this list wrong in a way the
@@ -588,7 +611,7 @@ mod tests {
         Fails::FolderPools,
         Fails::FolderTags,
         Fails::GroupEdges,
-        Fails::PerInterface,
+        Fails::CollectionItems,
     ];
 
     struct FakeSources {
@@ -599,6 +622,8 @@ mod tests {
         derived: Topology,
         /// …and whether it was asked for at all, which is half of ADR-043 決定 5's property.
         derived_asked: Mutex<bool>,
+        /// What `collection_items` answers.
+        items: Vec<yagra_common::CollectionItem>,
     }
 
     impl FakeSources {
@@ -609,6 +634,7 @@ mod tests {
                 mode,
                 derived: Topology::new(),
                 derived_asked: Mutex::new(false),
+                items: Vec::new(),
             }
         }
         fn refuse(&self, which: Fails) -> anyhow::Result<()> {
@@ -641,11 +667,9 @@ mod tests {
             self.refuse(Fails::GroupEdges)?;
             Ok(Vec::new())
         }
-        async fn per_interface_metrics(
-            &self,
-        ) -> anyhow::Result<std::collections::BTreeSet<String>> {
-            self.refuse(Fails::PerInterface)?;
-            Ok(std::collections::BTreeSet::new())
+        async fn collection_items(&self) -> anyhow::Result<Vec<yagra_common::CollectionItem>> {
+            self.refuse(Fails::CollectionItems)?;
+            Ok(self.items.clone())
         }
         async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
             self.mode
@@ -685,6 +709,36 @@ mod tests {
             .expect("nothing failed, so nothing should refuse");
         assert_eq!(base.nodes.len(), 2);
         assert_eq!(base.meta.len(), 2, "every node gets a metadata entry");
+    }
+
+    /// One collection read feeds both catalogue-derived sets (ADR-076, ADR-156): the per-interface
+    /// names and the no-reading placeholders come out of the same items, so neither can be built
+    /// from a state of the tables the other did not see.
+    #[tokio::test]
+    async fn one_collection_read_yields_the_per_interface_names_and_the_no_reading_table() {
+        let mut sources = FakeSources::new(
+            Fails::Nothing,
+            vec![node(1, None)],
+            crate::topology_mode::TopologyMode::Manual,
+        );
+        sources.items = yagra_common::builtin_templates()
+            .into_iter()
+            .flat_map(|t| t.items)
+            .chain(yagra_common::builtin_catalog())
+            .collect();
+        let base = load_alert_config_base(&sources).await.expect("healthy");
+        assert!(base.per_interface.contains("if_hc_in_octets"));
+        assert!(!base.per_interface.contains("huawei_temp"));
+        assert_eq!(
+            base.no_reading,
+            NoReadingMarkers::from_items(&sources.items),
+            "the table is the one the items make"
+        );
+        assert_ne!(
+            base.no_reading,
+            NoReadingMarkers::default(),
+            "the shipped catalogue declares a placeholder, so the table cannot be empty"
+        );
     }
 
     /// 🚨 **ADR-080: a failed read refuses; it never becomes an empty value.**

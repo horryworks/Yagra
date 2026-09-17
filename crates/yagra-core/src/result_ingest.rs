@@ -22,6 +22,11 @@
 //! site's buffered results at their original timestamps; feeding those to the matcher would re-fire
 //! every dwell-based alert as a flood. It therefore reaches the VM and metadata writers only, and
 //! that is the property [`consume_results_backfill`]'s own test pins.
+//!
+//! ⚠️ **Both consumers admit a result before anything reads its samples** (ADR-156). A vendor's
+//! "no reading" placeholder is taken out by [`NoReadingHandle::admit`], and the functions below take
+//! the [`Admitted`] it returns, so neither path can store or judge a placeholder as a value. The
+//! live path hands the placeholders to the engine as evidence; the backfill path drops them.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -37,6 +42,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use crate::alerts::AlertManager;
 use crate::coordinator::Coordinator;
 use crate::history::AlertHistoryStore;
+use crate::no_reading_filter::{Admitted, NoReadingHandle};
 use crate::repo::{self, NodeRepo};
 use crate::store::MetricStore;
 use crate::{arp, dns_check, l3, l3_routing, meraki, neighbors, scheduler};
@@ -537,6 +543,7 @@ pub(crate) struct HistoryRecord {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn consume_results<S>(
     mut results: S,
+    no_reading: NoReadingHandle,
     alerts: Arc<AlertManager>,
     notify_tx: tokio::sync::mpsc::Sender<crate::alerts::NotifyAction>,
     vm: VmWriters,
@@ -551,17 +558,17 @@ pub(crate) async fn consume_results<S>(
 {
     use tracing::Instrument as _;
     while let Some(result) = results.next().await {
-        let result = Arc::new(result);
+        let admitted = no_reading.admit(result);
         // Result-ingest span: child of the poller's poll span (via the result's carried trace
         // context), completing the poll's end-to-end distributed trace. Secret-free fields only.
         let ingest_span = tracing::info_span!(
             "poll.ingest",
-            node_id = %result.node_id,
-            job_id = %result.job_id,
+            node_id = %admitted.result().node_id,
+            job_id = %admitted.result().job_id,
         );
-        yagra_telemetry::set_span_parent(&ingest_span, &result.trace_context);
+        yagra_telemetry::set_span_parent(&ingest_span, &admitted.result().trace_context);
         ingest_result(
-            result,
+            admitted,
             &alerts,
             &notify_tx,
             &vm,
@@ -587,6 +594,7 @@ pub(crate) async fn consume_results<S>(
 /// consumer (fan-out subscribe; only the leader ingests). Returns when the stream ends.
 pub(crate) async fn consume_results_backfill<S>(
     mut results: S,
+    no_reading: NoReadingHandle,
     vm: VmWriters,
     meta_tx: tokio::sync::mpsc::Sender<MetaRecord>,
 ) where
@@ -594,7 +602,9 @@ pub(crate) async fn consume_results_backfill<S>(
 {
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_core_backfill_results_total").increment(1);
-        persist_metrics_and_meta(&Arc::new(result), &vm, &meta_tx);
+        // A replayed placeholder is not stored either — and, arriving hours late, it is not evidence
+        // about anything now, so it is dropped rather than handed to an engine this path never has.
+        persist_metrics_and_meta(&no_reading.admit(result), &vm, &meta_tx);
     }
     tracing::warn!("backfill result stream ended");
 }
@@ -605,10 +615,12 @@ pub(crate) async fn consume_results_backfill<S>(
 /// the same metrics land at their original timestamp without re-driving the alert machine. Metadata
 /// only — names/aliases live in PostgreSQL, joined at query time (ADR-011).
 fn persist_metrics_and_meta(
-    result: &Arc<PollResult>,
+    admitted: &Admitted,
     vm: &VmWriters,
     meta_tx: &tokio::sync::mpsc::Sender<MetaRecord>,
 ) {
+    // Placeholders are already out of `samples` (ADR-156): what reaches the VM writer is readings.
+    let result = admitted.result();
     // Metrics → VM writer. Shed-able: alerts are computed in-memory and never read VM back, so a
     // dropped sample never loses an alert (best-effort observational tier, ADR-025).
     if !result.samples.is_empty() {
@@ -743,7 +755,7 @@ fn persist_metrics_and_meta(
 /// unit. Every persist step is best-effort; only alert evaluation and history are loss-free.
 #[allow(clippy::too_many_arguments)]
 async fn ingest_result(
-    result: Arc<PollResult>,
+    admitted: Admitted,
     alerts: &Arc<AlertManager>,
     notify_tx: &tokio::sync::mpsc::Sender<crate::alerts::NotifyAction>,
     vm: &VmWriters,
@@ -754,6 +766,7 @@ async fn ingest_result(
     meraki_inflight: &Arc<meraki::MerakiInflight>,
     coordinator: &Arc<Coordinator>,
 ) {
+    let result = admitted.result();
     metrics::counter!("yagra_poll_results_total").increment(1);
     stats.record_result();
     // Attribute the result to its producing poller for the Pollers view (provenance only;
@@ -776,7 +789,7 @@ async fn ingest_result(
 
     // Metrics → VM writer + interface/identity metadata → PG writer. Shed-able/self-healing and
     // alert-independent, so it's shared with the backfill path (`consume_results_backfill`).
-    persist_metrics_and_meta(&result, vm, meta_tx);
+    persist_metrics_and_meta(&admitted, vm, meta_tx);
 
     // An observational result (today: the CDP/LLDP neighbour walk, ADR-038) states nothing about
     // the node's reachability, so it must not reach the alert engine at all. `observe` derives
@@ -795,7 +808,10 @@ async fn ingest_result(
     // The row names first (ADR-143): a rule scoped to a row name resolves against them, so the names
     // this result carries must be in the engine before its own samples are judged.
     alerts.record_row_names(result.node_id, &result.row_names);
-    for action in alerts.observe(&result) {
+    // A row whose device answered its placeholder is evidence that the row has no reading — the one
+    // thing that may close that row's alert. A row that merely stopped arriving closes nothing
+    // (ADR-156 決定 3).
+    for action in alerts.observe_with_no_reading(result, admitted.no_reading()) {
         // Which row an action produces is one rule for the whole crate (ADR-092); what is this
         // path's own is the channel — a roll-up persists nothing, and the eventual real recovery
         // is what records.
@@ -1298,7 +1314,13 @@ mod tests {
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         };
-        consume_results_backfill(futures::stream::iter(vec![result]), vm, meta_tx).await;
+        consume_results_backfill(
+            futures::stream::iter(vec![result]),
+            NoReadingHandle::default(),
+            vm,
+            meta_tx,
+        )
+        .await;
         assert!(
             metrics_rx.try_recv().is_ok(),
             "backfilled metrics reach the VM writer"
@@ -1326,7 +1348,7 @@ mod tests {
         // A tab from the device, folded to one space on this edge as on the poller's.
         result.os_version_without_patch =
             Some(format!("5.170{}(V200R021C00SPC100)", char::from(9)));
-        persist_metrics_and_meta(&Arc::new(result), &vm, &meta_tx);
+        persist_metrics_and_meta(&NoReadingHandle::default().admit(result), &vm, &meta_tx);
         let rec = meta_rx
             .try_recv()
             .expect("the record reaches the PG writer");
@@ -1355,7 +1377,7 @@ mod tests {
             char::from(9),
             "x".repeat(300)
         ));
-        persist_metrics_and_meta(&Arc::new(result), &vm, &meta_tx);
+        persist_metrics_and_meta(&NoReadingHandle::default().admit(result), &vm, &meta_tx);
         let rec = meta_rx
             .try_recv()
             .expect("the record reaches the PG writer");
@@ -1383,11 +1405,30 @@ mod tests {
             vec![crate::alerts::seeded_liveness_rule()],
             std::collections::HashMap::new(),
         ));
+        drive_ingest_into(&alerts, &NoReadingHandle::default(), results)
+            .await
+            .actions
+    }
+
+    /// Everything one run of [`drive_ingest_into`] handed onward, per channel.
+    struct Ingested {
+        actions: Vec<crate::alerts::NotifyAction>,
+        history: Vec<HistoryRecord>,
+        metrics: Vec<Arc<PollResult>>,
+    }
+
+    /// [`drive_ingest`] with the engine and the no-reading table supplied by the test (ADR-156), and
+    /// with what reached the VM writer and the history writer kept rather than dropped.
+    async fn drive_ingest_into(
+        alerts: &Arc<AlertManager>,
+        no_reading: &NoReadingHandle,
+        results: Vec<PollResult>,
+    ) -> Ingested {
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(64);
-        let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(64);
+        let (metrics_tx, mut metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(64);
         let vm = VmWriters::from_senders(vec![metrics_tx]);
         let (meta_tx, _meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(64);
-        let (history_tx, _history_rx) = tokio::sync::mpsc::channel::<HistoryRecord>(64);
+        let (history_tx, mut history_rx) = tokio::sync::mpsc::channel::<HistoryRecord>(64);
         // The history store is never touched: the channel is wide enough that `enqueue_history`
         // never takes its inline-write fallback. `connect_lazy` gives a handle that connects to
         // nothing (the same trick `events/engine.rs`'s planner tests use).
@@ -1407,8 +1448,8 @@ mod tests {
         ));
         for r in results {
             ingest_result(
-                Arc::new(r),
-                &alerts,
+                no_reading.admit(r),
+                alerts,
                 &notify_tx,
                 &vm,
                 &meta_tx,
@@ -1421,11 +1462,177 @@ mod tests {
             .await;
         }
         drop(notify_tx);
-        let mut out = Vec::new();
+        let mut out = Ingested {
+            actions: Vec::new(),
+            history: Vec::new(),
+            metrics: Vec::new(),
+        };
         while let Ok(a) = notify_rx.try_recv() {
-            out.push(a);
+            out.actions.push(a);
+        }
+        while let Ok(h) = history_rx.try_recv() {
+            out.history.push(h);
+        }
+        while let Ok(m) = metrics_rx.try_recv() {
+            out.metrics.push(m);
         }
         out
+    }
+
+    /// ADR-156 through the real ingest: the fifteen `hwEntityTemperature` rows the PoC AC6508
+    /// answered, under the shipped temperature rule's bounds and dwell (above 70/80, dwell 2).
+    fn ac6508_polls(node: NodeId, ats: std::ops::Range<i64>) -> Vec<PollResult> {
+        ats.map(|at| {
+            let mut r = liveness_result(node, CheckOutcome::Reachable, at);
+            r.samples = crate::no_reading_filter::ac6508_temperature_rows();
+            r
+        })
+        .collect()
+    }
+
+    fn temperature_engine(node: NodeId) -> Arc<AlertManager> {
+        use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
+        let rule = crate::thresholds::StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            Vec::new(),
+            ThresholdRule::new(
+                "huawei_temp",
+                ThresholdBounds::above(Some(70.0), Some(80.0)),
+                2,
+            ),
+        );
+        let alerts = Arc::new(AlertManager::new());
+        alerts.set_config(crate::alerts::testkit::cfg(
+            vec![rule],
+            crate::alerts::testkit::meta_for(node),
+        ));
+        alerts
+    }
+
+    fn ac6508_handle() -> NoReadingHandle {
+        let handle = NoReadingHandle::default();
+        handle.publish(crate::no_reading_filter::NoReadingMarkers::from_items(
+            &yagra_common::builtin_templates()
+                .into_iter()
+                .flat_map(|t| t.items)
+                .collect::<Vec<_>>(),
+        ));
+        handle
+    }
+
+    fn fires(actions: &[crate::alerts::NotifyAction]) -> usize {
+        actions
+            .iter()
+            .filter(|a| matches!(a, crate::alerts::NotifyAction::Fire(_)))
+            .count()
+    }
+
+    fn temperatures(metrics: &[Arc<PollResult>]) -> Vec<f64> {
+        metrics
+            .iter()
+            .flat_map(|r| r.samples.iter())
+            .filter(|s| s.metric == "huawei_temp")
+            .map(|s| s.value)
+            .collect()
+    }
+
+    /// Before the table is published — today's behaviour, and the bug this ADR exists for: twelve
+    /// criticals on the second poll, and every placeholder written to the TSDB.
+    #[tokio::test]
+    async fn without_a_table_the_ac6508_rows_raise_twelve_criticals() {
+        let node = NodeId::new();
+        let alerts = temperature_engine(node);
+        let out = drive_ingest_into(
+            &alerts,
+            &NoReadingHandle::default(),
+            ac6508_polls(node, 1..3),
+        )
+        .await;
+        assert_eq!(fires(&out.actions), 12, "{:?}", out.actions);
+        assert!(temperatures(&out.metrics).contains(&2_147_483_647.0));
+    }
+
+    /// With the table built from the **shipped** catalogue: no alert however long it runs, and only
+    /// the three readings reach the TSDB writer.
+    #[tokio::test]
+    async fn the_shipped_table_keeps_the_ac6508_placeholders_out_of_the_tsdb_and_the_rules() {
+        let node = NodeId::new();
+        let alerts = temperature_engine(node);
+        let out = drive_ingest_into(&alerts, &ac6508_handle(), ac6508_polls(node, 1..6)).await;
+        assert_eq!(fires(&out.actions), 0, "{:?}", out.actions);
+        assert_eq!(out.metrics.len(), 5, "every poll still reaches the writer");
+        assert_eq!(
+            temperatures(&out.metrics[..1]),
+            vec![58.0, 0.0, 0.0],
+            "the sensor and the two zero rows are readings"
+        );
+        assert!(!temperatures(&out.metrics).contains(&2_147_483_647.0));
+    }
+
+    /// The upgrade: the twelve alerts are restored, the device keeps answering its placeholder, and
+    /// the rule's dwell later all twelve close with a resolve each — written to history as resolved.
+    #[tokio::test]
+    async fn restored_ac6508_alerts_resolve_through_ingest_and_are_recorded_resolved() {
+        let node = NodeId::new();
+        let alerts = temperature_engine(node);
+        let rows = [3u32, 5, 14, 78, 142, 206, 270, 334, 398, 462, 526, 590];
+        let restored: Vec<Alert> = rows
+            .iter()
+            .map(|row| Alert {
+                subject: yagra_alert::Subject::Node(node),
+                check: crate::alerts::rules::row_check_id(node, *row, "huawei_temp"),
+                severity: yagra_common::Severity::Critical,
+                state: yagra_common::NodeState::Critical,
+                at_unix_ms: 0,
+                root_cause: None,
+                flapping: false,
+                metric: "huawei_temp".to_owned(),
+                breach: None,
+                ifindex: None,
+                row: Some(*row),
+                row_name: None,
+            })
+            .collect();
+        assert_eq!(alerts.restore(restored), 12);
+
+        let out = drive_ingest_into(&alerts, &ac6508_handle(), ac6508_polls(node, 1..3)).await;
+        let resolved: Vec<u32> = out
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                crate::alerts::NotifyAction::Resolve(alert) => alert.row,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolved.len(), 12, "{:?}", out.actions);
+        assert!(alerts.active_alerts().is_empty());
+        let recorded: Vec<&HistoryRecord> = out.history.iter().filter(|h| h.resolved).collect();
+        assert_eq!(
+            recorded.len(),
+            12,
+            "each close is written to history as a resolve"
+        );
+        assert!(recorded.iter().all(|h| h.alert.metric == "huawei_temp"));
+    }
+
+    /// The backfill path strips the placeholders too, and has nothing to hand them to.
+    #[tokio::test]
+    async fn a_backfilled_placeholder_is_not_stored() {
+        let (metrics_tx, mut metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
+        let (meta_tx, _meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+        consume_results_backfill(
+            futures::stream::iter(ac6508_polls(NodeId::new(), 1..2)),
+            ac6508_handle(),
+            vm,
+            meta_tx,
+        )
+        .await;
+        let stored = metrics_rx
+            .try_recv()
+            .expect("the readings reach the VM writer");
+        assert_eq!(temperatures(&[stored]), vec![58.0, 0.0, 0.0]);
     }
 
     fn observational_result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {

@@ -20,6 +20,7 @@ pub mod link_mode;
 pub mod meraki;
 pub mod metric;
 pub mod neighbor;
+pub mod no_reading;
 pub mod node;
 mod node_kind;
 mod notify_template;
