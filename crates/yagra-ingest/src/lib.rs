@@ -22,7 +22,8 @@ pub mod trap;
 
 pub use flow::{
     carries_template_set, parse_flow_export, parse_sflow, AggregatedFlow, ExporterBatch,
-    ExporterBuckets, FlowAggregator, FlowError, FlowTemplates, RawFlow, DEFAULT_FLOW_TOP_N,
+    ExporterBuckets, FlowAggregator, FlowError, FlowTemplates, RawFlow, TemplateStats,
+    DEFAULT_FLOW_TOP_N,
 };
 pub use ratelimit::SourceLimiter;
 pub use signature::{

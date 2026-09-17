@@ -148,8 +148,15 @@ impl NamePlan {
 
 /// Read the names for this table job's rows and put them on its result.
 ///
-/// Returns whether the device answered the walk — `true` also when there was nothing to name, so a
-/// node whose tables have no names is asked again in an hour rather than every few minutes.
+/// Returns whether this node can wait the hour: `true` when there was nothing to name, and when
+/// every column asked for was walked to its end — even if no name came back, so a device whose
+/// tables have no names is not asked every few minutes. `false` keeps the short retry.
+///
+/// 🚨 **Judged column by column, never by whether the walk returned `Ok`** (ADR-158). A transport
+/// walk is `Ok` for a device that never answered as long as fewer than two columns in a row failed,
+/// and this walk is usually one column — so a silent device came back `Ok([Failed])` with no
+/// `stopped`, and was left alone for an hour. A walk that did not answer every column still
+/// publishes the names it did get, and counts as done only when those were every row it wanted.
 pub(super) async fn collect(
     job: &PollJob,
     transport: &dyn Transport,
@@ -174,6 +181,7 @@ pub(super) async fn collect(
     let deadline = Instant::now() + NAME_WALK_BUDGET;
 
     let mut pointers = Vec::new();
+    let mut every_column_answered = true;
     let pointer_columns = plan.pointer_columns();
     if !pointer_columns.is_empty() {
         match walker
@@ -185,9 +193,15 @@ pub(super) async fn collect(
             )
             .await
         {
-            Ok(walk) => pointers = walk.rows,
+            Ok(walk) => {
+                every_column_answered &= walk.every_column_answered();
+                pointers = walk.rows;
+            }
+            // The device just failed to answer; the name walk would spend the rest of the budget
+            // on the same silence.
             Err(err) => {
-                tracing::debug!(job_id = %job.job_id, error = %err, "row-name pointer walk failed")
+                tracing::debug!(job_id = %job.job_id, error = %err, "row-name pointer walk failed");
+                return false;
             }
         }
     }
@@ -200,7 +214,10 @@ pub(super) async fn collect(
         )
         .await
     {
-        Ok(walk) => walk.rows,
+        Ok(walk) => {
+            every_column_answered &= walk.every_column_answered();
+            walk.rows
+        }
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "row-name walk failed");
             return false;
@@ -208,7 +225,7 @@ pub(super) async fn collect(
     };
     result.row_names = plan.assemble(&strings, &pointers);
     metrics::counter!("yagra_poll_row_names_total").increment(result.row_names.len() as u64);
-    true
+    every_column_answered || result.row_names.len() == plan.wanted.len()
 }
 
 #[cfg(test)]
@@ -217,7 +234,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use uuid::Uuid;
     use yagra_bus::TraceContext;
-    use yagra_transport::FakeTransport;
+    use yagra_transport::{FakeTransport, StringWalkFault};
 
     const POOL_USED: &str = "1.3.6.1.4.1.9.9.48.1.1.1.5";
     const POOL_NAME: &str = "1.3.6.1.4.1.9.9.48.1.1.1.2";
@@ -385,6 +402,107 @@ mod tests {
             transport.asked().is_empty(),
             "no walk should have been issued for a job with no named table"
         );
+    }
+
+    fn pool_job_and_result() -> (PollJob, PollResult) {
+        let job = table_job(vec![column("cisco_mem_used", POOL_USED)]);
+        let result = result(
+            &job,
+            0,
+            CheckOutcome::Reachable,
+            vec![
+                row("cisco_mem_used", 1, 37_548_112.0),
+                row("cisco_mem_used", 2, 12_312_508.0),
+            ],
+        );
+        (job, result)
+    }
+
+    /// The usual name walk is **one** column. A device that never answers it leaves `[Failed]` and
+    /// no `stopped` — the budget needs two failed columns in a row to call a device silent — and
+    /// that walk was taken for an answer, so the node waited an hour instead of five minutes
+    /// (ADR-158).
+    #[tokio::test]
+    async fn a_single_name_column_that_timed_out_is_not_an_answer() {
+        let (job, mut result) = pool_job_and_result();
+        let transport =
+            FakeTransport::reachable(1.0).with_string_walk_fault(StringWalkFault::ColumnsFailed);
+        assert!(!collect(&job, &transport, &mut result).await);
+        assert!(result.row_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_walk_the_budget_called_silent_keeps_the_short_retry() {
+        let (job, mut result) = pool_job_and_result();
+        let transport =
+            FakeTransport::reachable(1.0).with_string_walk_fault(StringWalkFault::Silent);
+        assert!(!collect(&job, &transport, &mut result).await);
+    }
+
+    /// Cut short with some names in hand: those are published, and the node is asked again soon for
+    /// the rest.
+    #[tokio::test]
+    async fn a_truncated_walk_publishes_what_it_got_and_asks_again() {
+        let (job, mut result) = pool_job_and_result();
+        let transport = FakeTransport::reachable(1.0)
+            .with_snmp_table_strings(vec![text(POOL_NAME, 1, "Processor")])
+            .with_string_walk_fault(StringWalkFault::CutAtDeadline);
+        assert!(!collect(&job, &transport, &mut result).await);
+        assert_eq!(
+            names(&result),
+            vec![("cisco_mem_used".into(), 1, "Processor".into())]
+        );
+    }
+
+    /// A pointer walk that failed is not an answer either, and the string walk it would feed is not
+    /// sent to a device that just failed to answer.
+    #[tokio::test]
+    async fn a_failed_pointer_walk_is_not_an_answer() {
+        let job = table_job(vec![column("cisco_cpu_5min", CPU_5MIN)]);
+        let mut result = result(
+            &job,
+            0,
+            CheckOutcome::Reachable,
+            vec![row("cisco_cpu_5min", 7, 12.0)],
+        );
+        let transport = FakeTransport::reachable(1.0)
+            .with_snmp_table_strings(vec![text(ENT_NAME, 1000, "CPU of Switch 1")])
+            .with_snmp_walk_error("request timed out");
+        assert!(!collect(&job, &transport, &mut result).await);
+        assert!(result.row_names.is_empty());
+        assert!(
+            transport
+                .asked()
+                .iter()
+                .all(|oids| !oids.iter().any(|o| o == ENT_NAME)),
+            "the name column was walked after the pointer walk failed: {:?}",
+            transport.asked()
+        );
+    }
+
+    /// **The accepting side.** A walk cut short that still named every row it wanted is complete
+    /// for this purpose: nothing is gained by asking again in five minutes.
+    #[tokio::test]
+    async fn a_truncated_walk_that_named_every_row_waits_the_hour() {
+        let (job, mut result) = pool_job_and_result();
+        let transport = FakeTransport::reachable(1.0)
+            .with_snmp_table_strings(vec![
+                text(POOL_NAME, 1, "Processor"),
+                text(POOL_NAME, 2, "I/O"),
+            ])
+            .with_string_walk_fault(StringWalkFault::CutAtDeadline);
+        assert!(collect(&job, &transport, &mut result).await);
+        assert_eq!(result.row_names.len(), 2);
+    }
+
+    /// A device that answers and has no names is an answer: it is asked again in an hour, not every
+    /// five minutes forever.
+    #[tokio::test]
+    async fn a_device_that_answers_with_no_names_waits_the_hour() {
+        let (job, mut result) = pool_job_and_result();
+        let transport = FakeTransport::reachable(1.0);
+        assert!(collect(&job, &transport, &mut result).await);
+        assert!(result.row_names.is_empty());
     }
 
     #[test]

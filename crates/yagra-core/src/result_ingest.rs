@@ -28,7 +28,7 @@
 //! the [`Admitted`] it returns, so neither path can store or judge a placeholder as a value. The
 //! live path hands the placeholders to the engine as evidence; the backfill path drops them.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use futures::{Stream, StreamExt};
@@ -325,6 +325,10 @@ fn register_failure_counters_at_zero() {
     metrics::counter!("yagra_result_metrics_persist_dropped_total", "reason" => "channel_full")
         .increment(0);
     metrics::counter!("yagra_result_meta_persist_dropped_total", "reason" => "channel_full")
+        .increment(0);
+    metrics::counter!("yagra_result_metrics_persist_dropped_total", "reason" => "writer_gone")
+        .increment(0);
+    metrics::counter!("yagra_result_meta_persist_dropped_total", "reason" => "writer_gone")
         .increment(0);
     metrics::counter!("yagra_vm_samples_dropped_total", "reason" => "spill_full").increment(0);
     metrics::counter!("yagra_vm_write_retries_total").increment(0);
@@ -630,7 +634,11 @@ fn persist_metrics_and_meta(
                 metrics::counter!("yagra_result_metrics_persist_dropped_total", "reason" => "channel_full")
                     .increment(1);
             }
-            Err(TrySendError::Closed(_)) => {}
+            Err(TrySendError::Closed(_)) => writer_gone(
+                "yagra_result_metrics_persist_dropped_total",
+                &METRICS_WRITER_GONE_LOGGED,
+                "metrics",
+            ),
         }
     }
 
@@ -742,8 +750,36 @@ fn persist_metrics_and_meta(
                 metrics::counter!("yagra_result_meta_persist_dropped_total", "reason" => "channel_full")
                     .increment(1);
             }
-            Err(TrySendError::Closed(_)) => {}
+            Err(TrySendError::Closed(_)) => writer_gone(
+                "yagra_result_meta_persist_dropped_total",
+                &META_WRITER_GONE_LOGGED,
+                "metadata",
+            ),
         }
+    }
+}
+
+/// Whether [`writer_gone`] has already logged for the metrics tier.
+static METRICS_WRITER_GONE_LOGGED: AtomicBool = AtomicBool::new(false);
+/// Whether [`writer_gone`] has already logged for the metadata tier.
+static META_WRITER_GONE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// A persistence writer's channel is closed, so the task that drained it has ended — during
+/// shutdown on purpose, at any other time because it panicked (ADR-158 決定 2).
+///
+/// 🚨 **This arm used to be `{}`.** A writer that panicked left every later result dropped here,
+/// with no counter, no log and nothing on any screen: the store simply stopped getting data. Now it
+/// is `reason="writer_gone"` on the tier's dropped counter every time and one error line the first
+/// time. Core's tasks are deliberately not restarted — the user decided (2026-09-17) that a core
+/// panic is made visible, not recovered from, because a restart loop over a panic that recurs on
+/// every start would hide the same fault behind a different symptom.
+fn writer_gone(counter: &'static str, logged: &AtomicBool, writer: &'static str) {
+    metrics::counter!(counter, "reason" => "writer_gone").increment(1);
+    if !logged.swap(true, Ordering::Relaxed) {
+        tracing::error!(
+            writer,
+            "a persistence writer has stopped (expected only at shutdown); results for it are being dropped"
+        );
     }
 }
 
@@ -1329,6 +1365,41 @@ mod tests {
             meta_rx.try_recv().is_ok(),
             "backfilled interface metadata reaches the PG writer"
         );
+    }
+
+    /// A writer whose task has ended leaves its channel closed. That used to be an empty match arm:
+    /// every later result was dropped with no counter and no log (ADR-158).
+    #[test]
+    fn a_closed_writer_channel_is_counted_not_swallowed() {
+        let (metrics_tx, metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let (meta_tx, meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+        drop((metrics_rx, meta_rx));
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
+        let mut result = (*sample_result()).clone();
+        result.serial_number = Some("FCW1929B68S".into()); // something for the metadata tier too
+
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            for _ in 0..2 {
+                persist_metrics_and_meta(
+                    &NoReadingHandle::default().admit(result.clone()),
+                    &vm,
+                    &meta_tx,
+                );
+            }
+        });
+        let rendered = handle.render();
+        for key in [
+            "yagra_result_metrics_persist_dropped_total",
+            "yagra_result_meta_persist_dropped_total",
+        ] {
+            let line = format!("{key}{{reason=\"writer_gone\"}} 2");
+            assert!(
+                rendered.lines().any(|l| l == line),
+                "expected `{line}` in:\n{rendered}"
+            );
+        }
     }
 
     /// ADR-138 Increment 4: a version sent without its patch reaches the PG writer in its **own**
@@ -2093,22 +2164,27 @@ mod tests {
         // And the counters that only move when something fails — measured absent on a healthy
         // deployment before `register_failure_counters_at_zero` existed, which is the whole point:
         // these five are the ones an operator alerts on.
-        for key in [
-            "yagra_result_metrics_persist_dropped_total",
-            "yagra_result_meta_persist_dropped_total",
-            "yagra_vm_samples_dropped_total",
-            "yagra_vm_write_retries_total",
-            "yagra_result_history_persist_fallback_total",
+        // The two dropped counters carry two reasons each: a full queue, and a writer that has
+        // stopped (ADR-158).
+        for (key, series) in [
+            ("yagra_result_metrics_persist_dropped_total", 2),
+            ("yagra_result_meta_persist_dropped_total", 2),
+            ("yagra_vm_samples_dropped_total", 1),
+            ("yagra_vm_write_retries_total", 1),
+            ("yagra_result_history_persist_fallback_total", 1),
         ] {
             let values = rendered_values(&rendered, key);
             assert_eq!(
                 values.len(),
-                1,
-                "{key} is absent, so a healthy deployment and a broken wiring read the same \
-                 — add it to register_failure_counters_at_zero. Rendered:\n{rendered}"
+                series,
+                "{key} is missing a series, so a healthy deployment and a broken wiring read the \
+                 same — add it to register_failure_counters_at_zero. Rendered:\n{rendered}"
             );
-            assert_eq!(values[0], 0.0, "{key} did not start at zero");
-            inspected += 1;
+            assert!(
+                values.iter().all(|v| *v == 0.0),
+                "{key} did not start at zero"
+            );
+            inspected += values.len();
         }
         // The floor counts what was inspected, not what was found wrong: a renderer that stopped
         // matching would otherwise report a clean tree.

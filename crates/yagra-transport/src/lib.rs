@@ -617,6 +617,30 @@ pub struct FakeTransport {
     /// interface walk owes its completeness gauge on *every* path, including this one — cannot be
     /// tested at all while the fake can only produce the first.
     pub snmp_walk_error: Option<String>,
+    /// When set, every **string column** walk (v2c and v3) still returns
+    /// [`Self::snmp_table_strings`] but ends the way this fault says (ADR-158).
+    ///
+    /// Its own field rather than a reuse of [`Self::snmp_walk_truncated`], which only numeric walks
+    /// read: the row-name walk issues a numeric walk and a string walk against one device, and a
+    /// test has to be able to break one without the other.
+    pub string_walk_fault: Option<StringWalkFault>,
+}
+
+/// How a fake string walk ends short, in the shapes the real walkers produce. See
+/// [`FakeTransport::string_walk_fault`].
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringWalkFault {
+    /// The deadline fell part-way down the columns: every column that returned a row was cut
+    /// (`Partial`, resuming after its last row), the rest were never asked, `stopped` is `Deadline`.
+    CutAtDeadline,
+    /// The budget called the device silent: every column that returned no row `Failed`, `stopped`
+    /// is `Silent`.
+    Silent,
+    /// Every column that returned no row `Failed`, and **nothing says `stopped`** — what a real
+    /// walker gives a silent device asked for a single column, because the budget needs two failures
+    /// in a row before it calls the device silent.
+    ColumnsFailed,
 }
 
 /// The canned `rows` whose column was asked for, with one report per asked column.
@@ -706,6 +730,45 @@ impl FakeTransport {
         }
     }
 
+    /// The canned string rows for `column_oids`, ended as [`Self::string_walk_fault`] says.
+    fn canned_string_walk(&self, column_oids: &[String]) -> TableWalk<SnmpTableString> {
+        let mut walk = canned_walk(
+            &self.snmp_table_strings,
+            |r| r.oid_base.as_str(),
+            column_oids,
+            None,
+        );
+        let Some(fault) = self.string_walk_fault else {
+            return walk;
+        };
+        for report in &mut walk.columns {
+            let last_row = walk
+                .rows
+                .iter()
+                .rev()
+                .find(|r| r.oid_base == report.column)
+                .map(|r| r.ifindex);
+            report.end = match (fault, last_row) {
+                (StringWalkFault::CutAtDeadline, Some(row)) => ColumnEnd::Partial {
+                    resume_after: vec![row],
+                },
+                (StringWalkFault::CutAtDeadline, None) => ColumnEnd::NotAsked,
+                (StringWalkFault::Silent | StringWalkFault::ColumnsFailed, Some(_)) => {
+                    ColumnEnd::Answered
+                }
+                (StringWalkFault::Silent | StringWalkFault::ColumnsFailed, None) => {
+                    ColumnEnd::Failed
+                }
+            };
+        }
+        walk.stopped = match fault {
+            StringWalkFault::CutAtDeadline => Some(Truncation::Deadline),
+            StringWalkFault::Silent => Some(Truncation::Silent),
+            StringWalkFault::ColumnsFailed => None,
+        };
+        walk
+    }
+
     /// Note that an SNMP call asked for `oids`. See [`Self::asked`] for why this is recorded.
     fn record_asked(&self, oids: &[String]) {
         if let Ok(mut log) = self.asked.lock() {
@@ -787,6 +850,7 @@ impl FakeTransport {
             walk_limits: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
             snmp_walk_error: None,
+            string_walk_fault: None,
             dns: fake_dns_chain(true),
         }
     }
@@ -824,6 +888,7 @@ impl FakeTransport {
             walk_limits: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
             snmp_walk_error: None,
+            string_walk_fault: None,
             dns: fake_dns_chain(false),
         }
     }
@@ -891,6 +956,14 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp_table(mut self, rows: Vec<SnmpTableSample>) -> Self {
         self.snmp_table = rows;
+        self
+    }
+
+    /// Make every string column walk (v2c and v3) end short as `fault` says, while still returning
+    /// whatever [`Self::snmp_table_strings`] rows it was given.
+    #[must_use]
+    pub fn with_string_walk_fault(mut self, fault: StringWalkFault) -> Self {
+        self.string_walk_fault = Some(fault);
         self
     }
 
@@ -1014,12 +1087,7 @@ impl Transport for FakeTransport {
         limits: WalkLimits,
     ) -> Result<TableWalk<SnmpTableString>, TransportError> {
         self.record_walk(column_oids, limits);
-        Ok(canned_walk(
-            &self.snmp_table_strings,
-            |r| r.oid_base.as_str(),
-            column_oids,
-            None,
-        ))
+        Ok(self.canned_string_walk(column_oids))
     }
 
     async fn snmp_v3_walk(
@@ -1050,12 +1118,7 @@ impl Transport for FakeTransport {
         limits: WalkLimits,
     ) -> Result<TableWalk<SnmpTableString>, TransportError> {
         self.record_walk(column_oids, limits);
-        Ok(canned_walk(
-            &self.snmp_table_strings,
-            |r| r.oid_base.as_str(),
-            column_oids,
-            None,
-        ))
+        Ok(self.canned_string_walk(column_oids))
     }
 
     async fn snmp_walk_instances(

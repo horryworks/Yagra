@@ -12,7 +12,7 @@
 //! and outputs are capped ([`MAX_VARBINDS`], [`MAX_VALUE_CHARS`]).
 
 use crate::clip_chars;
-use snmp2::{MessageType, Pdu, Value};
+use snmp2::{asn1, snmp, AsnReader, MessageType, Pdu, Value};
 use thiserror::Error;
 
 /// Cap on the number of varbinds kept from one trap.
@@ -144,15 +144,48 @@ pub fn parse_trap(bytes: &[u8]) -> Result<TrapEvent, TrapError> {
 /// (RFC 3416 §4.2.7). Returns `None` if the datagram doesn't re-parse as an inform —
 /// callers only invoke this after [`parse_trap`] said `is_inform`, so `None` is a
 /// should-not-happen guard, not a flow.
+///
+/// **The received bytes are copied, never re-encoded** (ADR-158 決定 1). Three places change: the
+/// PDU tag becomes Response, and the contents of error-status and error-index become zero. The
+/// ack is therefore exactly as long as the message it answers, so it fits wherever that did.
+/// Re-encoding through `snmp2` did not have that property: a sender can spell a value more
+/// compactly than `snmp2` does (Timeticks `43 01 FF` becomes `43 05 00 FF FF FF FF`), and 8,000
+/// such varbinds in one datagram outgrew the encoder's fixed buffer and panicked the reader task
+/// for good. Anything after the message's own SEQUENCE is not part of it and is not echoed.
 #[must_use]
 pub fn build_inform_response(bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut pdu = Pdu::from_bytes(bytes).ok()?;
+    let pdu = Pdu::from_bytes(bytes).ok()?;
     if pdu.message_type != MessageType::InformRequest {
         return None;
     }
-    // Same PDU (version/community/req_id/varbinds echoed), retagged as a Response.
-    pdu.message_type = MessageType::Response;
-    pdu.to_bytes().ok()
+
+    // Walk the same header `Pdu::from_bytes` just accepted, with the same bounds-checked reader.
+    // A reader's position in `bytes` is the end of the region it reads minus what it has left.
+    let mut datagram = AsnReader::from_bytes(bytes);
+    let content = datagram.read_raw(asn1::TYPE_SEQUENCE).ok()?;
+    let message_end = bytes.len() - datagram.bytes_left();
+    let mut message = AsnReader::from_bytes(content);
+    message.read_asn_integer().ok()?; // version
+    message.read_asn_octetstring().ok()?; // community
+    let tag_at = message_end - message.bytes_left();
+    let body = message.read_raw(snmp::MSG_INFORM).ok()?;
+    let body_end = message_end - message.bytes_left();
+    let mut fields = AsnReader::from_bytes(body);
+    fields.read_asn_integer().ok()?; // request-id, echoed as it came
+    let status = fields.read_raw(asn1::TYPE_INTEGER).ok()?;
+    let status_end = body_end - fields.bytes_left();
+    let index = fields.read_raw(asn1::TYPE_INTEGER).ok()?;
+    let index_end = body_end - fields.bytes_left();
+
+    let mut response = bytes.get(..message_end)?.to_vec();
+    *response.get_mut(tag_at)? = snmp::MSG_RESPONSE;
+    response
+        .get_mut(status_end.checked_sub(status.len())?..status_end)?
+        .fill(0);
+    response
+        .get_mut(index_end.checked_sub(index.len())?..index_end)?
+        .fill(0);
+    Some(response)
 }
 
 /// Map an `snmp2` parse error to ours. v3 datagrams surface as auth/version errors
@@ -289,6 +322,200 @@ mod tests {
         assert_eq!(parsed.message_type, MessageType::Response);
         assert_eq!(parsed.req_id, 777);
         assert_eq!(parsed.community, b"public");
+    }
+
+    /// A definite-length BER length, in the short form when it fits and the long form otherwise.
+    fn ber_len(n: usize) -> Vec<u8> {
+        if n < 0x80 {
+            return vec![n as u8];
+        }
+        let bytes: Vec<u8> = n
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|b| *b == 0)
+            .collect();
+        let mut out = vec![0x80 | bytes.len() as u8];
+        out.extend(bytes);
+        out
+    }
+
+    fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        out.extend(ber_len(content.len()));
+        out.extend_from_slice(content);
+        out
+    }
+
+    /// A v2c inform assembled byte by byte, so its encoding is exactly what a sender chose rather
+    /// than what `snmp2`'s encoder would have produced.
+    fn hand_built_inform(error_status: u8, error_index: u8, varbinds: &[u8]) -> Vec<u8> {
+        let mut pdu = Vec::new();
+        pdu.extend(tlv(0x02, &[0x07])); // request-id 7
+        pdu.extend(tlv(0x02, &[error_status]));
+        pdu.extend(tlv(0x02, &[error_index]));
+        pdu.extend(tlv(0x30, varbinds));
+        let mut message = Vec::new();
+        message.extend(tlv(0x02, &[0x01])); // version v2c
+        message.extend(tlv(0x04, b"public"));
+        message.extend(tlv(snmp::MSG_INFORM, &pdu));
+        tlv(0x30, &message)
+    }
+
+    /// The datagram that stopped a trap reader for good: every varbind's Timeticks is sent in one
+    /// byte (`43 01 FF`, which decodes to 4294967295) and `snmp2` re-encodes it in five
+    /// (`43 05 00 FF FF FF FF`). 8,000 of them fit in one UDP datagram and their re-encoding does
+    /// not fit in `snmp2`'s fixed 65,507-byte buffer.
+    fn inform_that_grows_when_reencoded() -> Vec<u8> {
+        let varbinds: Vec<u8> = [0x30, 0x06, 0x06, 0x01, 0x2B, 0x43, 0x01, 0xFF].repeat(8_000);
+        let bytes = hand_built_inform(0, 0, &varbinds);
+        assert!(bytes.len() < 65_507, "must fit in one UDP datagram");
+        bytes
+    }
+
+    /// Where the PDU tag sits in [`hand_built_inform`]'s output: outer header (4) + version (3) +
+    /// community (8).
+    const HAND_BUILT_PDU_TAG_AT: usize = 4 + 3 + 8;
+
+    #[test]
+    fn an_inform_whose_reencoding_would_outgrow_the_buffer_is_still_acknowledged() {
+        let bytes = inform_that_grows_when_reencoded();
+        assert!(parse_trap(&bytes).unwrap().is_inform);
+
+        let response = build_inform_response(&bytes).expect("an accepted inform gets an ack");
+        assert_eq!(response.len(), bytes.len(), "the ack is never larger");
+        assert_eq!(response[HAND_BUILT_PDU_TAG_AT], snmp::MSG_RESPONSE);
+        let differing: Vec<usize> = (0..bytes.len())
+            .filter(|&i| bytes[i] != response[i])
+            .collect();
+        assert_eq!(differing, vec![HAND_BUILT_PDU_TAG_AT]);
+        let parsed = Pdu::from_bytes(&response).unwrap();
+        assert_eq!(parsed.message_type, MessageType::Response);
+        assert_eq!(parsed.req_id, 7);
+    }
+
+    /// Re-encoding that same PDU is refused with an error instead of panicking — the path the
+    /// forwarding renderer and every other `pdu::build` caller take.
+    #[test]
+    fn reencoding_an_inform_too_large_for_the_buffer_is_an_error_not_a_panic() {
+        let bytes = inform_that_grows_when_reencoded();
+        let pdu = Pdu::from_bytes(&bytes).unwrap();
+        assert!(matches!(pdu.to_bytes(), Err(snmp2::Error::BufferOverflow)));
+    }
+
+    #[test]
+    fn an_oversized_build_is_an_error_not_a_panic() {
+        let oid = Oid::from(&[1, 3, 6, 1, 4, 1, 1]).unwrap();
+        let big = vec![b'a'; 70_000];
+        let mut buf = pdu::Buf::default();
+        let result = pdu::build(
+            Version::V2C,
+            b"public",
+            snmp::MSG_TRAP,
+            1,
+            &[(&oid, Value::OctetString(&big))],
+            0,
+            0,
+            &mut buf,
+            None,
+        );
+        assert!(matches!(result, Err(snmp2::Error::BufferOverflow)));
+
+        // The same buffer builds a normal PDU afterwards: `build` resets it, overflow mark included.
+        pdu::build(
+            Version::V2C,
+            b"public",
+            snmp::MSG_TRAP,
+            1,
+            &[(&oid, Value::OctetString(b"ok"))],
+            0,
+            0,
+            &mut buf,
+            None,
+        )
+        .expect("a buffer that overflowed once is usable again");
+        assert!(Pdu::from_bytes(&buf[..]).is_ok());
+    }
+
+    /// `snmp2`'s `push_i64` was rewritten from raw pointers to safe code (ADR-158). Every encoder
+    /// call goes through it, so pin the bytes across each sign and length boundary — and read each
+    /// one back through the decoder the trap listener uses.
+    #[test]
+    fn integers_encode_minimally_across_every_sign_boundary() {
+        let cases: &[(i64, &[u8])] = &[
+            (0, &[0x00]),
+            (1, &[0x01]),
+            (-1, &[0xFF]),
+            (127, &[0x7F]),
+            (128, &[0x00, 0x80]),
+            (255, &[0x00, 0xFF]),
+            (256, &[0x01, 0x00]),
+            (-128, &[0x80]),
+            (-129, &[0xFF, 0x7F]),
+            (32_767, &[0x7F, 0xFF]),
+            (32_768, &[0x00, 0x80, 0x00]),
+            (i64::from(u32::MAX), &[0x00, 0xFF, 0xFF, 0xFF, 0xFF]),
+            (i64::MAX, &[0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            (i64::MIN, &[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        ];
+        for (n, content) in cases {
+            let mut buf = pdu::Buf::default();
+            buf.push_integer(*n);
+            let mut expected = vec![0x02, content.len() as u8];
+            expected.extend_from_slice(content);
+            assert_eq!(&buf[..], &expected[..], "encoding of {n}");
+            assert!(!buf.overflowed());
+            assert_eq!(
+                AsnReader::from_bytes(&buf[..]).read_asn_integer().unwrap(),
+                *n,
+                "round trip of {n}"
+            );
+        }
+    }
+
+    /// Bytes after the message's own SEQUENCE are not part of it and are not echoed.
+    #[test]
+    fn the_ack_is_the_received_bytes_with_one_tag_changed() {
+        let uptime_oid = Oid::from(&[1, 3, 6, 1, 2, 1, 1, 3, 0]).unwrap();
+        let mut buf = pdu::Buf::default();
+        pdu::build(
+            Version::V2C,
+            b"public",
+            snmp::MSG_INFORM,
+            4242,
+            &[(&uptime_oid, Value::Timeticks(99))],
+            0,
+            0,
+            &mut buf,
+            None,
+        )
+        .unwrap();
+        let message = buf[..].to_vec();
+        let mut datagram = message.clone();
+        datagram.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+        let response = build_inform_response(&datagram).expect("ack");
+        assert_eq!(response.len(), message.len());
+        let tag_at = message.iter().position(|b| *b == snmp::MSG_INFORM).unwrap();
+        let mut expected = message;
+        expected[tag_at] = snmp::MSG_RESPONSE;
+        assert_eq!(response, expected);
+    }
+
+    /// RFC 3416 §4.2.7: the Response to an inform carries error-status and error-index 0, whatever
+    /// the request said.
+    #[test]
+    fn a_nonzero_error_status_is_not_echoed() {
+        let varbind = [0x30, 0x06, 0x06, 0x01, 0x2B, 0x43, 0x01, 0x05];
+        let bytes = hand_built_inform(5, 3, &varbind);
+        let request = Pdu::from_bytes(&bytes).unwrap();
+        assert_eq!((request.error_status, request.error_index), (5, 3));
+
+        let response = build_inform_response(&bytes).expect("ack");
+        let parsed = Pdu::from_bytes(&response).unwrap();
+        assert_eq!(parsed.message_type, MessageType::Response);
+        assert_eq!((parsed.error_status, parsed.error_index), (0, 0));
+        assert_eq!(parsed.req_id, 7);
+        assert_eq!(response.len(), bytes.len());
     }
 
     #[test]

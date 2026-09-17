@@ -335,6 +335,22 @@ mod tests {
             .any(|(oid, _)| oid == "1.3.6.1.2.1.2.2.1.2.4"));
     }
 
+    /// A received trap's varbind OIDs reach this renderer as text, and nothing bounds their length.
+    /// Re-encoded, 32 of them can outgrow `snmp2`'s fixed buffer, which used to panic core's
+    /// forwarder mid-dispatch; it is now an encoder error, so the trap is simply not rendered
+    /// (ADR-158).
+    #[test]
+    fn a_trap_too_large_to_re_encode_is_not_rendered_rather_than_panicking() {
+        let mut ev = event(EventKind::Trap);
+        let long_oid = format!("1.3.{}", vec!["4294967295"; 3_000].join("."));
+        ev.varbinds = (0..32)
+            .map(|_| (long_oid.clone(), "x".to_owned()))
+            .collect();
+        assert!(render_trap_v2c(&ev, DEFAULT_TRAP_COMMUNITY).is_none());
+        // …and the same renderer still works for the next, ordinary trap.
+        assert!(render_trap_v2c(&event(EventKind::Trap), DEFAULT_TRAP_COMMUNITY).is_some());
+    }
+
     #[test]
     fn trap_with_no_uptime_varbind_renders_zero_instead_of_dropping() {
         let mut ev = event(EventKind::Trap);

@@ -20,3 +20,7 @@ opentelemetry-otlp = { workspace = true }
 # Process-lifecycle: SIGTERM/Ctrl-C handling + CancellationToken for coordinated graceful shutdown.
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+# The two counters a panic leaves behind — `yagra_panics_total` from the hook and
+# `yagra_task_restarts_total` from `spawn_supervised` (ADR-158). The facade only: the recorder is
+# installed by each binary.
+metrics = { workspace = true }

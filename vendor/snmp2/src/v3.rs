@@ -1166,6 +1166,8 @@ pub(crate) fn build(
             buf.push_octet_string(&[]);
             buf.push_octet_string(security.engine_id());
         });
+        // Local patch (see PATCH_NOTE.md): never encrypt a PDU that did not fit.
+        pdu_buf.check_overflow()?;
         let (encrypted, salt) = security.encrypt(&pdu_buf)?;
         priv_params.extend_from_slice(&salt);
         Some(encrypted)
@@ -1204,9 +1206,14 @@ pub(crate) fn build(
             buf.push_integer(req_id.into()); // msg_id
         });
         buf.push_integer(3); // version
-        auth_pos = buf.len() - l0 - (sec_buf_len - auth_pos);
+        // Local patch (see PATCH_NOTE.md): saturating, because a push that did not fit leaves the
+        // lengths short and the plain subtraction underflowed. The overflow is refused just below.
+        auth_pos = (buf.len() - l0).saturating_sub(sec_buf_len.saturating_sub(auth_pos));
         inner_len = buf.len();
     });
+    // Local patch (see PATCH_NOTE.md): never sign or send a message that did not fit.
+    sec_buf_seq.check_overflow()?;
+    buf.check_overflow()?;
 
     auth_pos += buf.len() - inner_len;
     if (auth_pos + truncation_len) > buf.len() {

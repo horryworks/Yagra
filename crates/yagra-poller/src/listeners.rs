@@ -17,6 +17,13 @@
 //! into an [`EventMsg`], and published on `yagra.events` for core to match. Publish failures
 //! are logged and counted, never fatal — UDP event delivery is best-effort by nature.
 //!
+//! **Nothing a datagram does can end a reader** (ADR-158). One datagram's parsing runs inside
+//! [`contained`], so a panic there is `yagra_edge_datagram_panics_total` and a dropped datagram.
+//! And each reader is started by [`spawn_supervised`] over an `Arc` of its socket, so a reader that
+//! dies anyway is started again on the same socket. Before both, one crafted SNMP inform per reader
+//! stopped trap reception for the life of the process while the heartbeat went on reporting the
+//! listener as bound.
+//!
 //! The **original datagram** rides along on `EventMsg.raw` (base64, ADR-034) so core can forward
 //! it byte-exact to external collectors. It is attached *after* the rate-limit / oversize /
 //! parse / community gates, so anything Yagra dropped is never forwarded either. Cost is ~1.3×
@@ -39,8 +46,9 @@ use uuid::Uuid;
 use yagra_bus::{encode_raw, Bus, EventKind, EventMsg};
 use yagra_ingest::{
     build_inform_response, clip_event_text, parse_syslog, parse_trap, SourceLimiter, TrapError,
+    TrapEvent,
 };
-use yagra_telemetry::{spawn_cancellable, CancellationToken};
+use yagra_telemetry::{spawn_supervised, CancellationToken};
 
 /// Syslog datagrams beyond this are truncated by the recv buffer (RFC 5424 transport
 /// guidance; anything bigger than this over UDP is already pathological).
@@ -54,9 +62,35 @@ pub(crate) fn now_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// Run `f` — one datagram's worth of parsing — and turn a panic inside it into a counted drop.
+///
+/// The second layer of ADR-158 決定 2. [`spawn_supervised`] brings a reader back after a panic, but
+/// only after a wait, and a datagram that panics its parser would otherwise take the reader down
+/// every time it is re-sent. Contained, a hostile datagram costs itself and nothing else:
+/// `yagra_edge_datagram_panics_total{listener}` goes up by one, the panic hook has logged its
+/// text, and the loop reads the next one.
+///
+/// `AssertUnwindSafe` is sound here because nothing `f` touches outlives a panic in a broken
+/// state: the parsers are pure, and the flow listener's shared state sits behind a
+/// `std::sync::Mutex` whose poisoning every lock site already recovers from.
+pub(crate) fn contained<T>(listener: &'static str, f: impl FnOnce() -> T) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            metrics::counter!("yagra_edge_datagram_panics_total", "listener" => listener)
+                .increment(1);
+            None
+        }
+    }
+}
+
 /// Run the syslog UDP listener until the socket errors persistently.
+///
+/// The socket is shared rather than owned so that [`spawn_supervised`] can start a replacement
+/// reader on the same socket after a panic (ADR-158) — the kernel queue keeps what arrived while
+/// no reader was running.
 pub async fn run_syslog_listener<B: Bus>(
-    sock: UdpSocket,
+    sock: Arc<UdpSocket>,
     bus: Arc<B>,
     limiter: Arc<Mutex<SourceLimiter>>,
     pool: Option<String>,
@@ -80,7 +114,9 @@ pub async fn run_syslog_listener<B: Bus>(
             continue;
         }
 
-        let parsed = parse_syslog(&buf[..len]);
+        let Some(parsed) = contained("syslog", || parse_syslog(&buf[..len])) else {
+            continue;
+        };
         let event = EventMsg {
             event_id: Uuid::new_v4(),
             kind: EventKind::Syslog,
@@ -104,11 +140,59 @@ pub async fn run_syslog_listener<B: Bus>(
     }
 }
 
+/// One trap datagram that passed every gate, with what the listener still has to send.
+struct AdmittedTrap {
+    trap: TrapEvent,
+    /// The rendered, clipped event message.
+    message: String,
+    truncated: bool,
+    /// The Response to send back when the datagram was an inform.
+    ack: Option<Vec<u8>>,
+}
+
+/// Why a trap datagram was not admitted.
+enum TrapRefusal {
+    UnsupportedVersion,
+    Unparseable(TrapError),
+    Community,
+}
+
+/// Everything the trap listener does with one datagram that is not I/O: parse it, check its
+/// community, build the inform ack, render the message. One synchronous call, so that
+/// [`contained`] covers all of it at once (ADR-158).
+fn admit_trap(datagram: &[u8], community: Option<&str>) -> Result<AdmittedTrap, TrapRefusal> {
+    let trap = parse_trap(datagram).map_err(|e| match e {
+        TrapError::UnsupportedVersion => TrapRefusal::UnsupportedVersion,
+        other @ (TrapError::Malformed(_) | TrapError::NotATrap) => TrapRefusal::Unparseable(other),
+    })?;
+    if let Some(expected) = community {
+        if trap.community != expected {
+            return Err(TrapRefusal::Community);
+        }
+    }
+    // Informs expect an acknowledgement Response (RFC 3416 §4.2.7) — built only once the
+    // community has been accepted, so a stranger's inform is never answered.
+    let ack = if trap.is_inform {
+        build_inform_response(datagram)
+    } else {
+        None
+    };
+    // A trap with many/large varbinds can render past the 4096-char event cap; clip
+    // here (the syslog parser clips internally) so every message satisfies the DB CHECK.
+    let (message, truncated) = clip_event_text(&trap.render_message());
+    Ok(AdmittedTrap {
+        trap,
+        message,
+        truncated,
+        ack,
+    })
+}
+
 /// Run the SNMP trap/inform UDP listener until the socket errors persistently.
 /// If `community` is set, traps with a different community are dropped (counted,
-/// value never logged).
+/// value never logged). The socket is shared for the reason [`run_syslog_listener`] gives.
 pub async fn run_trap_listener<B: Bus>(
-    sock: UdpSocket,
+    sock: Arc<UdpSocket>,
     bus: Arc<B>,
     limiter: Arc<Mutex<SourceLimiter>>,
     community: Option<String>,
@@ -133,9 +217,11 @@ pub async fn run_trap_listener<B: Bus>(
             continue;
         }
 
-        let trap = match parse_trap(&buf[..len]) {
-            Ok(trap) => trap,
-            Err(TrapError::UnsupportedVersion) => {
+        let admitted = match contained("trap", || admit_trap(&buf[..len], community.as_deref())) {
+            // Already counted by `contained`.
+            None => continue,
+            Some(Ok(admitted)) => admitted,
+            Some(Err(TrapRefusal::UnsupportedVersion)) => {
                 // SNMPv3 traps are explicitly out of scope this release (USM keys on the
                 // poller would conflict with ADR-020) — see yagra-ingest::trap.
                 metrics::counter!("yagra_events_dropped_total", "reason" => "parse_error")
@@ -143,35 +229,33 @@ pub async fn run_trap_listener<B: Bus>(
                 tracing::debug!(source = %peer.ip(), "dropping unsupported-version SNMP datagram");
                 continue;
             }
-            Err(e) => {
+            Some(Err(TrapRefusal::Unparseable(e))) => {
                 metrics::counter!("yagra_events_dropped_total", "reason" => "parse_error")
                     .increment(1);
                 tracing::debug!(source = %peer.ip(), error = %e, "dropping unparseable trap datagram");
                 continue;
             }
-        };
-
-        if let Some(expected) = community.as_deref() {
-            if trap.community != expected {
+            Some(Err(TrapRefusal::Community)) => {
                 metrics::counter!("yagra_events_dropped_total", "reason" => "community")
                     .increment(1);
                 tracing::debug!(source = %peer.ip(), "dropping trap with mismatched community");
                 continue;
             }
-        }
+        };
+        let AdmittedTrap {
+            trap,
+            message,
+            truncated,
+            ack,
+        } = admitted;
 
-        // Informs expect an acknowledgement Response (RFC 3416 §4.2.7) — best-effort.
-        if trap.is_inform {
-            if let Some(response) = build_inform_response(&buf[..len]) {
-                if let Err(e) = sock.send_to(&response, peer).await {
-                    tracing::debug!(source = %peer.ip(), error = %e, "failed to ack inform");
-                }
+        // Best-effort: a lost ack makes the sender retransmit, which is the protocol's own remedy.
+        if let Some(response) = ack {
+            if let Err(e) = sock.send_to(&response, peer).await {
+                tracing::debug!(source = %peer.ip(), error = %e, "failed to ack inform");
             }
         }
 
-        // A trap with many/large varbinds can render past the 4096-char event cap; clip
-        // here (the syslog parser clips internally) so every message satisfies the DB CHECK.
-        let (message, truncated) = clip_event_text(&trap.render_message());
         let event = EventMsg {
             event_id: Uuid::new_v4(),
             kind: EventKind::Trap,
@@ -364,15 +448,18 @@ pub(crate) async fn start(
                 tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, per_source, global, "syslog listener enabled");
                 labels.push(format!("syslog:{bind}"));
                 for sock in socks {
-                    spawn_cancellable(
-                        shutdown,
+                    // Supervised (ADR-158): a reader that panics is started again on the same
+                    // socket, so the label above stays true.
+                    let sock = Arc::new(sock);
+                    let (bus, limiter, pool) = (bus.clone(), limiter.clone(), tuning.pool.clone());
+                    spawn_supervised(shutdown, "syslog_listener", move || {
                         run_syslog_listener(
-                            sock,
+                            sock.clone(),
                             bus.clone(),
                             limiter.clone(),
-                            tuning.pool.clone(),
-                        ),
-                    );
+                            pool.clone(),
+                        )
+                    });
                 }
             }
             Err(e) => tracing::error!(%bind, error = %e, "failed to bind syslog listener"),
@@ -388,16 +475,22 @@ pub(crate) async fn start(
                 tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, community_filter = community.is_some(), "trap listener enabled (v1/v2c; v3 traps out of scope)");
                 labels.push(format!("trap:{bind}"));
                 for sock in socks {
-                    spawn_cancellable(
-                        shutdown,
+                    let sock = Arc::new(sock);
+                    let (bus, limiter, community, pool) = (
+                        bus.clone(),
+                        limiter.clone(),
+                        community.clone(),
+                        tuning.pool.clone(),
+                    );
+                    spawn_supervised(shutdown, "trap_listener", move || {
                         run_trap_listener(
-                            sock,
+                            sock.clone(),
                             bus.clone(),
                             limiter.clone(),
                             community.clone(),
-                            tuning.pool.clone(),
-                        ),
-                    );
+                            pool.clone(),
+                        )
+                    });
                 }
             }
             Err(e) => tracing::error!(%bind, error = %e, "failed to bind trap listener"),
@@ -422,7 +515,7 @@ mod tests {
         let bus = Arc::new(InMemoryBus::new(8));
         let mut events = bus.subscribe_events();
 
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = sock.local_addr().unwrap();
         tokio::spawn(run_syslog_listener(
             sock,
@@ -456,7 +549,7 @@ mod tests {
         let bus = Arc::new(InMemoryBus::new(8));
         let mut events = bus.subscribe_events();
 
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = sock.local_addr().unwrap();
         tokio::spawn(run_trap_listener(
             sock,
@@ -513,6 +606,152 @@ mod tests {
         buf[..].to_vec()
     }
 
+    /// A v2c inform that `snmp2` re-encodes larger than it arrived: 8,000 varbinds whose Timeticks
+    /// is sent in one byte (`43 01 FF`) and re-encoded in five. Re-encoding it outgrew the encoder's
+    /// fixed buffer and panicked the reader that received it (ADR-158).
+    fn crafted_inform(community: &[u8]) -> Vec<u8> {
+        fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+            let mut out = vec![tag];
+            match content.len() {
+                n @ 0..=0x7F => out.push(n as u8),
+                n @ 0x80..=0xFF => out.extend([0x81, n as u8]),
+                n => out.extend([0x82, (n >> 8) as u8, n as u8]),
+            }
+            out.extend_from_slice(content);
+            out
+        }
+        let varbinds = [0x30, 0x06, 0x06, 0x01, 0x2B, 0x43, 0x01, 0xFF].repeat(8_000);
+        let mut pdu = Vec::new();
+        pdu.extend(tlv(0x02, &[0x09])); // request-id
+        pdu.extend(tlv(0x02, &[0x00])); // error-status
+        pdu.extend(tlv(0x02, &[0x00])); // error-index
+        pdu.extend(tlv(0x30, &varbinds));
+        let mut message = Vec::new();
+        message.extend(tlv(0x02, &[0x01])); // v2c
+        message.extend(tlv(0x04, community));
+        message.extend(tlv(snmp2::snmp::MSG_INFORM, &pdu));
+        tlv(0x30, &message)
+    }
+
+    /// The datagram that stopped a trap reader for good is acknowledged, and the same reader goes
+    /// on to turn the next trap into an event. The reader runs **unsupervised** here, so this is
+    /// the inform fix itself and not the supervisor covering for it.
+    #[tokio::test]
+    async fn a_crafted_inform_does_not_stop_the_trap_listener() {
+        let bus = Arc::new(InMemoryBus::new(16));
+        let mut events = bus.subscribe_events();
+
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let addr = sock.local_addr().unwrap();
+        tokio::spawn(run_trap_listener(
+            sock,
+            bus.clone(),
+            limiter(),
+            Some("public".into()),
+            None,
+        ));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let crafted = crafted_inform(b"public");
+        assert!(crafted.len() < 65_507, "must fit in one UDP datagram");
+        client.send_to(&crafted, addr).await.unwrap();
+
+        let mut ack = vec![0u8; 70_000];
+        let (n, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.recv_from(&mut ack),
+        )
+        .await
+        .expect("the crafted inform is acknowledged")
+        .unwrap();
+        assert_eq!(n, crafted.len(), "the ack is the inform, retagged");
+        assert_eq!(ack[0], 0x30);
+
+        client.send_to(&trap_bytes(b"public"), addr).await.unwrap();
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+                .await
+                .expect("the reader is still alive and publishes the next trap")
+                .unwrap();
+            if event.trap_oid.as_deref() == Some("1.3.6.1.6.3.1.1.5.3") {
+                break;
+            }
+        }
+    }
+
+    /// The second layer: a reader that dies is started again **on the same socket**, and a datagram
+    /// sent after the panic still becomes an event — the kernel queue kept it while no reader ran.
+    #[tokio::test]
+    async fn a_reader_that_died_is_replaced_on_the_same_socket() {
+        type Task = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+        let bus = Arc::new(InMemoryBus::new(8));
+        let mut events = bus.subscribe_events();
+        let shutdown = CancellationToken::new();
+
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let addr = sock.local_addr().unwrap();
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (counted, reader_bus, reader_limiter) = (starts.clone(), bus.clone(), limiter());
+        spawn_supervised(&shutdown, "test_syslog_listener", move || -> Task {
+            let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 1 {
+                return Box::pin(async { panic!("the first reader dies") });
+            }
+            Box::pin(run_syslog_listener(
+                sock.clone(),
+                reader_bus.clone(),
+                reader_limiter.clone(),
+                Some("default".into()),
+            ))
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while starts.load(std::sync::atomic::Ordering::SeqCst) < 1 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(
+                b"<13>Jul  6 22:14:15 edge-sw1 chassisd: after the panic",
+                addr,
+            )
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .expect("the replacement reader receives it")
+            .unwrap();
+        assert_eq!(event.message, "chassisd: after the panic");
+        assert!(starts.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        shutdown.cancel();
+    }
+
+    /// A panic inside one datagram's parsing is a counted drop, not a dead reader.
+    #[test]
+    fn a_panic_inside_one_datagram_is_a_counted_drop() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let (survived, dropped) = metrics::with_local_recorder(&recorder, || {
+            (
+                contained("trap", || 7),
+                contained("trap", || -> u8 { panic!("a hostile datagram") }),
+            )
+        });
+        assert_eq!(survived, Some(7));
+        assert_eq!(dropped, None);
+        let rendered = handle.render();
+        assert!(
+            rendered
+                .lines()
+                .any(|l| l == "yagra_edge_datagram_panics_total{listener=\"trap\"} 1"),
+            "{rendered}"
+        );
+    }
+
     #[test]
     fn bind_rejects_malformed_address() {
         let err =
@@ -549,7 +788,7 @@ mod tests {
         let limiter = limiter();
         for sock in socks {
             tokio::spawn(run_syslog_listener(
-                sock,
+                Arc::new(sock),
                 bus.clone(),
                 limiter.clone(),
                 Some("default".into()),
