@@ -221,6 +221,7 @@ pub(super) async fn execute_optical(
         l3: None,
         arp: None,
         routing: None,
+        wlan: None,
         row_names: Vec::new(),
         observational: true,
         // …but its readings are readings: a band on a light level or a chassis temperature is
@@ -653,6 +654,7 @@ fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterfac
         l3: None,
         arp: None,
         routing: None,
+        wlan: None,
         poller_id: None,
         // Never a liveness statement — see [`execute_mau`]'s doc comment.
         row_names: Vec::new(),

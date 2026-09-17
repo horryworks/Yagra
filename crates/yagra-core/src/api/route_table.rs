@@ -1964,6 +1964,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/wireless/aps",
+        // An AP has no node until it is imported, so the predicate joins through the controllers
+        // that report it: listed when a controller the caller can see reports it (ADR-064).
+        GroupFiltered,
+        Tool("list_wireless_aps"),
+    ),
+    (
+        "GET",
         "/healthz",
         Global("unauthenticated liveness probe"),
         Exempt("an unauthenticated container probe; /mcp is never anonymous"),

@@ -337,6 +337,7 @@ async fn live_state_with(
         l3: l3_repo,
         arp: Arc::new(crate::arp::ArpRepo::new(pool.clone())),
         discovered: Arc::new(crate::arp::DiscoveredRepo::new(pool.clone())),
+        wireless: Arc::new(crate::wireless::WirelessRepo::new(pool.clone())),
         topology_links: topo_link_repo,
         link_overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
         meraki_orgs: Arc::new(crate::meraki::MerakiOrgRepo::new(pool.clone())),

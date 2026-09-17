@@ -1297,6 +1297,15 @@ pub enum CheckSpec {
     /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpRouting`], following the same pairing as every
     /// other v2c/v3 pair here.
     SnmpV3Routing(SnmpV3RoutingCheck),
+    /// SNMP v2c walk of a wireless controller's AP table (ADR-064), at the node's own interval.
+    ///
+    /// The result is **observational** ([`PollResult::observational`]) — an AP table that will not
+    /// answer says nothing about whether the controller is up — but its one sample,
+    /// `wlan_ap_walk_complete`, **is** judged ([`PollResult::judge_samples`]): it runs at the node's
+    /// interval, and it is the only thing that shows the AP data has stopped arriving.
+    SnmpWlanAp(SnmpWlanApCheck),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpWlanAp`].
+    SnmpV3WlanAp(SnmpV3WlanApCheck),
 }
 
 impl CheckSpec {
@@ -1340,6 +1349,8 @@ impl CheckSpec {
             Self::SnmpV3Arp(_) => "snmp_v3_arp",
             Self::SnmpRouting(_) => "snmp_routing",
             Self::SnmpV3Routing(_) => "snmp_v3_routing",
+            Self::SnmpWlanAp(_) => "snmp_wlan_ap",
+            Self::SnmpV3WlanAp(_) => "snmp_v3_wlan_ap",
         }
     }
 
@@ -1376,6 +1387,7 @@ impl CheckSpec {
             Self::SnmpL3(c) => vec![c.community.as_str()],
             Self::SnmpArp(c) => vec![c.community.as_str()],
             Self::SnmpRouting(c) => vec![c.community.as_str()],
+            Self::SnmpWlanAp(c) => vec![c.community.as_str()],
             Self::SnmpV3(c) => c.auth.secret_literals(),
             Self::SnmpV3Table(c) => c.auth.secret_literals(),
             Self::SnmpV3Optical(c) => c.auth.secret_literals(),
@@ -1384,6 +1396,7 @@ impl CheckSpec {
             Self::SnmpV3L3(c) => c.auth.secret_literals(),
             Self::SnmpV3Arp(c) => c.auth.secret_literals(),
             Self::SnmpV3Routing(c) => c.auth.secret_literals(),
+            Self::SnmpV3WlanAp(c) => c.auth.secret_literals(),
             // Only the secret half of each scheme. The username, the header *name* and the URL are
             // structural — they identify which account, not how to use it — and are exactly what a
             // log has to keep saying for a misconfiguration to stay diagnosable. `HttpAuth`'s manual
@@ -1849,6 +1862,55 @@ pub struct SnmpV3ArpCheck {
     pub timeout_ms: u32,
 }
 
+/// SNMP v2c wireless-controller AP walk parameters (ADR-064).
+///
+/// One walk of the controller's AP table answers for every access point it manages. The poller
+/// turns the rows into a [`yagra_common::WlanInventory`] and publishes it on the controller's result;
+/// what becomes of each AP — whether it is imported as a node, which controller owns it in an HA
+/// pair — is decided in core, which holds the state those decisions need.
+///
+/// **Its own `CheckSpec` variant rather than a field on the table check**, for ADR-063's reason: an
+/// N-1 poller that has never heard of it drops exactly this spec (`de_lenient_specs`) and keeps
+/// collecting everything else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpWlanApCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// The vendor dialect, chosen by core from the collection item's OID.
+    #[serde(default)]
+    pub flavor: yagra_common::WlanFlavor,
+    /// The most APs to report. The walk is bounded to it while paging and the inventory says when
+    /// the controller had more ([`yagra_common::WlanInventory::truncated_at`]).
+    #[serde(default = "default_wlan_max_aps")]
+    pub max_aps: u32,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) wireless-controller AP walk parameters — the v3 analogue of [`SnmpWlanApCheck`].
+/// Auth/priv keys are resolved/decrypted by core and inlined here (ADR-018/020).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3WlanApCheck {
+    /// USM credentials, resolved and decrypted by core (ADR-018/020). Flattened like every other v3
+    /// check, so the six fields sit at the top level of the object.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
+    /// See [`SnmpWlanApCheck::flavor`].
+    #[serde(default)]
+    pub flavor: yagra_common::WlanFlavor,
+    /// See [`SnmpWlanApCheck::max_aps`].
+    #[serde(default = "default_wlan_max_aps")]
+    pub max_aps: u32,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+const fn default_wlan_max_aps() -> u32 {
+    yagra_common::MAX_APS_PER_CONTROLLER_DEFAULT
+}
+
 /// SNMP v2c routing-adjacency parameters (ADR-043 Increment 4).
 ///
 /// Carries a **pre-built** probe list rather than a list of addresses, so the OID grammar of
@@ -2162,6 +2224,17 @@ pub struct PollResult {
     /// and `arp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<RoutingSnapshot>,
+    /// The access points a wireless controller reported on this poll (AP walks only, ADR-064). Same
+    /// tier as `routing` — relational metadata for PostgreSQL and the AP list, **never** a TSDB label.
+    /// Bounded by the check's `max_aps`, itself capped at
+    /// [`yagra_common::MAX_APS_PER_CONTROLLER_HARD`].
+    ///
+    /// `None` and `Some(empty)` mean different things, as for `neighbors`: `None` = "no complete
+    /// inventory this poll" and nothing is written; `Some(empty)` = "this controller manages no APs".
+    /// A walk that did not get every column publishes `None` (ADR-064 決定 9b), so a half-read table
+    /// can never read as APs disappearing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wlan: Option<yagra_common::WlanInventory>,
     /// The names of the vendor-table rows this poll's values arrived on — `Processor` and `I/O` for
     /// a Cisco memory pool, `MPU Board 0` for a Huawei entity (ADR-143). Read by the hourly row-name
     /// walk after a table job, and only for rows whose value on this poll was not zero. Descriptive
@@ -3595,6 +3668,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            wlan: None,
             row_names: Vec::new(),
             observational: false,
             judge_samples: false,
@@ -4107,6 +4181,124 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
         assert_eq!(back.routing, Some(yagra_common::RoutingSnapshot::default()));
         assert!(back.observational);
+    }
+
+    /// A result from an N-1 poller carries no AP inventory and is byte-identical to today, and an
+    /// empty inventory survives the wire as "this controller manages no APs" (ADR-064).
+    #[test]
+    fn a_poll_result_without_an_ap_inventory_is_byte_identical_to_today() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable"
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.wlan.is_none());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("\"wlan\""), "{wire}");
+
+        let mut with = result;
+        with.wlan = Some(yagra_common::WlanInventory::default());
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+        assert_eq!(back.wlan, Some(yagra_common::WlanInventory::default()));
+    }
+
+    /// An AP walk check from an N-1 core (or one that gains a field later) still decodes, with the
+    /// dialect and the AP cap falling back to what `yagra-common` declares rather than to zero.
+    #[test]
+    fn a_wlan_ap_check_tolerates_missing_and_unknown_fields() {
+        let v2c: SnmpWlanApCheck =
+            serde_json::from_str(r#"{"community":"public","future":1}"#).unwrap();
+        assert_eq!(v2c.flavor, yagra_common::WlanFlavor::Huawei);
+        // A zero would mean "report no APs" and the feature would silently list nothing.
+        assert_eq!(v2c.max_aps, yagra_common::MAX_APS_PER_CONTROLLER_DEFAULT);
+        assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
+        let v3: SnmpV3WlanApCheck =
+            serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
+        assert_eq!(v3.max_aps, v2c.max_aps);
+
+        let wire = serde_json::to_string(&CheckSpec::SnmpWlanAp(v2c)).unwrap();
+        assert!(wire.contains(r#""kind":"snmp_wlan_ap""#), "{wire}");
+        let wire3 = serde_json::to_string(&CheckSpec::SnmpV3WlanAp(v3)).unwrap();
+        assert!(wire3.contains(r#""kind":"snmp_v3_wlan_ap""#), "{wire3}");
+    }
+
+    /// The inventory's bounds are payload bounds, so measure them: a controller result built through
+    /// [`yagra_common::WlanInventory::bounded`] fits NATS's 1 MiB `max_payload` even when every
+    /// string is at the sanitizer's cap, and at realistic lengths the whole hard cap fits
+    /// (ADR-064 改訂 R12).
+    ///
+    /// 🚨 The first version of this test built the list by hand and measured 1.6 MB at the hard cap —
+    /// which is how the byte budget came to exist. A count cap alone does not bound the message.
+    #[test]
+    fn a_controller_result_at_the_hard_cap_fits_the_bus() {
+        let observation = |i: u32, text: &str, ip: &str| {
+            let [.., hi, lo] = i.to_be_bytes();
+            yagra_common::WlanApObservation {
+                mac: yagra_common::ApMac::new([0xff, 0xff, 0xff, 0xff, hi, lo]),
+                name: Some(text.to_owned()),
+                serial: Some(text.to_owned()),
+                model: Some(text.to_owned()),
+                sw_version: Some(text.to_owned()),
+                ip: Some(ip.parse().unwrap()),
+                vendor_group: Some(text.to_owned()),
+                run_state: "country_code_mismatch".into(),
+                state: yagra_common::WlanApState::NotAssociated,
+                clients: Some(u32::MAX),
+                cpu_pct: Some(u32::MAX),
+                mem_pct: Some(u32::MAX),
+                temp_c: Some(i32::MIN),
+            }
+        };
+        let empty = || -> PollResult {
+            serde_json::from_str(
+                r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                    "node_id":"00000000-0000-0000-0000-000000000000",
+                    "at_unix_ms":0,"outcome":"reachable"}"#,
+            )
+            .unwrap()
+        };
+        let hard = yagra_common::MAX_APS_PER_CONTROLLER_HARD;
+
+        // Worst case: every string at its cap, an IPv6 address, every number at its widest.
+        let long = "x".repeat(yagra_common::WLAN_TEXT_MAX_CHARS);
+        let worst = (0..hard)
+            .map(|i| observation(i, &long, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"))
+            .collect();
+        let mut result = empty();
+        result.wlan = Some(yagra_common::WlanInventory::bounded(
+            yagra_common::WlanFlavor::Huawei,
+            worst,
+            hard,
+        ));
+        let bytes = serde_json::to_vec(&result).unwrap().len();
+        assert!(
+            bytes < 1_000_000,
+            "a worst-case controller result is {bytes} bytes"
+        );
+        assert!(result.wlan.as_ref().unwrap().truncated_at.is_some());
+
+        // Realistic lengths (the longest string measured on the PoC was 22 characters): the whole
+        // hard cap is kept, nothing is cut, and it is well inside the budget.
+        let realistic = (0..hard)
+            .map(|i| observation(i, "AirEngine5776-26-S90001", "10.225.171.227"))
+            .collect();
+        let mut result = empty();
+        result.wlan = Some(yagra_common::WlanInventory::bounded(
+            yagra_common::WlanFlavor::Huawei,
+            realistic,
+            hard,
+        ));
+        let inv = result.wlan.as_ref().unwrap();
+        assert_eq!(inv.aps.len(), hard as usize);
+        assert_eq!(inv.truncated_at, None);
+        let bytes = serde_json::to_vec(&result).unwrap().len();
+        assert!(
+            bytes < 900_000,
+            "a realistic controller result at the hard cap is {bytes} bytes"
+        );
     }
 
     /// A routing check from an N-1 core (or one that gains a field later) still decodes, and an

@@ -19,6 +19,7 @@
 //! | [`interfaces`] | a table walk keyed by ifIndex, plus the metadata fold |
 //! | [`physical`] | the physical layer — optical power and media, via ENTITY-MIB when needed |
 //! | [`adjacency`] | observational neighbour / address / ARP / routing walks |
+//! | [`wlan`] | a wireless controller's AP table, into an inventory (ADR-064) |
 //!
 //! Two more files are not conversations. [`identity`] decides **when** a node's `sysDescr` and OS
 //! version are read again — hourly, on the poller, so a classified device's upgrade still shows
@@ -54,6 +55,7 @@ mod stream;
 mod table_plan;
 #[cfg(test)]
 mod testkit;
+mod wlan;
 
 // Re-exported so a sibling's `use super::*` sees them: a private `use` here is visible to every
 // descendant, which is what keeps each conversation file free of its own import block.
@@ -64,6 +66,7 @@ use physical::{execute_mau, execute_optical};
 use probes::{execute_dns, execute_http, execute_icmp};
 use snmp::{execute_scalar_get, SnmpWalker};
 pub(crate) use stream::{run_stream, POLL_PHASE_BUCKETS, POLL_PHASE_METRIC};
+use wlan::execute_wlan;
 
 use crate::limiter::PollLimiter;
 use crate::optical;
@@ -246,6 +249,34 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             )
             .await
         }
+        CheckSpec::SnmpWlanAp(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_wlan(
+                job,
+                transport,
+                at_unix_ms,
+                check.flavor,
+                check.max_aps,
+                timeout,
+                &walker,
+            )
+            .await
+        }
+        CheckSpec::SnmpV3WlanAp(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(check.auth.clone());
+            execute_wlan(
+                job,
+                transport,
+                at_unix_ms,
+                check.flavor,
+                check.max_aps,
+                timeout,
+                &walker,
+            )
+            .await
+        }
         CheckSpec::MerakiCollect(_) => {
             // Meraki collects fan out to many results and are dispatched via `execute_meraki` in
             // `run_stream`; `execute` (one job → one result) is never used for them. Guard anyway.
@@ -289,6 +320,7 @@ fn result(
         l3: None,
         arp: None,
         routing: None,
+        wlan: None,
         row_names: Vec::new(),
         observational: false,
         judge_samples: false,

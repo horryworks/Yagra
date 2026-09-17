@@ -62,6 +62,7 @@ mod system;
 #[cfg(test)]
 mod testkit;
 mod topology;
+mod wireless;
 
 // Glob imports so a sibling module can reach a type or helper that lives in another one —
 // `ConfigParams` is declared beside `get_config` but `call_in` below builds one. Every domain file
@@ -72,6 +73,7 @@ mod topology;
 // can see an ancestor's private items, so this is the reach a sibling needs and nothing wider.
 use self::{
     alerts::*, analysis::*, events::*, metrics::*, nodes::*, support::*, system::*, topology::*,
+    wireless::*,
 };
 
 impl YagraMcp {
@@ -88,7 +90,8 @@ impl YagraMcp {
                 + Self::topology_router()
                 + Self::events_router()
                 + Self::analysis_router()
-                + Self::system_router(),
+                + Self::system_router()
+                + Self::wireless_router(),
         }
     }
 
@@ -166,6 +169,7 @@ impl YagraMcp {
                 self.list_node_groups_in(p!(ListNodeGroupsParams), scope)
                     .await
             }
+            "list_wireless_aps" => self.wireless_aps_in(p!(WirelessApsParams), scope).await,
             "list_suppressions" => self.list_suppressions_in(scope).await,
             "alert_trends" => self.alert_trends_in(p!(AlertTrendsParams), scope).await,
             "search_analysis_findings" => {

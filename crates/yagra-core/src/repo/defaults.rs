@@ -63,6 +63,9 @@ const HUAWEI: &[&str] = &[
     "Huawei wireless controller",
 ];
 
+// The profiles that walk a wireless controller's AP table (ADR-064).
+const WLAN_CONTROLLERS: &[&str] = &["Huawei wireless controller"];
+
 const FORTINET: &[&str] = &["Fortinet FortiGate"];
 
 const PANOS: &[&str] = &["Palo Alto PAN-OS firewall"];
@@ -102,7 +105,7 @@ type DefaultThreshold = (
     i32,
 );
 
-pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 33] = [
+pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 34] = [
     // ── Fleet-wide (ADR-075 + `icmp_rtt_ms`) ───────────────────────────────────
     // These four really do apply to every node, which is why the ADR-075 argument for
     // `global` holds for them and not for the vendor rows below.
@@ -457,6 +460,25 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 33] = [
         Some(95.0),
         3,
     ),
+    // ── Wireless controllers (ADR-064) ─────────────────────────────────────────
+    // The AP walk did not get every column, so no AP inventory was published this poll and the AP
+    // list stopped refreshing (決定 9b). The only signal that the AP data has stopped arriving —
+    // nothing else changes on screen, because nothing is concluded from absence.
+    //
+    // Warning, and 0.5 with dwell 3, for offset 31's reasons: the controller itself is answering,
+    // `below` is inclusive so 1.0 would fire on every healthy controller, and one incomplete walk can
+    // be a moment of load. ⚠️ Profile-scoped rather than fleet-wide, unlike offset 31, because this
+    // metric does have a catalogue row — the AP-table template — and a vendor metric belongs on the
+    // profiles that collect it (ADR-078 決定 1).
+    (
+        33,
+        WLAN_CONTROLLERS,
+        yagra_common::METRIC_WLAN_AP_WALK_COMPLETE,
+        "below",
+        Some(0.5),
+        None,
+        3,
+    ),
 ];
 
 /// The row-name pattern each seeded default carries, by offset (ADR-143). Absent means every row.
@@ -544,8 +566,8 @@ mod tests {
         // Load-bearing: without it, a loop that stopped matching would skip every assertion above
         // and report success about nothing.
         assert_eq!(
-            checked, 28,
-            "twenty-eight of the defaults are profile-scoped"
+            checked, 29,
+            "twenty-nine of the defaults are profile-scoped"
         );
     }
 

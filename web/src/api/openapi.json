@@ -22794,6 +22794,127 @@
         ]
       }
     },
+    "/api/v1/wireless/aps": {
+      "get": {
+        "tags": [
+          "wireless"
+        ],
+        "summary": "Access points reported by the wireless controllers Yagra monitors.",
+        "description": "Built from each controller's AP table on every poll, so an AP is listed whether or not it has\nbeen imported as a node. An AP behind an HA pair appears once: `state` and `clients` are what the\ncontroller serving it says, and `reported_by` shows every controller's view. An AP that no\ncontroller reports any more stays in the list with its `last_seen` ageing.",
+        "operationId": "list_wireless_aps",
+        "parameters": [
+          {
+            "name": "controller_node_id",
+            "in": "query",
+            "description": "Only APs this controller node reports.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only APs in this state: `associated`, `backup` or `not_associated`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "A case-insensitive substring of the name, MAC address, IP address or model (at most 64\ncharacters). Matched literally.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1–2048 (default 200).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "after_key",
+            "in": "query",
+            "description": "Keyset cursor: `next.key` from the previous page. Pair with `after_id`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after_id",
+            "in": "query",
+            "description": "Keyset cursor: `next.ap_id` from the previous page. Pair with `after_key`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of access points, ordered by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WirelessApPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown state, search longer than 64 characters, or only one half of the cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -25353,7 +25474,8 @@
         "enum": [
           "scalar",
           "table",
-          "optical"
+          "optical",
+          "wlan"
         ]
       },
       "CollectionTemplateItemRow": {
@@ -38562,6 +38684,298 @@
           "group",
           "group_id",
           "system"
+        ]
+      },
+      "WirelessApCursor": {
+        "type": "object",
+        "description": "Keyset cursor for the next page.",
+        "required": [
+          "key",
+          "ap_id"
+        ],
+        "properties": {
+          "ap_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Pass back as `after_id`."
+          },
+          "key": {
+            "type": "string",
+            "description": "Pass back as `after_key`."
+          }
+        }
+      },
+      "WirelessApPage": {
+        "type": "object",
+        "description": "One page of access points, ordered by name.",
+        "required": [
+          "aps"
+        ],
+        "properties": {
+          "aps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WirelessApRow"
+            }
+          },
+          "controller": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WirelessControllerSummary",
+                "description": "The controller named by `controller_node_id`, when one was named and it has reported an\ninventory. `null` otherwise."
+              }
+            ]
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WirelessApCursor",
+                "description": "`null` ⇒ this was the last page."
+              }
+            ]
+          }
+        }
+      },
+      "WirelessApRow": {
+        "type": "object",
+        "description": "One access point.",
+        "required": [
+          "ap_id",
+          "mac",
+          "run_state",
+          "first_seen",
+          "last_seen",
+          "reported_by"
+        ],
+        "properties": {
+          "ap_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable id, derived from the MAC address. The same AP keeps it when the controller serving it\nchanges."
+          },
+          "clients": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Wireless clients online through this AP, as the serving controller reports it."
+          },
+          "controller_node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node of the controller serving this AP: the last one to report it in service."
+          },
+          "first_seen": {
+            "type": "string",
+            "description": "When a controller first reported this AP (RFC 3339)."
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Management address. `null` when the controller reports none, which it does for an AP that is\ndown."
+          },
+          "last_associated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When a controller last reported this AP in service (RFC 3339). `null` if it never has been."
+          },
+          "last_seen": {
+            "type": "string",
+            "description": "When a controller last reported this AP (RFC 3339). It stops advancing when no controller\nreports the AP any more; the AP is never removed."
+          },
+          "mac": {
+            "type": "string",
+            "description": "MAC address, lower-case and colon-separated."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model, as the controller spells it."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The AP's name on its controller."
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The AP's node, once it has been imported as one."
+          },
+          "reported_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WirelessApSighting"
+            },
+            "description": "What each controller that reports this AP says, the serving controller first. Two entries\nfor an AP behind an HA pair."
+          },
+          "run_state": {
+            "type": "string",
+            "description": "The controller's own word for the state (`normal`, `fault`, `standby`)."
+          },
+          "serial": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WlanApState",
+                "description": "What the serving controller says: `associated` (in service), `backup` (a standby controller's\nview) or `not_associated` (down, not yet joined, or failing). `null` for a state this server\nversion does not recognise."
+              }
+            ]
+          },
+          "sw_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Software version."
+          },
+          "vendor_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The vendor's own grouping of APs (a Huawei AP group)."
+          }
+        }
+      },
+      "WirelessApSighting": {
+        "type": "object",
+        "description": "One controller's view of one access point.",
+        "required": [
+          "run_state",
+          "last_seen"
+        ],
+        "properties": {
+          "clients": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "controller_node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The reporting controller's node."
+          },
+          "last_associated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When this controller last reported the AP in service (RFC 3339)."
+          },
+          "last_seen": {
+            "type": "string",
+            "description": "When this controller last reported the AP (RFC 3339)."
+          },
+          "run_state": {
+            "type": "string"
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WlanApState"
+              }
+            ]
+          }
+        }
+      },
+      "WirelessControllerSummary": {
+        "type": "object",
+        "description": "What a controller's last complete AP inventory said about the controller itself.",
+        "required": [
+          "node_id",
+          "aps_reported"
+        ],
+        "properties": {
+          "aps_reported": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many APs its last inventory carried."
+          },
+          "aps_truncated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Set when the controller reported more APs than one inventory may carry: how many it\nreported. The list then holds only the first ones by MAC address."
+          },
+          "flavor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WlanFlavor",
+                "description": "The vendor dialect its AP table was read in."
+              }
+            ]
+          },
+          "last_inventory_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When its last complete inventory arrived (RFC 3339). `null` if none has."
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The controller's node."
+          }
+        }
+      },
+      "WlanApState": {
+        "type": "string",
+        "description": "What one controller says about one AP, reduced to the three answers the system acts on\n(ADR-064 改訂 R5).",
+        "enum": [
+          "associated",
+          "backup",
+          "not_associated"
+        ]
+      },
+      "WlanFlavor": {
+        "type": "string",
+        "description": "Which vendor dialect a controller speaks, selected by the collection item's OID\n(the [`crate::OpticalFlavor`] shape, ADR-064 決定 3).\n\nOnly dialects measured on a real controller are here. Cisco (AireOS and IOS-XE are two MIBs)\nand Aruba are later increments.",
+        "enum": [
+          "huawei"
         ]
       }
     },

@@ -14,12 +14,14 @@ use yagra_bus::{
     SnmpNeighborColumn, SnmpOpticalCheck, SnmpRouteProbe, SnmpRoutingCheck, SnmpRoutingColumn,
     SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3MauCheck,
     SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck, SnmpV3TableCheck,
+    SnmpV3WlanApCheck, SnmpWlanApCheck,
 };
 use yagra_common::{
     builtin_arp_columns, builtin_interface_meta_columns, builtin_l3_columns,
     builtin_neighbor_columns, builtin_routing_columns, route_probe_columns, route_probe_oid,
     CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node, OpticalFlavor, UrlCheckConfig,
-    METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
+    WlanFlavor, MAX_APS_PER_CONTROLLER_DEFAULT, METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM,
+    METRIC_IF_TX_POWER_DBM,
 };
 
 /// Build an ICMP poll job targeting a node's management address.
@@ -227,6 +229,60 @@ fn optical_probes(items: &[CollectionItem]) -> Vec<OpticalProbe> {
     }
     probes.retain(|p| p.rx_metric.is_some() || p.tx_metric.is_some() || p.temp_metric.is_some());
     probes
+}
+
+/// The wireless-controller dialects a node's collection set asks to walk (ADR-064), each once.
+///
+/// An item's `oid` names the dialect, as for optics. An OID no dialect claims is dropped here rather
+/// than sent, for `optical_probes`' reason: a walk the poller cannot interpret is a session spent
+/// for nothing. Two items naming one dialect (a template item and a node override) walk it once.
+fn wlan_flavors(items: &[CollectionItem]) -> Vec<WlanFlavor> {
+    let mut flavors: Vec<WlanFlavor> = Vec::new();
+    for item in items.iter().filter(|i| i.kind == CollectionKind::Wlan) {
+        if let Some(flavor) = WlanFlavor::from_root(&item.oid) {
+            if !flavors.contains(&flavor) {
+                flavors.push(flavor);
+            }
+        }
+    }
+    flavors
+}
+
+/// Build the SNMP v2c AP walks a wireless controller's collection set asks for — none for any other
+/// node (ADR-064).
+#[must_use]
+pub fn build_snmp_wlan_ap_checks(
+    community: &str,
+    items: &[CollectionItem],
+    timeout_ms: u32,
+) -> Vec<SnmpWlanApCheck> {
+    wlan_flavors(items)
+        .into_iter()
+        .map(|flavor| SnmpWlanApCheck {
+            community: community.to_owned(),
+            flavor,
+            max_aps: MAX_APS_PER_CONTROLLER_DEFAULT,
+            timeout_ms,
+        })
+        .collect()
+}
+
+/// Build the SNMP v3 (USM) AP walks — the v3 analogue of [`build_snmp_wlan_ap_checks`].
+#[must_use]
+pub fn build_snmp_v3_wlan_ap_checks(
+    secret: &SnmpV3Secret,
+    items: &[CollectionItem],
+    timeout_ms: u32,
+) -> Vec<SnmpV3WlanApCheck> {
+    wlan_flavors(items)
+        .into_iter()
+        .map(|flavor| SnmpV3WlanApCheck {
+            auth: secret.auth(),
+            flavor,
+            max_aps: MAX_APS_PER_CONTROLLER_DEFAULT,
+            timeout_ms,
+        })
+        .collect()
 }
 
 /// Build the SNMP v2c optical-transceiver check, or `None` when the node collects no optics.
@@ -615,6 +671,47 @@ mod tests {
         let v3 = build_snmp_v3_optical_check(&v3_secret(), &items, 1000).expect("v3");
         assert_eq!(v2c.probes, v3.probes);
         assert_eq!(v3.auth.user, "monitor");
+    }
+
+    fn wlan_item(oid: &str) -> CollectionItem {
+        item(
+            yagra_common::METRIC_WLAN_AP_WALK_COMPLETE,
+            oid,
+            CollectionKind::Wlan,
+        )
+    }
+
+    #[test]
+    fn a_wireless_controller_item_becomes_one_ap_walk_per_dialect() {
+        let root = WlanFlavor::Huawei.root_oid();
+        // Twice, as a template item and a node override would: still one walk.
+        let items = vec![wlan_item(root), wlan_item(&format!(".{root}"))];
+        let checks = build_snmp_wlan_ap_checks("public", &items, 2000);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].flavor, WlanFlavor::Huawei);
+        assert_eq!(checks[0].max_aps, MAX_APS_PER_CONTROLLER_DEFAULT);
+        assert_eq!(checks[0].timeout_ms, 2000);
+        let v3 = build_snmp_v3_wlan_ap_checks(&v3_secret(), &items, 2000);
+        assert_eq!(v3.len(), 1);
+        assert_eq!(v3[0].flavor, WlanFlavor::Huawei);
+    }
+
+    #[test]
+    fn a_node_with_no_wireless_items_gets_no_ap_walk() {
+        let items = vec![
+            item(
+                "snmp_sys_uptime_ticks",
+                "1.3.6.1.2.1.1.3.0",
+                CollectionKind::Scalar,
+            ),
+            // A Wlan item whose OID no dialect claims is dropped rather than sent.
+            wlan_item("1.3.6.1.4.1.2011.6.139.13.3.10.1"),
+        ];
+        assert!(build_snmp_wlan_ap_checks("public", &items, 2000).is_empty());
+        // And a Wlan item never becomes a scalar GET or a table column.
+        let (scalar, table) =
+            build_snmp_checks("public", &[wlan_item(WlanFlavor::Huawei.root_oid())], 2000);
+        assert!(scalar.is_none() && table.is_none());
     }
 
     #[test]

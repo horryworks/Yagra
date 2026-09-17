@@ -749,6 +749,13 @@
     "source": "collected"
   },
   {
+    "family": "Huawei WLAN access points (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_ap_walk_complete",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
     "family": "Huawei WLAN controller (AC)",
     "metric_kind": "gauge",
     "metric_name": "wlan_controller_ap_license",

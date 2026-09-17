@@ -158,6 +158,7 @@ import type {
   NeighborConfig,
   NeighborHistoryPage,
   DiscoveredEndpointPage,
+  WirelessApPage,
   ImportResult,
   DnsRecordType,
   UserKind,
@@ -948,6 +949,31 @@ export const api = {
       },
     });
   },
+
+  /**
+   * Access points reported by the wireless controllers Yagra monitors, ordered by name (ADR-064).
+   * Pass `controllerNodeId` for one controller's APs; the page then also carries that controller's
+   * inventory summary. Page with `after` taken from `next`.
+   */
+  listWirelessAps: (
+    opts: {
+      controllerNodeId?: string;
+      state?: 'associated' | 'backup' | 'not_associated';
+      search?: string;
+      limit?: number;
+      after?: { key: string; ap_id: string };
+    } = {},
+  ): Promise<WirelessApPage> =>
+    apiGet('/api/v1/wireless/aps', {
+      query: {
+        controller_node_id: opts.controllerNodeId,
+        state: opts.state,
+        search: opts.search,
+        limit: opts.limit,
+        after_key: opts.after?.key,
+        after_id: opts.after?.ap_id,
+      },
+    }),
 
   /** Promote a discovered endpoint to a monitored node. `409` ⇒ the address became a node already. */
   importDiscoveredEndpoint: (

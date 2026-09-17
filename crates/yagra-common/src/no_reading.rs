@@ -53,7 +53,9 @@ pub fn no_reading_marker(item: &CollectionItem) -> Option<f64> {
                 .find(|(column, _)| *column == oid)
                 .map(|(_, marker)| *marker)
         }
-        CollectionKind::Scalar | CollectionKind::Optical => None,
+        // A wireless controller's AP walk drops its vendor's placeholders in the poller's dialect,
+        // like the optical probe (ADR-064 改訂 R10).
+        CollectionKind::Scalar | CollectionKind::Optical | CollectionKind::Wlan => None,
     }
 }
 

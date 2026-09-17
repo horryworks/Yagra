@@ -97,6 +97,7 @@ pub async fn execute_meraki(
             l3: None,
             arp: None,
             routing: None,
+            wlan: None,
             row_names: Vec::new(),
             observational: false,
             judge_samples: false,
