@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 /// A ledger, not a wish list — the same contract as [`super::route_table`]. Adding a write route to
 /// a file not named here fails [`every_file_that_registers_a_write_is_declared`], and removing the
 /// last write from one that is named fails it too.
-const WRITE_DOMAINS: [&str; 41] = [
+const WRITE_DOMAINS: [&str; 42] = [
     "alerts.rs",
     "analysis.rs",
     "api_tokens.rs",
@@ -85,6 +85,7 @@ const WRITE_DOMAINS: [&str; 41] = [
     "upgrade.rs",
     "users.rs",
     "webtls.rs",
+    "wireless.rs",
 ];
 
 /// Domains excused from owing an accepted-write test, each with the reason it cannot have one.
@@ -155,15 +156,21 @@ fn halves(text: &str) -> (&str, &str) {
 ///
 /// Both spellings, because a route registers its verbs either way: `.route(path, post(h))` and
 /// `.route(path, get(h).post(h))`.
+/// 🚨 **Whitespace-insensitive, and that is the whole of it.** `cargo fmt` breaks a long
+/// `.route(path, post(h))` over four lines, which left `, post(` matching nothing — so a file whose
+/// write routes all wrap read as registering **no write at all**, which is precisely the case this
+/// module exists to catch. Found by ADR-064's wireless routes, whose paths are long enough to wrap;
+/// every other domain's happened to fit on one line, so the hole had never been stepped in.
 fn registers_a_write(production: &str) -> bool {
     let code = code_only(production);
+    let flat = code.split_whitespace().collect::<Vec<_>>().join(" ");
     let route = format!(".{}(", "route");
-    if !code.contains(&route) {
+    if !flat.contains(&route) {
         return false;
     }
     ["post", "put", "delete", "patch"]
         .iter()
-        .any(|verb| code.contains(&format!(", {verb}(")) || code.contains(&format!(".{verb}(")))
+        .any(|verb| flat.contains(&format!(", {verb}(")) || flat.contains(&format!(".{verb}(")))
 }
 
 /// Does this test text build a live-mode state — i.e. is there a write here that was *accepted*?
@@ -176,6 +183,45 @@ fn registers_a_write(production: &str) -> bool {
 /// test at all, which reads exactly like the failure this module exists to catch.
 fn has_an_accepted_write(tests: &str) -> bool {
     code_only(tests).contains(&format!("{}_state", "live"))
+}
+
+/// The detector must see a write route however `cargo fmt` laid it out, and must not see a read.
+///
+/// A recognition test rather than a floor: the healthy answer to "which files register a write" is
+/// a list that changes, so the only way to know the reader is alive is to hand it text whose answer
+/// is known. The wrapped form is the one that was silently missed.
+///
+/// ⚠️ **Every sample is assembled at runtime**, for the reason the module doc gives: this file has no
+/// `#[cfg(test)]` of its own (it is declared `#[cfg(test)] mod guards;`), so [`halves`] reads all of
+/// it as production and a literal write route written here makes the check report *this file*. That
+/// happened on the first attempt at this test.
+#[test]
+fn the_write_detector_sees_a_wrapped_route_and_not_a_read_only_one() {
+    let route = format!(".{}(", "route");
+    let verb = |v: &str| format!("{v}(h)");
+    let wrapped = format!(
+        "Router::new()\n    {route}\n        \"/api/v1/x/:id/y\",\n        {},\n    )\n",
+        verb("post")
+    );
+    let inline = format!("Router::new(){route}\"/api/v1/x\", {})\n", verb("put"));
+    let chained = format!(
+        "Router::new(){route}\"/api/v1/x\", {}.{})\n",
+        verb("get"),
+        verb("delete")
+    );
+    let read_only = format!("Router::new(){route}\"/api/v1/x\", {})\n", verb("get"));
+    assert!(
+        registers_a_write(&wrapped),
+        "a wrapped write route was missed"
+    );
+    assert!(registers_a_write(&inline));
+    assert!(registers_a_write(&chained));
+    assert!(!registers_a_write(&read_only));
+    // A commented-out write is not a write, and neither is prose about one.
+    assert!(!registers_a_write(&format!(
+        "// {route}\"/api/v1/x\", {})\n{read_only}",
+        verb("post")
+    )));
 }
 
 #[test]

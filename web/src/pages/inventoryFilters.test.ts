@@ -41,7 +41,7 @@ describe('the offered vocabularies', () => {
   });
 
   it('offers every node kind', () => {
-    expect(NODE_KINDS).toEqual(['meraki', 'url', 'dns', 'device']);
+    expect(NODE_KINDS).toEqual(['wireless_ap', 'meraki', 'url', 'dns', 'device']);
     const kind = COLS.find((c) => c.key === 'kind')?.filter;
     expect(kind?.kind === 'enum' && kind.options.map((o) => o.value)).toEqual([...NODE_KINDS]);
   });

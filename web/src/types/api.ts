@@ -816,6 +816,8 @@ export type DiscoveredEndpointPage = components['schemas']['DiscoveredEndpointPa
 /** Access points behind the wireless controllers Yagra monitors (ADR-064). */
 export type WirelessApPage = components['schemas']['WirelessApPage'];
 export type WirelessApRow = components['schemas']['WirelessApRow'];
+export type WirelessControllerSummary = components['schemas']['WirelessControllerSummary'];
+export type NodeWireless = components['schemas']['NodeWireless'];
 export type WlanApState = components['schemas']['WlanApState'];
 
 /** How many nodes an import created — shared by the scan import and the endpoint promotion. */
@@ -854,7 +856,7 @@ export type NodeDetail = components['schemas']['NodeDetail'];
 
 /** A node's monitoring kind, in the backend's precedence order. `device` is the fallthrough:
  *  ICMP liveness plus SNMP when configured. */
-export const NODE_KINDS = ['meraki', 'url', 'dns', 'device'] as const;
+export const NODE_KINDS = ['wireless_ap', 'meraki', 'url', 'dns', 'device'] as const;
 
 /** Pinned to `schemas.NodeKind`. */
 export type NodeKind = (typeof NODE_KINDS)[number];

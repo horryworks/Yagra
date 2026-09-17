@@ -2,13 +2,15 @@
 //! What a node *is*, and therefore how it gets polled.
 //!
 //! A node's kind is not a stored column — it is derived from which single-purpose side table
-//! carries a row for it (`meraki_devices` / `url_checks` / `dns_checks`), with an ordinary device
-//! as the fallthrough. Deriving it is cheap; deriving it *consistently* is what needed a type.
+//! carries a row for it (`wireless_aps` / `meraki_devices` / `url_checks` / `dns_checks`), with an
+//! ordinary device as the fallthrough. Deriving it is cheap; deriving it *consistently* is what
+//! needed a type.
 
 use crate::dns_check::METRIC_DNS_UP;
 use crate::meraki::METRIC_MERAKI_DEVICE_UP;
 use crate::metric::METRIC_ICMP_RTT_MS;
 use crate::url_check::METRIC_HTTP_UP;
+use crate::wlan::METRIC_WLAN_AP_UP;
 use serde::{Deserialize, Serialize};
 
 /// A node's monitoring kind: the thing that decides which poll jobs it produces.
@@ -25,6 +27,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
+    /// A wireless access point, answered for by the controller that manages it (ADR-064): it emits
+    /// **no** per-node job — the controller's AP walk is what reports it.
+    ///
+    /// First in precedence by user decision (ADR-064 改訂 R1): an AP is an AP whichever source
+    /// reports it, so when a Meraki MR later also carries a `wireless_aps` row it resolves here.
+    /// Today no Meraki node has one, so this order changes nothing any existing node resolves to.
+    WirelessAp,
     /// Bound to a Cisco Meraki device: polled by the org collector, so it emits **no** per-node job.
     Meraki,
     /// An HTTP(S) endpoint monitor: one HTTP job and no ICMP — a URL target may be unpingable
@@ -44,6 +53,8 @@ pub enum NodeKind {
 /// misclassification, not a type error. Adding a kind adds a field here and an arm in `resolve`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NodeRows {
+    /// The node has a `wireless_aps` row (it is an imported access point, ADR-064).
+    pub wireless_ap: bool,
     /// The node has a `meraki_devices` row.
     pub meraki: bool,
     /// The node has a `url_checks` row.
@@ -57,7 +68,8 @@ impl NodeKind {
     ///
     /// For anything that must present all of them: a filter's vocabulary, a per-kind tally. A kind
     /// missing here drops out of those silently, so the test below pins it against the tokens.
-    pub const ALL: [NodeKind; 4] = [
+    pub const ALL: [NodeKind; 5] = [
+        NodeKind::WirelessAp,
         NodeKind::Meraki,
         NodeKind::Url,
         NodeKind::Dns,
@@ -87,6 +99,7 @@ impl NodeKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::WirelessAp => "wireless_ap",
             Self::Meraki => "meraki",
             Self::Url => "url",
             Self::Dns => "dns",
@@ -112,7 +125,9 @@ impl NodeKind {
     /// poller and another to the operator looking at it.
     #[must_use]
     pub const fn resolve(rows: NodeRows) -> Self {
-        if rows.meraki {
+        if rows.wireless_ap {
+            Self::WirelessAp
+        } else if rows.meraki {
             Self::Meraki
         } else if rows.url {
             Self::Url
@@ -125,13 +140,14 @@ impl NodeKind {
 
     /// Whether the scheduler produces per-node poll jobs for this kind.
     ///
-    /// Only Meraki is `false`: those nodes are polled by the org collector, so a per-node job would
-    /// poll them twice. Both the sweep (which preloads Meraki ids to skip) and the on-demand
+    /// `false` for Meraki and for a wireless AP: the org collector and the controller's AP walk answer
+    /// for them, so a per-node job would poll them twice — and an AP node's address is often
+    /// `0.0.0.0`, the controller having reported none. Both the sweep (which preloads Meraki ids to skip) and the on-demand
     /// "poll now" path (which short-circuits per node) are stating this one fact.
     #[must_use]
     pub const fn is_polled_per_node(self) -> bool {
         match self {
-            Self::Meraki => false,
+            Self::WirelessAp | Self::Meraki => false,
             Self::Url | Self::Dns | Self::Device => true,
         }
     }
@@ -149,6 +165,7 @@ impl NodeKind {
     #[must_use]
     pub const fn liveness_metric(self) -> &'static str {
         match self {
+            Self::WirelessAp => METRIC_WLAN_AP_UP,
             Self::Meraki => METRIC_MERAKI_DEVICE_UP,
             Self::Url => METRIC_HTTP_UP,
             Self::Dns => METRIC_DNS_UP,
@@ -163,6 +180,7 @@ impl NodeKind {
     #[must_use]
     pub const fn display_name(self) -> &'static str {
         match self {
+            Self::WirelessAp => "wireless AP",
             Self::Meraki => "Meraki",
             Self::Url => "URL",
             Self::Dns => "DNS",
@@ -177,14 +195,21 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn meraki_outranks_a_url_check_which_outranks_a_dns_check() {
+    fn a_wireless_ap_outranks_meraki_which_outranks_a_url_check_which_outranks_a_dns_check() {
         // A node holding several rows resolves to exactly one kind, and always the same one. The
         // rows are not supposed to coexist, but the API guard that stops them is younger than some
         // of the rows, so the resolution has to answer for the ones already out there.
         let all = NodeRows {
+            wireless_ap: true,
             meraki: true,
             url: true,
             dns: true,
+        };
+        assert_eq!(NodeKind::resolve(all), NodeKind::WirelessAp);
+        // A Meraki MR that later gains an AP row is an AP (ADR-064 改訂 R1).
+        let all = NodeRows {
+            wireless_ap: false,
+            ..all
         };
         assert_eq!(NodeKind::resolve(all), NodeKind::Meraki);
         assert_eq!(
@@ -196,6 +221,7 @@ mod tests {
         );
         assert_eq!(
             NodeKind::resolve(NodeRows {
+                wireless_ap: false,
                 meraki: false,
                 url: false,
                 dns: true
@@ -206,8 +232,9 @@ mod tests {
     }
 
     #[test]
-    fn only_meraki_is_polled_by_something_other_than_the_scheduler() {
+    fn only_meraki_and_a_wireless_ap_are_polled_by_something_other_than_the_scheduler() {
         assert!(!NodeKind::Meraki.is_polled_per_node());
+        assert!(!NodeKind::WirelessAp.is_polled_per_node());
         for kind in [NodeKind::Url, NodeKind::Dns, NodeKind::Device] {
             assert!(kind.is_polled_per_node(), "{kind:?} should produce jobs");
         }
@@ -218,7 +245,7 @@ mod tests {
         // `as_str` is exhaustive, so a new variant is forced to get a token — but nothing forces
         // it into `ALL`, and a kind missing from `ALL` silently drops out of the inventory filter's
         // vocabulary. Pinning the two together fails either way round.
-        let expected = ["meraki", "url", "dns", "device"];
+        let expected = ["wireless_ap", "meraki", "url", "dns", "device"];
         assert_eq!(NodeKind::ALL.len(), expected.len());
         let tokens: Vec<&str> = NodeKind::ALL.iter().map(|k| k.as_str()).collect();
         assert_eq!(tokens, expected, "ALL is precedence order");
@@ -244,7 +271,13 @@ mod tests {
         // would silently stop matching the series the poller writes.
         assert_eq!(
             metrics,
-            ["meraki_device_up", "http_up", "dns_up", "icmp_rtt_ms"]
+            [
+                "wlan_ap_up",
+                "meraki_device_up",
+                "http_up",
+                "dns_up",
+                "icmp_rtt_ms"
+            ]
         );
     }
 
@@ -279,6 +312,7 @@ mod tests {
         // The token is an API contract — `NodeDetail.kind` — so pin it rather than trusting the
         // derive to keep meaning what it means today.
         for (kind, token) in [
+            (NodeKind::WirelessAp, "\"wireless_ap\""),
             (NodeKind::Meraki, "\"meraki\""),
             (NodeKind::Url, "\"url\""),
             (NodeKind::Dns, "\"dns\""),

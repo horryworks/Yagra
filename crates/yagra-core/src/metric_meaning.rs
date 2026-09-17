@@ -36,6 +36,8 @@ pub enum CheckFamily {
     Url,
     Dns,
     Meraki,
+    /// A wireless AP's numbers, as its controller reports them (ADR-064).
+    Wlan,
 }
 
 impl CheckFamily {
@@ -44,12 +46,13 @@ impl CheckFamily {
     /// Test vocabulary: production code reads the family *table*, never the variant list, so
     /// this is `cfg(test)` rather than dead code with an `allow` on it.
     #[cfg(test)]
-    pub const ALL: [CheckFamily; 5] = [
+    pub const ALL: [CheckFamily; 6] = [
         CheckFamily::Icmp,
         CheckFamily::Snmp,
         CheckFamily::Url,
         CheckFamily::Dns,
         CheckFamily::Meraki,
+        CheckFamily::Wlan,
     ];
 
     /// The token the generated catalog carries (`web/src/api/metricCatalog.json`), and the key
@@ -62,6 +65,7 @@ impl CheckFamily {
             CheckFamily::Url => "url",
             CheckFamily::Dns => "dns",
             CheckFamily::Meraki => "meraki",
+            CheckFamily::Wlan => "wlan",
         }
     }
 }
@@ -78,7 +82,7 @@ impl CheckFamily {
 ///
 /// `__liveness__` is the one row with no family: it is the liveness rule's sentinel, not a
 /// series, so the catalog generator skips it and no Overview card can ever carry it.
-pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 19] = [
+pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 24] = [
     ("__liveness__", None),
     ("icmp_rtt_ms", Some(CheckFamily::Icmp)),
     ("icmp_loss_pct", Some(CheckFamily::Icmp)),
@@ -98,6 +102,13 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 19] = [
     ("dns_answer_count", Some(CheckFamily::Dns)),
     ("dns_chain_length", Some(CheckFamily::Dns)),
     ("meraki_device_up", Some(CheckFamily::Meraki)),
+    // An imported AP's numbers, published by core from its controller's AP walk (ADR-064 B2) —
+    // collected by no template of the AP's own, which is why they are listed here.
+    ("wlan_ap_up", Some(CheckFamily::Wlan)),
+    ("wlan_ap_client_count", Some(CheckFamily::Wlan)),
+    ("wlan_ap_cpu_pct", Some(CheckFamily::Wlan)),
+    ("wlan_ap_mem_pct", Some(CheckFamily::Wlan)),
+    ("wlan_ap_temp_c", Some(CheckFamily::Wlan)),
 ];
 
 /// The names in [`CHECK_FAMILIES`], in the same order.
@@ -106,10 +117,10 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 19] = [
 /// that makes [`METRIC_MEANINGS`] checkable — without the list, a sentence for a metric nothing
 /// collects would look identical to a sentence for one that does. Derived from the family table
 /// so the two cannot disagree about a name.
-pub const CHECK_METRICS: [&str; 19] = check_names(&CHECK_FAMILIES);
+pub const CHECK_METRICS: [&str; 24] = check_names(&CHECK_FAMILIES);
 
-const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 19]) -> [&'static str; 19] {
-    let mut out = [""; 19];
+const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 24]) -> [&'static str; 24] {
+    let mut out = [""; 24];
     let mut i = 0;
     while i < rows.len() {
         out[i] = rows[i].0;
@@ -215,7 +226,7 @@ impl MetricUnit {
 /// already pins this table to the collection catalogue in **both** directions, so a new metric now
 /// fails to compile until someone decides its unit. That guarantee is bought, not built — there is
 /// no separate check for units and there should not be one.
-pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 117] = [
+pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 122] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.", MetricUnit::None),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).", MetricUnit::Counted("connections")),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.", MetricUnit::None),
@@ -324,6 +335,11 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 117] = [
     ("ups_charge_remaining_pct", "Estimated battery charge remaining, in percent.", MetricUnit::Symbol("%")),
     ("ups_minutes_remaining", "Estimated run time left on battery, in minutes. Meaningful only while the UPS is actually on battery.", MetricUnit::Counted("minutes")),
     ("ups_output_load_pct","Output load as a percentage of the UPS’s rated capacity. One row per output line.", MetricUnit::Symbol("%")),
+    ("wlan_ap_client_count", "Wireless clients online through this access point, as the controller serving it reports. Only an AP imported as a node has it, and only while a controller reports the AP in service.", MetricUnit::Counted("clients")),
+    ("wlan_ap_cpu_pct", "CPU in use on this access point, in percent, as the controller serving it reports. An HA standby's view (always 0) is never recorded.", MetricUnit::Symbol("%")),
+    ("wlan_ap_mem_pct", "Memory in use on this access point, in percent, as the controller serving it reports. An HA standby's view (always 0) is never recorded.", MetricUnit::Symbol("%")),
+    ("wlan_ap_temp_c", "Operating temperature of this access point in degrees Celsius, as the controller serving it reports. Absent for a model with no sensor rather than recorded as 0.", MetricUnit::Symbol("°C")),
+    ("wlan_ap_up", "Does the controller serving this access point report it in service. 1 = in service; 0 = the controller reports it down, not joined or failing. When no controller reports the AP at all, nothing is recorded — the value stops arriving rather than dropping to 0.", MetricUnit::None),
     ("wlan_ap_walk_complete", "Did the wireless controller's access-point table read to its end on this poll. 1 = yes; 0 = a column did not answer, so no AP list was published and the stored list was left as it was. Stuck at 0 means the AP list has stopped refreshing.", MetricUnit::None),
     ("wlan_controller_ap_license", "Access points the wireless controller is licensed to manage. Compare it with the configured count to see how much licence headroom is left. An HA standby reports the same licence.", MetricUnit::Counted("access points")),
     ("wlan_controller_ap_normal_pct", "Share of the controller's configured access points that are working normally, in percent. Below 100 means at least one AP is down, not yet joined, or failing its configuration. An HA standby reports the active controller's figure, so a pair raises one condition twice.", MetricUnit::Symbol("%")),

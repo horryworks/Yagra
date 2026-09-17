@@ -2882,6 +2882,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/wireless-controller": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set how a wireless controller's access points are imported as nodes.
+         * @description Import is off until switched on here. An imported AP is a node of kind `wireless_ap`: it is never
+         *     polled itself — the controller's AP walk reports it — and it goes down when the controller serving
+         *     it reports it down. A node deleted afterwards is not imported again automatically; use
+         *     `POST /api/v1/wireless/aps/{ap_id}/import` to bring it back.
+         */
+        put: operations["set_wireless_controller"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notification-channels": {
         parameters: {
             query?: never;
@@ -4727,6 +4750,29 @@ export interface paths {
         get: operations["list_wireless_aps"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/wireless/aps/{ap_id}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import one access point as a node now.
+         * @description Whatever its state, whether or not its controller imports automatically, and even if its node was
+         *     deleted before — asking for one AP is the decision the importer otherwise waits for. The node's id
+         *     is derived from the AP's MAC address, so an AP imported again gets back the node id, and the
+         *     history, it had.
+         */
+        post: operations["import_wireless_ap"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9249,6 +9295,7 @@ export interface components {
             url_check?: null | components["schemas"]["UrlCheckConfig"];
             /** @description Descriptive maker/model, editable from the node detail. */
             vendor?: string | null;
+            wireless?: null | components["schemas"]["NodeWireless"];
         };
         /** @description The subset of a node the model may see. Notably not the credential binding. */
         NodeFacts: {
@@ -9321,7 +9368,7 @@ export interface components {
          *     scheduler polled as Meraki could render a URL-monitor health card next to it.
          * @enum {string}
          */
-        NodeKind: "meraki" | "url" | "dns" | "device";
+        NodeKind: "wireless_ap" | "meraki" | "url" | "dns" | "device";
         /** @description One metric on one node: what it is, whether it has data, and how it must be read. */
         NodeMetricEntry: {
             dimension: components["schemas"]["MetricDimension"];
@@ -9504,6 +9551,11 @@ export interface components {
             /** @description `true` ⇒ this node's alerts always stand on their own, whatever the derived graph says. */
             opt_out: boolean;
         };
+        /** @description What a node is to the wireless inventory. */
+        NodeWireless: {
+            ap?: null | components["schemas"]["WirelessApRow"];
+            controller?: null | components["schemas"]["WirelessControllerSummary"];
+        };
         /**
          * @description Something the export or the import did that the operator would not otherwise see.
          *
@@ -9645,7 +9697,10 @@ export interface components {
         PolledBy: {
             /** @description The owning poller; set only in the `assigned` state. */
             poller_id?: string | null;
-            /** @description One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`. */
+            /**
+             * @description One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `wireless_controller` (an imported
+             *     access point, reported by its controller), `unknown`.
+             */
             state: string;
         };
         /** @description Where a poller attaches to the monitored network. */
@@ -12399,8 +12454,41 @@ export interface components {
             run_state: string;
             state?: null | components["schemas"]["WlanApState"];
         };
-        /** @description What a controller's last complete AP inventory said about the controller itself. */
+        /** @description How a controller's access points are imported. */
+        WirelessControllerSettingsBody: {
+            /**
+             * Format: uuid
+             * @description The folder to file imported AP nodes in. Omitted or `null` ⇒ a folder named
+             *     "<controller> APs" beside the controller.
+             */
+            ap_group_id?: string | null;
+            /**
+             * @description Whether access points this controller reports become nodes. Only APs that have been in
+             *     service at least once are imported automatically; importing starts within a minute.
+             */
+            import_aps: boolean;
+            /**
+             * Format: int32
+             * @description The most access points this controller imports, 1–2048. Omitted ⇒ 1024.
+             */
+            max_aps?: number | null;
+        };
+        /**
+         * @description What a controller's last complete AP inventory said about the controller itself, and how its
+         *     access points are imported as nodes.
+         */
         WirelessControllerSummary: {
+            /**
+             * Format: uuid
+             * @description The folder imported AP nodes are filed in. `null` ⇒ a folder named "<controller> APs" beside
+             *     the controller.
+             */
+            ap_group_id?: string | null;
+            /**
+             * Format: int32
+             * @description How many access points the `max_aps` cap left out on the last import pass.
+             */
+            aps_over_cap: number;
             /**
              * Format: int32
              * @description How many APs its last inventory carried.
@@ -12413,8 +12501,18 @@ export interface components {
              */
             aps_truncated_at?: number | null;
             flavor?: null | components["schemas"]["WlanFlavor"];
+            /**
+             * @description Whether access points this controller reports become nodes. Only APs that have been in
+             *     service at least once are imported automatically.
+             */
+            import_aps: boolean;
             /** @description When its last complete inventory arrived (RFC 3339). `null` if none has. */
             last_inventory_at?: string | null;
+            /**
+             * Format: int32
+             * @description The most access points this controller imports (1–2048).
+             */
+            max_aps: number;
             /**
              * Format: uuid
              * @description The controller's node.
@@ -23777,6 +23875,78 @@ export interface operations {
             };
         };
     };
+    set_wireless_controller: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The controller's node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WirelessControllerSettingsBody"];
+            };
+        };
+        responses: {
+            /** @description Settings stored; the controller as it now stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WirelessControllerSummary"];
+                };
+            };
+            /** @description max_aps outside 1–2048 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node or folder, or one outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     list_notification_channels: {
         parameters: {
             query?: never;
@@ -30715,6 +30885,74 @@ export interface operations {
             };
             /** @description Role lacks View */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    import_wireless_ap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The access point's id, from the AP list */
+                ap_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The AP's new node */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedId"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such access point, or none a controller in the caller's scope reports */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The access point is already a node (`ap_already_imported`), or no controller that reports it is monitored any more (`ap_has_no_controller`) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

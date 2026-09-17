@@ -37,11 +37,11 @@ import builtinCatalog from '../api/metricCatalog.json';
 import enMetricMeanings from '../locales/en/metricMeanings.json';
 
 /**
- * The five probes a check metric can come from (`metric_meaning.rs::CheckFamily`), in the order
+ * The six probes a check metric can come from (`metric_meaning.rs::CheckFamily`), in the order
  * the node Overview sections them (ADR-046 Inc.8). A runtime array so `i18nEnumKeys.test.ts`
  * can demand `nodes:overview.family.<token>` in both locales.
  */
-export const OVERVIEW_FAMILIES = ['icmp', 'snmp', 'url', 'dns', 'meraki'] as const;
+export const OVERVIEW_FAMILIES = ['icmp', 'snmp', 'url', 'dns', 'meraki', 'wlan'] as const;
 export type OverviewFamily = (typeof OVERVIEW_FAMILIES)[number];
 
 /**

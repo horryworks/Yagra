@@ -192,7 +192,12 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // attributed by the device's source address and NetFlow by the exporter's, so a ping-only node
   // can have rows in either. Hiding them with the SNMP axis was asked for and declined on that
   // evidence (ADR-119 決定 1).
-  events: { labelKey: 'tabs.events', kinds: ['device', 'meraki'], needsSnmp: false },
+  // An imported AP keeps it too: an AP that has a management address can send syslog of its own.
+  events: {
+    labelKey: 'tabs.events',
+    kinds: ['device', 'meraki', 'wireless_ap'],
+    needsSnmp: false,
+  },
   flow: { labelKey: 'tabs.flow', kinds: DEVICE_ONLY, needsSnmp: false },
 };
 

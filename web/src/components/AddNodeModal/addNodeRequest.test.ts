@@ -67,8 +67,8 @@ describe('duplicateWarning', () => {
 });
 
 describe('DUPLICATE_ADDRESS_KINDS', () => {
-  it('counts devices and Meraki devices, never URL or DNS monitors (ADR-139 決定 1)', () => {
-    expect([...DUPLICATE_ADDRESS_KINDS].sort()).toEqual(['device', 'meraki']);
+  it('counts devices, Meraki devices and imported APs, never URL or DNS monitors (ADR-139 決定 1)', () => {
+    expect([...DUPLICATE_ADDRESS_KINDS].sort()).toEqual(['device', 'meraki', 'wireless_ap']);
   });
 });
 

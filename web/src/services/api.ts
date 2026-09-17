@@ -159,6 +159,7 @@ import type {
   NeighborHistoryPage,
   DiscoveredEndpointPage,
   WirelessApPage,
+  WirelessControllerSummary,
   ImportResult,
   DnsRecordType,
   UserKind,
@@ -974,6 +975,17 @@ export const api = {
         after_id: opts.after?.ap_id,
       },
     }),
+
+  /** Set how a wireless controller's access points are imported as nodes (ADR-064). */
+  setWirelessController: (
+    nodeId: string,
+    body: { import_aps: boolean; max_aps?: number; ap_group_id?: string | null },
+  ): Promise<WirelessControllerSummary> =>
+    apiPut('/api/v1/nodes/{node_id}/wireless-controller', { path: { node_id: nodeId }, body }),
+
+  /** Import one access point as a node now. `409` ⇒ it already is one, or no controller reports it. */
+  importWirelessAp: (apId: string): Promise<{ id: string }> =>
+    apiPost('/api/v1/wireless/aps/{ap_id}/import', { path: { ap_id: apId } }),
 
   /** Promote a discovered endpoint to a monitored node. `409` ⇒ the address became a node already. */
   importDiscoveredEndpoint: (

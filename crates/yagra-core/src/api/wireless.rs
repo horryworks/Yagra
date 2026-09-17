@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Wireless controllers and the access points they report (ADR-064).
 //!
-//! One read today: the AP list, across every controller or narrowed to one. It is built from the
-//! inventories controllers publish on each poll, so an AP appears here as soon as a controller's AP
-//! walk has run — before, and whether or not, anyone imports it as a node.
+//! The AP list, across every controller or narrowed to one. It is built from the inventories
+//! controllers publish on each poll, so an AP appears here as soon as a controller's AP walk has
+//! run — before, and whether or not, anyone imports it as a node.
+//!
+//! Two writes (ADR-064 increment B2): a controller's import settings, and importing one AP by hand.
+//! Neither has an MCP tool — MCP stays read-only (ADR-042). What they change is read back through
+//! the AP list and the node detail's `wireless` field, which MCP does see.
 //!
 //! **Scoping is by the reporting controller, in the SQL.** An AP has no node of its own until it is
 //! imported, so what bounds it is the controllers that report it: an AP is listed when a controller
@@ -11,10 +15,18 @@
 //! the same [`wireless_ap_page`], so neither can forget the predicate.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireView, Scoped};
+use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
+use super::util::CreatedId;
 use super::ApiState;
-use crate::wireless::{ApFilter, WirelessRepo};
-use axum::{extract::Query, routing::get, Json, Router};
+use crate::wireless::{
+    ApFilter, ApRow, ControllerRow, ControllerSettings, ImportOne, WirelessRepo,
+};
+use axum::{
+    extract::{Path, Query},
+    http::StatusCode,
+    routing::{get, post, put},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_common::WlanApState;
@@ -29,16 +41,25 @@ const AP_SEARCH_MAX_CHARS: usize = 64;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(list_wireless_aps))]
+#[openapi(paths(list_wireless_aps, import_wireless_ap, set_wireless_controller))]
 pub(super) struct Doc;
 
 /// The wireless routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
-    Router::new().route("/api/v1/wireless/aps", get(list_wireless_aps))
+    Router::new()
+        .route("/api/v1/wireless/aps", get(list_wireless_aps))
+        .route(
+            "/api/v1/wireless/aps/:ap_id/import",
+            post(import_wireless_ap),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/wireless-controller",
+            put(set_wireless_controller),
+        )
 }
 
 /// One access point.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct WirelessApRow {
     /// Stable id, derived from the MAC address. The same AP keeps it when the controller serving it
     /// changes.
@@ -82,7 +103,7 @@ pub(crate) struct WirelessApRow {
 }
 
 /// One controller's view of one access point.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct WirelessApSighting {
     /// The reporting controller's node.
     pub controller_node_id: Option<Uuid>,
@@ -104,12 +125,13 @@ pub(crate) struct WirelessApCursor {
     pub ap_id: Uuid,
 }
 
-/// What a controller's last complete AP inventory said about the controller itself.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+/// What a controller's last complete AP inventory said about the controller itself, and how its
+/// access points are imported as nodes.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct WirelessControllerSummary {
     /// The controller's node.
     pub node_id: Uuid,
-    /// The vendor dialect its AP table was read in.
+    /// The vendor dialect its AP table was read in. `null` until an inventory has arrived.
     pub flavor: Option<yagra_common::WlanFlavor>,
     /// How many APs its last inventory carried.
     pub aps_reported: i32,
@@ -118,6 +140,27 @@ pub(crate) struct WirelessControllerSummary {
     pub aps_truncated_at: Option<i32>,
     /// When its last complete inventory arrived (RFC 3339). `null` if none has.
     pub last_inventory_at: Option<String>,
+    /// Whether access points this controller reports become nodes. Only APs that have been in
+    /// service at least once are imported automatically.
+    pub import_aps: bool,
+    /// The most access points this controller imports (1–2048).
+    pub max_aps: i32,
+    /// The folder imported AP nodes are filed in. `null` ⇒ a folder named "<controller> APs" beside
+    /// the controller.
+    pub ap_group_id: Option<Uuid>,
+    /// How many access points the `max_aps` cap left out on the last import pass.
+    pub aps_over_cap: i32,
+}
+
+/// What a node is to the wireless inventory.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct NodeWireless {
+    /// Set when the node is a wireless controller that has reported an AP inventory or been given
+    /// import settings.
+    pub controller: Option<WirelessControllerSummary>,
+    /// Set when the node is an imported access point: its entry in the AP list. The controllers in
+    /// it are limited to the ones the caller can see.
+    pub ap: Option<WirelessApRow>,
 }
 
 /// One page of access points, ordered by name.
@@ -239,6 +282,7 @@ impl WirelessApRequest {
                 controller_node,
                 state,
                 search: search.map(str::to_owned),
+                ..ApFilter::default()
             },
             after,
             limit: limit.unwrap_or(AP_DEFAULT_LIMIT).clamp(1, AP_MAX_LIMIT),
@@ -277,67 +321,288 @@ pub(crate) async fn wireless_ap_page(
             key: WirelessRepo::sort_key(r),
             ap_id: r.ap_id,
         });
-    let rfc = |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339();
     // Only for a controller the caller can see: the summary names a node, and a scoped caller must
     // not learn that a controller outside its folders exists by asking for it.
     let controller = match filter_controller {
-        Some(node) if scope_allows_node(admin, scope, node).await? => admin
-            .wireless
-            .controller(node)
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(
-                    e.as_ref(),
-                    "read wireless controller",
-                    "failed to read the controller",
-                )
-            })?
-            .map(|c| WirelessControllerSummary {
-                node_id: c.node_id,
-                flavor: c.flavor,
-                aps_reported: c.aps_reported,
-                aps_truncated_at: c.aps_truncated_at,
-                last_inventory_at: c.last_inventory_at.map(rfc),
-            }),
+        Some(node) if scope_allows_node(admin, scope, node).await? => {
+            read_controller(admin, node).await?.map(controller_dto)
+        }
         _ => None,
     };
     Ok(WirelessApPage {
         controller,
-        aps: rows
-            .into_iter()
-            .map(|r| WirelessApRow {
-                ap_id: r.ap_id,
-                mac: r.mac,
-                name: r.name,
-                serial: r.serial,
-                model: r.model,
-                sw_version: r.sw_version,
-                ip: r.ip.map(|ip| ip.to_string()),
-                vendor_group: r.vendor_group,
-                state: r.state,
-                run_state: r.run_state,
-                clients: r.clients,
-                node_id: r.node_id,
-                controller_node_id: r.owner_node_id,
-                first_seen: rfc(r.first_seen),
-                last_seen: rfc(r.last_seen),
-                last_associated_at: r.last_associated_at.map(rfc),
-                reported_by: r
-                    .sightings
-                    .into_iter()
-                    .map(|s| WirelessApSighting {
-                        controller_node_id: s.controller_node_id,
-                        state: s.state,
-                        run_state: s.run_state,
-                        clients: s.clients,
-                        last_seen: rfc(s.last_seen),
-                        last_associated_at: s.last_associated_at.map(rfc),
-                    })
-                    .collect(),
-            })
-            .collect(),
+        aps: rows.into_iter().map(ap_dto).collect(),
         next,
     })
+}
+
+fn rfc(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339()
+}
+
+/// One stored AP as the API shows it.
+fn ap_dto(r: ApRow) -> WirelessApRow {
+    WirelessApRow {
+        ap_id: r.ap_id,
+        mac: r.mac,
+        name: r.name,
+        serial: r.serial,
+        model: r.model,
+        sw_version: r.sw_version,
+        ip: r.ip.map(|ip| ip.to_string()),
+        vendor_group: r.vendor_group,
+        state: r.state,
+        run_state: r.run_state,
+        clients: r.clients,
+        node_id: r.node_id,
+        controller_node_id: r.owner_node_id,
+        first_seen: rfc(r.first_seen),
+        last_seen: rfc(r.last_seen),
+        last_associated_at: r.last_associated_at.map(rfc),
+        reported_by: r
+            .sightings
+            .into_iter()
+            .map(|s| WirelessApSighting {
+                controller_node_id: s.controller_node_id,
+                state: s.state,
+                run_state: s.run_state,
+                clients: s.clients,
+                last_seen: rfc(s.last_seen),
+                last_associated_at: s.last_associated_at.map(rfc),
+            })
+            .collect(),
+    }
+}
+
+/// One stored controller as the API shows it.
+fn controller_dto(c: ControllerRow) -> WirelessControllerSummary {
+    WirelessControllerSummary {
+        node_id: c.node_id,
+        flavor: c.flavor,
+        aps_reported: c.aps_reported,
+        aps_truncated_at: c.aps_truncated_at,
+        last_inventory_at: c.last_inventory_at.map(rfc),
+        import_aps: c.import_aps,
+        max_aps: c.max_aps,
+        ap_group_id: c.ap_group_id,
+        aps_over_cap: c.aps_over_cap,
+    }
+}
+
+async fn read_controller(
+    admin: &super::AdminState,
+    node: Uuid,
+) -> ApiResult<Option<ControllerRow>> {
+    admin.wireless.controller(node).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "read wireless controller",
+            "failed to read the controller",
+        )
+    })
+}
+
+/// What `node` is to the wireless inventory, for the node detail — REST and MCP both (ADR-042).
+///
+/// Best effort, like the side-table reads beside it in the detail view: a failed read answers
+/// `None` and is logged, rather than failing the whole page. The caller has already proved the node
+/// visible. The AP's reporting controllers are narrowed to the ones the caller can see, so a scoped
+/// caller does not learn a controller outside its folders from an AP inside them.
+pub(crate) async fn node_wireless(
+    st: &ApiState,
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    node: Uuid,
+) -> Option<NodeWireless> {
+    let controller = match admin.wireless.controller(node).await {
+        Ok(c) => c.map(controller_dto),
+        Err(e) => {
+            tracing::warn!(node = %node, error = %e, "wireless controller read failed");
+            None
+        }
+    };
+    let filter = ApFilter {
+        node: Some(node),
+        ..ApFilter::default()
+    };
+    let ap = match admin.wireless.list_page(None, &filter, None, 1).await {
+        Ok(rows) => rows.into_iter().next().map(|mut r| {
+            let visible = |n: Option<Uuid>| {
+                n.is_some_and(|n| scope.allows_node(st, yagra_common::NodeId::from(n)))
+            };
+            r.sightings.retain(|s| visible(s.controller_node_id));
+            if !visible(r.owner_node_id) {
+                r.owner_node_id = None;
+            }
+            ap_dto(r)
+        }),
+        Err(e) => {
+            tracing::warn!(node = %node, error = %e, "wireless AP read failed");
+            None
+        }
+    };
+    (controller.is_some() || ap.is_some()).then_some(NodeWireless { controller, ap })
+}
+
+/// How a controller's access points are imported.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(super) struct WirelessControllerSettingsBody {
+    /// Whether access points this controller reports become nodes. Only APs that have been in
+    /// service at least once are imported automatically; importing starts within a minute.
+    import_aps: bool,
+    /// The most access points this controller imports, 1–2048. Omitted ⇒ 1024.
+    #[serde(default)]
+    max_aps: Option<i32>,
+    /// The folder to file imported AP nodes in. Omitted or `null` ⇒ a folder named
+    /// "<controller> APs" beside the controller.
+    #[serde(default)]
+    ap_group_id: Option<Uuid>,
+}
+
+/// Set how a wireless controller's access points are imported as nodes.
+///
+/// Import is off until switched on here. An imported AP is a node of kind `wireless_ap`: it is never
+/// polled itself — the controller's AP walk reports it — and it goes down when the controller serving
+/// it reports it down. A node deleted afterwards is not imported again automatically; use
+/// `POST /api/v1/wireless/aps/{ap_id}/import` to bring it back.
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/wireless-controller", tag = "wireless",
+    params(("node_id" = Uuid, Path, description = "The controller's node id")),
+    request_body = WirelessControllerSettingsBody,
+    responses(
+        (status = 200, description = "Settings stored; the controller as it now stands", body = WirelessControllerSummary),
+        (status = 400, description = "max_aps outside 1–2048", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node or folder, or one outside the caller's scope", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_wireless_controller(
+    _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+    Json(body): Json<WirelessControllerSettingsBody>,
+) -> ApiResult<Json<WirelessControllerSummary>> {
+    let max_aps = body
+        .max_aps
+        .unwrap_or(yagra_common::MAX_APS_PER_CONTROLLER_DEFAULT as i32);
+    if !(1..=yagra_common::MAX_APS_PER_CONTROLLER_HARD as i32).contains(&max_aps) {
+        return Err(ApiError::bad_request(
+            "invalid_max_aps",
+            "max_aps must be between 1 and 2048",
+        ));
+    }
+    if let Some(group) = body.ap_group_id {
+        // A folder outside the caller's scope would file APs where the caller cannot see them.
+        super::scope::require_visible_group(&scope, group)?;
+        let exists = admin.groups.exists(group).await.map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "check folder", "failed to check the folder")
+        })?;
+        if !exists {
+            return Err(ApiError::not_found(
+                "group_not_found",
+                format!("no group {group}"),
+            ));
+        }
+    }
+    let stored = admin
+        .wireless
+        .set_controller_settings(
+            node_id,
+            ControllerSettings {
+                import_aps: body.import_aps,
+                max_aps,
+                ap_group_id: body.ap_group_id,
+            },
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "store wireless controller settings",
+                "failed to store the settings",
+            )
+        })?;
+    let missing = || ApiError::not_found("node_not_found", format!("no node {node_id}"));
+    if !stored {
+        return Err(missing());
+    }
+    let controller = read_controller(&admin, node_id)
+        .await?
+        .ok_or_else(missing)?;
+    Ok(Json(controller_dto(controller)))
+}
+
+/// Import one access point as a node now.
+///
+/// Whatever its state, whether or not its controller imports automatically, and even if its node was
+/// deleted before — asking for one AP is the decision the importer otherwise waits for. The node's id
+/// is derived from the AP's MAC address, so an AP imported again gets back the node id, and the
+/// history, it had.
+#[utoipa::path(
+    post, path = "/api/v1/wireless/aps/{ap_id}/import", tag = "wireless",
+    params(("ap_id" = Uuid, Path, description = "The access point's id, from the AP list")),
+    responses(
+        (status = 201, description = "The AP's new node", body = CreatedId),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such access point, or none a controller in the caller's scope reports", body = super::error::ErrorBody),
+        (status = 409, description = "The access point is already a node (`ap_already_imported`), or no controller that reports it is monitored any more (`ap_has_no_controller`)", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn import_wireless_ap(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(ap_id): Path<Uuid>,
+) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    let missing = || ApiError::not_found("ap_not_found", format!("no access point {ap_id}"));
+    // Visible exactly when the AP list would show it to this caller.
+    let filter = ApFilter {
+        ap: Some(ap_id),
+        ..ApFilter::default()
+    };
+    let visible = admin
+        .wireless
+        .list_page(scope.group_filter(), &filter, None, 1)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "read access point",
+                "failed to read the access point",
+            )
+        })?;
+    if visible.is_empty() {
+        return Err(missing());
+    }
+    let outcome = admin
+        .wireless
+        .import_one(ap_id, chrono::Utc::now())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "import access point",
+                "failed to import the access point",
+            )
+        })?;
+    match outcome {
+        ImportOne::Imported(id) => Ok((StatusCode::CREATED, Json(CreatedId { id }))),
+        ImportOne::AlreadyImported(node) => Err(ApiError::conflict(
+            "ap_already_imported",
+            format!("access point {ap_id} is already node {node}"),
+        )),
+        ImportOne::NoController => Err(ApiError::conflict(
+            "ap_has_no_controller",
+            "no controller that reports this access point is monitored any more",
+        )),
+        ImportOne::NotFound => Err(missing()),
+    }
 }
 
 /// Whether `node` is a node the caller may see.
@@ -392,6 +657,128 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE,
             "skeleton mode, after the guard"
         );
+    }
+
+    /// ADR-064 B2, accepted: an admin switches a controller's import on, imports a never-in-service
+    /// AP by hand, and the node detail of both says what each one is.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_admin_switches_import_on_and_imports_an_ap_by_hand(pool: sqlx::PgPool) {
+        let site = crate::pgtest::group(&pool, "site").await;
+        let wac = crate::pgtest::node(&pool, "wac001", 1, Some(site)).await;
+        let repo = WirelessRepo::new(pool.clone());
+        let obs = |mac: u8, state: WlanApState| WlanApObservation {
+            mac: ApMac::new([0, 0, 0, 0, 0, mac]),
+            name: Some(format!("ap-{mac}")),
+            serial: None,
+            model: Some("AirEngine5776-26".into()),
+            sw_version: None,
+            ip: None,
+            vendor_group: None,
+            run_state: "fault".into(),
+            state,
+            clients: None,
+            cpu_pct: None,
+            mem_pct: None,
+            temp_c: None,
+        };
+        // A fault AP that has never been in service: the importer leaves it alone.
+        let never = obs(9, WlanApState::NotAssociated);
+        let never_id = yagra_common::ap_id(never.mac);
+        repo.record_inventory(
+            wac,
+            &WlanInventory::bounded(WlanFlavor::Huawei, vec![never], 1024),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, Role::Admin);
+        let uri = format!("/api/v1/nodes/{wac}/wireless-controller");
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &uri,
+            &admin,
+            Some(serde_json::json!({ "import_aps": true, "max_aps": 50 })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["import_aps"], true);
+        assert_eq!(body["max_aps"], 50);
+        assert_eq!(body["aps_reported"], 1);
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &uri,
+            &admin,
+            Some(serde_json::json!({ "import_aps": true, "max_aps": 4096 })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let viewer = token(&st, Role::Viewer);
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &uri,
+            &viewer,
+            Some(serde_json::json!({ "import_aps": false })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let import = format!("/api/v1/wireless/aps/{never_id}/import");
+        let (status, body) = send(&st, "POST", &import, &admin, None).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["id"], never_id.to_string(), "the node id is the AP id");
+        let (name, group, address): (String, Option<Uuid>, String) = sqlx::query_as(
+            "SELECT n.name, n.group_id, host(n.address) FROM nodes n WHERE n.id = $1",
+        )
+        .bind(never_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(name, "ap-9");
+        assert_eq!(
+            address, "0.0.0.0",
+            "a controller reported no address for it"
+        );
+        let parent: Option<Uuid> =
+            sqlx::query_scalar("SELECT parent_id FROM node_groups WHERE id = $1")
+                .bind(group)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            parent,
+            Some(site),
+            "the AP folder sits beside the controller"
+        );
+
+        let (status, body) = send(&st, "POST", &import, &admin, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "ap_already_imported");
+        let unknown = format!("/api/v1/wireless/aps/{}/import", Uuid::new_v4());
+        let (status, _) = send(&st, "POST", &unknown, &admin, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // The imported AP's node detail says what it is.
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{never_id}"),
+            &admin,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["kind"], "wireless_ap");
+        assert_eq!(body["wireless"]["ap"]["mac"], "00:00:00:00:00:09");
+        let (_, body) = send(&st, "GET", &format!("/api/v1/nodes/{wac}"), &admin, None).await;
+        assert_eq!(body["wireless"]["controller"]["import_aps"], true);
+        assert!(body["wireless"]["ap"].is_null());
     }
 
     /// End to end over a real database: a viewer reads a controller's APs, and a scoped caller reads

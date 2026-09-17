@@ -46,6 +46,7 @@ use crate::neighbors::AdjacencySettings;
 use crate::repo::NodeRepo;
 use crate::secrets::CredentialStore;
 use crate::url_check::UrlCheckRepo;
+use crate::wireless::WirelessRepo;
 
 // ── Single-purpose monitor bindings ──────────────────────────────────────────────────────────
 
@@ -60,6 +61,9 @@ pub(super) trait MonitorBindings: Send + Sync {
     /// Whether the node is polled by the Meraki org collector. `bool` on purpose — see the module
     /// doc; the caller has never needed the configuration itself.
     async fn meraki_bound(&self, node: Uuid) -> anyhow::Result<bool>;
+    /// Whether the node is an imported wireless access point, answered for by its controller's AP
+    /// walk (ADR-064). `bool` for the same reason as [`Self::meraki_bound`].
+    async fn wireless_ap_bound(&self, node: Uuid) -> anyhow::Result<bool>;
     async fn url_config(&self, node: Uuid) -> anyhow::Result<Option<UrlCheckConfig>>;
     async fn dns_config(&self, node: Uuid) -> anyhow::Result<Option<DnsCheckConfig>>;
     /// Every node carrying a `url_checks` row, for the sweep's
@@ -69,9 +73,10 @@ pub(super) trait MonitorBindings: Send + Sync {
     async fn dns_node_ids(&self) -> anyhow::Result<HashSet<Uuid>>;
 }
 
-/// The production implementation: the three 1:1 side-table repositories.
+/// The production implementation: the four side-table repositories.
 pub(super) struct RepoBindings {
     meraki: Arc<MerakiDeviceRepo>,
+    wireless: Arc<WirelessRepo>,
     url: Arc<UrlCheckRepo>,
     dns: Arc<DnsCheckRepo>,
 }
@@ -79,10 +84,16 @@ pub(super) struct RepoBindings {
 impl RepoBindings {
     pub(super) const fn new(
         meraki: Arc<MerakiDeviceRepo>,
+        wireless: Arc<WirelessRepo>,
         url: Arc<UrlCheckRepo>,
         dns: Arc<DnsCheckRepo>,
     ) -> Self {
-        Self { meraki, url, dns }
+        Self {
+            meraki,
+            wireless,
+            url,
+            dns,
+        }
     }
 }
 
@@ -90,6 +101,10 @@ impl RepoBindings {
 impl MonitorBindings for RepoBindings {
     async fn meraki_bound(&self, node: Uuid) -> anyhow::Result<bool> {
         Ok(self.meraki.get(node).await?.is_some())
+    }
+
+    async fn wireless_ap_bound(&self, node: Uuid) -> anyhow::Result<bool> {
+        self.wireless.is_ap_node(node).await
     }
 
     async fn url_config(&self, node: Uuid) -> anyhow::Result<Option<UrlCheckConfig>> {

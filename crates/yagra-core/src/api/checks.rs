@@ -253,7 +253,7 @@ async fn reject_conflicting_monitor<K: CheckKind>(
 
 /// The single-purpose rows a node carries right now.
 ///
-/// Unlike the scheduler's per-sweep resolution, this pays for all three lookups: it runs on an
+/// Unlike the scheduler's per-sweep resolution, this pays for all four lookups: it runs on an
 /// operator write, not in the hot loop, and a guard that skips a lookup is a guard with a hole.
 async fn current_node_rows(admin: &AdminState, node_id: Uuid) -> Result<NodeRows, ApiError> {
     let failed = |what: &'static str| {
@@ -262,6 +262,11 @@ async fn current_node_rows(admin: &AdminState, node_id: Uuid) -> Result<NodeRows
         }
     };
     Ok(NodeRows {
+        wireless_ap: admin
+            .wireless
+            .is_ap_node(node_id)
+            .await
+            .map_err(failed("wireless-ap conflict lookup"))?,
         meraki: admin
             .meraki_devices
             .get(node_id)

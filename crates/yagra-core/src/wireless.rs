@@ -21,7 +21,7 @@
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use sqlx::{PgPool, Row};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{ap_id, WlanApObservation, WlanApState, WlanFlavor, WlanInventory};
@@ -124,7 +124,7 @@ pub struct SightingRow {
     pub last_associated_at: Option<DateTime<Utc>>,
 }
 
-/// What a controller's last complete inventory said about itself.
+/// What a controller's last complete inventory said about itself, and how its APs are imported.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControllerRow {
     pub node_id: Uuid,
@@ -132,6 +132,53 @@ pub struct ControllerRow {
     pub aps_reported: i32,
     pub aps_truncated_at: Option<i32>,
     pub last_inventory_at: Option<DateTime<Utc>>,
+    /// Whether this controller's APs become nodes (ADR-064 決定 8). Off until an operator turns it on.
+    pub import_aps: bool,
+    /// The most APs this controller may import.
+    pub max_aps: i32,
+    /// Where its imported AP nodes are filed. `None` ⇒ a folder named after the controller.
+    pub ap_group_id: Option<Uuid>,
+    /// How many APs the cap left out on the importer's last pass.
+    pub aps_over_cap: i32,
+}
+
+/// What an operator sets on a controller (`PUT /api/v1/nodes/{node_id}/wireless-controller`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ControllerSettings {
+    pub import_aps: bool,
+    pub max_aps: i32,
+    pub ap_group_id: Option<Uuid>,
+}
+
+/// An imported AP's node and who serves it — what the ingest fan-out needs to publish the AP's
+/// numbers under its node (`wireless_fanout`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApBinding {
+    pub ap_id: Uuid,
+    pub node_id: Uuid,
+    pub owner: Option<Ownership>,
+}
+
+/// What one pass of the importer did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImportPass {
+    /// AP nodes created.
+    pub imported: u32,
+    /// APs eligible but left out by a controller's cap, summed over controllers.
+    pub over_cap: u32,
+}
+
+/// What importing one AP by hand did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportOne {
+    /// The AP is now the node with this id.
+    Imported(Uuid),
+    /// The AP already has this node; nothing was written.
+    AlreadyImported(Uuid),
+    /// No AP with that id.
+    NotFound,
+    /// No controller that reports it is still monitored, so there is nowhere to file it.
+    NoController,
 }
 
 /// Filters for [`WirelessRepo::list_page`].
@@ -139,6 +186,10 @@ pub struct ControllerRow {
 pub struct ApFilter {
     /// Only APs this controller node reports.
     pub controller_node: Option<Uuid>,
+    /// Only the AP imported as this node.
+    pub node: Option<Uuid>,
+    /// Only this AP.
+    pub ap: Option<Uuid>,
     pub state: Option<WlanApState>,
     /// A case-insensitive substring of the name, MAC, address or model. Matched literally —
     /// `%` and `_` are characters, not wildcards.
@@ -219,7 +270,7 @@ impl WirelessRepo {
         let ids: Vec<Uuid> = aps.iter().map(|a| ap_id(a.mac)).collect();
         let current_rows = sqlx::query(
             "SELECT ap_id, owner_controller_id, last_associated_at, run_state, state, clients, \
-                    host(ip) AS ip \
+                    host(ip) AS ip, name, node_id \
              FROM wireless_aps WHERE ap_id = ANY($1) FOR UPDATE",
         )
         .bind(&ids)
@@ -231,6 +282,8 @@ impl WirelessRepo {
             state: String,
             clients: Option<i32>,
             ip: Option<String>,
+            name: Option<String>,
+            node: Option<Uuid>,
         }
         let mut current: HashMap<Uuid, Current> = HashMap::with_capacity(current_rows.len());
         for row in current_rows {
@@ -249,6 +302,8 @@ impl WirelessRepo {
                     state: row.try_get("state")?,
                     clients: row.try_get("clients")?,
                     ip: row.try_get("ip")?,
+                    name: row.try_get("name")?,
+                    node: row.try_get("node_id")?,
                 },
             );
         }
@@ -272,6 +327,13 @@ impl WirelessRepo {
         let mut sight_run_state = Vec::with_capacity(n);
         let mut sight_clients: Vec<Option<i32>> = Vec::with_capacity(n);
         let mut sight_associated: Vec<Option<DateTime<Utc>>> = Vec::with_capacity(n);
+        // What an imported AP's node follows (ADR-064 increment B2): its name, while nobody has
+        // renamed the node, and its address, from the report that is accepted.
+        let mut rename_node: Vec<Uuid> = Vec::new();
+        let mut rename_to: Vec<String> = Vec::new();
+        let mut rename_from: Vec<String> = Vec::new();
+        let mut readdress_node: Vec<Uuid> = Vec::new();
+        let mut readdress_to: Vec<String> = Vec::new();
         for (ap, id) in aps.iter().zip(&ids) {
             let known = current.get(id);
             let verdict = ownership(
@@ -306,6 +368,21 @@ impl WirelessRepo {
                     col_state.push(ap.state.as_str().to_owned());
                     col_clients.push(clients);
                     col_ip.push(ap.ip.map(|ip| ip.to_string()));
+                }
+            }
+            if let Some((c, node)) = known.and_then(|c| c.node.map(|node| (c, node))) {
+                // The node was named after the AP (or its MAC) when it was imported. While it still
+                // carries the name the AP had, nobody has renamed it, so it follows the controller.
+                if let Some(new) = ap.name.as_ref().filter(|new| c.name.as_ref() != Some(*new)) {
+                    rename_node.push(node);
+                    rename_to.push(new.clone());
+                    rename_from.push(c.name.clone().unwrap_or_else(|| ap.mac.to_string()));
+                }
+                // Only a known address moves it: an AP that is down reports none, and the node keeps
+                // the last one rather than reading `0.0.0.0`.
+                if let Some(ip) = ap.ip.filter(|_| verdict.take_state) {
+                    readdress_node.push(node);
+                    readdress_to.push(ip.to_string());
                 }
             }
             col_owner.push(verdict.owner.map(|o| o.controller));
@@ -385,6 +462,30 @@ impl WirelessRepo {
         .bind(now)
         .execute(&mut *tx)
         .await?;
+
+        if !rename_node.is_empty() {
+            sqlx::query(
+                "UPDATE nodes SET name = u.new, updated_at = now() \
+                 FROM UNNEST($1::uuid[], $2::text[], $3::text[]) AS u(id, new, old) \
+                 WHERE nodes.id = u.id AND nodes.name = u.old",
+            )
+            .bind(&rename_node)
+            .bind(&rename_to)
+            .bind(&rename_from)
+            .execute(&mut *tx)
+            .await?;
+        }
+        if !readdress_node.is_empty() {
+            sqlx::query(
+                "UPDATE nodes SET address = u.ip::inet, updated_at = now() \
+                 FROM UNNEST($1::uuid[], $2::text[]) AS u(id, ip) \
+                 WHERE nodes.id = u.id AND nodes.address IS DISTINCT FROM u.ip::inet",
+            )
+            .bind(&readdress_node)
+            .bind(&readdress_to)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -427,6 +528,8 @@ impl WirelessRepo {
                     OR strpos(COALESCE(host(a.ip), ''), $4) > 0 \
                     OR strpos(lower(COALESCE(a.model, '')), lower($4)) > 0) \
                AND ($5::TEXT IS NULL OR (lower(COALESCE(a.name, a.mac)), a.ap_id) > ($5, $6)) \
+               AND ($8::UUID IS NULL OR a.node_id = $8) \
+               AND ($9::UUID IS NULL OR a.ap_id = $9) \
              ORDER BY lower(COALESCE(a.name, a.mac)), a.ap_id \
              LIMIT $7",
         )
@@ -437,6 +540,8 @@ impl WirelessRepo {
         .bind(after.as_ref().map(|(key, _)| key.clone()))
         .bind(after.map(|(_, id)| id))
         .bind(limit)
+        .bind(filter.node)
+        .bind(filter.ap)
         .fetch_all(&self.pool)
         .await?;
 
@@ -511,10 +616,11 @@ impl WirelessRepo {
             .to_lowercase()
     }
 
-    /// A controller's summary, when it has reported an inventory.
+    /// A controller's summary, when it has reported an inventory or been given import settings.
     pub async fn controller(&self, node_id: Uuid) -> anyhow::Result<Option<ControllerRow>> {
         let row = sqlx::query(
-            "SELECT node_id, flavor, aps_reported, aps_truncated_at, last_inventory_at \
+            "SELECT node_id, flavor, aps_reported, aps_truncated_at, last_inventory_at, import_aps, \
+                    max_aps, ap_group_id, aps_over_cap \
              FROM wireless_controllers WHERE node_id = $1",
         )
         .bind(node_id)
@@ -528,10 +634,316 @@ impl WirelessRepo {
                 aps_reported: row.try_get("aps_reported")?,
                 aps_truncated_at: row.try_get("aps_truncated_at")?,
                 last_inventory_at: row.try_get("last_inventory_at")?,
+                import_aps: row.try_get("import_aps")?,
+                max_aps: row.try_get("max_aps")?,
+                ap_group_id: row.try_get("ap_group_id")?,
+                aps_over_cap: row.try_get("aps_over_cap")?,
             })
         })
         .transpose()
     }
+
+    /// Store how a controller's APs are imported (ADR-064 決定 8).
+    ///
+    /// Upserts, because an operator may switch import on before the controller's first AP walk has
+    /// run — the row the walk would have created is created here instead, and the walk's upsert
+    /// leaves these three columns alone. `false` when the node no longer exists.
+    pub async fn set_controller_settings(
+        &self,
+        node_id: Uuid,
+        settings: ControllerSettings,
+    ) -> anyhow::Result<bool> {
+        let written = sqlx::query(
+            "INSERT INTO wireless_controllers (id, source, node_id, import_aps, max_aps, ap_group_id) \
+             VALUES ($1, 'snmp', $1, $2, $3, $4) \
+             ON CONFLICT (id) DO UPDATE SET \
+                 import_aps = EXCLUDED.import_aps, \
+                 max_aps = EXCLUDED.max_aps, \
+                 ap_group_id = EXCLUDED.ap_group_id, \
+                 updated_at = now()",
+        )
+        .bind(node_id)
+        .bind(settings.import_aps)
+        .bind(settings.max_aps)
+        .bind(settings.ap_group_id)
+        .execute(&self.pool)
+        .await;
+        match written {
+            Ok(_) => Ok(true),
+            Err(sqlx::Error::Database(db)) if db.is_foreign_key_violation() => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Of `ids`, the nodes that are imported access points — the `wireless_ap` input to
+    /// `NodeKind::resolve` for one page of nodes. Empty input asks nothing.
+    pub async fn filter_ap_nodes(&self, ids: &[Uuid]) -> anyhow::Result<HashSet<Uuid>> {
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let rows = sqlx::query("SELECT node_id FROM wireless_aps WHERE node_id = ANY($1)")
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| Ok(r.try_get::<Uuid, _>("node_id")?))
+            .collect()
+    }
+
+    /// Every imported AP's node — the scheduler's once-per-round preload, so no AP node is polled
+    /// per node (an AP is answered for by its controller, and its address is often `0.0.0.0`).
+    pub async fn ap_node_ids(&self) -> anyhow::Result<HashSet<Uuid>> {
+        let rows = sqlx::query("SELECT node_id FROM wireless_aps WHERE node_id IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| Ok(r.try_get::<Uuid, _>("node_id")?))
+            .collect()
+    }
+
+    /// Whether `node` is an imported access point.
+    pub async fn is_ap_node(&self, node: Uuid) -> anyhow::Result<bool> {
+        Ok(self.filter_ap_nodes(&[node]).await?.contains(&node))
+    }
+
+    /// Every imported AP with its node and serving controller — what the ingest fan-out restores
+    /// before it publishes anything, and refreshes while it runs.
+    pub async fn ap_bindings(&self) -> anyhow::Result<Vec<ApBinding>> {
+        let rows = sqlx::query(
+            "SELECT ap_id, node_id, owner_controller_id, last_associated_at \
+             FROM wireless_aps WHERE node_id IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let owner: Option<Uuid> = row.try_get("owner_controller_id")?;
+                let associated: Option<DateTime<Utc>> = row.try_get("last_associated_at")?;
+                Ok(ApBinding {
+                    ap_id: row.try_get("ap_id")?,
+                    node_id: row.try_get("node_id")?,
+                    owner: owner
+                        .zip(associated)
+                        .map(|(controller, last_associated_at)| Ownership {
+                            controller,
+                            last_associated_at,
+                        }),
+                })
+            })
+            .collect()
+    }
+
+    /// One pass of the importer (ADR-064 決定 8, 改訂 R7): every AP that has **ever** been in
+    /// service, is reported by a controller with import switched on, and has never been imported
+    /// becomes a node — up to each controller's cap.
+    ///
+    /// * **Which controller files it**: the one serving it when that one imports, otherwise the
+    ///   first reporting controller that does. So an HA pair with import on for both puts each AP
+    ///   under the member serving it, once.
+    /// * **An AP someone deleted stays deleted**: `imported_at` outlives the node (`ON DELETE SET
+    ///   NULL`), and an AP that carries it is never picked again. `POST …/import` is the way back.
+    /// * **The cap is shown, never silent**: an AP left out is counted into the controller's
+    ///   `aps_over_cap`, which the controller's page reads.
+    pub async fn import_pending(&self, now: DateTime<Utc>) -> anyhow::Result<ImportPass> {
+        let candidates = sqlx::query(
+            "SELECT a.ap_id, c.controller_id, c.max_aps \
+             FROM wireless_aps a \
+             JOIN LATERAL ( \
+                 SELECT wc.id AS controller_id, wc.max_aps \
+                 FROM wireless_ap_sightings s \
+                 JOIN wireless_controllers wc ON wc.id = s.controller_id \
+                 WHERE s.ap_id = a.ap_id AND wc.import_aps AND wc.node_id IS NOT NULL \
+                 ORDER BY (wc.id = a.owner_controller_id) DESC NULLS LAST, wc.id \
+                 LIMIT 1) c ON TRUE \
+             WHERE a.node_id IS NULL AND a.imported_at IS NULL \
+               AND a.last_associated_at IS NOT NULL \
+             ORDER BY c.controller_id, lower(COALESCE(a.name, a.mac)), a.ap_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let already: HashMap<Uuid, i64> = sqlx::query(
+            "SELECT s.controller_id, count(*) AS n \
+             FROM wireless_ap_sightings s \
+             JOIN wireless_aps a ON a.ap_id = s.ap_id \
+             WHERE a.node_id IS NOT NULL \
+             GROUP BY s.controller_id",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.try_get("controller_id")?, row.try_get("n")?)))
+        .collect::<anyhow::Result<_>>()?;
+
+        let mut pass = ImportPass::default();
+        let mut used: HashMap<Uuid, i64> = HashMap::new();
+        let mut over: HashMap<Uuid, i32> = HashMap::new();
+        for row in candidates {
+            let ap: Uuid = row.try_get("ap_id")?;
+            let controller: Uuid = row.try_get("controller_id")?;
+            let max_aps: i32 = row.try_get("max_aps")?;
+            let taken = used
+                .entry(controller)
+                .or_insert_with(|| already.get(&controller).copied().unwrap_or(0));
+            if *taken >= i64::from(max_aps) {
+                *over.entry(controller).or_default() += 1;
+                pass.over_cap += 1;
+                continue;
+            }
+            if self.import_ap(ap, controller, now).await? {
+                *taken += 1;
+                pass.imported += 1;
+            }
+        }
+        let (ids, counts): (Vec<Uuid>, Vec<i32>) = over.into_iter().unzip();
+        sqlx::query(
+            "UPDATE wireless_controllers c \
+             SET aps_over_cap = COALESCE(u.over, 0), updated_at = now() \
+             FROM wireless_controllers wc \
+             LEFT JOIN UNNEST($1::uuid[], $2::int4[]) AS u(id, over) ON u.id = wc.id \
+             WHERE c.id = wc.id AND c.aps_over_cap IS DISTINCT FROM COALESCE(u.over, 0)",
+        )
+        .bind(&ids)
+        .bind(&counts)
+        .execute(&self.pool)
+        .await?;
+        Ok(pass)
+    }
+
+    /// Import one AP by hand, whatever its state, its controller's switch or an earlier deletion —
+    /// an operator asking for one AP is the decision the importer otherwise waits for.
+    pub async fn import_one(&self, ap: Uuid, now: DateTime<Utc>) -> anyhow::Result<ImportOne> {
+        let row = sqlx::query(
+            "SELECT a.node_id, c.controller_id \
+             FROM wireless_aps a \
+             LEFT JOIN LATERAL ( \
+                 SELECT wc.id AS controller_id \
+                 FROM wireless_ap_sightings s \
+                 JOIN wireless_controllers wc ON wc.id = s.controller_id \
+                 WHERE s.ap_id = a.ap_id AND wc.node_id IS NOT NULL \
+                 ORDER BY (wc.id = a.owner_controller_id) DESC NULLS LAST, s.last_seen DESC \
+                 LIMIT 1) c ON TRUE \
+             WHERE a.ap_id = $1",
+        )
+        .bind(ap)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(ImportOne::NotFound);
+        };
+        if let Some(node) = row.try_get::<Option<Uuid>, _>("node_id")? {
+            return Ok(ImportOne::AlreadyImported(node));
+        }
+        let Some(controller) = row.try_get::<Option<Uuid>, _>("controller_id")? else {
+            return Ok(ImportOne::NoController);
+        };
+        if self.import_ap(ap, controller, now).await? {
+            return Ok(ImportOne::Imported(ap));
+        }
+        // Lost a race with the importer or another request: report what is there now.
+        let node: Option<Uuid> =
+            sqlx::query_scalar("SELECT node_id FROM wireless_aps WHERE ap_id = $1")
+                .bind(ap)
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten();
+        Ok(node.map_or(ImportOne::NotFound, ImportOne::AlreadyImported))
+    }
+
+    /// Create AP `ap`'s node, filed for `controller`, in one transaction. `false` when the AP was
+    /// imported (or its controller removed) since it was picked.
+    ///
+    /// The node's id **is** the AP id — MAC-derived, so the same AP is the same node whichever
+    /// controller files it, and a re-import after a deletion brings back its history. Its address is
+    /// the AP's, or `0.0.0.0` while the controller reports none; nothing polls it either way.
+    async fn import_ap(
+        &self,
+        ap: Uuid,
+        controller: Uuid,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT a.mac, a.name, host(a.ip) AS ip, a.model, wc.flavor, wc.ap_group_id, \
+                    n.name AS controller_name, n.group_id AS controller_group \
+             FROM wireless_aps a \
+             JOIN wireless_controllers wc ON wc.id = $2 \
+             JOIN nodes n ON n.id = wc.node_id \
+             WHERE a.ap_id = $1 AND a.node_id IS NULL \
+             FOR UPDATE OF a",
+        )
+        .bind(ap)
+        .bind(controller)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let mac: String = row.try_get("mac")?;
+        let name: Option<String> = row.try_get("name")?;
+        let ip: Option<String> = row.try_get("ip")?;
+        let flavor: Option<String> = row.try_get("flavor")?;
+        let folder = match row.try_get::<Option<Uuid>, _>("ap_group_id")? {
+            Some(group) => group,
+            None => {
+                let controller_name: String = row.try_get("controller_name")?;
+                let folder = Uuid::new_v5(
+                    &yagra_common::WLAN_AP_NS,
+                    format!("ap-folder:{controller}").as_bytes(),
+                );
+                sqlx::query(
+                    "INSERT INTO node_groups (id, name, group_type, parent_id) \
+                     VALUES ($1, $2, 'generic', $3) ON CONFLICT (id) DO NOTHING",
+                )
+                .bind(folder)
+                .bind(ap_folder_name(&controller_name))
+                .bind(row.try_get::<Option<Uuid>, _>("controller_group")?)
+                .execute(&mut *tx)
+                .await?;
+                folder
+            }
+        };
+        sqlx::query(
+            "INSERT INTO nodes (id, name, address, profile_id, vendor, model, group_id) \
+             VALUES ($1, $2, $3::inet, (SELECT id FROM profiles WHERE id = $4), $5, $6, $7) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(ap)
+        .bind(name.unwrap_or_else(|| mac.clone()))
+        .bind(ip.unwrap_or_else(|| "0.0.0.0".to_owned()))
+        .bind(wireless_ap_profile_id())
+        .bind(
+            flavor
+                .as_deref()
+                .and_then(WlanFlavor::from_token)
+                .map(WlanFlavor::vendor),
+        )
+        .bind(row.try_get::<Option<String>, _>("model")?)
+        .bind(folder)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE wireless_aps SET node_id = $1, imported_at = $2 WHERE ap_id = $1")
+            .bind(ap)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+}
+
+/// The folder a controller's imported APs are filed in when none was chosen.
+fn ap_folder_name(controller: &str) -> String {
+    format!("{controller} APs")
+}
+
+/// The seed id of the built-in "Wireless AP (via controller)" profile — every imported AP node
+/// carries it. `None` only if the profile were dropped from the built-in list, which the ordering
+/// test in `yagra-common` would refuse first.
+fn wireless_ap_profile_id() -> Option<Uuid> {
+    yagra_common::builtin_profiles()
+        .iter()
+        .position(|p| p.name == yagra_common::WIRELESS_AP_PROFILE)
+        .map(|i| crate::seed_ids::SeedRange::Profiles.id(i))
 }
 
 #[cfg(test)]
@@ -963,5 +1375,209 @@ mod tests {
         );
         let summary = repo.controller(wac).await.unwrap().unwrap();
         assert_eq!(summary.aps_reported, 0);
+    }
+
+    /// The importer (ADR-064 決定 8, 改訂 R7): nothing while import is off; with it on, only APs that
+    /// have been in service, up to the cap, with the rest counted; each under the member of a pair
+    /// that serves it; and an AP whose node someone deleted is never brought back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_importer_takes_in_service_aps_up_to_the_cap_and_never_undoes_a_deletion(
+        pool: sqlx::PgPool,
+    ) {
+        let site = pgtest::group(&pool, "site").await;
+        let active = pgtest::node(&pool, "wac001", 1, Some(site)).await;
+        let standby = pgtest::node(&pool, "wac002", 2, Some(site)).await;
+        let repo = WirelessRepo::new(pool.clone());
+        let up = |n: u8, name: &str| {
+            observation(
+                [0, 0, 0, 0, 1, n],
+                name,
+                "normal",
+                WlanApState::Associated,
+                1,
+            )
+        };
+        let backup = |n: u8, name: &str| {
+            observation([0, 0, 0, 0, 1, n], name, "standby", WlanApState::Backup, 1)
+        };
+        let fault = observation(
+            [0, 0, 0, 0, 2, 1],
+            "never",
+            "fault",
+            WlanApState::NotAssociated,
+            0,
+        );
+        repo.record_inventory(
+            standby,
+            &inventory(vec![
+                backup(1, "a"),
+                backup(2, "b"),
+                backup(3, "c"),
+                fault.clone(),
+            ]),
+            at(0),
+        )
+        .await
+        .unwrap();
+        repo.record_inventory(
+            active,
+            &inventory(vec![up(1, "a"), up(2, "b"), up(3, "c"), fault]),
+            at(1),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            repo.import_pending(at(2)).await.unwrap(),
+            ImportPass::default()
+        );
+        assert_eq!(
+            pgtest::rows(&pool, "nodes").await,
+            2,
+            "import is off by default"
+        );
+
+        for node in [active, standby] {
+            assert!(repo
+                .set_controller_settings(
+                    node,
+                    ControllerSettings {
+                        import_aps: true,
+                        max_aps: 2,
+                        ap_group_id: None,
+                    },
+                )
+                .await
+                .unwrap());
+        }
+        let pass = repo.import_pending(at(3)).await.unwrap();
+        assert_eq!(
+            pass,
+            ImportPass {
+                imported: 2,
+                over_cap: 1
+            },
+            "three in service, cap two; the never-in-service AP is not a candidate"
+        );
+        let ap_nodes = repo.ap_node_ids().await.unwrap();
+        assert_eq!(ap_nodes.len(), 2);
+        assert_eq!(
+            repo.controller(active).await.unwrap().unwrap().aps_over_cap,
+            1
+        );
+        // Filed under the member serving them — in a folder beside it named after it.
+        let folders: Vec<(String, Option<Uuid>)> = sqlx::query_as(
+            "SELECT DISTINCT g.name, g.parent_id FROM nodes n JOIN node_groups g ON g.id = n.group_id \
+             WHERE n.id = ANY($1)",
+        )
+        .bind(ap_nodes.iter().copied().collect::<Vec<_>>())
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(folders, vec![("wac001 APs".to_owned(), Some(site))]);
+        let bindings = repo.ap_bindings().await.unwrap();
+        assert!(
+            bindings
+                .iter()
+                .all(|b| b.owner.map(|o| o.controller) == Some(active)),
+            "{bindings:?}"
+        );
+
+        // Delete one imported AP's node and raise the cap: the other two come in, the deleted
+        // one does not.
+        let deleted = *ap_nodes.iter().next().unwrap();
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(deleted)
+            .execute(&pool)
+            .await
+            .unwrap();
+        repo.set_controller_settings(
+            active,
+            ControllerSettings {
+                import_aps: true,
+                max_aps: 1024,
+                ap_group_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let pass = repo.import_pending(at(4)).await.unwrap();
+        assert_eq!(pass.imported, 1, "only the AP the cap left out");
+        let now_nodes = repo.ap_node_ids().await.unwrap();
+        assert!(!now_nodes.contains(&deleted), "a deleted AP node came back");
+        assert_eq!(
+            repo.controller(active).await.unwrap().unwrap().aps_over_cap,
+            0
+        );
+        // …but asking for it by hand does.
+        assert_eq!(
+            repo.import_one(deleted, at(5)).await.unwrap(),
+            ImportOne::Imported(deleted)
+        );
+        assert!(repo.is_ap_node(deleted).await.unwrap());
+    }
+
+    /// An imported AP's node follows the controller's name for it until someone renames the node,
+    /// and follows its address from the report that stands — never blanking it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_ap_node_follows_its_name_until_renamed_and_keeps_its_last_address(
+        pool: sqlx::PgPool,
+    ) {
+        let wac = pgtest::node(&pool, "wac", 1, None).await;
+        let repo = WirelessRepo::new(pool.clone());
+        let mac = [0, 0, 0, 0, 3, 1];
+        let ap = ap_id(ApMac::new(mac));
+        let mut obs = observation(mac, "old-name", "normal", WlanApState::Associated, 1);
+        repo.record_inventory(wac, &inventory(vec![obs.clone()]), at(0))
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.import_one(ap, at(1)).await.unwrap(),
+            ImportOne::Imported(ap)
+        );
+        let read = |pool: sqlx::PgPool| async move {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT name, host(address) FROM nodes WHERE id = $1",
+            )
+            .bind(ap)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(
+            read(pool.clone()).await,
+            ("old-name".into(), "10.0.0.27".into())
+        );
+
+        obs.name = Some("new-name".into());
+        obs.ip = Some("10.0.0.28".parse().unwrap());
+        repo.record_inventory(wac, &inventory(vec![obs.clone()]), at(300))
+            .await
+            .unwrap();
+        assert_eq!(
+            read(pool.clone()).await,
+            ("new-name".into(), "10.0.0.28".into())
+        );
+
+        // The AP goes down: no address reported, and the node keeps the last one.
+        let down = observation(mac, "new-name", "fault", WlanApState::NotAssociated, 0);
+        repo.record_inventory(wac, &inventory(vec![down]), at(600))
+            .await
+            .unwrap();
+        assert_eq!(read(pool.clone()).await.1, "10.0.0.28");
+
+        // An operator renames the node: the controller's next rename no longer reaches it.
+        sqlx::query("UPDATE nodes SET name = 'lobby' WHERE id = $1")
+            .bind(ap)
+            .execute(&pool)
+            .await
+            .unwrap();
+        obs.name = Some("renamed-on-controller".into());
+        repo.record_inventory(wac, &inventory(vec![obs]), at(900))
+            .await
+            .unwrap();
+        assert_eq!(read(pool).await.0, "lobby");
     }
 }

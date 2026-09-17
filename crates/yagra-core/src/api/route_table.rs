@@ -1274,6 +1274,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "PUT",
+        "/api/v1/nodes/:node_id/wireless-controller",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/nodes/by-group",
         GroupFiltered,
@@ -1961,6 +1967,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/version",
         DEPLOY_WIDE,
         Tool("get_system_health"),
+    ),
+    (
+        "POST",
+        "/api/v1/wireless/aps/:ap_id/import",
+        // The AP must be one the list would show this caller: reported by a controller it can see.
+        GroupFiltered,
+        NO_MCP_WRITE,
     ),
     (
         "GET",

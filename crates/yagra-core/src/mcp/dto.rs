@@ -441,6 +441,10 @@ pub struct NodeStatusDto {
     /// Whether a person fixed this node's profile, so reclassification never offers to change it
     /// (ADR-140). Mirrors `NodeDetail.profile_locked`, a sibling of `node` for the reason `notes` is.
     pub profile_locked: bool,
+    /// What this node is to the wireless inventory (ADR-064): a controller's AP inventory and
+    /// import settings, or an imported AP's entry in the AP list. Mirrors `NodeDetail.wireless`,
+    /// from the same function, so a scoped caller's controllers are narrowed the same way.
+    pub wireless: Option<crate::api::wireless::NodeWireless>,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -1014,6 +1018,46 @@ mod tests {
             os_version: Some("15.0(2a)EX5".to_owned()),
             serial_number: Some("FCW1929B68S, FCW1931A06Z".to_owned()),
             profile_locked: true,
+            // Populated, both halves: the canary sees only the keys an instance fills.
+            wireless: Some(crate::api::wireless::NodeWireless {
+                controller: Some(crate::api::wireless::WirelessControllerSummary {
+                    node_id: uuid::Uuid::nil(),
+                    flavor: Some(yagra_common::WlanFlavor::Huawei),
+                    aps_reported: 38,
+                    aps_truncated_at: Some(3000),
+                    last_inventory_at: Some(unix_s_to_rfc3339(0)),
+                    import_aps: true,
+                    max_aps: 1024,
+                    ap_group_id: Some(uuid::Uuid::nil()),
+                    aps_over_cap: 2,
+                }),
+                ap: Some(crate::api::wireless::WirelessApRow {
+                    ap_id: uuid::Uuid::nil(),
+                    mac: "54:f6:e2:0a:02:80".to_owned(),
+                    name: Some("floor-2-east".to_owned()),
+                    serial: Some("2102353VUR10P5000123".to_owned()),
+                    model: Some("AirEngine5776-26".to_owned()),
+                    sw_version: Some("V600R024C00SPC100".to_owned()),
+                    ip: Some("10.0.0.27".to_owned()),
+                    vendor_group: Some("default".to_owned()),
+                    state: Some(yagra_common::WlanApState::Associated),
+                    run_state: "normal".to_owned(),
+                    clients: Some(4),
+                    node_id: Some(uuid::Uuid::nil()),
+                    controller_node_id: Some(uuid::Uuid::nil()),
+                    first_seen: unix_s_to_rfc3339(0),
+                    last_seen: unix_s_to_rfc3339(0),
+                    last_associated_at: Some(unix_s_to_rfc3339(0)),
+                    reported_by: vec![crate::api::wireless::WirelessApSighting {
+                        controller_node_id: Some(uuid::Uuid::nil()),
+                        state: Some(yagra_common::WlanApState::Backup),
+                        run_state: "standby".to_owned(),
+                        clients: Some(4),
+                        last_seen: unix_s_to_rfc3339(0),
+                        last_associated_at: None,
+                    }],
+                }),
+            }),
             interfaces: vec![InterfaceDto {
                 ifindex: 1,
                 name: Some("Gig0/1".to_owned()),
