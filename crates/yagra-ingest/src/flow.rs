@@ -4,8 +4,8 @@
 //! Devices export **flow records** (who talked to whom, on which port/protocol, how much) as
 //! passive UDP datagrams — the same class of edge intake as syslog/traps. NetFlow v9 and IPFIX
 //! are **template-based**: a template FlowSet/Set defines the field layout, and later data records
-//! are decoded against the cached template. [`FlowTemplates`] holds that cache (bounded, FIFO
-//! eviction) keyed by `(exporter, observation-domain, template-id)`.
+//! are decoded against the cached template. [`FlowTemplates`] holds that cache (bounded per exporter
+//! and in total) keyed by `(exporter, observation-domain, template-id)`.
 //!
 //! The raw flow tuple `(src ip × dst ip × src port × dst port × proto)` is **extreme cardinality**
 //! and must never reach the TSDB (CLAUDE.md §7.1). [`FlowAggregator`] folds identical tuples within
@@ -20,7 +20,7 @@
 //! datagram shape on its own port** and is decoded by [`parse_sflow`], including sampling-rate scale
 //! correction, so both feed the same [`RawFlow`] downstream.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
@@ -32,8 +32,18 @@ pub const DEFAULT_FLOW_TOP_N: usize = 500;
 /// Caps aggregator memory against a source-cycling flood, mirroring the rate limiter's source cap.
 pub(crate) const MAX_AGG_KEYS: usize = 100_000;
 
-/// Upper bound on cached templates (across all exporters). FIFO eviction beyond this.
+/// Upper bound on cached templates (across all exporters). Beyond it, the exporter holding the most
+/// gives up its oldest.
 pub(crate) const MAX_TEMPLATES: usize = 8_192;
+
+/// Upper bound on templates cached for one exporter address. Beyond it, that exporter's own oldest
+/// goes. Well past what a real exporter defines, and small enough that one source cannot reach
+/// [`MAX_TEMPLATES`] by itself (ADR-158 B1).
+pub(crate) const MAX_TEMPLATES_PER_EXPORTER: usize = 512;
+
+/// Upper bound on templates one datagram may *add* (a re-sent template it already holds costs
+/// nothing). An 8-byte template record meant one datagram could define 8,000 of them.
+pub(crate) const MAX_TEMPLATES_PER_DATAGRAM: usize = 128;
 
 /// Upper bound on flow records decoded from a single datagram (a crafted-packet backstop).
 pub(crate) const MAX_RECORDS_PER_DATAGRAM: usize = 8_192;
@@ -174,16 +184,46 @@ pub struct TemplateStats {
     pub rejected_oversized: u64,
     /// Zero-field template records (IPFIX withdrawals). Skipped: nothing is deleted on their say-so.
     pub withdrawals_ignored: u64,
+    /// New templates past one datagram's allowance ([`MAX_TEMPLATES_PER_DATAGRAM`]). Not stored.
+    pub rejected_datagram_cap: u64,
+    /// Stored templates evicted because their exporter reached [`MAX_TEMPLATES_PER_EXPORTER`] —
+    /// always that exporter's own oldest.
+    pub evicted_exporter_quota: u64,
+    /// Stored templates evicted because the whole cache reached its capacity — the oldest of the
+    /// exporter holding the most.
+    pub evicted_global_cap: u64,
+}
+
+/// Where one template lives inside its exporter's share of the cache.
+type LocalKey = (u32, u16);
+
+/// One exporter address's templates, in the order they were first defined.
+#[derive(Default)]
+struct ExporterTemplates {
+    map: HashMap<LocalKey, Vec<TemplateField>>,
+    order: VecDeque<LocalKey>,
 }
 
 /// Bounded cache of NetFlow v9 / IPFIX templates. Keyed by `(exporter, observation-domain,
-/// template-id)`; FIFO eviction at [`MAX_TEMPLATES`] so a template-churning flood can't grow memory
-/// unbounded. Data records whose template has not been seen yet are simply skipped (standard flow
-/// behaviour — the exporter re-sends templates periodically).
+/// template-id)`. Data records whose template has not been seen yet are simply skipped (standard
+/// flow behaviour — the exporter re-sends templates periodically).
+///
+/// Three bounds, so one source cannot push out everybody else's templates (ADR-158 B1). One
+/// datagram adds at most [`MAX_TEMPLATES_PER_DATAGRAM`]; one exporter holds at most
+/// [`MAX_TEMPLATES_PER_EXPORTER`] and makes room from its own oldest; and when the whole cache is
+/// full, the exporter holding the most gives up its oldest. It used to be one arrival order for all
+/// exporters, which two large datagrams from one source emptied of everyone else.
+///
+/// ⚠️ **This does not stop a flood with forged source addresses.** Sixteen addresses at their quota
+/// fill the cache again. The defence against that is an ACL on the collector port; this bounds a
+/// broken or compromised exporter.
 pub struct FlowTemplates {
-    map: HashMap<TemplateKey, Vec<TemplateField>>,
-    order: VecDeque<TemplateKey>,
+    exporters: HashMap<IpAddr, ExporterTemplates>,
+    /// `(templates held, exporter)` for every exporter holding any — the largest is the last.
+    by_size: BTreeSet<(usize, IpAddr)>,
+    total: usize,
     cap: usize,
+    per_exporter: usize,
     stats: TemplateStats,
 }
 
@@ -200,13 +240,21 @@ impl FlowTemplates {
         Self::default()
     }
 
-    /// New cache with an explicit capacity.
+    /// New cache with an explicit total capacity and the default per-exporter quota.
     #[must_use]
     pub fn with_capacity(cap: usize) -> Self {
+        Self::with_limits(cap, MAX_TEMPLATES_PER_EXPORTER)
+    }
+
+    /// New cache with both bounds explicit.
+    #[must_use]
+    pub(crate) fn with_limits(cap: usize, per_exporter: usize) -> Self {
         Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
+            exporters: HashMap::new(),
+            by_size: BTreeSet::new(),
+            total: 0,
             cap: cap.max(1),
+            per_exporter: per_exporter.max(1),
             stats: TemplateStats::default(),
         }
     }
@@ -217,32 +265,87 @@ impl FlowTemplates {
         std::mem::take(&mut self.stats)
     }
 
+    fn contains(&self, key: &TemplateKey) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Store a template. Replacing one already held is free; a new one first makes room, from the
+    /// exporter's own oldest when it is at its quota, otherwise from the largest holder when the
+    /// cache is full.
     fn insert(&mut self, key: TemplateKey, fields: Vec<TemplateField>) {
-        if !self.map.contains_key(&key) {
-            if self.map.len() >= self.cap {
-                if let Some(oldest) = self.order.pop_front() {
-                    self.map.remove(&oldest);
-                }
-            }
-            self.order.push_back(key);
+        let local = (key.domain, key.template_id);
+        if let Some(slot) = self
+            .exporters
+            .get_mut(&key.exporter)
+            .and_then(|e| e.map.get_mut(&local))
+        {
+            *slot = fields;
+            return;
         }
-        self.map.insert(key, fields);
+        if self.held_by(key.exporter) >= self.per_exporter {
+            self.evict_oldest_of(key.exporter);
+            self.stats.evicted_exporter_quota = self.stats.evicted_exporter_quota.saturating_add(1);
+        } else if self.total >= self.cap {
+            if let Some(&(_, largest)) = self.by_size.last() {
+                self.evict_oldest_of(largest);
+                self.stats.evicted_global_cap = self.stats.evicted_global_cap.saturating_add(1);
+            }
+        }
+        let held = self.held_by(key.exporter);
+        let exporter = self.exporters.entry(key.exporter).or_default();
+        exporter.map.insert(local, fields);
+        exporter.order.push_back(local);
+        self.resize(key.exporter, held, held + 1);
+        self.total += 1;
+    }
+
+    fn held_by(&self, exporter: IpAddr) -> usize {
+        self.exporters.get(&exporter).map_or(0, |e| e.map.len())
+    }
+
+    fn evict_oldest_of(&mut self, exporter: IpAddr) {
+        let Some(templates) = self.exporters.get_mut(&exporter) else {
+            return;
+        };
+        let held = templates.map.len();
+        let Some(oldest) = templates.order.pop_front() else {
+            return;
+        };
+        templates.map.remove(&oldest);
+        if templates.map.is_empty() {
+            self.exporters.remove(&exporter);
+        }
+        self.resize(exporter, held, held - 1);
+        self.total -= 1;
+    }
+
+    /// Move `exporter` in the size index from `from` templates to `to`.
+    fn resize(&mut self, exporter: IpAddr, from: usize, to: usize) {
+        if from > 0 {
+            self.by_size.remove(&(from, exporter));
+        }
+        if to > 0 {
+            self.by_size.insert((to, exporter));
+        }
     }
 
     fn get(&self, key: &TemplateKey) -> Option<&Vec<TemplateField>> {
-        self.map.get(key)
+        self.exporters
+            .get(&key.exporter)?
+            .map
+            .get(&(key.domain, key.template_id))
     }
 
     /// Number of cached templates (test/observability).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.total
     }
 
     /// Whether the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.total == 0
     }
 }
 
@@ -457,6 +560,7 @@ fn parse_netflow_v9(
     let domain = u32::from_be_bytes([datagram[16], datagram[17], datagram[18], datagram[19]]);
     let mut reader = Reader::new(&datagram[20..]);
     let mut out = Vec::new();
+    let mut allowance = MAX_TEMPLATES_PER_DATAGRAM;
 
     while reader.remaining() >= 4 {
         let flowset_id = reader.u16().ok_or(FlowError::Truncated)?;
@@ -477,6 +581,7 @@ fn parse_netflow_v9(
                 domain,
                 content,
                 TemplateDialect::NetflowV9,
+                &mut allowance,
             ),
             1 => { /* options template — not decoded this increment */ }
             id if id >= 256 => {
@@ -506,12 +611,16 @@ fn parse_netflow_v9(
 ///   another exporter's template, and an exporter re-sends what it still uses.
 /// - **A record with an id below 256 ends the set.** No template may use one (RFC 3954 / RFC 7011),
 ///   so it is padding or garbage — and zero padding must not be counted as a withdrawal.
+///
+/// `allowance` is how many *new* templates the rest of this datagram may still add; a template the
+/// cache already holds is replaced without spending it (B1).
 fn parse_template_set(
     templates: &mut FlowTemplates,
     exporter: IpAddr,
     domain: u32,
     content: &[u8],
     dialect: TemplateDialect,
+    allowance: &mut usize,
 ) {
     let mut r = Reader::new(content);
     while r.remaining() >= 4 {
@@ -566,14 +675,20 @@ fn parse_template_set(
                 templates.stats.rejected_oversized.saturating_add(1);
             continue;
         }
-        templates.insert(
-            TemplateKey {
-                exporter,
-                domain,
-                template_id,
-            },
-            fields,
-        );
+        let key = TemplateKey {
+            exporter,
+            domain,
+            template_id,
+        };
+        if !templates.contains(&key) {
+            if *allowance == 0 {
+                templates.stats.rejected_datagram_cap =
+                    templates.stats.rejected_datagram_cap.saturating_add(1);
+                continue;
+            }
+            *allowance -= 1;
+        }
+        templates.insert(key, fields);
     }
 }
 
@@ -592,6 +707,7 @@ fn parse_ipfix(
     let end = msg_len.clamp(16, datagram.len());
     let mut reader = Reader::new(&datagram[16..end]);
     let mut out = Vec::new();
+    let mut allowance = MAX_TEMPLATES_PER_DATAGRAM;
 
     while reader.remaining() >= 4 {
         let set_id = reader.u16().ok_or(FlowError::Truncated)?;
@@ -604,7 +720,14 @@ fn parse_ipfix(
             None => break,
         };
         match set_id {
-            2 => parse_template_set(templates, exporter, domain, content, TemplateDialect::Ipfix),
+            2 => parse_template_set(
+                templates,
+                exporter,
+                domain,
+                content,
+                TemplateDialect::Ipfix,
+                &mut allowance,
+            ),
             3 => { /* options template — not decoded this increment */ }
             id if id >= 256 => {
                 decode_data_records(templates, exporter, domain, id, content, &mut out);
@@ -2061,6 +2184,156 @@ mod tests {
             let _ = parse_flow_export(&mut t, exporter, &pkt);
         }
         assert!(t.len() <= 4);
+    }
+
+    /// A template FlowSet holding `count` one-field templates from `first_id` on — 8 bytes each,
+    /// the cheapest definition the format allows.
+    fn many_templates(first_id: u16, count: u16) -> Vec<u8> {
+        (first_id..first_id + count)
+            .map(|id| template_record(id, &[(IE_OCTET_DELTA, 4)]))
+            .collect::<Vec<_>>()
+            .concat()
+    }
+
+    /// Two maximum-size datagrams from one exporter used to define 16,200 templates in an 8,192
+    /// entry cache kept in one arrival order, pushing out every other exporter's (ADR-158 B1).
+    /// Each exporter's flows then stopped until its next template refresh — 1 to 30 minutes.
+    #[test]
+    fn one_exporter_cannot_evict_anothers_templates() {
+        let quiet = v4(192, 0, 2, 1);
+        let noisy = v4(198, 51, 100, 9);
+        let mut t = FlowTemplates::new();
+        let define = nf9_with_sets(&[flow_set(0, &template_record(301, &SMALL_TEMPLATE))]);
+        parse_flow_export(&mut t, quiet, &define).unwrap();
+
+        for round in 0..2u16 {
+            let pkt = nf9_with_sets(&[flow_set(0, &many_templates(400 + round * 8_100, 8_100))]);
+            assert!(pkt.len() <= 65_507, "must fit in one UDP datagram");
+            parse_flow_export(&mut t, noisy, &pkt).unwrap();
+        }
+
+        let data = nf9_with_sets(&[flow_set(301, &small_record(9))]);
+        let flows = parse_flow_export(&mut t, quiet, &data).unwrap();
+        assert_eq!(flows.len(), 1, "the quiet exporter's template survived");
+        assert!(t.len() <= 1 + MAX_TEMPLATES_PER_EXPORTER);
+    }
+
+    /// One datagram may add at most [`MAX_TEMPLATES_PER_DATAGRAM`] new templates, across all of its
+    /// template sets; the next datagram gets its own allowance.
+    #[test]
+    fn a_single_datagram_defines_at_most_the_per_datagram_cap() {
+        let exporter = v4(192, 0, 2, 1);
+        let mut t = FlowTemplates::new();
+        let pkt = nf9_with_sets(&[
+            flow_set(0, &many_templates(300, 500)),
+            flow_set(0, &many_templates(800, 500)),
+        ]);
+        parse_flow_export(&mut t, exporter, &pkt).unwrap();
+        assert_eq!(t.len(), MAX_TEMPLATES_PER_DATAGRAM);
+        assert_eq!(
+            t.take_stats().rejected_datagram_cap,
+            (1_000 - MAX_TEMPLATES_PER_DATAGRAM) as u64
+        );
+
+        let next = nf9_with_sets(&[flow_set(0, &many_templates(2_000, 200))]);
+        parse_flow_export(&mut t, exporter, &next).unwrap();
+        assert_eq!(t.len(), 2 * MAX_TEMPLATES_PER_DATAGRAM);
+    }
+
+    /// An exporter at its quota makes room from its own templates, oldest first, and nobody
+    /// else's.
+    #[test]
+    fn an_exporter_at_its_quota_evicts_its_own_oldest() {
+        let a = v4(192, 0, 2, 1);
+        let b = v4(192, 0, 2, 2);
+        let mut t = FlowTemplates::with_limits(16, 3);
+        let theirs = nf9_with_sets(&[flow_set(0, &template_record(301, &SMALL_TEMPLATE))]);
+        parse_flow_export(&mut t, b, &theirs).unwrap();
+        let ours: Vec<u8> = (301..=304)
+            .map(|id| template_record(id, &SMALL_TEMPLATE))
+            .collect::<Vec<_>>()
+            .concat();
+        parse_flow_export(&mut t, a, &nf9_with_sets(&[flow_set(0, &ours)])).unwrap();
+
+        let decoded = |t: &mut FlowTemplates, exporter, id| {
+            let pkt = nf9_with_sets(&[flow_set(id, &small_record(1))]);
+            parse_flow_export(t, exporter, &pkt).unwrap().len()
+        };
+        assert_eq!(decoded(&mut t, a, 301), 0, "a's oldest made room");
+        assert_eq!(decoded(&mut t, a, 304), 1);
+        assert_eq!(
+            decoded(&mut t, b, 301),
+            1,
+            "b's same-numbered template is untouched"
+        );
+        assert_eq!(t.len(), 4);
+        let stats = t.take_stats();
+        assert_eq!(
+            (stats.evicted_exporter_quota, stats.evicted_global_cap),
+            (1, 0)
+        );
+    }
+
+    /// Re-sending a template it already holds is what every exporter does all day. It uses no
+    /// allowance and evicts nothing, however often it is repeated in one datagram.
+    #[test]
+    fn a_refreshed_template_costs_nothing() {
+        let exporter = v4(192, 0, 2, 1);
+        let mut t = FlowTemplates::with_limits(16, 2);
+        let both = [
+            template_record(301, &SMALL_TEMPLATE),
+            template_record(302, &SMALL_TEMPLATE),
+        ]
+        .concat();
+        parse_flow_export(&mut t, exporter, &nf9_with_sets(&[flow_set(0, &both)])).unwrap();
+
+        let refresh = both.repeat(200);
+        parse_flow_export(&mut t, exporter, &nf9_with_sets(&[flow_set(0, &refresh)])).unwrap();
+
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.take_stats(), TemplateStats::default());
+        let data = nf9_with_sets(&[
+            flow_set(301, &small_record(1)),
+            flow_set(302, &small_record(2)),
+        ]);
+        assert_eq!(parse_flow_export(&mut t, exporter, &data).unwrap().len(), 2);
+    }
+
+    /// When the whole cache is full, room comes from the exporter holding the most templates.
+    #[test]
+    fn a_full_cache_evicts_from_the_exporter_holding_the_most() {
+        let (a, b, c) = (v4(192, 0, 2, 1), v4(192, 0, 2, 2), v4(192, 0, 2, 3));
+        let mut t = FlowTemplates::with_limits(4, 3);
+        let define = |t: &mut FlowTemplates, exporter, ids: &[u16]| {
+            let records: Vec<u8> = ids
+                .iter()
+                .map(|&id| template_record(id, &SMALL_TEMPLATE))
+                .collect::<Vec<_>>()
+                .concat();
+            parse_flow_export(t, exporter, &nf9_with_sets(&[flow_set(0, &records)])).unwrap();
+        };
+        define(&mut t, a, &[301]);
+        define(&mut t, b, &[301, 302, 303]);
+        define(&mut t, c, &[301]);
+
+        let decoded = |t: &mut FlowTemplates, exporter, id| {
+            let pkt = nf9_with_sets(&[flow_set(id, &small_record(1))]);
+            parse_flow_export(t, exporter, &pkt).unwrap().len()
+        };
+        assert_eq!(
+            decoded(&mut t, a, 301),
+            1,
+            "the smallest holder kept its only template"
+        );
+        assert_eq!(
+            decoded(&mut t, b, 301),
+            0,
+            "the largest holder's oldest made room"
+        );
+        assert_eq!(decoded(&mut t, b, 302), 1);
+        assert_eq!(decoded(&mut t, c, 301), 1);
+        assert_eq!(t.len(), 4);
+        assert_eq!(t.take_stats().evicted_global_cap, 1);
     }
 
     // ── NetFlow v5 ──

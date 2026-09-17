@@ -299,7 +299,7 @@ mod tests {
         let back = parse_trap(&wire).unwrap();
         assert_eq!(back.version, 2);
         assert_eq!(back.community, "private");
-        assert_eq!(back.trap_oid, "1.3.6.1.6.3.1.1.5.3");
+        assert_eq!(back.trap_oid.as_deref(), Some("1.3.6.1.6.3.1.1.5.3"));
         assert_eq!(back.uptime_ticks, Some(12345));
         assert!(!back.is_inform);
         assert!(

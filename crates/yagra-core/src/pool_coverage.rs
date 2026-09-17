@@ -140,8 +140,12 @@ pub fn coverage(
 
 /// Non-Meraki node counts keyed by **effective** pool (own > nearest ancestor folder > default).
 ///
-/// Infallible, and degrades the same way `poller_inventory` does (ADR-017): this answers a question
-/// an operator asks *while* something is broken.
+/// 🚨 **Fails when any of its three reads fails** (ADR-158 B4). It used to degrade: an unreadable
+/// folder tree resolved every inheriting node to `default`, and an unreadable inventory counted
+/// nothing. Both are answers the coverage watch acts on — a pool that seemed to lose its nodes had
+/// its open alert cleared, and on the first tick after a restart an empty answer was cached and
+/// cleared every restored alert. A display that wants a partial answer degrades at its own call
+/// site, where the choice is visible.
 ///
 /// The Meraki exclusion is load-bearing, not tidiness. Core's org collector polls Meraki-managed
 /// nodes directly, so they depend on no pool poller — counting them would put a Meraki-only
@@ -150,18 +154,21 @@ pub async fn node_counts_by_pool(
     repo: &NodeRepo,
     meraki: &MerakiDeviceRepo,
     groups: &GroupRepo,
-) -> HashMap<String, usize> {
-    let resolver = match groups.pool_rows().await {
-        Ok(rows) => PoolResolver::build(rows),
-        Err(e) => {
-            tracing::warn!(error = %e, "loading folder pools failed; resolving without inheritance");
-            PoolResolver::empty()
-        }
-    };
+) -> anyhow::Result<HashMap<String, usize>> {
+    let resolver = PoolResolver::build(groups.pool_rows().await?);
+    Ok(count_by_pool(
+        &pool_dependent_nodes(repo, meraki).await?,
+        &resolver,
+    ))
+}
+
+/// How many of `nodes` resolve to each pool. Pure.
+#[must_use]
+pub fn count_by_pool(nodes: &[Node], resolver: &PoolResolver) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
-    for n in pool_dependent_nodes(repo, meraki).await {
+    for n in nodes {
         *counts
-            .entry(resolver.resolve_pool(&n).to_owned())
+            .entry(resolver.resolve_pool(n).to_owned())
             .or_insert(0) += 1;
     }
     counts
@@ -181,19 +188,42 @@ pub async fn node_counts_by_pool(
 /// implementation, so the dialog an operator answers and the `409` that enforces the answer
 /// cannot disagree.
 ///
-/// Infallible for the same reason as its caller: this answers a question asked *while* something
-/// is broken. A read failure degrades to an empty list.
-pub async fn pool_dependent_nodes(repo: &NodeRepo, meraki: &MerakiDeviceRepo) -> Vec<Node> {
-    let meraki_ids = meraki.node_ids().await.unwrap_or_default();
-    match repo.list_nodes().await {
-        Ok(nodes) => nodes
-            .into_iter()
-            .filter(|n| !meraki_ids.contains(&n.id.as_uuid()))
-            .collect(),
-        Err(e) => {
-            tracing::error!(error = %e, "list nodes for pool coverage failed");
-            Vec::new()
-        }
+/// Fails when either read fails. It used to answer an empty list for an unreadable inventory and
+/// count Meraki nodes for an unreadable device list — and every caller decides something from the
+/// answer: whether to refuse a poller move, which nodes a takeover pins (ADR-158 B4).
+pub async fn pool_dependent_nodes(
+    repo: &NodeRepo,
+    meraki: &MerakiDeviceRepo,
+) -> anyhow::Result<Vec<Node>> {
+    let meraki_ids = meraki.node_ids().await?;
+    Ok(repo
+        .list_nodes()
+        .await?
+        .into_iter()
+        .filter(|n| !meraki_ids.contains(&n.id.as_uuid()))
+        .collect())
+}
+
+/// The watch loop's last successful node count, with the config generation it was read at.
+pub type CountsCache = Option<(u64, HashMap<String, usize>)>;
+
+/// Fold one read of the node counts into the watch loop's cache.
+///
+/// A successful read replaces the cache, **empty included** — an inventory that really is empty
+/// must be able to clear the alerts it no longer has nodes for. A failed read changes nothing:
+/// the cache keeps its older generation, so the next tick reads again, and with no cache at all the
+/// loop has nothing to act on and waits (the same shape as `scheduler/sweep.rs`'s resolver).
+pub fn remember(
+    cached: &mut CountsCache,
+    generation: u64,
+    read: anyhow::Result<HashMap<String, usize>>,
+) {
+    match read {
+        Ok(counts) => *cached = Some((generation, counts)),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "pool coverage: counting nodes by pool failed; keeping the last answer"
+        ),
     }
 }
 
@@ -476,22 +506,14 @@ pub(crate) async fn run_pool_coverage_watch(
         );
         watch.seed(reopened, Instant::now());
     }
-    let mut cached: Option<(u64, HashMap<String, usize>)> = None;
+    let mut cached: pool_coverage::CountsCache = None;
     loop {
         tokio::time::sleep(pool_coverage::WATCH_TICK).await;
 
         let generation = config_gen::current();
         if cached.as_ref().is_none_or(|(gen, _)| *gen != generation) {
-            let counts = pool_coverage::node_counts_by_pool(&repo, &meraki, &groups).await;
-            // An empty map means "no pool has any nodes", which silently disables the whole check.
-            // `node_counts_by_pool` already degrades on a read error, so only a genuinely empty
-            // inventory produces one legitimately — keep the previous answer when we had one
-            // rather than letting a bad read look like a healthy fleet.
-            if counts.is_empty() && cached.is_some() {
-                tracing::warn!("pool coverage: node counts came back empty; keeping the last set");
-            } else {
-                cached = Some((generation, counts));
-            }
+            let read = pool_coverage::node_counts_by_pool(&repo, &meraki, &groups).await;
+            pool_coverage::remember(&mut cached, generation, read);
         }
         let Some((_, node_pools)) = cached.as_ref() else {
             continue;
@@ -894,5 +916,155 @@ mod tests {
              (ADR-107 増分 5). Without that, a pool that recovers while this core is down keeps a \
              `critical` open for the life of the deployment — measured at 15 days on .211"
         );
+        assert!(
+            after_signature.contains("remember("),
+            "the watch loop no longer folds its node-count read through `remember`, so nothing \
+             tested decides what a failed read does to the cache (ADR-158 B4)"
+        );
+    }
+
+    /// A seeded, raised `siteA` and a cache that counted 12 nodes in it — the state a coverage
+    /// alert that has been open across a restart is in.
+    fn raised_site_a(t0: Instant) -> (CoverageWatch, CountsCache) {
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        w.seed(["siteA".to_owned()], t0);
+        (w, Some((1, counts(&[("siteA", 12)]))))
+    }
+
+    fn failed_read() -> anyhow::Result<HashMap<String, usize>> {
+        Err(anyhow::anyhow!("relation \"node_groups\" does not exist"))
+    }
+
+    /// ADR-158 B4. A failed read leaves the older generation cached — so the next tick reads again —
+    /// and never replaces what was known with nothing.
+    #[test]
+    fn a_failed_read_is_never_cached() {
+        let (_, mut cached) = raised_site_a(Instant::now());
+        remember(&mut cached, 2, failed_read());
+        assert_eq!(cached, Some((1, counts(&[("siteA", 12)]))));
+    }
+
+    /// The first tick after a restart has no cache yet. A failed read there used to be cached as an
+    /// empty inventory — which cleared every coverage alert the restore had just put back.
+    #[test]
+    fn a_failed_read_on_the_first_tick_leaves_nothing_to_act_on() {
+        let mut cached = None;
+        remember(&mut cached, 1, failed_read());
+        assert_eq!(cached, None);
+    }
+
+    #[test]
+    fn a_failed_read_clears_nothing() {
+        let t0 = Instant::now();
+        let (mut w, mut cached) = raised_site_a(t0);
+        remember(&mut cached, 2, failed_read());
+        let (_, node_pools) = cached.as_ref().expect("the last answer is kept");
+        let sample = coverage(&[], node_pools, &[]);
+        assert!(w.observe(&sample, t0 + Duration::from_secs(30)).is_empty());
+    }
+
+    /// The other direction, and the reason the old "an empty answer keeps the last set" guard had
+    /// to go rather than stay beside the fix: once a failure is an `Err`, an empty map is a real
+    /// empty inventory, and the pool's alert must be able to close.
+    #[test]
+    fn an_emptied_inventory_does_clear() {
+        let t0 = Instant::now();
+        let (mut w, mut cached) = raised_site_a(t0);
+        remember(&mut cached, 2, Ok(HashMap::new()));
+        let (generation, node_pools) = cached.as_ref().expect("cached");
+        assert_eq!(*generation, 2);
+        let sample = coverage(&[], node_pools, &[]);
+        assert_eq!(
+            w.observe(&sample, t0 + Duration::from_secs(30)),
+            vec![CoverageEvent::Clear {
+                pool: "siteA".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn nodes_are_counted_by_the_pool_they_resolve_to() {
+        let folder = uuid::Uuid::from_u128(7);
+        let resolver = PoolResolver::build(vec![(folder, None, Some("siteA".to_owned()))]);
+        let at = |pool: Option<&str>, group: Option<uuid::Uuid>| {
+            let mut n = Node::new(
+                yagra_common::NodeId::new(),
+                "n",
+                std::net::IpAddr::from([10, 0, 0, 1]),
+            );
+            n.pool = pool.map(str::to_owned);
+            n.group = group.map(yagra_common::GroupId::from);
+            n
+        };
+        let nodes = [
+            at(None, Some(folder)),
+            at(None, Some(folder)),
+            at(Some("siteB"), Some(folder)),
+            at(None, None),
+        ];
+        assert_eq!(
+            count_by_pool(&nodes, &resolver),
+            counts(&[("siteA", 2), ("siteB", 1), ("default", 1)])
+        );
+    }
+
+    use crate::pgtest;
+
+    fn stores(pool: &sqlx::PgPool) -> (NodeRepo, MerakiDeviceRepo, GroupRepo) {
+        (
+            pgtest::repo(pool.clone()),
+            MerakiDeviceRepo::new(pool.clone()),
+            GroupRepo::new(pool.clone()),
+        )
+    }
+
+    /// A node inheriting `siteA` from its folder, read with the folder tree readable and then not.
+    /// Before ADR-158 the unreadable tree resolved the node to `default` and said so as an answer.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_failed_folder_pool_read_is_an_error_not_a_default_pool(pool: sqlx::PgPool) {
+        let folder = pgtest::group(&pool, "site-a").await;
+        GroupRepo::new(pool.clone())
+            .set_pool(folder, Some("siteA"))
+            .await
+            .unwrap();
+        pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        let (repo, meraki, groups) = stores(&pool);
+        assert_eq!(
+            node_counts_by_pool(&repo, &meraki, &groups).await.unwrap(),
+            counts(&[("siteA", 1)])
+        );
+
+        sqlx::query("ALTER TABLE node_groups RENAME COLUMN parent_id TO parent_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(node_counts_by_pool(&repo, &meraki, &groups).await.is_err());
+    }
+
+    /// An unreadable inventory, or an unreadable Meraki list, is an error — not an empty fleet, and
+    /// not a fleet with the Meraki nodes counted in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_failed_inventory_or_meraki_read_is_an_error(pool: sqlx::PgPool) {
+        pgtest::node(&pool, "plain", 1, None).await;
+        let (repo, meraki, groups) = stores(&pool);
+        assert_eq!(pool_dependent_nodes(&repo, &meraki).await.unwrap().len(), 1);
+
+        sqlx::query("ALTER TABLE meraki_devices RENAME TO meraki_devices_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(pool_dependent_nodes(&repo, &meraki).await.is_err());
+        sqlx::query("ALTER TABLE meraki_devices_unreadable RENAME TO meraki_devices")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query("ALTER TABLE nodes RENAME TO nodes_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(node_counts_by_pool(&repo, &meraki, &groups).await.is_err());
     }
 }

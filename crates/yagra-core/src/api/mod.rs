@@ -103,9 +103,7 @@ pub use error::{ApiError, ApiResult};
 pub(crate) use extract::bearer;
 // Pool names are validated in `nodes` — every writer of one, including the folder-group and Meraki
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
-pub(crate) use util::{
-    audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339, pool_resolver,
-};
+pub(crate) use util::{audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339};
 
 use crate::ack::AckRepo;
 use crate::alerts::AlertManager;

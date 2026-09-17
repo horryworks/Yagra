@@ -15259,7 +15259,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportResult"];
                 };
             };
-            /** @description An unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has */
+            /** @description More nodes than one sweep can find, an unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has */
             400: {
                 headers: {
                     [name: string]: unknown;

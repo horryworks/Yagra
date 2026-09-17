@@ -324,11 +324,20 @@ fn publish_template_stats(stats: TemplateStats) {
     let TemplateStats {
         rejected_oversized,
         withdrawals_ignored,
+        rejected_datagram_cap,
+        evicted_exporter_quota,
+        evicted_global_cap,
     } = stats;
-    metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "oversized")
-        .increment(rejected_oversized);
-    metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "withdrawal")
-        .increment(withdrawals_ignored);
+    for (reason, count) in [
+        ("oversized", rejected_oversized),
+        ("withdrawal", withdrawals_ignored),
+        ("datagram_cap", rejected_datagram_cap),
+        ("exporter_quota", evicted_exporter_quota),
+        ("global_cap", evicted_global_cap),
+    ] {
+        metrics::counter!("yagra_flow_templates_dropped_total", "reason" => reason)
+            .increment(count);
+    }
 }
 
 /// Start-of-bucket timestamp (ms) for the window being flushed: `now` floored to a `secs` boundary.
@@ -828,8 +837,8 @@ mod tests {
         assert!(got.is_err(), "garbage must not be relayed");
     }
 
-    /// Both template-drop reasons are published — at zero before any bad template, and by their
-    /// counts after (ADR-158).
+    /// Every template-drop reason is published — at zero before any bad template, and by its count
+    /// after (ADR-158).
     #[test]
     fn template_drops_are_published_by_reason_including_zero() {
         let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
@@ -839,12 +848,18 @@ mod tests {
             publish_template_stats(TemplateStats {
                 rejected_oversized: 2,
                 withdrawals_ignored: 0,
+                rejected_datagram_cap: 3,
+                evicted_exporter_quota: 4,
+                evicted_global_cap: 5,
             });
         });
         let rendered = handle.render();
         for line in [
             "yagra_flow_templates_dropped_total{reason=\"oversized\"} 2",
             "yagra_flow_templates_dropped_total{reason=\"withdrawal\"} 0",
+            "yagra_flow_templates_dropped_total{reason=\"datagram_cap\"} 3",
+            "yagra_flow_templates_dropped_total{reason=\"exporter_quota\"} 4",
+            "yagra_flow_templates_dropped_total{reason=\"global_cap\"} 5",
         ] {
             assert!(
                 rendered.lines().any(|l| l == line),

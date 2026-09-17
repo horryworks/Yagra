@@ -25,7 +25,7 @@
 
 use super::extract::{Admin, ListSlot, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::CreatedId;
-use super::{pool_resolver, AdminState, ApiError, ApiResult, ApiState};
+use super::{AdminState, ApiError, ApiResult, ApiState};
 use crate::groups::{placement_order, would_create_cycle};
 use axum::{
     extract::{Path, Query, State},
@@ -2438,7 +2438,11 @@ pub(crate) async fn poll_now(
             ApiError::from_internal(e.as_ref(), "poll-now: load node", "failed to load node")
         })?
         .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?;
-    Ok(poll_now_with(admin, &pool_resolver(admin).await, &node).await)
+    // Not the degrading resolver: with the folder tree unread, a folder-inherited node resolves to
+    // `default`, its jobs go where no poller for it listens, and the caller is told they were
+    // dispatched (ADR-158 B4).
+    let resolver = super::util::pool_resolver_or_error(admin).await?;
+    Ok(poll_now_with(admin, &resolver, &node).await)
 }
 
 /// Dispatch one node's poll set against a resolver the caller already built.
@@ -2535,8 +2539,9 @@ async fn poll_nodes_now(
             ApiError::from_internal(e.as_ref(), "poll-now: load nodes", "failed to load nodes")
         })?;
     // 🚨 Built once, outside the loop. `poll_now` builds one per call and it is a whole-tree read,
-    // so calling that N times would re-read the folder tree once per node.
-    let resolver = pool_resolver(&admin).await;
+    // so calling that N times would re-read the folder tree once per node. A failed read is a 500,
+    // as it is for the single-node form.
+    let resolver = super::util::pool_resolver_or_error(&admin).await?;
     let mut jobs = 0usize;
     for node in &nodes {
         jobs += poll_now_with(&admin, &resolver, node).await.dispatched;
@@ -4266,5 +4271,38 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert_eq!(body["any_prefixes"], false, "{body}");
         assert_eq!(body["unmatched"][0], a.to_string(), "{body}");
+    }
+
+    /// ADR-158 B4. A node inheriting `siteA` from its folder is polled on `siteA`; with the folder
+    /// tree unreadable, both poll-now forms answer 500. They used to resolve the node to `default`,
+    /// publish its jobs where no poller for it listens, and answer 202.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn poll_now_refuses_to_guess_a_pool_it_cannot_resolve(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use axum::http::StatusCode;
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let folder = crate::pgtest::group(&pool, "site-a").await;
+        crate::groups::GroupRepo::new(pool.clone())
+            .set_pool(folder, Some("siteA"))
+            .await
+            .unwrap();
+        let node = crate::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        let single = format!("/api/v1/nodes/{node}/poll");
+        let bulk = serde_json::json!({ "node_ids": [node] });
+
+        let (status, body) = send(&st, "POST", &single, &tok, None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        assert_eq!(body["pool"], "siteA", "{body}");
+
+        sqlx::query("ALTER TABLE node_groups RENAME COLUMN parent_id TO parent_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, body) = send(&st, "POST", &single, &tok, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let (status, body) = send(&st, "POST", "/api/v1/nodes/poll", &tok, Some(bulk)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     }
 }
