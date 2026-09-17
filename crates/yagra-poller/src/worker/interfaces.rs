@@ -261,6 +261,7 @@ async fn execute_table_walk(
         l3: None,
         arp: None,
         routing: None,
+        wlan: None,
         row_names: Vec::new(),
         observational: false,
         judge_samples: false,

@@ -107,6 +107,7 @@
   "ups_charge_remaining_pct": "Estimated battery charge remaining, in percent.",
   "ups_minutes_remaining": "Estimated run time left on battery, in minutes. Meaningful only while the UPS is actually on battery.",
   "ups_output_load_pct": "Output load as a percentage of the UPS’s rated capacity. One row per output line.",
+  "wlan_ap_walk_complete": "Did the wireless controller's access-point table read to its end on this poll. 1 = yes; 0 = a column did not answer, so no AP list was published and the stored list was left as it was. Stuck at 0 means the AP list has stopped refreshing.",
   "wlan_controller_ap_license": "Access points the wireless controller is licensed to manage. Compare it with the configured count to see how much licence headroom is left. An HA standby reports the same licence.",
   "wlan_controller_ap_normal_pct": "Share of the controller's configured access points that are working normally, in percent. Below 100 means at least one AP is down, not yet joined, or failing its configuration. An HA standby reports the active controller's figure, so a pair raises one condition twice.",
   "wlan_controller_aps_configured": "Access points configured on the wireless controller, whether or not they are currently joined.",

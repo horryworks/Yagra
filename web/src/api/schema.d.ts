@@ -4710,6 +4710,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/wireless/aps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Access points reported by the wireless controllers Yagra monitors.
+         * @description Built from each controller's AP table on every poll, so an AP is listed whether or not it has
+         *     been imported as a node. An AP behind an HA pair appears once: `state` and `clients` are what the
+         *     controller serving it says, and `reported_by` shows every controller's view. An AP that no
+         *     controller reports any more stays in the list with its `last_seen` ageing.
+         */
+        get: operations["list_wireless_aps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -5923,7 +5946,7 @@ export interface components {
          * @description How a [`CollectionItem`] is collected from the agent.
          * @enum {string}
          */
-        CollectionKind: "scalar" | "table" | "optical";
+        CollectionKind: "scalar" | "table" | "optical" | "wlan";
         /** @description One metric inside a collection template. */
         CollectionTemplateItemRow: {
             collection: string;
@@ -12287,6 +12310,132 @@ export interface components {
          * @enum {string}
          */
         WindowScope: "node" | "profile" | "group" | "group_id" | "system";
+        /** @description Keyset cursor for the next page. */
+        WirelessApCursor: {
+            /**
+             * Format: uuid
+             * @description Pass back as `after_id`.
+             */
+            ap_id: string;
+            /** @description Pass back as `after_key`. */
+            key: string;
+        };
+        /** @description One page of access points, ordered by name. */
+        WirelessApPage: {
+            aps: components["schemas"]["WirelessApRow"][];
+            controller?: null | components["schemas"]["WirelessControllerSummary"];
+            next?: null | components["schemas"]["WirelessApCursor"];
+        };
+        /** @description One access point. */
+        WirelessApRow: {
+            /**
+             * Format: uuid
+             * @description Stable id, derived from the MAC address. The same AP keeps it when the controller serving it
+             *     changes.
+             */
+            ap_id: string;
+            /**
+             * Format: int32
+             * @description Wireless clients online through this AP, as the serving controller reports it.
+             */
+            clients?: number | null;
+            /**
+             * Format: uuid
+             * @description The node of the controller serving this AP: the last one to report it in service.
+             */
+            controller_node_id?: string | null;
+            /** @description When a controller first reported this AP (RFC 3339). */
+            first_seen: string;
+            /**
+             * @description Management address. `null` when the controller reports none, which it does for an AP that is
+             *     down.
+             */
+            ip?: string | null;
+            /** @description When a controller last reported this AP in service (RFC 3339). `null` if it never has been. */
+            last_associated_at?: string | null;
+            /**
+             * @description When a controller last reported this AP (RFC 3339). It stops advancing when no controller
+             *     reports the AP any more; the AP is never removed.
+             */
+            last_seen: string;
+            /** @description MAC address, lower-case and colon-separated. */
+            mac: string;
+            /** @description Model, as the controller spells it. */
+            model?: string | null;
+            /** @description The AP's name on its controller. */
+            name?: string | null;
+            /**
+             * Format: uuid
+             * @description The AP's node, once it has been imported as one.
+             */
+            node_id?: string | null;
+            /**
+             * @description What each controller that reports this AP says, the serving controller first. Two entries
+             *     for an AP behind an HA pair.
+             */
+            reported_by: components["schemas"]["WirelessApSighting"][];
+            /** @description The controller's own word for the state (`normal`, `fault`, `standby`). */
+            run_state: string;
+            serial?: string | null;
+            state?: null | components["schemas"]["WlanApState"];
+            /** @description Software version. */
+            sw_version?: string | null;
+            /** @description The vendor's own grouping of APs (a Huawei AP group). */
+            vendor_group?: string | null;
+        };
+        /** @description One controller's view of one access point. */
+        WirelessApSighting: {
+            /** Format: int32 */
+            clients?: number | null;
+            /**
+             * Format: uuid
+             * @description The reporting controller's node.
+             */
+            controller_node_id?: string | null;
+            /** @description When this controller last reported the AP in service (RFC 3339). */
+            last_associated_at?: string | null;
+            /** @description When this controller last reported the AP (RFC 3339). */
+            last_seen: string;
+            run_state: string;
+            state?: null | components["schemas"]["WlanApState"];
+        };
+        /** @description What a controller's last complete AP inventory said about the controller itself. */
+        WirelessControllerSummary: {
+            /**
+             * Format: int32
+             * @description How many APs its last inventory carried.
+             */
+            aps_reported: number;
+            /**
+             * Format: int32
+             * @description Set when the controller reported more APs than one inventory may carry: how many it
+             *     reported. The list then holds only the first ones by MAC address.
+             */
+            aps_truncated_at?: number | null;
+            flavor?: null | components["schemas"]["WlanFlavor"];
+            /** @description When its last complete inventory arrived (RFC 3339). `null` if none has. */
+            last_inventory_at?: string | null;
+            /**
+             * Format: uuid
+             * @description The controller's node.
+             */
+            node_id: string;
+        };
+        /**
+         * @description What one controller says about one AP, reduced to the three answers the system acts on
+         *     (ADR-064 改訂 R5).
+         * @enum {string}
+         */
+        WlanApState: "associated" | "backup" | "not_associated";
+        /**
+         * @description Which vendor dialect a controller speaks, selected by the collection item's OID
+         *     (the [`crate::OpticalFlavor`] shape, ADR-064 決定 3).
+         *
+         *     Only dialects measured on a real controller are here. Cisco (AireOS and IOS-XE are two MIBs)
+         *     and Aruba are later increments.
+         * @enum {string}
+         */
+        WlanFlavor: "huawei";
     };
     responses: never;
     parameters: never;
@@ -30508,6 +30657,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionInfo"];
+                };
+            };
+        };
+    };
+    list_wireless_aps: {
+        parameters: {
+            query?: {
+                /** @description Only APs this controller node reports. */
+                controller_node_id?: string;
+                /** @description Only APs in this state: `associated`, `backup` or `not_associated`. */
+                state?: string;
+                /**
+                 * @description A case-insensitive substring of the name, MAC address, IP address or model (at most 64
+                 *     characters). Matched literally.
+                 */
+                search?: string;
+                /** @description Page size, 1–2048 (default 200). */
+                limit?: number;
+                /** @description Keyset cursor: `next.key` from the previous page. Pair with `after_id`. */
+                after_key?: string;
+                /** @description Keyset cursor: `next.ap_id` from the previous page. Pair with `after_key`. */
+                after_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of access points, ordered by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WirelessApPage"];
+                };
+            };
+            /** @description Unknown state, search longer than 64 characters, or only one half of the cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
         };

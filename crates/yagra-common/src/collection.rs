@@ -20,6 +20,7 @@
 use crate::metric::MetricKind;
 use crate::profile::ProfileCategory;
 use crate::thresholds::ScopeLevel;
+use crate::wlan::{WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -45,11 +46,18 @@ pub enum CollectionKind {
     /// The item's `oid` is the flavour's **entry OID**, not a column base — it selects which
     /// vendor dialect to speak. An `oid` no [`OpticalFlavor::from_root`] recognises is skipped.
     Optical,
+    /// A wireless controller's AP table (ADR-064): one walk answers for every access point the
+    /// controller manages, and becomes an inventory rather than a series per row.
+    ///
+    /// Like [`CollectionKind::Optical`], the item's `oid` is the dialect's **entry OID** and selects
+    /// the vendor ([`crate::WlanFlavor::from_root`]); an `oid` no dialect claims is skipped. The item
+    /// names the one node-level sample the walk publishes, [`crate::METRIC_WLAN_AP_WALK_COMPLETE`].
+    Wlan,
 }
 
 impl CollectionKind {
     /// Every variant, for exhaustive iteration in tests.
-    pub const ALL: [Self; 3] = [Self::Scalar, Self::Table, Self::Optical];
+    pub const ALL: [Self; 4] = [Self::Scalar, Self::Table, Self::Optical, Self::Wlan];
 
     /// The token stored in the `collection` column of `collection_items` /
     /// `collection_template_items`.
@@ -62,6 +70,7 @@ impl CollectionKind {
             Self::Scalar => "scalar",
             Self::Table => "table",
             Self::Optical => "optical",
+            Self::Wlan => "wlan",
         }
     }
 
@@ -385,6 +394,8 @@ pub fn item_publishes_per_interface(item: &CollectionItem) -> bool {
         CollectionKind::Optical => {
             item.metric_name == METRIC_IF_RX_POWER_DBM || item.metric_name == METRIC_IF_TX_POWER_DBM
         }
+        // One sample for the controller node; the per-AP values belong to the AP nodes (ADR-064).
+        CollectionKind::Wlan => false,
     }
 }
 
@@ -597,6 +608,7 @@ const T_NETSNMP: &str = "Linux Net-SNMP (UCD)";
 const T_ASA_SESSIONS: &str = "Cisco ASA sessions";
 const T_HUAWEI_USG_SESSIONS: &str = "Huawei USG sessions";
 /// A wireless controller's own totals — APs and clients — read as scalars (ADR-064 increment A).
+/// The AP table walk is a template of its own, named by [`crate::WlanFlavor::template_name`].
 /// Vendor-prefixed in name only: the metric names it publishes are the vendor-neutral
 /// `wlan_controller_*`, so a Cisco or Aruba flavor later maps its OIDs onto the same series.
 const T_HUAWEI_WLAN_CTL: &str = "Huawei WLAN controller (AC)";
@@ -1050,7 +1062,34 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                 ),
             ],
         },
+        // ADR-064 increment B1 (2026-09-18). Appended at the end: seed ids are array positions.
+        wlan_ap_template(WlanFlavor::Huawei),
     ]
+}
+
+/// The built-in AP-table template for one wireless controller dialect (ADR-064).
+///
+/// One item: its OID selects the dialect, and its metric is the controller's walk-complete sample.
+/// The per-AP inventory the walk produces is not a collection item — it is relational data for
+/// PostgreSQL (the AP list), never a series per row (ADR-011).
+fn wlan_ap_template(flavor: WlanFlavor) -> BuiltinTemplate {
+    BuiltinTemplate {
+        name: flavor.template_name(),
+        description: match flavor {
+            WlanFlavor::Huawei => {
+                "The access points a Huawei wireless controller manages (HUAWEI-WLAN-AP-MIB): each \
+                 AP's name, model, software version, address, state and client count, for the \
+                 controller's AP list. Adds one sample to the controller, whether the AP table was \
+                 read to its end."
+            }
+        },
+        items: vec![CollectionItem {
+            metric_name: METRIC_WLAN_AP_WALK_COMPLETE.to_owned(),
+            oid: flavor.root_oid().to_owned(),
+            kind: CollectionKind::Wlan,
+            metric_kind: MetricKind::Gauge,
+        }],
+    }
 }
 
 /// The built-in optical template for one dialect: the same two metric names, pointed at the
@@ -1547,7 +1586,12 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Huawei wireless controller",
             C::WirelessController,
             Some("Huawei"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_HUAWEI_WLAN_CTL],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_HUAWEI,
+                T_HUAWEI_WLAN_CTL,
+                WlanFlavor::Huawei.template_name(),
+            ],
         ),
         prof(
             "A10 Thunder ADC",
@@ -1946,6 +1990,7 @@ mod tests {
             T_POE,
             // ── ADR-064 appended from here ──
             T_HUAWEI_WLAN_CTL,
+            WlanFlavor::Huawei.template_name(),
         ];
         let actual: Vec<&str> = builtin_templates().iter().map(|t| t.name).collect();
         assert_eq!(
@@ -2181,6 +2226,10 @@ mod tests {
         assert!(
             wac.templates.contains(&T_HUAWEI_WLAN_CTL),
             "WAC carries the controller's AP and client totals (ADR-064 increment A)"
+        );
+        assert!(
+            wac.templates.contains(&WlanFlavor::Huawei.template_name()),
+            "WAC walks its AP table (ADR-064 increment B1)"
         );
 
         let a10 = by_name("A10 Thunder ADC").expect("A10 load-balancer profile present");

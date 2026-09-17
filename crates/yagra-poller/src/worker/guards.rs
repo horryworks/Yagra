@@ -64,6 +64,8 @@ const SPEC_OWNERSHIP: &[(&str, &[&str])] = &[
             "SnmpV3Arp",
             "SnmpRouting",
             "SnmpV3Routing",
+            "SnmpWlanAp",
+            "SnmpV3WlanAp",
         ],
     ),
     // The loop, and the three kinds whose *scheduling* differs — see the doc above.
@@ -84,6 +86,8 @@ const SPEC_OWNERSHIP: &[(&str, &[&str])] = &[
     ("interfaces.rs", &[]),
     ("physical.rs", &[]),
     ("adjacency.rs", &[]),
+    // A wireless controller's AP walk (ADR-064): handed the destructured dialect and cap.
+    ("wlan.rs", &[]),
 ];
 
 /// Every variant of `CheckSpec`, read from the bus type that declares them.

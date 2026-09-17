@@ -526,6 +526,9 @@ pub(crate) struct MetaRecord {
     /// The routing adjacency observed on this poll (routing walks only, ADR-043 Increment 4). Same
     /// tier again. `None` means nothing was observed and nothing is written — never "no peers".
     routing: Option<yagra_common::RoutingSnapshot>,
+    /// The AP inventory a wireless controller reported on this poll (ADR-064). Same tier again.
+    /// `None` means no complete inventory arrived and nothing is written — never "no APs".
+    wlan: Option<yagra_common::WlanInventory>,
     /// The vendor-table row names read on this poll (ADR-143), as `(metric, row, name)` and cleaned
     /// again here — the poller already did, but this is the edge a value from an older or
     /// misbehaving poller crosses. Empty means nothing was read and nothing is written, never "these
@@ -706,6 +709,9 @@ fn persist_metrics_and_meta(
     // And the routing adjacency, for the fifth time: a snapshot dropped here is re-observed on the
     // next collection, and the stored one simply does not advance in the meantime.
     let routing = result.routing.clone();
+    // And a controller's AP inventory (ADR-064): dropped here, the next poll re-reports every AP and
+    // the stored list's `last_seen` simply does not advance in the meantime.
+    let wlan = result.wlan.clone();
     // Row names ride the same shed-able tier (ADR-143): they are re-read hourly, so a dropped record
     // costs an hour's delay on a name the engine already holds from the result itself.
     // Through the same function the alert engine uses, so the name stored and the name an alert
@@ -727,6 +733,7 @@ fn persist_metrics_and_meta(
         || l3.is_some()
         || arp.is_some()
         || routing.is_some()
+        || wlan.is_some()
     {
         let rec = MetaRecord {
             node_id: result.node_id.as_uuid(),
@@ -742,6 +749,7 @@ fn persist_metrics_and_meta(
             l3,
             arp,
             routing,
+            wlan,
             row_names,
         };
         match meta_tx.try_send(rec) {
@@ -1050,6 +1058,7 @@ pub(crate) struct MetaStores {
     pub(crate) l3: Arc<l3::L3Repo>,
     pub(crate) arp: Arc<arp::ArpRepo>,
     pub(crate) routing: Arc<l3_routing::RoutingRepo>,
+    pub(crate) wireless: Arc<crate::wireless::WirelessRepo>,
 }
 
 pub(crate) async fn run_pg_writer(
@@ -1130,6 +1139,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         l3,
         arp,
         routing,
+        wireless,
     } = stores;
     if buf.is_empty() {
         return;
@@ -1146,6 +1156,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
     let mut arp_rows: Vec<(Uuid, yagra_common::ArpSummary)> = Vec::new();
     let mut routing_rows: Vec<(Uuid, yagra_common::RoutingSnapshot)> = Vec::new();
+    let mut wlan_rows: Vec<(Uuid, yagra_common::WlanInventory)> = Vec::new();
     let mut row_name_rows: Vec<repo::RowNameRow> = Vec::new();
     for rec in buf.drain(..) {
         for (metric, row, name) in rec.row_names {
@@ -1183,6 +1194,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if let Some(snapshot) = rec.routing {
             routing_rows.push((rec.node_id, snapshot));
+        }
+        if let Some(inventory) = rec.wlan {
+            wlan_rows.push((rec.node_id, inventory));
         }
     }
     if !iface_rows.is_empty() {
@@ -1277,6 +1291,19 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !routing_rows.is_empty() {
         metrics::counter!("yagra_routing_persisted_total").increment(routing_rows.len() as u64);
     }
+    // One transaction per inventory, in arrival order and deliberately NOT coalesced per node: the
+    // two members of an HA pair are two nodes reporting the same APs, and the ownership rule
+    // (`wireless::ownership`) must see one controller's report before it decides on the next.
+    let now = chrono::Utc::now();
+    for (node_id, inventory) in &wlan_rows {
+        if let Err(e) = wireless.record_inventory(*node_id, inventory, now).await {
+            tracing::warn!(node = %node_id, error = %e, "wireless AP inventory write failed");
+        }
+    }
+    if !wlan_rows.is_empty() {
+        metrics::counter!("yagra_wlan_inventories_persisted_total")
+            .increment(wlan_rows.len() as u64);
+    }
     // Row names are current state, coalesced across the batch like interfaces are: the upsert keeps
     // the last name per (node, metric, row) and rewrites a stored row only when the name changed.
     if !row_name_rows.is_empty() {
@@ -1349,6 +1376,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            wlan: None,
             row_names: Vec::new(),
             observational: false,
             judge_samples: false,
@@ -1729,6 +1757,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            wlan: None,
             row_names: Vec::new(),
             observational: true,
             judge_samples: false,
@@ -2068,6 +2097,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            wlan: None,
             row_names: Vec::new(),
             observational: false,
             judge_samples: false,

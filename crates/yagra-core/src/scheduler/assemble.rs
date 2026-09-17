@@ -224,6 +224,8 @@ trait SnmpJobSource {
     fn arp(&self, timeout_ms: u32) -> LabelledSpec;
     /// The routing-adjacency walk, probing this node's assigned targets (ADR-043 Inc.4).
     fn routing(&self, targets: &[std::net::IpAddr], timeout_ms: u32) -> LabelledSpec;
+    /// The wireless controller AP walks, one per dialect the collection set names (ADR-064).
+    fn wlan(&self, items: &[CollectionItem], timeout_ms: u32) -> Vec<LabelledSpec>;
 }
 
 /// SNMP v2c: the credential is a community string.
@@ -278,6 +280,12 @@ impl SnmpJobSource for V2c<'_> {
             "snmp_routing",
         )
     }
+    fn wlan(&self, items: &[CollectionItem], timeout_ms: u32) -> Vec<LabelledSpec> {
+        build_snmp_wlan_ap_checks(self.0, items, timeout_ms)
+            .into_iter()
+            .map(|c| (CheckSpec::SnmpWlanAp(c), "snmp_wlan_ap"))
+            .collect()
+    }
 }
 
 impl SnmpJobSource for V3<'_> {
@@ -327,6 +335,12 @@ impl SnmpJobSource for V3<'_> {
             "snmp_v3_routing",
         )
     }
+    fn wlan(&self, items: &[CollectionItem], timeout_ms: u32) -> Vec<LabelledSpec> {
+        build_snmp_v3_wlan_ap_checks(self.0, items, timeout_ms)
+            .into_iter()
+            .map(|c| (CheckSpec::SnmpV3WlanAp(c), "snmp_v3_wlan_ap"))
+            .collect()
+    }
 }
 
 /// Append a node's SNMP jobs, whichever authentication scheme it uses.
@@ -363,6 +377,11 @@ fn push_snmp_jobs<S: SnmpJobSource>(
     // continuously with temperature and age, and it shares a time axis with throughput in the
     // interface dock (ADR-062).
     if let Some(spec) = src.optical(items, SNMP_TIMEOUT_MS) {
+        jobs.push(job(spec, interval_secs));
+    }
+    // A wireless controller's AP walk rides `interval_secs` too (ADR-064): an AP that goes down is
+    // news on the controller's own cadence, not on the adjacency walks' hourly one.
+    for spec in src.wlan(items, SNMP_TIMEOUT_MS) {
         jobs.push(job(spec, interval_secs));
     }
     if neighbors.neighbors_enabled {

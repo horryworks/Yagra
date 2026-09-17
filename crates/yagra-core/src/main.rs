@@ -148,6 +148,7 @@ mod upgrade;
 mod url_check;
 mod volatile;
 mod webtls;
+mod wireless;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -655,6 +656,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let arp_repo = Arc::new(arp::ArpRepo::new(repo.pool()));
     let routing_repo = Arc::new(l3_routing::RoutingRepo::new(repo.pool()));
     let discovered_repo = Arc::new(arp::DiscoveredRepo::new(repo.pool()));
+    // Wireless controllers and their APs (ADR-064): written by the result-ingest metadata tier,
+    // read by the AP list.
+    let wireless_repo = Arc::new(wireless::WirelessRepo::new(repo.pool()));
     let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
     let link_override_repo = Arc::new(link_overrides::LinkOverrideRepo::new(repo.pool()));
 
@@ -857,6 +861,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         arp: arp_repo.clone(),
         routing: routing_repo.clone(),
         discovered: discovered_repo.clone(),
+        wireless: wireless_repo.clone(),
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
         pollers: poller_repo.clone(),
@@ -912,6 +917,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         // through the links `run_topology_derivation` writes, which `/topology/links` already
         // serves — so the route ledger gains no line and the MCP gap does not move (ADR-042).
         discovered: discovered_repo.clone(),
+        wireless: wireless_repo.clone(),
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
         meraki_orgs,
@@ -1136,6 +1142,8 @@ struct LeaderTasks {
     arp: Arc<arp::ArpRepo>,
     routing: Arc<l3_routing::RoutingRepo>,
     discovered: Arc<arp::DiscoveredRepo>,
+    /// Wireless controllers' AP inventories (ADR-064), written by the result-ingest metadata tier.
+    wireless: Arc<wireless::WirelessRepo>,
     topology_links: Arc<topology_links::TopoLinkRepo>,
     link_overrides: Arc<link_overrides::LinkOverrideRepo>,
     /// Durable poller inventory — where the pollers are, which is what roots the derived dependency
@@ -1235,6 +1243,7 @@ impl LeaderTasks {
                 l3: self.l3.clone(),
                 arp: self.arp.clone(),
                 routing: self.routing.clone(),
+                wireless: self.wireless.clone(),
             },
             self.history.clone(),
             self.shutdown.clone(),
@@ -1592,6 +1601,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         l3: None,
         arp: None,
         routing: None,
+        wlan: None,
         row_names: Vec::new(),
         observational: false,
         judge_samples: false,

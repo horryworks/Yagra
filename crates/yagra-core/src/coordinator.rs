@@ -1232,6 +1232,11 @@ fn spec_required_caps(spec: &JobSpec) -> Vec<&'static str> {
         | CheckSpec::SnmpV3Arp(_)
         | CheckSpec::SnmpRouting(_)
         | CheckSpec::SnmpV3Routing(_)
+        // The AP walk likewise (ADR-064): an older poller skips the spec — the controller's AP list
+        // stops refreshing and `wlan_ap_walk_complete` reads `no_data` — and a newer one publishes a
+        // complete inventory or none. Nothing is ever answered wrongly.
+        | CheckSpec::SnmpWlanAp(_)
+        | CheckSpec::SnmpV3WlanAp(_)
         | CheckSpec::Dns(_)
         | CheckSpec::MerakiCollect(_) => Vec::new(),
     }

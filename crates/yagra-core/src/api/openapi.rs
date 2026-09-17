@@ -139,6 +139,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::meraki::Doc::openapi(),
         super::netbox::Doc::openapi(),
         super::events::Doc::openapi(),
+        super::wireless::Doc::openapi(),
     ] {
         doc.merge(fragment);
     }

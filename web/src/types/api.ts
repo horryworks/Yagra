@@ -813,6 +813,10 @@ export type DiscoveredEndpoint = components['schemas']['DiscoveredEndpointRow'];
 
 /** A page of discovered endpoints with its keyset cursor and the fleet coverage line. */
 export type DiscoveredEndpointPage = components['schemas']['DiscoveredEndpointPage'];
+/** Access points behind the wireless controllers Yagra monitors (ADR-064). */
+export type WirelessApPage = components['schemas']['WirelessApPage'];
+export type WirelessApRow = components['schemas']['WirelessApRow'];
+export type WlanApState = components['schemas']['WlanApState'];
 
 /** How many nodes an import created — shared by the scan import and the endpoint promotion. */
 export type ImportResult = components['schemas']['ImportResult'];

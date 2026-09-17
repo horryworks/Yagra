@@ -97,6 +97,7 @@ pub(crate) mod upgrade;
 pub(crate) mod users;
 pub(crate) mod util;
 mod webtls;
+pub(crate) mod wireless;
 
 pub(crate) use error::error_response;
 pub use error::{ApiError, ApiResult};
@@ -204,6 +205,8 @@ pub struct AdminState {
     /// Endpoints the fleet has seen but does not monitor (ADR-043 Increment 3). Recomputable from
     /// `arp` **except** for `first_seen`, which is why it is a table and not a view.
     pub discovered: Arc<crate::arp::DiscoveredRepo>,
+    /// Wireless controllers and the access points they report (ADR-064).
+    pub wireless: Arc<crate::wireless::WirelessRepo>,
     /// The derived connectivity graph (ADR-043) — a cache the leader recomputes, not a source of
     /// truth, so a stale read is a stale map rather than lost data.
     pub topology_links: Arc<crate::topology_links::TopoLinkRepo>,
@@ -484,6 +487,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(config_bundle::routes())
         .merge(meraki::routes())
         .merge(netbox::routes())
+        // Wireless controllers and their access points (ADR-064).
+        .merge(wireless::routes())
         // Passive events: sources/rules CRUD + manual alert close, in `api/events.rs`.
         .merge(events::routes())
         // Machine-scoped webhook ingest, layered with its own small body cap: it is the one
@@ -900,6 +905,7 @@ mod tests {
             l3: None,
             arp: None,
             routing: None,
+            wlan: None,
             row_names: Vec::new(),
             observational: false,
             judge_samples: false,

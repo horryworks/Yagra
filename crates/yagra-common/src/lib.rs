@@ -42,6 +42,7 @@ pub mod thresholds;
 pub mod topology;
 pub mod trap;
 pub mod url_check;
+pub mod wlan;
 
 pub use arp::{
     builtin_arp_columns, ArpColumn, ArpEntry, ArpInterfaceCount, ArpSummary,
@@ -129,4 +130,9 @@ pub use url_check::{
     HTTP_AUTH_SCHEMES, JSON_PATH_MAX_LEN, MAX_JSON_EXTRACTS, METRIC_HTTP_BODY_MATCH,
     METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE,
     METRIC_HTTP_UP, METRIC_NAME_MAX_LEN, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
+};
+pub use wlan::{
+    ap_id, huawei_run_state, sanitize_wlan_text, ApMac, WlanApObservation, WlanApState, WlanFlavor,
+    WlanInventory, HUAWEI_AP_RUN_STATES, MAX_APS_PER_CONTROLLER_DEFAULT,
+    MAX_APS_PER_CONTROLLER_HARD, METRIC_WLAN_AP_WALK_COMPLETE, WLAN_AP_NS, WLAN_TEXT_MAX_CHARS,
 };
