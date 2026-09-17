@@ -581,6 +581,11 @@ impl AlertManager {
     /// threshold check per sample that has a resolved threshold. Returns notify actions for
     /// every committed transition (also broadcast to SSE subscribers here).
     ///
+    /// 🚨 **An observational result gets no liveness check** — its `outcome` is a placeholder, not
+    /// a statement (ADR-038). Only its samples are judged (ADR-158 A10). Ingest decides whether such
+    /// a result reaches this at all (`PollResult::judge_samples`), and the skip is here as well so
+    /// that no caller can feed a placeholder outcome into the dwell window ICMP owns.
+    ///
     /// This is the engine's entry point from `result_ingest`, for a result whose vendor placeholders
     /// were taken out at ingest (ADR-156).
     ///
@@ -675,16 +680,6 @@ impl AlertManager {
             config.maintenance.contains(&node)
         };
 
-        // Liveness from the reachability outcome.
-        let raw = if in_maintenance {
-            NodeState::Maintenance
-        } else {
-            match result.outcome {
-                CheckOutcome::Reachable => NodeState::Ok,
-                CheckOutcome::Unreachable => NodeState::Unreachable,
-                CheckOutcome::Error => NodeState::Unknown,
-            }
-        };
         // One read of the node's poll interval for the whole result (ADR-144). A poll result is
         // one poll, so its checks count polls as they are.
         let moment = Moment {
@@ -693,26 +688,38 @@ impl AlertManager {
             cadence: Cadence::EveryPoll,
             interval: self.intervals.for_node(node.as_uuid()),
         };
-        actions.extend(self.process_check(
-            node,
-            raw,
-            result.at_unix_ms,
-            CheckSpec {
-                check: check_id(node, LIVENESS),
-                metric: LIVENESS,
-                // No rule ⇒ the state machine keeps its usual cadence so the Nodes page and the
-                // down-set behave exactly as before; only `alerting` changes.
-                dwell: liveness_dwell.unwrap_or(DEFAULT_LIVENESS_DWELL),
-                is_liveness: true,
-                alerting: liveness_dwell.is_some(),
-                eval: None,
-                ifindex: None,
-                row: None,
-                row_name: None,
-                cadence: moment.cadence,
-                interval: moment.interval,
-            },
-        ));
+        // Liveness from the reachability outcome — unless the result makes no claim about it.
+        if !result.observational {
+            let raw = if in_maintenance {
+                NodeState::Maintenance
+            } else {
+                match result.outcome {
+                    CheckOutcome::Reachable => NodeState::Ok,
+                    CheckOutcome::Unreachable => NodeState::Unreachable,
+                    CheckOutcome::Error => NodeState::Unknown,
+                }
+            };
+            actions.extend(self.process_check(
+                node,
+                raw,
+                result.at_unix_ms,
+                CheckSpec {
+                    check: check_id(node, LIVENESS),
+                    metric: LIVENESS,
+                    // No rule ⇒ the state machine keeps its usual cadence so the Nodes page and the
+                    // down-set behave exactly as before; only `alerting` changes.
+                    dwell: liveness_dwell.unwrap_or(DEFAULT_LIVENESS_DWELL),
+                    is_liveness: true,
+                    alerting: liveness_dwell.is_some(),
+                    eval: None,
+                    ifindex: None,
+                    row: None,
+                    row_name: None,
+                    cadence: moment.cadence,
+                    interval: moment.interval,
+                },
+            ));
+        }
 
         // Threshold checks per sample. Two shapes, and the split is ADR-077 decision 1.
         //

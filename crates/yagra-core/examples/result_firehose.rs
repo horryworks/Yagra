@@ -184,6 +184,7 @@ fn make_result(
         routing: None,
         row_names: Vec::new(),
         observational: false,
+        judge_samples: false,
         poller_id: Some("firehose".to_owned()),
         trace_context: Default::default(),
     }

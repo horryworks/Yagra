@@ -2183,6 +2183,22 @@ pub struct PollResult {
     /// and an N-1 poller's results keep driving alerts exactly as before (ADR-017).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub observational: bool,
+    /// An **observational** result whose **samples** are still judged against threshold rules
+    /// (ADR-158 A10). Meaningless without `observational`: every other result's samples are always
+    /// judged.
+    ///
+    /// `observational` answers one question — does this result say anything about liveness — and
+    /// it used to answer a second by accident: core returned before the alert engine, so a band on
+    /// an optical light level was stored, listed and never evaluated. The two are separate flags
+    /// because the second is not true of every observational check. Set it only on a check that
+    /// runs at the node's own poll interval (today: the optical probe). The adjacency walks run
+    /// hourly to daily. Their count samples would then outlive the freshness sweep's window
+    /// (`alerts/stale.rs`), and a dwell counted in their polls would be days long.
+    ///
+    /// Defaulted and omitted when false, like `observational`: an N-1 poller's optical results stay
+    /// unjudged exactly as before, and an N-1 core ignores the field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub judge_samples: bool,
     /// Which poller produced this result (its sanitized id), when the poller stamps one
     /// (ADR-009). Descriptive provenance for the Pollers view / self-observability — never a
     /// TSDB label. Defaulted so an older poller that doesn't stamp it stays N-1 compatible
@@ -3581,6 +3597,7 @@ mod tests {
             routing: None,
             row_names: Vec::new(),
             observational: false,
+            judge_samples: false,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
         };
@@ -3745,6 +3762,31 @@ mod tests {
         let back: PollResult = serde_json::from_str(&wire).unwrap();
         assert_eq!(back.neighbors, Some(yagra_common::NeighborSet::default()));
         assert!(back.observational);
+    }
+
+    /// ADR-158 A10's field. An N-1 poller never sends it, so its optical results stay unjudged; an
+    /// ordinary result's wire form does not change; and a result that sets it keeps it.
+    #[test]
+    fn judge_samples_tolerates_missing_and_unknown_fields() {
+        let mut result: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable","observational":true,
+                "a_field_from_a_newer_poller":1}"#,
+        )
+        .unwrap();
+        assert!(result.observational);
+        assert!(
+            !result.judge_samples,
+            "an N-1 poller's observational result must stay out of the threshold rules"
+        );
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("judge_samples"), "{wire}");
+
+        result.judge_samples = true;
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        assert!(back.observational && back.judge_samples);
     }
 
     /// ADR-043's result field, N-1 sensitive in exactly the way `neighbors` was.

@@ -284,11 +284,13 @@ pub(crate) async fn node_collection(
         (status = 400, description = "The metric name is not an identifier, the OID is not dotted-numeric, or collection/metric_kind is out of vocabulary", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "The node is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
     ),
 )]
 async fn create_node_collection(
     _guard: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
     Json(body): Json<CreateCollectionItem>,

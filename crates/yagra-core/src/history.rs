@@ -306,10 +306,63 @@ fn open_alerts_sql(node_present: bool) -> String {
         "SELECT * FROM ( \
            SELECT DISTINCT ON (check_id) {HISTORY_COLUMNS} \
            FROM alert_history \
-           ORDER BY check_id, at_unix_ms DESC, resolved DESC, id DESC \
+           ORDER BY check_id, {} \
          ) latest \
          WHERE NOT resolved AND {subject} \
-         ORDER BY at_unix_ms DESC LIMIT $1"
+         ORDER BY at_unix_ms DESC LIMIT $1",
+        latest_order_by()
+    )
+}
+
+/// The columns that decide which of a check's rows is its **latest** transition, most significant
+/// first, every one descending (ADR-158 A7).
+///
+/// 🚨 **Two statements must agree on this and they are built from it.** The restore reads a check's
+/// latest row to decide whether its alert is open ([`open_alerts_sql`]); the retention prune keeps
+/// exactly that row when it is a fire ([`prune_sql`]). If the two orderings ever disagreed on a tie
+/// — a fire and a clear in the same millisecond — the prune could delete the row the restore was
+/// about to read, which is the defect this exists to stop.
+const LATEST_TRANSITION_KEY: [&str; 3] = ["at_unix_ms", "resolved", "id"];
+
+/// `at_unix_ms DESC, resolved DESC, id DESC` — the tail of the restore's `DISTINCT ON` ordering.
+fn latest_order_by() -> String {
+    LATEST_TRANSITION_KEY
+        .iter()
+        .map(|c| format!("{c} DESC"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `(n.at_unix_ms, n.resolved, n.id) > (h.at_unix_ms, h.resolved, h.id)`: row `n` comes after row
+/// `h` in [`latest_order_by`]. A row-value comparison is lexicographic, and every column there is
+/// descending, so "greater" is "sorts first" — the same order, not a second spelling of it.
+fn newer_than(n: &str, h: &str) -> String {
+    let side = |alias: &str| {
+        LATEST_TRANSITION_KEY
+            .iter()
+            .map(|c| format!("{alias}.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!("({}) > ({})", side(n), side(h))
+}
+
+/// The retention prune (ADR-158 A7): rows older than `$1` seconds, **except** a check's latest row
+/// when that row is a fire.
+///
+/// Those rows are exactly what [`AlertHistoryStore::open_alerts`] and
+/// [`AlertHistoryStore::open_alerts_of_deleted_nodes`] return between them — every other old row is
+/// either a resolve or has a newer row after it. Deleting by age alone took an alert that stayed
+/// open longer than the retention setting out of the restore, so the next restart fired it a second
+/// time, and one that recovered while core was down left its external incident open.
+fn prune_sql() -> String {
+    format!(
+        "DELETE FROM alert_history h \
+         WHERE h.recorded_at < now() - ($1::double precision * interval '1 second') \
+           AND (h.resolved OR EXISTS ( \
+                SELECT 1 FROM alert_history newer \
+                WHERE newer.check_id = h.check_id AND {}))",
+        newer_than("newer", "h")
     )
 }
 
@@ -547,14 +600,13 @@ impl AlertHistoryStore {
             .collect()
     }
 
-    /// Delete history rows older than `older_than_secs` (retention). Returns rows removed.
+    /// Delete history rows older than `older_than_secs` (retention), keeping every alert that is
+    /// still open (see [`prune_sql`]). Returns rows removed.
     pub async fn prune_old(&self, older_than_secs: i64) -> anyhow::Result<u64> {
-        let res = sqlx::query(
-            "DELETE FROM alert_history WHERE recorded_at < now() - ($1::double precision * interval '1 second')",
-        )
-        .bind(older_than_secs as f64)
-        .execute(&self.pool)
-        .await?;
+        let res = sqlx::query(&prune_sql())
+            .bind(older_than_secs as f64)
+            .execute(&self.pool)
+            .await?;
         Ok(res.rows_affected())
     }
 
@@ -1193,6 +1245,29 @@ mod tests {
         assert!(!orphans.contains("subject_kind <> 'node'"));
     }
 
+    /// The prune and the restore are built from one ordering, so a tie cannot be broken one way by
+    /// the statement that reads the latest row and the other way by the one that keeps it. The
+    /// database test proves the two agree on a fixture; this pins that neither spells its own.
+    #[test]
+    fn the_prune_and_the_restore_are_built_from_one_ordering() {
+        assert_eq!(latest_order_by(), "at_unix_ms DESC, resolved DESC, id DESC");
+        assert_eq!(
+            newer_than("n", "h"),
+            "(n.at_unix_ms, n.resolved, n.id) > (h.at_unix_ms, h.resolved, h.id)"
+        );
+        for present in [true, false] {
+            assert!(
+                open_alerts_sql(present)
+                    .contains(&format!("ORDER BY check_id, {}", latest_order_by())),
+                "{}",
+                open_alerts_sql(present)
+            );
+        }
+        let prune = prune_sql();
+        assert!(prune.contains(&newer_than("newer", "h")), "{prune}");
+        assert!(prune.contains("h.resolved OR EXISTS"), "{prune}");
+    }
+
     #[test]
     fn the_calendar_buckets_in_utc_so_they_do_not_move_with_the_session_timezone() {
         // Without the explicit zone the buckets would depend on whatever the DB session is set to,
@@ -1304,6 +1379,117 @@ mod tests {
 
         assert_eq!(by_severity, 10);
         assert_eq!(by_node, by_severity, "the report's two totals disagree");
+    }
+
+    /// One transition of `check`, about `node`, at `at_unix_ms`.
+    fn transition(check: CheckId, node: Uuid, at_unix_ms: i64) -> Alert {
+        Alert {
+            check,
+            ..fire(node, Severity::Critical, at_unix_ms)
+        }
+    }
+
+    /// Every row the restore would return, both halves, by id.
+    async fn restorable(store: &AlertHistoryStore) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = store
+            .open_alerts(10_000)
+            .await
+            .expect("open")
+            .into_iter()
+            .chain(
+                store
+                    .open_alerts_of_deleted_nodes(10_000)
+                    .await
+                    .expect("orphans"),
+            )
+            .map(|r| r.id)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// 🚨 **The retention prune never deletes a row the restore would return** (ADR-158 A7).
+    ///
+    /// The prune used to delete by age alone. An alert open longer than the retention setting (1 day
+    /// at the least) lost its fire row, so the next restart restored nothing: the alert fired a
+    /// second time, and an alert that had recovered while core was down left its PagerDuty/JSM
+    /// incident open for good — the two failures ADR-097 had fixed.
+    ///
+    /// One fixture per way a row can stand, and three measurements: the restore returns exactly the
+    /// same rows before and after, the prune reports exactly the rows it should have removed, and
+    /// the table holds exactly what is left — so neither "delete nothing" nor "delete everything
+    /// old" can pass.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_prune_never_deletes_a_row_the_restore_would_return(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "n1", 1, None).await;
+        // Not in `nodes`: an alert about a node deleted while core was stopped (ADR-097 Inc.5).
+        let gone = Uuid::new_v4();
+        let store = AlertHistoryStore::new(pool.clone());
+        let check = || CheckId::from(Uuid::new_v4());
+        let (a, b, c, d, e, f, g) = (
+            check(),
+            check(),
+            check(),
+            check(),
+            check(),
+            check(),
+            check(),
+        );
+
+        // Everything here is aged past the retention window below.
+        store
+            .record_batch(&[
+                // A — a fire still open: the row the restore needs.
+                (transition(a, node, 100), false),
+                // B — three unresolved rows: only the latest is what the restore reads.
+                (transition(b, node, 100), false),
+                (transition(b, node, 200), false),
+                (transition(b, node, 300), false),
+                // C — fired and resolved: nothing open, all of it old.
+                (transition(c, node, 100), false),
+                (transition(c, node, 200), true),
+                // D — an old fire whose resolve is recent (recorded below).
+                (transition(d, node, 100), false),
+                // E — a fire and a clear in the same millisecond: the clear wins the tie.
+                (transition(e, node, 100), false),
+                (transition(e, node, 100), true),
+                // F — still open, about a node that no longer exists.
+                (transition(f, gone, 100), false),
+            ])
+            .await
+            .expect("record the old rows");
+        sqlx::query("UPDATE alert_history SET recorded_at = now() - interval '30 days'")
+            .execute(&pool)
+            .await
+            .expect("age them");
+        store
+            .record_batch(&[
+                (transition(d, node, 200), true),
+                // G — recent, untouched whatever it is.
+                (transition(g, node, 50), false),
+            ])
+            .await
+            .expect("record the recent rows");
+
+        let before = restorable(&store).await;
+        assert_eq!(
+            before.len(),
+            4,
+            "A, B's latest, F and G are open — the fixture must give the restore something to lose"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "alert_history").await, 12);
+
+        let removed = store.prune_old(7 * 86_400).await.expect("prune");
+
+        assert_eq!(
+            restorable(&store).await,
+            before,
+            "the prune removed a row the restore reads"
+        );
+        // B's two older rows, C's two, D's fire, E's two.
+        assert_eq!(removed, 7, "the prune removed the wrong number of rows");
+        assert_eq!(crate::pgtest::rows(&pool, "alert_history").await, 5);
     }
 
     /// 🎯 **More than a thousand fires in the window are all counted.**

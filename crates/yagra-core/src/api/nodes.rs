@@ -28,7 +28,7 @@ use super::util::CreatedId;
 use super::{pool_resolver, AdminState, ApiError, ApiResult, ApiState};
 use crate::groups::{placement_order, would_create_cycle};
 use axum::{
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
     Json, Router,
@@ -1453,6 +1453,7 @@ async fn create_node(
 )]
 async fn delete_node(
     _perm: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
@@ -1568,6 +1569,7 @@ pub(super) struct NodeBindings {
 )]
 async fn set_node_bindings(
     _perm: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<NodeBindings>,
@@ -1622,17 +1624,22 @@ pub(super) struct NodeGroupAssignment {
         (status = 204, description = "Node moved in the folder tree"),
         (status = 400, description = "The destination folder does not exist", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the caller cannot see ungrouped nodes", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node or the destination folder is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_node_group(
     _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<NodeGroupAssignment>,
 ) -> ApiResult<StatusCode> {
+    // The destination as well as the node: moving a node into a folder this caller may not act on
+    // puts it where they can no longer reach it (the bulk move's rule, ADR-124 決定 8).
+    require_visible_destination(&scope, body.group_id)?;
     // A folder that does not exist is a 400 that names it, rather than the foreign key turning
     // into a 500 that names nothing. Shared with the import and the bulk move (ADR-124 決定 1).
     super::groups::require_group_exists(&admin, body.group_id).await?;
@@ -1789,7 +1796,8 @@ pub(super) struct BulkTagResult {
 /// ⚠️ **Scoped via `Scoped`, not `Admin` alone.** `manage_config` is held by Operator, and an
 /// Operator can be group-scoped, so a bulk write that skipped the scope would let one site's
 /// operator relabel another's. This is the shape `POST /nodes/move` chose deliberately (ADR-124
-/// decision 8) rather than inheriting the single-node writes' known-wrong `ADMIN_CFG` claim.
+/// decision 8). The single-node writes took `VisibleNode` later: their old `ADMIN_CFG` claim let a
+/// scoped caller write any node by id (ADR-158 A8).
 #[utoipa::path(
     post, path = "/api/v1/nodes/tags", tag = "nodes",
     request_body = BulkNodeTags,
@@ -1874,16 +1882,7 @@ async fn move_nodes(
     }
     // The destination is checked before the ids: moving nodes *into* a folder this caller may not
     // act on would put them where that caller can no longer reach them.
-    match body.group_id {
-        Some(group) => super::scope::require_visible_group(&scope, group)?,
-        None if !scope.allows_group(None) => {
-            return Err(ApiError::forbidden_code(
-                "out_of_scope",
-                "this token cannot see ungrouped nodes",
-            ))
-        }
-        None => {}
-    }
+    require_visible_destination(&scope, body.group_id)?;
     super::groups::require_group_exists(&admin, body.group_id).await?;
     // Two writers, because appending does not need to read the destination first: the plain move
     // takes the `MAX(sort_order)` inside its own statement, and paying for a sibling read on every
@@ -1913,6 +1912,24 @@ async fn move_nodes(
     // moved something and never how much (`api/maintenance.rs` does the same for its bulk clear).
     tracing::info!(requested, moved, group = ?body.group_id, placed, "bulk node move");
     Ok(Json(BulkMoveResult { requested, moved }))
+}
+
+/// Refuse a move into a folder the caller may not act on — `404` for a folder outside their scope
+/// (its existence is not theirs to learn), `403 out_of_scope` for "ungrouped" when they cannot see
+/// ungrouped nodes. One rule for the three writers that move a node: the bulk move, the single move
+/// and the drag placement (ADR-158 A8).
+fn require_visible_destination(
+    scope: &super::scope::NodeScope,
+    group: Option<Uuid>,
+) -> Result<(), ApiError> {
+    match group {
+        Some(group) => super::scope::require_visible_group(scope, group),
+        None if !scope.allows_group(None) => Err(ApiError::forbidden_code(
+            "out_of_scope",
+            "this token cannot see ungrouped nodes",
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The nodes to delete.
@@ -2091,15 +2108,18 @@ pub(super) struct NodeParentAssignment {
     request_body = NodeParentAssignment,
     responses(
         (status = 204, description = "Dependency edge set or cleared"),
-        (status = 400, description = "Self-dependency, a parent that does not exist, or an edge that would close a cycle", body = super::error::ErrorBody),
+        (status = 400, description = "Self-dependency, a parent that does not exist or is outside the caller's scope, or an edge that would close a cycle", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_node_parent(
     _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<NodeParentAssignment>,
@@ -2111,6 +2131,14 @@ async fn set_node_parent(
             return Err(ApiError::bad_request(
                 "invalid_dependency",
                 "a node cannot depend on itself",
+            ));
+        }
+        // A parent this caller cannot see answers exactly as one that does not exist, so the
+        // refusal teaches them nothing about another site's inventory (ADR-158 A8).
+        if !scope.allows_node(&st, yagra_common::NodeId::from(parent)) {
+            return Err(ApiError::bad_request(
+                "parent_not_found",
+                format!("no node {parent}"),
             ));
         }
         let nodes = admin.repo.list_nodes().await.map_err(|e| {
@@ -2169,13 +2197,15 @@ pub(super) struct NodePlacement {
         (status = 204, description = "Node repositioned"),
         (status = 400, description = "Both `before` and `after` were given", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the caller cannot see ungrouped nodes", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node or the destination folder is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn place_node(
     _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<NodePlacement>,
@@ -2186,6 +2216,7 @@ async fn place_node(
             "specify at most one of before/after",
         ));
     }
+    require_visible_destination(&scope, body.group_id)?;
     // Order among the destination group's current members, excluding the moving node so it doesn't
     // anchor against itself, then interpolate a fractional order next to the target.
     let siblings: Vec<(Uuid, f64)> = admin
@@ -2285,6 +2316,7 @@ pub(crate) struct PoolAssignment {
 )]
 async fn set_node_pool(
     _perm: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<PoolAssignment>,
@@ -2328,7 +2360,7 @@ pub(super) struct BulkPoolResult {
 /// per-node `PUT /nodes/{node_id}/pool` meant one request each.
 ///
 /// ⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately
-/// (ADR-124 決定 8) rather than inheriting the single-node writer's known-wrong `ADMIN_CFG` claim.
+/// (ADR-124 決定 8). The single-node writer is `NodeScoped` too since ADR-158 A8.
 /// `manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which
 /// poller reaches a device, so an unscoped bulk write would let one site's operator strand
 /// another's inventory on a poller that cannot see it.
@@ -2800,6 +2832,7 @@ mod tests {
             routing: None,
             row_names: Vec::new(),
             observational: false,
+            judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
         });
@@ -3850,7 +3883,7 @@ mod tests {
     ///
     /// The pool decides which poller reaches a device, so an unscoped write here would strand
     /// another site's inventory on a poller that cannot see it — which is why this route is
-    /// `GroupFiltered` and the single-node one's `ADMIN_CFG` claim is a known defect.
+    /// `GroupFiltered`, and why the single-node one takes `VisibleNode` (ADR-158 A8).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_pool_change_does_not_reach_outside_the_callers_scope(pool: sqlx::PgPool) {
@@ -3917,6 +3950,188 @@ mod tests {
             repo.get_node(other).await.expect("read").is_some(),
             "a scoped caller deleted a node in a folder it cannot see"
         );
+    }
+
+    /// 🚨 **A group-scoped caller cannot write a node outside its folders by naming its id**
+    /// (ADR-158 A8).
+    ///
+    /// Eleven single-node writes took `ManageConfig` and no scope, so a caller limited to one site
+    /// could delete, rename, re-home, re-parent, move, or attach a check or a collection item to any
+    /// node in the deployment, and tell from `204` against `404` whether an id existed at all. The
+    /// bulk forms beside them were scoped; these were not.
+    ///
+    /// Both halves on one fixture: every route answers `404 node_not_found` for the other site's
+    /// node and writes nothing, and every route is **accepted** for the caller's own node — so a
+    /// handler that refused everything would fail the second half.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_cannot_write_a_node_outside_its_folders(pool: sqlx::PgPool) {
+        use crate::alerts::{AlertConfig, NodeMeta};
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        use axum::http::StatusCode;
+        use serde_json::json;
+
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let own = crate::pgtest::node(&pool, "own", 1, Some(mine)).await;
+        let own_url = crate::pgtest::node(&pool, "own-url", 2, Some(mine)).await;
+        let own_dns = crate::pgtest::node(&pool, "own-dns", 3, Some(mine)).await;
+        let other = crate::pgtest::node(&pool, "other", 4, Some(theirs)).await;
+        // `VisibleNode` reads a node's folder from the alert engine's snapshot, which a live
+        // deployment refreshes from these rows and this fixture does not.
+        let meta = [
+            (own, mine),
+            (own_url, mine),
+            (own_dns, mine),
+            (other, theirs),
+        ]
+        .into_iter()
+        .map(|(node, group)| {
+            (
+                NodeId::from(node),
+                NodeMeta {
+                    folder_group: Some(group),
+                    folder_chain: vec![group],
+                    ..NodeMeta::default()
+                },
+            )
+        })
+        .collect();
+        st.alerts.set_config(AlertConfig::new(Vec::new(), meta));
+        let tok = scoped_token(&st, &[mine]);
+
+        let url = json!({ "url": "http://10.0.0.5/health" });
+        let dns = json!({ "name": "example.test" });
+        let item = json!({
+            "metric_name": "scoped_probe",
+            "oid": "1.3.6.1.4.1.9.9.1",
+            "collection": "scalar",
+            "metric_kind": "gauge",
+        });
+        // (method, path suffix, body, the status the caller's own node gets). Deletes last, so each
+        // runs against something its write created.
+        let writes = |url_node: Uuid, dns_node: Uuid, node: Uuid| {
+            vec![
+                (
+                    "PUT",
+                    format!("{node}/bindings"),
+                    Some(json!({ "name": "renamed" })),
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "PUT",
+                    format!("{node}/group"),
+                    Some(json!({ "group_id": mine })),
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "PUT",
+                    format!("{node}/parent"),
+                    Some(json!({ "parent_id": null })),
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "PUT",
+                    format!("{node}/placement"),
+                    Some(json!({ "group_id": mine })),
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "PUT",
+                    format!("{node}/pool"),
+                    Some(json!({ "pool": "osaka" })),
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "POST",
+                    format!("{node}/collection"),
+                    Some(item.clone()),
+                    StatusCode::CREATED,
+                ),
+                (
+                    "PUT",
+                    format!("{url_node}/url-check"),
+                    Some(url.clone()),
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "PUT",
+                    format!("{dns_node}/dns-check"),
+                    Some(dns.clone()),
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "DELETE",
+                    format!("{url_node}/url-check"),
+                    None,
+                    StatusCode::NO_CONTENT,
+                ),
+                (
+                    "DELETE",
+                    format!("{dns_node}/dns-check"),
+                    None,
+                    StatusCode::NO_CONTENT,
+                ),
+                ("DELETE", format!("{node}"), None, StatusCode::NO_CONTENT),
+            ]
+        };
+
+        let refused = writes(other, other, other);
+        assert_eq!(refused.len(), 11, "every single-node write is exercised");
+        for (method, path, body, _) in refused {
+            let (status, out) =
+                send(&st, method, &format!("/api/v1/nodes/{path}"), &tok, body).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}: {out}");
+            assert_eq!(
+                out["error"]["code"], "node_not_found",
+                "{method} {path}: {out}"
+            );
+        }
+        let repo = crate::pgtest::repo(pool.clone());
+        let untouched = repo
+            .get_node(other)
+            .await
+            .expect("read")
+            .expect("a scoped caller deleted a node in a folder it cannot see");
+        assert_eq!(untouched.name, "other", "renamed from outside its scope");
+        assert_eq!(untouched.pool, None, "re-homed from outside its scope");
+        assert_eq!(crate::pgtest::rows(&pool, "collection_items").await, 0);
+        assert_eq!(crate::pgtest::rows(&pool, "url_checks").await, 0);
+        assert_eq!(crate::pgtest::rows(&pool, "dns_checks").await, 0);
+
+        for (method, path, body, expected) in writes(own_url, own_dns, own) {
+            let (status, out) =
+                send(&st, method, &format!("/api/v1/nodes/{path}"), &tok, body).await;
+            assert_eq!(status, expected, "{method} {path}: {out}");
+        }
+        assert!(
+            repo.get_node(own).await.expect("read").is_none(),
+            "the caller's own node was not deleted"
+        );
+
+        // A move INTO a folder the caller cannot see is refused too, even for its own node.
+        let (status, out) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/nodes/{own_url}/group"),
+            &tok,
+            Some(json!({ "group_id": theirs })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{out}");
+        assert_eq!(out["error"]["code"], "group_not_found", "{out}");
+        // …and so is a parent the caller cannot see, answered as one that does not exist.
+        let (status, out) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/nodes/{own_url}/parent"),
+            &tok,
+            Some(json!({ "parent_id": other })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+        assert_eq!(out["error"]["code"], "parent_not_found", "{out}");
     }
 
     /// Over the ceiling is refused outright, as the bulk move is.

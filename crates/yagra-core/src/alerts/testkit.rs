@@ -68,6 +68,7 @@ pub(crate) fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult
         routing: None,
         row_names: Vec::new(),
         observational: false,
+        judge_samples: false,
         poller_id: None,
         trace_context: Default::default(),
     }

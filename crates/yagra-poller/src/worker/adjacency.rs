@@ -361,6 +361,9 @@ mod tests {
             r.observational,
             "core keys its skip-the-alert-engine branch off this flag"
         );
+        // Its count sample is not judged either: the walk runs hourly, slower than the freshness
+        // sweep and every dwell assume (ADR-158 A10).
+        assert!(!r.judge_samples);
         // A device with nothing to report still made a real observation: an empty set, which
         // replaces whatever was stored (so an unplugged switch stops showing stale peers).
         assert_eq!(

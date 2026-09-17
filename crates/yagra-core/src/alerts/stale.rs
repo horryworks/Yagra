@@ -46,7 +46,10 @@ const TICK: Duration = Duration::from_secs(300);
 /// interval, which `app_settings_default_poll_interval_secs_check` and the identical CHECK on
 /// `profiles.poll_interval_secs` cap at 3600 seconds. Every slower cadence in the tree — neighbours,
 /// media, l3, arp (21600 default, 86400 max), routing — rides a check whose result is
-/// `observational`, so it never reaches the alert engine and can never produce a candidate.
+/// `observational` **without** `judge_samples`, so its samples never reach the alert engine and can
+/// never produce a candidate. The one observational check whose samples are judged, the optical
+/// probe, runs at the node's own interval (ADR-158 A10) — which is the condition
+/// `PollResult::judge_samples` sets for any check that claims it.
 ///
 /// So a series may miss five consecutive polls at the slowest legal setting and still count as
 /// flowing; at the 300-second default it is 72 missed polls, and at thirty seconds 720. Measured against the real strandings

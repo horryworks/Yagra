@@ -49,7 +49,7 @@ pub(super) async fn execute_optical(
     let mut windows: BTreeMap<u32, optical::OpticalWindow> = BTreeMap::new();
     // Built lazily and at most once per poll: both dialects that need it walk the same two
     // ENTITY-MIB columns, and a node bound to two vendor profiles must not walk them twice.
-    let mut entity: Option<optical::EntityIndex> = None;
+    let mut entity: Option<EntityIndexWalk> = None;
 
     for probe in probes {
         if probe.rx_metric.is_none() && probe.tx_metric.is_none() && probe.temp_metric.is_none() {
@@ -102,10 +102,15 @@ pub(super) async fn execute_optical(
         // chassis sensor dead-ends. That is the whole of the SFP/chassis split — no free-text rule
         // is added, and ADR-062 Issue #66's exclusion of a module's own temperature holds by
         // construction rather than by a list of strings.
-        if let (Some(metric), Some(idx)) = (probe.temp_metric.as_ref(), entity.as_ref()) {
+        //
+        // "Reaches no interface" is a conclusion from what the index did NOT contain, so it is drawn
+        // only from an index read whole (ADR-158 A6). An incomplete one publishes no chassis
+        // temperature at all this poll: a gap in the chart, rather than an SFP's 45 °C drawn as the
+        // chassis's.
+        if let (Some(metric), Some(walk)) = (probe.temp_metric.as_ref(), entity.as_ref()) {
             let mut kept = 0usize;
             for (ent, celsius) in &temps {
-                if idx.ifindex_for(*ent).is_some() {
+                if !walk.complete || walk.index.ifindex_for(*ent).is_some() {
                     continue;
                 }
                 kept += 1;
@@ -121,6 +126,9 @@ pub(super) async fn execute_optical(
                     job_id = %job.job_id,
                     flavor = ?probe.flavor,
                     kept,
+                    // Every sensor is withheld when the index is incomplete, so without this the
+                    // log would call them all port-attached.
+                    index_complete = walk.complete,
                     port_attached = temps.len() - kept,
                     "chassis temperature sensors",
                 );
@@ -130,9 +138,11 @@ pub(super) async fn execute_optical(
         let (resolved, resolved_windows) = if probe.flavor.is_ifindex_keyed() {
             (readings, raw_windows)
         } else {
-            let idx = entity
+            // A partial index is used as it is: a row it DID return is true (`EntityIndexWalk`).
+            let idx = &entity
                 .as_ref()
-                .expect("built above for a non-ifindex-keyed dialect");
+                .expect("built above for a non-ifindex-keyed dialect")
+                .index;
             let before = readings.len();
             let mapped: Vec<optical::OpticalSample> = readings
                 .into_iter()
@@ -213,6 +223,10 @@ pub(super) async fn execute_optical(
         routing: None,
         row_names: Vec::new(),
         observational: true,
+        // …but its readings are readings: a band on a light level or a chassis temperature is
+        // judged like any other (ADR-158 A10). Core schedules this job at the node's own poll
+        // interval (`scheduler/assemble.rs`), which is the condition the field's doc sets.
+        judge_samples: true,
         poller_id: None,
         trace_context: Default::default(),
     }
@@ -585,8 +599,10 @@ pub(super) async fn execute_mau(
     if entity_fallback {
         let text = walk_entity_media_text(job, transport, walker, timeout).await;
         if !text.is_empty() {
-            let index = walk_entity_index(job, transport, walker, timeout).await;
-            crate::mau::merge_entity_fallback(&mut media, &text, |ent| index.ifindex_for(ent));
+            // Only what the index FOUND is used here — a part attached to a port — so a partial
+            // index is safe (see `EntityIndexWalk`).
+            let walk = walk_entity_index(job, transport, walker, timeout).await;
+            crate::mau::merge_entity_fallback(&mut media, &text, |ent| walk.index.ifindex_for(ent));
         }
     }
 
@@ -641,6 +657,8 @@ fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterfac
         // Never a liveness statement — see [`execute_mau`]'s doc comment.
         row_names: Vec::new(),
         observational: true,
+        // Hourly, and it carries no samples anyway.
+        judge_samples: false,
         trace_context: Default::default(),
     }
 }
@@ -701,20 +719,40 @@ const ENT_PHYSICAL_IS_FRU: &str = "1.3.6.1.2.1.47.1.1.1.1.16";
 /// a module's. See `mau::entity_text`'s 🚨.
 const ENT_PHYSICAL_CLASS: &str = "1.3.6.1.2.1.47.1.1.1.1.5";
 
+/// Counts every ENTITY-MIB index walk by whether it was read whole (`result`: `complete` or
+/// `incomplete`). Both series are touched on every walk, so a poller that has walked once publishes
+/// the incomplete one at zero rather than first creating it on a failure (ADR-108 Increment 3).
+const ENTITY_INDEX_WALKS_METRIC: &str = "yagra_optical_entity_index_walks_total";
+
+/// What [`walk_entity_index`] learned, and whether it learned all of it.
+///
+/// **Not an `Option`, because the two uses of the index need different evidence** (ADR-158 A6).
+/// Mapping a reading to its port uses what was *found*: a row that attaches a sensor to a port is
+/// true however much of the table went unread, so a partial index is still safe to map through.
+/// Calling a sensor a chassis sensor uses what was *not found* — "it reaches no port" — and that
+/// conclusion is only as good as the table it was drawn from. A failed walk used to leave an empty
+/// index, under which every sensor reached no port and each SFP's own temperature was published
+/// as the chassis's.
+struct EntityIndexWalk {
+    index: optical::EntityIndex,
+    /// Every column was walked to its end and the row budget did not cut the table.
+    complete: bool,
+}
+
 /// Walk the two ENTITY-MIB relations that attach a physical entity to an interface.
 async fn walk_entity_index(
     job: &PollJob,
     transport: &dyn Transport,
     walker: &SnmpWalker,
     timeout: Duration,
-) -> optical::EntityIndex {
-    let mut idx = optical::EntityIndex::default();
+) -> EntityIndexWalk {
+    let mut index = optical::EntityIndex::default();
     let columns = vec![
         optical::ENT_ALIAS_MAPPING.to_owned(),
         optical::ENT_PHYSICAL_CONTAINED_IN.to_owned(),
     ];
-    match walker
-        .walk_instances(
+    let complete = match walker
+        .walk_instance_columns(
             transport,
             job.target,
             &columns,
@@ -723,18 +761,35 @@ async fn walk_entity_index(
         )
         .await
     {
-        Ok(rows) => {
-            let (alias, parent): (Vec<_>, Vec<_>) = rows
+        Ok(walk) => {
+            // A column the row budget cut still ends as answered — the walker stops asking, it
+            // does not fail — so a table that reached the cap is judged by its size.
+            let complete = walk.every_column_answered && walk.rows.len() < OPTICAL_ENTITY_MAX_ROWS;
+            let (alias, parent): (Vec<_>, Vec<_>) = walk
+                .rows
                 .into_iter()
                 .partition(|r| r.oid_base == optical::ENT_ALIAS_MAPPING);
-            idx.add_alias_rows(&alias);
-            idx.add_parent_rows(&parent);
+            index.add_alias_rows(&alias);
+            index.add_parent_rows(&parent);
+            complete
         }
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity index walk failed");
+            false
         }
-    }
-    idx
+    };
+    let (seen, other) = if complete {
+        ("complete", "incomplete")
+    } else {
+        tracing::debug!(
+            job_id = %job.job_id,
+            "entity index incomplete: no sensor will be reported as a chassis sensor this poll"
+        );
+        ("incomplete", "complete")
+    };
+    metrics::counter!(ENTITY_INDEX_WALKS_METRIC, "result" => seen).increment(1);
+    metrics::counter!(ENTITY_INDEX_WALKS_METRIC, "result" => other).increment(0);
+    EntityIndexWalk { index, complete }
 }
 
 #[cfg(test)]
@@ -801,15 +856,20 @@ mod tests {
         assert!(windows.contains_key(&2), "the live port keeps its band");
     }
 
-    /// **The Cisco sensor dialect end to end: optical readings, the sentinel, and the SFP/chassis
-    /// split** (ADR-070 decisions 1 and 2).
-    ///
-    /// There was no test of the correlated path at all before this — every optical test exercised
-    /// a `SimpleDialect`. That gap is why the shape of this one matters more than its size: the
-    /// four things asserted here each fail *silently* into "no series", which on a real device is
-    /// indistinguishable from "this switch has no optics".
-    #[tokio::test]
-    async fn the_cisco_sensor_dialect_splits_optical_readings_from_chassis_temperature() {
+    /// One ENTITY-MIB containment row: `ent` sits inside `parent`.
+    fn contained_in(ent: u32, parent: u32) -> yagra_transport::SnmpInstanceRow {
+        yagra_transport::SnmpInstanceRow {
+            oid_base: optical::ENT_PHYSICAL_CONTAINED_IN.to_owned(),
+            instance: vec![ent],
+            value: yagra_transport::SnmpValue::Int(i64::from(parent)),
+        }
+    }
+
+    /// A Cisco switch as the lab N3K/N9K answer it: one live receive sensor on Ethernet1/1, that
+    /// SFP's own temperature, one chassis sensor (`module-1 FRONT`), and a 0 dBm "no module"
+    /// transmit sensor — with the ENTITY-MIB rows that tell the port-attached sensors from the
+    /// chassis one. Returned with the optical job that asks for all three metrics.
+    fn cisco_sensor_switch() -> (FakeTransport, PollJob) {
         use yagra_transport::{SnmpInstanceRow, SnmpTableSample, SnmpTableString, SnmpValue};
         let d = optical::sensor_dialect(yagra_common::OpticalFlavor::CiscoEntitySensor)
             .expect("cisco is a correlated dialect");
@@ -862,20 +922,15 @@ mod tests {
             instance: vec![ent, 0],
             value: SnmpValue::Oid(format!("1.3.6.1.2.1.2.2.1.1.{ifindex}")),
         };
-        let parent = |ent: u32, p: u32| SnmpInstanceRow {
-            oid_base: optical::ENT_PHYSICAL_CONTAINED_IN.to_owned(),
-            instance: vec![ent],
-            value: SnmpValue::Int(i64::from(p)),
-        };
         fake.snmp_instances = vec![
-            parent(100, 10),
-            parent(101, 10),
+            contained_in(100, 10),
+            contained_in(101, 10),
             alias(10, 1), // port Ethernet1/1
-            parent(300, 20),
+            contained_in(300, 20),
             alias(20, 2), // port Ethernet1/2
             // The chassis sensor climbs to a module that owns no interface — a dead end, exactly
             // as `module-1 FRONT` does on the real N9K (four hops, no alias).
-            parent(200, 900),
+            contained_in(200, 900),
         ];
 
         let job = PollJob::snmp_optical(
@@ -894,33 +949,124 @@ mod tests {
             },
             30,
         );
+        (fake, job)
+    }
+
+    /// `(ifindex, value)` of every sample in `r` named `metric`.
+    fn samples_of(r: &PollResult, metric: &str) -> Vec<(Option<u32>, f64)> {
+        r.samples
+            .iter()
+            .filter(|s| s.metric == metric)
+            .map(|s| (s.ifindex.map(|i| i.0), s.value))
+            .collect()
+    }
+
+    /// **The Cisco sensor dialect end to end: optical readings, the sentinel, and the SFP/chassis
+    /// split** (ADR-070 decisions 1 and 2).
+    ///
+    /// There was no test of the correlated path at all before this — every optical test exercised
+    /// a `SimpleDialect`. That gap is why the shape of this one matters more than its size: the
+    /// four things asserted here each fail *silently* into "no series", which on a real device is
+    /// indistinguishable from "this switch has no optics".
+    #[tokio::test]
+    async fn the_cisco_sensor_dialect_splits_optical_readings_from_chassis_temperature() {
+        let (fake, job) = cisco_sensor_switch();
         let r = execute(&job, &fake, 1_000).await;
-        let of = |metric: &str| -> Vec<(Option<u32>, f64)> {
-            r.samples
-                .iter()
-                .filter(|s| s.metric == metric)
-                .map(|s| (s.ifindex.map(|i| i.0), s.value))
-                .collect()
-        };
 
         // The Cisco columns were walked at all — if the dialect were still hardcoded to the
         // standard root this would be empty, which is the pre-ADR-070 behaviour on every Catalyst.
         assert_eq!(
-            of(yagra_common::METRIC_IF_RX_POWER_DBM),
+            samples_of(&r, yagra_common::METRIC_IF_RX_POWER_DBM),
             vec![(Some(1), -13.187)],
             "the live receive level, translated to its ifIndex"
         );
         // The 0 dBm marker must not become the strongest reading on the switch.
         assert!(
-            of(yagra_common::METRIC_IF_TX_POWER_DBM).is_empty(),
+            samples_of(&r, yagra_common::METRIC_IF_TX_POWER_DBM).is_empty(),
             "a 0 dBm sensor is 'no module', not a measurement"
         );
         // Exactly one temperature: the chassis one. The SFP's own temperature (ent 101, 45 °C) is
         // excluded *structurally* — it reaches a port — not by matching its description.
         assert_eq!(
-            of(yagra_common::METRIC_CISCO_TEMP_C),
+            samples_of(&r, yagra_common::METRIC_CISCO_TEMP_C),
             vec![(Some(200), 31.0)],
             "only the sensor that belongs to no port becomes a chassis temperature"
+        );
+    }
+
+    /// 🚨 **A chassis temperature is a claim that a sensor reaches no port, and an index that was
+    /// not read cannot support it** (ADR-158 A6). Before this, a failed ENTITY-MIB walk left an
+    /// empty index, every sensor "reached no port", and the SFP's own 45 °C was published as a
+    /// chassis temperature beside the real one.
+    #[tokio::test]
+    async fn a_failed_entity_index_walk_publishes_no_chassis_temperature() {
+        let (fake, job) = cisco_sensor_switch();
+        let fake = fake.with_silent_instance_walks();
+        let r = execute(&job, &fake, 1_000).await;
+
+        assert!(
+            samples_of(&r, yagra_common::METRIC_CISCO_TEMP_C).is_empty(),
+            "nothing was learned about which sensor sits on a port, so none is a chassis sensor: \
+             {:?}",
+            samples_of(&r, yagra_common::METRIC_CISCO_TEMP_C)
+        );
+        assert!(
+            r.observational,
+            "a failed index walk still states nothing about liveness"
+        );
+    }
+
+    /// The optical result states nothing about liveness and still asks for its readings to be
+    /// judged (ADR-158 A10) — the two halves core reads separately.
+    #[tokio::test]
+    async fn an_optical_result_is_observational_and_asks_for_its_samples_to_be_judged() {
+        let (fake, job) = cisco_sensor_switch();
+        let r = execute(&job, &fake, 1_000).await;
+        assert!(r.observational);
+        assert!(r.judge_samples);
+        assert!(!r.samples.is_empty(), "…and it has readings to judge");
+    }
+
+    /// A walk that returned rows but did not hear every column out is half an index. The rows it
+    /// did return are still true, so a reading that finds its port through them keeps it — only the
+    /// "reaches no port" conclusion is withheld.
+    #[tokio::test]
+    async fn an_index_missing_its_alias_column_publishes_no_chassis_temperature() {
+        let (mut fake, job) = cisco_sensor_switch();
+        // Ethernet1/2's alias row is what the unanswered column lost.
+        fake.snmp_instances
+            .retain(|r| !(r.oid_base == optical::ENT_ALIAS_MAPPING && r.instance == vec![20, 0]));
+        let fake = fake.with_unanswered_instance_columns();
+        let r = execute(&job, &fake, 1_000).await;
+
+        assert!(
+            samples_of(&r, yagra_common::METRIC_CISCO_TEMP_C).is_empty(),
+            "a partial index cannot prove a sensor reaches no port: {:?}",
+            samples_of(&r, yagra_common::METRIC_CISCO_TEMP_C)
+        );
+        assert_eq!(
+            samples_of(&r, yagra_common::METRIC_IF_RX_POWER_DBM),
+            vec![(Some(1), -13.187)],
+            "a reading whose port WAS found keeps it — finding is evidence even in half an index"
+        );
+    }
+
+    /// The row budget ends a column as answered (the walker stops asking, it does not fail), so the
+    /// column flag alone says nothing about a table cut at its cap.
+    #[tokio::test]
+    async fn an_index_walk_that_filled_its_row_budget_is_not_trusted() {
+        let (mut fake, job) = cisco_sensor_switch();
+        let real = fake.snmp_instances.len();
+        let filler = u32::try_from(OPTICAL_ENTITY_MAX_ROWS - real).expect("fits");
+        fake.snmp_instances
+            .extend((0..filler).map(|i| contained_in(100_000 + i, 900)));
+        let r = execute(&job, &fake, 1_000).await;
+
+        assert!(
+            samples_of(&r, yagra_common::METRIC_CISCO_TEMP_C).is_empty(),
+            "a table that filled the budget may have lost the rows that attach a sensor to its \
+             port: {:?}",
+            samples_of(&r, yagra_common::METRIC_CISCO_TEMP_C)
         );
     }
 

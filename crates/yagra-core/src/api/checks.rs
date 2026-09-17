@@ -478,6 +478,7 @@ async fn get_url_check(
 )]
 async fn set_url_check(
     perm: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
     Json(cfg): Json<UrlCheckConfig>,
@@ -492,12 +493,13 @@ async fn set_url_check(
         (status = 204, description = "URL check removed; the node itself is untouched"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "The node carries no URL check", body = super::error::ErrorBody),
+        (status = 404, description = "The node carries no URL check, or is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_url_check(
     perm: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
@@ -540,6 +542,7 @@ async fn get_dns_check(
 )]
 async fn set_dns_check(
     perm: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
     Json(cfg): Json<DnsCheckConfig>,
@@ -554,12 +557,13 @@ async fn set_dns_check(
         (status = 204, description = "DNS check removed; the node and its recorded chains are untouched"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "The node carries no DNS check", body = super::error::ErrorBody),
+        (status = 404, description = "The node carries no DNS check, or is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_dns_check(
     perm: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {

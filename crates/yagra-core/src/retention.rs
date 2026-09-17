@@ -346,7 +346,7 @@ impl Subject {
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
                 pruned_from: Some("alert_history"),
-                note: "Fired/cleared alert records, including the metric snapshot taken at fire time.",
+                note: "Fired/cleared alert records, including the metric snapshot taken at fire time. An alert that is still open keeps its latest fire record past this window, so a restart restores it.",
             },
             Subject::NodeStateSnapshots => Row {
                 subject: self,
