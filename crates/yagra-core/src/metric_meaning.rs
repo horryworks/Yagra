@@ -141,7 +141,7 @@ pub fn check_family(metric: &str) -> Option<CheckFamily> {
 /// **Nor is it inferred from the name.** Inc.6 decision J refused a `_pct` / `_ms` suffix rule and
 /// the counter-example it named is still here: `huawei_cpu_usage` and `huawei_mem_usage` are both
 /// percentages with no suffix at all, so the rule would miss precisely the vendor the lab runs.
-/// There is no rule. All 108 rows were written by hand.
+/// There is no rule. All 116 rows were written by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricUnit {
     /// Appended to the value as-is, and the same in every language: `%`, `ms`, `°C`, `W`, `dBm`,
@@ -215,7 +215,7 @@ impl MetricUnit {
 /// already pins this table to the collection catalogue in **both** directions, so a new metric now
 /// fails to compile until someone decides its unit. That guarantee is bought, not built — there is
 /// no separate check for units and there should not be one.
-pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 108] = [
+pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 116] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.", MetricUnit::None),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).", MetricUnit::Counted("connections")),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.", MetricUnit::None),
@@ -323,7 +323,15 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 108] = [
     ("ups_battery_status", "Battery condition. 1 = unknown, 2 = normal, 3 = low, 4 = depleted. Anything above 2 needs attention.", MetricUnit::None),
     ("ups_charge_remaining_pct", "Estimated battery charge remaining, in percent.", MetricUnit::Symbol("%")),
     ("ups_minutes_remaining", "Estimated run time left on battery, in minutes. Meaningful only while the UPS is actually on battery.", MetricUnit::Counted("minutes")),
-    ("ups_output_load_pct", "Output load as a percentage of the UPS’s rated capacity. One row per output line.", MetricUnit::Symbol("%")),
+    ("ups_output_load_pct","Output load as a percentage of the UPS’s rated capacity. One row per output line.", MetricUnit::Symbol("%")),
+    ("wlan_controller_ap_license", "Access points the wireless controller is licensed to manage. Compare it with the configured count to see how much licence headroom is left. An HA standby reports the same licence.", MetricUnit::Counted("access points")),
+    ("wlan_controller_ap_normal_pct", "Share of the controller's configured access points that are working normally, in percent. Below 100 means at least one AP is down, not yet joined, or failing its configuration. An HA standby reports the active controller's figure, so a pair raises one condition twice.", MetricUnit::Symbol("%")),
+    ("wlan_controller_aps_configured", "Access points configured on the wireless controller, whether or not they are currently joined.", MetricUnit::Counted("access points")),
+    ("wlan_controller_aps_joined", "Access points currently joined to the wireless controller. An HA standby reports the active controller's count, so do not add the two members of a pair together.", MetricUnit::Counted("access points")),
+    ("wlan_controller_clients", "Wireless clients currently online through the controller, on every band. An HA standby reports the active controller's count, so do not add the two members of a pair together.", MetricUnit::Counted("clients")),
+    ("wlan_controller_clients_2g4", "Wireless clients currently online on the 2.4 GHz band. An HA standby reports the active controller's count.", MetricUnit::Counted("clients")),
+    ("wlan_controller_clients_5g", "Wireless clients currently online on the 5 GHz band. An HA standby reports the active controller's count.", MetricUnit::Counted("clients")),
+    ("wlan_controller_clients_6g", "Wireless clients currently online on the 6 GHz band. Zero on a controller whose access points have no 6 GHz radio. An HA standby reports the active controller's count.", MetricUnit::Counted("clients")),
 ];
 
 /// Where a metric comes from — the one fact about it that changes how it can be *used*.
@@ -528,7 +536,7 @@ mod tests {
     /// The units, grouped by kind, exactly as they are committed for the WebUI (ADR-046 Inc.7).
     ///
     /// Three flat maps rather than one map of pairs: `serde_json` pretty-prints an array across
-    /// four lines, so a per-metric tuple would turn a 108-line file into 400 and make every diff
+    /// four lines, so a per-metric tuple would turn a 116-line file into 430 and make every diff
     /// unreadable. Grouped, each metric is one line and the WebUI gets the three lookups it
     /// actually wants without re-deriving them.
     ///

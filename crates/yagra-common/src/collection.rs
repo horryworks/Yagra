@@ -596,6 +596,10 @@ const T_NETSNMP: &str = "Linux Net-SNMP (UCD)";
 // Role-KPI (functional).
 const T_ASA_SESSIONS: &str = "Cisco ASA sessions";
 const T_HUAWEI_USG_SESSIONS: &str = "Huawei USG sessions";
+/// A wireless controller's own totals — APs and clients — read as scalars (ADR-064 increment A).
+/// Vendor-prefixed in name only: the metric names it publishes are the vendor-neutral
+/// `wlan_controller_*`, so a Cisco or Aruba flavor later maps its OIDs onto the same series.
+const T_HUAWEI_WLAN_CTL: &str = "Huawei WLAN controller (AC)";
 
 // Role-KPI (VPN) — firewalls used as VPN heads. Cisco RA/IPsec reuse across ASA + FTD (+ IOS
 // IPsec gateways); Fortinet/Palo Alto carry their own VPN counters.
@@ -980,6 +984,70 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
             items: vec![
                 vendor_table("poe_power_capacity_w", "1.3.6.1.2.1.105.1.3.1.1.2"),
                 vendor_table("poe_power_consumed_w", "1.3.6.1.2.1.105.1.3.1.1.4"),
+            ],
+        },
+        // ADR-064 increment A (2026-09-18). Appended at the end: seed ids are array positions.
+        //
+        // HUAWEI-WLAN-GLOBAL-MIB scalars, measured on the PoC's four AC6508s (V200R024C00SPC100).
+        // Vendor-neutral metric names on purpose (ADR-064 R9): Cisco and Aruba controllers expose the
+        // same concepts, and a later flavor template maps its own OIDs onto these names so fleet
+        // rankings, dashboards and rules work across vendors.
+        //
+        // 🚨 An HA **standby** AC answers the AP and client counts with the active's values — 30 APs
+        // and 16 clients on both members of the measured pair — so summing a pair doubles them. The
+        // meaning sentences say so; per-AP totals come from the AP nodes (increment B).
+        //
+        // Left out, each for a reason: hwWlanGlobalUpSpeed/DownSpeed (`.12.1.2.8/.9`) carry no unit in
+        // the MIB and read 0 on the standby — a guessed unit draws a believable wrong line (ADR-062);
+        // hwWlanAccessMaxStaNumber (`.12.1.1.3`) is a platform constant (4096); associated STAs
+        // (`.12.1.2.2`) equalled the authenticated count on every AC measured; dual-band STAs
+        // (`.12.1.2.7`) is a client-capability census; service-normal AP count (`.12.1.5.6`) equalled
+        // the joined count and the normal ratio already covers it.
+        BuiltinTemplate {
+            name: T_HUAWEI_WLAN_CTL,
+            description: "Huawei wireless controller totals (HUAWEI-WLAN-GLOBAL-MIB): configured, \
+                 joined and licensed access points, the share of APs working normally, online \
+                 clients overall and per band, and successful roams. An HA standby reports the \
+                 active controller's AP and client counts, so do not add the two together.",
+            items: vec![
+                vendor_scalar(
+                    "wlan_controller_aps_configured",
+                    "1.3.6.1.4.1.2011.6.139.12.1.5.7.0",
+                ),
+                vendor_scalar(
+                    "wlan_controller_aps_joined",
+                    "1.3.6.1.4.1.2011.6.139.12.1.2.1.0",
+                ),
+                vendor_scalar(
+                    "wlan_controller_ap_license",
+                    "1.3.6.1.4.1.2011.6.139.12.1.1.2.0",
+                ),
+                vendor_scalar(
+                    "wlan_controller_ap_normal_pct",
+                    "1.3.6.1.4.1.2011.6.139.12.1.5.1.0",
+                ),
+                vendor_scalar(
+                    "wlan_controller_clients",
+                    "1.3.6.1.4.1.2011.6.139.12.1.2.3.0",
+                ),
+                vendor_scalar(
+                    "wlan_controller_clients_2g4",
+                    "1.3.6.1.4.1.2011.6.139.12.1.2.5.0",
+                ),
+                vendor_scalar(
+                    "wlan_controller_clients_5g",
+                    "1.3.6.1.4.1.2011.6.139.12.1.2.6.0",
+                ),
+                vendor_scalar(
+                    "wlan_controller_clients_6g",
+                    "1.3.6.1.4.1.2011.6.139.12.1.2.13.0",
+                ),
+                // Integer32 in the MIB but a since-boot total, so a counter: `rate()` turns it into
+                // roams per second and absorbs the reset at a reboot (ADR-012). Reads 0 on a standby.
+                vendor_scalar_counter(
+                    "huawei_wlan_reassoc_success",
+                    "1.3.6.1.4.1.2011.6.139.12.1.2.4.0",
+                ),
             ],
         },
     ]
@@ -1479,7 +1547,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Huawei wireless controller",
             C::WirelessController,
             Some("Huawei"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI],
+            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_HUAWEI_WLAN_CTL],
         ),
         prof(
             "A10 Thunder ADC",
@@ -1876,6 +1944,8 @@ mod tests {
             T_CISCO_SENSORS,
             T_CISCO_ENV_STATE,
             T_POE,
+            // ── ADR-064 appended from here ──
+            T_HUAWEI_WLAN_CTL,
         ];
         let actual: Vec<&str> = builtin_templates().iter().map(|t| t.name).collect();
         assert_eq!(
@@ -1883,6 +1953,43 @@ mod tests {
             "the built-in template array changed order or gained an entry that is not at the end; \
              seed ids are array positions (extensibility.md §6)"
         );
+    }
+
+    /// The wireless controller totals are GETs of `.0` instances under HUAWEI-WLAN, and only the
+    /// since-boot roam total is a counter (ADR-064 increment A).
+    ///
+    /// Pinned because each shape fails silently. A column base without `.0` makes the GET answer
+    /// "no such instance" and the metric reads `no_data` forever; a `Table` item would be walked,
+    /// land in the Entity dimension and read as a node-wide **max** of one row; and a count stored as
+    /// a counter would be charted as a rate of APs per second.
+    #[test]
+    fn the_wlan_controller_totals_are_scalar_gets_under_huawei_wlan() {
+        let templates = builtin_templates();
+        let t = templates
+            .iter()
+            .find(|t| t.name == T_HUAWEI_WLAN_CTL)
+            .expect("the WLAN controller template exists");
+        assert_eq!(t.items.len(), 9, "{:?}", t.items);
+        for item in &t.items {
+            assert_eq!(item.kind, CollectionKind::Scalar, "{}", item.metric_name);
+            assert!(
+                item.oid.starts_with("1.3.6.1.4.1.2011.6.139.12.1.") && item.oid.ends_with(".0"),
+                "{}: {}",
+                item.metric_name,
+                item.oid
+            );
+            let expected = if item.metric_name == "huawei_wlan_reassoc_success" {
+                MetricKind::Counter
+            } else {
+                assert!(
+                    item.metric_name.starts_with("wlan_controller_"),
+                    "{}: a vendor-neutral name",
+                    item.metric_name
+                );
+                MetricKind::Gauge
+            };
+            assert_eq!(item.metric_kind, expected, "{}", item.metric_name);
+        }
     }
 
     /// Every profile that attaches an optical template attaches exactly one.
@@ -2071,6 +2178,10 @@ mod tests {
         assert_eq!(wac.category, ProfileCategory::WirelessController);
         assert_eq!(wac.vendor, Some("Huawei"));
         assert!(wac.templates.contains(&T_HUAWEI), "WAC carries VRP health");
+        assert!(
+            wac.templates.contains(&T_HUAWEI_WLAN_CTL),
+            "WAC carries the controller's AP and client totals (ADR-064 increment A)"
+        );
 
         let a10 = by_name("A10 Thunder ADC").expect("A10 load-balancer profile present");
         assert_eq!(a10.category, ProfileCategory::LoadBalancer);

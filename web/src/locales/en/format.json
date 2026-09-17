@@ -55,9 +55,11 @@
     "meraki_uplink_status": "Uplink status"
   },
   "unit": {
+    "access points": "access points",
     "addresses": "addresses",
     "adjacencies": "adjacencies",
     "answers": "answers",
+    "clients": "clients",
     "connections": "connections",
     "days": "days",
     "entries": "entries",

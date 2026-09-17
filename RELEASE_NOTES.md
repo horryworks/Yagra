@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **Huawei wireless controllers report their access points and clients.** A node on the built-in "Huawei wireless controller" profile now also collects, from HUAWEI-WLAN-GLOBAL-MIB: access points configured, joined and licensed (`wlan_controller_aps_configured`, `wlan_controller_aps_joined`, `wlan_controller_ap_license`), the share of APs working normally (`wlan_controller_ap_normal_pct`), clients online overall and on 2.4, 5 and 6 GHz (`wlan_controller_clients`, `…_2g4`, `…_5g`, `…_6g`), and successful roams as a counter (`huawei_wlan_reassoc_success`). Joined APs and online clients get their own cards under Device health; the rest appear as cards below it. The profile picks the new set up on the next core start, with no action needed. ⚠️ **An HA standby controller reports the active controller's AP and client counts**, so the two members of a pair show the same numbers — do not add them together. No default alert rule is added: "normal share below 100" would fire on both members of a pair for one condition.
+
 ## v0.3.26 — Threshold rules on optical light levels fire, a crafted SNMP inform no longer stops trap reception, folder-scoped accounts can no longer change nodes outside their folders, IPFIX records with variable-length fields are recorded, an alert open longer than the history retention survives a restart, a crashed listener comes back
 
 ### Improvements

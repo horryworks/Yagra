@@ -378,6 +378,13 @@
     "source": "collected"
   },
   {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "counter",
+    "metric_name": "huawei_wlan_reassoc_success",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
     "family": "icmp",
     "metric_kind": "gauge",
     "metric_name": "icmp_loss_pct",
@@ -738,6 +745,62 @@
     "family": "UPS (RFC1628)",
     "metric_kind": "gauge",
     "metric_name": "ups_output_load_pct",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_ap_license",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_ap_normal_pct",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_aps_configured",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_aps_joined",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_clients",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_clients_2g4",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_clients_5g",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN controller (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_clients_6g",
     "per_interface": false,
     "source": "collected"
   }
