@@ -392,6 +392,17 @@ fn install_panic_hook() {
     });
 }
 
+/// Hand `yagra_panics_total` to the metrics recorder at zero. **Call it after the binary has
+/// installed its recorder** — [`init`] runs before that, so a registration made there would go to
+/// the no-op recorder and publish nothing.
+///
+/// 🚨 A counter first touched by a failure has **no series at all** while nothing is failing, so a
+/// healthy process and one whose hook never fires read the same, and an `increase()` alert misses
+/// the first panic (ADR-108 Increment 3 — the same bug `result_ingest` guards against).
+pub fn register_panic_counter_at_zero() {
+    metrics::counter!("yagra_panics_total").increment(0);
+}
+
 /// Build the batch-exporting tracer provider for `endpoint`. Returns `None` (and warns to stderr,
 /// since the subscriber isn't installed yet) if the exporter can't be constructed — a bad endpoint
 /// must degrade to logs-only, never abort the binary.
@@ -572,6 +583,8 @@ where
     F: FnMut() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
+    // At zero, on the caller's thread, so a task that never panics still has its series.
+    metrics::counter!("yagra_task_restarts_total", "task" => task).increment(0);
     let token = shutdown.clone();
     tokio::spawn(async move {
         let mut backoff = RESTART_BACKOFF_MIN;
@@ -840,6 +853,29 @@ mod tests {
             .expect("a returning task ends its supervision")
             .expect("the supervisor itself never panics");
         assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Both panic counters exist at zero before anything has panicked (ADR-108 Increment 3).
+    #[tokio::test]
+    async fn the_panic_counters_are_published_at_zero() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let token = CancellationToken::new();
+        metrics::with_local_recorder(&recorder, || {
+            register_panic_counter_at_zero();
+            spawn_supervised(&token, "test_zero", std::future::pending::<()>);
+        });
+        let rendered = handle.render();
+        for line in [
+            "yagra_panics_total 0",
+            "yagra_task_restarts_total{task=\"test_zero\"} 0",
+        ] {
+            assert!(
+                rendered.lines().any(|l| l == line),
+                "expected `{line}` in:\n{rendered}"
+            );
+        }
+        token.cancel();
     }
 
     #[test]

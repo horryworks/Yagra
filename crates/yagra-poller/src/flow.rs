@@ -19,7 +19,9 @@
 //! buffered. Parsing shares the `yagra-ingest` never-panic contract; the socket setup, source rate
 //! limiter, and timestamp helper are reused verbatim from [`crate::listeners`].
 
-use crate::listeners::{allow, contained, now_unix_ms, EdgeTuning};
+use crate::listeners::{
+    allow, contained, now_unix_ms, register_datagram_panics_at_zero, EdgeTuning,
+};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -314,19 +316,19 @@ pub async fn run_flow_flusher<B: Bus>(
 
 /// Publish what the template cache read and did not apply since the last flush (ADR-158). The
 /// parser crate counts and this crate publishes, the way `ExporterBuckets::drain` already splits it.
+///
+/// Zeros are published too, and [`start`] calls this with nothing counted when the NetFlow/IPFIX
+/// listener binds: a counter only a bad template touches would otherwise have no series at all on a
+/// healthy poller (ADR-108 Increment 3).
 fn publish_template_stats(stats: TemplateStats) {
     let TemplateStats {
         rejected_oversized,
         withdrawals_ignored,
     } = stats;
-    if rejected_oversized > 0 {
-        metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "oversized")
-            .increment(rejected_oversized);
-    }
-    if withdrawals_ignored > 0 {
-        metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "withdrawal")
-            .increment(withdrawals_ignored);
-    }
+    metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "oversized")
+        .increment(rejected_oversized);
+    metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "withdrawal")
+        .increment(withdrawals_ignored);
 }
 
 /// Start-of-bucket timestamp (ms) for the window being flushed: `now` floored to a `secs` boundary.
@@ -409,6 +411,8 @@ pub(crate) async fn start(
                 tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, top_n, bucket_secs, "flow listener enabled (NetFlow v5/v9 / IPFIX)");
                 labels.push(format!("flow:{bind}"));
                 any_bound = true;
+                register_datagram_panics_at_zero(FlowProto::Netflow.as_str());
+                publish_template_stats(TemplateStats::default());
                 for sock in socks {
                     spawn_flow_reader(
                         shutdown,
@@ -432,6 +436,7 @@ pub(crate) async fn start(
                 tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, top_n, bucket_secs, "sflow listener enabled (sFlow v5)");
                 labels.push(format!("sflow:{bind}"));
                 any_bound = true;
+                register_datagram_panics_at_zero(FlowProto::Sflow.as_str());
                 for sock in socks {
                     spawn_flow_reader(
                         shutdown,
@@ -821,6 +826,31 @@ mod tests {
 
         let got = tokio::time::timeout(std::time::Duration::from_millis(500), raw.recv()).await;
         assert!(got.is_err(), "garbage must not be relayed");
+    }
+
+    /// Both template-drop reasons are published — at zero before any bad template, and by their
+    /// counts after (ADR-158).
+    #[test]
+    fn template_drops_are_published_by_reason_including_zero() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            publish_template_stats(TemplateStats::default());
+            publish_template_stats(TemplateStats {
+                rejected_oversized: 2,
+                withdrawals_ignored: 0,
+            });
+        });
+        let rendered = handle.render();
+        for line in [
+            "yagra_flow_templates_dropped_total{reason=\"oversized\"} 2",
+            "yagra_flow_templates_dropped_total{reason=\"withdrawal\"} 0",
+        ] {
+            assert!(
+                rendered.lines().any(|l| l == line),
+                "expected `{line}` in:\n{rendered}"
+            );
+        }
     }
 
     /// The reception path must not depend on the relay draining: a stalled publisher fills the

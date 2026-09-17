@@ -5266,6 +5266,7 @@ name = "yagra-telemetry"
 version = "0.3.25"
 dependencies = [
  "metrics",
+ "metrics-exporter-prometheus",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",

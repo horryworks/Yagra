@@ -245,6 +245,8 @@ async fn main() -> anyhow::Result<()> {
     let metrics = PrometheusBuilder::new()
         .install_recorder()
         .map_err(|e| anyhow::anyhow!("install Prometheus recorder: {e}"))?;
+    // After the recorder, or the zero goes nowhere (ADR-158).
+    yagra_telemetry::register_panic_counter_at_zero();
 
     match Config::from_env() {
         Some(cfg) => run_live(cfg, metrics).await,
