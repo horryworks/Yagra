@@ -5265,6 +5265,7 @@ dependencies = [
 name = "yagra-telemetry"
 version = "0.3.25"
 dependencies = [
+ "metrics",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",

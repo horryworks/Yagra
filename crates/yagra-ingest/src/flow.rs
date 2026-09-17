@@ -145,10 +145,35 @@ struct TemplateKey {
 struct TemplateField {
     /// Information-element number (enterprise bit already stripped).
     ie: u16,
-    /// Field length in bytes.
+    /// Field length in bytes. Not the length when [`Self::variable`] is set.
     len: u16,
     /// Whether this is an enterprise-specific field (decoded as opaque — length skipped).
     enterprise: bool,
+    /// IPFIX variable-length encoding (RFC 7011 §7): the template declares 65535 and every record
+    /// carries this field's length in front of its value. Never set for NetFlow v9, where 65535 is
+    /// an ordinary fixed length (ADR-158).
+    variable: bool,
+}
+
+/// The length an IPFIX template declares for a variable-length field (RFC 7011 §7).
+const VARIABLE_LENGTH: u16 = 0xFFFF;
+
+/// Which template dialect a template set is written in. The two differ in exactly the two places
+/// [`parse_template_set`] branches on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TemplateDialect {
+    NetflowV9,
+    Ipfix,
+}
+
+/// Template records the cache read and did not apply, counted since the last
+/// [`FlowTemplates::take_stats`] (ADR-158). This crate publishes no metrics; the poller does.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateStats {
+    /// Templates declaring more than the per-template field cap. Read past whole, never stored.
+    pub rejected_oversized: u64,
+    /// Zero-field template records (IPFIX withdrawals). Skipped: nothing is deleted on their say-so.
+    pub withdrawals_ignored: u64,
 }
 
 /// Bounded cache of NetFlow v9 / IPFIX templates. Keyed by `(exporter, observation-domain,
@@ -159,6 +184,7 @@ pub struct FlowTemplates {
     map: HashMap<TemplateKey, Vec<TemplateField>>,
     order: VecDeque<TemplateKey>,
     cap: usize,
+    stats: TemplateStats,
 }
 
 impl Default for FlowTemplates {
@@ -181,7 +207,14 @@ impl FlowTemplates {
             map: HashMap::new(),
             order: VecDeque::new(),
             cap: cap.max(1),
+            stats: TemplateStats::default(),
         }
+    }
+
+    /// What was read and not applied since the last call, and reset. Counts saturate, so a cache
+    /// nobody drains (core's forwarder keeps one) cannot overflow.
+    pub fn take_stats(&mut self) -> TemplateStats {
+        std::mem::take(&mut self.stats)
     }
 
     fn insert(&mut self, key: TemplateKey, fields: Vec<TemplateField>) {
@@ -438,7 +471,13 @@ fn parse_netflow_v9(
             None => break, // truncated trailer — stop, keep what we have
         };
         match flowset_id {
-            0 => parse_v9_templates(templates, exporter, domain, content),
+            0 => parse_template_set(
+                templates,
+                exporter,
+                domain,
+                content,
+                TemplateDialect::NetflowV9,
+            ),
             1 => { /* options template — not decoded this increment */ }
             id if id >= 256 => {
                 decode_data_records(templates, exporter, domain, id, content, &mut out);
@@ -452,33 +491,80 @@ fn parse_netflow_v9(
     Ok(out)
 }
 
-fn parse_v9_templates(
+/// Learn the templates in one template FlowSet (NetFlow v9) or template Set (IPFIX).
+///
+/// One reader for both, because they differ in two places only: an IPFIX field with the enterprise
+/// bit carries a 4-byte PEN, and an IPFIX length of 65535 means variable length.
+///
+/// Three rules, each a fix (ADR-158):
+///
+/// - **A template declaring more than [`MAX_TEMPLATE_FIELDS`] fields is read past whole and not
+///   stored.** It used to be cut at the cap and stored: data records then decoded with the wrong
+///   layout, and the unread fields were taken for the next template's header.
+/// - **A zero-field record (an IPFIX withdrawal) is skipped and deletes nothing.** It used to end the
+///   whole set, hiding every template after it. Honouring it would let four forged UDP bytes erase
+///   another exporter's template, and an exporter re-sends what it still uses.
+/// - **A record with an id below 256 ends the set.** No template may use one (RFC 3954 / RFC 7011),
+///   so it is padding or garbage — and zero padding must not be counted as a withdrawal.
+fn parse_template_set(
     templates: &mut FlowTemplates,
     exporter: IpAddr,
     domain: u32,
     content: &[u8],
+    dialect: TemplateDialect,
 ) {
     let mut r = Reader::new(content);
     while r.remaining() >= 4 {
-        let (Some(template_id), Some(field_count)) = (r.u16(), r.u16()) else {
+        let (Some(template_id), Some(declared)) = (r.u16(), r.u16()) else {
             break;
         };
-        let field_count = (field_count as usize).min(MAX_TEMPLATE_FIELDS);
-        let mut fields = Vec::with_capacity(field_count);
-        let mut ok = true;
-        for _ in 0..field_count {
-            let (Some(ie), Some(len)) = (r.u16(), r.u16()) else {
-                ok = false;
+        if template_id < 256 {
+            break;
+        }
+        let declared = declared as usize;
+        if declared == 0 {
+            templates.stats.withdrawals_ignored =
+                templates.stats.withdrawals_ignored.saturating_add(1);
+            continue;
+        }
+        let keep = declared <= MAX_TEMPLATE_FIELDS;
+        let mut fields = Vec::with_capacity(declared.min(MAX_TEMPLATE_FIELDS));
+        let mut complete = true;
+        for _ in 0..declared {
+            let (Some(ie_raw), Some(len)) = (r.u16(), r.u16()) else {
+                complete = false;
                 break;
             };
-            fields.push(TemplateField {
-                ie,
-                len,
-                enterprise: false,
-            });
+            let (ie, enterprise, variable) = match dialect {
+                TemplateDialect::NetflowV9 => (ie_raw, false, false),
+                TemplateDialect::Ipfix => (
+                    ie_raw & 0x7fff,
+                    ie_raw & 0x8000 != 0,
+                    len == VARIABLE_LENGTH,
+                ),
+            };
+            // An enterprise-specific field carries its 4-byte PEN, read past whether or not the
+            // template is kept; the field is decoded as opaque later.
+            if enterprise && r.u32().is_none() {
+                complete = false;
+                break;
+            }
+            if keep {
+                fields.push(TemplateField {
+                    ie,
+                    len,
+                    enterprise,
+                    variable,
+                });
+            }
         }
-        if !ok || fields.is_empty() {
-            break;
+        if !complete {
+            break; // truncated mid-template — nothing after it can be located
+        }
+        if !keep {
+            templates.stats.rejected_oversized =
+                templates.stats.rejected_oversized.saturating_add(1);
+            continue;
         }
         templates.insert(
             TemplateKey {
@@ -518,7 +604,7 @@ fn parse_ipfix(
             None => break,
         };
         match set_id {
-            2 => parse_ipfix_templates(templates, exporter, domain, content),
+            2 => parse_template_set(templates, exporter, domain, content, TemplateDialect::Ipfix),
             3 => { /* options template — not decoded this increment */ }
             id if id >= 256 => {
                 decode_data_records(templates, exporter, domain, id, content, &mut out);
@@ -532,56 +618,15 @@ fn parse_ipfix(
     Ok(out)
 }
 
-fn parse_ipfix_templates(
-    templates: &mut FlowTemplates,
-    exporter: IpAddr,
-    domain: u32,
-    content: &[u8],
-) {
-    let mut r = Reader::new(content);
-    while r.remaining() >= 4 {
-        let (Some(template_id), Some(field_count)) = (r.u16(), r.u16()) else {
-            break;
-        };
-        let field_count = (field_count as usize).min(MAX_TEMPLATE_FIELDS);
-        let mut fields = Vec::with_capacity(field_count);
-        let mut ok = true;
-        for _ in 0..field_count {
-            let (Some(ie_raw), Some(len)) = (r.u16(), r.u16()) else {
-                ok = false;
-                break;
-            };
-            let enterprise = ie_raw & 0x8000 != 0;
-            if enterprise {
-                // Enterprise-specific field: consume the 4-byte PEN; decode as opaque later.
-                if r.u32().is_none() {
-                    ok = false;
-                    break;
-                }
-            }
-            fields.push(TemplateField {
-                ie: ie_raw & 0x7fff,
-                len,
-                enterprise,
-            });
-        }
-        if !ok || fields.is_empty() {
-            break;
-        }
-        templates.insert(
-            TemplateKey {
-                exporter,
-                domain,
-                template_id,
-            },
-            fields,
-        );
-    }
-}
-
 /// Decode a data FlowSet/Set against a cached template, appending [`RawFlow`]s to `out`. Unknown
 /// template ⇒ no-op (records skipped until the template is re-sent). Records missing both addresses
 /// are dropped (not a useful flow).
+///
+/// Records are walked field by field rather than cut at a fixed length, because an IPFIX
+/// variable-length field makes each record as long as its own values say (ADR-158). The loop runs
+/// while the smallest possible record still fits — a variable-length field counts its one length
+/// byte — which is also what stops it at set padding: RFC 7011 §3.3.1 keeps padding shorter than
+/// any record. A template of fixed-length fields only is decoded exactly as before.
 fn decode_data_records(
     templates: &FlowTemplates,
     exporter: IpAddr,
@@ -598,23 +643,42 @@ fn decode_data_records(
     let Some(fields) = templates.get(&key) else {
         return;
     };
-    let record_len: usize = fields.iter().map(|f| f.len as usize).sum();
-    if record_len == 0 {
+    let min_len: usize = fields
+        .iter()
+        .map(|f| if f.variable { 1 } else { f.len as usize })
+        .sum();
+    // Zero would never advance: every field fixed at length 0.
+    if min_len == 0 {
         return;
     }
     let mut r = Reader::new(content);
-    while r.remaining() >= record_len && out.len() < MAX_RECORDS_PER_DATAGRAM {
-        let Some(record) = r.take(record_len) else {
-            break;
-        };
-        if let Some(flow) = decode_one_record(fields, record) {
-            out.push(flow);
+    while r.remaining() >= min_len && out.len() < MAX_RECORDS_PER_DATAGRAM {
+        match decode_one_record(fields, &mut r) {
+            // A value ran past the end of the set: nothing after it can be located.
+            None => break,
+            Some(Some(flow)) => out.push(flow),
+            Some(None) => {}
         }
     }
 }
 
-fn decode_one_record(fields: &[TemplateField], record: &[u8]) -> Option<RawFlow> {
-    let mut fr = Reader::new(record);
+/// One field's value: its fixed length, or for a variable-length field the length in front of it —
+/// one byte, or 255 followed by two (RFC 7011 §7). `None` when the set ends first.
+fn take_field<'a>(r: &mut Reader<'a>, field: &TemplateField) -> Option<&'a [u8]> {
+    let len = if field.variable {
+        match r.u8()? {
+            255 => r.u16()? as usize,
+            short => short as usize,
+        }
+    } else {
+        field.len as usize
+    };
+    r.take(len)
+}
+
+/// Read one record from `r`. The outer `None` means a value ran past the end of the set; the inner
+/// one that the record was read whole but carries no address pair, so it is not a flow.
+fn decode_one_record(fields: &[TemplateField], fr: &mut Reader<'_>) -> Option<Option<RawFlow>> {
     let mut src_ip: Option<IpAddr> = None;
     let mut dst_ip: Option<IpAddr> = None;
     let mut src_port = 0u16;
@@ -628,7 +692,7 @@ fn decode_one_record(fields: &[TemplateField], record: &[u8]) -> Option<RawFlow>
     let mut packets = 0u64;
 
     for f in fields {
-        let val = fr.take(f.len as usize)?;
+        let val = take_field(fr, f)?;
         if f.enterprise {
             continue; // opaque enterprise field — length already consumed
         }
@@ -654,9 +718,12 @@ fn decode_one_record(fields: &[TemplateField], record: &[u8]) -> Option<RawFlow>
         }
     }
 
-    Some(RawFlow {
-        src_ip: src_ip?,
-        dst_ip: dst_ip?,
+    let (Some(src_ip), Some(dst_ip)) = (src_ip, dst_ip) else {
+        return Some(None);
+    };
+    Some(Some(RawFlow {
+        src_ip,
+        dst_ip,
         src_port,
         dst_port,
         proto,
@@ -666,7 +733,7 @@ fn decode_one_record(fields: &[TemplateField], record: &[u8]) -> Option<RawFlow>
         dst_as,
         bytes,
         packets,
-    })
+    }))
 }
 
 fn ipv6_from(val: &[u8]) -> IpAddr {
@@ -1550,6 +1617,18 @@ mod tests {
                 0, 5, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             ], // v5 full header claiming 5 records, zero record bytes
             (0..255u8).cycle().take(600).collect(),
+            // An oversized v9 template cut off part-way through its fields (ADR-158).
+            nf9_with_sets(&[flow_set(
+                0,
+                &template_record(300, &[(IE_OCTET_DELTA, 4); 200])[..300],
+            )]),
+            // An oversized IPFIX template whose enterprise PEN is cut off.
+            ipfix_with_sets(&[flow_set(2, &[1, 44, 0, 200, 0x80, 1, 0, 4, 0, 0])]),
+            // A variable-length prefix of 255 with no length after it.
+            ipfix_with_sets(&[
+                flow_set(2, &template_record(405, &[(82, 0xFFFF)])),
+                flow_set(405, &[255]),
+            ]),
         ];
         for c in cases {
             // Must return (Ok or Err) without panicking.
@@ -1680,6 +1759,286 @@ mod tests {
         assert_eq!(flows[0].dst_ip, IpAddr::V6(dst));
         assert_eq!(flows[0].bytes, 1234);
         assert_eq!(record_len, 36);
+    }
+
+    // ── Template robustness and IPFIX variable length (ADR-158) ──
+
+    /// One template record: id, field count, then (IE, length) pairs.
+    fn template_record(template_id: u16, fields: &[(u16, u16)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&template_id.to_be_bytes());
+        out.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+        for (ie, len) in fields {
+            out.extend_from_slice(&ie.to_be_bytes());
+            out.extend_from_slice(&len.to_be_bytes());
+        }
+        out
+    }
+
+    /// A FlowSet / Set: id, total length, content.
+    fn flow_set(set_id: u16, content: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&set_id.to_be_bytes());
+        out.extend_from_slice(&((4 + content.len()) as u16).to_be_bytes());
+        out.extend_from_slice(content);
+        out
+    }
+
+    fn nf9_with_sets(sets: &[Vec<u8>]) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&9u16.to_be_bytes());
+        pkt.extend_from_slice(&1u16.to_be_bytes());
+        pkt.extend_from_slice(&[0u8; 12]); // uptime/secs/seq
+        pkt.extend_from_slice(&7u32.to_be_bytes()); // domain
+        for s in sets {
+            pkt.extend_from_slice(s);
+        }
+        pkt
+    }
+
+    fn ipfix_with_sets(sets: &[Vec<u8>]) -> Vec<u8> {
+        let body: usize = sets.iter().map(Vec::len).sum();
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&((16 + body) as u16).to_be_bytes());
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // export time
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // seq
+        pkt.extend_from_slice(&7u32.to_be_bytes()); // obs domain
+        for s in sets {
+            pkt.extend_from_slice(s);
+        }
+        pkt
+    }
+
+    /// src v4, dst v4, 4-byte octet count — the smallest template that yields a flow.
+    const SMALL_TEMPLATE: [(u16, u16); 3] =
+        [(IE_SRC_IPV4, 4), (IE_DST_IPV4, 4), (IE_OCTET_DELTA, 4)];
+
+    fn small_record(bytes: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&[10, 0, 0, 1]);
+        out.extend_from_slice(&[10, 0, 0, 2]);
+        out.extend_from_slice(&bytes.to_be_bytes());
+        out
+    }
+
+    /// A template declaring more fields than the cap is read past whole and not stored. Before
+    /// ADR-158 it was cut at 128 fields and stored, and the 129th field was then read as the next
+    /// template's header — so the real template after it was never learned.
+    #[test]
+    fn an_oversized_template_is_rejected_whole_and_the_next_one_still_parses() {
+        let oversized = template_record(300, &[(IE_OCTET_DELTA, 4); 129]);
+        let good = template_record(301, &SMALL_TEMPLATE);
+        let pkt = nf9_with_sets(&[
+            flow_set(0, &[oversized, good].concat()),
+            flow_set(301, &small_record(4096)),
+        ]);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt).unwrap();
+        assert_eq!(flows.len(), 1, "{flows:?}");
+        assert_eq!(flows[0].bytes, 4096);
+        assert_eq!(t.len(), 1, "only the legal template is stored");
+        assert_eq!(t.take_stats().rejected_oversized, 1);
+        assert_eq!(t.take_stats(), TemplateStats::default(), "taking resets");
+    }
+
+    /// The same over IPFIX, where an enterprise field carries four more bytes (its PEN) that the
+    /// read-past has to consume too.
+    #[test]
+    fn an_oversized_ipfix_template_with_enterprise_fields_is_read_past_exactly() {
+        let mut oversized = Vec::new();
+        oversized.extend_from_slice(&300u16.to_be_bytes());
+        oversized.extend_from_slice(&129u16.to_be_bytes());
+        for i in 0..129u16 {
+            if i % 2 == 0 {
+                oversized.extend_from_slice(&(0x8000 | 12_345u16).to_be_bytes());
+                oversized.extend_from_slice(&4u16.to_be_bytes());
+                oversized.extend_from_slice(&9u32.to_be_bytes()); // PEN
+            } else {
+                oversized.extend_from_slice(&IE_OCTET_DELTA.to_be_bytes());
+                oversized.extend_from_slice(&4u16.to_be_bytes());
+            }
+        }
+        let good = template_record(301, &SMALL_TEMPLATE);
+        let pkt = ipfix_with_sets(&[
+            flow_set(2, &[oversized, good].concat()),
+            flow_set(301, &small_record(77)),
+        ]);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].bytes, 77);
+        assert_eq!(t.len(), 1);
+    }
+
+    /// A good template is never replaced by an oversized redefinition of the same id.
+    #[test]
+    fn an_oversized_redefinition_never_replaces_a_good_template() {
+        let exporter = v4(192, 0, 2, 1);
+        let mut t = FlowTemplates::new();
+        let first = nf9_with_sets(&[flow_set(0, &template_record(301, &SMALL_TEMPLATE))]);
+        parse_flow_export(&mut t, exporter, &first).unwrap();
+
+        let redefinition = nf9_with_sets(&[flow_set(
+            0,
+            &template_record(301, &[(IE_OCTET_DELTA, 4); 129]),
+        )]);
+        parse_flow_export(&mut t, exporter, &redefinition).unwrap();
+
+        let data = nf9_with_sets(&[flow_set(301, &small_record(5))]);
+        let flows = parse_flow_export(&mut t, exporter, &data).unwrap();
+        assert_eq!(flows.len(), 1, "the good template still decodes");
+        assert_eq!(flows[0].bytes, 5);
+    }
+
+    /// A zero-field record (an IPFIX withdrawal) is skipped, not treated as the end of the set —
+    /// and it deletes nothing: flow export arrives over spoofable UDP, and four forged bytes must
+    /// not be able to erase another exporter's template.
+    #[test]
+    fn a_zero_field_record_does_not_hide_the_templates_after_it() {
+        let exporter = v4(192, 0, 2, 1);
+        let mut t = FlowTemplates::new();
+        let define = ipfix_with_sets(&[flow_set(2, &template_record(302, &SMALL_TEMPLATE))]);
+        parse_flow_export(&mut t, exporter, &define).unwrap();
+
+        let withdraw_then_define = ipfix_with_sets(&[
+            flow_set(
+                2,
+                &[
+                    template_record(302, &[]),
+                    template_record(301, &SMALL_TEMPLATE),
+                ]
+                .concat(),
+            ),
+            flow_set(301, &small_record(1)),
+            flow_set(302, &small_record(2)),
+        ]);
+        let flows = parse_flow_export(&mut t, exporter, &withdraw_then_define).unwrap();
+        assert_eq!(
+            flows.iter().map(|f| f.bytes).collect::<Vec<_>>(),
+            vec![1, 2],
+            "301 was learned after the withdrawal, and 302 was not deleted by it"
+        );
+        assert_eq!(t.take_stats().withdrawals_ignored, 1);
+    }
+
+    /// Set padding (zero bytes, RFC 7011 §3.3.1) after a template is padding, not a withdrawal.
+    #[test]
+    fn padding_after_a_template_is_not_a_withdrawal() {
+        let mut t = FlowTemplates::new();
+        let content = [template_record(301, &SMALL_TEMPLATE), vec![0; 4]].concat();
+        let pkt = ipfix_with_sets(&[flow_set(2, &content)]);
+        parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t.take_stats(), TemplateStats::default());
+    }
+
+    /// IE 82 (interfaceName) as IPFIX variable length: the template says 65535 and each record says
+    /// how long its own value is. Summing 65535 as a length made every such record undecodable.
+    #[test]
+    fn an_ipfix_variable_length_field_is_walked_not_summed() {
+        const IE_INTERFACE_NAME: u16 = 82;
+        let template = template_record(
+            400,
+            &[
+                (IE_SRC_IPV4, 4),
+                (IE_DST_IPV4, 4),
+                (IE_OCTET_DELTA, 8),
+                (IE_INTERFACE_NAME, 0xFFFF),
+                (IE_PROTOCOL, 1),
+            ],
+        );
+        let mut data = Vec::new();
+        // Record 1: the short form — one length byte.
+        data.extend_from_slice(&[10, 0, 0, 1, 10, 0, 0, 2]);
+        data.extend_from_slice(&1000u64.to_be_bytes());
+        data.push(5);
+        data.extend_from_slice(b"eth0/");
+        data.push(6);
+        // Record 2: the long form — 255, then a two-byte length.
+        data.extend_from_slice(&[10, 0, 0, 3, 10, 0, 0, 4]);
+        data.extend_from_slice(&2000u64.to_be_bytes());
+        data.push(255);
+        data.extend_from_slice(&300u16.to_be_bytes());
+        data.extend_from_slice(&[b'x'; 300]);
+        data.push(17);
+
+        let pkt = ipfix_with_sets(&[flow_set(2, &template), flow_set(400, &data)]);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt).unwrap();
+        assert_eq!(flows.len(), 2, "{flows:?}");
+        assert_eq!((flows[0].bytes, flows[0].proto), (1000, 6));
+        assert_eq!((flows[1].bytes, flows[1].proto), (2000, 17));
+        assert_eq!(flows[1].dst_ip, v4(10, 0, 0, 4));
+    }
+
+    /// A length prefix that points past the end of the set stops decoding there — no panic, and
+    /// the records before it are kept.
+    #[test]
+    fn a_variable_length_prefix_past_the_set_end_stops_cleanly() {
+        let template = template_record(401, &[(IE_SRC_IPV4, 4), (IE_DST_IPV4, 4), (82, 0xFFFF)]);
+        let mut data = Vec::new();
+        data.extend_from_slice(&[10, 0, 0, 1, 10, 0, 0, 2, 2, b'o', b'k']);
+        data.extend_from_slice(&[10, 0, 0, 3, 10, 0, 0, 4, 200, b'n', b'o']);
+        let pkt = ipfix_with_sets(&[flow_set(2, &template), flow_set(401, &data)]);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].src_ip, v4(10, 0, 0, 1));
+
+        // The long form cut off inside its own two-byte length.
+        let cut = ipfix_with_sets(&[
+            flow_set(2, &template),
+            flow_set(401, &[10, 0, 0, 1, 10, 0, 0, 2, 255, 0]),
+        ]);
+        assert_eq!(
+            parse_flow_export(&mut t, v4(192, 0, 2, 1), &cut),
+            Ok(vec![])
+        );
+    }
+
+    /// Padding at the end of a data set is shorter than the smallest record, so it is not read as
+    /// one — with variable-length fields counting one byte towards that smallest record.
+    #[test]
+    fn set_padding_after_variable_length_records_is_not_a_record() {
+        let template = template_record(402, &[(IE_SRC_IPV4, 4), (IE_DST_IPV4, 4), (82, 0xFFFF)]);
+        let mut data = vec![10, 0, 0, 1, 10, 0, 0, 2, 0]; // an empty name
+        data.extend_from_slice(&[0, 0, 0]); // padding
+        let pkt = ipfix_with_sets(&[flow_set(2, &template), flow_set(402, &data)]);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+    }
+
+    /// NetFlow v9 has no variable-length encoding: a field of length 65535 is 65,535 bytes long.
+    #[test]
+    fn netflow_v9_reads_65535_as_a_fixed_length() {
+        let template = template_record(403, &[(IE_SRC_IPV4, 4), (IE_DST_IPV4, 4), (82, 0xFFFF)]);
+        // What the record would be if 65535 meant "variable": a one-byte length and five bytes.
+        let data = [&[10, 0, 0, 1, 10, 0, 0, 2, 5][..], b"eth0/"].concat();
+        let pkt = nf9_with_sets(&[flow_set(0, &template), flow_set(403, &data)]);
+        let mut t = FlowTemplates::new();
+        assert_eq!(
+            parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt),
+            Ok(vec![])
+        );
+        assert_eq!(t.len(), 1);
+    }
+
+    /// An element Yagra maps (octetDeltaCount) is still decoded when the exporter chose to send
+    /// it variable-length (RFC 7011 §7 permits that for any element).
+    #[test]
+    fn a_mapped_element_sent_variable_length_still_decodes() {
+        let template = template_record(
+            404,
+            &[(IE_SRC_IPV4, 4), (IE_DST_IPV4, 4), (IE_OCTET_DELTA, 0xFFFF)],
+        );
+        let data = [&[10, 0, 0, 1, 10, 0, 0, 2, 3][..], &[0x01, 0x00, 0x00]].concat();
+        let pkt = ipfix_with_sets(&[flow_set(2, &template), flow_set(404, &data)]);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, v4(192, 0, 2, 1), &pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].bytes, 65_536);
     }
 
     #[test]

@@ -8,13 +8,19 @@ use crate::{
 use std::{
     fmt, mem,
     net::{IpAddr, Ipv4Addr},
-    ops, ptr,
+    ops,
 };
 
 // Local patch (see PATCH_NOTE.md): widened from pub(crate) alongside `fn build` so
 // Yagra's trap-listener tests can construct PDU fixtures.
 pub struct Buf {
     len: usize,
+    // Local patch (see PATCH_NOTE.md): set when a push did not fit. The pushes write backwards from
+    // the end of a fixed buffer, and upstream indexed past its start (a panic) once a PDU outgrew
+    // it — reachable from a received inform that re-encodes larger than it arrived. A push that
+    // does not fit now writes nothing and sets this; the builders turn it into
+    // `Error::BufferOverflow`.
+    overflowed: bool,
     #[cfg(not(feature = "heap_buffers"))]
     buf: [u8; BUFFER_SIZE],
 
@@ -33,6 +39,7 @@ impl Default for Buf {
     fn default() -> Buf {
         Buf {
             len: 0,
+            overflowed: false,
             #[cfg(not(feature = "heap_buffers"))]
             buf: [0; BUFFER_SIZE],
             #[cfg(feature = "heap_buffers")]
@@ -69,19 +76,43 @@ impl Buf {
         self.len == 0
     }
 
+    /// Whether a push since the last [`Self::reset`] did not fit (local patch, see PATCH_NOTE.md).
+    /// What the buffer holds is then not a valid encoding and must not be sent.
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+
+    /// `Err(BufferOverflow)` when a push since the last reset did not fit.
+    pub(crate) fn check_overflow(&self) -> Result<()> {
+        if self.overflowed {
+            Err(Error::BufferOverflow)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn push_chunk(&mut self, chunk: &[u8]) {
         let offset = BUFFER_SIZE - self.len;
-        self.buf[(offset - chunk.len())..offset].copy_from_slice(chunk);
+        let Some(start) = offset.checked_sub(chunk.len()) else {
+            self.overflowed = true;
+            return;
+        };
+        self.buf[start..offset].copy_from_slice(chunk);
         self.len += chunk.len();
     }
 
     pub fn push_byte(&mut self, byte: u8) {
+        if self.len >= BUFFER_SIZE {
+            self.overflowed = true;
+            return;
+        }
         self.buf[BUFFER_SIZE - self.len - 1] = byte;
         self.len += 1;
     }
 
     pub fn reset(&mut self) {
         self.len = 0;
+        self.overflowed = false;
     }
 
     pub fn scribble_bytes<F>(&mut self, mut f: F)
@@ -126,6 +157,7 @@ impl Buf {
             let num_leading_nulls = (len.leading_zeros() / 8) as usize;
             let length_len = mem::size_of::<usize>() - num_leading_nulls;
             let leading_byte = length_len as u8 | 0b1000_0000;
+            let before = self.len;
             self.scribble_bytes(|o| {
                 if o.len() <= length_len {
                     return 0;
@@ -136,6 +168,9 @@ impl Buf {
                 o[write_offset + 1..].copy_from_slice(&bytes[num_leading_nulls..]);
                 length_len + 1
             });
+            if self.len == before {
+                self.overflowed = true;
+            }
         }
     }
 
@@ -188,36 +223,27 @@ impl Buf {
         self.push_byte(snmp::TYPE_COUNTER64);
     }
 
-    pub fn push_i64(&mut self, mut n: i64) -> usize {
+    /// Push the minimal two's-complement big-endian encoding of `n` and return its length.
+    ///
+    /// Local patch (see PATCH_NOTE.md): upstream wrote this through raw pointers and computed
+    /// `available().len() - 8` before checking that eight bytes were free. Same bytes, safe code.
+    pub fn push_i64(&mut self, n: i64) -> usize {
         let (null, num_null_bytes) = if n.is_negative() {
             (0xffu8, ((!n).leading_zeros() / 8) as usize)
         } else {
             (0x00u8, (n.leading_zeros() / 8) as usize)
         };
-        n = n.to_be();
-        let count = unsafe {
-            let wbuf = self.available();
-            let mut src_ptr = ptr::addr_of!(n).cast::<u8>();
-            let mut dst_ptr = wbuf.as_mut_ptr().add(wbuf.len() - mem::size_of::<i64>());
-            let mut count = mem::size_of::<i64>() - num_null_bytes;
-            if count == 0 {
-                count = 1;
-            }
-            // preserve sign
-            if (*src_ptr.add(mem::size_of::<i64>() - count) ^ null) > 127u8 {
-                count += 1;
-            }
-            if wbuf.len() < count {
-                return 0;
-            }
-            #[allow(clippy::cast_possible_wrap)]
-            let offset = (mem::size_of::<i64>() - count) as isize;
-            src_ptr = src_ptr.offset(offset);
-            dst_ptr = dst_ptr.offset(offset);
-            ptr::copy_nonoverlapping(src_ptr, dst_ptr, count);
-            count
-        };
-        self.len += count;
+        let bytes = n.to_be_bytes();
+        let mut count = (mem::size_of::<i64>() - num_null_bytes).max(1);
+        // Preserve the sign: a leading byte whose top bit disagrees with the sign needs one more.
+        if count < mem::size_of::<i64>() && (bytes[mem::size_of::<i64>() - count] ^ null) > 127u8 {
+            count += 1;
+        }
+        let before = self.len;
+        self.push_chunk(&bytes[mem::size_of::<i64>() - count..]);
+        if self.len == before {
+            return 0;
+        }
         count
     }
 
@@ -291,6 +317,11 @@ impl Buf {
             output.len() - pos
         });
         let length_after = self.len;
+        // Local patch (see PATCH_NOTE.md): nothing written means the encoding is broken — it did
+        // not fit, or the head was invalid — and the PDU must not be sent either way.
+        if length_after == length_before {
+            self.overflowed = true;
+        }
         self.push_length(length_after - length_before);
         self.push_byte(asn1::TYPE_OBJECTIDENTIFIER);
     }
@@ -341,7 +372,8 @@ pub fn build(
         buf.push_octet_string(community);
         buf.push_integer(version as i64);
     });
-    Ok(())
+    // Local patch (see PATCH_NOTE.md): a PDU that did not fit is an error, not a panic.
+    buf.check_overflow()
 }
 
 pub(crate) fn push_varbinds(buf: &mut Buf, values: &[(&Oid, Value)]) {
@@ -746,6 +778,7 @@ impl<'a> Pdu<'a> {
                     buf.push_octet_string(self.community);
                     buf.push_integer(self.version);
                 });
+                buf.check_overflow()?;
                 return Ok(buf.to_vec());
             }
             return Err(Error::AsnWrongType);

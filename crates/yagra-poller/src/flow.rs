@@ -19,7 +19,7 @@
 //! buffered. Parsing shares the `yagra-ingest` never-panic contract; the socket setup, source rate
 //! limiter, and timestamp helper are reused verbatim from [`crate::listeners`].
 
-use crate::listeners::{allow, now_unix_ms, EdgeTuning};
+use crate::listeners::{allow, contained, now_unix_ms, EdgeTuning};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -28,8 +28,9 @@ use tokio::sync::mpsc;
 use yagra_bus::{encode_raw, Bus, FlowBatch, FlowRecord, RawFlowDatagram};
 use yagra_ingest::{
     parse_flow_export, parse_sflow, ExporterBuckets, FlowError, FlowTemplates, SourceLimiter,
+    TemplateStats,
 };
-use yagra_telemetry::{spawn_cancellable, CancellationToken};
+use yagra_telemetry::{spawn_cancellable, spawn_supervised, CancellationToken};
 
 /// Flow datagrams beyond this are rejected outright (a NetFlow/IPFIX export never approaches it).
 const FLOW_BUF_BYTES: usize = 64 * 1024;
@@ -162,8 +163,11 @@ pub async fn run_raw_flow_relay<B: Bus>(bus: Arc<B>, mut relay: RawFlowRelay) {
 ///
 /// `tee` relays each accepted datagram verbatim for forwarding (ADR-034). `None` disables the relay,
 /// which the tests use to exercise reception alone.
+///
+/// The socket is shared so a supervised replacement reader can take over the same one after a
+/// panic (ADR-158).
 pub async fn run_flow_listener(
-    sock: UdpSocket,
+    sock: Arc<UdpSocket>,
     state: Arc<Mutex<FlowState>>,
     limiter: Arc<Mutex<SourceLimiter>>,
     proto: FlowProto,
@@ -192,8 +196,9 @@ pub async fn run_flow_listener(
         }
         let exporter = peer.ip();
         // Parse + fold under one short sync lock; guard dropped at the end of this block so it is
-        // never held across the metric/log calls (no await inside).
-        let outcome = {
+        // never held across the metric/log calls (no await inside). Contained (ADR-158): a panic
+        // here drops this datagram and poisons the mutex, which every lock site recovers from.
+        let Some(outcome) = contained(proto.as_str(), || {
             let mut guard = state.lock().unwrap_or_else(PoisonError::into_inner);
             let FlowState { templates, buckets } = &mut *guard;
             let parsed = match proto {
@@ -210,6 +215,8 @@ pub async fn run_flow_listener(
                 }
                 Err(e) => Err(e),
             }
+        }) else {
+            continue;
         };
         match outcome {
             Ok(n) => {
@@ -255,10 +262,11 @@ pub async fn run_flow_flusher<B: Bus>(
     ticker.tick().await; // first tick is immediate — skip it (nothing accumulated yet)
     loop {
         ticker.tick().await;
-        let (batches, dropped_exporters) = {
+        let ((batches, dropped_exporters), template_stats) = {
             let mut guard = state.lock().unwrap_or_else(PoisonError::into_inner);
-            guard.buckets.drain()
+            (guard.buckets.drain(), guard.templates.take_stats())
         };
+        publish_template_stats(template_stats);
         if dropped_exporters > 0 {
             metrics::counter!("yagra_flow_records_dropped_total", "reason" => "exporter_cap")
                 .increment(u64::from(dropped_exporters));
@@ -301,6 +309,23 @@ pub async fn run_flow_flusher<B: Bus>(
             };
             publish_flow(bus.as_ref(), batch).await;
         }
+    }
+}
+
+/// Publish what the template cache read and did not apply since the last flush (ADR-158). The
+/// parser crate counts and this crate publishes, the way `ExporterBuckets::drain` already splits it.
+fn publish_template_stats(stats: TemplateStats) {
+    let TemplateStats {
+        rejected_oversized,
+        withdrawals_ignored,
+    } = stats;
+    if rejected_oversized > 0 {
+        metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "oversized")
+            .increment(rejected_oversized);
+    }
+    if withdrawals_ignored > 0 {
+        metrics::counter!("yagra_flow_templates_dropped_total", "reason" => "withdrawal")
+            .increment(withdrawals_ignored);
     }
 }
 
@@ -385,15 +410,14 @@ pub(crate) async fn start(
                 labels.push(format!("flow:{bind}"));
                 any_bound = true;
                 for sock in socks {
-                    spawn_cancellable(
+                    spawn_flow_reader(
                         shutdown,
-                        run_flow_listener(
-                            sock,
-                            state.clone(),
-                            flow_limiter.clone(),
-                            FlowProto::Netflow,
-                            Some(raw_tee.clone()),
-                        ),
+                        "netflow_listener",
+                        Arc::new(sock),
+                        &state,
+                        &flow_limiter,
+                        FlowProto::Netflow,
+                        &raw_tee,
                     );
                 }
             }
@@ -409,15 +433,14 @@ pub(crate) async fn start(
                 labels.push(format!("sflow:{bind}"));
                 any_bound = true;
                 for sock in socks {
-                    spawn_cancellable(
+                    spawn_flow_reader(
                         shutdown,
-                        run_flow_listener(
-                            sock,
-                            state.clone(),
-                            flow_limiter.clone(),
-                            FlowProto::Sflow,
-                            Some(raw_tee.clone()),
-                        ),
+                        "sflow_listener",
+                        Arc::new(sock),
+                        &state,
+                        &flow_limiter,
+                        FlowProto::Sflow,
+                        &raw_tee,
                     );
                 }
             }
@@ -429,20 +452,52 @@ pub(crate) async fn start(
     // publishes the verbatim datagrams — both spawned only if at least one protocol socket
     // bound (nothing to flush or relay otherwise).
     if any_bound {
-        spawn_cancellable(
-            shutdown,
-            run_flow_flusher(
-                bus.clone(),
-                state.clone(),
-                poller_id.to_owned(),
-                pool_defaulted.to_owned(),
-                bucket_secs,
-            ),
+        // Supervised: its state lives in `state`, so a fresh flusher picks up where one that
+        // panicked left off.
+        let (flush_bus, flush_state, id, pool) = (
+            bus.clone(),
+            state.clone(),
+            poller_id.to_owned(),
+            pool_defaulted.to_owned(),
         );
+        spawn_supervised(shutdown, "flow_flusher", move || {
+            run_flow_flusher(
+                flush_bus.clone(),
+                flush_state.clone(),
+                id.clone(),
+                pool.clone(),
+                bucket_secs,
+            )
+        });
+        // ⚠️ NOT supervised: the relay owns the one receiving end of the tee's channel, so there is
+        // nothing to start a replacement from. Changing that is a decision recorded in the backlog
+        // (ADR-158), not something to do in passing.
         spawn_cancellable(shutdown, run_raw_flow_relay(bus.clone(), raw_relay));
     }
 
     labels
+}
+
+/// Start one supervised flow reader over a shared socket (ADR-158).
+fn spawn_flow_reader(
+    shutdown: &CancellationToken,
+    task: &'static str,
+    sock: Arc<UdpSocket>,
+    state: &Arc<Mutex<FlowState>>,
+    limiter: &Arc<Mutex<SourceLimiter>>,
+    proto: FlowProto,
+    tee: &Arc<RawFlowTee>,
+) {
+    let (state, limiter, tee) = (state.clone(), limiter.clone(), tee.clone());
+    spawn_supervised(shutdown, task, move || {
+        run_flow_listener(
+            sock.clone(),
+            state.clone(),
+            limiter.clone(),
+            proto,
+            Some(tee.clone()),
+        )
+    });
 }
 
 #[cfg(test)]
@@ -500,7 +555,7 @@ mod tests {
         let mut flows = bus.subscribe_flows();
         let state = Arc::new(Mutex::new(FlowState::new(500)));
 
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = sock.local_addr().unwrap();
         tokio::spawn(run_flow_listener(
             sock,
@@ -612,7 +667,7 @@ mod tests {
         let mut flows = bus.subscribe_flows();
         let state = Arc::new(Mutex::new(FlowState::new(500)));
 
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = sock.local_addr().unwrap();
         tokio::spawn(run_flow_listener(
             sock,
@@ -660,7 +715,7 @@ mod tests {
         let mut flows = bus.subscribe_flows();
         let state = Arc::new(Mutex::new(FlowState::new(500)));
 
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = sock.local_addr().unwrap();
         tokio::spawn(run_flow_listener(
             sock,
@@ -695,7 +750,7 @@ mod tests {
         let (tee, relay) = raw_flow_tee("edge-1".into(), Some("tokyo".into()));
         tokio::spawn(run_raw_flow_relay(bus.clone(), relay));
 
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let addr = sock.local_addr().unwrap();
         tokio::spawn(run_flow_listener(sock, state, limiter(), proto, Some(tee)));
         (bus, addr)

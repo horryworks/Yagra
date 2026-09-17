@@ -333,6 +333,8 @@ pub fn init_instance(service_name: &str, instance: Option<&str>) -> TelemetryGua
         .with(file_layer)
         .with(otel_layer)
         .init();
+    // After the subscriber, so the hook's line has somewhere to go.
+    install_panic_hook();
 
     match &provider {
         Some(_) => tracing::info!(
@@ -359,6 +361,35 @@ pub fn init_instance(service_name: &str, instance: Option<&str>) -> TelemetryGua
         provider,
         _log: log_guard,
     }
+}
+
+/// Route every panic through `tracing` and count it, then run the hook that was there before
+/// (ADR-158 決定 2).
+///
+/// 🚨 **Without this a panic's text reaches stderr only.** ADR-045's on-disk log exists so that a
+/// panic on a deployment nobody can open a shell on still leaves a trace the support bundle can
+/// carry — and the panic itself was the one line that never went through `tracing`, so it never
+/// reached the file. `yagra_panics_total` is the number an operator can alert on: a panic that
+/// killed an unsupervised task changes nothing else anyone can see.
+///
+/// The previous hook still runs, so stderr (and `docker logs`) keeps the text it always had.
+/// Installed once per process whatever the number of calls, so a second `init` cannot stack two
+/// reports of every panic.
+fn install_panic_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            metrics::counter!("yagra_panics_total").increment(1);
+            let thread = std::thread::current();
+            tracing::error!(
+                panic = %info,
+                thread = thread.name().unwrap_or("<unnamed>"),
+                "panic"
+            );
+            previous(info);
+        }));
+    });
 }
 
 /// Build the batch-exporting tracer provider for `endpoint`. Returns `None` (and warns to stderr,
@@ -496,6 +527,91 @@ where
             _ = fut => {}
         }
     })
+}
+
+/// The first wait before a panicked task is started again.
+const RESTART_BACKOFF_MIN: std::time::Duration = std::time::Duration::from_millis(100);
+/// The longest wait between restarts. A task that panics on every start is retried this often,
+/// forever — visible as `yagra_task_restarts_total` climbing, never as a hot loop.
+const RESTART_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(5);
+/// A task that ran at least this long before panicking starts again from the shortest wait: its
+/// panic is a new event, not the next beat of a crash loop.
+const RESTART_BACKOFF_RESET_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The wait after `prev`: doubled, never below [`RESTART_BACKOFF_MIN`] or above
+/// [`RESTART_BACKOFF_MAX`].
+fn next_backoff(prev: std::time::Duration) -> std::time::Duration {
+    prev.saturating_mul(2)
+        .clamp(RESTART_BACKOFF_MIN, RESTART_BACKOFF_MAX)
+}
+
+/// [`spawn_cancellable`], **started again whenever it panics** (ADR-158 決定 2).
+///
+/// `make` builds the task's future afresh for each start, so whatever the task owns — a socket, a
+/// shared state handle — has to be something `make` can hand out again (an `Arc` clone). A panic is
+/// counted in `yagra_task_restarts_total{task}`, logged with its message, and followed by a wait
+/// that doubles from 100 ms to 5 s (reset after a run of a minute), so a task that dies on every
+/// start costs one log line per five seconds rather than a spinning core.
+///
+/// **Only a panic restarts.** A task that returns has finished, and one stopped by `shutdown` has
+/// been told to; neither is started again. The wait watches `shutdown` too, so a crash loop cannot
+/// hold up a graceful stop.
+///
+/// ⚠️ **Why this is not simply what `spawn_cancellable` does**: before it existed, a panic in a
+/// UDP listener ended that reader for the life of the process, while the heartbeat went on
+/// reporting the listener as bound — one crafted SNMP inform per reader silenced trap reception
+/// with nothing on any screen saying so. Core's own tasks deliberately stay on
+/// `spawn_cancellable`: restarting one could replay work half done, and the user decided (2026-09-17)
+/// that core panics are counted and made visible, not recovered from automatically.
+pub fn spawn_supervised<F, Fut>(
+    shutdown: &CancellationToken,
+    task: &'static str,
+    mut make: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let token = shutdown.clone();
+    tokio::spawn(async move {
+        let mut backoff = RESTART_BACKOFF_MIN;
+        loop {
+            if token.is_cancelled() {
+                return;
+            }
+            let started = std::time::Instant::now();
+            let panic = match spawn_cancellable(&token, make()).await {
+                Ok(()) => return,
+                Err(e) if e.is_panic() => e.into_panic(),
+                // Aborted rather than panicked: the runtime is going away.
+                Err(_) => return,
+            };
+            if started.elapsed() >= RESTART_BACKOFF_RESET_AFTER {
+                backoff = RESTART_BACKOFF_MIN;
+            }
+            metrics::counter!("yagra_task_restarts_total", "task" => task).increment(1);
+            tracing::error!(
+                task,
+                panic = panic_text(panic.as_ref()),
+                restart_in_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
+                "background task panicked; starting it again"
+            );
+            tokio::select! {
+                () = token.cancelled() => return,
+                () = tokio::time::sleep(backoff) => {}
+            }
+            backoff = next_backoff(backoff);
+        }
+    })
+}
+
+/// The message a panic carried, when it carried one of the two payload types `panic!` produces.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string panic payload>")
 }
 
 #[cfg(test)]
@@ -650,6 +766,138 @@ mod tests {
             .await
             .expect("cancelled task must finish promptly")
             .expect("wrapper task must not panic");
+    }
+
+    type BoxedTask = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+    /// A panic no longer ends a supervised task for good: the next start runs (ADR-158).
+    #[tokio::test]
+    async fn a_panicking_task_is_restarted() {
+        let token = CancellationToken::new();
+        let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<usize>();
+        let counted = starts.clone();
+        let handle = spawn_supervised(&token, "test_restart", move || -> BoxedTask {
+            let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let tx = tx.clone();
+            Box::pin(async move {
+                if n == 1 {
+                    panic!("the first start dies");
+                }
+                let _ = tx.send(n);
+                std::future::pending::<()>().await;
+            })
+        });
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the task must be started again after its panic")
+            .unwrap();
+        assert_eq!(second, 2);
+        token.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("supervision ends on cancel")
+            .expect("the supervisor itself never panics");
+    }
+
+    /// The wait between restarts watches the shutdown token, so a crash loop cannot hold up a
+    /// graceful stop. By the fourth start the next wait is 800 ms, twice the time allowed here.
+    #[tokio::test]
+    async fn supervision_stops_on_cancel_even_during_backoff() {
+        let token = CancellationToken::new();
+        let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = starts.clone();
+        let handle = spawn_supervised(&token, "test_crash_loop", move || -> BoxedTask {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { panic!("every start dies") })
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while starts.load(std::sync::atomic::Ordering::SeqCst) < 4 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the crash loop keeps restarting");
+        token.cancel();
+        tokio::time::timeout(std::time::Duration::from_millis(400), handle)
+            .await
+            .expect("cancel must cut the backoff short")
+            .expect("the supervisor itself never panics");
+    }
+
+    /// A task that returns has finished; starting it again would turn a one-shot into a loop.
+    #[tokio::test]
+    async fn a_task_that_returns_is_not_restarted() {
+        let token = CancellationToken::new();
+        let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = starts.clone();
+        let handle = spawn_supervised(&token, "test_one_shot", move || -> BoxedTask {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async {})
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("a returning task ends its supervision")
+            .expect("the supervisor itself never panics");
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_backoff_is_bounded() {
+        let mut wait = std::time::Duration::ZERO;
+        let mut seen = Vec::new();
+        for _ in 0..12 {
+            wait = next_backoff(wait);
+            seen.push(wait);
+        }
+        assert_eq!(seen[0], RESTART_BACKOFF_MIN, "never below the floor");
+        assert_eq!(seen[1], RESTART_BACKOFF_MIN * 2);
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "{seen:?}");
+        assert_eq!(*seen.last().unwrap(), RESTART_BACKOFF_MAX, "{seen:?}");
+        assert_eq!(
+            next_backoff(std::time::Duration::MAX),
+            RESTART_BACKOFF_MAX,
+            "doubling cannot overflow past the ceiling"
+        );
+    }
+
+    /// A panic's text reaches `tracing` — and therefore ADR-045's on-disk log — instead of only
+    /// stderr. The subscriber here is thread-local, and the hook runs on the panicking thread.
+    #[test]
+    fn a_panic_is_written_to_the_log() {
+        #[derive(Clone, Default)]
+        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        install_panic_hook();
+        install_panic_hook(); // idempotent: one report per panic, not two
+        let capture = Capture::default();
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let unwound = tracing::subscriber::with_default(subscriber, || {
+            std::panic::catch_unwind(|| panic!("hook-marker-7f3a"))
+        });
+        assert!(unwound.is_err(), "the hook must not swallow the unwind");
+        let log = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(
+            log.matches("hook-marker-7f3a").count(),
+            1,
+            "exactly one report of the panic: {log}"
+        );
     }
 
     /// The retention parse, including the case that matters: a value that cannot be honoured falls

@@ -452,6 +452,30 @@ pub struct TableWalk<R> {
     pub stopped: Option<Truncation>,
 }
 
+impl<R> TableWalk<R> {
+    /// Whether every column asked for was walked to its end (ADR-158).
+    ///
+    /// The one answer that says the rows are everything the device has. [`Self::stopped`] cannot
+    /// say it: a walk of **one** column whose agent never answered reports `[Failed]` with
+    /// `stopped: None`, because it takes [`MAX_CONSECUTIVE_COLUMN_FAILURES`] columns in a row before
+    /// the budget calls the device silent — and one column never gets there. Read by the row-name
+    /// walk, whose usual shape is exactly one column and which took that walk for an answer and
+    /// waited an hour before asking again.
+    ///
+    /// `Answered` includes "the agent does not implement this column" (see [`ColumnEnd::Answered`]),
+    /// so a device with nothing to say still answers `true`.
+    #[must_use]
+    pub fn every_column_answered(&self) -> bool {
+        self.columns.iter().all(|c| match c.end {
+            ColumnEnd::Answered => true,
+            ColumnEnd::Partial { .. }
+            | ColumnEnd::Failed
+            | ColumnEnd::Skipped
+            | ColumnEnd::NotAsked => false,
+        })
+    }
+}
+
 /// How one column's conversation ended, as the walker loops need it: the verdict about the device
 /// that [`WalkBudget::record`] folds in, or a cut at the deadline part-way down the column.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -803,6 +827,56 @@ mod tests {
         skipped.record(ColumnOutcome::Answered);
         skipped.record(ColumnOutcome::Skipped);
         assert!(!skipped.every_column_answered(2));
+    }
+
+    fn walk_ending(ends: Vec<ColumnEnd>, stopped: Option<Truncation>) -> TableWalk<()> {
+        TableWalk {
+            rows: Vec::new(),
+            columns: ends
+                .into_iter()
+                .enumerate()
+                .map(|(i, end)| ColumnReport {
+                    column: format!("1.3.6.1.{i}"),
+                    end,
+                })
+                .collect(),
+            stopped,
+        }
+    }
+
+    /// **The accepting side first**: columns the agent walked to their end — including ones it
+    /// answered by not implementing — are an answer, and so is a walk that asked for nothing.
+    #[test]
+    fn a_walk_whose_columns_all_ended_is_an_answer() {
+        assert!(walk_ending(vec![ColumnEnd::Answered], None).every_column_answered());
+        assert!(
+            walk_ending(vec![ColumnEnd::Answered, ColumnEnd::Answered], None)
+                .every_column_answered()
+        );
+        assert!(walk_ending(Vec::new(), None).every_column_answered());
+    }
+
+    /// The case `stopped` cannot see (ADR-158): one column that never answered is `[Failed]` with
+    /// `stopped: None`. Every other way a column can end short is not an answer either.
+    #[test]
+    fn a_single_failed_column_is_not_an_answer_though_nothing_says_stopped() {
+        let silent_one_column = walk_ending(vec![ColumnEnd::Failed], None);
+        assert_eq!(silent_one_column.stopped, None);
+        assert!(!silent_one_column.every_column_answered());
+        for short in [
+            ColumnEnd::Partial {
+                resume_after: vec![4],
+            },
+            ColumnEnd::Failed,
+            ColumnEnd::Skipped,
+            ColumnEnd::NotAsked,
+        ] {
+            assert!(
+                !walk_ending(vec![ColumnEnd::Answered, short.clone()], None)
+                    .every_column_answered(),
+                "{short:?}"
+            );
+        }
     }
 
     /// The two reasons are distinct labels, because the counter is read to tell them apart.

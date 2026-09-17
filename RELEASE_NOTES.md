@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A listener that crashes comes back, and every panic is logged and counted.** The poller's syslog, trap, NetFlow/IPFIX and sFlow readers and its flow flusher are started again after a panic, on the same socket, waiting 100 ms and doubling up to 5 s between attempts (`yagra_task_restarts_total{task}`). A single datagram that makes a parser panic is dropped and counted (`yagra_edge_datagram_panics_total{listener}`) instead of taking its reader down. Before, a reader that panicked stayed stopped until the poller restarted, while the heartbeat went on listing the listener as enabled. Both binaries now also write a panic's message through their log — so it reaches the on-disk log and the support bundle, not only the container's stderr — and count it as `yagra_panics_total`. Core does not restart its own tasks, but results dropped because a storage writer has stopped are now counted as `reason="writer_gone"` on `yagra_result_metrics_persist_dropped_total` and `yagra_result_meta_persist_dropped_total` and logged once, where they used to vanish without a trace.
+
+### Bug Fixes
+
+- **IPFIX records with variable-length fields are recorded.** An IPFIX template can leave a field's length to each record (it declares 65535), which exporters use for text such as application or interface names. Yagra added 65535 to the record length, so no record from such a template ever fit and every flow from it was silently dropped. Each record's own length is now read. NetFlow v9, which has no variable-length encoding, is unchanged.
+- **A flow template with more than 128 fields is ignored instead of being cut short.** The shortened template decoded later records with the wrong layout — wrong addresses and byte counts — and made the rest of the datagram be read from the wrong position. Such a template is now read past and not used; the flows it describes are not recorded, and it is counted as `yagra_flow_templates_dropped_total{reason="oversized"}`. A template record with no fields (an IPFIX withdrawal) no longer stops the templates after it in the same set from being learned. It is counted as `reason="withdrawal"` and removes nothing, because flow export arrives over UDP and a forged datagram must not be able to delete another exporter's template.
+- **A device that does not answer the row-name walk is asked again within minutes.** The walk that names memory pools, CPUs and sensors (hourly per node) counted a device that stayed silent as having answered, so the next attempt waited an hour and rules filtered by row name stayed unmatched for that hour. A walk that did not reach every row it wanted, or whose device did not answer, is now retried on the short retry, and whatever names it did get are still used.
+
+### Security
+
+- **A crafted SNMP inform can no longer stop trap reception.** Acknowledging an inform rebuilt the message, and a message can be built to grow when rebuilt; one such datagram made the reader that received it panic and stop for good — four datagrams stopped all of a poller's trap readers, with no community required unless `YAGRA_TRAP_COMMUNITY` is set. The acknowledgement is now the received message itself with its type changed to Response and error-status and error-index set to 0, the same length as what arrived. The SNMP encoder also returns an error instead of panicking when a message does not fit, which covers core's trap forwarding. Upgrade the poller for reception; core for forwarding.
+
 ## v0.3.25 — Each port's IP addresses in the node Interfaces list, the inventory tree driven from the keyboard, a Huawei part with no temperature sensor no longer reads 2147483647 °C
 
 ### New Features
