@@ -297,10 +297,11 @@ pub async fn run_stream<S>(
                 let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
                 // After the table job and inside its permit, so the device is asked on a conversation
                 // that already exists. Only a device that answered: a silent one would spend the walk's
-                // whole budget saying nothing, and keeps the short retry `claim_first_now` set.
+                // whole budget saying nothing, and keeps the short retry `claim_first_now` set. It
+                // ends inside the table job's budget, counted from `probed_at` (ADR-158 B6).
                 if names_due
                     && result.outcome == CheckOutcome::Reachable
-                    && row_names::collect(&job, transport.as_ref(), &mut result).await
+                    && row_names::collect(&job, transport.as_ref(), &mut result, probed_at).await
                 {
                     task_row_cadence
                         .lock()

@@ -1451,14 +1451,14 @@ impl LeaderTasks {
         );
         spawn_cancellable(
             &self.shutdown,
-            run_topology_derivation(
-                self.repo.clone(),
-                self.l3.clone(),
-                self.neighbors.clone(),
-                self.routing.clone(),
-                self.topology_links.clone(),
-                self.link_overrides.clone(),
-            ),
+            run_topology_derivation(TopologyStores {
+                repo: self.repo.clone(),
+                l3: self.l3.clone(),
+                neighbors: self.neighbors.clone(),
+                routing: self.routing.clone(),
+                links: self.topology_links.clone(),
+                overrides: self.link_overrides.clone(),
+            }),
         );
         spawn_cancellable(
             &self.shutdown,
@@ -1743,99 +1743,143 @@ const TOPO_DERIVE_INTERVAL_SECS: u64 = 300;
 /// configuration, which is exactly what a poll does not do — gating on it alone would leave the map
 /// frozen while the network changed underneath it. Gating on the watermark alone would miss a node
 /// being deleted or re-addressed by hand.
-async fn run_topology_derivation(
-    repo: Arc<NodeRepo>,
-    l3: Arc<l3::L3Repo>,
-    neighbors: Arc<neighbors::NeighborRepo>,
-    routing: Arc<l3_routing::RoutingRepo>,
-    links: Arc<topology_links::TopoLinkRepo>,
-    overrides: Arc<link_overrides::LinkOverrideRepo>,
-) {
+async fn run_topology_derivation(stores: TopologyStores) {
     type Watermark = Option<chrono::DateTime<chrono::Utc>>;
     let mut last_signal: Option<(u64, Watermark, Watermark, Watermark)> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(TOPO_DERIVE_INTERVAL_SECS)).await;
 
-        let l3_mark = l3.observation_watermark().await.unwrap_or(None);
-        let nb_mark = neighbors.observation_watermark().await.unwrap_or(None);
+        let l3_mark = stores.l3.observation_watermark().await.unwrap_or(None);
+        let nb_mark = stores
+            .neighbors
+            .observation_watermark()
+            .await
+            .unwrap_or(None);
         // The third watermark, added with Increment 4: a point-to-point link appearing changes no
         // address and no CDP/LLDP row, so without this the map would not redraw for it.
-        let rt_mark = routing.observation_watermark().await.unwrap_or(None);
+        let rt_mark = stores.routing.observation_watermark().await.unwrap_or(None);
         let signal = (config_gen::current(), l3_mark, nb_mark, rt_mark);
         if last_signal.as_ref() == Some(&signal) {
             metrics::counter!("yagra_topology_derive_skipped_total").increment(1);
             continue;
         }
 
-        let started = std::time::Instant::now();
-        let nodes = repo.list_nodes().await.unwrap_or_default();
-        let inventory: Vec<(yagra_common::NodeId, std::net::IpAddr)> =
-            nodes.iter().map(|n| (n.id, n.address)).collect();
-        let l3_rows = match l3.all_current().await {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::warn!(error = %e, "topology derivation: reading interface addresses failed");
-                continue;
-            }
-        };
-        let nb_rows = match neighbors.all_current().await {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::warn!(error = %e, "topology derivation: reading adjacency failed");
-                continue;
-            }
-        };
-        let rt_rows = match routing.all_current().await {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::warn!(error = %e, "topology derivation: reading routing adjacency failed");
-                continue;
-            }
-        };
+        match derive_cycle(&stores).await {
+            DeriveCycle::Derived { .. } => last_signal = Some(signal),
+            // Not remembered: the same signal re-derives on the next tick.
+            DeriveCycle::Incomplete => {}
+        }
+    }
+}
 
-        // An override read that fails degrades to *no* overrides rather than skipping the cycle:
-        // the derivation's own output is still correct, it just lacks the operator's corrections
-        // for one cycle. Skipping instead would freeze the whole map on a transient.
-        let ovr = overrides.all().await.unwrap_or_else(|e| {
+/// The stores one derivation cycle reads and writes.
+struct TopologyStores {
+    repo: Arc<NodeRepo>,
+    l3: Arc<l3::L3Repo>,
+    neighbors: Arc<neighbors::NeighborRepo>,
+    routing: Arc<l3_routing::RoutingRepo>,
+    links: Arc<topology_links::TopoLinkRepo>,
+    overrides: Arc<link_overrides::LinkOverrideRepo>,
+}
+
+/// What one derivation cycle did.
+#[derive(Debug, PartialEq, Eq)]
+enum DeriveCycle {
+    /// A read or the write failed. Nothing was written or pruned, and the loop does not remember
+    /// the signal, so the next tick tries again.
+    Incomplete,
+    /// The graph was written and aged. A failed prune or run record is logged, not retried.
+    Derived { links: usize },
+}
+
+/// Derive the connectivity graph once, write it, and prune what it no longer contains.
+///
+/// **Every input is read in full or the cycle does nothing** (ADR-158 B3). The prune deletes by
+/// age — whatever this cycle did not refresh — so a cycle derived from a partial input deletes the
+/// part it could not read. Two inputs used to degrade instead of failing: the inventory, read as an
+/// empty fleet, and the operator's overrides, read as none. With inputs that move hourly, every
+/// link is older than the prune window, so an unreadable inventory emptied the map, and unreadable
+/// overrides deleted every pinned link and wrote every hidden one back. Both then held until an
+/// observation next moved, because the cycle was remembered as done.
+///
+/// The cost is that a persistent failure of one read freezes the stored map as it was, with a
+/// warning every tick. That is the honest state: the last graph derived from everything.
+async fn derive_cycle(stores: &TopologyStores) -> DeriveCycle {
+    let started = std::time::Instant::now();
+    let nodes = match stores.repo.list_nodes().await {
+        Ok(nodes) => nodes,
+        Err(e) => {
+            tracing::warn!(error = %e, "topology derivation: reading the inventory failed");
+            return DeriveCycle::Incomplete;
+        }
+    };
+    let inventory: Vec<(yagra_common::NodeId, std::net::IpAddr)> =
+        nodes.iter().map(|n| (n.id, n.address)).collect();
+    let l3_rows = match stores.l3.all_current().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "topology derivation: reading interface addresses failed");
+            return DeriveCycle::Incomplete;
+        }
+    };
+    let nb_rows = match stores.neighbors.all_current().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "topology derivation: reading adjacency failed");
+            return DeriveCycle::Incomplete;
+        }
+    };
+    let rt_rows = match stores.routing.all_current().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "topology derivation: reading routing adjacency failed");
+            return DeriveCycle::Incomplete;
+        }
+    };
+    let ovr = match stores.overrides.all().await {
+        Ok(rows) => rows,
+        Err(e) => {
             tracing::warn!(error = %e, "topology derivation: reading link overrides failed");
-            Vec::new()
-        });
-
-        let out = yagra_topology::derive::derive_links(yagra_topology::derive::DeriveInput {
-            nodes: &inventory,
-            l3: &l3_rows,
-            neighbors: &nb_rows,
-            routing: &rt_rows,
-            overrides: &ovr,
-        });
-
-        if let Err(e) = links.upsert_batch(&out.links).await {
-            tracing::warn!(error = %e, "topology derivation: writing links failed");
-            continue;
+            return DeriveCycle::Incomplete;
         }
-        // Only prune once the write succeeded, so a failed cycle never deletes a live graph.
-        match links
-            .prune_stale(i64::try_from(TOPO_DERIVE_INTERVAL_SECS).unwrap_or(i64::MAX))
-            .await
-        {
-            Ok(n) if n > 0 => tracing::info!(removed = n, "pruned stale topology links"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "topology derivation: pruning stale links failed"),
-        }
-        if let Err(e) = links.record_run(&out.summary, out.links.len()).await {
-            tracing::warn!(error = %e, "topology derivation: recording the run failed");
-        }
+    };
 
-        last_signal = Some(signal);
-        metrics::gauge!("yagra_topology_links_total").set(out.links.len() as f64);
-        metrics::histogram!("yagra_topology_derive_seconds")
-            .record(started.elapsed().as_secs_f64());
-        tracing::debug!(
-            links = out.links.len(),
-            unmatched_lldp = out.summary.unmatched_lldp_rows,
-            oversized_segments = out.summary.oversized_segments,
-            "derived the connectivity graph"
-        );
+    let out = yagra_topology::derive::derive_links(yagra_topology::derive::DeriveInput {
+        nodes: &inventory,
+        l3: &l3_rows,
+        neighbors: &nb_rows,
+        routing: &rt_rows,
+        overrides: &ovr,
+    });
+
+    if let Err(e) = stores.links.upsert_batch(&out.links).await {
+        tracing::warn!(error = %e, "topology derivation: writing links failed");
+        return DeriveCycle::Incomplete;
+    }
+    // Only prune once the write succeeded, so a failed cycle never deletes a live graph.
+    match stores
+        .links
+        .prune_stale(i64::try_from(TOPO_DERIVE_INTERVAL_SECS).unwrap_or(i64::MAX))
+        .await
+    {
+        Ok(n) if n > 0 => tracing::info!(removed = n, "pruned stale topology links"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "topology derivation: pruning stale links failed"),
+    }
+    if let Err(e) = stores.links.record_run(&out.summary, out.links.len()).await {
+        tracing::warn!(error = %e, "topology derivation: recording the run failed");
+    }
+
+    metrics::gauge!("yagra_topology_links_total").set(out.links.len() as f64);
+    metrics::histogram!("yagra_topology_derive_seconds").record(started.elapsed().as_secs_f64());
+    tracing::debug!(
+        links = out.links.len(),
+        unmatched_lldp = out.summary.unmatched_lldp_rows,
+        oversized_segments = out.summary.oversized_segments,
+        "derived the connectivity graph"
+    );
+    DeriveCycle::Derived {
+        links: out.links.len(),
     }
 }
 
@@ -2352,5 +2396,116 @@ mod tests {
                  subject, or in LeaderTasks if it is leader-gated (ADR-090)"
             );
         }
+    }
+
+    use crate::pgtest;
+    use std::sync::Arc;
+
+    fn topology_stores(pool: &sqlx::PgPool) -> super::TopologyStores {
+        super::TopologyStores {
+            repo: Arc::new(pgtest::repo(pool.clone())),
+            l3: Arc::new(crate::l3::L3Repo::new(pool.clone())),
+            neighbors: Arc::new(crate::neighbors::NeighborRepo::new(pool.clone())),
+            routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),
+            links: Arc::new(crate::topology_links::TopoLinkRepo::new(pool.clone())),
+            overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
+        }
+    }
+
+    /// Two nodes, a stored link between them last seen an hour ago — the state of every link after
+    /// an hour in which no observation moved — and no observation that would derive it again.
+    async fn an_hour_old_link(pool: &sqlx::PgPool) -> (uuid::Uuid, uuid::Uuid) {
+        let a = pgtest::node(pool, "a", 1, None).await;
+        let b = pgtest::node(pool, "b", 2, None).await;
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        sqlx::query(
+            "INSERT INTO node_links (link_key, a_node, b_node, sources, first_seen, last_seen) \
+             VALUES ($1, $2, $3, '{manual}', now() - interval '1 day', now() - interval '1 hour')",
+        )
+        .bind(format!("v1|n:{lo}|n:{hi}"))
+        .bind(lo)
+        .bind(hi)
+        .execute(pool)
+        .await
+        .unwrap();
+        (a, b)
+    }
+
+    async fn rename(pool: &sqlx::PgPool, from: &str, to: &str) {
+        sqlx::query(&format!("ALTER TABLE {from} RENAME TO {to}"))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// A failed inventory read used to be read as an empty fleet: the cycle derived nothing,
+    /// "refreshed" nothing, and the prune right after it deleted every link older than fifteen
+    /// minutes — which, with inputs that move hourly, is every link (ADR-158 B3).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_failed_inventory_read_neither_writes_nor_prunes_the_graph(pool: sqlx::PgPool) {
+        an_hour_old_link(&pool).await;
+        rename(&pool, "nodes", "nodes_unreadable").await;
+
+        let outcome = super::derive_cycle(&topology_stores(&pool)).await;
+
+        assert_eq!(outcome, super::DeriveCycle::Incomplete);
+        assert_eq!(pgtest::rows(&pool, "node_links").await, 1);
+        assert_eq!(pgtest::rows(&pool, "topology_derivation").await, 0);
+    }
+
+    /// A failed override read used to run the cycle without the operator's decisions: a pinned
+    /// link was not re-emitted and was pruned, and a hidden one was written back onto the map. The
+    /// cycle is now skipped and not remembered, so the next tick tries again.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_failed_override_read_is_not_remembered_and_prunes_nothing(pool: sqlx::PgPool) {
+        let (a, b) = an_hour_old_link(&pool).await;
+        crate::link_overrides::LinkOverrideRepo::new(pool.clone())
+            .upsert(
+                a.into(),
+                b.into(),
+                yagra_common::LinkOverrideAction::Pin,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        rename(&pool, "link_overrides", "link_overrides_unreadable").await;
+
+        let outcome = super::derive_cycle(&topology_stores(&pool)).await;
+
+        assert_eq!(outcome, super::DeriveCycle::Incomplete);
+        assert_eq!(
+            pgtest::rows(&pool, "node_links").await,
+            1,
+            "the pinned link survived"
+        );
+
+        // Readable again: the pin is re-emitted, refreshed, and kept.
+        rename(&pool, "link_overrides_unreadable", "link_overrides").await;
+        let outcome = super::derive_cycle(&topology_stores(&pool)).await;
+        assert_eq!(outcome, super::DeriveCycle::Derived { links: 1 });
+        let fresh: bool =
+            sqlx::query_scalar("SELECT last_seen > now() - interval '1 minute' FROM node_links")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(fresh);
+    }
+
+    /// The cycle that can read everything still prunes what nothing derives any more — the half
+    /// that keeps the two refusals above from being "never prune".
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_whole_cycle_derives_and_prunes(pool: sqlx::PgPool) {
+        an_hour_old_link(&pool).await;
+
+        let outcome = super::derive_cycle(&topology_stores(&pool)).await;
+
+        assert_eq!(outcome, super::DeriveCycle::Derived { links: 0 });
+        assert_eq!(pgtest::rows(&pool, "node_links").await, 0);
+        assert_eq!(pgtest::rows(&pool, "topology_derivation").await, 1);
     }
 }

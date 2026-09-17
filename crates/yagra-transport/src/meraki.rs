@@ -173,7 +173,7 @@ impl Session {
         }
 
         let mut items: Vec<Value> = Vec::new();
-        let mut pages = 0usize;
+        let mut visited: Vec<reqwest::Url> = Vec::new();
         let mut rate_retries = 0u32;
 
         loop {
@@ -233,22 +233,43 @@ impl Session {
                 Ok(other) => items.push(other),
                 Err(e) => return Err(io(format!("meraki json parse failed: {e}"))),
             }
-            pages += 1;
+            visited.push(url);
 
-            match next {
-                Some(n) if pages < MAX_PAGES => {
-                    url = reqwest::Url::parse(&n)
-                        .map_err(|e| io(format!("invalid meraki next link: {e}")))?;
-                }
-                Some(_) => {
-                    tracing::warn!(max = MAX_PAGES, "meraki pagination truncated at page cap");
-                    break;
-                }
+            match next_page(&visited, next.as_deref())? {
+                Some(n) => url = n,
                 None => break,
             }
         }
         Ok(items)
     }
+}
+
+/// Where paging goes after the pages in `visited`: the `rel=next` URL, or `None` to stop.
+///
+/// Stops at [`MAX_PAGES`], and — ADR-158 B5 — at a next link naming a page already fetched. A
+/// server that answered with its own URL, or a cycle between two pages, used to be followed to the
+/// cap and every repeat taken in again: the same devices fifty times over, each one a sample.
+fn next_page(
+    visited: &[reqwest::Url],
+    next: Option<&str>,
+) -> Result<Option<reqwest::Url>, TransportError> {
+    let Some(next) = next else {
+        return Ok(None);
+    };
+    let next =
+        reqwest::Url::parse(next).map_err(|e| io(format!("invalid meraki next link: {e}")))?;
+    if visited.contains(&next) {
+        tracing::warn!(
+            pages = visited.len(),
+            "meraki next link names a page already fetched; stopping pagination"
+        );
+        return Ok(None);
+    }
+    if visited.len() >= MAX_PAGES {
+        tracing::warn!(max = MAX_PAGES, "meraki pagination truncated at page cap");
+        return Ok(None);
+    }
+    Ok(Some(next))
 }
 
 /// Parse a `Retry-After` header value (delta-seconds) into a duration.
@@ -671,6 +692,48 @@ mod tests {
             parse_next_link(multi).as_deref(),
             Some("https://api.meraki.com/next")
         );
+    }
+
+    fn page(after: &str) -> reqwest::Url {
+        reqwest::Url::parse(&format!(
+            "https://api.meraki.com/api/v1/organizations/1/devices?perPage=1000&startingAfter={after}"
+        ))
+        .unwrap()
+    }
+
+    /// ADR-158 B5. A next link naming the page just fetched ends the paging — it used to be
+    /// followed to the fifty-page cap, taking in the same items every time.
+    #[test]
+    fn a_next_link_that_repeats_the_current_page_ends_the_paging() {
+        let first = page("Q2-A");
+        assert_eq!(
+            next_page(std::slice::from_ref(&first), Some(first.as_str())).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_next_link_back_to_an_earlier_page_ends_the_paging() {
+        let (a, b) = (page("Q2-A"), page("Q2-B"));
+        assert_eq!(next_page(&[a.clone(), b], Some(a.as_str())).unwrap(), None);
+    }
+
+    /// The ordinary case still pages, and the cap still stops it.
+    #[test]
+    fn a_new_next_link_is_followed_until_the_page_cap() {
+        let fresh = page("Q2-NEW");
+        assert_eq!(
+            next_page(&[page("Q2-A")], Some(fresh.as_str())).unwrap(),
+            Some(fresh.clone())
+        );
+        assert_eq!(next_page(&[page("Q2-A")], None).unwrap(), None);
+
+        let full: Vec<reqwest::Url> = (0..MAX_PAGES).map(|i| page(&i.to_string())).collect();
+        assert_eq!(next_page(&full, Some(fresh.as_str())).unwrap(), None);
+        assert!(next_page(&full[..MAX_PAGES - 1], Some(fresh.as_str()))
+            .unwrap()
+            .is_some());
+        assert!(next_page(&[], Some("not a url")).is_err());
     }
 
     #[test]

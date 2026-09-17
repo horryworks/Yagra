@@ -376,13 +376,19 @@ pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
         Vec::new()
     });
     // Non-Meraki nodes by effective pool. Shared with the coverage watch loop so the exclusion and
-    // the folder inheritance are decided once (see `pool_coverage::node_counts_by_pool`).
+    // the folder inheritance are decided once (see `pool_coverage::node_counts_by_pool`). This page
+    // degrades to "no counts" on a read error (ADR-017); the watch loop, which acts on the answer,
+    // does not (ADR-158 B4).
     let node_pools = crate::pool_coverage::node_counts_by_pool(
         &admin.repo,
         &admin.meraki_devices,
         &admin.groups,
     )
-    .await;
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "node counts by pool failed; showing pollers without counts");
+        std::collections::HashMap::new()
+    });
     // Descriptions are cosmetic, so this degrades to "no descriptions" rather than failing a page
     // an operator is looking at because something is already broken (ADR-017).
     let described = admin.repo.list_pools().await.unwrap_or_else(|e| {
@@ -1176,10 +1182,20 @@ async fn set_poller_pool(
                     "failed to check what the source pool still holds",
                 )
             })?;
-            let resolver = super::util::pool_resolver(&admin).await;
+            // Neither read may degrade here (ADR-158 B4): an unread folder tree resolves the pool's
+            // inheriting nodes to `default`, an unread inventory has no nodes at all, and either
+            // one answers "nothing is stranded" and lets the pool's last poller go.
+            let resolver = super::util::pool_resolver_or_error(&admin).await?;
             let inventory =
                 crate::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices)
-                    .await;
+                    .await
+                    .map_err(|e| {
+                        ApiError::from_internal(
+                            e.as_ref(),
+                            "pool dependent nodes",
+                            "failed to check what the source pool still holds",
+                        )
+                    })?;
             let members = resolver.members(&inventory, from);
             if members.total > 0 {
                 match req.on_source_empty {
@@ -2267,5 +2283,77 @@ mod tests {
             list.to_string().contains(&node.to_string()),
             "the anchor is not on the poller row: {list}"
         );
+    }
+
+    /// ADR-158 B4. Moving `siteA`'s only live poller away is refused while a node still inherits
+    /// `siteA` from its folder. With the folder tree unreadable that node resolved to `default`,
+    /// the pool looked empty, and the move went through — leaving the node with no poller.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_poller_move_that_cannot_count_what_it_strands_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use axum::http::StatusCode;
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let folder = crate::pgtest::group(&pool, "site-a").await;
+        crate::groups::GroupRepo::new(pool.clone())
+            .set_pool(folder, Some("siteA"))
+            .await
+            .unwrap();
+        crate::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        sqlx::query("INSERT INTO pollers (id, pool) VALUES ('edge-1', 'siteA')")
+            .execute(&pool)
+            .await
+            .expect("register the poller");
+        st.admin
+            .as_ref()
+            .expect("live state")
+            .coordinator
+            .observe_heartbeat(
+                yagra_bus::HeartbeatMsg {
+                    poller_id: "edge-1".to_owned(),
+                    pool: "siteA".to_owned(),
+                    incarnation: Uuid::new_v4(),
+                    version: "0.3.25".to_owned(),
+                    epoch: None,
+                    last_seq: 0,
+                    working_set_nodes: 0,
+                    working_set_specs: 0,
+                    inflight: 0,
+                    results_total: 0,
+                    listeners: Vec::new(),
+                    caps: vec![yagra_bus::CAP_POOL_FOLLOW.to_owned()],
+                    host: None,
+                    leaving: false,
+                    mgmt_addrs: Vec::new(),
+                    upgrade: None,
+                },
+                std::time::Instant::now(),
+            )
+            .await;
+        let body = serde_json::json!({ "pool": "default" });
+
+        let (status, answer) = send(
+            &st,
+            "PUT",
+            "/api/v1/pollers/edge-1/pool",
+            &tok,
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+
+        sqlx::query("ALTER TABLE node_groups RENAME COLUMN parent_id TO parent_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, answer) =
+            send(&st, "PUT", "/api/v1/pollers/edge-1/pool", &tok, Some(body)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{answer}");
+        let still: String = sqlx::query_scalar("SELECT pool FROM pollers WHERE id = 'edge-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(still, "siteA");
     }
 }

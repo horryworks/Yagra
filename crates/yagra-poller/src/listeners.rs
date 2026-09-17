@@ -274,7 +274,7 @@ pub async fn run_trap_listener<B: Bus>(
             syslog_severity: None,
             hostname: None,
             app_name: None,
-            trap_oid: Some(trap.trap_oid),
+            trap_oid: trap.trap_oid,
             varbinds: trap.varbinds,
             truncated,
             // The original PDU, for byte-exact forwarding (ADR-034). Doubly worth carrying for

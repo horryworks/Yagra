@@ -41,7 +41,8 @@ use std::time::Instant;
 use uuid::Uuid;
 
 /// Most targets a single scan may sweep. The cap is what keeps one request from becoming an
-/// unbounded outbound scan of someone else's network.
+/// unbounded outbound scan of someone else's network. The import and its preview hold to it too:
+/// they carry what one sweep found.
 const MAX_SCAN_TARGETS: usize = 1024;
 
 /// Default page size for the discovered-endpoint list.
@@ -636,7 +637,7 @@ pub(super) struct ImportDiscovered {
     request_body = ImportDiscovered,
     responses(
         (status = 201, description = "Nodes created, in one transaction", body = ImportResult),
-        (status = 400, description = "An unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has", body = super::error::ErrorBody),
+        (status = 400, description = "More nodes than one sweep can find, an unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -648,6 +649,19 @@ async fn import_discovered(
     admin: Admin,
     Json(body): Json<ImportDiscovered>,
 ) -> ApiResult<(StatusCode, Json<ImportResult>)> {
+    // An import is what one sweep found, so it carries at most what one sweep can target — the
+    // same cap the preview holds it to. Checked first: past it, every check below is a round trip or
+    // an allocation per row, and the insert is one transaction holding a connection throughout
+    // (ADR-158 B7).
+    if body.nodes.len() > MAX_SCAN_TARGETS {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {MAX_SCAN_TARGETS} nodes may be imported in one request, got {}",
+                body.nodes.len()
+            ),
+        ));
+    }
     let parse_uuid = |s: &Option<String>| -> Result<Option<Uuid>, ()> {
         match s {
             None => Ok(None),
@@ -1721,6 +1735,38 @@ mod tests {
             0,
             "the batch is refused before anything is written"
         );
+    }
+
+    /// ADR-158 B7. An import carries at most what one sweep can find. Every other bulk write on
+    /// the node inventory already refused a larger batch; this one inserted 1,025 rows — or, in a
+    /// 2 MB body, some twenty thousand — one statement at a time inside one transaction.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_import_larger_than_one_sweep_is_refused_whole(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let nodes: Vec<serde_json::Value> = (0..=MAX_SCAN_TARGETS)
+            .map(|i| {
+                serde_json::json!({
+                    "address": format!("10.9.{}.{}", i / 250, i % 250 + 1),
+                    "name": format!("found-{i}"),
+                })
+            })
+            .collect();
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &tok,
+            Some(serde_json::json!({ "nodes": nodes })),
+        )
+        .await;
+
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "too_many_nodes");
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 0);
     }
 
     // ── ADR-131: filing an import by IP range ───────────────────────────────────────────

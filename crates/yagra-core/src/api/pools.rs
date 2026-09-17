@@ -587,10 +587,19 @@ async fn take_over_pool(
 
     // Who is in `from` — by *effective* pool, not by the column. ADR-107 増分 3: a node is in a
     // pool three ways and the two no column records are the majority, so counting rows here would
-    // move a fraction of what the operator was shown and report success.
-    let resolver = super::util::pool_resolver(&admin).await;
-    let inventory =
-        crate::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices).await;
+    // move a fraction of what the operator was shown and report success. Neither read degrades
+    // (ADR-158 B4): with the folder tree unread, every inheriting node resolves to `default`, so
+    // covering `default` would pin nodes that belong to other pools.
+    let resolver = super::util::pool_resolver_or_error(&admin).await?;
+    let inventory = crate::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "pool dependent nodes",
+                "failed to read which nodes the pool holds",
+            )
+        })?;
     let members = resolver.members(&inventory, &from);
 
     let counts = admin
@@ -1059,6 +1068,49 @@ mod tests {
         // `repo::pool_takeover` against the default pool: `PoolCarry::fall_through` is empty for
         // any other source, which this test learned by asserting the opposite and failing.
         assert_eq!(pool_of(bare).await, None, "a non-member was moved");
+        assert_eq!(crate::pgtest::rows(&pool, "pool_takeover").await, 0);
+    }
+
+    /// ADR-158 B4. Covering `default` re-points the nodes that fall through to it — and a node
+    /// inheriting `siteA` from its folder is not one of them. With the folder tree unreadable it
+    /// looked like one, and was pinned to the destination as a member of a pool it never was.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_takeover_that_cannot_resolve_membership_moves_nothing(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let folder = crate::pgtest::group(&pool, "site-a").await;
+        crate::groups::GroupRepo::new(pool.clone())
+            .set_pool(folder, Some("siteA"))
+            .await
+            .unwrap();
+        let inherits = crate::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        sqlx::query("ALTER TABLE node_groups RENAME COLUMN parent_id TO parent_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/pools/default/takeover",
+            &tok,
+            Some(serde_json::json!({ "to": "siteB" })),
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "{body}"
+        );
+        let pinned: Option<String> = sqlx::query_scalar("SELECT pool FROM nodes WHERE id = $1")
+            .bind(inherits)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(pinned, None, "a node of another pool was pinned");
         assert_eq!(crate::pgtest::rows(&pool, "pool_takeover").await, 0);
     }
 }

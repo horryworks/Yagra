@@ -25,9 +25,26 @@ use super::*;
 use yagra_bus::RowName;
 use yagra_common::row_names::{row_name_source, sanitize_row_name, RowNameSource};
 
-/// How long the name walk may run, whatever the job's interval. It is extra work on a permit the
-/// table job already held, so it is bounded on its own rather than borrowing the job's budget.
+/// The longest the name walk may run. It is also held inside the table job's own budget — see
+/// [`name_walk_deadline`].
 const NAME_WALK_BUDGET: Duration = Duration::from_secs(20);
+
+/// When the name walk must stop: [`NAME_WALK_BUDGET`] from now, but never past the table job's own
+/// budget, counted from when the job started (ADR-158 B6).
+///
+/// 🚨 **One budget for the job** (ADR-110 Increment 10), and the name walk is part of the job: it
+/// runs inside the same device slot. A job queued behind it on the device waits
+/// `table_plan::single_flight_wait`, which is sized from the table job's budget and nothing more. The
+/// walk used to get twenty seconds of its own after the job, so once an hour a table walk that used
+/// most of its budget ran past that wait and the next check on the device was shed. A job that used
+/// all of its budget now leaves the walk nothing, and the node keeps the short retry.
+pub(super) fn name_walk_deadline(
+    job_started: Instant,
+    interval_secs: u32,
+    now: Instant,
+) -> Instant {
+    (job_started + table_plan::table_job_budget(interval_secs)).min(now + NAME_WALK_BUDGET)
+}
 
 /// The most names one result carries — the same cap core applies on receipt, kept in one place.
 pub(super) use yagra_common::row_names::ROW_NAMES_MAX;
@@ -157,10 +174,13 @@ impl NamePlan {
 /// and this walk is usually one column — so a silent device came back `Ok([Failed])` with no
 /// `stopped`, and was left alone for an hour. A walk that did not answer every column still
 /// publishes the names it did get, and counts as done only when those were every row it wanted.
+///
+/// `job_started` is when the table job began, so the walk ends inside that job's budget.
 pub(super) async fn collect(
     job: &PollJob,
     transport: &dyn Transport,
     result: &mut PollResult,
+    job_started: Instant,
 ) -> bool {
     let (walker, columns, timeout_ms) = if let CheckSpec::SnmpTable(t) = &job.check {
         (
@@ -178,7 +198,13 @@ pub(super) async fn collect(
         return true;
     }
     let timeout = Duration::from_millis(u64::from(timeout_ms));
-    let deadline = Instant::now() + NAME_WALK_BUDGET;
+    let now = Instant::now();
+    let deadline = name_walk_deadline(job_started, job.interval_secs, now);
+    if deadline <= now {
+        // The table job spent its budget; asking now would hold the device past what the next job
+        // waits for. Not an answer, so the short retry stands.
+        return false;
+    }
 
     let mut pointers = Vec::new();
     let mut every_column_answered = true;
@@ -313,7 +339,7 @@ mod tests {
                 row("if_hc_in_octets", 1, 99.0),
             ],
         );
-        assert!(collect(&job, &transport, &mut result).await);
+        assert!(collect(&job, &transport, &mut result, Instant::now()).await);
         assert_eq!(
             names(&result),
             vec![
@@ -396,7 +422,7 @@ mod tests {
             CheckOutcome::Reachable,
             vec![row("if_hc_in_octets", 1, 99.0)],
         );
-        assert!(collect(&job, &transport, &mut result).await);
+        assert!(collect(&job, &transport, &mut result, Instant::now()).await);
         assert!(result.row_names.is_empty());
         assert!(
             transport.asked().is_empty(),
@@ -427,7 +453,7 @@ mod tests {
         let (job, mut result) = pool_job_and_result();
         let transport =
             FakeTransport::reachable(1.0).with_string_walk_fault(StringWalkFault::ColumnsFailed);
-        assert!(!collect(&job, &transport, &mut result).await);
+        assert!(!collect(&job, &transport, &mut result, Instant::now()).await);
         assert!(result.row_names.is_empty());
     }
 
@@ -436,7 +462,7 @@ mod tests {
         let (job, mut result) = pool_job_and_result();
         let transport =
             FakeTransport::reachable(1.0).with_string_walk_fault(StringWalkFault::Silent);
-        assert!(!collect(&job, &transport, &mut result).await);
+        assert!(!collect(&job, &transport, &mut result, Instant::now()).await);
     }
 
     /// Cut short with some names in hand: those are published, and the node is asked again soon for
@@ -447,7 +473,7 @@ mod tests {
         let transport = FakeTransport::reachable(1.0)
             .with_snmp_table_strings(vec![text(POOL_NAME, 1, "Processor")])
             .with_string_walk_fault(StringWalkFault::CutAtDeadline);
-        assert!(!collect(&job, &transport, &mut result).await);
+        assert!(!collect(&job, &transport, &mut result, Instant::now()).await);
         assert_eq!(
             names(&result),
             vec![("cisco_mem_used".into(), 1, "Processor".into())]
@@ -468,7 +494,7 @@ mod tests {
         let transport = FakeTransport::reachable(1.0)
             .with_snmp_table_strings(vec![text(ENT_NAME, 1000, "CPU of Switch 1")])
             .with_snmp_walk_error("request timed out");
-        assert!(!collect(&job, &transport, &mut result).await);
+        assert!(!collect(&job, &transport, &mut result, Instant::now()).await);
         assert!(result.row_names.is_empty());
         assert!(
             transport
@@ -491,7 +517,7 @@ mod tests {
                 text(POOL_NAME, 2, "I/O"),
             ])
             .with_string_walk_fault(StringWalkFault::CutAtDeadline);
-        assert!(collect(&job, &transport, &mut result).await);
+        assert!(collect(&job, &transport, &mut result, Instant::now()).await);
         assert_eq!(result.row_names.len(), 2);
     }
 
@@ -501,7 +527,7 @@ mod tests {
     async fn a_device_that_answers_with_no_names_waits_the_hour() {
         let (job, mut result) = pool_job_and_result();
         let transport = FakeTransport::reachable(1.0);
-        assert!(collect(&job, &transport, &mut result).await);
+        assert!(collect(&job, &transport, &mut result, Instant::now()).await);
         assert!(result.row_names.is_empty());
     }
 
@@ -509,5 +535,49 @@ mod tests {
     fn only_a_table_walk_carries_row_names() {
         assert!(carries_row_names(&table_job(Vec::new()).check));
         assert!(!carries_row_names(&testkit::icmp_job().check));
+    }
+
+    /// ADR-158 B6. The name walk runs in the table job's device slot, and the job queued behind it
+    /// waits only for the table job's budget. So the walk ends inside that budget at every interval
+    /// and at every point the table job can have reached — and still gets its twenty seconds when
+    /// the job left that much. It used to take twenty seconds from wherever the job ended.
+    #[test]
+    fn the_name_walk_ends_inside_the_table_jobs_budget() {
+        let started = Instant::now();
+        for interval in [0u32, 30, 60, 120, 300, 3_600] {
+            let budget = table_plan::table_job_budget(interval);
+            for elapsed in [Duration::ZERO, Duration::from_secs(5), budget / 2, budget] {
+                let now = started + elapsed;
+                let deadline = name_walk_deadline(started, interval, now);
+                assert!(
+                    deadline <= started + budget,
+                    "interval {interval}s, {elapsed:?} in: the walk runs past the job's budget"
+                );
+                assert!(deadline <= now + NAME_WALK_BUDGET);
+            }
+        }
+        assert_eq!(
+            name_walk_deadline(started, 300, started + Duration::from_secs(10)),
+            started + Duration::from_secs(30),
+            "a job with room left gives the walk its whole twenty seconds"
+        );
+    }
+
+    /// A table job that spent its whole budget leaves the walk nothing: no request is sent, and the
+    /// node keeps the short retry.
+    #[tokio::test]
+    async fn a_table_job_that_spent_its_budget_asks_the_device_nothing_more() {
+        let (job, mut result) = pool_job_and_result();
+        let transport = FakeTransport::reachable(1.0).with_snmp_table_strings(vec![
+            text(POOL_NAME, 1, "Processor"),
+            text(POOL_NAME, 2, "I/O"),
+        ]);
+        let started = Instant::now()
+            .checked_sub(table_plan::table_job_budget(job.interval_secs))
+            .expect("the clock has run longer than one table budget");
+
+        assert!(!collect(&job, &transport, &mut result, started).await);
+        assert!(result.row_names.is_empty());
+        assert!(transport.asked().is_empty(), "{:?}", transport.asked());
     }
 }

@@ -287,12 +287,13 @@ pub(crate) struct EnabledBody {
     pub enabled: bool,
 }
 
-/// Build a [`PoolResolver`](crate::poolres::PoolResolver) from the folder tree.
+/// Build a [`PoolResolver`](crate::poolres::PoolResolver) from the folder tree, for a **display**.
 ///
-/// A read error degrades to "no folder inheritance" with a warning, deliberately: every caller is a
-/// read-only view, where missing inheritance is a display inaccuracy rather than a polling decision.
-/// The scheduler does **not** use this — it builds its own resolver and holds the last known one, so
-/// a folder-read blip can never misroute an actual poll.
+/// A read error degrades to "no folder inheritance" with a warning, deliberately: a caller of this
+/// one is a read-only view, where missing inheritance is a display inaccuracy rather than a polling
+/// decision. A caller that *acts* on the resolution takes [`pool_resolver_or_error`] instead. The
+/// scheduler uses neither — it builds its own resolver and holds the last known one, so a
+/// folder-read blip can never misroute an actual poll.
 ///
 /// Shared by the nodes and poller-pool domains, so it lives here rather than in either.
 pub(crate) async fn pool_resolver(admin: &super::AdminState) -> crate::poolres::PoolResolver {
@@ -303,6 +304,30 @@ pub(crate) async fn pool_resolver(admin: &super::AdminState) -> crate::poolres::
             crate::poolres::PoolResolver::empty()
         }
     }
+}
+
+/// Build a [`PoolResolver`](crate::poolres::PoolResolver) for a handler that **acts** on it, or
+/// answer 500.
+///
+/// ADR-158 B4: four handlers decided something from [`pool_resolver`]'s degraded answer, where "no
+/// folder inheritance" resolves every inheriting node to `default`. A poll-now published to the
+/// default pool's subject and reported success; a takeover pinned nodes from other pools; a poller
+/// move let a pool's last poller go because its inheriting nodes looked like somebody else's.
+pub(crate) async fn pool_resolver_or_error(
+    admin: &super::AdminState,
+) -> Result<crate::poolres::PoolResolver, super::ApiError> {
+    admin
+        .groups
+        .pool_rows()
+        .await
+        .map(crate::poolres::PoolResolver::build)
+        .map_err(|e| {
+            super::ApiError::from_internal(
+                e.as_ref(),
+                "load folder pools",
+                "failed to resolve which pool nodes belong to",
+            )
+        })
 }
 
 /// Build a [`TagResolver`](crate::tagres::TagResolver) from the folder tree (ADR-135 inc. 2).

@@ -9,16 +9,22 @@
 //!
 //! This is the first server-side use of `snmp2`'s decode path with attacker-controlled
 //! datagrams: everything returns `Result`, nothing panics (hostile-input tests below),
-//! and outputs are capped ([`MAX_VARBINDS`], [`MAX_VALUE_CHARS`]).
+//! and outputs are capped ([`MAX_VARBINDS`], [`MAX_VALUE_CHARS`]). An OID is not clipped — a cut
+//! OID names a different object — so one longer than SMIv2 allows ([`MAX_OID_ARCS`]) is refused
+//! instead: the trap when it is the trap's identity, the one varbind when it is a varbind's name.
 
 use crate::clip_chars;
-use snmp2::{asn1, snmp, AsnReader, MessageType, Pdu, Value};
+use snmp2::{asn1, snmp, AsnReader, MessageType, Oid, Pdu, Value};
+use std::fmt::Write as _;
 use thiserror::Error;
 
 /// Cap on the number of varbinds kept from one trap.
 pub const MAX_VARBINDS: usize = 32;
 /// Cap on one rendered varbind value, in characters.
 pub(crate) const MAX_VALUE_CHARS: usize = 256;
+/// The most sub-identifiers an OID may have (SMIv2, RFC 2578 §3.5). Each is at most 32 bits, so a
+/// legal OID renders in under 1,400 characters.
+pub(crate) const MAX_OID_ARCS: usize = 128;
 
 /// snmpTrapOID.0 — identifies the trap in v2c (RFC 3416).
 const SNMP_TRAP_OID_0: &str = "1.3.6.1.6.3.1.1.4.1.0";
@@ -47,8 +53,9 @@ pub struct TrapEvent {
     /// Community string (lossy UTF-8). Checked by the caller against the configured
     /// community; **never logged**.
     pub community: String,
-    /// The trap identity OID (v2c: snmpTrapOID.0; v1: mapped per RFC 3584).
-    pub trap_oid: String,
+    /// The trap identity OID (v2c: snmpTrapOID.0; v1: mapped per RFC 3584). `None` for a v2c trap
+    /// that carried no snmpTrapOID.0 — never an empty string, which reads as an identity downstream.
+    pub trap_oid: Option<String>,
     /// sysUpTime at the sender, in timeticks, if present.
     pub uptime_ticks: Option<u64>,
     /// Varbinds as dotted-OID → rendered-value pairs (≤ [`MAX_VARBINDS`] entries,
@@ -65,7 +72,7 @@ impl TrapEvent {
     /// already carried by `trap_oid`/`uptime_ticks` and would only add noise.
     #[must_use]
     pub fn render_message(&self) -> String {
-        let mut out = self.trap_oid.clone();
+        let mut out = self.trap_oid.clone().unwrap_or_default();
         for (oid, value) in &self.varbinds {
             if oid == SNMP_TRAP_OID_0 || oid == SYS_UPTIME_0 {
                 continue;
@@ -103,10 +110,15 @@ pub fn parse_trap(bytes: &[u8]) -> Result<TrapEvent, TrapError> {
     let mut trap_oid = None;
     let mut uptime_ticks = None;
     for (oid, value) in pdu.varbinds.clone() {
-        let oid_str = oid.to_string();
+        // A name longer than an OID may be costs this varbind only; the rest of the trap is intact.
+        let Some(oid_str) = legal_oid_text(&oid, MAX_OID_ARCS) else {
+            continue;
+        };
         if oid_str == SNMP_TRAP_OID_0 {
             if let Value::ObjectIdentifier(ref id) = value {
-                trap_oid = Some(id.to_string());
+                trap_oid = Some(legal_oid_text(id, MAX_OID_ARCS).ok_or_else(|| {
+                    TrapError::Malformed("snmpTrapOID.0 is not a legal OID".into())
+                })?);
             }
         } else if oid_str == SYS_UPTIME_0 {
             if let Value::Timeticks(t) = value {
@@ -124,8 +136,13 @@ pub fn parse_trap(bytes: &[u8]) -> Result<TrapEvent, TrapError> {
         trap_oid = Some(match info.generic_trap {
             // coldStart(0)..egpNeighborLoss(5) → 1.3.6.1.6.3.1.1.5.<generic+1>
             g @ 0..=5 => format!("1.3.6.1.6.3.1.1.5.{}", g + 1),
-            // enterpriseSpecific(6) → <enterprise>.0.<specific>
-            _ => format!("{}.0.{}", info.enterprise, info.specific_trap),
+            // enterpriseSpecific(6) → <enterprise>.0.<specific>, which must itself be a legal OID:
+            // the enterprise gets two arcs fewer than the cap.
+            _ => {
+                let enterprise = legal_oid_text(&info.enterprise, MAX_OID_ARCS - 2)
+                    .ok_or_else(|| TrapError::Malformed("enterprise is not a legal OID".into()))?;
+                format!("{enterprise}.0.{}", info.specific_trap)
+            }
         });
         uptime_ticks = Some(u64::from(info.timestamp));
     }
@@ -133,7 +150,7 @@ pub fn parse_trap(bytes: &[u8]) -> Result<TrapEvent, TrapError> {
     Ok(TrapEvent {
         version,
         community,
-        trap_oid: trap_oid.unwrap_or_default(),
+        trap_oid,
         uptime_ticks,
         varbinds,
         is_inform,
@@ -186,6 +203,27 @@ pub fn build_inform_response(bytes: &[u8]) -> Option<Vec<u8>> {
         .get_mut(index_end.checked_sub(index.len())?..index_end)?
         .fill(0);
     Some(response)
+}
+
+/// The dotted text of `oid`, or `None` when it is not a legal SNMP OID: more than `max_arcs`
+/// sub-identifiers, one wider than 32 bits (RFC 2578 §3.5), or none at all.
+///
+/// Never clipped (ADR-158): a shortened OID is a different, real-looking OID, and the trap identity
+/// is both the event's classification key and what a forwarder re-encodes. Refusing also bounds the
+/// work — the walk stops at the first arc past the cap, however long the encoding is. `Oid`'s own
+/// `Display` has no bound and falls back to hex for an arc wider than 64 bits, which is not an OID.
+fn legal_oid_text(oid: &Oid, max_arcs: usize) -> Option<String> {
+    let mut text = String::new();
+    for (i, arc) in oid.iter()?.enumerate() {
+        if i >= max_arcs || arc > u64::from(u32::MAX) {
+            return None;
+        }
+        if i > 0 {
+            text.push('.');
+        }
+        write!(text, "{arc}").ok()?;
+    }
+    (!text.is_empty()).then_some(text)
 }
 
 /// Map an `snmp2` parse error to ours. v3 datagrams surface as auth/version errors
@@ -273,7 +311,7 @@ mod tests {
         let trap = parse_trap(&bytes).unwrap();
         assert_eq!(trap.version, 2);
         assert_eq!(trap.community, "public");
-        assert_eq!(trap.trap_oid, "1.3.6.1.6.3.1.1.5.3");
+        assert_eq!(trap.trap_oid.as_deref(), Some("1.3.6.1.6.3.1.1.5.3"));
         assert_eq!(trap.uptime_ticks, Some(12345));
         assert!(!trap.is_inform);
         assert!(trap
@@ -576,5 +614,127 @@ mod tests {
             .find(|(o, _)| o == "1.3.6.1.4.1.1")
             .unwrap();
         assert_eq!(value.chars().count(), MAX_VALUE_CHARS);
+    }
+
+    /// `1.3.` followed by `n` arcs of `arc`.
+    fn arcs(n: usize, arc: u64) -> Vec<u64> {
+        let mut out = vec![1, 3];
+        out.extend(std::iter::repeat_n(arc, n));
+        out
+    }
+
+    /// A trap identity is refused whole when it is longer than an OID may be (ADR-158). It used to
+    /// be rendered without a bound — 5,000 arcs is a 10,000-character classification key.
+    #[test]
+    fn an_overlong_trap_oid_is_refused() {
+        let bytes = v2c_trap_bytes(&arcs(4_998, 1), vec![]);
+        assert!(
+            matches!(parse_trap(&bytes), Err(TrapError::Malformed(_))),
+            "{:?}",
+            parse_trap(&bytes).map(|t| t.trap_oid.map(|o| o.len()))
+        );
+    }
+
+    #[test]
+    fn a_trap_oid_arc_wider_than_32_bits_is_refused() {
+        let bytes = v2c_trap_bytes(&[1, 3, 6, 1, 4, 1, 1 << 32], vec![]);
+        assert!(matches!(parse_trap(&bytes), Err(TrapError::Malformed(_))));
+    }
+
+    /// The largest legal OID — 128 arcs, every one of the last 126 at the 32-bit maximum — is
+    /// kept exactly, not shortened.
+    #[test]
+    fn a_maximum_legal_oid_is_kept_whole() {
+        let identity = arcs(MAX_OID_ARCS - 2, u64::from(u32::MAX));
+        let bytes = v2c_trap_bytes(&identity, vec![]);
+        let expected = identity
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".");
+        assert_eq!(parse_trap(&bytes).unwrap().trap_oid, Some(expected));
+    }
+
+    /// An overlong varbind *name* costs that varbind, not the trap.
+    #[test]
+    fn an_overlong_varbind_name_is_skipped_and_the_rest_survive() {
+        let long_name = Oid::from(&arcs(4_998, 7)).unwrap();
+        let if_descr = Oid::from(&[1, 3, 6, 1, 2, 1, 2, 2, 1, 2, 4]).unwrap();
+        let bytes = v2c_trap_bytes(
+            &[1, 3, 6, 1, 6, 3, 1, 1, 5, 3],
+            vec![
+                (&long_name, Value::OctetString(b"hidden")),
+                (&if_descr, Value::OctetString(b"ge-0/0/1")),
+            ],
+        );
+        let trap = parse_trap(&bytes).unwrap();
+        assert_eq!(trap.trap_oid.as_deref(), Some("1.3.6.1.6.3.1.1.5.3"));
+        let names: Vec<&str> = trap.varbinds.iter().map(|(o, _)| o.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![SYS_UPTIME_0, SNMP_TRAP_OID_0, "1.3.6.1.2.1.2.2.1.2.4"]
+        );
+        assert!(!trap.render_message().contains("hidden"));
+    }
+
+    /// A v2c trap with no snmpTrapOID.0 has no identity — not an empty-string one, which the
+    /// event store's classification key reads as a real value.
+    #[test]
+    fn a_v2c_trap_without_snmp_trap_oid_has_no_identity() {
+        let uptime_oid = Oid::from(&[1, 3, 6, 1, 2, 1, 1, 3, 0]).unwrap();
+        let mut buf = pdu::Buf::default();
+        pdu::build(
+            Version::V2C,
+            b"public",
+            snmp::MSG_TRAP,
+            5,
+            &[(&uptime_oid, Value::Timeticks(1))],
+            0,
+            0,
+            &mut buf,
+            None,
+        )
+        .unwrap();
+        let trap = parse_trap(&buf[..]).unwrap();
+        assert_eq!(trap.trap_oid, None);
+        assert_eq!(trap.uptime_ticks, Some(1));
+    }
+
+    /// A v1 Trap-PDU assembled byte by byte: enterpriseSpecific (6), specific-trap 1.
+    fn v1_trap_bytes(enterprise: &[u64]) -> Vec<u8> {
+        let oid = Oid::from(enterprise).unwrap();
+        let mut body = Vec::new();
+        body.extend(tlv(0x06, oid.as_bytes()));
+        body.extend(tlv(0x40, &[192, 0, 2, 1])); // agent-addr
+        body.extend(tlv(0x02, &[6])); // generic-trap
+        body.extend(tlv(0x02, &[1])); // specific-trap
+        body.extend(tlv(0x43, &[0x10])); // time-stamp
+        body.extend(tlv(0x30, &[])); // no varbinds
+        let mut message = Vec::new();
+        message.extend(tlv(0x02, &[0x00])); // version-1
+        message.extend(tlv(0x04, b"public"));
+        message.extend(tlv(snmp::MSG_TRAP_V1, &body));
+        tlv(0x30, &message)
+    }
+
+    /// v1's identity is `<enterprise>.0.<specific>`, and that is held to the same bound as a v2c
+    /// identity: the enterprise may have at most 126 arcs.
+    #[test]
+    fn a_v1_enterprise_oid_is_held_to_the_same_bound() {
+        let trap = parse_trap(&v1_trap_bytes(&[1, 3, 6, 1, 4, 1, 9])).unwrap();
+        assert_eq!(trap.version, 1);
+        assert_eq!(trap.trap_oid.as_deref(), Some("1.3.6.1.4.1.9.0.1"));
+        assert_eq!(trap.uptime_ticks, Some(16));
+
+        let longest = parse_trap(&v1_trap_bytes(&arcs(MAX_OID_ARCS - 4, 5))).unwrap();
+        let identity = longest.trap_oid.unwrap();
+        assert_eq!(identity.split('.').count(), MAX_OID_ARCS);
+
+        for enterprise in [arcs(MAX_OID_ARCS - 3, 5), arcs(4_998, 5)] {
+            assert!(matches!(
+                parse_trap(&v1_trap_bytes(&enterprise)),
+                Err(TrapError::Malformed(_))
+            ));
+        }
     }
 }
