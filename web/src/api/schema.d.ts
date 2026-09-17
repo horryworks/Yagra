@@ -21320,7 +21320,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -21449,7 +21449,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -21833,7 +21833,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -23311,7 +23311,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -23542,7 +23542,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
