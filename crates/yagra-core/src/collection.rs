@@ -1367,7 +1367,7 @@ mod parse_tests {
                 .iter()
                 .map(|i| i.item.metric_name.as_str())
                 .collect::<Vec<_>>(),
-            ["m0_scalar", "m1_table", "m2_optical"]
+            ["m0_scalar", "m1_table", "m2_optical", "m3_wlan"]
         );
 
         // The other three columns the row mapper reads, and the scope it reports itself at.
