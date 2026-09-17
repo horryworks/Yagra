@@ -75,7 +75,9 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     (nodes) or \
     top_interfaces (interfaces); for one link's history — throughput, errors, and optical light \
     level — use get_interface_series; for what a node is \
-    cabled to use get_neighbors; for where things are filed use list_node_groups. Before concluding \
+    cabled to use get_neighbors; for which IP addresses each port carries (every one, secondaries \
+    included) read the interfaces in get_node_status; for where things are filed use \
+    list_node_groups. Before concluding \
     a fleet is healthy, check list_suppressions — a silenced fleet looks quiet. For how alerting has \
     behaved over time use alert_trends, and to find what diagnostics have turned up across runs use \
     search_analysis_findings. Use run_analysis for deeper diagnosis (poll a long run with \

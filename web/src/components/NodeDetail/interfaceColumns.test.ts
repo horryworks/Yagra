@@ -32,13 +32,14 @@ function cssFallback(): string {
 }
 
 describe('the Interfaces column list', () => {
-  it('has the ten columns the header draws', () => {
+  it('has the eleven columns the header draws', () => {
     // The accepting case first: a list that had lost a column would satisfy the comparison below
     // just as well, because the CSS would be edited to match it.
-    expect(INTERFACE_COLUMNS).toHaveLength(10);
+    expect(INTERFACE_COLUMNS).toHaveLength(11);
     expect(INTERFACE_COLUMNS.map((c) => c.key)).toEqual([
       'if_name',
       'if_alias',
+      'addresses',
       'neighbors',
       'oper',
       'media',
@@ -69,10 +70,12 @@ describe('the Interfaces column list', () => {
 describe('filterSlots', () => {
   it('puts each filter control under its own heading, one slot per column', () => {
     // Pinned by position, because a slot one place off draws a control under the wrong heading and
-    // nothing else notices — NEIGHBORS (ADR-145) is the column that carries none, third.
+    // nothing else notices — NEIGHBORS (ADR-145) is the column that carries none, fourth since
+    // ADDRESSES (ADR-157) went in ahead of it with a control of its own.
     expect(filterSlots(FILTER_KEYS)).toEqual([
       'if_name',
       'if_alias',
+      'addresses',
       null,
       'oper',
       'media',

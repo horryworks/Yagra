@@ -36,6 +36,7 @@ const NODE_B = '22222222-2222-4222-8222-222222222222';
 const row = (ifindex: number, extra: Partial<InterfaceRow> = {}): InterfaceRow => ({
   ifindex,
   stale: false,
+  addresses: [],
   ...extra,
 });
 

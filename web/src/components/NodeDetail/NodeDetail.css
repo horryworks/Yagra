@@ -705,7 +705,13 @@ html[data-viewport='mobile'] .nd-extract-row {
    about ten pixels wide.
 
    MEDIA is the only new flexible track: its values ("1000BASE-LX10") are the longest of the three
-   and are device text, where SPEED and DUPLEX render from closed sets we can size exactly. */
+   and are device text, where SPEED and DUPLEX render from closed sets we can size exactly.
+
+   IP ADDRESSES (ADR-157) is the eleventh track, third in the row. Its floor is what the longest
+   IPv4 cell on the PoC recordings needs without ellipsizing — `10.204.29.254/24 +10`, a /24 with
+   ten secondaries behind it. An IPv6 address is longer than any floor worth paying for on every
+   row, so it ellipsizes and the cell's title (and the popover) carry it whole. The table's minimum
+   is now 1162px; past that it scrolls rather than dropping a column (ADR-054). */
 .nd-if-head,
 .nd-if-filters,
 .nd-if-row {
@@ -723,8 +729,8 @@ html[data-viewport='mobile'] .nd-extract-row {
      file and fails when the two disagree. */
   grid-template-columns: var(
     --nd-if-cols,
-    minmax(140px, 1.4fr) minmax(88px, 1.3fr) minmax(120px, 1fr) 94px minmax(112px, 1fr) 84px
-      76px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr)
+    minmax(140px, 1.4fr) minmax(88px, 1.3fr) minmax(168px, 1fr) minmax(120px, 1fr) 94px
+      minmax(112px, 1fr) 84px 76px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr)
   );
   align-items: center;
 }
@@ -925,6 +931,73 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 .nd-if-nbpop-item .mono {
   font-size: var(--font-xs);
+}
+
+/* The IP addresses cell (ADR-157): the first address, then `+N` as a button when the port carries
+   more. Same flex shape as the Neighbors cell for the same reason — a flex container does not
+   ellipsize its children, so the ellipsis sits on the address and the `+N` never shrinks. The
+   address is an address, so it is monospace (ui-conventions, "two font families"), and it sits a
+   step back like `.nd-if-media`: a reference fact an operator scans past, not a triage signal. */
+.nd-if-addr {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.nd-if-addr-first {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A real button: it opens the popover with every address. Drawn like the Neighbors link — accent
+   text, a bottom border as the focus mark, no outline. */
+.nd-if-addr-more {
+  flex: none;
+  padding: 0;
+  border: none;
+  border-bottom: var(--border-width) solid transparent;
+  background: none;
+  color: var(--accent-color);
+  font: inherit;
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.nd-if-addr-more:hover {
+  color: var(--accent-hover);
+}
+
+.nd-if-addr-more:focus-visible {
+  outline: none;
+  border-bottom-color: var(--accent-color);
+}
+
+/* The popover reuses the Neighbors panel (`.nd-if-nbpop`); its list is one address per line, so
+   the lines sit closer together than the neighbour cards do. */
+.nd-if-addrpop-list {
+  gap: 4px;
+}
+
+.nd-if-addrpop-item {
+  font-size: var(--font-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The dock's IP tile can hold eleven addresses. On the desktop it stays ONE line and ellipsizes
+   (the title carries the rest, and so do the list's `+N` popover): `.nd-if-dock-head` is a single
+   non-wrapping row, and its height is budgeted against the charts' floor — `DOCK_MIN_PX` promises
+   the charts 132px, which leaves the chrome 128. 🚨 The first version let this tile wrap with
+   `overflow-wrap: anywhere`; inside a nowrap flex row that made its min-content one character, the
+   row shrank it to that, and the chrome went 113px → 193px. `interfaceDock.spec.ts` caught it. */
+.nd-if-dock-addrs {
+  min-width: 0;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nd-if-oper {
@@ -1830,6 +1903,7 @@ html[data-viewport='mobile'] .nd-if-oper {
    facts rather than triage signals — the phone's job here is "which port is down and how busy is
    it" — and they stay reachable one tap away in the dock, which mobile keeps (ADR-063 decision 9). */
 html[data-viewport='mobile'] .nd-if-desc,
+html[data-viewport='mobile'] .nd-if-addr,
 html[data-viewport='mobile'] .nd-if-nb,
 html[data-viewport='mobile'] .nd-if-media,
 html[data-viewport='mobile'] .nd-if-speed,
@@ -1882,6 +1956,23 @@ html[data-viewport='mobile'] .nd-if-dock-charts {
 
 html[data-viewport='mobile'] .nd-if-dock-head {
   flex-wrap: wrap;
+}
+
+/* The phone's dock is content-sized and scrolls (above), so here the tiles may wrap — and the IP
+   tile takes a line of its own and shows every address, because the list's column is not drawn
+   on a phone and this is the only place they are (ADR-157 決定 6). `break-word`, not `anywhere`:
+   the list breaks at its commas, and only a lone IPv6 address wider than the screen is cut. */
+html[data-viewport='mobile'] .nd-if-dock-ctl,
+html[data-viewport='mobile'] .nd-if-dock-stats {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .nd-if-dock-addrs {
+  flex-basis: 100%;
+  max-width: none;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 /* Collection tab: the status card's right-aligned stat cluster (profile / credential / last poll)

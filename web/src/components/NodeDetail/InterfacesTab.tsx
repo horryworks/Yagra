@@ -12,7 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { formatBps, formatDbm, formatPps, formatSi } from '../../lib/format';
-import type { InterfaceRow, InterfaceSeries, Neighbor } from '../../types/api';
+import type { InterfaceAddress, InterfaceRow, InterfaceSeries, Neighbor } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/palette';
@@ -81,6 +81,7 @@ import {
   peerLabel,
   peerLabelIsChassis,
 } from './neighbors';
+import { addressCellText, addressesOf, formatAddress } from './interfaceAddresses';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 const SPARK_WINDOW_SECS = 3600;
@@ -230,6 +231,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const labels: Record<string, string> = {
     if_name: t('interfaces.colInterface'),
     if_alias: t('interfaces.colDescription'),
+    addresses: t('interfaces.colAddresses'),
     neighbors: t('interfaces.colNeighbors'),
     oper: t('interfaces.colOper'),
     media: t('interfaces.colMedia'),
@@ -444,35 +446,42 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <div
             className="nd-if-h"
             style={{ gridColumn: 3, gridRow: 1 }}
+            title={t('interfaces.colAddressesTitle')}
+          >
+            {t('interfaces.colAddresses')}
+          </div>
+          <div
+            className="nd-if-h"
+            style={{ gridColumn: 4, gridRow: 1 }}
             title={t('interfaces.colNeighborsTitle')}
           >
             {t('interfaces.colNeighbors')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }} title={t('interfaces.colOperTitle')}>
+          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }} title={t('interfaces.colOperTitle')}>
             {t('interfaces.colOper')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }}>
+          <div className="nd-if-h" style={{ gridColumn: 6, gridRow: 1 }}>
             {t('interfaces.colMedia')}
           </div>
-          <div className="nd-if-h right" style={{ gridColumn: 6, gridRow: 1 }}>
+          <div className="nd-if-h right" style={{ gridColumn: 7, gridRow: 1 }}>
             {t('interfaces.colSpeed')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 7, gridRow: 1 }} title={t('interfaces.duplexHint')}>
+          <div className="nd-if-h" style={{ gridColumn: 8, gridRow: 1 }} title={t('interfaces.duplexHint')}>
             {t('interfaces.colDuplex')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 8, gridRow: 1 }}>
+          <div className="nd-if-h" style={{ gridColumn: 9, gridRow: 1 }}>
             {t('interfaces.colThroughput')}
           </div>
           <div
             className="nd-if-h right"
-            style={{ gridColumn: 9, gridRow: 1 }}
+            style={{ gridColumn: 10, gridRow: 1 }}
             title={t('interfaces.colInOutTitle')}
           >
             {t('interfaces.colIn')}
           </div>
           <div
             className="nd-if-h right"
-            style={{ gridColumn: 10, gridRow: 1 }}
+            style={{ gridColumn: 11, gridRow: 1 }}
             title={t('interfaces.colInOutTitle')}
           >
             {t('interfaces.colOut')}
@@ -529,6 +538,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               <span className="nd-if-cell nd-if-desc" title={r.if_alias || undefined}>
                 {r.if_alias || '—'}
               </span>
+              <AddressCell port={portName} addresses={addressesOf(r)} />
               <NeighborCell port={portName} neighbors={byPort.get(r.ifindex)} />
               <span className="nd-if-oper">
                 <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
@@ -620,6 +630,77 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         <div className="nd-if-dockhint">{t('interfaces.dockHint')}</div>
       )}
     </div>
+  );
+}
+
+/** The IP addresses cell (ADR-157): the first address, `+N` as a button when the port carries
+ *  more, and a popover listing every one. What the cell says is decided in `interfaceAddresses.ts`,
+ *  where a test runs; this only draws it.
+ *
+ *  Same event discipline as `NeighborCell` below: only the `+N` button stops its click, so a click
+ *  on the address text still opens the dock, and the popover's own panel stops its clicks itself.
+ *  A port with one address has nothing to open and gets no button — a dialog holding one line is
+ *  a click that buys nothing. The `title` carries every address, one per line, so hovering reads
+ *  them all without opening anything. */
+function AddressCell({
+  port,
+  addresses,
+}: {
+  port: string;
+  addresses: InterfaceAddress[];
+}) {
+  const { t } = useTranslation('nodes');
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const dismiss = useCallback((restoreFocus: boolean) => {
+    setOpen(false);
+    if (restoreFocus) focusPopoverTrigger(wrapRef.current, 'dialog');
+  }, []);
+  const cell = addressCellText(addresses);
+  if (cell == null) {
+    return <span className="nd-if-cell nd-if-addr nd-muted">—</span>;
+  }
+  const title = t('interfaces.addressesTitle', { port });
+  return (
+    <span className="nd-if-cell nd-if-addr" ref={wrapRef} title={cell.all.join('\n')}>
+      {/* Device-reported text, rendered as a text child and never as markup. */}
+      <span className="mono nd-if-addr-first">{cell.first}</span>
+      {cell.more > 0 && (
+        <button
+          type="button"
+          className="nd-if-addr-more"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label={t('interfaces.addressesOpen', { port, count: cell.all.length })}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((o) => !o);
+          }}
+        >
+          {t('interfaces.addressesMore', { count: cell.more })}
+        </button>
+      )}
+      {cell.more > 0 && (
+        <AnchoredPopover
+          open={open}
+          anchorRef={wrapRef}
+          role="dialog"
+          label={title}
+          align="start"
+          onDismiss={dismiss}
+          className="nd-if-nbpop"
+        >
+          <p className="nd-if-nbpop-title">{title}</p>
+          <ul className="nd-if-nbpop-list nd-if-addrpop-list">
+            {cell.all.map((a) => (
+              <li key={a} className="mono nd-if-addrpop-item">
+                {a}
+              </li>
+            ))}
+          </ul>
+        </AnchoredPopover>
+      )}
+    </span>
   );
 }
 
@@ -827,6 +908,8 @@ function InterfaceDock({
   /** The port as the header names it — one spelling, used by the header, the button's label and
    *  the dialog's title. */
   const portLabel = row.if_name ?? `if${row.ifindex}`;
+  // Every address of the port, in the `ip/prefix` spelling the list's column uses (ADR-157).
+  const portAddresses = addressesOf(row).map(formatAddress);
 
   useEffect(() => {
     // Reading the ruleset is `ManageConfig` (a threshold decides when the fleet pages someone), so
@@ -1045,6 +1128,20 @@ function InterfaceDock({
               <span title={row.transceiver_model ?? undefined}>
                 <span className="nd-muted">{t('interfaces.colMedia')}</span>{' '}
                 {row.if_media ?? row.transceiver_model}
+              </span>
+            )}
+            {/* Every address, not the list's "first +N": the dock is the one place an operator
+                is looking at a single port, and on a phone it is the only route to them at all —
+                the column is dropped there like the other reference facts (ADR-157 決定 6).
+                🚨 On the desktop the tile is ONE line, ellipsized, with the whole list in its
+                title: this head is a single non-wrapping row whose height is budgeted against
+                the charts' floor (`interfaceDock.spec.ts`), and a tile that wraps eats that floor
+                — the first version did, 113px of chrome became 193. The phone's head wraps
+                already, so there the tile takes its own line and shows them all. */}
+            {portAddresses.length > 0 && (
+              <span className="nd-if-dock-addrs" title={portAddresses.join('\n')}>
+                <span className="nd-muted">{t('interfaces.dockAddresses')}</span>{' '}
+                <span className="mono">{portAddresses.join(', ')}</span>
               </span>
             )}
             <span>

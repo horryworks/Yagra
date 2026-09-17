@@ -126,7 +126,8 @@ const row = (page: Page, name: string) =>
 
 test('each port names the device it faces, and a port with none shows a dash', async ({ page }) => {
   await openTab(page);
-  await expect(page.locator('.nd-if-head .nd-if-h').nth(2)).toHaveText('Neighbors');
+  // Fourth since ADR-157 put IP addresses ahead of it.
+  await expect(page.locator('.nd-if-head .nd-if-h').nth(3)).toHaveText('Neighbors');
 
   // Waiting on the populated cell first: the neighbours arrive after the rows, and a dash read
   // before they land would pass the third assertion for the wrong reason.

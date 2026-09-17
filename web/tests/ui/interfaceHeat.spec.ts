@@ -144,9 +144,9 @@ test('In and Out are two columns, not one cell holding both', async ({ page }) =
 
   // The header names them separately...
   const heads = page.locator('.nd-if-head .nd-if-h');
-  await expect(heads).toHaveCount(10);
-  await expect(heads.nth(8)).toHaveText('In');
-  await expect(heads.nth(9)).toHaveText('Out');
+  await expect(heads).toHaveCount(11);
+  await expect(heads.nth(9)).toHaveText('In');
+  await expect(heads.nth(10)).toHaveText('Out');
 
   // ...and each row carries one cell per direction, holding its own figure. The old shape put both
   // in one cell separated by a slash, which is what a text assertion on the row alone would miss.
@@ -156,7 +156,7 @@ test('In and Out are two columns, not one cell holding both', async ({ page }) =
   expect(await busy.locator('.nd-if-in').innerText()).not.toContain('/');
 });
 
-test('the filter controls still sit under their own headers with ten columns', async ({
+test('the filter controls still sit under their own headers with eleven columns', async ({
   page,
 }) => {
   await openTab(page);
@@ -171,7 +171,7 @@ test('the filter controls still sit under their own headers with ten columns', a
         .evaluate((el) => getComputedStyle(el).gridTemplateColumns),
     ),
   );
-  expect(head.split(' ')).toHaveLength(10);
+  expect(head.split(' ')).toHaveLength(11);
   expect(filters).toBe(head);
   expect(row).toBe(head);
 });

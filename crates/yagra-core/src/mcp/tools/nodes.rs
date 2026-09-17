@@ -462,6 +462,11 @@ impl YagraMcp {
             .store
             .node_interface_live(p.node_id, crate::poll_interval::RATE_WINDOW_FLOOR_SECS)
             .await;
+        // Each port's addresses, from the same stored set the REST list joins (ADR-157). Best
+        // effort like the interface list above it: a failed read leaves the lists empty rather
+        // than failing the whole status.
+        let l3 = admin.l3.current(p.node_id).await.unwrap_or(None);
+        let mut addresses = crate::api::collection::addresses_by_ifindex(l3.as_ref());
         let now_s = crate::api::util::now_unix_s();
         let kind = crate::api::nodes::node_kinds(admin, &[p.node_id])
             .await
@@ -499,6 +504,10 @@ impl YagraMcp {
                         live.get(&m.ifindex).copied().unwrap_or_default(),
                         now_s,
                         crate::repo::INTERFACE_STALE_SECS,
+                        u32::try_from(m.ifindex)
+                            .ok()
+                            .and_then(|i| addresses.remove(&i))
+                            .unwrap_or_default(),
                     )
                 })
                 .collect(),

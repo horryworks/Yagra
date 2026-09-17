@@ -921,6 +921,7 @@ export type MerakiEnumeration = components['schemas']['MerakiEnumeration'];
 /** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).
  *  Rates/utilization are derived at query time; `null` when there's no data or no known speed. */
 export type InterfaceRow = components['schemas']['InterfaceRow'];
+export type InterfaceAddress = components['schemas']['InterfaceAddress'];
 
 /** Per-interface time-series for the detail pane (`GET /nodes/:id/interfaces/:ifindex/series`).
  *  All arrays share the `timestamps` x-axis; `null` is a gap. `*_bps` are bits/sec (rate of
