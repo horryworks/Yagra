@@ -24,3 +24,7 @@ tokio-util = { workspace = true }
 # `yagra_task_restarts_total` from `spawn_supervised` (ADR-158). The facade only: the recorder is
 # installed by each binary.
 metrics = { workspace = true }
+
+[dev-dependencies]
+# Renders the counters a test registered, to check they exist at zero.
+metrics-exporter-prometheus = { workspace = true }

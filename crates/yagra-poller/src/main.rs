@@ -166,6 +166,8 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = builder.install() {
         tracing::warn!(error = %e, "failed to start metrics exporter");
     }
+    // After the recorder, or the zero goes nowhere (ADR-158).
+    yagra_telemetry::register_panic_counter_at_zero();
 
     tracing::info!(
         poller_id = %identity.id,

@@ -84,6 +84,13 @@ pub(crate) fn contained<T>(listener: &'static str, f: impl FnOnce() -> T) -> Opt
     }
 }
 
+/// Hand [`contained`]'s counter for `listener` to the recorder at zero, once that listener has bound.
+/// A counter only a failure touches otherwise has no series until the first panic, which reads the
+/// same as a listener nobody wired (ADR-108 Increment 3).
+pub(crate) fn register_datagram_panics_at_zero(listener: &'static str) {
+    metrics::counter!("yagra_edge_datagram_panics_total", "listener" => listener).increment(0);
+}
+
 /// Run the syslog UDP listener until the socket errors persistently.
 ///
 /// The socket is shared rather than owned so that [`spawn_supervised`] can start a replacement
@@ -447,6 +454,7 @@ pub(crate) async fn start(
                 let n = socks.len();
                 tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, per_source, global, "syslog listener enabled");
                 labels.push(format!("syslog:{bind}"));
+                register_datagram_panics_at_zero("syslog");
                 for sock in socks {
                     // Supervised (ADR-158): a reader that panics is started again on the same
                     // socket, so the label above stays true.
@@ -474,6 +482,7 @@ pub(crate) async fn start(
                 let n = socks.len();
                 tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, community_filter = community.is_some(), "trap listener enabled (v1/v2c; v3 traps out of scope)");
                 labels.push(format!("trap:{bind}"));
+                register_datagram_panics_at_zero("trap");
                 for sock in socks {
                     let sock = Arc::new(sock);
                     let (bus, limiter, community, pool) = (
@@ -736,6 +745,7 @@ mod tests {
         let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
         let handle = recorder.handle();
         let (survived, dropped) = metrics::with_local_recorder(&recorder, || {
+            register_datagram_panics_at_zero("syslog");
             (
                 contained("trap", || 7),
                 contained("trap", || -> u8 { panic!("a hostile datagram") }),
@@ -749,6 +759,12 @@ mod tests {
                 .lines()
                 .any(|l| l == "yagra_edge_datagram_panics_total{listener=\"trap\"} 1"),
             "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .any(|l| l == "yagra_edge_datagram_panics_total{listener=\"syslog\"} 0"),
+            "a bound listener's counter exists before its first panic: {rendered}"
         );
     }
 

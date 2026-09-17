@@ -12,7 +12,7 @@
 
 ### 改善
 
-- **受信タスクが落ちても戻るようになり、パニックはすべてログと数字に残るようになりました。** ポーラーの syslog・トラップ・NetFlow/IPFIX・sFlow の受信と、フローの送り出しは、パニックすると同じソケットのまま起こし直されます。間隔は 100 ms から倍々に最大 5 秒で、回数は `yagra_task_restarts_total{task}` に出ます。1 個のデータグラムで解析がパニックした場合は、そのデータグラムだけを捨てて数えます（`yagra_edge_datagram_panics_total{listener}`）。受信は止まりません。これまでは、パニックした受信はポーラーを再起動するまで止まったままで、ハートビートはその受信を有効と表示し続けていました。あわせて、どちらのバイナリもパニックの文面をログに書くようになりました。コンテナの標準エラーだけでなく、ディスク上のログとサポートバンドルにも残ります。回数は `yagra_panics_total` に出ます。core は自分のタスクを起こし直しません。ただし、保存の書き込みタスクが止まって捨てた結果を、`yagra_result_metrics_persist_dropped_total` と `yagra_result_meta_persist_dropped_total` の `reason="writer_gone"` で数え、1 回だけログに出します。これまでは何の跡も残さず消えていました。
+- **受信タスクが落ちても戻るようになり、パニックはすべてログと数字に残るようになりました。** ポーラーの syslog・トラップ・NetFlow/IPFIX・sFlow の受信と、フローの送り出しは、パニックすると同じソケットのまま起こし直されます。間隔は 100 ms から倍々に最大 5 秒で、回数は `yagra_task_restarts_total{task}` に出ます。1 個のデータグラムで解析がパニックした場合は、そのデータグラムだけを捨てて数えます（`yagra_edge_datagram_panics_total{listener}`）。受信は止まりません。これまでは、パニックした受信はポーラーを再起動するまで止まったままで、ハートビートはその受信を有効と表示し続けていました。あわせて、どちらのバイナリもパニックの文面をログに書くようになりました。コンテナの標準エラーだけでなく、ディスク上のログとサポートバンドルにも残ります。回数は `yagra_panics_total` に出ます。core は自分のタスクを起こし直しません。ただし、保存の書き込みタスクが止まって捨てた結果を、`yagra_result_metrics_persist_dropped_total` と `yagra_result_meta_persist_dropped_total` の `reason="writer_gone"` で数え、1 回だけログに出します。これまでは何の跡も残さず消えていました。これらのカウンタは起動時から 0 で出るので（`yagra_flow_templates_dropped_total` は NetFlow/IPFIX の受信を始めた時点から）、増加に掛けたアラートは 1 回目も捉えます。
 
 ### バグ修正
 
