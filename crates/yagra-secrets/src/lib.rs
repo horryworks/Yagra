@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// The AES-GCM nonce length every seal writes, and the only length [`EnvelopeCipher::open`] accepts.
+const GCM_NONCE_BYTES: usize = 12;
+
 /// Errors from secret sealing/opening.
 #[derive(Debug, Error)]
 pub enum SecretError {
@@ -173,6 +176,13 @@ impl<K: KeyProvider> EnvelopeCipher<K> {
 
     /// Decrypt a [`SealedSecret`] back to plaintext.
     pub fn open(&self, sealed: &SealedSecret) -> Result<Vec<u8>, SecretError> {
+        // `Nonce::from_slice` asserts its length, so a stored row whose nonce is not 12 bytes would
+        // panic below instead of failing. That row is corrupt, and a corrupt row is exactly what
+        // `decrypt_report` exists to name and what the scheduler steps over with a warning — both
+        // need an `Err` to do it (ADR-158 C8).
+        if sealed.dek_nonce.len() != GCM_NONCE_BYTES || sealed.ct_nonce.len() != GCM_NONCE_BYTES {
+            return Err(SecretError::Crypto);
+        }
         let kek = self
             .keys
             .kek(sealed.key_id)
@@ -240,6 +250,37 @@ mod tests {
         let mut sealed = cipher.seal(b"api-token").unwrap();
         sealed.ciphertext[0] ^= 0xff; // flip a bit
         assert!(matches!(cipher.open(&sealed), Err(SecretError::Crypto)));
+    }
+
+    /// A stored row whose nonce is not 12 bytes is corrupt, and corrupt is an `Err`, never a panic
+    /// (ADR-158 C8). The callers are built on that: `decrypt_report` exists to *report* the rows a
+    /// restore broke, and the scheduler warns and moves on when a credential will not open. A panic
+    /// takes down the check meant to find the row, and the poll dispatch along with it.
+    #[test]
+    fn open_with_a_wrong_length_nonce_is_an_error_not_a_panic() {
+        let cipher = EnvelopeCipher::new(StaticKeyProvider::single(kek(0x66)));
+        let sealed = cipher.seal(b"community").unwrap();
+
+        for len in [0, 11, 13, 16] {
+            let mut short_dek = sealed.clone();
+            short_dek.dek_nonce = vec![0; len];
+            assert!(
+                matches!(cipher.open(&short_dek), Err(SecretError::Crypto)),
+                "a {len}-byte DEK nonce"
+            );
+
+            let mut short_ct = sealed.clone();
+            short_ct.ct_nonce = vec![0; len];
+            assert!(
+                matches!(cipher.open(&short_ct), Err(SecretError::Crypto)),
+                "a {len}-byte ciphertext nonce"
+            );
+        }
+        // The intact row still opens: the check refuses the length, not the secret.
+        assert_eq!(cipher.open(&sealed).unwrap(), b"community");
+        // And the length it accepts is the one the cipher writes, not a number typed beside it.
+        assert_eq!(sealed.dek_nonce.len(), GCM_NONCE_BYTES);
+        assert_eq!(Aes256Gcm::generate_nonce(&mut OsRng).len(), GCM_NONCE_BYTES);
     }
 
     #[test]
