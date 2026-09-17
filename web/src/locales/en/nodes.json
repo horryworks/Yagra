@@ -316,6 +316,8 @@
     "setupRate": "Setup rate",
     "vpnUsers": "VPN users",
     "vpnTunnels": "VPN tunnels",
+    "wlanAps": "Access points",
+    "wlanClients": "Wireless clients",
     "noHistory": "No history yet…",
     "breakdown": "Per row",
     "unnamedRow": "Row {{row}}",

@@ -50,9 +50,11 @@
     "meraki_uplink_status": "アップリンクステータス"
   },
   "unit": {
+    "access points": "台",
     "addresses": "アドレス",
     "adjacencies": "隣接",
     "answers": "件",
+    "clients": "台",
     "connections": "接続",
     "days": "日",
     "entries": "件",

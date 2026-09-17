@@ -218,6 +218,23 @@ describe('resolveHealth', () => {
     expect(hasAnyHealth(resolveHealth(MEM_SPECS[0].metrics.map(table)))).toBe(true);
   });
 
+  it("puts a wireless controller's joined APs and online clients on their own cards (ADR-064)", () => {
+    // What the Huawei AC profile collects: two node-level gauges among the controller totals. Both
+    // read the latest value, and the per-band client counts beside them stay free for the
+    // uncurated section rather than being swallowed by the total's card.
+    const health = resolveHealth([
+      scalar('wlan_controller_aps_joined'),
+      scalar('wlan_controller_clients'),
+      scalar('wlan_controller_clients_5g'),
+    ]);
+    expect(health.cards.wlanAps?.metric).toBe('wlan_controller_aps_joined');
+    expect(health.cards.wlanAps?.read).toEqual({ kind: 'latest' });
+    expect(health.cards.wlanClients?.metric).toBe('wlan_controller_clients');
+    const claimed = claimedMetrics(health);
+    expect(claimed.has('wlan_controller_clients')).toBe(true);
+    expect(claimed.has('wlan_controller_clients_5g')).toBe(false);
+  });
+
   it('resolves cards independently of one another', () => {
     const cpu = METRIC_CARDS.find((c) => c.id === 'cpu')!;
     const vpn = METRIC_CARDS.find((c) => c.id === 'vpnTunnels')!;

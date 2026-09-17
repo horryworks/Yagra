@@ -132,6 +132,23 @@ export const METRIC_CARDS = [
     ],
     scale: 'count',
   },
+  {
+    // Access points joined to a wireless controller (ADR-064 increment A). The vendor-neutral name
+    // is the point: a Cisco or Aruba flavor publishes the same series and lands on this card.
+    // ⚠️ An HA standby reports the active controller's count, so both members show the same number.
+    id: 'wlanAps',
+    labelKey: 'overview.wlanAps',
+    candidates: ['wlan_controller_aps_joined'],
+    scale: 'count',
+  },
+  {
+    // Wireless clients online through the controller, every band (ADR-064 increment A). Same HA
+    // caveat as the AP card.
+    id: 'wlanClients',
+    labelKey: 'overview.wlanClients',
+    candidates: ['wlan_controller_clients'],
+    scale: 'count',
+  },
 ] as const satisfies readonly MetricCardSpec[];
 
 export type MetricCardId = (typeof METRIC_CARDS)[number]['id'];

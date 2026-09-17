@@ -106,5 +106,13 @@
   "ups_battery_status": "Battery condition. 1 = unknown, 2 = normal, 3 = low, 4 = depleted. Anything above 2 needs attention.",
   "ups_charge_remaining_pct": "Estimated battery charge remaining, in percent.",
   "ups_minutes_remaining": "Estimated run time left on battery, in minutes. Meaningful only while the UPS is actually on battery.",
-  "ups_output_load_pct": "Output load as a percentage of the UPS’s rated capacity. One row per output line."
+  "ups_output_load_pct": "Output load as a percentage of the UPS’s rated capacity. One row per output line.",
+  "wlan_controller_ap_license": "Access points the wireless controller is licensed to manage. Compare it with the configured count to see how much licence headroom is left. An HA standby reports the same licence.",
+  "wlan_controller_ap_normal_pct": "Share of the controller's configured access points that are working normally, in percent. Below 100 means at least one AP is down, not yet joined, or failing its configuration. An HA standby reports the active controller's figure, so a pair raises one condition twice.",
+  "wlan_controller_aps_configured": "Access points configured on the wireless controller, whether or not they are currently joined.",
+  "wlan_controller_aps_joined": "Access points currently joined to the wireless controller. An HA standby reports the active controller's count, so do not add the two members of a pair together.",
+  "wlan_controller_clients": "Wireless clients currently online through the controller, on every band. An HA standby reports the active controller's count, so do not add the two members of a pair together.",
+  "wlan_controller_clients_2g4": "Wireless clients currently online on the 2.4 GHz band. An HA standby reports the active controller's count.",
+  "wlan_controller_clients_5g": "Wireless clients currently online on the 5 GHz band. An HA standby reports the active controller's count.",
+  "wlan_controller_clients_6g": "Wireless clients currently online on the 6 GHz band. Zero on a controller whose access points have no 6 GHz radio. An HA standby reports the active controller's count."
 }
