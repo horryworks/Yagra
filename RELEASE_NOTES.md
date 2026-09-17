@@ -10,9 +10,11 @@
 
 ## Unreleased
 
+## v0.3.25 — Each port's IP addresses in the node Interfaces list, the inventory tree driven from the keyboard, a Huawei part with no temperature sensor no longer reads 2147483647 °C
+
 ### New Features
 
-- **The Interfaces list shows each port's IP addresses.** Node detail ▸ Interfaces has a new **IP addresses** column, right of Description, written `192.168.0.1/24`. Every address the device lists on the port is there — secondaries included: the first is shown, **+N** opens the rest in a popover, hovering the cell shows them all, and the dock under the list prints every one (on a phone, where the column is dropped, the dock is where they are). The column has a filter of its own that searches every address of the port, so `10.121.` finds the SVI carrying that range even when it is a secondary, and `/30` finds the point-to-point links. The addresses come from the hourly IP address walk Yagra already ran for the network map, so nothing new is polled and a change shows within the hour; an address whose mask the device did not report readably is shown without a prefix. `GET /api/v1/nodes/{node_id}/interfaces` gains an `addresses` list on every row (`ip`, `prefix_len` — `null` when unknown), and the MCP `get_node_status` tool returns the same list per interface.
+- **The Interfaces list shows each port's IP addresses.** Node detail ▸ Interfaces has a new **IP addresses** column, right of Description, written `192.168.0.1/24`. Every address the device lists on the port is there — secondaries included: the first is shown, **+N** opens the rest in a popover, hovering the cell shows them all, and the dock under the list repeats them — kept to one line on a desktop, with the whole list on hover, and written out in full on a phone, where the column is dropped and the dock is where they are. The column has a filter of its own that searches every address of the port, so `10.121.` finds the SVI carrying that range even when it is a secondary, and `/30` finds the point-to-point links. The addresses come from the hourly IP address walk Yagra already ran for the network map, so nothing new is polled and a change shows within the hour; an address whose mask the device did not report readably is shown without a prefix. `GET /api/v1/nodes/{node_id}/interfaces` gains an `addresses` list on every row (`ip`, `prefix_len` — `null` when unknown), and the MCP `get_node_status` tool returns the same list per interface.
 
 ### Improvements
 
