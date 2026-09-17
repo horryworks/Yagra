@@ -1037,7 +1037,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
              list_node_groups and list_nodes",
         ),
     ),
-    ("DELETE", "/api/v1/nodes/:node_id", ADMIN_CFG, NO_MCP_WRITE),
+    ("DELETE", "/api/v1/nodes/:node_id", NodeScoped, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/nodes/:node_id",
@@ -1053,7 +1053,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/nodes/:node_id/bindings",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1065,7 +1065,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "POST",
         "/api/v1/nodes/:node_id/collection",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1083,7 +1083,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "DELETE",
         "/api/v1/nodes/:node_id/dns-check",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1095,7 +1095,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/nodes/:node_id/dns-check",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1137,7 +1137,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/nodes/:node_id/group",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1228,13 +1228,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/nodes/:node_id/parent",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
         "PUT",
         "/api/v1/nodes/:node_id/placement",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1246,7 +1246,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/nodes/:node_id/pool",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1258,7 +1258,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "DELETE",
         "/api/v1/nodes/:node_id/url-check",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (
@@ -1270,7 +1270,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/nodes/:node_id/url-check",
-        ADMIN_CFG,
+        NodeScoped,
         NO_MCP_WRITE,
     ),
     (

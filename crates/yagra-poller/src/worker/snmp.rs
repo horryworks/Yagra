@@ -514,9 +514,10 @@ impl SnmpWalker {
     }
 
     /// As [`Self::walk_instances`], keeping whether every column answered. Only a caller that pairs
-    /// rows across columns needs that — the identity probe's patch table (ADR-138 Increment 3) — so
-    /// the neighbour, address, ARP, routing and media walks keep taking the rows alone.
-    async fn walk_instance_columns(
+    /// rows across columns needs that — the identity probe's patch table (ADR-138 Increment 3), and
+    /// the ENTITY-MIB index when it concludes a sensor reaches no port (ADR-158) — so the neighbour,
+    /// address, ARP, routing and media walks keep taking the rows alone.
+    pub(super) async fn walk_instance_columns(
         &self,
         transport: &dyn Transport,
         target: IpAddr,

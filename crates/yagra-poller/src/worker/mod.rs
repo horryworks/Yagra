@@ -291,6 +291,7 @@ fn result(
         routing: None,
         row_names: Vec::new(),
         observational: false,
+        judge_samples: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),

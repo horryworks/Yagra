@@ -2262,7 +2262,7 @@ export interface paths {
          *     per-node `PUT /nodes/{node_id}/pool` meant one request each.
          *
          *     ⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately
-         *     (ADR-124 決定 8) rather than inheriting the single-node writer's known-wrong `ADMIN_CFG` claim.
+         *     (ADR-124 決定 8). The single-node writer is `NodeScoped` too since ADR-158 A8.
          *     `manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which
          *     poller reaches a device, so an unscoped bulk write would let one site's operator strand
          *     another's inventory on a poller that cannot see it.
@@ -2316,7 +2316,8 @@ export interface paths {
          *     ⚠️ **Scoped via `Scoped`, not `Admin` alone.** `manage_config` is held by Operator, and an
          *     Operator can be group-scoped, so a bulk write that skipped the scope would let one site's
          *     operator relabel another's. This is the shape `POST /nodes/move` chose deliberately (ADR-124
-         *     decision 8) rather than inheriting the single-node writes' known-wrong `ADMIN_CFG` claim.
+         *     decision 8). The single-node writes took `VisibleNode` later: their old `ADMIN_CFG` claim let a
+         *     scoped caller write any node by id (ADR-158 A8).
          */
         post: operations["bulk_tag_nodes"];
         delete?: never;
@@ -21581,6 +21582,15 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
+            /** @description The node is outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
             /** @description Skeleton mode: no write side */
             503: {
                 headers: {
@@ -21889,7 +21899,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The node carries no DNS check */
+            /** @description The node carries no DNS check, or is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -22424,7 +22434,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the caller cannot see ungrouped nodes */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22433,7 +22443,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node or the destination folder is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -23075,7 +23085,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Self-dependency, a parent that does not exist, or an edge that would close a cycle */
+            /** @description Self-dependency, a parent that does not exist or is outside the caller's scope, or an edge that would close a cycle */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -23102,7 +23112,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -23163,7 +23173,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the caller cannot see ungrouped nodes */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -23172,7 +23182,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node or the destination folder is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -23598,7 +23608,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The node carries no URL check */
+            /** @description The node carries no URL check, or is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;

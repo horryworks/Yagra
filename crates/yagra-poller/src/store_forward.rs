@@ -707,6 +707,7 @@ mod tests {
             routing: None,
             row_names: Vec::new(),
             observational: false,
+            judge_samples: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         }

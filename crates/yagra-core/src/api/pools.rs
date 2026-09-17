@@ -416,13 +416,14 @@ async fn update_pool(
             // receives anything, silently.
             let now = std::time::Instant::now();
             let stuck: Vec<String> = claimants
-                .into_iter()
+                .iter()
                 .filter(|id| {
                     !admin
                         .coordinator
                         .caps_of(id, now)
                         .is_some_and(|caps| caps.iter().any(|c| c == yagra_bus::CAP_POOL_FOLLOW))
                 })
+                .cloned()
                 .collect();
             if !stuck.is_empty() {
                 return Err(ApiError::conflict(
@@ -441,6 +442,14 @@ async fn update_pool(
             })?;
             if !found {
                 return Err(ApiError::not_found("pool_not_found", "no such pool"));
+            }
+            // 🚨 The in-process half (ADR-158 A9). `rename_pool` moved every stored row, pollers
+            // included, but the coordinator's registry still names the old pool until each poller's
+            // next heartbeat read — and an assignment cycle in that window reads the renamed pool
+            // as unserved and sends its poller an empty working set. The single-poller move
+            // (`api/pollers.rs`) tells the registry the same way; the rename moves them all.
+            for id in &claimants {
+                admin.coordinator.set_pool(id, &to);
             }
         }
     }
@@ -896,6 +905,97 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/pools", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("edge"), "{list}");
+    }
+
+    /// 🚨 **Renaming a pool renames it in core's live registry too** (ADR-158 A9).
+    ///
+    /// The rename re-pointed every stored row — `pollers.pool` included — and left the coordinator's
+    /// in-memory entry naming the old pool. Until the next heartbeat's read, the next assignment
+    /// cycle computed the renamed pool's nodes as having no live poller and sent the poller that did
+    /// serve it an empty working set: the whole pool unpolled, with every screen agreeing it was
+    /// fine. Moving one poller between pools already told the registry (`set_pool`); the rename,
+    /// which moves every poller of a pool at once, did not.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn renaming_a_pool_moves_its_live_pollers_with_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/pools",
+            &tok,
+            Some(serde_json::json!({ "name": "tokyo" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        sqlx::query("INSERT INTO pollers (id, pool) VALUES ('edge-1', 'tokyo')")
+            .execute(&pool)
+            .await
+            .expect("register the poller");
+        let now = std::time::Instant::now();
+        st.admin
+            .as_ref()
+            .expect("live state")
+            .coordinator
+            .observe_heartbeat(
+                yagra_bus::HeartbeatMsg {
+                    poller_id: "edge-1".to_owned(),
+                    pool: "tokyo".to_owned(),
+                    incarnation: uuid::Uuid::new_v4(),
+                    version: "0.3.25".to_owned(),
+                    epoch: None,
+                    last_seq: 0,
+                    working_set_nodes: 0,
+                    working_set_specs: 0,
+                    inflight: 0,
+                    results_total: 0,
+                    listeners: Vec::new(),
+                    // A build that follows a pool change, or the rename is refused (ADR-107 Inc.2).
+                    caps: vec![yagra_bus::CAP_POOL_FOLLOW.to_owned()],
+                    host: None,
+                    leaving: false,
+                    mgmt_addrs: Vec::new(),
+                    upgrade: None,
+                },
+                now,
+            )
+            .await;
+        assert!(st
+            .admin
+            .as_ref()
+            .expect("live state")
+            .coordinator
+            .live_pools(now)
+            .contains("tokyo"));
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/pools/tokyo",
+            &tok,
+            Some(serde_json::json!({ "name": "kanto" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        let live = st
+            .admin
+            .as_ref()
+            .expect("live state")
+            .coordinator
+            .live_pools(std::time::Instant::now());
+        assert!(
+            live.contains("kanto"),
+            "the registry still names the old pool, so the renamed one reads as unserved: {live:?}"
+        );
+        assert!(!live.contains("tokyo"), "{live:?}");
+        let stored: String = sqlx::query_scalar("SELECT pool FROM pollers WHERE id = 'edge-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("read");
+        assert_eq!(stored, "kanto", "the durable half moved as before");
     }
 
     /// Covering a pool moves its members and putting them back is exact (ADR-107 増分 4).

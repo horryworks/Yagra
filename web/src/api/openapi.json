@@ -11202,7 +11202,7 @@
           "nodes"
         ],
         "summary": "Move many nodes to one poll-pool, or clear them all back to inherited (ADR-124 増分 10).",
-        "description": "Re-homing a site onto different pollers is the case the two existing writers cannot serve: the\nfolder-wide `PUT /node-groups/{id}/pool` only reaches nodes that share a folder, and the\nper-node `PUT /nodes/{node_id}/pool` meant one request each.\n\n⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately\n(ADR-124 決定 8) rather than inheriting the single-node writer's known-wrong `ADMIN_CFG` claim.\n`manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which\npoller reaches a device, so an unscoped bulk write would let one site's operator strand\nanother's inventory on a poller that cannot see it.",
+        "description": "Re-homing a site onto different pollers is the case the two existing writers cannot serve: the\nfolder-wide `PUT /node-groups/{id}/pool` only reaches nodes that share a folder, and the\nper-node `PUT /nodes/{node_id}/pool` meant one request each.\n\n⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately\n(ADR-124 決定 8). The single-node writer is `NodeScoped` too since ADR-158 A8.\n`manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which\npoller reaches a device, so an unscoped bulk write would let one site's operator strand\nanother's inventory on a poller that cannot see it.",
         "operationId": "bulk_set_node_pool",
         "requestBody": {
           "content": {
@@ -11337,7 +11337,7 @@
           "nodes"
         ],
         "summary": "Label many nodes at once — the operation that makes tagging usable at all.",
-        "description": "🚨 **This MERGES; it does not replace.** The caller picked rows in the inventory tree and knows\none label it wants on all of them; it has no idea what else each of them carries. A replacing\nbulk write would silently wipe every other label on every selected node\n(`PUT /nodes/{id}/bindings` replaces, and that is correct there because the dialog shows the\nwhole map).\n\n⚠️ **Scoped via `Scoped`, not `Admin` alone.** `manage_config` is held by Operator, and an\nOperator can be group-scoped, so a bulk write that skipped the scope would let one site's\noperator relabel another's. This is the shape `POST /nodes/move` chose deliberately (ADR-124\ndecision 8) rather than inheriting the single-node writes' known-wrong `ADMIN_CFG` claim.",
+        "description": "🚨 **This MERGES; it does not replace.** The caller picked rows in the inventory tree and knows\none label it wants on all of them; it has no idea what else each of them carries. A replacing\nbulk write would silently wipe every other label on every selected node\n(`PUT /nodes/{id}/bindings` replaces, and that is correct there because the dialog shows the\nwhole map).\n\n⚠️ **Scoped via `Scoped`, not `Admin` alone.** `manage_config` is held by Operator, and an\nOperator can be group-scoped, so a bulk write that skipped the scope would let one site's\noperator relabel another's. This is the shape `POST /nodes/move` chose deliberately (ADR-124\ndecision 8). The single-node writes took `VisibleNode` later: their old `ADMIN_CFG` claim let a\nscoped caller write any node by id (ADR-158 A8).",
         "operationId": "bulk_tag_nodes",
         "requestBody": {
           "content": {
@@ -11834,6 +11834,16 @@
               }
             }
           },
+          "404": {
+            "description": "The node is outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Skeleton mode: no write side",
             "content": {
@@ -12223,7 +12233,7 @@
             }
           },
           "404": {
-            "description": "The node carries no DNS check",
+            "description": "The node carries no DNS check, or is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -13144,7 +13154,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig",
+            "description": "Role lacks ManageConfig, or the caller cannot see ungrouped nodes",
             "content": {
               "application/json": {
                 "schema": {
@@ -13154,7 +13164,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node or the destination folder is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -14092,7 +14102,7 @@
             "description": "Dependency edge set or cleared"
           },
           "400": {
-            "description": "Self-dependency, a parent that does not exist, or an edge that would close a cycle",
+            "description": "Self-dependency, a parent that does not exist or is outside the caller's scope, or an edge that would close a cycle",
             "content": {
               "application/json": {
                 "schema": {
@@ -14122,7 +14132,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -14197,7 +14207,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig",
+            "description": "Role lacks ManageConfig, or the caller cannot see ungrouped nodes",
             "content": {
               "application/json": {
                 "schema": {
@@ -14207,7 +14217,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node or the destination folder is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -14724,7 +14734,7 @@
             }
           },
           "404": {
-            "description": "The node carries no URL check",
+            "description": "The node carries no URL check, or is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {

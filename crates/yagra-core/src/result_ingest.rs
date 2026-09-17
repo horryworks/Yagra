@@ -827,14 +827,18 @@ async fn ingest_result(
     // alert-independent, so it's shared with the backfill path (`consume_results_backfill`).
     persist_metrics_and_meta(&admitted, vm, meta_tx);
 
-    // An observational result (today: the CDP/LLDP neighbour walk, ADR-038) states nothing about
-    // the node's reachability, so it must not reach the alert engine at all. `observe` derives
-    // liveness from `outcome` on *every* result, and both ways of pretending otherwise are bugs:
-    // an hourly walk that timed out would push `Unreachable` into the dwell window ICMP owns and
-    // page someone for a healthy device, while a hard-coded `Reachable` would cancel a genuine
-    // outage. Same shape as `consume_results_backfill` — persist the observation, touch no alert
-    // state. The counters above still run: the result did arrive, from a real poller.
-    if result.observational {
+    // An observational result (the adjacency walks, the media walk, the optical probe — ADR-038)
+    // states nothing about the node's reachability. Both ways of pretending otherwise are bugs: an
+    // hourly walk that timed out would push `Unreachable` into the dwell window ICMP owns and page
+    // someone for a healthy device, while a hard-coded `Reachable` would cancel a genuine outage.
+    // The engine itself skips liveness for such a result (`observe_with_no_reading`).
+    //
+    // Its samples are a separate question, answered by `judge_samples` (ADR-158 A10). This used to
+    // be one early return for both, and so every band on an optical light level was stored and
+    // never evaluated. A slow walk's count samples still stop here, as `consume_results_backfill`
+    // does — persist the observation, touch no alert state. The counters above still run: the
+    // result did arrive, from a real poller.
+    if result.observational && !result.judge_samples {
         return;
     }
 
@@ -1347,6 +1351,7 @@ mod tests {
             routing: None,
             row_names: Vec::new(),
             observational: false,
+            judge_samples: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         };
@@ -1726,6 +1731,7 @@ mod tests {
             routing: None,
             row_names: Vec::new(),
             observational: true,
+            judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
         }
@@ -1734,6 +1740,7 @@ mod tests {
     fn liveness_result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
         PollResult {
             observational: false,
+            judge_samples: false,
             neighbors: None,
             l3: None,
             arp: None,
@@ -1785,6 +1792,149 @@ mod tests {
                 .any(|a| matches!(a, crate::alerts::NotifyAction::Fire(_))),
             "the genuine outage must still fire despite the interleaved observational results"
         );
+    }
+
+    /// A band rule on the receive light level (warning at or below -20 dBm), for `node`, dwell 2 —
+    /// the shape an operator writes for an optical port. The catalogue marks the metric
+    /// per-interface, as the shipped one does.
+    fn optical_engine(node: NodeId) -> Arc<AlertManager> {
+        use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
+        let rule = crate::thresholds::StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            Vec::new(),
+            ThresholdRule::new(
+                yagra_common::METRIC_IF_RX_POWER_DBM,
+                ThresholdBounds {
+                    warning_below: Some(-20.0),
+                    ..ThresholdBounds::default()
+                },
+                2,
+            ),
+        );
+        let alerts = Arc::new(AlertManager::new());
+        alerts.set_config(
+            crate::alerts::testkit::cfg(vec![rule], crate::alerts::testkit::meta_for(node))
+                .with_per_interface(
+                    [yagra_common::METRIC_IF_RX_POWER_DBM.to_owned()]
+                        .into_iter()
+                        .collect(),
+                ),
+        );
+        alerts
+    }
+
+    /// What the optical job sends (`physical.rs::execute_optical`): observational, asking for its
+    /// samples to be judged, one port's light level at -25 dBm.
+    fn optical_result(node: NodeId, at: i64) -> PollResult {
+        let mut r = observational_result(node, CheckOutcome::Reachable, at);
+        r.neighbors = None;
+        r.judge_samples = true;
+        r.samples = vec![yagra_bus::Sample::interface(
+            yagra_common::METRIC_IF_RX_POWER_DBM,
+            yagra_common::IfIndex(7),
+            -25.0,
+            yagra_common::MetricKind::Gauge,
+        )];
+        r
+    }
+
+    /// 🚨 **A threshold on an optical light level used to be judged by nothing** (ADR-158 A10). The
+    /// optical job's result is observational, and ingest returned before the engine for every such
+    /// result — so the band was stored, listed in Settings, and never evaluated. The only test of it
+    /// handed the engine a result without the mark.
+    #[tokio::test]
+    async fn an_observational_result_still_has_its_samples_judged() {
+        let node = NodeId::new();
+        let alerts = optical_engine(node);
+        let out = drive_ingest_into(
+            &alerts,
+            &NoReadingHandle::default(),
+            (1..4).map(|at| optical_result(node, at)).collect(),
+        )
+        .await;
+        let fired: Vec<(String, Option<u32>)> = out
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                crate::alerts::NotifyAction::Fire(alert) => {
+                    Some((alert.metric.clone(), alert.ifindex.map(|i| i.0)))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fired,
+            vec![(yagra_common::METRIC_IF_RX_POWER_DBM.to_owned(), Some(7))],
+            "the port's light level crossed its band for the rule's dwell: {:?}",
+            out.actions
+        );
+    }
+
+    /// The other half, which must not move: a result that judges its samples still states nothing
+    /// about liveness. Six `Error` outcomes are twice the seeded liveness dwell, and neither the
+    /// node's state nor a liveness alert may follow from them.
+    #[tokio::test]
+    async fn an_observational_error_result_never_touches_liveness() {
+        let node = NodeId::new();
+        let alerts = optical_engine(node);
+        let results = (1..7)
+            .map(|at| {
+                let mut r = optical_result(node, at);
+                r.outcome = CheckOutcome::Error;
+                r.samples.clear();
+                r
+            })
+            .collect();
+        let out = drive_ingest_into(&alerts, &NoReadingHandle::default(), results).await;
+        assert!(
+            out.actions.is_empty(),
+            "a transceiver that would not answer is not an outage: {:?}",
+            out.actions
+        );
+        assert_eq!(
+            alerts.node_state(node),
+            None,
+            "the node has told the engine nothing about whether it is up"
+        );
+    }
+
+    /// And a slow walk's count sample stays out of the rules, which is why the field exists at all
+    /// rather than every observational sample being judged: the neighbour walk runs hourly, so its
+    /// dwell would be counted in hours and the freshness sweep (`alerts/stale.rs`) would close what
+    /// it opened.
+    #[tokio::test]
+    async fn a_slow_walks_count_sample_is_not_judged() {
+        use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
+        let node = NodeId::new();
+        let rule = crate::thresholds::StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            Vec::new(),
+            ThresholdRule::new(
+                yagra_common::METRIC_SNMP_NEIGHBOR_COUNT,
+                ThresholdBounds {
+                    warning_below: Some(1.0),
+                    ..ThresholdBounds::default()
+                },
+                1,
+            ),
+        );
+        let alerts = Arc::new(AlertManager::new());
+        alerts.set_config(crate::alerts::testkit::cfg(
+            vec![rule],
+            crate::alerts::testkit::meta_for(node),
+        ));
+        let results = (1..4)
+            .map(|at| {
+                let mut r = observational_result(node, CheckOutcome::Reachable, at);
+                r.samples = vec![Sample::gauge(yagra_common::METRIC_SNMP_NEIGHBOR_COUNT, 0.0)];
+                r
+            })
+            .collect();
+        let out = drive_ingest_into(&alerts, &NoReadingHandle::default(), results).await;
+        assert!(out.actions.is_empty(), "{:?}", out.actions);
+        assert_eq!(out.metrics.len(), 3, "…while every count is still stored");
     }
 
     /// The backlog array a single-shard writer needs, for a test that spawns one directly.
@@ -1920,6 +2070,7 @@ mod tests {
             routing: None,
             row_names: Vec::new(),
             observational: false,
+            judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
         })
