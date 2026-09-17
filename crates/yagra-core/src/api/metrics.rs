@@ -231,7 +231,13 @@ fn join_inventory(
 ///
 /// The item knows, so ask it. See [`yagra_common::table_rows_are_interfaces`].
 fn dimension_of_item(item: &CollectionItem) -> MetricDimension {
-    if item.kind == yagra_common::CollectionKind::Scalar {
+    // A wireless controller's AP-walk item publishes one sample for the controller node — whether
+    // the walk completed — and its per-AP values are an inventory, not rows of this series
+    // (ADR-064). Reported as `entity` it told an MCP client to read it as a node-wide max of rows.
+    if matches!(
+        item.kind,
+        yagra_common::CollectionKind::Scalar | yagra_common::CollectionKind::Wlan
+    ) {
         return MetricDimension::None;
     }
     if yagra_common::item_publishes_per_interface(item) {
@@ -1628,6 +1634,20 @@ mod tests {
             ],
             "a metric joined or left this list — say which side it belongs on and why"
         );
+    }
+
+    /// A wireless controller's AP-walk item is one value for the controller, like a scalar (ADR-064).
+    ///
+    /// Measured on .210 before this existed: `list_node_metrics` reported `wlan_ap_walk_complete` as
+    /// `entity`, which tells a client to read a node-wide max across table rows.
+    #[test]
+    fn a_wireless_controller_ap_walk_item_is_a_node_level_metric() {
+        let wlan = yagra_common::builtin_templates()
+            .into_iter()
+            .flat_map(|t| t.items)
+            .find(|i| i.kind == yagra_common::CollectionKind::Wlan)
+            .expect("a built-in AP-walk item");
+        assert_eq!(dimension_of_item(&wlan), MetricDimension::None);
     }
 
     #[test]

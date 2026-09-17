@@ -218,7 +218,8 @@ impl WirelessRepo {
 
         let ids: Vec<Uuid> = aps.iter().map(|a| ap_id(a.mac)).collect();
         let current_rows = sqlx::query(
-            "SELECT ap_id, owner_controller_id, last_associated_at, run_state, state, clients \
+            "SELECT ap_id, owner_controller_id, last_associated_at, run_state, state, clients, \
+                    host(ip) AS ip \
              FROM wireless_aps WHERE ap_id = ANY($1) FOR UPDATE",
         )
         .bind(&ids)
@@ -229,6 +230,7 @@ impl WirelessRepo {
             run_state: String,
             state: String,
             clients: Option<i32>,
+            ip: Option<String>,
         }
         let mut current: HashMap<Uuid, Current> = HashMap::with_capacity(current_rows.len());
         for row in current_rows {
@@ -246,6 +248,7 @@ impl WirelessRepo {
                     run_state: row.try_get("run_state")?,
                     state: row.try_get("state")?,
                     clients: row.try_get("clients")?,
+                    ip: row.try_get("ip")?,
                 },
             );
         }
@@ -285,18 +288,24 @@ impl WirelessRepo {
             col_serial.push(ap.serial.clone());
             col_model.push(ap.model.clone());
             col_version.push(ap.sw_version.clone());
-            col_ip.push(ap.ip.map(|ip| ip.to_string()));
             col_group.push(ap.vendor_group.clone());
+            // The address follows the report that is accepted, like the state: a controller whose
+            // word does not stand must not blank the address the serving one gave — and the serving
+            // one reporting none (Huawei's 255.255.255.255 for an AP that is down) does clear it.
+            // Found by the database test: a standby that answers no address, arriving after the
+            // active, emptied the AP's IP on every poll.
             match (verdict.take_state, known) {
                 (false, Some(c)) => {
                     col_run_state.push(c.run_state.clone());
                     col_state.push(c.state.clone());
                     col_clients.push(c.clients);
+                    col_ip.push(c.ip.clone());
                 }
                 _ => {
                     col_run_state.push(ap.run_state.clone());
                     col_state.push(ap.state.as_str().to_owned());
                     col_clients.push(clients);
+                    col_ip.push(ap.ip.map(|ip| ip.to_string()));
                 }
             }
             col_owner.push(verdict.owner.map(|o| o.controller));
