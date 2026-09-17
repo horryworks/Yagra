@@ -389,6 +389,16 @@ impl YagraMcp {
                        null on a copper port and on optical ports whose vendor publishes no \
                        thresholds. Nothing alerts on them: they are the module's own published \
                        figures, not a threshold configured in Yagra. \
+                       `addresses` lists every IP address configured on the interface as the \
+                       device reports it — secondaries included, IPv4 before IPv6, and SNMP does \
+                       not say which one is primary. Each entry is `ip` plus `prefix_len` in bits \
+                       (24 for a /24); a null `prefix_len` means the device gave a mask that could \
+                       not be decoded, NOT that the address is a host route. The list comes from \
+                       an address walk that runs about once an hour, so an empty list on every \
+                       port of a node means that walk has not run yet or the device does not \
+                       answer the IP address tables — not that the device has no addresses — and \
+                       a change made on the device can take up to an hour to show. An address \
+                       the device attributes to no interface is not listed. \
                        `snmp_configured` says whether SNMP polling is CONFIGURED for this node — a \
                        credential bound to it, or the deployment-wide fallback community — and NOT \
                        whether the device is answering. False means no ifTable or CDP/LLDP walk \
