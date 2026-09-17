@@ -75,6 +75,7 @@ mod mib;
 mod module_source;
 mod neighbors;
 mod netbox;
+mod no_reading_filter;
 mod notifications;
 mod notify_facts;
 mod notify_render;
@@ -434,6 +435,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // leader's scheduler publishes, so until its first rebuild — and on a standby — every reader
     // answers exactly as it did before the handle existed.
     let poll_intervals = poll_interval::PollIntervals::unknown();
+    // Vendor no-reading placeholders by metric name (ADR-156). Published by the config load below and
+    // the leader's refresh loop; read by both result consumers before they store or judge a sample.
+    let no_reading = no_reading_filter::NoReadingHandle::default();
 
     // TSDB + bus.
     let store: Arc<dyn MetricStore> =
@@ -711,7 +715,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     )
     .await
     {
-        Ok(config) => alerts.set_config(config),
+        Ok((config, markers)) => {
+            alerts.set_config(config);
+            no_reading.publish(markers);
+        }
         Err(e) => {
             metrics::counter!("yagra_alert_config_load_failures_total").increment(1);
             tracing::error!(error = %e, "priming the alert config failed; retrying on the refresh loop");
@@ -815,6 +822,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         alerts: alerts.clone(),
         scheduler_stats: scheduler_stats.clone(),
         poll_intervals: poll_intervals.clone(),
+        no_reading: no_reading.clone(),
         meraki_inflight: meraki_inflight.clone(),
         meraki_devices: meraki_devices.clone(),
         meraki_orgs: meraki_orgs.clone(),
@@ -1083,6 +1091,9 @@ struct LeaderTasks {
     scheduler_stats: Arc<scheduler::SchedulerStats>,
     /// Published into by the scheduler after every rebuild whose reads all succeeded (ADR-144).
     poll_intervals: poll_interval::PollIntervals,
+    /// Vendor no-reading placeholders (ADR-156): published by the config refresh, read by both result
+    /// consumers.
+    no_reading: no_reading_filter::NoReadingHandle,
     meraki_inflight: Arc<meraki::MerakiInflight>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
@@ -1232,6 +1243,7 @@ impl LeaderTasks {
                 &self.shutdown,
                 result_ingest::consume_results(
                     results,
+                    self.no_reading.clone(),
                     self.alerts.clone(),
                     notify_tx,
                     vm.clone(),
@@ -1248,7 +1260,12 @@ impl LeaderTasks {
             let backfill = Box::pin(self.bus.subscribe_results_backfill().await?);
             spawn_cancellable(
                 &self.shutdown,
-                result_ingest::consume_results_backfill(backfill, vm, meta_tx),
+                result_ingest::consume_results_backfill(
+                    backfill,
+                    self.no_reading.clone(),
+                    vm,
+                    meta_tx,
+                ),
             );
         }
         Ok(())
@@ -1412,6 +1429,7 @@ impl LeaderTasks {
                     l3: self.l3.clone(),
                     nodes: self.repo.clone(),
                 },
+                self.no_reading.clone(),
             ),
         );
         spawn_cancellable(

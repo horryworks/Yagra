@@ -62,6 +62,20 @@ fn parse_scope_level(s: &str) -> ScopeLevel {
     }
 }
 
+/// Every metric name among `items` that publishes **one series per interface** (ADR-076).
+///
+/// Answered by [`yagra_common::item_publishes_per_interface`] — the OID rules it applies are the only
+/// thing that can decide this, because `ifindex` is a row key rather than a port number (ADR-011).
+/// The engine needs the set, not a per-metric probe, because it asks the question once per distinct
+/// metric on every poll result. `items` is [`CollectionRepo::collected_items`].
+pub fn per_interface_metric_names(items: &[CollectionItem]) -> BTreeSet<String> {
+    items
+        .iter()
+        .filter(|i| yagra_common::item_publishes_per_interface(i))
+        .map(|i| i.metric_name.clone())
+        .collect()
+}
+
 /// PostgreSQL-backed collection-set store.
 pub struct CollectionRepo {
     pool: PgPool,
@@ -224,41 +238,35 @@ impl CollectionRepo {
         Ok(row.try_get("is_counter")?)
     }
 
-    /// Every metric name that publishes **one series per interface** (ADR-076).
+    /// Every collection item this deployment knows: the built-in catalogue plus both
+    /// operator-editable item tables.
     ///
-    /// The union of the built-in catalogue and both operator-editable item tables, answered by
-    /// [`yagra_common::item_publishes_per_interface`] — the OID rules it applies are the only
-    /// thing that can decide this, and they live in Rust because `ifindex` is a row key rather
-    /// than a port number (ADR-011). The engine needs the set, not a per-metric probe, because it
-    /// asks the question once per distinct metric on every poll result.
+    /// Read whole because two sets are derived from it, and both are decided in Rust from the OID
+    /// rather than stored: which metric names publish **one series per interface**
+    /// ([`per_interface_metric_names`], ADR-076 — `ifindex` is a row key rather than a port number,
+    /// ADR-011) and which carry a vendor **no-reading placeholder**
+    /// ([`crate::no_reading_filter::NoReadingMarkers::from_items`], ADR-156). One read means the two
+    /// can never be built from different states of the tables.
     ///
     /// Both item tables are consulted, exactly as [`Self::metric_declared_counter`] does: an item
     /// defined on a template and one defined at a scope are the same thing to a poller, and
     /// consulting only one would silently leave half the fleet's interface metrics sharing a
-    /// single check.
-    pub async fn per_interface_metric_names(&self) -> anyhow::Result<BTreeSet<String>> {
-        let mut out: BTreeSet<String> = yagra_common::builtin_catalog()
-            .iter()
-            .filter(|i| yagra_common::item_publishes_per_interface(i))
-            .map(|i| i.metric_name.clone())
-            .collect();
+    /// single check. `enabled` is deliberately not consulted: the question is what a metric *is*,
+    /// and a disabled item whose name is still arriving from somewhere else must not change it.
+    pub async fn collected_items(&self) -> anyhow::Result<Vec<CollectionItem>> {
+        let mut out = yagra_common::builtin_catalog();
         let rows = sqlx::query(
-            "SELECT metric_name, oid, collection FROM collection_items              UNION              SELECT metric_name, oid, collection FROM collection_template_items",
+            "SELECT metric_name, oid, collection, metric_kind FROM collection_items              UNION              SELECT metric_name, oid, collection, metric_kind FROM collection_template_items",
         )
         .fetch_all(&self.pool)
         .await?;
         for row in rows {
-            let item = CollectionItem {
+            out.push(CollectionItem {
                 metric_name: row.try_get("metric_name")?,
                 oid: row.try_get("oid")?,
                 kind: parse_collection_kind(&row.try_get::<String, _>("collection")?),
-                // Unread by `item_publishes_per_interface`; the dimension is decided by the OID
-                // and the collection kind, never by whether the value is a counter.
-                metric_kind: yagra_common::MetricKind::Gauge,
-            };
-            if yagra_common::item_publishes_per_interface(&item) {
-                out.insert(item.metric_name);
-            }
+                metric_kind: parse_metric_kind(&row.try_get::<String, _>("metric_kind")?),
+            });
         }
         Ok(out)
     }
@@ -918,7 +926,7 @@ mod tests {
         };
 
         // The built-in half answers on an empty database — the operator tables only add to it.
-        let builtin = repo.per_interface_metric_names().await.expect("set");
+        let builtin = per_interface_metric_names(&repo.collected_items().await.expect("items"));
         // Both names come out of the catalogue rather than being spelled here: a metric name that
         // does not exist satisfies the negation below without checking anything, and the positive
         // one was wrong on the first run (the built-in is `if_hc_in_octets`, not `if_in_octets`).
@@ -992,7 +1000,7 @@ mod tests {
         .await
         .expect("template item");
 
-        let set = repo.per_interface_metric_names().await.expect("set");
+        let set = per_interface_metric_names(&repo.collected_items().await.expect("items"));
         assert!(set.contains("if_in_broadcast"), "{set:?}");
         assert!(set.contains(TEMPLATE_ONLY), "the template table: {set:?}");
         assert!(
@@ -1017,11 +1025,87 @@ mod tests {
         )
         .await
         .expect("item");
-        assert!(repo
-            .per_interface_metric_names()
+        assert!(
+            per_interface_metric_names(&repo.collected_items().await.expect("items"))
+                .contains("if_in_unknown_protos")
+        );
+    }
+
+    /// ADR-156: the no-reading table is built from both item tables, with each row's real kinds —
+    /// and an operator item that reuses the metric name on another column takes the marker away.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_no_reading_table_follows_the_items_in_both_tables(pool: sqlx::PgPool) {
+        use crate::no_reading_filter::NoReadingMarkers;
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "S90001wac002", 12, None).await;
+        let template = match repo
+            .create_template("Huawei VRP health (test)", None)
             .await
-            .expect("set")
-            .contains("if_in_unknown_protos"));
+            .expect("template")
+        {
+            CreateTemplateOutcome::Created(id) => id,
+            CreateTemplateOutcome::NameTaken => panic!("a fresh database cannot have this name"),
+        };
+        repo.create_template_item(
+            template,
+            "huawei_temp",
+            "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.11",
+            "table",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("template item");
+
+        let items = repo.collected_items().await.expect("items");
+        let temp: Vec<&CollectionItem> = items
+            .iter()
+            .filter(|i| i.metric_name == "huawei_temp")
+            .collect();
+        assert_eq!(temp.len(), 1, "{temp:?}");
+        assert_eq!(temp[0].kind, CollectionKind::Table);
+        assert_eq!(temp[0].metric_kind, MetricKind::Gauge);
+        assert_ne!(
+            NoReadingMarkers::from_items(&items),
+            NoReadingMarkers::default(),
+            "a template item on the declared column carries its placeholder"
+        );
+
+        // A counter item reads back as a counter: the kind is read, not assumed.
+        repo.create_item(
+            "node",
+            node,
+            "if_in_broadcast",
+            "1.3.6.1.2.1.31.1.1.1.3",
+            "table",
+            "counter",
+            true,
+        )
+        .await
+        .expect("item");
+        let items = repo.collected_items().await.expect("items");
+        assert!(items
+            .iter()
+            .any(|i| i.metric_name == "if_in_broadcast" && i.metric_kind == MetricKind::Counter));
+
+        // The same name on another column, from the other table: core cannot tell those samples
+        // apart, so the name loses its marker.
+        repo.create_item(
+            "node",
+            node,
+            "huawei_temp",
+            "1.3.6.1.4.1.99999.1.1.1",
+            "table",
+            "gauge",
+            true,
+        )
+        .await
+        .expect("item");
+        assert_eq!(
+            NoReadingMarkers::from_items(&repo.collected_items().await.expect("items")),
+            NoReadingMarkers::default()
+        );
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

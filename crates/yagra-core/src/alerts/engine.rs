@@ -56,8 +56,35 @@ enum CheckOn<'a> {
     Row(u32, Option<&'a str>),
 }
 
+/// Whether a sample is a reading, or the placeholder a vendor answers for a row with no reading at
+/// all (ADR-156).
+///
+/// A placeholder never reaches a rule as a value. On a table row that already holds a state it is
+/// **evidence**: the device itself says the row has nothing to measure, so the row is observed as
+/// `Ok` through its dwell and an alert on it recovers the ordinary way. Everywhere else it is
+/// nothing — a row with no state stays without one, and a placeholder on a port or on a node-wide
+/// check says nothing about that check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    /// A measured value, judged against the rule.
+    Value,
+    /// The column's no-reading placeholder, taken out of the result by
+    /// [`crate::no_reading_filter::NoReadingHandle::admit`].
+    NoReading,
+}
+
 /// What each vendor-table row is called, per node: node → metric → row key → name (ADR-143).
 type RowNamesByNode = HashMap<NodeId, HashMap<String, HashMap<u32, String>>>;
+
+/// One table row handed to `observe_rows`: the sample, its resolved rule, the row key, the row's
+/// name, and whether the sample is a reading or a placeholder (ADR-143, ADR-156).
+type RowObservation<'a> = (
+    &'a Sample,
+    &'a EffectiveThreshold,
+    u32,
+    Option<&'a str>,
+    Reading,
+);
 
 /// When one batch of samples was observed, and how often such a batch arrives (ADR-144).
 ///
@@ -545,7 +572,28 @@ impl AlertManager {
     /// Feed one poll result through the engine: a liveness check from the outcome plus a
     /// threshold check per sample that has a resolved threshold. Returns notify actions for
     /// every committed transition (also broadcast to SSE subscribers here).
+    /// Tests' shorthand for [`Self::observe_with_no_reading`] on a result that carried no vendor
+    /// placeholder — every result but the ones ADR-156 is about. Production always goes through the
+    /// ingest boundary, which is why this does not exist outside tests.
+    #[cfg(test)]
     pub fn observe(&self, result: &PollResult) -> Vec<NotifyAction> {
+        self.observe_with_no_reading(result, &[])
+    }
+
+    /// Judge one poll result for a result whose vendor placeholders were taken out at ingest
+    /// (ADR-156) — the engine's entry point from `result_ingest`.
+    ///
+    /// `no_reading` is what [`crate::no_reading_filter::NoReadingHandle::admit`] removed. Each one is
+    /// resolved exactly like a sample, and then observed only where it is evidence: on a table row
+    /// that already holds a state, as `Ok` through the rule's dwell. 🚨 **A row that is merely absent
+    /// from the result is not evidence and closes nothing** (ADR-156 決定 3) — a poller defect, a
+    /// truncated walk or a changed SNMP view all make a row absent, and closing on absence would take
+    /// that fault off the screen.
+    pub fn observe_with_no_reading(
+        &self,
+        result: &PollResult,
+        no_reading: &[Sample],
+    ) -> Vec<NotifyAction> {
         let node = result.node_id;
         // Rolled-up display state before this observation. Only this node's own state can move in
         // one `observe` (suppression re-attributes other nodes' alerts but leaves their committed
@@ -579,7 +627,8 @@ impl AlertManager {
             Vec::new();
         // Each sample's row name where it changes which rule resolves (ADR-143), kept by position so
         // the second pass — which runs after the config lock is dropped — rebuilds the same memo key.
-        let mut sample_names: Vec<Option<&str>> = Vec::with_capacity(result.samples.len());
+        let mut sample_names: Vec<Option<&str>> =
+            Vec::with_capacity(result.samples.len() + no_reading.len());
         // Held for the whole call. Nothing below takes this lock for writing, and `record_row_names`
         // runs before `observe` on the same task, so it cannot be waiting on it.
         let names = self.row_names.read().expect("row names rwlock poisoned");
@@ -601,7 +650,9 @@ impl AlertManager {
             liveness_dwell = config
                 .resolve(node, None, None, LIVENESS)
                 .map(|eff| eff.dwell_samples);
-            for sample in &result.samples {
+            // The placeholders resolve too, in the same memo: a row that holds a state needs its
+            // rule's dwell to recover through (ADR-156 決定 4).
+            for sample in result.samples.iter().chain(no_reading) {
                 if config.is_per_interface(&sample.metric)
                     && !per_if_metrics.contains(&sample.metric.as_str())
                 {
@@ -684,8 +735,14 @@ impl AlertManager {
         // row key on a metric that is not per-interface is a memory pool, a CPU or a sensor, and gets
         // a check of its own. They are gathered here and observed together below, where the index of
         // rows holding a state decides which of them are worth observing at all (decision 5).
-        let mut rows: Vec<(&Sample, &EffectiveThreshold, u32, Option<&str>)> = Vec::new();
-        for (position, sample) in result.samples.iter().enumerate() {
+        let mut rows: Vec<RowObservation<'_>> = Vec::new();
+        for (position, sample) in result.samples.iter().chain(no_reading).enumerate() {
+            // Positions past the readings are the placeholders, in the order the first pass saw them.
+            let reading = if position < result.samples.len() {
+                Reading::Value
+            } else {
+                Reading::NoReading
+            };
             let key = resolve_key(&sample.metric, sample.ifindex, &per_if_metrics);
             let name = sample_names.get(position).copied().flatten();
             let Some(eff) = resolved
@@ -696,6 +753,9 @@ impl AlertManager {
                 continue;
             };
             match (key.1, sample.ifindex) {
+                // A placeholder is evidence only about a table row (ADR-156 決定 5). A port's check
+                // and a node-wide fold are left exactly as a missing sample would leave them.
+                (Some(_), _) | (None, None) if reading == Reading::NoReading => {}
                 // One port, one check, one observation (ADR-076).
                 (Some(idx), _) => actions.extend(self.observe_threshold_sample(
                     node,
@@ -703,6 +763,7 @@ impl AlertManager {
                     sample,
                     eff,
                     CheckOn::Port(idx),
+                    Reading::Value,
                 )),
                 // One table row, one check (ADR-143). The name goes on the alert whether or not a
                 // rule needed it to resolve, so it is looked up here rather than taken from `name`.
@@ -711,7 +772,7 @@ impl AlertManager {
                         .and_then(|m| m.get(sample.metric.as_str()))
                         .and_then(|m| m.get(&row.0))
                         .map(String::as_str);
-                    rows.push((sample, eff, row.0, display));
+                    rows.push((sample, eff, row.0, display, reading));
                 }
                 // Node-wide: keep the worst sample **in this rule's own direction**, observe below.
                 (None, None) => match folded.iter_mut().find(|(m, _, _)| *m == sample.metric) {
@@ -725,7 +786,14 @@ impl AlertManager {
             }
         }
         for (_, sample, eff) in folded {
-            actions.extend(self.observe_threshold_sample(node, moment, sample, eff, CheckOn::Node));
+            actions.extend(self.observe_threshold_sample(
+                node,
+                moment,
+                sample,
+                eff,
+                CheckOn::Node,
+                Reading::Value,
+            ));
         }
         if !rows.is_empty() {
             actions.extend(self.observe_rows(node, moment, rows));
@@ -754,7 +822,7 @@ impl AlertManager {
     /// transition.
     /// Feed one already-resolved sample through the state machine as a threshold check.
     ///
-    /// Shared by both shapes in [`Self::observe`] — a port's own check and a node-wide folded one —
+    /// Shared by both shapes in [`Self::observe_with_no_reading`] — a port's own check and a node-wide folded one —
     /// since they differ only in which id the check carries. Written once so the counter rule, the
     /// maintenance substitution and the [`ThresholdEval`] that describes the breach cannot drift
     /// between them.
@@ -765,6 +833,7 @@ impl AlertManager {
         sample: &Sample,
         eff: &EffectiveThreshold,
         on: CheckOn<'_>,
+        reading: Reading,
     ) -> Vec<NotifyAction> {
         let (check, ifindex, row, row_name) = match on {
             CheckOn::Port(idx) => (
@@ -784,6 +853,12 @@ impl AlertManager {
         };
         let raw = if moment.in_maintenance {
             NodeState::Maintenance
+        } else if reading == Reading::NoReading {
+            // The device says this row has nothing to measure (ADR-156 決定 4). Observed as `Ok`
+            // rather than resolved on the spot, the same shape as the counter arm below: a sensor
+            // that answers 85 and its placeholder on alternate polls must still reach its dwell,
+            // and an open alert recovers through the ordinary path with its notification.
+            NodeState::Ok
         } else if sample.kind == MetricKind::Counter {
             // A raw monotonic counter has no meaningful fixed bound: `above` latches
             // permanently once crossed and `below` fires across every reboot's counter
@@ -825,7 +900,9 @@ impl AlertManager {
                 is_liveness: false,
                 // A threshold check exists only because a rule resolved for it.
                 alerting: true,
-                eval: Some(eval),
+                // A placeholder is not a value, so it describes no breach. `Ok` cannot fire, and a
+                // resolve does not read this.
+                eval: (reading == Reading::Value).then_some(eval),
                 ifindex,
                 row,
                 row_name,
@@ -865,7 +942,7 @@ impl AlertManager {
         &self,
         node: NodeId,
         moment: Moment,
-        rows: Vec<(&Sample, &EffectiveThreshold, u32, Option<&str>)>,
+        rows: Vec<RowObservation<'_>>,
     ) -> Vec<NotifyAction> {
         let mut actions = Vec::new();
         // Decision 6: the node-wide alert a metric had before its rows alerted on their own is closed
@@ -882,7 +959,7 @@ impl AlertManager {
             let states = self.row_states.lock().expect("row states mutex poisoned");
             let node_rows = states.get(&node);
             rows.iter()
-                .map(|(sample, _, row, _)| {
+                .map(|(sample, _, row, _, _)| {
                     node_rows
                         .and_then(|m| m.get(sample.metric.as_str()))
                         .is_some_and(|set| set.contains(row))
@@ -890,10 +967,12 @@ impl AlertManager {
                 .collect()
         };
         let mut newly_held: Vec<(String, u32)> = Vec::new();
-        for ((sample, eff, row, name), held) in rows.into_iter().zip(held) {
-            // A counter is never evaluated (ADR-012) and maintenance breaches nothing, so neither is
-            // a reason to create a state — only to keep feeding one that exists.
-            let breaching = !moment.in_maintenance
+        for ((sample, eff, row, name, reading), held) in rows.into_iter().zip(held) {
+            // A counter is never evaluated (ADR-012), maintenance breaches nothing, and a placeholder
+            // is not a value (ADR-156), so none of them is a reason to create a state — only to keep
+            // feeding one that exists.
+            let breaching = reading == Reading::Value
+                && !moment.in_maintenance
                 && sample.kind != MetricKind::Counter
                 && eff.evaluate(sample.value) != NodeState::Ok;
             if !breaching && !held {
@@ -905,6 +984,7 @@ impl AlertManager {
                 sample,
                 eff,
                 CheckOn::Row(row, name),
+                reading,
             ));
             if !held {
                 newly_held.push((sample.metric.clone(), row));
@@ -1346,7 +1426,7 @@ impl AlertManager {
     /// rule is what ADR-009 asks this to reach.
     ///
     /// **A maintenance window does not silence this, including the fleet-wide one an upgrade opens
-    /// (ADR-050 decision 12), and that is deliberate.** The gate lives in [`Self::observe`] and
+    /// (ADR-050 decision 12), and that is deliberate.** The gate lives in [`Self::observe_with_no_reading`] and
     /// tests a *node* set, so a [`Subject::Pool`] could never fall in it by accident; the question
     /// is whether to add a second gate here, and the answer is no on three counts. The debounce is
     /// already the mechanism for this exact case — [`crate::pool_coverage::DEFAULT_RAISE_AFTER`] is
@@ -1467,7 +1547,7 @@ impl AlertManager {
     /// `values` is every row the evaluator computed for this node — a filesystem each for
     /// `hr_storage_used_pct`, a memory pool each for `cisco_mem_used_pct`, one entry for a scalar.
     /// They are folded to **one** observation here, under this rule's own direction, exactly as
-    /// [`Self::observe`] folds a table walk's samples (ADR-077 decision 1). 🚨 The caller must not
+    /// [`Self::observe_with_no_reading`] folds a table walk's samples (ADR-077 decision 1). 🚨 The caller must not
     /// fold and must not call once per row: N observations in one dwell window is the ADR-076 bug —
     /// one bad row among good ones has its candidate reset by the next row and never reaches the
     /// dwell, while N bad rows satisfy a 3-sample dwell inside a single tick.
@@ -1594,10 +1674,12 @@ impl AlertManager {
         if effs.iter().all(Option::is_none) {
             return None;
         }
-        let observed: Vec<(&Sample, &EffectiveThreshold, u32, Option<&str>)> = samples
+        let observed: Vec<RowObservation<'_>> = samples
             .iter()
             .zip(&effs)
-            .filter_map(|((sample, row, name), eff)| Some((sample, eff.as_ref()?, *row, *name)))
+            .filter_map(|((sample, row, name), eff)| {
+                Some((sample, eff.as_ref()?, *row, *name, Reading::Value))
+            })
             .collect();
         let moment = Moment {
             at_unix_ms,
@@ -1672,7 +1754,7 @@ impl AlertManager {
 
     /// Resolve every active **derived** per-interface alert whose rule no longer resolves.
     ///
-    /// Nothing polls `if_in_util_pct`, so [`Self::observe`] never visits `metric@ifindex` for a
+    /// Nothing polls `if_in_util_pct`, so [`Self::observe_with_no_reading`] never visits `metric@ifindex` for a
     /// derived metric and no poll can close one. Without this sweep, deleting a port rule left its
     /// alert open in the UI and its incident open in whatever external tool the dedup key reached,
     /// for the life of the process.
@@ -1723,7 +1805,7 @@ impl AlertManager {
     ///
     /// Found on the deployment, not in a test: the verification rule for `huawei_mem_used_pct` was
     /// deleted and its warning stayed open for the life of the process, because nothing polls a
-    /// derived metric and so [`Self::observe`]'s `!alerting` branch never visits its check.
+    /// derived metric and so [`Self::observe_with_no_reading`]'s `!alerting` branch never visits its check.
     pub fn resolve_orphaned_node_derived_alerts(&self) -> Vec<NotifyAction> {
         let orphans: Vec<CheckId> = {
             let config = self.config.read().expect("config rwlock poisoned");
@@ -1755,7 +1837,7 @@ impl AlertManager {
     ///
     /// # The defect this closes, which the tree believed was already closed
     ///
-    /// [`Self::observe`] `continue`s a sample whose threshold does not resolve *before*
+    /// [`Self::observe_with_no_reading`] `continue`s a sample whose threshold does not resolve *before*
     /// [`Self::process_check`] is reached, and `observe_threshold_sample` hard-codes
     /// `alerting: true`. So `process_check`'s `!alerting` branch — the one whose own doc says it
     /// exists to close a stranded alert — is reachable **only** by the liveness check. Deleting a
@@ -1774,6 +1856,8 @@ impl AlertManager {
     /// | [`Self::resolve_orphaned_node_derived_alerts`] | rule gone | derived node-wide |
     /// | **this** | rule gone | **collected, both dimensions** |
     /// | the freshness sweep (`alerts::stale`) | **data gone** | collected + derived node-wide |
+    /// | the poll path, as `Ok` through dwell | **the device answered its no-reading placeholder** (ADR-156) | collected table rows |
+    /// | nobody, **deliberately** | a table row stopped arriving while its metric did not | collected table rows (ADR-156 決定 3: absence is also what a monitoring fault looks like; ADR-143's remnant) |
     /// | [`Self::forget_deleted_nodes`] | node gone | any node subject |
     /// | `events::engine` | the event rule's own lifecycle | `event:*` |
     /// | `pool_coverage` | the pool recovered | [`Subject::Pool`] |
@@ -1942,7 +2026,7 @@ impl AlertManager {
     ///
     /// The third sweep of this shape, and the one whose subject is the **node** rather than the
     /// rule. Its motivating failure is different from its two siblings': deleting a node produces no
-    /// poll result, so [`Self::observe`]'s `!alerting` branch is never reached for any of its checks
+    /// poll result, so [`Self::observe_with_no_reading`]'s `!alerting` branch is never reached for any of its checks
     /// and there is no path by which a deleted node's alert can ever resolve. ADR-097 decision 4
     /// made that invisible rather than harmless — `open_alerts` drops a row whose node is gone, so a
     /// restart makes the alert **disappear without ever having been resolved**, and whatever
@@ -5882,5 +5966,267 @@ mod row_tests {
         assert_eq!(fired.len(), 1, "{actions:?}");
         assert_eq!(fired[0].check, check_id(node, pct));
         assert_eq!(fired[0].row, None);
+    }
+}
+
+/// ADR-156: a vendor's "no reading" placeholder is evidence about a table row, and nothing else is.
+///
+/// Built on the AC6508 measurement the ADR started from — fifteen `hwEntityTemperature` rows, twelve
+/// of them the placeholder — and on the one decision the user made explicitly: a row that merely
+/// stops arriving must never close its alert, because that is also what a monitoring fault looks
+/// like.
+#[cfg(test)]
+mod no_reading_tests {
+    use super::super::testkit::*;
+    use super::*;
+    use crate::no_reading_filter::{
+        ac6508_temperature_rows, NoReadingHandle, NoReadingMarkers, AC6508_MARKER,
+    };
+    use yagra_common::{
+        CollectionItem, CollectionKind, ScopeLevel, ThresholdBounds, ThresholdRule,
+    };
+
+    const TEMP: &str = "huawei_temp";
+    const PLACEHOLDER_ROWS: [u32; 12] = [3, 5, 14, 78, 142, 206, 270, 334, 398, 462, 526, 590];
+
+    /// The seeded Huawei default's bounds and dwell (`repo/defaults.rs`: above 70/80, dwell 2), at
+    /// global scope so no profile has to be wired up to reach it.
+    fn default_temp_rule() -> StoredThreshold {
+        StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            Vec::new(),
+            ThresholdRule::new(TEMP, ThresholdBounds::above(Some(70.0), Some(80.0)), 2),
+        )
+    }
+
+    fn setup() -> (AlertManager, NodeId) {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(vec![default_temp_rule()], meta_for(node)));
+        (mgr, node)
+    }
+
+    /// The ingest boundary as production builds it: the table from the built-in column, then
+    /// `admit`, so every test here observes exactly what `ingest_result` would hand the engine.
+    fn handle() -> NoReadingHandle {
+        let handle = NoReadingHandle::default();
+        handle.publish(NoReadingMarkers::from_items(&[CollectionItem {
+            metric_name: TEMP.to_owned(),
+            oid: "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.11".to_owned(),
+            kind: CollectionKind::Table,
+            metric_kind: MetricKind::Gauge,
+        }]));
+        handle
+    }
+
+    fn observe(
+        mgr: &AlertManager,
+        node: NodeId,
+        samples: Vec<Sample>,
+        at: i64,
+    ) -> Vec<NotifyAction> {
+        let mut r = result(node, CheckOutcome::Reachable, at);
+        r.samples = samples;
+        let admitted = handle().admit(r);
+        mgr.observe_with_no_reading(admitted.result(), admitted.no_reading())
+    }
+
+    fn row(r: u32, value: f64) -> Sample {
+        Sample::interface(TEMP, IfIndex(r), value, MetricKind::Gauge)
+    }
+
+    fn fires(actions: &[NotifyAction]) -> usize {
+        actions
+            .iter()
+            .filter(|a| matches!(a, NotifyAction::Fire(_)))
+            .count()
+    }
+
+    fn resolved_rows(actions: &[NotifyAction]) -> Vec<u32> {
+        let mut rows: Vec<u32> = actions
+            .iter()
+            .filter_map(|a| match a {
+                NotifyAction::Resolve(alert) => alert.row,
+                _ => None,
+            })
+            .collect();
+        rows.sort_unstable();
+        rows
+    }
+
+    /// One of the twelve alerts the PoC had open, as `alert_history` gives it back after a restart.
+    fn open_row_alert(node: NodeId, row: u32) -> Alert {
+        Alert {
+            subject: Subject::Node(node),
+            check: row_check_id(node, row, TEMP),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+            metric: TEMP.to_owned(),
+            breach: None,
+            ifindex: None,
+            row: Some(row),
+            row_name: None,
+        }
+    }
+
+    /// The upgrade, end to end: twelve alerts restored from history, then the device keeps answering
+    /// its placeholder. Nothing on the first poll — the rule's dwell is two — and all twelve on the
+    /// second, as ordinary resolves.
+    #[test]
+    fn the_restored_ac6508_alerts_close_after_the_rules_dwell_of_placeholders() {
+        let (mgr, node) = setup();
+        let restored: Vec<Alert> = PLACEHOLDER_ROWS
+            .iter()
+            .map(|r| open_row_alert(node, *r))
+            .collect();
+        assert_eq!(mgr.restore(restored), 12);
+
+        let first = observe(&mgr, node, ac6508_temperature_rows(), 1);
+        assert!(resolved_rows(&first).is_empty(), "{first:?}");
+        assert_eq!(mgr.active_alerts().len(), 12);
+
+        let second = observe(&mgr, node, ac6508_temperature_rows(), 2);
+        assert_eq!(
+            resolved_rows(&second),
+            PLACEHOLDER_ROWS.to_vec(),
+            "{second:?}"
+        );
+        assert_eq!(fires(&second), 0);
+        assert!(mgr.active_alerts().is_empty());
+
+        // …and it stays closed: the placeholder never becomes a value to breach with.
+        for at in 3..8 {
+            assert!(observe(&mgr, node, ac6508_temperature_rows(), at).is_empty());
+        }
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// 🚨 **ADR-156 決定 3, the user's decision.** A row that stops arriving is what a poller defect, a
+    /// truncated walk and a changed SNMP view all look like, so it must keep its alert open however
+    /// long it is gone. Only the device answering the placeholder closes it.
+    #[test]
+    fn a_row_that_stops_arriving_keeps_its_alert_until_the_device_answers_its_placeholder() {
+        let (mgr, node) = setup();
+        // Row 3 genuinely overheats and fires after the dwell.
+        let _ = observe(&mgr, node, vec![row(3, 90.0), row(9, 58.0)], 1);
+        assert_eq!(
+            fires(&observe(&mgr, node, vec![row(3, 90.0), row(9, 58.0)], 2)),
+            1
+        );
+
+        // Then row 3 is simply absent while row 9 keeps arriving — for longer than any dwell.
+        for at in 3..20 {
+            let actions = observe(&mgr, node, vec![row(9, 58.0)], at);
+            assert!(
+                resolved_rows(&actions).is_empty(),
+                "absence closed row 3: {actions:?}"
+            );
+        }
+        assert_eq!(
+            mgr.active_alerts().len(),
+            1,
+            "a missing row is not a recovered row"
+        );
+
+        // The device then answers row 3 with its placeholder: evidence, through the dwell.
+        let placeholder = vec![row(3, AC6508_MARKER), row(9, 58.0)];
+        assert!(resolved_rows(&observe(&mgr, node, placeholder.clone(), 20)).is_empty());
+        assert_eq!(
+            resolved_rows(&observe(&mgr, node, placeholder, 21)),
+            vec![3]
+        );
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// A placeholder on a row with no state creates none — the same fifteen rows that raised twelve
+    /// criticals as values raise nothing once they are recognised. The contrast half runs the very
+    /// same samples as values, so this cannot pass because nothing ever fires.
+    #[test]
+    fn a_placeholder_is_never_judged_as_a_value() {
+        let (mgr, node) = setup();
+        for at in 1..6 {
+            assert!(observe(&mgr, node, ac6508_temperature_rows(), at).is_empty());
+        }
+        assert!(mgr.active_alerts().is_empty());
+        // No state was created either: a real 85 on a placeholder row still needs the full dwell.
+        assert_eq!(fires(&observe(&mgr, node, vec![row(3, 85.0)], 6)), 0);
+        assert_eq!(fires(&observe(&mgr, node, vec![row(3, 85.0)], 7)), 1);
+
+        // Contrast: the same rows handed over as values are today's bug, twelve criticals.
+        let (mgr, node) = setup();
+        let mut r = result(node, CheckOutcome::Reachable, 1);
+        r.samples = ac6508_temperature_rows();
+        let _ = mgr.observe(&r);
+        r.at_unix_ms = 2;
+        assert_eq!(fires(&mgr.observe(&r)), 12);
+    }
+
+    /// A sensor that answers a value and its placeholder on alternate polls is not closed by the
+    /// placeholders and not re-fired by the values: each one resets the other's dwell, exactly as an
+    /// in-band reading would. Closing on the spot would instead hide the real 85 forever.
+    #[test]
+    fn a_sensor_alternating_with_its_placeholder_neither_fires_nor_resolves() {
+        let (mgr, node) = setup();
+        // Ends on a placeholder (at = 10), so the two values below start a fresh dwell.
+        for at in 1..=10 {
+            let value = if at % 2 == 1 { 85.0 } else { AC6508_MARKER };
+            assert_eq!(fires(&observe(&mgr, node, vec![row(3, value)], at)), 0);
+        }
+        assert!(mgr.active_alerts().is_empty());
+
+        // Once it has fired, alternating does not resolve it.
+        let _ = observe(&mgr, node, vec![row(3, 85.0)], 11);
+        assert_eq!(fires(&observe(&mgr, node, vec![row(3, 85.0)], 12)), 1);
+        for at in 13..21 {
+            let value = if at % 2 == 1 { AC6508_MARKER } else { 85.0 };
+            let actions = observe(&mgr, node, vec![row(3, value)], at);
+            assert!(resolved_rows(&actions).is_empty(), "{actions:?}");
+            assert_eq!(fires(&actions), 0, "{actions:?}");
+        }
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// A placeholder with no row key says nothing about a node-wide check, which folds several rows
+    /// into one: it is not stored, and it closes nothing.
+    #[test]
+    fn a_placeholder_without_a_row_closes_nothing() {
+        let (mgr, node) = setup();
+        let _ = observe(&mgr, node, vec![Sample::gauge(TEMP, 90.0)], 1);
+        assert_eq!(
+            fires(&observe(&mgr, node, vec![Sample::gauge(TEMP, 90.0)], 2)),
+            1
+        );
+        for at in 3..10 {
+            let actions = observe(&mgr, node, vec![Sample::gauge(TEMP, AC6508_MARKER)], at);
+            assert!(actions.is_empty(), "{actions:?}");
+        }
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// ADR-143 決定 6 counts a placeholder row as a per-row observation: the node-wide alert a
+    /// pre-ADR-143 core raised on the 2147483647 maximum is retired by it, as by any row.
+    #[test]
+    fn the_first_placeholder_row_retires_a_restored_node_wide_alert() {
+        let (mgr, node) = setup();
+        let legacy = Alert {
+            row: None,
+            check: check_id(node, TEMP),
+            ..open_row_alert(node, 0)
+        };
+        assert_eq!(mgr.restore(vec![legacy]), 1);
+        let actions = observe(&mgr, node, vec![row(3, AC6508_MARKER)], 1);
+        let resolved: Vec<CheckId> = actions
+            .iter()
+            .filter_map(|a| match a {
+                NotifyAction::Resolve(alert) => Some(alert.check),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolved, vec![check_id(node, TEMP)], "{actions:?}");
+        assert!(mgr.active_alerts().is_empty());
     }
 }
