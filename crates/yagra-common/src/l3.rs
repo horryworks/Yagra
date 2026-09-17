@@ -492,6 +492,27 @@ impl L3Snapshot {
             .collect()
     }
 
+    /// The addresses grouped by the `ifIndex` they are configured on, each group in the
+    /// snapshot's canonical order (ADR-157).
+    ///
+    /// This is the join key to the interface inventory: the Interfaces list and `get_node_status`
+    /// attach each group to the `interfaces` row with the same index. A group keyed `0` is what an
+    /// agent that reported no `ifIndex` produces — it is returned like any other so a caller can
+    /// count what it could not place, but it matches no interface row.
+    ///
+    /// Grouping keeps every address, secondaries included: an SVI on a real device carries up to
+    /// eleven (measured on the PoC recordings, 2026-09-17), and the one place that reads this
+    /// shows them all.
+    #[must_use]
+    pub fn by_ifindex(&self) -> std::collections::BTreeMap<u32, Vec<&L3Address>> {
+        let mut out: std::collections::BTreeMap<u32, Vec<&L3Address>> =
+            std::collections::BTreeMap::new();
+        for a in &self.addresses {
+            out.entry(a.ifindex).or_default().push(a);
+        }
+        out
+    }
+
     /// Put the snapshot in canonical form so two observations of an unchanged device compare equal.
     ///
     /// 1. Records are sorted by `(ip, source_table, ifindex)`. Sorting by source table before
@@ -868,6 +889,52 @@ mod tests {
         );
         // ipAdEntAddr / ipAddressAddr are the index, never a walked column.
         assert!(!oids.contains(&"1.3.6.1.2.1.4.20.1.1"));
+    }
+
+    #[test]
+    fn by_ifindex_keeps_every_address_of_a_port_in_canonical_order() {
+        // The PoC recording's Vlanif100 shape: many secondaries on one ifIndex, one on another, and
+        // a v6 address whose prefix could not be decoded. Built out of order so the grouping is
+        // shown to inherit the canonical sort rather than the insertion order.
+        let snap = L3Snapshot::new(vec![
+            L3Address::new(71, v4("10.121.2.254"), 24),
+            L3Address::new(81, v4("10.103.250.42"), 30),
+            L3Address::new(71, v6("fec0::a:0:0:4"), 0),
+            L3Address::new(71, v4("10.104.29.254"), 24),
+            L3Address::new(71, v4("10.121.1.254"), 24),
+        ]);
+        let by = snap.by_ifindex();
+        assert_eq!(by.keys().copied().collect::<Vec<_>>(), vec![71, 81]);
+        let vlanif100: Vec<String> = by[&71].iter().map(|a| a.ip.to_string()).collect();
+        assert_eq!(
+            vlanif100,
+            vec![
+                "10.104.29.254",
+                "10.121.1.254",
+                "10.121.2.254",
+                "fec0::a:0:0:4"
+            ],
+            "every address stays, v4 before v6, numeric within v4 — the snapshot's own order"
+        );
+        assert_eq!(
+            by[&71][3].prefix_len, 0,
+            "an undecodable prefix is kept, not dropped"
+        );
+        assert_eq!(by[&81].len(), 1);
+        // The total is the snapshot's: grouping neither loses nor invents an address.
+        assert_eq!(by.values().map(Vec::len).sum::<usize>(), snap.len());
+    }
+
+    #[test]
+    fn by_ifindex_returns_the_unplaced_group_under_zero_and_nothing_for_an_empty_snapshot() {
+        // ifIndex 0 is what the poller writes when the agent reported none. It comes back as a
+        // group like any other — the caller decides that it matches no interface row.
+        let snap = L3Snapshot::new(vec![L3Address::new(0, v4("192.0.2.9"), 24)]);
+        assert_eq!(
+            snap.by_ifindex().keys().copied().collect::<Vec<_>>(),
+            vec![0]
+        );
+        assert!(L3Snapshot::default().by_ifindex().is_empty());
     }
 
     #[test]

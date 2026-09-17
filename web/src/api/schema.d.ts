@@ -7997,6 +7997,22 @@ export interface components {
             event_id: string;
         };
         /**
+         * @description One IP address configured on an interface, as the device reports it (ADR-157).
+         *
+         *     Every address the device lists is here, in a fixed order (IPv4 before IPv6, numeric within
+         *     each), so a secondary is as visible as the primary — SNMP does not say which is which.
+         */
+        InterfaceAddress: {
+            /** @description The address itself, in its usual text form; never narrowed to IPv4. */
+            ip: string;
+            /**
+             * Format: int32
+             * @description Prefix length in bits (`24` for a /24). `null` when the device gave a mask or prefix that
+             *     could not be decoded — the address is still real, only its network is unknown.
+             */
+            prefix_len?: number | null;
+        };
+        /**
          * @description A links × time grid. `values[i][j]` is link `i`'s throughput at `timestamps[j]`, so every row
          *     is the same length and the client can shade cells without bounds checks.
          */
@@ -8032,8 +8048,14 @@ export interface components {
          *     earns its place on copper, where a duplex mismatch is a real misconfiguration. `if_type` is the
          *     IANAifType integer (6 = ethernetCsmacd); it is what distinguishes "duplex does not apply to this
          *     interface" — a loopback, a tunnel, a dialer — from "we could not read it".
+         *
+         *     `addresses` lists every IP address configured on the interface — secondaries included — as
+         *     the device reports them in its IP address tables (ADR-157). Read from the hourly address walk
+         *     (ADR-043), so a change shows within an hour; empty until that walk has run, and for a port the
+         *     device reports no address on. An address the device attributes to no interface is not listed.
          */
         InterfaceRow: {
+            addresses: components["schemas"]["InterfaceAddress"][];
             if_alias?: string | null;
             if_duplex?: string | null;
             if_media?: string | null;

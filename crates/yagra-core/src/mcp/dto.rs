@@ -339,10 +339,17 @@ pub struct InterfaceDto {
     pub tx_power_high_dbm: Option<f64>,
     /// The node has not reported this interface recently — treat its numbers as history.
     pub stale: bool,
+    /// Every IP address configured on this interface, secondaries included, as the device lists
+    /// them in its IP address tables (ADR-157): `ip` plus `prefix_len` in bits, `prefix_len`
+    /// `null` when the device's mask could not be decoded. Ordered IPv4 first, then IPv6, numeric
+    /// within each; SNMP does not say which address is primary. Read from the hourly address
+    /// walk, so empty until it has run and for a port that carries no address. The same list the
+    /// WebUI's Interfaces tab shows.
+    pub addresses: Vec<crate::api::collection::InterfaceAddress>,
 }
 
 impl InterfaceDto {
-    /// Build from an interface-metadata row plus its query-time rates.
+    /// Build from an interface-metadata row plus its query-time rates and its stored addresses.
     ///
     /// ⚠️ **`InterfaceLive`'s octet rates are BYTES per second** — the name says `bps` and the
     /// contents do not, which is why the ×8 lives at every call site rather than in the store. Drop
@@ -353,6 +360,7 @@ impl InterfaceDto {
         live: crate::store::InterfaceLive,
         now_s: i64,
         stale_after_s: i64,
+        addresses: Vec<crate::api::collection::InterfaceAddress>,
     ) -> Self {
         let in_bps = live.in_bps.map(|r| r * 8.0);
         let out_bps = live.out_bps.map(|r| r * 8.0);
@@ -383,6 +391,7 @@ impl InterfaceDto {
             tx_power_low_dbm: meta.tx_power_low_dbm,
             tx_power_high_dbm: meta.tx_power_high_dbm,
             stale: meta.last_seen_s.is_none_or(|s| now_s - s > stale_after_s),
+            addresses,
         }
     }
 }
@@ -1028,6 +1037,13 @@ mod tests {
                 tx_power_low_dbm: Some(-9.0),
                 tx_power_high_dbm: Some(-1.0),
                 stale: false,
+                // Populated for the same reason as the optical window: the canary scans the keys
+                // an instance actually carries, and a nested list is only scanned if it has an
+                // element (ADR-157).
+                addresses: vec![crate::api::collection::InterfaceAddress {
+                    ip: "192.0.2.1".to_owned(),
+                    prefix_len: Some(24),
+                }],
             }],
         };
         assert_inventory_dto_is_clean(&serde_json::to_value(&status).unwrap(), "NodeStatus");

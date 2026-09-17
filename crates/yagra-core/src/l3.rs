@@ -20,10 +20,11 @@ use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{L3Snapshot, NodeId};
 
-// There are deliberately no per-node read methods here yet. `node_l3_changes` is written and
-// pruned from the moment this ships, because a history cannot be backfilled — the reader can be
-// added later, the recording cannot. Adding `current()` / `list_changes()` now would be code with
-// no caller, which is the thing that rots.
+// `node_l3_changes` is written and pruned from the moment ADR-043 shipped, because a history
+// cannot be backfilled — the reader can be added later, the recording cannot. The per-node
+// reader of the *current* set arrived with its first caller (ADR-157: the Interfaces list and
+// `get_node_status` show each port's addresses); `list_changes()` still has none and so still
+// does not exist — code with no caller is the thing that rots.
 //
 /// PostgreSQL-backed store for node interface addresses: current set and change history.
 pub struct L3Repo {
@@ -107,6 +108,25 @@ impl L3Repo {
                 Ok((NodeId(row.try_get("node_id")?), snapshot.0))
             })
             .collect()
+    }
+
+    /// One node's current address set, or `None` when no address walk has ever been recorded for
+    /// it (ADR-157).
+    ///
+    /// `None` and `Some(empty)` are different answers and both are returned as they are: the
+    /// first means the walk has not run (or the node has no SNMP), the second means the device
+    /// answered the two IP tables with no rows — which is a real observation and replaces the
+    /// stored set, exactly as `record_observation` says.
+    pub async fn current(&self, node_id: Uuid) -> anyhow::Result<Option<L3Snapshot>> {
+        let row = sqlx::query("SELECT addresses FROM node_l3 WHERE node_id = $1")
+            .bind(node_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| {
+            let snapshot: Json<L3Snapshot> = row.try_get("addresses")?;
+            Ok(snapshot.0)
+        })
+        .transpose()
     }
 
     /// The newest `last_seen` across every node, or `None` when nothing has been observed.
@@ -266,8 +286,9 @@ mod tests {
         assert!(production_source().contains("THEN node_l3.first_seen ELSE now() END"));
     }
 
-    /// There is no per-node reader yet (see the note above `L3Repo`), so the only paging rule to
-    /// pin is that nobody reintroduces `OFFSET` when one is added.
+    /// The per-node reader (`current`, ADR-157) fetches one row by key and pages nothing; the
+    /// history reader still does not exist. So the only paging rule to pin is that nobody
+    /// reintroduces `OFFSET` when one is added.
     #[test]
     fn no_statement_pages_with_offset() {
         assert!(
@@ -310,5 +331,53 @@ mod tests {
     #[test]
     fn the_host_route_filter_runs_in_sql() {
         assert!(production_source().contains("(a->>'prefix_len')::INT IN (32, 128)"));
+    }
+
+    // ── Against a real PostgreSQL (ADR-114) ────────────────────────────────────────────────
+
+    /// The per-node reader answers with exactly what was recorded, distinguishes "never walked"
+    /// from "walked and empty", and follows a replacement (ADR-157).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn current_returns_the_recorded_set_and_none_before_any_walk(pool: sqlx::PgPool) {
+        // This module deliberately has no `use super::*` — its other tests read the source as
+        // text — so the one test that runs the code names what it needs.
+        use super::L3Repo;
+        use std::net::IpAddr;
+        use yagra_common::{L3Address, L3Snapshot};
+        let repo = L3Repo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "l3-current", 1, None).await;
+        let other = crate::pgtest::node(&pool, "l3-other", 2, None).await;
+
+        assert_eq!(
+            repo.current(node).await.unwrap(),
+            None,
+            "nothing recorded yet"
+        );
+
+        // Two addresses on one port plus one whose prefix could not be decoded — the snapshot
+        // comes back byte-for-byte, canonical order and the zero prefix included.
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let first = L3Snapshot::new(vec![
+            L3Address::new(71, ip("10.121.1.254"), 24),
+            L3Address::new(71, ip("10.104.29.254"), 24),
+            L3Address::new(24, ip("fec0::a:0:0:4"), 0),
+        ]);
+        repo.record_observation(node, &first).await.unwrap();
+        assert_eq!(repo.current(node).await.unwrap(), Some(first.clone()));
+        assert_eq!(
+            repo.current(other).await.unwrap(),
+            None,
+            "another node's row is not read"
+        );
+
+        // An empty observation is a real answer and replaces the set — `Some(empty)`, not `None`.
+        repo.record_observation(node, &L3Snapshot::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.current(node).await.unwrap(),
+            Some(L3Snapshot::default())
+        );
     }
 }

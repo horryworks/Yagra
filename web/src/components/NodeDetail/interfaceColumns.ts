@@ -25,20 +25,21 @@ export interface InterfaceColumn {
 }
 
 /**
- * The ten columns, in the order the header draws them.
+ * The eleven columns, in the order the header draws them.
  *
  * ⚠️ The order is load-bearing three times over: it is the grid, it is the order of
  * `ColumnFilterRow`'s slots (derived by `filterSlots` below), and it is the index a resize grip is
  * placed at. Inserting a column in the middle also means the header cells' explicit `gridColumn`
  * numbers in `InterfacesTab.tsx` move.
  *
- * The numbers themselves are ADR-126's — measured, not estimated — plus ADR-145's NEIGHBORS. The
- * note above the declaration in `NodeDetail.css` explains where each came from; do not change one
- * here without reading it.
+ * The numbers themselves are ADR-126's — measured, not estimated — plus ADR-145's NEIGHBORS and
+ * ADR-157's ADDRESSES. The note above the declaration in `NodeDetail.css` explains where each came
+ * from; do not change one here without reading it.
  */
 export const INTERFACE_COLUMNS: readonly InterfaceColumn[] = [
   { key: 'if_name', width: 'minmax(140px, 1.4fr)' },
   { key: 'if_alias', width: 'minmax(88px, 1.3fr)' },
+  { key: 'addresses', width: 'minmax(168px, 1fr)' },
   { key: 'neighbors', width: 'minmax(120px, 1fr)' },
   { key: 'oper', width: '94px' },
   { key: 'media', width: 'minmax(112px, 1fr)' },

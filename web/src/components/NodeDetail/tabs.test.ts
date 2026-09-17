@@ -193,6 +193,7 @@ const iface = (oper: number | null): InterfaceRow => ({
   out_util_pct: null,
   last_seen_unix: null,
   stale: false,
+  addresses: [],
 });
 
 const stats = (over: Partial<NodeDetailTabStats> = {}): NodeDetailTabStats => ({

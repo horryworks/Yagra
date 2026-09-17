@@ -19,9 +19,11 @@ import {
 import {
   METRIC_STATUSES,
   NEIGHBOR_PROTOS,
+  type InterfaceAddress,
   type Neighbor,
   type NodeMetricEntry,
 } from '../../types/api';
+import { addressesOf, formatAddress } from './interfaceAddresses';
 import { DUPLEX_STATES, duplexState, mediaText, SPEED_TIERS, speedTier } from './linkMode';
 
 // ───────────────────────────────────────────────────────────────── interfaces
@@ -68,6 +70,7 @@ export interface FilterableInterface {
   transceiver_model?: string | null;
   if_speed_bps?: number | null;
   if_duplex?: string | null;
+  addresses?: InterfaceAddress[] | null;
 }
 
 /**
@@ -101,6 +104,18 @@ export function interfaceFilters(
       readText: (r) => [r.if_alias],
       containsSemantics: 'substring',
       placeholder: t('interfaces.colDescription'),
+    },
+    // Every address of the port is searched, in the `ip/prefix` spelling the cell shows, so a
+    // secondary the cell folds behind `+N` still answers — `10.121.` finds the SVI that carries
+    // that range, `/30` every point-to-point link (ADR-157 決定 7).
+    addresses: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (r) => addressesOf(r).map(formatAddress),
+      containsSemantics: 'substring',
+      placeholder: t('interfaces.colAddresses'),
+      hint: t('interfaces.addressesHint'),
     },
     oper: {
       kind: 'enum',

@@ -638,6 +638,11 @@ async fn set_profile_templates(
 /// earns its place on copper, where a duplex mismatch is a real misconfiguration. `if_type` is the
 /// IANAifType integer (6 = ethernetCsmacd); it is what distinguishes "duplex does not apply to this
 /// interface" — a loopback, a tunnel, a dialer — from "we could not read it".
+///
+/// `addresses` lists every IP address configured on the interface — secondaries included — as
+/// the device reports them in its IP address tables (ADR-157). Read from the hourly address walk
+/// (ADR-043), so a change shows within an hour; empty until that walk has run, and for a port the
+/// device reports no address on. An address the device attributes to no interface is not listed.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceRow {
     ifindex: u32,
@@ -659,6 +664,52 @@ pub(crate) struct InterfaceRow {
     tx_power_high_dbm: Option<f64>,
     last_seen_unix: Option<i64>,
     stale: bool,
+    addresses: Vec<InterfaceAddress>,
+}
+
+/// One IP address configured on an interface, as the device reports it (ADR-157).
+///
+/// Every address the device lists is here, in a fixed order (IPv4 before IPv6, numeric within
+/// each), so a secondary is as visible as the primary — SNMP does not say which is which.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct InterfaceAddress {
+    /// The address itself, in its usual text form; never narrowed to IPv4.
+    pub(crate) ip: String,
+    /// Prefix length in bits (`24` for a /24). `null` when the device gave a mask or prefix that
+    /// could not be decoded — the address is still real, only its network is unknown.
+    pub(crate) prefix_len: Option<u8>,
+}
+
+impl InterfaceAddress {
+    /// The API form of one stored address. The stored `0` is the poller's "could not decode"
+    /// marker (`yagra_common::L3Address::prefix_len`), and it is the one thing this conversion
+    /// translates: a client should read `null`, not remember that zero means unknown.
+    pub(crate) fn from_l3(a: &yagra_common::L3Address) -> Self {
+        Self {
+            ip: a.ip.to_string(),
+            prefix_len: (a.prefix_len != 0).then_some(a.prefix_len),
+        }
+    }
+}
+
+/// Each interface's addresses out of one node's stored address set, keyed by `ifIndex` — the
+/// join the Interfaces list and `get_node_status` both perform (ADR-157 決定 3).
+pub(crate) fn addresses_by_ifindex(
+    snapshot: Option<&yagra_common::L3Snapshot>,
+) -> std::collections::BTreeMap<u32, Vec<InterfaceAddress>> {
+    snapshot
+        .map(|s| {
+            s.by_ifindex()
+                .into_iter()
+                .map(|(ifindex, list)| {
+                    (
+                        ifindex,
+                        list.into_iter().map(InterfaceAddress::from_l3).collect(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Interfaces discovered on a node, with query-time utilization.
@@ -687,6 +738,17 @@ async fn list_node_interfaces(
     let metas = admin.repo.list_interfaces(node_id).await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list interfaces", "failed to list interfaces")
     })?;
+    // The node's stored address set, once for the whole list (ADR-157). A read failure is a 500
+    // like the metadata's own: answering the list with every address column blank would look
+    // exactly like a device that reports none.
+    let l3 = admin.l3.current(node_id).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "read interface addresses",
+            "failed to read interface addresses",
+        )
+    })?;
+    let mut addresses = addresses_by_ifindex(l3.as_ref());
     let now = now_unix_s();
     // One batched fetch for the whole node (3 TSDB round-trips), not 3 per interface — a 48-port
     // switch refreshing for every open client would otherwise be ~150 sequential queries.
@@ -729,6 +791,7 @@ async fn list_node_interfaces(
             tx_power_high_dbm: m.tx_power_high_dbm,
             last_seen_unix: m.last_seen_s,
             stale,
+            addresses: addresses.remove(&ifindex).unwrap_or_default(),
         });
     }
     Ok(Json(out))
@@ -987,6 +1050,91 @@ mod tests {
         assert_eq!(
             crate::pgtest::rows(&pool, "collection_templates").await,
             before + 1
+        );
+    }
+
+    // ── The interface list carries each port's addresses (ADR-157) ──────────────────
+
+    /// The join the Interfaces tab draws: every stored address lands on the row with its
+    /// `ifIndex`, in the snapshot's order, with the poller's zero prefix read back as `null` —
+    /// and an address on an index that has no interface row is on no row at all.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn interfaces_carry_every_address_of_their_port(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::repo::InterfaceUpsert;
+        use std::net::IpAddr;
+        use yagra_common::{L3Address, L3Snapshot};
+
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.as_ref().expect("live state");
+        let node = crate::pgtest::node(&pool, "svi-switch", 1, None).await;
+        let port = |ifindex: i32, name: &str| InterfaceUpsert {
+            ifindex,
+            if_name: Some(name.to_owned()),
+            if_alias: None,
+            if_speed: None,
+            if_duplex: None,
+            if_type: None,
+            if_media: None,
+            transceiver_model: None,
+            rx_power_low_dbm: None,
+            rx_power_high_dbm: None,
+            tx_power_low_dbm: None,
+            tx_power_high_dbm: None,
+        };
+        admin
+            .repo
+            .upsert_interfaces_batch(&[(node, port(71, "Vlanif100")), (node, port(81, "Vlanif91"))])
+            .await
+            .unwrap();
+        // The PoC recording's shape in miniature: secondaries on 71, one whose prefix the agent
+        // did not give, and one on an index the interface walk never reported (99).
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        admin
+            .l3
+            .record_observation(
+                node,
+                &L3Snapshot::new(vec![
+                    L3Address::new(71, ip("10.121.1.254"), 24),
+                    L3Address::new(71, ip("10.104.29.254"), 24),
+                    L3Address::new(71, ip("fec0::a:0:0:4"), 0),
+                    L3Address::new(99, ip("192.0.2.9"), 30),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let tok = token(&st, yagra_common::Role::Viewer);
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{node}/interfaces"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let rows = body.as_array().expect("a list");
+        assert_eq!(rows.len(), 2, "{body}");
+        let by_index = |i: u64| {
+            rows.iter()
+                .find(|r| r["ifindex"] == i)
+                .unwrap_or_else(|| panic!("no row for ifindex {i}: {body}"))
+        };
+        assert_eq!(
+            by_index(71)["addresses"],
+            serde_json::json!([
+                { "ip": "10.104.29.254", "prefix_len": 24 },
+                { "ip": "10.121.1.254", "prefix_len": 24 },
+                { "ip": "fec0::a:0:0:4", "prefix_len": null },
+            ]),
+            "every address of the port, canonical order, zero prefix read as null"
+        );
+        assert_eq!(by_index(81)["addresses"], serde_json::json!([]));
+        assert!(
+            !body.to_string().contains("192.0.2.9"),
+            "an address on an index with no interface row is on no row: {body}"
         );
     }
 }

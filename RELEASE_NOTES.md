@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **The Interfaces list shows each port's IP addresses.** Node detail ▸ Interfaces has a new **IP addresses** column, right of Description, written `192.168.0.1/24`. Every address the device lists on the port is there — secondaries included: the first is shown, **+N** opens the rest in a popover, hovering the cell shows them all, and the dock under the list prints every one (on a phone, where the column is dropped, the dock is where they are). The column has a filter of its own that searches every address of the port, so `10.121.` finds the SVI carrying that range even when it is a secondary, and `/30` finds the point-to-point links. The addresses come from the hourly IP address walk Yagra already ran for the network map, so nothing new is polled and a change shows within the hour; an address whose mask the device did not report readably is shown without a prefix. `GET /api/v1/nodes/{node_id}/interfaces` gains an `addresses` list on every row (`ip`, `prefix_len` — `null` when unknown), and the MCP `get_node_status` tool returns the same list per interface.
+
 ### Improvements
 
 - **The inventory tree can be driven from the keyboard.** In All nodes, select a node or folder and press **↑ / ↓** to move the selection; the detail pane follows once the key comes to rest, so holding a key down scrolls through the tree without reloading the pane at every row. **→** opens a closed folder or steps into an open one, **←** closes an open folder or steps out to its parent, **Enter** opens or closes a folder and opens a node's own page, and **Home / End / Page Up / Page Down** jump through long trees. **Space** adds the current node to the selection bar below the tree or takes it out, **Shift+↑ / ↓** extends that selection the way a Shift click does, and **Ctrl+↑ / ↓** moves without changing it. The **context-menu key** or **Shift+F10** opens the row's right-click menu, which can now be walked with the arrow keys. The whole tree is a single Tab stop — Tab moves past it in one press instead of stopping on every row — and it is announced to screen readers as a tree. Escape clears the selection as before.
