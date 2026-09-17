@@ -84,12 +84,12 @@ mod tests {
     /// counter or per interface would drop values core reads on a different path.
     #[test]
     fn every_declared_column_is_a_vendor_gauge_table_the_catalogue_collects() {
-        assert!(
-            !NO_READING_COLUMNS.is_empty(),
-            "the table is empty, so the check below looked at nothing"
-        );
         let items = builtin_items();
+        // A floor on what was checked, not on the table: counting the loop is what cannot pass over
+        // nothing (and a const `is_empty` is refused by clippy as always-false).
+        let mut checked = 0;
         for (column, marker) in NO_READING_COLUMNS {
+            checked += 1;
             let collected: Vec<&CollectionItem> = items
                 .iter()
                 .filter(|i| i.oid.trim_start_matches('.') == *column)
@@ -122,6 +122,7 @@ mod tests {
                 "{column}: a marker must be a finite non-zero value, got {marker}"
             );
         }
+        assert!(checked > 0, "no declared column was checked");
     }
 
     #[test]
