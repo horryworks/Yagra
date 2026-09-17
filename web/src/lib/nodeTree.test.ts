@@ -10,6 +10,7 @@ import {
   filterGroupOptions,
   filterTerm,
   findTreeGroup,
+  foldersWithNodes,
   flatRowKey,
   flattenTree,
   groupDeletionImpact,
@@ -211,6 +212,155 @@ describe('flattenTree — Pinned only (ADR-146)', () => {
   it('makes a search under Pinned only a different filter, without changing any other key', () => {
     expect(treeFilterKey('myj', false, '', true)).not.toBe(treeFilterKey('myj', false, ''));
     expect(treeFilterKey('myj', false, '')).toBe(JSON.stringify(['myj', '']));
+  });
+});
+
+describe('flattenTree — Folders with nodes only (ADR-159)', () => {
+  // Japan ─┬─ Tokyo: tokyo-sw          (the folder with a node)
+  //        └─ Osaka                    (empty, and nothing below it)
+  // US ────── Austin                   (US is empty itself; the node is one level down)
+  // Spare                              (empty, no children)          (ungrouped: lone)
+  const groups = [
+    group('g1', 'Japan', null, 1),
+    group('g1a', 'Tokyo', 'g1', 1),
+    group('g1b', 'Osaka', 'g1', 2),
+    group('g2', 'US', null, 2),
+    group('g2a', 'Austin', 'g2', 1),
+    group('g3', 'Spare', null, 3),
+  ];
+  const nodes = [node('n1', 'tokyo-sw', 'g1a', 1), node('n2', 'austin-sw', 'g2a', 1)];
+  const counts = (ok: number): StateCounts => ({
+    ok,
+    warning: 0,
+    critical: 0,
+    unreachable: 0,
+    maintenance: 0,
+    unknown: 0,
+  });
+  // What the server answers: a folder with no members of its own simply never appears.
+  const groupCounts = { g1a: counts(1), g2a: counts(1) };
+  const keys = (opts: Partial<Parameters<typeof flattenTree>[1]>) =>
+    flattenTree(buildNodeTree(groups, nodes), {
+      collapsed: {},
+      filter: '',
+      groupCounts,
+      loadedGroups: new Set(['g1a', 'g2a']),
+      ...opts,
+    }).map(flatRowKey);
+
+  it('drops a folder with nothing below it, and keeps the one whose node is a level down', () => {
+    expect(keys({ withNodesOnly: { keep: new Set() } })).toEqual([
+      'g:g1',
+      'g:g1a',
+      'n:n1',
+      'g:g2',
+      'g:g2a',
+      'n:n2',
+      'ungrouped-head',
+    ]);
+  });
+
+  it('keeps every folder while the switch is off', () => {
+    expect(keys({})).toContain('g:g1b');
+    expect(keys({})).toContain('g:g3');
+  });
+
+  it('keeps a folder just created, and the folders above it, though it is empty', () => {
+    // Without this an operator presses "New folder" and the tree does not change (ADR-055 R6).
+    const rows = keys({ withNodesOnly: { keep: new Set(['g1b']) } });
+    expect(rows).toContain('g:g1b');
+    expect(rows).toContain('g:g1');
+    expect(rows).not.toContain('g:g3');
+  });
+
+  it('hides nothing while the counts are still on their way', () => {
+    // 🚨 The failure this guards: judged against counts that have not arrived, EVERY folder reads
+    // as empty — so the whole tree would blank for a round trip on every visit.
+    const rows = keys({
+      groupCounts: {},
+      countsPending: true,
+      loadedGroups: new Set(),
+      withNodesOnly: { keep: new Set() },
+    });
+    for (const g of ['g:g1', 'g:g1a', 'g:g1b', 'g:g2', 'g:g2a', 'g:g3']) expect(rows).toContain(g);
+  });
+
+  it('combines with Pinned only: a pinned folder with nothing in it is still dropped', () => {
+    const view = pinnedView(groups, new Set(['g1b', 'g1a']), new Set(), []);
+    expect(keys({ pinned: view, withNodesOnly: { keep: new Set() } })).toEqual([
+      'g:g1',
+      'g:g1a',
+      'n:n1',
+    ]);
+  });
+
+  it('combines with a term: an empty folder whose name matches is dropped too', () => {
+    expect(keys({ filter: 'osaka', withNodesOnly: { keep: new Set() } })).toEqual([]);
+  });
+
+  it('reads the saved layout, because it is not a search (ADR-154 decision 7)', () => {
+    const rows = flattenTree(buildNodeTree(groups, nodes), {
+      collapsed: { g1: true },
+      filter: '',
+      groupCounts,
+      loadedGroups: new Set(['g1a', 'g2a']),
+      withNodesOnly: { keep: new Set() },
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'g:g2a', 'n:n2', 'ungrouped-head']);
+    expect(rows[0].kind === 'group' && rows[0].isOpen).toBe(false);
+    // The closed folder still counts what is under it — that is how the operator finds it.
+    expect(rows[0].kind === 'group' && rows[0].tally?.total).toBe(1);
+  });
+
+  it('judges by the loaded members on the legacy path, where there are no server counts', () => {
+    const rows = flattenTree(buildNodeTree(groups, nodes), {
+      collapsed: {},
+      filter: '',
+      withNodesOnly: { keep: new Set() },
+    }).map(flatRowKey);
+    expect(rows).toContain('g:g1a');
+    expect(rows).not.toContain('g:g1b');
+  });
+});
+
+describe('foldersWithNodes (ADR-159)', () => {
+  const groups = [
+    group('g1', 'Japan'),
+    group('g1a', 'Tokyo', 'g1'),
+    group('g1b', 'Osaka', 'g1'),
+    group('g2', 'US'),
+  ];
+  const tally = (total: number) => ({
+    counts: emptyCounts(),
+    total,
+    needAttention: 0,
+  });
+  const emptyCounts = (): Record<NodeState, number> => ({
+    ok: 0,
+    warning: 0,
+    critical: 0,
+    unreachable: 0,
+    maintenance: 0,
+    unknown: 0,
+  });
+
+  it('keeps a folder above a kept one even when a sibling is kept first', () => {
+    // 🚨 The bug this guards: `below || visit(child)` short-circuits, so once Tokyo answers "keep"
+    // Osaka is never visited — and a folder kept only by `keep` under it disappears.
+    const tree = buildNodeTree(groups, []);
+    const sub = new Map([
+      ['g1', tally(1)],
+      ['g1a', tally(1)],
+      ['g1b', tally(0)],
+      ['g2', tally(0)],
+    ]);
+    const kept = foldersWithNodes(tree.roots, sub, new Set(['g1b']));
+    expect([...kept].sort()).toEqual(['g1', 'g1a', 'g1b']);
+  });
+
+  it('falls back to the loaded members when there is no rollup', () => {
+    const tree = buildNodeTree(groups, [node('n1', 'sw', 'g1b')]);
+    expect([...foldersWithNodes(tree.roots, null, new Set())].sort()).toEqual(['g1', 'g1b']);
   });
 });
 

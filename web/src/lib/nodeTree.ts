@@ -512,6 +512,17 @@ export function flattenTree(
     /** Pinned only (ADR-146): keep what this view keeps — pinned folders whole, pinned nodes, and
      *  the folders above both as a path. Omit when the switch is off. */
     pinned?: PinnedView;
+    /** Folders with nodes only (ADR-159): drop every folder with no node anywhere below it. Omit
+     *  when the switch is off.
+     *
+     *  `keep` is the folders that stay whatever their membership — the ones created on this screen
+     *  since it was opened. A folder is empty the moment it is made, so without this the operator
+     *  presses "New folder", the tree does not change, and the folder reads as not created.
+     *
+     *  ⚠️ **Nothing is dropped while the counts are pending.** The answer comes from
+     *  `groupCounts`, and hiding folders from an answer that has not arrived would blank the tree
+     *  for a round trip — including the folders that do have nodes. */
+    withNodesOnly?: { keep: ReadonlySet<string> };
   },
 ): FlatRow[] {
   const q = filterTerm(opts.filter);
@@ -528,10 +539,6 @@ export function flattenTree(
   const searching = byTerm || opts.narrowed === true;
   const narrowing = searching || pinned !== undefined;
   const nameMatches = (name: string) => name.toLowerCase().includes(q);
-  /** Pinned only keeps this folder's row — always true while the switch is off. */
-  const groupKept = (id: string) => !pinned || pinnedGroupShown(pinned, id);
-  /** Pinned only keeps this node's row — always true while the switch is off. */
-  const nodeKept = (n: NodeSummary) => !pinned || pinnedNodeShown(pinned, n);
   const rows: FlatRow[] = [];
   const counts = opts.groupCounts;
   // The counts are on their way (ADR-133). Everything below asks this BEFORE it asks `counts`,
@@ -541,6 +548,21 @@ export function flattenTree(
   // Per-group subtree tally from the server direct counts (bottom-up over the built, acyclic tree).
   // Skipped while pending: it would walk every group to produce zeros that nothing reads.
   const subtree = counts && !pending ? subtreeTallyMap(tree.roots, counts) : null;
+  // Folders with nodes only (ADR-159). Asked of `pending` first, like everything else that reads
+  // the counts: with no answer yet the set would be "no folder has nodes", which is a whole tree
+  // hidden for a round trip.
+  const occupied =
+    opts.withNodesOnly && !pending
+      ? foldersWithNodes(tree.roots, subtree, opts.withNodesOnly.keep)
+      : null;
+  /** Pinned only and Folders with nodes only keep this folder's row — both switches off ⇒ true.
+   *  The two narrow the same tree, so they are an AND: a pinned folder with nothing in it goes. */
+  const groupKept = (id: string) =>
+    (!pinned || pinnedGroupShown(pinned, id)) && (!occupied || occupied.has(id));
+  /** Pinned only keeps this node's row — always true while the switch is off. Folders with nodes
+   *  only says nothing about a node: it is a rule about folders, and a folder it keeps shows its
+   *  members exactly as browsing does. */
+  const nodeKept = (n: NodeSummary) => !pinned || pinnedNodeShown(pinned, n);
   // Browsing: a group whose members haven't been fetched stands in with a placeholder. Filtering:
   // the server search page carries every match there is, so only a REVEALED group (whose members are
   // being fetched separately, because the term matched the folder rather than its contents) can be
@@ -781,6 +803,42 @@ export function subtreeTallyMap(
     }
     out.set(g.id, tallyFromCounts(acc));
     return acc;
+  };
+  for (const r of roots) visit(r);
+  return out;
+}
+
+/**
+ * The folders "Folders with nodes only" keeps (ADR-159): every folder with a node somewhere below
+ * it, plus `keep` and the folders above anything kept.
+ *
+ * ⚠️ **Below, not inside.** A folder whose own members are zero but whose child folder holds nodes
+ * has to stay: the tree is a tree, and a kept row with its parent dropped has nowhere to be drawn.
+ * That is why this returns a set rather than a predicate over one folder's direct count.
+ *
+ * `sub` is {@link subtreeTallyMap}'s answer — the server per-group counts rolled up, so a folder
+ * nobody has opened is judged by its real membership rather than by the members that happen to be
+ * loaded. `null` is the legacy full-node path, where every member is in hand and the loaded rows
+ * *are* the membership.
+ *
+ * 🚨 The child walk runs before the short circuit on purpose: `visit(child) || below`, never
+ * `below || visit(child)`. The second form stops visiting once one child is kept, and the folders
+ * under the ones it skipped never reach `out` — a subtree that vanishes from the tree the moment a
+ * sibling has a node.
+ */
+export function foldersWithNodes(
+  roots: TreeGroup[],
+  sub: Map<string, StateTally> | null,
+  keep: ReadonlySet<string>,
+): Set<string> {
+  const out = new Set<string>();
+  const visit = (g: TreeGroup): boolean => {
+    let below = false;
+    for (const child of g.children) below = visit(child) || below;
+    const own = sub ? (sub.get(g.id)?.total ?? 0) > 0 : g.nodes.length > 0;
+    const kept = below || own || keep.has(g.id);
+    if (kept) out.add(g.id);
+    return kept;
   };
   for (const r of roots) visit(r);
   return out;

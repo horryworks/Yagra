@@ -27,7 +27,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan, useNodeTabStore } from '../store';
 import { usePrefsStore } from '../prefs';
-import { setNodeTreePinnedOnly } from '../serverPrefs';
+import { setNodeTreePinnedOnly, setNodeTreeWithNodesOnly } from '../serverPrefs';
 import { usePinsStore } from '../pinsStore';
 import { pinnedView } from '../lib/pins';
 import { PinIcon } from '../components/ui/icons';
@@ -392,6 +392,17 @@ export function NodesPage() {
     void usePinsStore.getState().load();
   }, []);
 
+  // Folders with nodes only (ADR-159): hide every folder with no node below it. Held on the account
+  // like Pinned only, so it survives a reload — which is what makes the next line necessary.
+  const withNodesOnly = usePrefsStore((s) => s.nodeTreeWithNodesOnly) === true;
+  /** Folders created on this screen since it was opened. A folder is empty the moment it is made,
+   *  so without this the operator presses "New folder" and the tree does not change — which reads
+   *  as a create that failed, not as a filter doing its job (ADR-159, ADR-055 R6).
+   *
+   *  ⚠️ Deliberately forgotten on reload: it answers "you just made this", not "this folder is
+   *  special". By then the folder has either been filled or is one the switch is right to hide. */
+  const [createdGroups, setCreatedGroups] = useState<ReadonlySet<string>>(() => new Set());
+
   // Members load lazily, per group, only once that group's contents are on screen (A-3). The hook
   // owns that cache; this page only says what is currently worth having loaded.
   // Any of the four puts the tree into filter mode. The state / kind / pool ones count even with
@@ -407,11 +418,13 @@ export function NodesPage() {
   const clearAllFilters = useCallback(() => {
     // Pinned only narrows the tree too, so "clear all filters" that left it on would be untrue.
     if (pinnedOnly) setNodeTreePinnedOnly(false);
+    // Same for Folders with nodes only (ADR-159) — it is hiding rows, so it is a filter.
+    if (withNodesOnly) setNodeTreeWithNodesOnly(false);
     const params = new URLSearchParams(searchParams);
     writeInventoryFilters(filterCols, params, defaultFilters(filterCols));
     assignTerm(params, '');
     setSearchParams(params, { replace: true });
-  }, [filterCols, pinnedOnly, searchParams, setSearchParams, assignTerm]);
+  }, [filterCols, pinnedOnly, withNodesOnly, searchParams, setSearchParams, assignTerm]);
   // Filter mode's server-side page — the nodes that matched. One capped page, never the fleet; the
   // folders a group-name match reveals arrive separately through the per-group member cache below.
   // `appliedTerm` is the debounced term the search was issued for, so the reveal loads in step with
@@ -1066,6 +1079,18 @@ export function NodesPage() {
                 {t('inventory.pinnedOnly')}
               </button>
             )}
+            {/* Folders with nodes only (ADR-159), right of Pinned only. The same button, pressed
+                the same way, for the same reason: it narrows this tree. Always drawn — it reads
+                the per-folder counts the tree already has, so there is no endpoint to be missing. */}
+            <button
+              type="button"
+              className={withNodesOnly ? 'mfilt-btn on' : 'mfilt-btn'}
+              aria-pressed={withNodesOnly}
+              title={t('inventory.withNodesOnlyHint')}
+              onClick={() => setNodeTreeWithNodesOnly(!withNodesOnly)}
+            >
+              {t('inventory.withNodesOnly')}
+            </button>
             <FilterBar
               columns={filterCols}
               labels={filterLabels}
@@ -1079,7 +1104,7 @@ export function NodesPage() {
             <ClearFilters
               columns={filterCols}
               filters={inventoryFilters}
-              extraActive={filter.trim() !== '' || pinnedOnly}
+              extraActive={filter.trim() !== '' || pinnedOnly || withNodesOnly}
               onClear={clearAllFilters}
             />
             {filterSheet && (
@@ -1175,6 +1200,8 @@ export function NodesPage() {
             }
             pins={pins}
             pinnedOnly={pinnedOnly}
+            withNodesOnly={withNodesOnly}
+            keepGroups={createdGroups}
             // Not permission-gated: pinning is the account's own navigation (ADR-146).
             onTogglePin={pinsReady ? togglePin : undefined}
           />
@@ -1366,7 +1393,13 @@ export function NodesPage() {
           state={groupModal}
           groups={groups}
           onClose={() => setGroupModal(null)}
-          onSaved={() => {
+          onSaved={(groupId) => {
+            // A folder just created is empty, so "Folders with nodes only" would drop it the
+            // moment the reload below brings it in (ADR-159). Recorded on every create, switch on
+            // or off: pressing the switch afterwards should not make the new folder vanish either.
+            if (groupModal.mode === 'add') {
+              setCreatedGroups((prev) => new Set(prev).add(groupId));
+            }
             setGroupModal(null);
             void reload();
           }}

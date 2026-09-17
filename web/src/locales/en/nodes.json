@@ -88,6 +88,8 @@
     "resizePane": "Drag to resize the inventory pane (double-click to reset)",
     "pinnedOnly": "Pinned only",
     "pinnedOnlyHint": "Show only the nodes and folders you pinned, with the folders above them",
+    "withNodesOnly": "With nodes",
+    "withNodesOnlyHint": "Hide folders that have no nodes in them or in any folder below. A folder you create here stays until you reload the page.",
     "filterScanTruncated": "Some matches are not shown: the filter examined as many nodes as it is allowed to. Add a search term to narrow it.",
     "cols": {
       "state": "State",

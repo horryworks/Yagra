@@ -47,7 +47,10 @@ export function GroupModal({
   state: GroupModalState;
   groups: NodeGroup[];
   onClose: () => void;
-  onSaved: () => void;
+  /** Called with the folder's id once every part of it is saved — the new one on a create, the
+   *  same one on an edit. The page needs the id so a folder just created stays on screen under
+   *  "Folders with nodes only", which would otherwise drop it for being empty (ADR-159). */
+  onSaved: (groupId: string) => void;
 }) {
   const { t } = useTranslation('nodes');
   const editing = state.mode === 'edit';
@@ -144,6 +147,9 @@ export function GroupModal({
         if (tagsChanged(tagDraft, state.group)) {
           await api.setNodeGroupTags(id, tagDraft.tags, tagDraft.tagsExcluded);
         }
+        // Handed on rather than swallowed: `onSaved` takes the id (ADR-159), and this block's own
+        // return value is what reaches it.
+        return id;
       })
       .then(onSaved)
       .catch((e: unknown) => {
