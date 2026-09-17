@@ -1447,7 +1447,7 @@ async fn create_node(
         (status = 204, description = "Node deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -1563,7 +1563,7 @@ pub(super) struct NodeBindings {
         (status = 400, description = "Illegal pool name, an empty name, or a note over 2,000 characters", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -2310,7 +2310,7 @@ pub(crate) struct PoolAssignment {
         (status = 400, description = "Illegal pool name", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]

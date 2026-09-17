@@ -11506,7 +11506,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -11664,7 +11664,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -12160,7 +12160,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -14377,7 +14377,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -14661,7 +14661,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {
