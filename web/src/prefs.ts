@@ -135,6 +135,14 @@ interface PrefsStore {
    *  `null` rather than `false` so a machine that never touched it does not overwrite the account's
    *  answer with a default. Nothing should call the setter directly. */
   nodeTreePinnedOnly: boolean | null;
+  /** Whether the inventory tree hides folders with no nodes below them (ADR-159). `null` = never
+   *  set, which reads as off.
+   *
+   *  ⚠️ **On the account as well** (ADR-058, `serverPrefs.ts`), for the reason
+   *  [`nodeTreePinnedOnly`] is: it is a mode an operator leaves on, so a machine that kept its own
+   *  answer would show a different tree from the one they set up next door. Nothing should call
+   *  the setter directly. */
+  nodeTreeWithNodesOnly: boolean | null;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -169,6 +177,9 @@ interface PrefsStore {
   /** Record the Pinned only switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also syncs
    *  it to the account (see [`nodeTreePinnedOnly`]). */
   setNodeTreePinnedOnly: (on: boolean | null) => void;
+  /** Record the Folders-with-nodes-only switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which
+   *  also syncs it to the account (see [`nodeTreeWithNodesOnly`]). */
+  setNodeTreeWithNodesOnly: (on: boolean | null) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -200,6 +211,8 @@ export const usePrefsStore = create<PrefsStore>()(
       discoveryScan: null,
       // Same again: absent before ADR-146, read as `null` (off), no migration owed.
       nodeTreePinnedOnly: null,
+      // Same again: absent before ADR-159, read as `null` (off), no migration owed.
+      nodeTreeWithNodesOnly: null,
       // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
       // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
       // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
@@ -233,6 +246,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setTableColumnWidths: (tableColumnWidths) => set({ tableColumnWidths }),
       setDiscoveryScan: (discoveryScan) => set({ discoveryScan }),
       setNodeTreePinnedOnly: (nodeTreePinnedOnly) => set({ nodeTreePinnedOnly }),
+      setNodeTreeWithNodesOnly: (nodeTreeWithNodesOnly) => set({ nodeTreeWithNodesOnly }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

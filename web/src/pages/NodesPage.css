@@ -96,6 +96,14 @@
   flex: none;
   padding: var(--space-1) var(--space-3) var(--space-2);
   border-bottom: var(--border-width) solid var(--border-color);
+  /* 🚨 **The filter row gives way before the tree does** (ADR-159). It wraps, so it grows a line
+     every time a control is added or the pane is narrowed — and it is `flex: none` above a
+     `flex: 1` tree. Measured at 1280×360 with the third toggle: the row reached 145px and
+     `.ntree-body` was left **0px**, so the inventory showed nothing at all while five filter
+     controls sat above it. Half the pane is the most this row may take; past that it scrolls and
+     the tree keeps the rest. On any ordinary window the cap is never reached, so nothing moves. */
+  max-height: 50%;
+  overflow-y: auto;
 }
 
 /* Pinned only (ADR-146): `.mfilt-btn`'s look and pressed state, with room for its pin glyph. */

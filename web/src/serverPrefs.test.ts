@@ -40,6 +40,7 @@ import {
   setInterfaceDockHeight,
   setNodeTreeCollapsed,
   setNodeTreePinnedOnly,
+  setNodeTreeWithNodesOnly,
 } from './serverPrefs';
 import { MAX_STORED_COLLAPSED } from './lib/nodeTree';
 import { COLUMN_MAX_PX, MAX_STORED_COLUMNS, MAX_STORED_TABLES } from './lib/columnWidths';
@@ -58,6 +59,7 @@ beforeEach(() => {
   resetServerPrefs();
   usePrefsStore.getState().setInterfaceDockHeight(null);
   usePrefsStore.getState().setNodeTreePinnedOnly(null);
+  usePrefsStore.getState().setNodeTreeWithNodesOnly(null);
   usePrefsStore.getState().setNodeTreeCollapsed({});
   usePrefsStore.getState().setTableColumnWidths({});
 });
@@ -195,6 +197,43 @@ describe('the Pinned only switch (ADR-146)', () => {
     setNodeTreePinnedOnly(false);
     vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
     expect(putPreferences).toHaveBeenCalledWith({ nodeTreePinnedOnly: false });
+  });
+
+  it('sends nothing for a machine that never touched it', () => {
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
+  });
+});
+
+describe('the Folders-with-nodes-only switch (ADR-159)', () => {
+  it('adopts the account\'s answer, and nothing that is not a boolean', async () => {
+    getPreferences.mockResolvedValue({ nodeTreeWithNodesOnly: true });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().nodeTreeWithNodesOnly).toBe(true);
+    for (const value of ['true', 1, null, {}]) {
+      getPreferences.mockResolvedValue({ nodeTreeWithNodesOnly: value });
+      await loadServerPrefs();
+      expect(usePrefsStore.getState().nodeTreeWithNodesOnly).toBe(true);
+    }
+  });
+
+  it('saves switching it off, not only on', () => {
+    setNodeTreeWithNodesOnly(false);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ nodeTreeWithNodesOnly: false });
+  });
+
+  it('travels beside the other switch rather than replacing it', () => {
+    // Both are the inventory tree's, and one document carries the pair — a save that dropped the
+    // other would switch it off on the next machine.
+    setNodeTreePinnedOnly(true);
+    setNodeTreeWithNodesOnly(true);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({
+      nodeTreePinnedOnly: true,
+      nodeTreeWithNodesOnly: true,
+    });
   });
 
   it('sends nothing for a machine that never touched it', () => {

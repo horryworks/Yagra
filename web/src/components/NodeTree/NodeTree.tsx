@@ -129,6 +129,10 @@ const PENDING_SETTLE_MS = 100;
  *  rather than allocating a new `Map` on every render (which would defeat every memo below it). */
 const EMPTY_CHECKED: CheckedNodes = new Map();
 
+/** The same trick for the folders "Folders with nodes only" keeps regardless (ADR-159): a page that
+ *  has created none passes nothing, and a fresh `Set` per render would rebuild the flat list. */
+const NO_KEPT_GROUPS: ReadonlySet<string> = new Set();
+
 type DropTarget = { id: string | 'root'; position: DropPos; ok: boolean } | null;
 type Menu =
   | { x: number; y: number; kind: 'group'; group: TreeGroup }
@@ -297,6 +301,12 @@ interface Props {
   pins?: PinnedView;
   /** Show only what `pins` keeps: pinned folders whole, pinned nodes, and the folders above both. */
   pinnedOnly?: boolean;
+  /** Hide folders with no node anywhere below them (ADR-159). */
+  withNodesOnly?: boolean;
+  /** Folders `withNodesOnly` keeps whatever their membership — the ones created on this screen
+   *  since it was opened, which are empty by definition (ADR-159). Ignored while the switch is
+   *  off; the tree never adds to it. */
+  keepGroups?: ReadonlySet<string>;
   /** Right-click → poll this node, or the whole working set, immediately (ADR-124 増分 12).
    *  Omit to hide the item — it is `ManageConfig`, the permission its handler checks. */
   onPollNodes?: (target: ActionTarget) => void;
@@ -355,6 +365,8 @@ export function NodeTree({
   onRunDiscovery,
   pins,
   pinnedOnly,
+  withNodesOnly,
+  keepGroups,
   onPollNodes,
   onTogglePin,
 }: Props) {
@@ -389,6 +401,13 @@ export function NodeTree({
   const q = filterTerm(filter ?? '');
   // Pinned only narrows the tree as well (ADR-146).
   const pinnedFilter = pinnedOnly ? pins : undefined;
+  // …and so does Folders with nodes only (ADR-159). Built through a memo because `flattenTree`'s
+  // option is an object: a fresh literal every render would rebuild the whole flat list on every
+  // render, which is the cost `liveTreeNodes` and the memo below exist to avoid.
+  const withNodes = useMemo(
+    () => (withNodesOnly ? { keep: keepGroups ?? NO_KEPT_GROUPS } : undefined),
+    [withNodesOnly, keepGroups],
+  );
   const filtering = q.length > 0 || narrowed === true || pinnedFilter !== undefined;
   // A term or a state / kind / pool filter — the questions whose matches a closed folder must not
   // hide. ⚠️ Not Pinned only on its own: that one browses the saved layout (ADR-154 decision 7).
@@ -434,6 +453,7 @@ export function NodeTree({
         revealedGroups,
         failedGroups,
         pinned: pinnedFilter,
+        withNodesOnly: withNodes,
       }),
     [
       tree,
@@ -447,6 +467,7 @@ export function NodeTree({
       revealedGroups,
       failedGroups,
       pinnedFilter,
+      withNodes,
     ],
   );
   const scrollRef = useRef<HTMLDivElement>(null);

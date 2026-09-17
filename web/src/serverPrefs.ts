@@ -43,6 +43,8 @@ interface ServerPrefsDoc {
   tableColumnWidths?: ColumnWidthDoc;
   /** The inventory tree's Pinned only switch (ADR-146). */
   nodeTreePinnedOnly?: boolean;
+  /** The inventory tree's Folders-with-nodes-only switch (ADR-159). */
+  nodeTreeWithNodesOnly?: boolean;
   /** The inventory tree's collapsed folders, keyed by group id (ADR-154). */
   nodeTreeCollapsed?: Record<string, true>;
 }
@@ -94,6 +96,9 @@ function adopt(raw: unknown): void {
   if (typeof doc.nodeTreePinnedOnly === 'boolean') {
     usePrefsStore.getState().setNodeTreePinnedOnly(doc.nodeTreePinnedOnly);
   }
+  if (typeof doc.nodeTreeWithNodesOnly === 'boolean') {
+    usePrefsStore.getState().setNodeTreeWithNodesOnly(doc.nodeTreeWithNodesOnly);
+  }
   // `null` means the account holds nothing that reads as a layout — keep this browser's, which the
   // next save then seeds the account with. An empty object is a layout: everything open.
   const collapsed = adoptCollapsed(doc.nodeTreeCollapsed);
@@ -105,13 +110,20 @@ function adopt(raw: unknown): void {
 
 /** The document to send: the account-scoped subset of `prefs.ts`. */
 function currentDoc(): ServerPrefsDoc {
-  const { interfaceDockHeight, tableColumnWidths, nodeTreePinnedOnly, nodeTreeCollapsed } =
-    usePrefsStore.getState();
+  const {
+    interfaceDockHeight,
+    tableColumnWidths,
+    nodeTreePinnedOnly,
+    nodeTreeWithNodesOnly,
+    nodeTreeCollapsed,
+  } = usePrefsStore.getState();
   const doc: ServerPrefsDoc = {};
   if (interfaceDockHeight != null) doc.interfaceDockHeight = interfaceDockHeight;
   // Sent once it has been set at all — `false` included, or switching it off on one machine would
   // leave the account saying "on" to the next.
   if (nodeTreePinnedOnly != null) doc.nodeTreePinnedOnly = nodeTreePinnedOnly;
+  // Same again, and for the same reason (ADR-159).
+  if (nodeTreeWithNodesOnly != null) doc.nodeTreeWithNodesOnly = nodeTreeWithNodesOnly;
   // Omitted while empty rather than sent as `{}`: the account row has a 32 KiB ceiling every
   // preference shares, and an operator who never drags a column should cost it nothing.
   if (tableColumnWidths && Object.keys(tableColumnWidths).length > 0) {
@@ -202,6 +214,15 @@ export function setInterfaceDockHeight(px: number): void {
  */
 export function setNodeTreePinnedOnly(on: boolean): void {
   usePrefsStore.getState().setNodeTreePinnedOnly(on);
+  scheduleSave();
+}
+
+/**
+ * Record the inventory tree's Folders-with-nodes-only switch: locally now, on the account shortly
+ * (ADR-159). One press is one save, as for Pinned only above.
+ */
+export function setNodeTreeWithNodesOnly(on: boolean): void {
+  usePrefsStore.getState().setNodeTreeWithNodesOnly(on);
   scheduleSave();
 }
 
