@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.24 — Filters, sort orders and the inventory search survive a reload, folders closed in the inventory tree stay closed and follow your account, CloudEngine S5735-L stacks show every member's serial, closing a popover with Escape keeps the selected node**
+> Status: **v0.3.25 — Each port's IP addresses in the node Interfaces list, the inventory tree driven from the keyboard, a Huawei part with no temperature sensor no longer reads 2147483647 °C**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
