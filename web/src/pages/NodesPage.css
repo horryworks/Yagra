@@ -1,8 +1,31 @@
 /* Nodes / All nodes — the two-pane split. Both panes are flat cards (0.5px border, --radius) that
    own their own internal scroll; the grid fills the height left by the page header. */
 
+/* "N need attention" in the page header. Since ADR-163 it is a BUTTON — pressing it selects the
+   three states it counts — but it lives inside the header's prose line, where a bordered control
+   would read as chrome rather than as part of the sentence. So the button is stripped back to the
+   text it already was, and a dotted underline carries "this is pressable".
+   ⚠️ **Colour cannot say "on" here.** The text is already `--status-critical` at rest, and status is
+   its own channel (design-system §1.1) — repainting it accent would trade the "these are problems"
+   reading for an "active" one. The underline goes solid instead, and the authoritative pressed mark
+   is the `Needs attention` toggle in the filter row, which uses the accent border every other
+   filter control uses. `aria-pressed` carries it for anyone not reading either. */
 .nodes-attention {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
   color: var(--status-critical);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.nodes-attention:hover,
+.nodes-attention:focus-visible,
+.nodes-attention[aria-pressed='true'] {
+  text-decoration-style: solid;
 }
 
 .nodes-truncated {

@@ -36,7 +36,7 @@ import {
 // `DISPLAY_ORDER` rather than a fresh list: it is the single enumeration of the state union
 // (`lib/nodeState.ts` exists because this list once lived in five places under three names), and
 // its order — healthy first, then problems, then the neutral two — is the one the control wants.
-import { DISPLAY_ORDER } from '../lib/nodeState';
+import { DISPLAY_ORDER, PROBLEM_STATES } from '../lib/nodeState';
 import { NODE_KIND_SPEC } from '../lib/nodeKind';
 import { NODE_KINDS, type NodeState } from '../types/api';
 import type { TFunction } from 'i18next';
@@ -139,6 +139,67 @@ export function inventoryKey(f: FilterState): string {
 /** Whether anything is narrowing the tree. */
 export function isInventoryFiltered(f: FilterState): boolean {
   return (f.state ?? '') !== '' || (f.kind ?? '') !== '' || (f.pool ?? '') !== '';
+}
+
+// ---------------------------------------------------------------------------
+// The "Needs attention" preset (ADR-163).
+//
+// ⚠️ **This is not a fourth filter.** It writes the `state` column that is already here, so there is
+// no new URL key, no account preference, and nothing for `clearAllFilters` or `ClearFilters` to be
+// taught about — the reason ADR-159's toggle needed `extraActive` is that it held state of its own.
+// What it buys is the press: "show me everything that is not healthy" was five gestures.
+//
+// Why the *display state* and not the alert list: the tree paints from `NodeSummary.state`, which
+// the server has already rolled up to the worst of a node's committed liveness and every active
+// alert on it (`alerts/engine.rs::node_states_for`). Asking the alert store instead would mean a
+// second subscription on this page — `useAlertStream()` is mounted by the Alerts screen and the
+// three dashboards, not by the shell — to answer a question the server answers already.
+
+/** The states the preset selects, in the order the state filter offers them.
+ *
+ *  **The set is the load-bearing half**: it is the same one the page header counts as
+ *  "N need attention", so pressing the button leaves exactly those N rows on screen. A hand-written
+ *  copy that drifted would put a control beside a number it disagrees with, and neither surface
+ *  would look wrong on its own — which is why this is derived from `PROBLEM_STATES` rather than
+ *  spelled out.
+ *
+ *  ⚠️ **The order here is not what makes the URL stable — `encodeSet` is.** That function emits the
+ *  spec's option order whatever order it is handed, so reversing this array changes nothing an
+ *  operator can see (measured: breaking it fails one test, and that test is the only thing watching
+ *  it). It is kept in `DISPLAY_ORDER` so that this array and the URL it produces read the same way
+ *  side by side, not because anything downstream depends on it. */
+export const ATTENTION_STATES: readonly NodeState[] = NODE_STATE_FILTERS.filter((s) =>
+  PROBLEM_STATES.has(s),
+);
+
+/** Whether the state filter currently holds exactly the attention states — what the toggle and the
+ *  header count both read for `aria-pressed`.
+ *
+ *  ⚠️ Compared as a **set**, not as a string. A hand-typed `?state=critical,warning,unreachable`
+ *  asks this same question, and a button left unlit above a tree it had narrowed is the control
+ *  disagreeing with the screen. */
+export function isAttentionOnly(f: FilterState): boolean {
+  const chosen = decodeSet(f.state ?? '');
+  return (
+    chosen.length === ATTENTION_STATES.length && ATTENTION_STATES.every((s) => chosen.includes(s))
+  );
+}
+
+/** Press the preset: select the attention states, or clear the state column when they are already
+ *  the selection. Every other column is left exactly as it was.
+ *
+ *  Two properties worth stating because neither is the only defensible choice:
+ *
+ *  - It **replaces** the chosen states rather than adding to them. This is a preset, not a fourth
+ *    filter; "everything that is not healthy" *plus* `ok` is a question nobody asked.
+ *  - Turning it off **clears** the column rather than restoring what was selected before. There is
+ *    nothing to restore from — the preset deliberately holds no state of its own (ADR-163 決定 5),
+ *    and inventing a stash here would be the one place on this page where a filter remembers. */
+export function toggleAttention(f: FilterState): FilterState {
+  return {
+    ...f,
+    state: isAttentionOnly(f) ? '' : encodeSet(ATTENTION_STATES, NODE_STATE_FILTERS),
+  };
 }
 
 /** Read the filters out of the URL.

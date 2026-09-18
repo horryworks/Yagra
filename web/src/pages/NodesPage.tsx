@@ -50,8 +50,10 @@ import {
   inventoryColumns,
   inventoryFilterLabels,
   inventoryKey,
+  isAttentionOnly,
   isInventoryFiltered,
   readInventoryFilters,
+  toggleAttention,
   TREE_SEARCH_KEY,
   truncationNotice,
   writeInventoryFilters,
@@ -371,6 +373,26 @@ export function NodesPage() {
       setSearchParams(params, { replace: true });
     },
     [filterCols, searchParams, setSearchParams],
+  );
+
+  // "Needs attention" (ADR-163) — the one press that asks the question this screen is opened for.
+  // It selects warning + critical + unreachable in the `state` filter above, which is why nothing
+  // else on this page had to learn about it: `isInventoryFiltered`, `ClearFilters` and
+  // `clearAllFilters` already watch that column. Compare with Pinned only and With nodes, which
+  // hold switches of their own and therefore had to be taught to all three (ADR-159 決定 8).
+  const attentionOnly = isAttentionOnly(inventoryFilters);
+  const pressAttention = useCallback(
+    (fromHeader: boolean) => {
+      // ⚠️ `attentionOnly` is read before the write, so this is "was it on", not "is it on".
+      const turningOn = !attentionOnly;
+      setInventoryFilters(toggleAttention(inventoryFilters));
+      // The header count stays on screen while the inventory is railed to a 40px strip, so pressing
+      // it there would narrow a tree nobody can see — a control that reads as having done nothing
+      // (ADR-055 R6). Only on the way ON: opening the pane as a side effect of *clearing* a filter
+      // would be a second, unasked-for change.
+      if (fromHeader && turningOn && railed) toggleNodesPane();
+    },
+    [attentionOnly, inventoryFilters, setInventoryFilters, railed, toggleNodesPane],
   );
 
   // Pins (ADR-146): this account's own, from the server, and the switch that narrows the tree to
@@ -937,9 +959,20 @@ export function NodesPage() {
               <>
                 {' '}
                 ·{' '}
-                <span className="nodes-attention">
+                {/* The count is the way in (ADR-163). It already names the set the preset selects,
+                    so making it press the preset costs no new control and no new vocabulary — and
+                    it is the one place the number and the filter can be seen agreeing. Shares
+                    `pressAttention` with the toggle in the filter row, so there is one behaviour to
+                    reason about rather than two that look alike. */}
+                <button
+                  type="button"
+                  className="nodes-attention"
+                  aria-pressed={attentionOnly}
+                  title={t('inventory.needAttentionOnlyHint')}
+                  onClick={() => pressAttention(true)}
+                >
                   {t('inventory.needAttention', { count: attention })}
-                </span>
+                </button>
               </>
             )}
           </>
@@ -1092,6 +1125,20 @@ export function NodesPage() {
               onClick={() => setNodeTreeWithNodesOnly(!withNodesOnly)}
             >
               {t('inventory.withNodesOnly')}
+            </button>
+            {/* Needs attention (ADR-163), right of With nodes. The same button for the third time,
+                because it is the same kind of control — but unlike the two beside it this one holds
+                nothing: it is a preset over the `state` filter below, so its pressed look is read
+                back out of that filter rather than out of a switch. Press it and the State trigger
+                lights up too, which is what says *what* it did. */}
+            <button
+              type="button"
+              className={attentionOnly ? 'mfilt-btn on' : 'mfilt-btn'}
+              aria-pressed={attentionOnly}
+              title={t('inventory.needAttentionOnlyHint')}
+              onClick={() => pressAttention(false)}
+            >
+              {t('inventory.needAttentionOnly')}
             </button>
             <FilterBar
               columns={filterCols}
