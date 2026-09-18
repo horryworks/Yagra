@@ -463,6 +463,16 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--text-primary);
 }
 
+/* A fact that points at another node (an AP's wireless controller). */
+.nd-fact-v a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.nd-fact-v a:hover {
+  color: var(--accent-hover);
+}
+
 /* A fact whose value is an operational problem (e.g. a pool with no live poller). The value text
    itself already spells out the condition, so colour is reinforcement, never the only signal. */
 .nd-fact-v.warn {

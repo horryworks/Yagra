@@ -12458,8 +12458,8 @@ export interface components {
         WirelessControllerSettingsBody: {
             /**
              * Format: uuid
-             * @description The folder to file imported AP nodes in. Omitted or `null` ⇒ a folder named
-             *     "<controller> APs" beside the controller.
+             * @description The folder to file imported AP nodes in. Omitted or `null` ⇒ the folder this controller is
+             *     in; no folder is created. AP nodes already imported stay where they are.
              */
             ap_group_id?: string | null;
             /**
@@ -12480,8 +12480,8 @@ export interface components {
         WirelessControllerSummary: {
             /**
              * Format: uuid
-             * @description The folder imported AP nodes are filed in. `null` ⇒ a folder named "<controller> APs" beside
-             *     the controller.
+             * @description The folder imported AP nodes are filed in. `null` ⇒ the folder this controller is in. No
+             *     folder is created for them.
              */
             ap_group_id?: string | null;
             /**

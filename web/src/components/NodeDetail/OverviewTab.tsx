@@ -8,13 +8,15 @@
 // The RTT chart followed the shared range control as of ADR-117; it was a fixed 30-minute sparkline
 // before that, which on an ICMP-only node was the whole reason the period buttons looked broken.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { rootCause, type HasSubject } from '../../lib/alertSubject';
 import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
-import { useEntityNames } from '../ui/entityNames';
+import { isEntityResolved, useEntityNames } from '../ui/entityNames';
+import { nodesPageHref } from '../../lib/treeSelection';
 import { api } from '../../services/api';
 import {
   alertWhatOf,
@@ -629,7 +631,8 @@ function MerakiHealth({
 
 interface Fact {
   label: string;
-  value: string;
+  /** A node, not a string: the wireless-controller row is a link to the controller's own pane. */
+  value: ReactNode;
   mono?: boolean;
   /** Render the value as a warning (paired with text, never colour alone). */
   warn?: boolean;
@@ -736,6 +739,9 @@ function useFacts(
 
   const path = groupPath(groups, node.group_id ?? null);
   const groupName = (id: string) => groups.find((g) => g.id === id)?.name;
+  // Null for an AP whose serving controller is outside the caller's scope: `node_wireless` blanks
+  // the id rather than naming a node the token may not see.
+  const controllerNode = node.wireless?.ap?.controller_node_id ?? null;
   return {
     group: { label: t('field.group'), value: path.length ? path.join(' / ') : t('ungrouped') },
     // Placement facts sit together: which folder, which pool, which poller.
@@ -745,6 +751,12 @@ function useFacts(
       value: polledByLabel(assignment?.polled_by, t),
       mono: assignment?.polled_by.state === 'assigned',
       warn: polledByIsWarning(assignment?.polled_by),
+    },
+    // An imported AP only (ADR-064): the controller reporting it in service, and every number on
+    // this page comes from that controller — so it is the next place to look when the AP looks wrong.
+    controller: {
+      label: t('field.wirelessController'),
+      value: controllerNode ? <ControllerFact id={controllerNode} /> : '—',
     },
     address: { label: t('field.ipAddress'), value: node.address, mono: true },
     maker: { label: t('field.maker'), value: node.vendor || '—' },
@@ -770,6 +782,22 @@ function useFacts(
       mono: !!node.dns_check?.resolver,
     },
   };
+}
+
+/** The wireless controller serving an imported AP: its name, linking to its own pane.
+ *
+ *  Falls back to [`EntityName`]'s raw-handle treatment when the name cannot be resolved — a bare
+ *  UUID must never be the visible primary (design-system §4.1), and an unresolvable controller is
+ *  not somewhere to navigate to either. */
+function ControllerFact({ id }: { id: string }) {
+  const { nodeName } = useEntityNames();
+  const name = nodeName(id);
+  if (!isEntityResolved(name, id)) return <EntityName name={name} id={id} />;
+  return (
+    <Link to={nodesPageHref({ kind: 'node', id })} title={id}>
+      {name}
+    </Link>
+  );
 }
 
 /** ifOperStatus (1 = up) → a node-state colour for status dots/charts. (Shared with the

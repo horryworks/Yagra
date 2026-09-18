@@ -145,8 +145,8 @@ pub(crate) struct WirelessControllerSummary {
     pub import_aps: bool,
     /// The most access points this controller imports (1–2048).
     pub max_aps: i32,
-    /// The folder imported AP nodes are filed in. `null` ⇒ a folder named "<controller> APs" beside
-    /// the controller.
+    /// The folder imported AP nodes are filed in. `null` ⇒ the folder this controller is in. No
+    /// folder is created for them.
     pub ap_group_id: Option<Uuid>,
     /// How many access points the `max_aps` cap left out on the last import pass.
     pub aps_over_cap: i32,
@@ -453,8 +453,8 @@ pub(super) struct WirelessControllerSettingsBody {
     /// The most access points this controller imports, 1–2048. Omitted ⇒ 1024.
     #[serde(default)]
     max_aps: Option<i32>,
-    /// The folder to file imported AP nodes in. Omitted or `null` ⇒ a folder named
-    /// "<controller> APs" beside the controller.
+    /// The folder to file imported AP nodes in. Omitted or `null` ⇒ the folder this controller is
+    /// in; no folder is created. AP nodes already imported stay where they are.
     #[serde(default)]
     ap_group_id: Option<Uuid>,
 }
@@ -745,16 +745,10 @@ mod tests {
             address, "0.0.0.0",
             "a controller reported no address for it"
         );
-        let parent: Option<Uuid> =
-            sqlx::query_scalar("SELECT parent_id FROM node_groups WHERE id = $1")
-                .bind(group)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
         assert_eq!(
-            parent,
+            group,
             Some(site),
-            "the AP folder sits beside the controller"
+            "the AP node is filed in the controller's own folder (ADR-064 B2 の手直し)"
         );
 
         let (status, body) = send(&st, "POST", &import, &admin, None).await;

@@ -39147,7 +39147,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The folder to file imported AP nodes in. Omitted or `null` ⇒ a folder named\n\"<controller> APs\" beside the controller."
+            "description": "The folder to file imported AP nodes in. Omitted or `null` ⇒ the folder this controller is\nin; no folder is created. AP nodes already imported stay where they are."
           },
           "import_aps": {
             "type": "boolean",
@@ -39180,7 +39180,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The folder imported AP nodes are filed in. `null` ⇒ a folder named \"<controller> APs\" beside\nthe controller."
+            "description": "The folder imported AP nodes are filed in. `null` ⇒ the folder this controller is in. No\nfolder is created for them."
           },
           "aps_over_cap": {
             "type": "integer",

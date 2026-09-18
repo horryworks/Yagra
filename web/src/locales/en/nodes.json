@@ -30,6 +30,7 @@
     "polledByWirelessController": "Its wireless controller",
     "polledByMeraki": "Meraki collector",
     "polledByUnknown": "Unknown",
+    "wirelessController": "Wireless controller",
     "nameRequired": "A name is required.",
     "notes": "Notes",
     "notesPlaceholder": "e.g. in the ceiling void above the east corridor — needs a ladder",
