@@ -20,7 +20,12 @@
 use crate::metric::MetricKind;
 use crate::profile::ProfileCategory;
 use crate::thresholds::ScopeLevel;
-use crate::wlan::{WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, WIRELESS_AP_PROFILE};
+use crate::wlan::{
+    WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, METRIC_WLAN_CONTROLLER_SSID_COUNT,
+    METRIC_WLAN_SSID_AP_COUNT, METRIC_WLAN_SSID_CLIENTS, METRIC_WLAN_SSID_CLIENTS_2G4,
+    METRIC_WLAN_SSID_CLIENTS_5G, METRIC_WLAN_SSID_CLIENTS_6G, METRIC_WLAN_SSID_IN_OCTETS,
+    METRIC_WLAN_SSID_OUT_OCTETS, METRIC_WLAN_SSID_WALK_COMPLETE, WIRELESS_AP_PROFILE,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -1064,6 +1069,8 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         },
         // ADR-064 increment B1 (2026-09-18). Appended at the end: seed ids are array positions.
         wlan_ap_template(WlanFlavor::Huawei),
+        // ADR-064 increment D (2026-09-18). Appended at the end: seed ids are array positions.
+        wlan_ssid_template(WlanFlavor::Huawei),
     ]
 }
 
@@ -1089,6 +1096,52 @@ fn wlan_ap_template(flavor: WlanFlavor) -> BuiltinTemplate {
             kind: CollectionKind::Wlan,
             metric_kind: MetricKind::Gauge,
         }],
+    }
+}
+
+/// The built-in SSID-statistics template for one dialect (ADR-064 増分 D).
+///
+/// Every item names the dialect's **SSID** entry OID, which is what selects the walk — the AP
+/// template names the AP table's, and a node may carry either or both.
+///
+/// The seven per-SSID names are listed as items so the metric catalogue, the Overview sections
+/// and the meaning sentences all know they exist; they are not what the poller reads (it reads
+/// the columns declared in the poller crate). Their *dimension* cannot be answered from the kind
+/// alone — see [`crate::WLAN_NODE_LEVEL_METRICS`].
+///
+/// ⚠️ **An HA standby answers the per-SSID client counts with the active controller numbers**,
+/// exactly as it does for the AP and client totals, so the two members of a pair show the same
+/// figures and must not be added together. Unlike an AP, an SSID has no owning controller to
+/// arbitrate: it is a fact about each controller own configuration.
+fn wlan_ssid_template(flavor: WlanFlavor) -> BuiltinTemplate {
+    let item = |metric: &str, metric_kind: MetricKind| CollectionItem {
+        metric_name: metric.to_owned(),
+        oid: flavor.ssid_root_oid().to_owned(),
+        kind: CollectionKind::Wlan,
+        metric_kind,
+    };
+    BuiltinTemplate {
+        name: flavor.ssid_template_name(),
+        description: match flavor {
+            WlanFlavor::Huawei => {
+                "The SSIDs a Huawei wireless controller is broadcasting, and what each one \
+                 carries (HUAWEI-WLAN-VAP-MIB): clients on 2.4, 5 and 6 GHz, how many access \
+                 points broadcast it, and bytes in and out. One row per SSID, named by the SSID \
+                 itself. An HA standby reports the active controller's client counts, so do not \
+                 add the two together."
+            }
+        },
+        items: vec![
+            item(METRIC_WLAN_SSID_WALK_COMPLETE, MetricKind::Gauge),
+            item(METRIC_WLAN_CONTROLLER_SSID_COUNT, MetricKind::Gauge),
+            item(METRIC_WLAN_SSID_CLIENTS, MetricKind::Gauge),
+            item(METRIC_WLAN_SSID_CLIENTS_2G4, MetricKind::Gauge),
+            item(METRIC_WLAN_SSID_CLIENTS_5G, MetricKind::Gauge),
+            item(METRIC_WLAN_SSID_CLIENTS_6G, MetricKind::Gauge),
+            item(METRIC_WLAN_SSID_AP_COUNT, MetricKind::Gauge),
+            item(METRIC_WLAN_SSID_IN_OCTETS, MetricKind::Counter),
+            item(METRIC_WLAN_SSID_OUT_OCTETS, MetricKind::Counter),
+        ],
     }
 }
 
@@ -1591,6 +1644,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 T_HUAWEI,
                 T_HUAWEI_WLAN_CTL,
                 WlanFlavor::Huawei.template_name(),
+                WlanFlavor::Huawei.ssid_template_name(),
             ],
         ),
         prof(
@@ -1996,6 +2050,7 @@ mod tests {
             // ── ADR-064 appended from here ──
             T_HUAWEI_WLAN_CTL,
             WlanFlavor::Huawei.template_name(),
+            WlanFlavor::Huawei.ssid_template_name(),
         ];
         let actual: Vec<&str> = builtin_templates().iter().map(|t| t.name).collect();
         assert_eq!(

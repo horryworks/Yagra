@@ -1883,6 +1883,14 @@ pub struct SnmpWlanApCheck {
     /// the controller had more ([`yagra_common::WlanInventory::truncated_at`]).
     #[serde(default = "default_wlan_max_aps")]
     pub max_aps: u32,
+    /// Also walk the controller's SSID statistics table (ADR-064 増分 D).
+    ///
+    /// Set by core when the node's collection set holds an item naming the dialect's SSID table, so
+    /// an operator turns the walk on and off by attaching the template. Defaulted, which is what
+    /// makes it safe in both upgrade orders: an N-1 poller never sees the field and keeps walking
+    /// only the AP table, and an N-1 core never sets it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub walk_ssids: bool,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -1902,6 +1910,9 @@ pub struct SnmpV3WlanApCheck {
     /// See [`SnmpWlanApCheck::max_aps`].
     #[serde(default = "default_wlan_max_aps")]
     pub max_aps: u32,
+    /// See [`SnmpWlanApCheck::walk_ssids`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub walk_ssids: bool,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,

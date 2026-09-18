@@ -236,13 +236,19 @@ fn optical_probes(items: &[CollectionItem]) -> Vec<OpticalProbe> {
 /// An item's `oid` names the dialect, as for optics. An OID no dialect claims is dropped here rather
 /// than sent, for `optical_probes`' reason: a walk the poller cannot interpret is a session spent
 /// for nothing. Two items naming one dialect (a template item and a node override) walk it once.
-fn wlan_flavors(items: &[CollectionItem]) -> Vec<WlanFlavor> {
-    let mut flavors: Vec<WlanFlavor> = Vec::new();
+fn wlan_flavors(items: &[CollectionItem]) -> Vec<(WlanFlavor, bool)> {
+    let mut flavors: Vec<(WlanFlavor, bool)> = Vec::new();
     for item in items.iter().filter(|i| i.kind == CollectionKind::Wlan) {
-        if let Some(flavor) = WlanFlavor::from_root(&item.oid) {
-            if !flavors.contains(&flavor) {
-                flavors.push(flavor);
-            }
+        let Some(flavor) = WlanFlavor::from_root(&item.oid) else {
+            continue;
+        };
+        let ssid = flavor.is_ssid_root(&item.oid);
+        match flavors.iter_mut().find(|(f, _)| *f == flavor) {
+            // One walk per dialect however many items name it, and the SSID table is asked for if
+            // **any** of them named it — the two templates are attached independently, so a node
+            // carrying both must not get two jobs for one controller.
+            Some((_, walk_ssids)) => *walk_ssids |= ssid,
+            None => flavors.push((flavor, ssid)),
         }
     }
     flavors
@@ -258,10 +264,11 @@ pub fn build_snmp_wlan_ap_checks(
 ) -> Vec<SnmpWlanApCheck> {
     wlan_flavors(items)
         .into_iter()
-        .map(|flavor| SnmpWlanApCheck {
+        .map(|(flavor, walk_ssids)| SnmpWlanApCheck {
             community: community.to_owned(),
             flavor,
             max_aps: MAX_APS_PER_CONTROLLER_DEFAULT,
+            walk_ssids,
             timeout_ms,
         })
         .collect()
@@ -276,10 +283,11 @@ pub fn build_snmp_v3_wlan_ap_checks(
 ) -> Vec<SnmpV3WlanApCheck> {
     wlan_flavors(items)
         .into_iter()
-        .map(|flavor| SnmpV3WlanApCheck {
+        .map(|(flavor, walk_ssids)| SnmpV3WlanApCheck {
             auth: secret.auth(),
             flavor,
             max_aps: MAX_APS_PER_CONTROLLER_DEFAULT,
+            walk_ssids,
             timeout_ms,
         })
         .collect()

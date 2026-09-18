@@ -231,14 +231,22 @@ fn join_inventory(
 ///
 /// The item knows, so ask it. See [`yagra_common::table_rows_are_interfaces`].
 fn dimension_of_item(item: &CollectionItem) -> MetricDimension {
-    // A wireless controller's AP-walk item publishes one sample for the controller node — whether
-    // the walk completed — and its per-AP values are an inventory, not rows of this series
-    // (ADR-064). Reported as `entity` it told an MCP client to read it as a node-wide max of rows.
-    if matches!(
-        item.kind,
-        yagra_common::CollectionKind::Scalar | yagra_common::CollectionKind::Wlan
-    ) {
+    if item.kind == yagra_common::CollectionKind::Scalar {
         return MetricDimension::None;
+    }
+    // 🚨 A WLAN item's dimension is decided by its **metric name**, not by its kind, and the kind
+    // alone used to be the whole answer. Two templates carry `CollectionKind::Wlan` now: the AP
+    // walk, whose one sample is a node-level flag (its per-AP values are an inventory, not rows of
+    // a series — reported as `entity` it told an MCP client to read it as a node-wide max), and the
+    // SSID walk, which publishes exactly the rows `entity` means (ADR-064 増分 D). Answering `none`
+    // for the second would leave the SSID rows unreadable from both the screen and `/mcp`, which
+    // share this function.
+    if item.kind == yagra_common::CollectionKind::Wlan {
+        return if yagra_common::WLAN_NODE_LEVEL_METRICS.contains(&item.metric_name.as_str()) {
+            MetricDimension::None
+        } else {
+            MetricDimension::Entity
+        };
     }
     if yagra_common::item_publishes_per_interface(item) {
         MetricDimension::Interface

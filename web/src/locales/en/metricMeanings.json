@@ -122,5 +122,12 @@
   "wlan_controller_clients": "Wireless clients currently online through the controller, on every band. An HA standby reports the active controller's count, so do not add the two members of a pair together.",
   "wlan_controller_clients_2g4": "Wireless clients currently online on the 2.4 GHz band. An HA standby reports the active controller's count.",
   "wlan_controller_clients_5g": "Wireless clients currently online on the 5 GHz band. An HA standby reports the active controller's count.",
-  "wlan_controller_clients_6g": "Wireless clients currently online on the 6 GHz band. Zero on a controller whose access points have no 6 GHz radio. An HA standby reports the active controller's count."
+  "wlan_controller_clients_6g": "Wireless clients currently online on the 6 GHz band. Zero on a controller whose access points have no 6 GHz radio. An HA standby reports the active controller's count.",
+  "wlan_controller_ssid_count": "How many SSIDs this wireless controller is broadcasting. Published only when the SSID table was read to its end, so it never falls just because a read failed. An HA standby is configured with the same SSIDs as the controller it backs up, so both members of a pair report the same number.",
+  "wlan_ssid_ap_count": "How many access points are broadcasting this SSID, as the controller reports. One row per SSID, named by the SSID itself.",
+  "wlan_ssid_clients": "Wireless clients currently online on this SSID, added up over the bands the controller answered for. One row per SSID, named by the SSID itself. An HA standby reports the active controller’s numbers, so do not add the two controllers together.",
+  "wlan_ssid_clients_2g4": "Wireless clients currently online on this SSID over 2.4 GHz. One row per SSID, named by the SSID itself.",
+  "wlan_ssid_clients_5g": "Wireless clients currently online on this SSID over 5 GHz. One row per SSID, named by the SSID itself.",
+  "wlan_ssid_clients_6g": "Wireless clients currently online on this SSID over 6 GHz. Zero on a controller whose access points have no 6 GHz radios. One row per SSID, named by the SSID itself.",
+  "wlan_ssid_walk_complete": "Did the controller answer every column of its SSID table on this poll (1) or not (0). Unlike the access-point walk, an incomplete read still publishes the SSIDs it did get — each one is an independent reading rather than a member of a list that replaces the stored one — but it will not say how many SSIDs there are."
 }

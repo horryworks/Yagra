@@ -66,6 +66,84 @@ pub const METRIC_WLAN_AP_CPU_TEMP_C: &str = "wlan_ap_cpu_temp_c";
 /// interesting values rest on the MIB's wording alone (ADR-064 増分 E).
 pub const METRIC_WLAN_AP_POWER_STATE: &str = "wlan_ap_power_state";
 
+/// How many SSIDs the controller is broadcasting — the one node-level number the SSID walk adds.
+///
+/// Published only when the walk read every column, because a partial row count is a wrong answer
+/// rather than a missing one (the per-SSID rows are each independent and are published either way).
+pub const METRIC_WLAN_CONTROLLER_SSID_COUNT: &str = "wlan_controller_ssid_count";
+/// Did the controller's SSID walk get every column it asked for (1) or not (0).
+pub const METRIC_WLAN_SSID_WALK_COMPLETE: &str = "wlan_ssid_walk_complete";
+
+/// Clients online on one SSID, summed over the bands the controller answered for.
+///
+/// One series per SSID on the **controller** node, keyed by [`ssid_row_key`]; the SSID's name is
+/// joined at read time out of `entity_row_names` and is never a series label (ADR-011/ADR-143).
+pub const METRIC_WLAN_SSID_CLIENTS: &str = "wlan_ssid_clients";
+/// Clients online on one SSID over 2.4 GHz.
+pub const METRIC_WLAN_SSID_CLIENTS_2G4: &str = "wlan_ssid_clients_2g4";
+/// Clients online on one SSID over 5 GHz.
+pub const METRIC_WLAN_SSID_CLIENTS_5G: &str = "wlan_ssid_clients_5g";
+/// Clients online on one SSID over 6 GHz.
+pub const METRIC_WLAN_SSID_CLIENTS_6G: &str = "wlan_ssid_clients_6g";
+/// How many access points are broadcasting one SSID.
+pub const METRIC_WLAN_SSID_AP_COUNT: &str = "wlan_ssid_ap_count";
+/// Bytes received on one SSID's air interface, as a raw counter (ADR-012).
+pub const METRIC_WLAN_SSID_IN_OCTETS: &str = "wlan_ssid_in_octets";
+/// Bytes sent on one SSID's air interface, as a raw counter (ADR-012).
+pub const METRIC_WLAN_SSID_OUT_OCTETS: &str = "wlan_ssid_out_octets";
+
+/// Every metric the SSID walk publishes per SSID, gauges first.
+///
+/// Read by the catalogue ledger and by the reader that decides a metric's dimension, so neither can
+/// come to hold a different idea of which names are rows of this table.
+pub const WLAN_SSID_ROW_METRICS: [&str; 7] = [
+    METRIC_WLAN_SSID_CLIENTS,
+    METRIC_WLAN_SSID_CLIENTS_2G4,
+    METRIC_WLAN_SSID_CLIENTS_5G,
+    METRIC_WLAN_SSID_CLIENTS_6G,
+    METRIC_WLAN_SSID_AP_COUNT,
+    METRIC_WLAN_SSID_IN_OCTETS,
+    METRIC_WLAN_SSID_OUT_OCTETS,
+];
+
+/// The metrics a WLAN collection item names that are **one number for the controller**, not rows.
+///
+/// 🚨 `dimension_of_item` cannot answer from [`crate::CollectionKind::Wlan`] alone any more: the AP
+/// and SSID templates both carry that kind, and one publishes a node-level flag while the other
+/// publishes a row per SSID. This list is what tells them apart, and it is read by the API edge and
+/// by the catalogue generator so the screen and `/mcp` cannot disagree about which it is.
+pub const WLAN_NODE_LEVEL_METRICS: [&str; 3] = [
+    METRIC_WLAN_AP_WALK_COMPLETE,
+    METRIC_WLAN_SSID_WALK_COMPLETE,
+    METRIC_WLAN_CONTROLLER_SSID_COUNT,
+];
+
+/// The row key one SSID's series carry, derived from its **name**.
+///
+/// FNV-1a over the cleaned name, never over the index's sub-identifiers. Two reasons, and the
+/// second is the one that matters later: `fold_subids` is private to `yagra-transport`, and a
+/// Huawei AC indexes this table by the SSID string while Cisco's equivalent indexes it by a number
+/// — so folding the index would give one SSID a different series on each dialect, and a controller
+/// replaced by another vendor's would start its history again.
+///
+/// 🚨 **Changing this function re-keys every stored series and orphans every row name.** It is
+/// pinned to literal values by a test, the same way [`ap_id`] is pinned to its MAC.
+#[must_use]
+pub fn ssid_row_key(name: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in name.as_bytes() {
+        h ^= u32::from(*b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    // 0 is reserved: a row key of zero reads as "no row" at several edges, and one SSID in four
+    // billion is not worth the ambiguity.
+    if h == 0 {
+        1
+    } else {
+        h
+    }
+}
+
 /// The built-in profile an imported AP node carries (ADR-064). It attaches no template: an AP is
 /// never polled itself — its controller's walk answers for it.
 pub const WIRELESS_AP_PROFILE: &str = "Wireless AP (via controller)";
@@ -227,11 +305,41 @@ impl WlanFlavor {
         }
     }
 
+    /// The entry OID of the dialect's **SSID statistics** table (ADR-064 増分 D).
+    ///
+    /// Huawei: `hwWlanSsidStatisticTable`, `INDEX { hwWlanSsid }` — the index *is* the SSID name,
+    /// as a length-prefixed octet string. ⚠️ The name has no readable column: `.1` is
+    /// not-accessible and answered nothing on the measured AC6508, which is why the poller decodes
+    /// it out of the index rather than walking for it.
+    #[must_use]
+    pub const fn ssid_root_oid(self) -> &'static str {
+        match self {
+            Self::Huawei => "1.3.6.1.4.1.2011.6.139.17.1.2.1",
+        }
+    }
+
+    /// The built-in collection template that walks this dialect's SSID table.
+    #[must_use]
+    pub const fn ssid_template_name(self) -> &'static str {
+        match self {
+            Self::Huawei => "Huawei WLAN SSIDs (AC)",
+        }
+    }
+
     /// The dialect an item's OID selects, or `None` — a job for an OID no dialect claims is skipped.
     #[must_use]
     pub fn from_root(oid: &str) -> Option<Self> {
         let oid = oid.trim_start_matches('.');
-        Self::ALL.into_iter().find(|f| f.root_oid() == oid)
+        Self::ALL
+            .into_iter()
+            .find(|f| f.root_oid() == oid || f.ssid_root_oid() == oid)
+    }
+
+    /// Whether `oid` is this dialect's SSID table rather than its AP table — what decides which
+    /// walk a collection item asks for.
+    #[must_use]
+    pub fn is_ssid_root(self, oid: &str) -> bool {
+        oid.trim_start_matches('.') == self.ssid_root_oid()
     }
 
     /// The built-in collection template that walks this dialect's AP table.

@@ -16,18 +16,37 @@
 //! condition ADR-158 A10 sets.
 
 use super::*;
-use yagra_common::{WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE};
+use yagra_common::{
+    WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, METRIC_WLAN_CONTROLLER_SSID_COUNT,
+    METRIC_WLAN_SSID_WALK_COMPLETE,
+};
+
+/// What one wireless-controller job is asked to read.
+///
+/// A struct rather than five arguments: the SSID flag made the sixth, and the parameters were
+/// already one fact about the controller spread across a signature.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct WlanPlan {
+    pub(super) flavor: WlanFlavor,
+    pub(super) max_aps: u32,
+    pub(super) walk_ssids: bool,
+    pub(super) timeout: Duration,
+}
 
 /// Walk `flavor`'s AP table on the job's target and build the controller's result.
 pub(super) async fn execute_wlan(
     job: &PollJob,
     transport: &dyn Transport,
     at_unix_ms: i64,
-    flavor: WlanFlavor,
-    max_aps: u32,
-    timeout: Duration,
+    plan: WlanPlan,
     walker: &SnmpWalker,
 ) -> PollResult {
+    let WlanPlan {
+        flavor,
+        max_aps,
+        walk_ssids,
+        timeout,
+    } = plan;
     let columns = crate::wlan::columns(flavor);
     let (outcome, inventory) = match walker
         .walk_instance_columns(
@@ -87,12 +106,29 @@ pub(super) async fn execute_wlan(
         }
     }
     let complete = f64::from(u8::from(inventory.is_some()));
-    let mut r = result(
-        job,
-        at_unix_ms,
-        outcome,
-        vec![Sample::gauge(METRIC_WLAN_AP_WALK_COMPLETE, complete)],
-    );
+    let mut samples = vec![Sample::gauge(METRIC_WLAN_AP_WALK_COMPLETE, complete)];
+    let mut row_names = Vec::new();
+    if walk_ssids && outcome != CheckOutcome::Unreachable {
+        let (ssid_samples, names, ssid_complete) =
+            ssid_readings(job, transport, flavor, timeout, walker).await;
+        samples.extend(ssid_samples);
+        row_names = names;
+        samples.push(Sample::gauge(
+            METRIC_WLAN_SSID_WALK_COMPLETE,
+            f64::from(u8::from(ssid_complete.is_some())),
+        ));
+        // Only a complete walk may say how many SSIDs there are: a partial one would publish a
+        // smaller number, which reads as SSIDs having been removed rather than as a failed read.
+        if let Some(count) = ssid_complete {
+            #[allow(clippy::cast_precision_loss)]
+            samples.push(Sample::gauge(
+                METRIC_WLAN_CONTROLLER_SSID_COUNT,
+                count as f64,
+            ));
+        }
+    }
+    let mut r = result(job, at_unix_ms, outcome, samples);
+    r.row_names = row_names;
     r.wlan = inventory;
     // Never a liveness statement, but its one sample is a reading taken at the node's interval.
     r.observational = true;
@@ -148,6 +184,51 @@ async fn optional_rows(
     }
 }
 
+/// The SSID table's samples and row names, and how many SSIDs a **complete** walk found.
+///
+/// Unlike the AP table there is no all-or-nothing rule here (決定 9b): each SSID is an independent
+/// series rather than a member of a list that replaces a stored one, so a column that did not
+/// answer costs that column and the rest are published. What a partial walk may not do is *count*
+/// — hence the `Option`.
+async fn ssid_readings(
+    job: &PollJob,
+    transport: &dyn Transport,
+    flavor: WlanFlavor,
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> (Vec<Sample>, Vec<yagra_bus::RowName>, Option<usize>) {
+    let columns = crate::wlan::ssid_columns(flavor);
+    match walker
+        .walk_instance_columns(
+            transport,
+            job.target,
+            &columns,
+            timeout,
+            crate::wlan::ssid_walk_row_budget(flavor),
+        )
+        .await
+    {
+        Ok(walk) => {
+            let readings = crate::wlan::ssids(flavor, &walk.rows);
+            let (samples, names) = crate::wlan::ssid_samples(&readings);
+            (
+                samples,
+                names,
+                walk.every_column_answered.then_some(readings.len()),
+            )
+        }
+        Err(err) => {
+            tracing::warn!(
+                job_id = %job.job_id,
+                target = %job.target,
+                error = %err,
+                "wireless controller SSID walk failed"
+            );
+            (Vec::new(), Vec::new(), None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,12 +245,120 @@ mod tests {
                 community: "public".into(),
                 flavor: WlanFlavor::Huawei,
                 max_aps: 1024,
+                walk_ssids: false,
                 timeout_ms: 1000,
             }),
             300,
         )
     }
 
+    const SSID_ROOT: &str = "1.3.6.1.4.1.2011.6.139.17.1.2.1";
+
+    /// One SSID column cell, keyed by the SSID name the way the controller indexes it.
+    fn ssid_cell(column: u32, name: &str, value: i64) -> SnmpInstanceRow {
+        let mut instance = vec![u32::try_from(name.len()).unwrap()];
+        instance.extend(name.bytes().map(u32::from));
+        SnmpInstanceRow {
+            oid_base: format!("{SSID_ROOT}.{column}"),
+            instance,
+            value: SnmpValue::Int(value),
+        }
+    }
+
+    fn ssid_job(walk_ssids: bool) -> PollJob {
+        PollJob::for_spec(
+            uuid::Uuid::nil(),
+            NodeId::from(uuid::Uuid::nil()),
+            "192.0.2.1".parse().unwrap(),
+            CheckSpec::SnmpWlanAp(yagra_bus::SnmpWlanApCheck {
+                community: "public".into(),
+                flavor: WlanFlavor::Huawei,
+                max_aps: 1024,
+                walk_ssids,
+                timeout_ms: 1000,
+            }),
+            300,
+        )
+    }
+
+    fn with_ssids() -> FakeTransport {
+        FakeTransport {
+            snmp_instances: vec![
+                instance(6, [1, 2, 3, 4, 5, 6], SnmpValue::Int(8)),
+                instance(4, [1, 2, 3, 4, 5, 6], SnmpValue::Bytes(b"ap-1".to_vec())),
+                ssid_cell(2, "guest", 2),
+                ssid_cell(3, "guest", 11),
+                ssid_cell(4, "guest", 30),
+            ],
+            ..FakeTransport::reachable(1.0)
+        }
+    }
+
+    fn value(r: &PollResult, metric: &str) -> Option<f64> {
+        r.samples
+            .iter()
+            .find(|s| s.metric == metric)
+            .map(|s| s.value)
+    }
+
+    /// The SSID rows ride the controller own result as samples plus row names — no new message
+    /// type, no new store (ADR-064 R17).
+    #[tokio::test]
+    async fn an_asked_for_ssid_walk_publishes_a_row_and_its_name() {
+        let r = execute(&ssid_job(true), &with_ssids(), 1).await;
+        assert_eq!(value(&r, "wlan_ssid_walk_complete"), Some(1.0));
+        assert_eq!(value(&r, "wlan_controller_ssid_count"), Some(1.0));
+        let row = yagra_common::ssid_row_key("guest");
+        let clients = r
+            .samples
+            .iter()
+            .find(|s| s.metric == "wlan_ssid_clients")
+            .expect("the SSID client count is published");
+        assert_eq!(clients.ifindex, Some(yagra_common::IfIndex(row)));
+        assert_eq!(clients.value, 13.0, "2 on 2.4 GHz plus 11 on 5 GHz");
+        assert!(
+            r.row_names
+                .iter()
+                .any(|n| n.row == row && n.name == "guest" && n.metric == "wlan_ssid_clients"),
+            "{:?}",
+            r.row_names
+        );
+    }
+
+    /// The flag is the whole switch: a controller whose collection set has no SSID item is never
+    /// asked, so attaching the template is what turns the second walk on.
+    #[tokio::test]
+    async fn an_unasked_ssid_walk_is_not_made_at_all() {
+        let t = with_ssids();
+        let r = execute(&ssid_job(false), &t, 1).await;
+        assert_eq!(value(&r, "wlan_ssid_walk_complete"), None);
+        assert!(r.row_names.is_empty());
+        for asked in t.asked() {
+            assert!(
+                !asked.iter().any(|c| c.starts_with(SSID_ROOT)),
+                "the SSID table was walked without being asked for: {asked:?}"
+            );
+        }
+    }
+
+    /// 🚨 Unlike the AP table there is no all-or-nothing rule: a column that did not answer costs
+    /// that column, and the SSIDs still publish. What a partial walk may **not** do is count them
+    /// — a smaller number reads as SSIDs having been removed rather than as a failed read.
+    #[tokio::test]
+    async fn an_incomplete_ssid_walk_still_publishes_its_rows_but_will_not_count_them() {
+        let t = with_ssids().with_unanswered_instance_column(format!("{SSID_ROOT}.17"));
+        let r = execute(&ssid_job(true), &t, 1).await;
+        assert_eq!(value(&r, "wlan_ssid_walk_complete"), Some(0.0));
+        assert_eq!(value(&r, "wlan_controller_ssid_count"), None);
+        assert_eq!(value(&r, "wlan_ssid_clients"), Some(13.0));
+        assert!(!r.row_names.is_empty());
+        assert_eq!(
+            value(&r, "wlan_ap_walk_complete"),
+            Some(1.0),
+            "the AP list is not affected by the SSID table"
+        );
+        assert!(r.wlan.is_some());
+    }
     fn instance(column: u32, mac: [u32; 6], value: SnmpValue) -> SnmpInstanceRow {
         SnmpInstanceRow {
             oid_base: format!("{ROOT}.{column}"),

@@ -859,5 +859,68 @@
     "metric_name": "wlan_controller_clients_6g",
     "per_interface": false,
     "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_ssid_count",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_ssid_ap_count",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_ssid_clients",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_ssid_clients_2g4",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_ssid_clients_5g",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_ssid_clients_6g",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "counter",
+    "metric_name": "wlan_ssid_in_octets",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "counter",
+    "metric_name": "wlan_ssid_out_octets",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN SSIDs (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_ssid_walk_complete",
+    "per_interface": false,
+    "source": "collected"
   }
 ]
