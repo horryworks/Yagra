@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: AGPL-3.0-only
-//! Cisco Meraki orchestration: org/device/network persistence, the collect-job builder, and the
 //! read-only API-key resolver.
 //!
 //! A Meraki organization ([`MerakiOrg`]) is the org-scoped polling + rate-limit unit; its devices
@@ -282,11 +280,14 @@ impl MerakiOrgRepo {
         let id = Uuid::new_v4();
         let group = org_group_id(id);
         let mut tx = self.pool.begin().await?;
-        // Root group at the HostTree top level (no parent — single-tenant decision).
-        sqlx::query(
-            "INSERT INTO node_groups (id, name, group_type, parent_id) \
-             VALUES ($1, $2, 'region', NULL) ON CONFLICT (id) DO NOTHING",
-        )
+        // Root group at the HostTree top level (no parent — single-tenant decision). `sort_order`
+        // is appended over the whole top-level scope (ADR-162): left at its DEFAULT 0 the org
+        // folder would sit above everything an operator has arranged there.
+        let order = crate::groups::append_base_sql("NULL", "");
+        sqlx::query(&format!(
+            "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
+             VALUES ($1, $2, 'region', NULL, {order} + 1) ON CONFLICT (id) DO NOTHING"
+        ))
         .bind(group)
         .bind(name)
         .execute(&mut *tx)
@@ -484,13 +485,15 @@ impl MerakiOrgRepo {
         let mut count = 0u32;
 
         for d in devices {
-            // Network group (idempotent), parented to the org root group.
+            // Network folder (idempotent), parented to the org root folder. Appended over the
+            // parent's whole scope (ADR-162) — the org folder holds nodes as well as networks.
             let group = network_group_id(org.id, &d.network_id);
+            let group_order = crate::groups::append_base_sql("$3", "");
             if org.group_id.is_some() && created_groups.insert(group) {
-                sqlx::query(
-                    "INSERT INTO node_groups (id, name, group_type, parent_id) \
-                     VALUES ($1, $2, 'site', $3) ON CONFLICT (id) DO NOTHING",
-                )
+                sqlx::query(&format!(
+                    "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
+                     VALUES ($1, $2, 'site', $3, {group_order} + 1) ON CONFLICT (id) DO NOTHING"
+                ))
                 .bind(group)
                 .bind(&d.network_name)
                 .bind(org.group_id)
@@ -501,10 +504,14 @@ impl MerakiOrgRepo {
 
             let node_id = Uuid::new_v4();
             let address = d.lan_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-            sqlx::query(
-                "INSERT INTO nodes (id, name, address, profile_id, vendor, model, group_id) \
-                 VALUES ($1, $2, $3::inet, $4, 'Cisco Meraki', $5, $6)",
-            )
+            // Appended over the destination folder's whole scope (ADR-162). Left at its DEFAULT 0
+            // every imported device would sit above that folder's sub-folders.
+            let node_order = crate::groups::append_base_sql("$6", "");
+            sqlx::query(&format!(
+                "INSERT INTO nodes \
+                   (id, name, address, profile_id, vendor, model, group_id, sort_order) \
+                 VALUES ($1, $2, $3::inet, $4, 'Cisco Meraki', $5, $6, {node_order} + 1)"
+            ))
             .bind(node_id)
             .bind(&d.name)
             .bind(address.to_string())

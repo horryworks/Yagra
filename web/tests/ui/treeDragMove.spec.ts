@@ -91,6 +91,44 @@ async function dropOnNode(page: Page, index: number, band: DropBand = 'middle') 
   );
 }
 
+/** Begin a drag on the row matching `selector` — the folder rows, which have no index. */
+async function startDragOn(page: Page, selector: string) {
+  await page.evaluate((sel: string) => {
+    const w = window as unknown as { __dt?: DataTransfer };
+    w.__dt = new DataTransfer();
+    const src = document.querySelector(sel);
+    if (!src) throw new Error(`no drag source for ${sel}`);
+    src.dispatchEvent(
+      new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: w.__dt }),
+    );
+  }, selector);
+}
+
+/** Hover the nth `.ntree-node` row without letting go, so the drop indicator can be read. The
+ *  `drop-bad` mark is the only thing a refused drag puts on screen, and the whole of ADR-162
+ *  decision 6 is that the refusal is visible rather than a drop that quietly lands elsewhere. */
+async function dragOverNode(page: Page, index: number, band: DropBand = 'middle') {
+  await page.evaluate(
+    ({ index, band }: { index: number; band: DropBand }) => {
+      const w = window as unknown as { __dt?: DataTransfer };
+      const dst = document.querySelectorAll('.ntree-node')[index];
+      if (!dst) throw new Error(`no node row at index ${index}`);
+      const r = dst.getBoundingClientRect();
+      const frac = band === 'top' ? 0.2 : band === 'bottom' ? 0.8 : 0.5;
+      dst.dispatchEvent(
+        new DragEvent('dragover', {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: w.__dt,
+          clientX: r.left + r.width / 2,
+          clientY: r.top + r.height * frac,
+        }),
+      );
+    },
+    { index, band },
+  );
+}
+
 /** Drop on the row matching `selector`, at the given height within it. */
 async function dropOn(page: Page, selector: string, band: DropBand = 'middle') {
   await page.evaluate(
@@ -263,4 +301,56 @@ test('dropping on the lower half of a row names it as the row to follow', async 
   expect(moves[0].node_ids).toHaveLength(1);
   expect(moves[0].after).toBe(TREE_SIBLING_IDS[2]);
   expect(moves[0].before).toBeUndefined();
+});
+
+test('a folder dragged onto an ungrouped node is refused, and the same drag works on the header', async ({
+  page,
+}) => {
+  // ADR-162 decision 6, in the browser. A folder may now be dropped beside a node — but NOT beside
+  // a node in the "Ungrouped" bucket, which is drawn apart from the top-level folders. The server
+  // would compute a real position there (both live in the same sibling scope), and the folder would
+  // then appear somewhere the operator did not drop it.
+  //
+  // ⚠️ **The mock's three nodes are all ungrouped** (`tests/support/bootstrap.ts`), so this tier can
+  // only reach the refusing half. The permitting half — a folder beside a node *inside* a folder —
+  // is `nodeTreeDnd.test.ts`'s `lets a folder land beside a node inside another folder`, plus a
+  // `/flashdeploy` eyeball. Changing the fixture to file one node in the folder would move four
+  // other specs that count `.ntree-node`.
+  //
+  // 🚨 **The second half is what makes the first half mean anything.** "No request was sent" is
+  // also what a broken drag looks like, so the same drag is then dropped on the Ungrouped header
+  // and must produce one — a positive control in the same test, on the same payload.
+  const placements: string[] = [];
+  await page.route(
+    '**/api/v1/node-groups/*/placement',
+    async (route: import('@playwright/test').Route) => {
+      placements.push(route.request().url());
+      await route.fulfill({ status: 204, body: '' });
+    },
+  );
+  const moves = await captureMoves(page);
+  await page.goto('/nodes');
+  await expect(page.locator('.ntree-node')).toHaveCount(3);
+  const folder = '.ntree-row.ntree-grow';
+  await expect(page.locator(folder).first()).toBeVisible();
+
+  await startDragOn(page, folder);
+  await expect(page.locator('.ntree-row.dragging')).toHaveCount(1);
+
+  // Hover the last ungrouped node: the row must say no, in the one way a drag can.
+  await dragOverNode(page, 2, 'top');
+  await expect(page.locator('.ntree-row.drop-bad')).toHaveCount(1);
+  await dropOnNode(page, 2, 'top');
+  await page.waitForTimeout(300);
+  expect(placements, 'a folder was placed among the ungrouped nodes').toHaveLength(0);
+  expect(moves, 'a folder drop must never send a node move').toHaveLength(0);
+
+  // The positive control, same gesture: the Ungrouped header is the root drop zone and re-parents
+  // the folder to the top level. The drag has to be started again — a drop ends it, which is the
+  // behaviour every other test on this page relies on.
+  await startDragOn(page, folder);
+  await expect(page.locator('.ntree-row.dragging')).toHaveCount(1);
+  await dropOn(page, '.ntree-ungrouped-head');
+  await expect.poll(() => placements.length).toBe(1);
+  await expect.poll(() => placements.length).toBe(1);
 });

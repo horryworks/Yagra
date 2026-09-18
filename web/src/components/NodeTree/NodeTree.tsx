@@ -257,13 +257,15 @@ interface Props {
   ) => void;
   /** Re-parent a group (or null = top level), appending it — drop into a group / onto Ungrouped. */
   onMoveGroup: (groupId: string, parentId: string | null) => void;
-  /** Arrange one folder's **direct** children in name order (ADR-130). Subfolders and member
-   *  nodes are renumbered in their own scopes, so folders stay above nodes whatever the direction;
-   *  folders deeper down are untouched. 🚨 **Overwrites a hand-arranged order with no undo** — by
-   *  decision, and the reason no confirmation is asked is that the caller right-clicked the folder
-   *  this acts on. Gated on `canEdit` at the item, never at the menu (see `nodeTreeMenu.ts`). */
+  /** Arrange one folder's **direct** children in name order (ADR-130, amended by ADR-162).
+   *  Subfolders and member nodes are renumbered as one list, so a subfolder named `m` lands between
+   *  the nodes named `k` and `p`; folders deeper down are untouched. 🚨 **Overwrites a
+   *  hand-arranged order with no undo** — by decision, and the reason no confirmation is asked is
+   *  that the caller right-clicked the folder this acts on. Gated on `canEdit` at the item, never
+   *  at the menu (see `nodeTreeMenu.ts`). */
   onSortGroupChildren: (groupId: string, direction: 'asc' | 'desc') => void;
-  /** Drag-reorder a group next to a sibling group (before/after) under a parent. */
+  /** Drag-reorder a group next to a sibling row (before/after) under a parent. ⚠️ Since ADR-162 the
+   *  sibling may be a **node**: under one parent the two kinds are one ordered list. */
   onReorderGroup: (
     groupId: string,
     dest: { parentId: string | null; before?: string; after?: string },

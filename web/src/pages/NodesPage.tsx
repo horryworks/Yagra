@@ -858,7 +858,9 @@ export function NodesPage() {
       .then(reload)
       .catch((e: unknown) => setError(errMsg(e, t('err.moveGroup'))));
 
-  // Drag-reorder (before/after a sibling): place the item relative to a neighbour and refresh.
+  // Drag-reorder (before/after a sibling row): place the item relative to a neighbour and refresh.
+  // ⚠️ Since ADR-162 the neighbour may be a NODE — folders and nodes under one parent are one
+  // ordered list — so `dest.before`/`after` carry whichever row the cursor was on.
   // ⚠️ There is no node twin of this any more — a node drop, at an edge or not, goes through
   // `moveNodes` above (ADR-124 増分 8), so "what happens when you move a node" has one answer.
   const reorderGroup = (

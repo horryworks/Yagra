@@ -17,7 +17,7 @@
 //! |---|---|---|
 //! | `node_groups.name` / `parent_id` / `latitude` / `longitude` | NetBox | overwrite every time |
 //! | `node_groups.pool` | the operator | **never touched** |
-//! | `node_groups.sort_order` | Yagra | kept name-ordered so the tree does not shuffle |
+//! | `node_groups.sort_order` | NetBox **on create only** | seeded name-ordered, then never touched (ADR-162) |
 //! | a row that vanished from NetBox | nobody | **marked, never deleted** |
 //! | `node_group_prefixes` (mig 0104) | NetBox | overwritten, and **swept when it vanishes** |
 //!
@@ -1200,9 +1200,11 @@ impl NetboxRepo {
     /// added** — that is decision 2's entire content, and a sync that overwrote it would silently
     /// undo an operator's poller placement on every cycle.
     ///
-    /// `sort_order` is set from the caller's `order` so siblings stay name-ordered; it is Yagra's
-    /// column, but leaving it at the `DEFAULT 0` would make the tree's order depend on insertion
-    /// history rather than on anything visible.
+    /// `sort_order` is seeded from the caller's `order` **on the insert only** (ADR-162 decision 7)
+    /// so a folder a sync creates lands name-ordered rather than at the `DEFAULT 0`. It is not in
+    /// the `DO UPDATE SET`: the scope is one sequence shared with the folder's nodes, so rewriting
+    /// it every cycle would move every synced folder above every node — and it would overwrite an
+    /// order the operator arranged here, which is the more recent statement of intent.
     #[allow(clippy::too_many_arguments)] // A parameter struct here would be one shape used once.
     async fn upsert_group(
         &self,
@@ -1217,6 +1219,15 @@ impl NetboxRepo {
     ) -> anyhow::Result<()> {
         let group_id = kind.group_id(server_id, object_id);
         let mut tx = self.pool.begin().await?;
+        // 🚨 **`sort_order` is set when the folder is CREATED and never again** (ADR-162 decision 7).
+        // This used to be in the `DO UPDATE SET`, on the argument that a Yagra column should not
+        // depend on insertion history — so every sync rewrote the folder's position from NetBox's
+        // name order. That was already a hand-arranged order being overwritten; since ADR-162 it is
+        // worse, because the position a sync writes is an index among *folders* and the scope is
+        // one sequence shared with the nodes, so every sync would fling the synced folders above
+        // every node. The cost of taking it out is that re-ordering sites in NetBox no longer
+        // reaches Yagra — chosen deliberately: what the operator arranged here is the more recent
+        // statement of intent.
         sqlx::query(
             "INSERT INTO node_groups \
                (id, name, group_type, parent_id, sort_order, latitude, longitude) \
@@ -1225,7 +1236,6 @@ impl NetboxRepo {
                name = EXCLUDED.name, \
                group_type = EXCLUDED.group_type, \
                parent_id = EXCLUDED.parent_id, \
-               sort_order = EXCLUDED.sort_order, \
                latitude = EXCLUDED.latitude, \
                longitude = EXCLUDED.longitude",
         )
@@ -2338,6 +2348,19 @@ mod tests {
             "the node_groups upsert must never write `pool` — that column is the operator's \
              (ADR-100 decision 2), and overwriting it would undo their poller placement on \
              every sync"
+        );
+        // ADR-162 decision 7, as a build failure rather than as a comment: seeded on the INSERT,
+        // never rewritten. The scope a folder's `sort_order` lives in is shared with its nodes, so
+        // a sync that rewrote it would move every synced folder above every node, every cycle.
+        assert!(
+            !stmt.contains("sort_order = EXCLUDED.sort_order"),
+            "the node_groups upsert must not rewrite `sort_order` on conflict (ADR-162 decision 7)"
+        );
+        // Accept side: it must still be SEEDED, or a folder a sync creates lands at the DEFAULT 0
+        // and sits above everything in its scope — and the ban above would pass just as well.
+        assert!(
+            stmt.contains("sort_order, latitude"),
+            "the node_groups INSERT must still name `sort_order` in its column list"
         );
         // Accept side: the four columns NetBox *does* own must be in there, or a statement that
         // updates nothing would satisfy the ban above.

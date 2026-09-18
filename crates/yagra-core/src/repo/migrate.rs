@@ -301,6 +301,12 @@ mod tests {
                 let s = stmt.trim();
                 s.starts_with("update ")
                     || s.starts_with("delete ")
+                    // A data-modifying CTE starts with `with`, so neither prefix above sees it —
+                    // and 0122 is exactly that shape. Nothing in migrations/ started with `with`
+                    // before it, so widening the needle cannot turn an existing file red
+                    // (ADR-162 decision 3).
+                    || (s.starts_with("with ")
+                        && (s.contains("update ") || s.contains("delete ")))
                     || s.contains("drop column")
                     || s.contains("drop table")
                     || s.contains("drop constraint")
@@ -362,6 +368,96 @@ mod tests {
         // And the schema is usable, not merely recorded: `nodes` is the table the first migration
         // creates and the last release still reads.
         assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 0);
+    }
+
+    /// **Migration 0122 gives each scope one scale, and does not move anything on screen.**
+    ///
+    /// The state it repairs is what migration 0015 left in every deployment: `row_number()` seeded
+    /// per table, so a scope's first folder and its first node both carry `1`. Once the tree draws
+    /// them as one list that tie is broken by name — and, worse, `placement_orders` divides the gap
+    /// between two neighbours, so two equal neighbours collapse every midpoint onto their value and
+    /// a drag writes 204 while nothing moves.
+    ///
+    /// The statements are read out of the migration file rather than retyped, so this cannot pass
+    /// against a second copy of the SQL that the deployment never runs.
+    ///
+    /// ⚠️ The harness has already run every migration, 0122 included, so the fixture puts a scope
+    /// *back* into the pre-0122 shape and applies the file again. That is what makes the assertions
+    /// about the statement rather than about the seeding.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_single_scale_migration_preserves_the_visible_order(pool: sqlx::PgPool) {
+        use crate::groups::{GroupRepo, GroupType};
+        let groups = GroupRepo::new(pool.clone());
+        let parent = groups
+            .create("parent", GroupType::Site, None, None)
+            .await
+            .expect("parent");
+        // Named so name order and position order disagree: repaired correctly the folders keep
+        // their own order (zulu, alpha) rather than falling into alphabetical.
+        let f1 = groups
+            .create("zulu", GroupType::Generic, Some(parent), None)
+            .await
+            .expect("f1");
+        let f2 = groups
+            .create("alpha", GroupType::Generic, Some(parent), None)
+            .await
+            .expect("f2");
+        let n1 = crate::pgtest::node(&pool, "node-one", 40, Some(parent)).await;
+        let n2 = crate::pgtest::node(&pool, "node-two", 41, Some(parent)).await;
+
+        // Back to the pre-0122 shape: each table numbered from 1 in its own scope.
+        for (id, order) in [(f1, 1.0_f64), (f2, 2.0)] {
+            sqlx::query("UPDATE node_groups SET sort_order = $2 WHERE id = $1")
+                .bind(id)
+                .bind(order)
+                .execute(&pool)
+                .await
+                .expect("seed folder order");
+        }
+        for (id, order) in [(n1, 1.0_f64), (n2, 2.0)] {
+            sqlx::query("UPDATE nodes SET sort_order = $2 WHERE id = $1")
+                .bind(id)
+                .bind(order)
+                .execute(&pool)
+                .await
+                .expect("seed node order");
+        }
+
+        let sql = include_str!("../../../../migrations/0122_tree_ordering_single_scale.sql");
+        let code = sql
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut applied = 0usize;
+        for stmt in code.split(';') {
+            if stmt.trim().is_empty() {
+                continue;
+            }
+            sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .expect("the migration's statement applies");
+            applied += 1;
+        }
+        assert_eq!(
+            applied, 2,
+            "0122 is two statements; the split found {applied}"
+        );
+
+        let rows = crate::groups::ordered_tree_siblings(&pool, Some(parent))
+            .await
+            .expect("siblings");
+        assert_eq!(
+            rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![f1, f2, n1, n2],
+            "the folders keep their order and stay above the nodes — the order that was on screen"
+        );
+        let mut orders: Vec<f64> = rows.iter().map(|(_, o)| *o).collect();
+        orders.sort_by(f64::total_cmp);
+        orders.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+        assert_eq!(orders.len(), 4, "every position distinct after the repair");
     }
 
     /// Foreign-key columns deliberately left without an index, and why each one is safe.

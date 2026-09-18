@@ -14,7 +14,14 @@ import { pinnedGroupShown, pinnedNodeShown, type PinnedView } from './pins';
  *  The definition lives in `nodeState.ts` with the rest of the NodeState vocabulary. */
 export { DISPLAY_ORDER as STATE_ORDER } from './nodeState';
 
-/** A group with its child groups and member nodes resolved (built from the flat lists). */
+/** A group with its child groups and member nodes resolved (built from the flat lists).
+ *
+ *  ⚠️ **Two arrays, one ordered list.** They are kept apart here because every other reader asks a
+ *  question about one kind or the other (`descendantNodes`, `subtreeTallyMap`, `foldersWithNodes`,
+ *  `visibleNodes`, `survivesSearch`, `findTreeGroup`, `GroupDetail`), and a union array would make
+ *  all seven narrow a case they do not care about. Exactly one reader asks about **order** —
+ *  `flattenTree`'s `walkGroup` — and since ADR-162 it merges them on `sort_order`. Do not read the
+ *  split as "folders come first": that was true until ADR-162 and is what it reversed. */
 export interface TreeGroup extends NodeGroup {
   children: TreeGroup[];
   nodes: NodeSummary[];
@@ -39,7 +46,14 @@ export interface NodeTreeData {
 const COLLATOR = new Intl.Collator();
 
 /** Order siblings by their manual `sort_order` (drag-reorder), falling back to name so equal or
- *  unset orders stay stable. */
+ *  unset orders stay stable.
+ *
+ *  ⚠️ **Since ADR-162 this compares across the two kinds**, because a folder and a node under one
+ *  parent are one ordered list. The first two keys are the server's (`sort_order, name, id` in
+ *  `GroupRepo::list` and `groups::ordered_tree_siblings`); the third is not — the server breaks a
+ *  remaining tie by `id` and `walkGroup` puts the folder first. They can only disagree about two
+ *  rows that share a `sort_order` **and** a name, which migration 0122 and every append since then
+ *  are what keep from happening. */
 const byOrder = <T extends { sort_order: number; name: string }>(a: T, b: T) =>
   a.sort_order - b.sort_order || COLLATOR.compare(a.name, b.name);
 
@@ -691,14 +705,41 @@ export function flattenTree(
       (pending && !isLoaded(group.id));
     rows.push({ kind: 'group', depth, group, isOpen, hasChildren, tally });
     if (!isOpen) return;
-    // Children first, then this group's own member nodes — matching the recursive render order.
-    for (const child of group.children) walkGroup(child, depth + 1, effMatch);
+    // Sub-folders and member nodes are ONE ordered list (ADR-162), merged on `sort_order`. Until
+    // then this walked the children and then the nodes, which is what made a folder unable to sit
+    // between two nodes — and what `dropAllowed` refused a drop there for.
+    //
     // Only a term rejects a node here — the state / kind / pool filters already did their rejecting
     // server-side, so every node still in hand is one the operator asked for.
     const shown = group.nodes.filter(
       (n) => nodeKept(n) && (!byTerm || effMatch || nameMatches(n.name)),
     );
-    for (const n of shown) rows.push({ kind: 'node', depth: depth + 1, node: n });
+    // 🚨 **A two-pointer merge, not `[...children, ...shown].sort(byOrder)`.** `buildNodeTree` has
+    // already sorted both, and this function runs again on every `/nodes/by-group` response — a
+    // re-sort would pay `O(n log n)` and a fresh `COLLATOR.compare` per comparison, for every open
+    // folder, every time one folder's members arrive (ADR-133's measurement is what pays for this
+    // note). Ties go to the folder, which is the third sort key the server does not have: it
+    // orders by `id` there, and the two can only disagree when a folder and a node share both a
+    // `sort_order` and a name.
+    let ci = 0;
+    let ni = 0;
+    while (ci < group.children.length || ni < shown.length) {
+      const child = group.children[ci];
+      const node = shown[ni];
+      // The type argument is explicit because the two sides are different types: inference takes
+      // `T` from `child` and then refuses `node`. Both satisfy the constraint, which is the whole
+      // content of "they are siblings".
+      if (
+        child !== undefined &&
+        (node === undefined || byOrder<{ sort_order: number; name: string }>(child, node) <= 0)
+      ) {
+        walkGroup(child, depth + 1, effMatch);
+        ci += 1;
+      } else if (node !== undefined) {
+        rows.push({ kind: 'node', depth: depth + 1, node });
+        ni += 1;
+      }
+    }
     // Members still arriving: one placeholder standing in for the rest. What we already have goes
     // first — in filter mode the search page already carries this group's MATCHING nodes, and hiding
     // them behind the placeholder would flicker them out while the rest of the folder loads.

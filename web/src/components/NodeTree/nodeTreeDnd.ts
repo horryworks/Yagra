@@ -116,6 +116,19 @@ export function dropPosition(
  * ⚠️ **The node branch refuses the whole batch, not just the grabbed row** (Inc.4). "Not onto
  * itself" generalises to "not onto anything I am carrying" — dropping three nodes onto the second
  * of the three names a destination that is one of the things being moved.
+ *
+ * 🚨 **A folder may land beside a node** (ADR-162). This branch used to read
+ * `target.kind === 'node' ⇒ false`, on the ground that "a folder relates to folders only" — which
+ * was true while the renderer drew every folder above every node, and which made the whole area a
+ * folder's members occupy undroppable. Under one parent the two kinds are one ordered list, so a
+ * node row is a position like any other and the cycle question is the same one: the drop re-parents
+ * the folder into **that row's scope**.
+ *
+ * ⚠️ **Except at the top level, where it is refused** (ADR-162 decision 6). A node with no folder is
+ * drawn under the "Ungrouped" header, apart from the top-level folders — the one place the tree is
+ * still two lists. The server would happily compute a position there, and the folder would then
+ * appear somewhere the operator did not drop it. `scope == null` is exactly that row:
+ * `buildNodeTree` sends every node whose `group_id` is null to the ungrouped bucket.
  */
 export function dropAllowed(
   groups: NodeGroup[],
@@ -129,8 +142,14 @@ export function dropAllowed(
     // the rows being dragged.
     return !(target.kind === 'node' && drag.ids.includes(target.id));
   }
-  // Dragging a group: it relates to groups only, never to a node, and never to itself.
-  if (target.kind === 'node' || target.id === drag.id) return false;
+  // Dragging a folder: never onto itself.
+  if (target.id === drag.id) return false;
+  if (target.kind === 'node') {
+    // Beside a node: allowed inside a folder, refused under the Ungrouped header (see above).
+    // `dropPosition` never answers `inside` over a node row, so this is a before/after landing in
+    // that node's own folder — which must not be the folder being dragged, or one beneath it.
+    return target.scope != null && !isSelfOrDescendant(groups, drag.id, target.scope);
+  }
   if (position === 'inside') return !isSelfOrDescendant(groups, drag.id, target.id);
   // before/after re-parents the group to the target's parent scope.
   return target.scope == null || !isSelfOrDescendant(groups, drag.id, target.scope);
@@ -160,7 +179,12 @@ export type DropAction =
     }
   /** Re-parent a group, appending it. */
   | { kind: 'move-group'; groupId: string; parentId: string | null }
-  /** Place a group next to a sibling group under `parentId`. */
+  /** Place a group next to a sibling row under `parentId`.
+   *
+   *  ⚠️ **`before`/`after` may name a NODE** (ADR-162). Under one parent folders and nodes are one
+   *  ordered list, so the anchor is whatever row the cursor was on. The server looks the id up in
+   *  the merged sibling list (`groups::ordered_tree_siblings`), which is the only reason this
+   *  needed no new field. */
   | {
       kind: 'reorder-group';
       groupId: string;
@@ -192,6 +216,9 @@ export function dropAction(drag: DragItem, target: Target, position: DropPos): D
     };
   }
   if (position === 'inside') return { kind: 'move-group', groupId: drag.id, parentId: target.id };
+  // Beside a row, folder or node: into the folder that row sits in, at that row's edge (ADR-162).
+  // `dropPosition` never answers `inside` over a node, and the `inside` case above has already
+  // taken the folder rows, so both kinds arrive here meaning the same thing.
   return {
     kind: 'reorder-group',
     groupId: drag.id,
