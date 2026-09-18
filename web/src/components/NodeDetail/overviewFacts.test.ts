@@ -58,12 +58,11 @@ describe('overview fact rows', () => {
       'credential',
       'parent',
     ]);
-    // An AP is the only kind carrying `controller`, and it reads right after "Polled by".
+    // An AP carries no row of its own: `polledBy` is relabelled to name its controller.
     expect([...visibleFactRows('wireless_ap')]).toEqual([
       'group',
       'pool',
       'polledBy',
-      'controller',
       'address',
       'maker',
       'model',
