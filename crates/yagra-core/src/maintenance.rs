@@ -4,6 +4,13 @@
 //! Windows are scoped like thresholds (node / profile / group, ADR-013); the alert engine
 //! snapshots the *currently active* windows every refresh and treats matching nodes as
 //! [`yagra_common::NodeState::Maintenance`] — no alerts fire and existing ones resolve.
+//!
+//! 🚨 **The fleet-wide [`WindowScope::System`] window is the exception, and it is not a scope with
+//! more nodes in it** (ADR-160). It says the *deployment* is out of service, so the engine judges
+//! nothing at all while it lasts rather than observing `Maintenance` — see
+//! [`crate::alerts::config::split_windows`], which takes it out of the operator scopes before they
+//! are resolved against the inventory. Treating the two the same is what closed and reopened a
+//! down device's incident on every upgrade.
 //! Mutes silence the **notification** for one node (optionally one check) until a given
 //! time; the alert still fires for the UI/history. This is the I/O adapter — the
 //! suppression itself lives in [`crate::alerts`].
@@ -41,6 +48,14 @@ pub enum WindowScope {
     /// indefinitely, *and* the core that comes back closes the window as soon as the run reports an
     /// outcome ([`MaintenanceRepo::end_upgrade_windows`]). The bound is the backstop, not the plan —
     /// a measured upgrade takes ~65s against a 900s bound.
+    ///
+    /// 🚨 **What it does to the alert engine is pause it, not put every node in maintenance**
+    /// (ADR-160). `__liveness__` counts one observation per non-observational poll result, so a
+    /// restarted poller's first sweep satisfies its dwell inside the window: substituting
+    /// `Maintenance` resolved the open alert of every device that was still down and re-fired the
+    /// rolled-up `snmp_up` / `icmp_loss_pct` beside it — measured at 66 resolves and 66 fires across
+    /// 22 devices, on every upgrade. The engine also enforces `ends_at` itself, so this bound holds
+    /// even if the config refresh never comes back to lift the pause.
     System,
 }
 
@@ -346,7 +361,7 @@ impl MaintenanceRepo {
     /// Delete the windows among `ids` that have ended. Returns how many rows went.
     ///
     /// **`ends_at <= now()` is evaluated by the database, not by the caller.** The browser's clock
-    /// decides nothing here, and the predicate is the exact complement of [`Self::active_scopes`]'
+    /// decides nothing here, and the predicate is the exact complement of [`Self::active_windows`]'
     /// `ends_at > now()` — so a window this removes is one that was already suppressing nothing.
     ///
     /// `ids` is the caller's *visible* set (`api::maintenance::visible_windows`), which is what
@@ -367,32 +382,14 @@ impl MaintenanceRepo {
         Ok(res.rows_affected())
     }
 
-    /// The scopes of windows active **right now** (enabled, covering the current time).
-    /// The alert-config refresh resolves these against the inventory.
-    pub async fn active_scopes(&self) -> anyhow::Result<Vec<(WindowScope, String)>> {
-        let rows = sqlx::query(
-            "SELECT scope_level, scope_id FROM maintenance_windows \
-             WHERE enabled AND starts_at <= now() AND ends_at > now()",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok((
-                    WindowScope::parse(&row.try_get::<String, _>("scope_level")?),
-                    row.try_get("scope_id")?,
-                ))
-            })
-            .collect()
-    }
-
-    /// The scopes of windows active right now **with the instant each stops**.
+    /// The scopes of windows active right now (enabled, covering the current time) **with the
+    /// instant each stops**.
     ///
-    /// [`Self::active_scopes`] answers "which nodes are suppressed", which is all the alert engine
-    /// needs. Releasing one node from an inherited window needs the other half — *when* that
-    /// coverage runs out — because the exemption is sized to it. Kept as a second query rather than
-    /// widening `active_scopes`, whose result is rebuilt on every refresh cycle for the whole fleet
-    /// and does not need the extra column.
+    /// ⚠️ There used to be a second, narrower query here (`active_scopes`, without `ends_at`) for
+    /// the alert-config refresh, on the reasoning that "which nodes are suppressed" is all the
+    /// engine needs. ADR-160 made that false: a fleet-wide window pauses judgement, and the engine
+    /// keeps that pause bounded itself rather than trusting the refresh loop to lift it, so it needs
+    /// the end. One query rather than two spellings of "active".
     pub async fn active_windows(
         &self,
     ) -> anyhow::Result<Vec<(WindowScope, String, DateTime<Utc>)>> {
@@ -421,7 +418,7 @@ impl MaintenanceRepo {
     ///
     /// **`ends_at` moves to `now()`; this path does not delete the row.** The fleet really was
     /// silenced for that long, and an operator asking "why did nothing alert at 10:31" deserves to
-    /// find the answer rather than an absence. [`Self::active_scopes`] filters on `ends_at > now()`,
+    /// find the answer rather than an absence. [`Self::active_windows`] filters on `ends_at > now()`,
     /// so the suppression stops on the alerting config's next refresh either way.
     ///
     /// That is a rule about *this* path only, not a guarantee the row survives: an operator may
@@ -1514,7 +1511,7 @@ mod tests {
         let repo = MaintenanceRepo::new(pool.clone());
         let now = Utc::now();
         let hour = chrono::Duration::hours(1);
-        assert!(repo.active_scopes().await.expect("scopes").is_empty());
+        assert!(repo.active_windows().await.expect("windows").is_empty());
 
         repo.create_window("running", "node", "in-force", now - hour, now + hour)
             .await
@@ -1533,7 +1530,13 @@ mod tests {
             .await
             .expect("disable");
 
-        let scopes = repo.active_scopes().await.expect("scopes");
+        let scopes: Vec<(WindowScope, String)> = repo
+            .active_windows()
+            .await
+            .expect("windows")
+            .into_iter()
+            .map(|(level, id, _)| (level, id))
+            .collect();
         assert_eq!(
             scopes,
             vec![(WindowScope::Node, "in-force".to_owned())],
@@ -1579,14 +1582,20 @@ mod tests {
         )
         .await
         .expect("upgrade window");
-        assert_eq!(repo.active_scopes().await.expect("scopes").len(), 2);
+        assert_eq!(repo.active_windows().await.expect("windows").len(), 2);
 
         assert_eq!(
             repo.end_upgrade_windows().await.expect("close"),
             1,
             "the upgrade close touched the wrong number of windows"
         );
-        let scopes = repo.active_scopes().await.expect("scopes");
+        let scopes: Vec<(WindowScope, String)> = repo
+            .active_windows()
+            .await
+            .expect("windows")
+            .into_iter()
+            .map(|(level, id, _)| (level, id))
+            .collect();
         assert_eq!(
             scopes,
             vec![(WindowScope::Node, "n-1".to_owned())],

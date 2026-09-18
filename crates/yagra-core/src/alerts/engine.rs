@@ -601,6 +601,24 @@ impl AlertManager {
         no_reading: &[Sample],
     ) -> Vec<NotifyAction> {
         let node = result.node_id;
+        // 🚨 ADR-160: inside the fleet-wide pause an upgrade opens, this result is not judged at all
+        // — no liveness, no thresholds, no rows, no state. The deployment is what is out of service,
+        // so every answer it could produce is an answer about Yagra rather than about the network.
+        // Substituting `Maintenance` instead (what a window used to do here) closed the open alert
+        // of a node that was still down, because a restarted poller replays every check within
+        // seconds and `__liveness__` counts one observation per result.
+        //
+        // One extra uncontended read of the config lock per result, ahead of the one below: the
+        // alternative is to thread the answer through `Moment` and check it at four places that can
+        // each observe, which is exactly the shape a later reader forgets to extend.
+        if self
+            .config
+            .read()
+            .expect("config rwlock poisoned")
+            .is_paused(node, result.at_unix_ms)
+        {
+            return Vec::new();
+        }
         // Rolled-up display state before this observation. Only this node's own state can move in
         // one `observe` (suppression re-attributes other nodes' alerts but leaves their committed
         // liveness — and thus their display state — unchanged), so a single before/after diff
@@ -647,10 +665,14 @@ impl AlertManager {
         // The liveness rule (ADR-075), resolved under the same lock as the sample thresholds.
         // `None` = no rule anywhere in this node's scope chain ⇒ commit state, page nobody.
         let liveness_dwell: Option<u32>;
-        // Inside an active maintenance window every check observes `Maintenance` instead of
+        // Inside an **operator's** maintenance window every check observes `Maintenance` instead of
         // its real state: no alert can fire (Maintenance carries no severity) and existing
         // alerts resolve after the usual dwell. The real state flows again when the window
         // ends, re-committing any surviving problem.
+        //
+        // ⚠️ The fleet-wide window an upgrade opens does **not** come through here — it is the pause
+        // this function returned early on, above (ADR-160). The two used to be one set, and the
+        // substitution is exactly what made an upgrade close a still-down node's incident.
         let in_maintenance = {
             let config = self.config.read().expect("config rwlock poisoned");
             liveness_dwell = config
@@ -1121,7 +1143,20 @@ impl AlertManager {
                         down.remove(&node);
                     }
                 }
-                flipped
+                // 🚨 ADR-160 決定 5: **entering maintenance must not re-attribute anything.** A down
+                // node leaves the down-set when its window opens, and the re-sweep below would then
+                // take the roll-up marker off its `snmp_up` / `icmp_loss_pct` and emit a `Fire` for
+                // each — pages sent *during* a window whose whole purpose is silence, and then
+                // closed again a minute later when those checks reach their own dwell.
+                //
+                // Leaving maintenance re-sweeps instead, and needs its own clause because
+                // `Maintenance → Ok` moves nothing in the down-set: without it, a device that pings
+                // again while its SNMP agent stays dead would keep the marker of an outage that is
+                // over, and never page for `snmp_up` at all.
+                let entering_maintenance = matches!(committed, NodeState::Maintenance);
+                let leaving_maintenance =
+                    matches!(previous, Some(NodeState::Maintenance)) && !entering_maintenance;
+                (flipped && !entering_maintenance) || leaving_maintenance
             }
             // Not a liveness check, or a liveness check still holding its seed. Neither can move
             // the down-set: an unconfirmed check is `Ok` only because it had to start somewhere.
@@ -1136,11 +1171,26 @@ impl AlertManager {
         // external tool its dedup key reached. Resolving here rather than at config-reload time
         // keeps it to one code path: the poll loop is already visiting every node.
         if !alerting {
-            let stranded = self
-                .active
-                .lock()
-                .expect("alerts mutex poisoned")
-                .remove(&check);
+            // 🚨 ADR-160 決定 6: **"no rule" and "no config yet" are not the same thing.** Before the
+            // first snapshot loads, `AlertConfig::default` resolves nothing, so every restored
+            // `__liveness__` alert looked like one whose rule had been deleted and was closed on the
+            // first poll after a restart. Nothing re-opened it either: by then the check had already
+            // committed `Unreachable`, so the device stayed down with its incident closed in
+            // PagerDuty and no transition left to make. Priming runs before the ingest starts
+            // (`main.rs`), so this only bites when that read fails — which is the moment a database
+            // is least able to tell the difference. [`Self::resolve_orphaned_collected_alerts`] asks
+            // the same question of an empty node map; this asks the snapshot itself, because a
+            // deployment may legitimately hold a loaded config whose node metadata is empty — which
+            // is also how most of this module's own tests are built.
+            let config_loaded = self.config.read().expect("config rwlock poisoned").loaded;
+            let stranded = config_loaded
+                .then(|| {
+                    self.active
+                        .lock()
+                        .expect("alerts mutex poisoned")
+                        .remove(&check)
+                })
+                .flatten();
             let mut actions = Vec::new();
             if let Some(alert) = stranded {
                 self.broadcast(&alert, true);
@@ -1341,15 +1391,18 @@ impl AlertManager {
         actions
     }
 
-    /// Whether `node` is inside an active maintenance window (per the config snapshot).
-    /// Used by the event pipeline to suppress event alerts the same way poll alerts are.
+    /// Whether `node` is silenced by a maintenance window **at `at_unix_ms`** (per the config
+    /// snapshot). Used by the event pipeline to suppress event alerts the same way poll alerts are.
+    ///
+    /// ⚠️ Both kinds of window count here, and that is deliberate even though ADR-160 made them
+    /// mean opposite things to the *state machine*. A syslog or trap rule fires edge-triggered with
+    /// no dwell to pause, so "observe nothing" and "suppress" are the same instruction for it — and
+    /// an upgrade restarts the bus, which is exactly when devices emit link and neighbour events
+    /// nobody can act on.
     #[must_use]
-    pub fn in_maintenance(&self, node: NodeId) -> bool {
-        self.config
-            .read()
-            .expect("config rwlock poisoned")
-            .maintenance
-            .contains(&node)
+    pub fn in_maintenance(&self, node: NodeId, at_unix_ms: i64) -> bool {
+        let config = self.config.read().expect("config rwlock poisoned");
+        config.maintenance.contains(&node) || config.is_paused(node, at_unix_ms)
     }
 
     /// The node's **folder group** (`nodes.group_id`) per the config snapshot, for RBAC visibility
@@ -1434,8 +1487,9 @@ impl AlertManager {
     /// rule is what ADR-009 asks this to reach.
     ///
     /// **A maintenance window does not silence this, including the fleet-wide one an upgrade opens
-    /// (ADR-050 decision 12), and that is deliberate.** The gate lives in [`Self::observe_with_no_reading`] and
-    /// tests a *node* set, so a [`Subject::Pool`] could never fall in it by accident; the question
+    /// (ADR-050 decision 12), and that is deliberate.** Both gates live in
+    /// [`Self::observe_with_no_reading`] and ask about a *node* — the operator window's set, and
+    /// ADR-160's pause — so a [`Subject::Pool`] could never fall in either by accident; the question
     /// is whether to add a second gate here, and the answer is no on three counts. The debounce is
     /// already the mechanism for this exact case — [`crate::pool_coverage::DEFAULT_RAISE_AFTER`] is
     /// 300s precisely so an ordinary restart cannot page anyone, against a measured 65s upgrade. A
@@ -1506,16 +1560,23 @@ impl AlertManager {
         value: f64,
         at_unix_ms: i64,
     ) -> Option<Vec<NotifyAction>> {
-        let (eff, in_maintenance) = {
+        let (eff, in_maintenance, paused) = {
             let config = self.config.read().expect("config rwlock poisoned");
             (
                 config.resolve(node, Some(ifindex), None, metric),
                 config.maintenance.contains(&node),
+                config.is_paused(node, at_unix_ms),
             )
         };
         // `None`, not an empty vector: the caller distinguishes "nobody is watching this port"
         // from "somebody is watching and nothing happened".
         let eff = eff?;
+        // ADR-160: paused, so nothing is observed — but a rule *is* in force, and answering `None`
+        // would tell the caller to stop tracking this port (ADR-076 increment 6d) and drop the
+        // congestion alert's only route to a recovery.
+        if paused {
+            return Some(Vec::new());
+        }
         let raw = if in_maintenance {
             NodeState::Maintenance
         } else {
@@ -1584,16 +1645,22 @@ impl AlertManager {
             return self.observe_derived_rows(node, metric, rows, at_unix_ms);
         }
         let values: Vec<f64> = rows.iter().map(|(_, v)| *v).collect();
-        let (eff, in_maintenance) = {
+        let (eff, in_maintenance, paused) = {
             let config = self.config.read().expect("config rwlock poisoned");
             (
                 config.resolve(node, None, None, metric),
                 config.maintenance.contains(&node),
+                config.is_paused(node, at_unix_ms),
             )
         };
         // `None`, not an empty vector: the caller distinguishes "nobody is watching this metric"
         // from "somebody is watching and nothing happened".
         let eff = eff?;
+        // ADR-160, the same distinction as on the port form: a rule is in force, and this tick
+        // observed nothing because the deployment is paused.
+        if paused {
+            return Some(Vec::new());
+        }
         // The worst row wins, ranked by the rule's own bounds rather than by magnitude — "highest
         // is worst" is false for any rule whose fault direction is `below` (ADR-081).
         let value = values.iter().copied().reduce(|incumbent, candidate| {
@@ -1660,7 +1727,7 @@ impl AlertManager {
                 Some((Sample::gauge(metric, value), row, name))
             })
             .collect();
-        let (in_maintenance, effs) = {
+        let (in_maintenance, paused, effs) = {
             let config = self.config.read().expect("config rwlock poisoned");
             let by_name = config.has_row_rules(metric);
             let mut memo: Vec<(Option<&str>, Option<EffectiveThreshold>)> = Vec::new();
@@ -1676,11 +1743,19 @@ impl AlertManager {
                     eff
                 })
                 .collect();
-            (config.maintenance.contains(&node), effs)
+            (
+                config.maintenance.contains(&node),
+                config.is_paused(node, at_unix_ms),
+                effs,
+            )
         };
         // `None` still means "nobody is watching this metric on this node", as for the node-wide form.
         if effs.iter().all(Option::is_none) {
             return None;
+        }
+        // ADR-160: rules are in force, and the deployment is paused, so no row is observed.
+        if paused {
+            return Some(Vec::new());
         }
         let observed: Vec<RowObservation<'_>> = samples
             .iter()
@@ -3940,6 +4015,487 @@ mod tests {
         let mut high = result(node, CheckOutcome::Reachable, 0);
         high.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
         assert!(mgr.observe(&high).is_empty());
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    // ── ADR-160: the fleet-wide window an upgrade opens pauses judgement ─────────────────────────
+    //
+    // Measured on the PoC and reproduced in the lab (2026-09-18): opening a `WindowScope::System`
+    // window and restarting the poller **closed every open alert of every device that was still
+    // down, and re-opened all of them three minutes later** — 66 resolves and 66 fires across 22
+    // devices. The cause is that a window used to substitute `Maintenance` for every observation,
+    // and `__liveness__` counts one observation per non-observational result, so a restarted
+    // poller's first sweep satisfies its dwell inside the window while the threshold checks (one
+    // sample each) do not.
+
+    /// The state a core comes back to after an upgrade: the node was down, its `snmp_up` was rolled
+    /// into that outage, and both were restored from `alert_history` (ADR-097).
+    fn restored_outage(node: NodeId) -> AlertManager {
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(vec![snmp_up_rule(2)], meta_for(node)));
+        mgr.restore(vec![
+            open_alert(node, LIVENESS, NodeState::Unreachable),
+            open_alert(node, yagra_common::METRIC_SNMP_UP, NodeState::Critical),
+        ]);
+        assert!(mgr.down_set().contains(&node), "the outage was restored");
+        assert_eq!(mgr.active_alerts().len(), 2);
+        mgr
+    }
+
+    /// The config that core holds while the upgrade's window is open.
+    fn paused_cfg(node: NodeId, until: i64) -> AlertConfig {
+        cfg(vec![snmp_up_rule(2)], meta_for(node)).with_pause(Some(until), BTreeSet::new())
+    }
+
+    /// The `snmp_up` alert's roll-up marker — `Some(node)` while the outage owns it (ADR-087).
+    fn snmp_root_cause(mgr: &AlertManager) -> Option<NodeId> {
+        mgr.active_alerts()
+            .into_iter()
+            .find(|a| a.metric == yagra_common::METRIC_SNMP_UP)
+            .expect("the snmp_up alert is still open")
+            .root_cause
+    }
+
+    #[test]
+    fn a_restored_outage_is_left_alone_by_an_upgrade_pause() {
+        let node = NodeId::new();
+        let mgr = restored_outage(node);
+        mgr.set_config(paused_cfg(node, 10_000));
+
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            let actions = mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 1_000 + i));
+            assert!(
+                actions.is_empty(),
+                "the pause judged a result and produced {actions:?}"
+            );
+        }
+        assert_eq!(
+            mgr.active_alerts().len(),
+            2,
+            "a paused deployment closed an alert of a node that is still down"
+        );
+        assert!(
+            mgr.down_set().contains(&node),
+            "the outage left the down-set, which is what re-fires its rolled-up alerts"
+        );
+        assert_eq!(
+            snmp_root_cause(&mgr),
+            Some(node),
+            "the roll-up marker came off, so `snmp_up` would page on its own"
+        );
+    }
+
+    #[test]
+    fn after_the_pause_a_still_down_node_stays_silent() {
+        let node = NodeId::new();
+        let mgr = restored_outage(node);
+        mgr.set_config(paused_cfg(node, 10_000));
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 1_000 + i));
+        }
+
+        // The window closes. The device never recovered, so there is nothing to say about it: the
+        // committed state the pause preserved is the state the poll agrees with.
+        mgr.set_config(cfg(vec![snmp_up_rule(2)], meta_for(node)));
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            let actions = mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 20_000 + i));
+            assert!(
+                actions.is_empty(),
+                "an upgrade re-fired an outage that never went away: {actions:?}"
+            );
+        }
+        assert_eq!(mgr.active_alerts().len(), 2);
+    }
+
+    #[test]
+    fn a_node_that_recovered_during_the_pause_resolves_after_it() {
+        let node = NodeId::new();
+        let mgr = restored_outage(node);
+        mgr.set_config(paused_cfg(node, 10_000));
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            assert!(mgr
+                .observe(&result(node, CheckOutcome::Reachable, 1_000 + i))
+                .is_empty());
+        }
+
+        // The window closes and the device is answering: the recovery costs a full dwell, exactly as
+        // it would have if the process had never stopped.
+        mgr.set_config(cfg(vec![snmp_up_rule(2)], meta_for(node)));
+        for i in 1..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            let actions = mgr.observe(&result(node, CheckOutcome::Reachable, 20_000 + i));
+            let resolved = actions
+                .iter()
+                .any(|a| matches!(a, NotifyAction::Resolve(alert) if alert.metric == LIVENESS));
+            assert_eq!(
+                resolved,
+                i == i64::from(DEFAULT_LIVENESS_DWELL),
+                "the recovery landed on observation {i}, not on the dwell"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_outage_during_the_pause_fires_only_after_it() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Ok));
+
+        mgr.set_config(cfg(Vec::new(), meta_for(node)).with_pause(Some(10_000), BTreeSet::new()));
+        for i in 0..10 {
+            assert!(mgr
+                .observe(&result(node, CheckOutcome::Unreachable, 1_000 + i))
+                .is_empty());
+        }
+        assert_eq!(
+            mgr.node_liveness(node),
+            Some(NodeState::Ok),
+            "a paused deployment moved a node's state — it is meant to observe nothing at all"
+        );
+
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        for i in 1..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, 20_000 + i));
+            let fired = actions.iter().any(|a| matches!(a, NotifyAction::Fire(_)));
+            assert_eq!(
+                fired,
+                i == i64::from(DEFAULT_LIVENESS_DWELL),
+                "the outage fired on observation {i}, not on the dwell"
+            );
+        }
+    }
+
+    #[test]
+    fn an_open_threshold_alert_is_not_resolved_by_the_pause() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(vec![snmp_up_rule(2)], meta_for(node)));
+        // The agent is dead but the device answers ICMP, so this alert stands on its own.
+        mgr.restore(vec![open_alert(
+            node,
+            yagra_common::METRIC_SNMP_UP,
+            NodeState::Critical,
+        )]);
+        mgr.set_config(paused_cfg(node, 10_000));
+
+        for i in 0..6 {
+            assert!(mgr
+                .observe(&snmp_down(node, CheckOutcome::Reachable, 1_000 + i))
+                .is_empty());
+        }
+        assert_eq!(
+            mgr.active_alerts().len(),
+            1,
+            "the pause resolved a threshold alert whose breach never went away"
+        );
+    }
+
+    #[test]
+    fn paused_port_and_derived_observations_change_nothing() {
+        use yagra_common::{ThresholdBounds, ThresholdRule};
+        let node = NodeId::new();
+        let idx = IfIndex(3);
+        let derived_rule = StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Node,
+            vec![node.to_string()],
+            ThresholdRule::new(
+                "huawei_mem_used_pct",
+                ThresholdBounds::above(Some(1.0), Some(99.0)),
+                1,
+            ),
+        );
+        let rules = vec![port_rule(node, idx, 1.0), derived_rule];
+
+        let mgr = manager();
+        mgr.set_config(cfg(rules.clone(), meta_for(node)));
+        mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        assert_eq!(
+            mgr.observe_interface_metric(node, idx, "if_in_util_pct", 99.0, 1)
+                .expect("a rule is in force")
+                .len(),
+            1,
+            "the port alert did not fire, so the rest of this test proves nothing"
+        );
+        assert_eq!(
+            mgr.observe_derived_metric(node, "huawei_mem_used_pct", &[(0, 80.0)], 1)
+                .expect("a rule is in force")
+                .len(),
+            1
+        );
+        assert_eq!(mgr.active_alerts().len(), 2);
+
+        // Paused: both evaluators answer "a rule is in force and nothing was judged". `None` would
+        // tell the caller nobody is watching, which drops the port from the tracked set.
+        mgr.set_config(cfg(rules, meta_for(node)).with_pause(Some(10_000), BTreeSet::new()));
+        let port = mgr.observe_interface_metric(node, idx, "if_in_util_pct", 0.0, 2);
+        assert!(
+            port.as_ref().is_some_and(Vec::is_empty),
+            "the port evaluator answered {port:?} rather than `a rule is in force, nothing judged`"
+        );
+        let derived = mgr.observe_derived_metric(node, "huawei_mem_used_pct", &[(0, 0.0)], 2);
+        assert!(
+            derived.as_ref().is_some_and(Vec::is_empty),
+            "the derived evaluator answered {derived:?}"
+        );
+        assert_eq!(
+            mgr.active_alerts().len(),
+            2,
+            "the pause resolved an alert through one of the tick evaluators"
+        );
+    }
+
+    /// 🚨 The bound the engine keeps itself (ADR-050 決定 12). The refresh loop is what normally
+    /// lifts a pause, and a pause — unlike a window — leaves nothing on screen to notice, so a
+    /// wedged refresh must not be able to silence the fleet past the window's own end.
+    #[test]
+    fn a_pause_past_its_end_observes_normally() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)).with_pause(Some(1_000), BTreeSet::new()));
+
+        let mut fired = false;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&result(node, CheckOutcome::Unreachable, 2_000 + i)) {
+                fired |= matches!(action, NotifyAction::Fire(_));
+            }
+        }
+        assert!(fired, "a pause whose window has ended is still suppressing");
+    }
+
+    #[test]
+    fn an_operator_window_wins_over_the_pause() {
+        let node = NodeId::new();
+        let mgr = restored_outage(node);
+        let mut window = BTreeSet::new();
+        window.insert(node);
+        mgr.set_config(
+            cfg(vec![snmp_up_rule(2)], meta_for(node))
+                .with_maintenance(window)
+                .with_pause(Some(10_000), BTreeSet::new()),
+        );
+
+        let mut resolved = false;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&result(node, CheckOutcome::Unreachable, 1_000 + i)) {
+                resolved |= matches!(action, NotifyAction::Resolve(_));
+            }
+        }
+        assert!(
+            resolved,
+            "an operator's window stopped resolving alerts because an upgrade was running"
+        );
+        // The rolled-up `snmp_up` alert is still open, so the *display* state is its severity; the
+        // liveness check itself is what the window moved.
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Maintenance));
+    }
+
+    #[test]
+    fn an_exempt_node_is_not_paused() {
+        let node = NodeId::new();
+        let mgr = restored_outage(node);
+        let mut exempt = BTreeSet::new();
+        exempt.insert(node);
+        mgr.set_config(cfg(vec![snmp_up_rule(2)], meta_for(node)).with_pause(Some(10_000), exempt));
+
+        // Released from the fleet-wide window, so it is monitored right through the upgrade: its
+        // recovery is seen and its alert closes.
+        let mut resolved = false;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&result(node, CheckOutcome::Reachable, 1_000 + i)) {
+                resolved |=
+                    matches!(action, NotifyAction::Resolve(alert) if alert.metric == LIVENESS);
+            }
+        }
+        assert!(
+            resolved,
+            "a node released from the window was paused anyway, so its recovery went unseen"
+        );
+    }
+
+    #[test]
+    fn a_paused_node_counts_as_in_maintenance_for_event_rules() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)).with_pause(Some(10_000), BTreeSet::new()));
+        assert!(
+            mgr.in_maintenance(node, 5_000),
+            "a syslog or trap rule would fire during the upgrade"
+        );
+        assert!(
+            !mgr.in_maintenance(node, 20_000),
+            "the pause outlived its own window"
+        );
+    }
+
+    // ── ADR-160 決定 5: entering a window must not page the alerts it rolls up ───────────────────
+
+    #[test]
+    fn a_down_node_entering_maintenance_does_not_page_its_rolled_up_alerts() {
+        let node = NodeId::new();
+        let mgr = restored_outage(node);
+        let mut window = BTreeSet::new();
+        window.insert(node);
+        // ⚠️ The dwell matters to what this test can see. `snmp_up` reaching `Maintenance` on its
+        // own would take it out of the active set before liveness commits, and the re-page this is
+        // about would have nothing left to fire — which is a race, not a fix. A high dwell pins the
+        // case the upgrade actually produces, where liveness counts far more observations than a
+        // threshold check does and commits first.
+        mgr.set_config(cfg(vec![snmp_up_rule(50)], meta_for(node)).with_maintenance(window));
+
+        let mut fires = Vec::new();
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 1_000 + i)) {
+                if let NotifyAction::Fire(alert) = action {
+                    fires.push(alert.metric);
+                }
+            }
+        }
+        assert!(
+            fires.is_empty(),
+            "opening a window paged {fires:?} — a window is supposed to be silence"
+        );
+    }
+
+    #[test]
+    fn a_parent_entering_maintenance_does_not_repage_its_down_children() {
+        let parent = NodeId::new();
+        let child = NodeId::new();
+        let mut topo = Topology::new();
+        topo.add_dependency(child, parent);
+        let mut meta = meta_for(parent);
+        meta.insert(child, NodeMeta::default());
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(Vec::new(), meta.clone()).with_topology(topo.clone()));
+
+        // Both down, the child rolled up under the parent's outage.
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(parent, CheckOutcome::Unreachable, i));
+            mgr.observe(&result(child, CheckOutcome::Unreachable, i));
+        }
+        let rolled = mgr
+            .active_alerts()
+            .into_iter()
+            .find(|a| a.subject.is_node(child))
+            .expect("the child alerted");
+        assert_eq!(rolled.root_cause, Some(parent), "the child rolled up");
+
+        // The parent goes into a window. The child is still down and nobody asked to hear about it.
+        let mut window = BTreeSet::new();
+        window.insert(parent);
+        mgr.set_config(
+            cfg(Vec::new(), meta)
+                .with_topology(topo)
+                .with_maintenance(window),
+        );
+        let mut fires = Vec::new();
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&result(parent, CheckOutcome::Unreachable, 100 + i)) {
+                if let NotifyAction::Fire(alert) = action {
+                    fires.push(alert.subject);
+                }
+            }
+        }
+        assert!(
+            fires.is_empty(),
+            "putting the parent in a window paged its children: {fires:?}"
+        );
+    }
+
+    /// The other half of 決定 5, and the reason the fix is two clauses rather than one:
+    /// `Maintenance → Ok` moves nothing in the down-set, so leaving a window has to re-sweep on its
+    /// own account. Without it a device that pings again while its SNMP agent stays dead keeps the
+    /// marker of an outage that is over and never pages at all.
+    #[test]
+    fn leaving_maintenance_reachable_with_snmp_dead_pages_snmp_up_after_the_window() {
+        let node = NodeId::new();
+        let mgr = restored_outage(node);
+        let mut window = BTreeSet::new();
+        window.insert(node);
+        // A dwell high enough that `snmp_up` cannot commit `Maintenance` inside this short window —
+        // which is the case the upgrade produces, since liveness counts far more observations.
+        mgr.set_config(cfg(vec![snmp_up_rule(50)], meta_for(node)).with_maintenance(window));
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 1_000 + i)) {
+                assert!(
+                    !matches!(action, NotifyAction::Fire(_)),
+                    "the window paged {action:?}"
+                );
+            }
+        }
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Maintenance));
+
+        // The window ends with the device answering ICMP and its agent still dead.
+        mgr.set_config(cfg(vec![snmp_up_rule(50)], meta_for(node)));
+        let mut paged = false;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&snmp_down(node, CheckOutcome::Reachable, 20_000 + i)) {
+                if let NotifyAction::Fire(alert) = action {
+                    paged |= alert.metric == yagra_common::METRIC_SNMP_UP;
+                }
+            }
+        }
+        assert!(
+            paged,
+            "the agent is dead, the node is up, and nothing pages: the roll-up marker was never taken off"
+        );
+    }
+
+    // ── ADR-160 決定 6: "no rule" is not "no config yet" ─────────────────────────────────────────
+
+    #[test]
+    fn a_restored_outage_is_not_closed_before_the_config_loads() {
+        let node = NodeId::new();
+        // No `set_config` at all: what the engine holds when priming the config failed.
+        let mgr = AlertManager::new();
+        mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]);
+
+        for i in 0..5 {
+            let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, 1_000 + i));
+            assert!(
+                actions.is_empty(),
+                "an engine with no config closed a restored outage: {actions:?}"
+            );
+        }
+        assert_eq!(
+            mgr.active_alerts().len(),
+            1,
+            "the outage was closed and nothing can re-open it — the check is already committed down"
+        );
+
+        // With the config loaded the alert is still open, and still nothing to say: the device never
+        // changed state.
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        for i in 0..5 {
+            assert!(mgr
+                .observe(&result(node, CheckOutcome::Unreachable, 20_000 + i))
+                .is_empty());
+        }
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// The accepting half: deleting the rule **is** still how an alert gets closed (ADR-075), and
+    /// the guard above must not have turned that off.
+    #[test]
+    fn deleting_the_liveness_rule_still_closes_its_alert() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i));
+        }
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        // The operator deletes the liveness rule; the node's metadata is still loaded.
+        mgr.set_config(AlertConfig::new(Vec::new(), meta_for(node)));
+        let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, 100));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, NotifyAction::Resolve(_))),
+            "a deleted rule must still close the alert it stranded"
+        );
         assert!(mgr.active_alerts().is_empty());
     }
 
