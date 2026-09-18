@@ -746,18 +746,23 @@ function useFacts(
     group: { label: t('field.group'), value: path.length ? path.join(' / ') : t('ungrouped') },
     // Placement facts sit together: which folder, which pool, which poller.
     pool: { label: t('field.pool'), value: poolFactLabel(assignment, groupName, t), mono: true },
-    polledBy: {
-      label: t('field.polledBy'),
-      value: polledByLabel(assignment?.polled_by, t),
-      mono: assignment?.polled_by.state === 'assigned',
-      warn: polledByIsWarning(assignment?.polled_by),
-    },
-    // An imported AP only (ADR-064): the controller reporting it in service, and every number on
-    // this page comes from that controller — so it is the next place to look when the AP looks wrong.
-    controller: {
-      label: t('field.wirelessController'),
-      value: controllerNode ? <ControllerFact id={controllerNode} /> : '—',
-    },
+    // An imported AP is collected by its controller, and *which* controller is the half worth
+    // printing: every number on this page comes from that one, and since the AP is filed in the
+    // controller's own folder nothing else here identifies it (ADR-064 増分 B2 の手直し). So the row
+    // is relabelled and names it. An em dash means no controller has reported this AP in service
+    // yet — the only state in which "Its wireless controller" was ever the whole answer.
+    polledBy:
+      node.kind === 'wireless_ap'
+        ? {
+            label: t('field.wirelessController'),
+            value: controllerNode ? <ControllerFact id={controllerNode} /> : '—',
+          }
+        : {
+            label: t('field.polledBy'),
+            value: polledByLabel(assignment?.polled_by, t),
+            mono: assignment?.polled_by.state === 'assigned',
+            warn: polledByIsWarning(assignment?.polled_by),
+          },
     address: { label: t('field.ipAddress'), value: node.address, mono: true },
     maker: { label: t('field.maker'), value: node.vendor || '—' },
     model: { label: t('field.model'), value: node.model || '—', mono: true },
