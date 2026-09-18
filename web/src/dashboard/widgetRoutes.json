@@ -1,5 +1,6 @@
 {
   "active-alerts": [
+    "GET /api/v1/alerts",
     "GET /api/v1/stream/alerts"
   ],
   "aggregate-throughput": [
@@ -44,6 +45,7 @@
     "GET /api/v1/events/stats"
   ],
   "flapping-watchlist": [
+    "GET /api/v1/alerts",
     "GET /api/v1/stream/alerts",
     "POST /api/v1/node-names"
   ],
@@ -116,6 +118,7 @@
     "GET /api/v1/node-groups"
   ],
   "severity-mix": [
+    "GET /api/v1/alerts",
     "GET /api/v1/stream/alerts"
   ],
   "site-matrix": [

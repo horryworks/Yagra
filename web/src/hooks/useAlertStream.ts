@@ -7,11 +7,14 @@ import { api } from '../services/api';
 import { subscribeAlerts } from '../services/sse';
 import { useAlertStore } from '../store';
 
-export function useAlertStream(): void {
+/** `enabled` is for the public board, which must not subscribe to a stream its widgets have not
+ *  opened (`boardReadsAlerts`). Every other caller is signed in and leaves it on. */
+export function useAlertStream(enabled = true): void {
   const upsertAlert = useAlertStore((s) => s.upsertAlert);
   const resolveAlert = useAlertStore((s) => s.resolveAlert);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     api
       .listAlerts()
       .then((list) => list.forEach(upsertAlert))
@@ -19,5 +22,5 @@ export function useAlertStream(): void {
         /* transient / gated — live SSE still delivers events */
       });
     return subscribeAlerts(upsertAlert, (a) => resolveAlert(a));
-  }, [upsertAlert, resolveAlert]);
+  }, [enabled, upsertAlert, resolveAlert]);
 }

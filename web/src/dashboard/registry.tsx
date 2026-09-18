@@ -165,7 +165,11 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
-    reads: ['GET /api/v1/stream/alerts'],
+    // 🚨 Both routes, and the second is not optional. The page seeds the alert store from
+    // `GET /alerts` and the stream only carries what changes AFTER it connects — it sends no
+    // snapshot. With the stream alone declared, an anonymous visitor's seed was refused and
+    // swallowed, so a public board read "no active alerts" in the middle of an outage.
+    reads: ['GET /api/v1/alerts', 'GET /api/v1/stream/alerts'],
     Component: ActiveAlertsWidget,
     Actions: ActiveAlertsActions,
   },
@@ -189,7 +193,8 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
-    reads: ['GET /api/v1/stream/alerts'],
+    // See `active-alerts`: the seed is half of what this reads.
+    reads: ['GET /api/v1/alerts', 'GET /api/v1/stream/alerts'],
     Component: SeverityMixWidget,
   },
   {
@@ -201,7 +206,9 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
+    // See `active-alerts`: the seed is half of what this reads.
     reads: [
+      'GET /api/v1/alerts',
       'GET /api/v1/stream/alerts',
       'POST /api/v1/node-names',
     ],

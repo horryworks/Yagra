@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { REGISTRY, defaultLayout, emptyPublicLayout } from './registry';
-import { NOT_PUBLIC, catalogFor, whyNotPublic } from './publicCatalog';
+import { ALERT_STREAM_ROUTE, boardReadsAlerts, catalogFor, NOT_PUBLIC, whyNotPublic } from './publicCatalog';
 
 describe('the public board default', () => {
   it('starts empty, unlike the other two boards', () => {
@@ -62,5 +62,34 @@ describe('the public board catalog', () => {
     // catalog would look like a very careful one.
     expect(catalogFor(true).length).toBeGreaterThanOrEqual(REGISTRY.length - 5);
     expect(catalogFor(true).length).toBeGreaterThan(40);
+  });
+});
+
+describe('boardReadsAlerts', () => {
+  it('is true for a board holding any widget that names the alert stream', () => {
+    expect(boardReadsAlerts(['status-summary', 'active-alerts'])).toBe(true);
+    expect(boardReadsAlerts(['severity-mix'])).toBe(true);
+    expect(boardReadsAlerts(['flapping-watchlist'])).toBe(true);
+  });
+
+  it('is false for a board with none, an empty board, and a type that is not a widget', () => {
+    expect(boardReadsAlerts(['status-summary', 'health-ring'])).toBe(false);
+    expect(boardReadsAlerts([])).toBe(false);
+    expect(boardReadsAlerts(['not-a-widget'])).toBe(false);
+  });
+
+  it('every widget that reads the stream also declares the seed it cannot work without', () => {
+    // 🚨 The stream carries only what changes AFTER it connects — it sends no snapshot — so the
+    // open alerts come from `GET /alerts`. Core opens a route to anonymous visitors only if a
+    // widget on the public board declares it. With the stream alone declared, the seed was refused
+    // and swallowed, and a public board read "no active alerts" in the middle of an outage.
+    const streaming = REGISTRY.filter((d) => d.reads.includes(ALERT_STREAM_ROUTE));
+    // A floor on what was inspected: a route string that stopped matching would otherwise pass.
+    expect(streaming.length).toBeGreaterThanOrEqual(3);
+    for (const d of streaming) {
+      expect(d.reads, `${d.type} streams alerts without the seed route`).toContain(
+        'GET /api/v1/alerts',
+      );
+    }
   });
 });

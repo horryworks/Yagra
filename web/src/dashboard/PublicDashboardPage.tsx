@@ -41,6 +41,7 @@ import { useCan } from '../store';
 import { CatalogModal } from './CatalogModal';
 import { LayoutStoreProvider } from './LayoutStoreContext';
 import { usePublicLayoutStore } from './layoutStore';
+import { boardReadsAlerts } from './publicCatalog';
 import { WidgetFrame } from './WidgetFrame';
 import './MyDashboardPage.css';
 import './SharedDashboardPage.css';
@@ -53,12 +54,13 @@ export interface PublicDashboardPageProps {
 
 export function PublicDashboardPage({ viewerOnly = false }: PublicDashboardPageProps) {
   const { t } = useTranslation('dashboard');
-  useAlertStream();
 
   // `PUT /public-dashboard` is ManageSystem: composing this board widens what strangers can read.
   const canSystem = useCan('manage_system');
 
   const widgets = usePublicLayoutStore((s) => s.widgets);
+  // Only when a widget here reads it — see `boardReadsAlerts`.
+  useAlertStream(boardReadsAlerts(widgets.map((w) => w.type)));
   const status = usePublicLayoutStore((s) => s.status);
   const saveError = usePublicLayoutStore((s) => s.saveError);
   const dismissSaveError = usePublicLayoutStore((s) => s.dismissSaveError);

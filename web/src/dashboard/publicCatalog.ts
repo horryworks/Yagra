@@ -34,6 +34,24 @@ export function catalogFor(publicOnly: boolean): WidgetDefinition[] {
   return publicOnly ? REGISTRY.filter((d) => !(d.type in NOT_PUBLIC)) : REGISTRY;
 }
 
+/** The route the live alert store is fed from. A widget that names it reads that store. */
+export const ALERT_STREAM_ROUTE = 'GET /api/v1/stream/alerts';
+
+/**
+ * Whether any widget on this board reads the live alert store.
+ *
+ * The public board asks before it subscribes. An anonymous visitor may only reach the routes the
+ * board's widgets declare, so on a board with no alert widget the stream is refused — and a
+ * refused stream is retried every three seconds for as long as the page is open, by every
+ * visitor. Derived from `reads`, never from a list of widget types: the declaration is what core
+ * opens the route from, so asking the same field cannot disagree with it.
+ */
+export function boardReadsAlerts(types: readonly string[]): boolean {
+  return types.some((type) =>
+    REGISTRY.find((d) => d.type === type)?.reads.includes(ALERT_STREAM_ROUTE),
+  );
+}
+
 /** Why this widget cannot be placed on the public board, or `undefined` if it can. */
 export function whyNotPublic(type: string): string | undefined {
   return NOT_PUBLIC[type];
