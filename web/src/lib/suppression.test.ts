@@ -15,7 +15,9 @@ import {
   groupContainers,
   groupSubtree,
   muteTargetFromAlert,
+  MAX_TIMER_DELAY_MS,
   nextSuppressionExpiry,
+  suppressionRefreshDelayMs,
   PANEL_LABEL_KEYS,
   suppressionPanelRows,
   type SuppressionPanelRow,
@@ -695,5 +697,29 @@ describe('nextSuppressionExpiry', () => {
 
   it('is null when there is nothing to wait for', () => {
     expect(nextSuppressionExpiry([], [], [], T0)).toBeNull();
+  });
+});
+
+describe('suppressionRefreshDelayMs', () => {
+  const T0 = Date.parse('2026-08-12T06:00:00Z');
+  const DAY = 86_400_000;
+
+  it('waits until a second past a near expiry — the cap changes nothing it does not have to', () => {
+    expect(suppressionRefreshDelayMs(T0 + 90 * 60_000, T0)).toBe(90 * 60_000 + 1000);
+    // Just under the ceiling is still exact, so the cap is a ceiling and not a replacement.
+    expect(suppressionRefreshDelayMs(T0 + 24 * DAY, T0)).toBe(24 * DAY + 1000);
+  });
+
+  it('never exceeds what setTimeout can hold, or the timer fires at once and re-arms forever', () => {
+    // A quarter-long mute: 90 days is 7.776e9 ms, which as a signed 32-bit integer is not 90 days.
+    const delay = suppressionRefreshDelayMs(T0 + 90 * DAY, T0);
+    expect(delay).toBe(MAX_TIMER_DELAY_MS);
+    expect(delay).toBeLessThanOrEqual(2 ** 31 - 1);
+    // The value a browser would actually use must be the value we asked for.
+    expect(delay | 0).toBe(delay);
+  });
+
+  it('is never negative when the expiry has just passed', () => {
+    expect(suppressionRefreshDelayMs(T0 - 5, T0)).toBe(1000);
   });
 });

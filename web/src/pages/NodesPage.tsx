@@ -68,6 +68,7 @@ import { useNodeStates } from '../dashboard/useNodeStates';
 import {
   buildSuppressionIndex,
   nextSuppressionExpiry,
+  suppressionRefreshDelayMs,
   suppressionPanelRows,
   releasableRows,
   type ReleaseAction,
@@ -575,11 +576,12 @@ export function NodesPage() {
   // while nothing is expiring — and it schedules only instants still ahead, so a server whose
   // clock disagrees cannot turn this into a refetch loop. `buildSuppressionIndex` already ignores
   // anything past, so a late or failed refetch leaves the markers correct, not stale.
+  // ⚠️ The delay comes from `suppressionRefreshDelayMs`, never from a subtraction here: an expiry
+  // more than 24.8 days out overflows `setTimeout`, and that WAS a refetch loop.
   useEffect(() => {
     const at = nextSuppressionExpiry(windows, mutes, exemptions);
     if (at === null) return undefined;
-    // A second past the expiry, so the row is gone from the server's answer rather than racing it.
-    const h = setTimeout(reloadSuppression, at - Date.now() + 1000);
+    const h = setTimeout(reloadSuppression, suppressionRefreshDelayMs(at));
     return () => clearTimeout(h);
   }, [windows, mutes, exemptions, reloadSuppression]);
 
