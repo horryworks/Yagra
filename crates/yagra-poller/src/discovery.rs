@@ -30,9 +30,10 @@
 //! 2. at each chunk boundary — the coarse-grained stop;
 //! 3. before each credential attempt on a target — the fine-grained one.
 //!
-//! **The third is not belt-and-braces.** A target costs one ICMP timeout plus a rate-limited
-//! attempt per credential (2s apart, `security.md`), so with five credentials a single target can
-//! take ~22s and a 32-target chunk two waves of that. Stopping only at chunk boundaries would leave
+//! **The third is not belt-and-braces.** A target costs one ICMP timeout plus one attempt per
+//! credential — **every** credential the operator selected (ADR-161) — so with five credentials a
+//! single target can take ~22s and a 32-target chunk two waves of that. Stopping only at chunk
+//! boundaries would leave
 //! the operator watching an unresponsive button for the better part of a minute. What is *not*
 //! interrupted is a probe already in flight: dropping a raw socket or an SNMP session mid-exchange
 //! has consequences that are not worth discovering here, so the worst-case delay is one probe
@@ -54,10 +55,19 @@
 //!
 //! By default a target that does not answer ICMP is **not** tried with SNMP. That is where a sweep's
 //! time goes: on a /24 the overwhelming majority of addresses are unassigned, and each one used to
-//! cost one ICMP timeout *plus* up to [`LimiterConfig::max_consecutive_failures`] SNMP attempts
-//! spaced [`LimiterConfig::min_interval_ms`] apart before the limiter backed the device off. Measured
+//! cost one ICMP timeout *plus* an SNMP attempt per selected credential, spaced
+//! [`LimiterConfig::min_interval_ms`] apart. Measured
 //! on the test network: 254 addresses, 8 devices, **5m21s**, essentially all of it spent asking
 //! empty addresses for their `sysDescr`.
+//!
+//! ⚠️ **That measurement predates ADR-161 and was taken under a cap of three credentials.** The
+//! gate is now the *only* thing bounding a sweep's cost — every selected credential is tried on
+//! every target that reaches the loop — so with the box below ticked and five credentials
+//! selected, expect **roughly 1.6× that figure: arithmetic off the old measurement, not a new
+//! one** (three attempts per silent address became five). The gate off is the common case and is unaffected:
+//! only real devices pay, and they pay once. What was removed was not a cost control that worked;
+//! it was a cooldown that deleted the operator's 4th and 5th credentials while protecting nothing
+//! (`LimiterConfig::snmp_sweep`'s doc has the argument).
 //!
 //! ⚠️ **What this gives up is real and is why it is a choice, not a rule.** A device that filters
 //! ICMP and answers SNMP — a firewall, a hardened host — is now found only when the operator ticks
@@ -254,6 +264,29 @@ struct SweepCtx {
     icmp_errors: AtomicUsize,
 }
 
+/// Everything one sweep holds constant, built from the job that asked for it.
+///
+/// A function rather than a literal inside the sweep loop so a test can read the wiring back:
+/// **which rate-limit profile a sweep probes with is a decision, and it was wrong for a year**
+/// with nothing able to see it (ADR-161).
+fn sweep_ctx(job: &DiscoveryJob, cancels: Arc<CancelSet>) -> SweepCtx {
+    SweepCtx {
+        candidates: Arc::new(candidates_of(job)),
+        timeout: Duration::from_millis(u64::from(job.timeout_ms)),
+        // Per-device credential-probe rate limit (security.md): space attempts so the sweep
+        // paces itself at one device. **No cooldown** — SNMP has no account to lock out, so a
+        // consecutive-failure limit here would not protect the device, it would only stop
+        // trying the operator's remaining credentials (ADR-161, and see
+        // `LimiterConfig::snmp_sweep`'s doc for why that is not the same trade-off SSH/CLI
+        // probing will face).
+        rate: LimiterConfig::snmp_sweep(),
+        scan_id: job.scan_id,
+        cancels,
+        snmp_when_unreachable: job.snmp_when_unreachable,
+        icmp_errors: AtomicUsize::new(0),
+    }
+}
+
 impl SweepCtx {
     /// Whether this sweep has been told to stop, as of now.
     fn stopping(&self) -> bool {
@@ -295,6 +328,10 @@ pub async fn run_discovery_stream<S>(
         tracing::info!(
             scan = %job.scan_id,
             targets = job.targets.len(),
+            // Every credential is tried on every reachable target (ADR-161), so this number is
+            // the multiplier on how long a sweep takes. Logged because it is the operator's own
+            // choice and the only thing that explains a slow sweep that is working correctly.
+            credentials = job.credentials.len() + job.communities.len(),
             snmp_when_unreachable = job.snmp_when_unreachable,
             "discovery sweep starting"
         );
@@ -316,19 +353,7 @@ pub async fn run_discovery_stream<S>(
             },
         )
         .await;
-        let ctx = SweepCtx {
-            candidates: Arc::new(candidates_of(&job)),
-            timeout: Duration::from_millis(u64::from(job.timeout_ms)),
-            // Per-device credential-probe rate limit (security.md): space attempts and back off
-            // after repeated failures so the sweep can never trip a device's account lockout.
-            // Conservative defaults; tunable here as SSH/CLI credential probing (which actually
-            // locks out) lands.
-            rate: LimiterConfig::default(),
-            scan_id: job.scan_id,
-            cancels: cancels.clone(),
-            snmp_when_unreachable: job.snmp_when_unreachable,
-            icmp_errors: AtomicUsize::new(0),
-        };
+        let ctx = sweep_ctx(&job, cancels.clone());
         let mut found: Vec<DiscoveredDevice> = Vec::new();
         let mut probed: u32 = 0;
         let mut cancelled = false;
@@ -486,11 +511,19 @@ fn now_ms() -> i64 {
 }
 
 /// Probe one target: ICMP liveness + SNMP identity, trying each candidate in order
-/// (first that answers wins). Candidate probes run **sequentially per device** and are gated
-/// by a per-device [`CredentialProbeLimiter`] ([`SweepCtx::rate`]): attempts are spaced apart and,
-/// after repeated failures, the device is backed off for the rest of the sweep so probing can never
-/// trip an account lockout (security.md). Attempted credentials are never logged. Returns a
+/// (first that answers wins). Candidate probes run **sequentially per device** and are spaced
+/// apart by a per-device [`CredentialProbeLimiter`] ([`SweepCtx::rate`]), so the sweep paces
+/// itself at one device (security.md). Attempted credentials are never logged. Returns a
 /// device iff it answered ICMP or SNMP.
+///
+/// 🚨 **Every candidate is tried** (ADR-161). The sweep's profile carries no consecutive-failure
+/// cooldown, and it must not gain one: SNMP has no account to lock out, and every non-answer
+/// looks alike here — a dropped packet, an ACL on 161, an agent with no `sysDescr` and a wrong
+/// community all arrive as silence and all used to spend the same budget of three. The operator's
+/// 4th and 5th credentials were dropped without a packet or a log line, which reads from the
+/// Discovery screen as "the later communities do not work". The cooldown could not have protected
+/// anything either: the limiter below is built **per target** and dropped on return, so it never
+/// spanned two targets, two sweeps, or one re-run a second later.
 ///
 /// Unless [`SweepCtx::snmp_when_unreachable`] is set, a target that did not answer ICMP returns
 /// here without a single SNMP packet — see the module doc for what that buys and what it costs.
@@ -524,8 +557,13 @@ async fn probe_one(
     }
 
     // Keyed by target IP — the device has no NodeId during discovery. One limiter per probe is
-    // enough: each target appears once per sweep, and spacing/cooldown only span this target's
-    // sequential candidate attempts.
+    // enough for what it now does: each target appears once per sweep, and the spacing only has
+    // to span this target's sequential candidate attempts.
+    //
+    // ⚠️ That is *why* a cooldown does not belong here, and it is the thing to remember when
+    // SSH/CLI probing arrives with a credential kind that really does lock accounts out: a limit
+    // enforced on a limiter that lives for one target protects nothing, while looking protective.
+    // Hoist it to the sweep (or to core) at that point.
     let mut limiter = CredentialProbeLimiter::<IpAddr>::new(ctx.rate);
     let mut identity = SnmpIdentity::default();
     let mut matched_credential = None;
@@ -541,7 +579,10 @@ async fn probe_one(
         if ctx.stopping() {
             break 'candidates;
         }
-        // Honour per-device spacing before each attempt; stop the device entirely on cooldown.
+        // Honour per-device spacing before each attempt. `CoolingDown` cannot occur under the
+        // sweep's own profile (`LimiterConfig::snmp_sweep`) and is handled rather than ignored
+        // because the arm is exhaustive and the variant stays reachable for a future caller that
+        // does pass a cooldown.
         loop {
             match limiter.begin_attempt(target, now_ms()) {
                 AttemptDecision::Allow => break,
@@ -998,8 +1039,23 @@ mod tests {
     fn no_rate() -> LimiterConfig {
         LimiterConfig {
             min_interval_ms: 0,
-            max_consecutive_failures: u32::MAX,
+            max_consecutive_failures: None,
             cooldown_ms: 0,
+        }
+    }
+
+    /// The **shipped** SNMP profile with only the sleeping removed.
+    ///
+    /// `..LimiterConfig::snmp_sweep()` rather than a fresh literal, deliberately: the field under
+    /// test is `max_consecutive_failures`, so it has to come from the value production passes or
+    /// the test is about a config nobody ships — which is exactly how `Some(3)` went unexercised
+    /// (every probe test used [`no_rate`], which overrode it). Only `min_interval_ms` is zeroed,
+    /// because the 2 s spacing is real time that `now_ms` reads off the wall clock: `start_paused`
+    /// would make `sleep` return without advancing it and the wait loop would spin forever.
+    fn shipped_rate_without_the_sleep() -> LimiterConfig {
+        LimiterConfig {
+            min_interval_ms: 0,
+            ..LimiterConfig::snmp_sweep()
         }
     }
 
@@ -1235,10 +1291,101 @@ mod tests {
         assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
     }
 
-    /// Wiring check: once a device hits the consecutive-failure limit it is backed off, so the
-    /// remaining candidates are never tried (lockout protection, security.md).
+    /// ADR-161, the wiring half: **which rate profile a sweep probes with.** Read off the value
+    /// `run_discovery_stream` actually builds, because the defect was not in the limiter — that
+    /// did exactly what it was configured to do — it was in the configuration handed to it.
+    #[test]
+    fn a_sweep_probes_with_the_no_cooldown_profile() {
+        let ctx = sweep_ctx(&job(vec![], vec!["a".to_owned()]), no_cancels());
+        assert_eq!(
+            ctx.rate.max_consecutive_failures, None,
+            "a cooldown here cuts the candidate list short and protects nothing: SNMP has \
+             no account to lock out, and the limiter is rebuilt per target, so a cooldown \
+             set here could never span two sweeps anyway"
+        );
+        assert!(
+            ctx.rate.min_interval_ms > 0,
+            "spacing is the half that does pace the device (security.md) and must survive \
+             the removal of the cooldown — a fix that deleted the limiter outright would \
+             pass the assertion above"
+        );
+    }
+
+    /// ADR-161, the behaviour half — and the user-reported bug stated as a test.
+    ///
+    /// Five credentials, the **fifth** correct. Under the shipped config this used to find
+    /// nothing at all: three failures tripped a 15-minute cooldown and `break 'candidates` threw
+    /// away candidates 4 and 5 without sending a packet or logging a line.
     #[tokio::test]
-    async fn cooldown_backs_off_remaining_candidates() {
+    async fn every_selected_credential_is_tried_under_the_shipped_profile() {
+        let id = Uuid::from_u128(9);
+        let cands = candidates_of(&job(
+            vec![
+                v2c_cred(Uuid::from_u128(5), "wrong-1"),
+                v2c_cred(Uuid::from_u128(6), "wrong-2"),
+                v2c_cred(Uuid::from_u128(7), "wrong-3"),
+                v2c_cred(Uuid::from_u128(8), "wrong-4"),
+                v2c_cred(id, "right"),
+            ],
+            vec![],
+        ));
+        let fake = SelectiveFake {
+            ping: Ping::Answers,
+            good_community: Some("right".to_owned()),
+            good_v3_user: None,
+        };
+        let mut c = ctx(cands);
+        c.rate = shipped_rate_without_the_sleep();
+        let d = probe_one(target(), &c, &fake)
+            .await
+            .expect("the fifth credential answers, so the device is found");
+        assert_eq!(
+            d.matched_credential,
+            Some(id),
+            "and it is reported as the credential that actually matched"
+        );
+    }
+
+    /// The same, one layer out: the ad-hoc communities appended after the stored credentials
+    /// (`candidates_of`) are reachable too. With a cap of three they never were — three stored
+    /// credentials was enough to guarantee no typed-in community was ever tried.
+    #[tokio::test]
+    async fn an_adhoc_community_behind_three_stored_credentials_is_still_tried() {
+        let cands = candidates_of(&job(
+            vec![
+                v2c_cred(Uuid::from_u128(5), "wrong-1"),
+                v2c_cred(Uuid::from_u128(6), "wrong-2"),
+                v2c_cred(Uuid::from_u128(7), "wrong-3"),
+            ],
+            vec!["typed-in".to_owned()],
+        ));
+        let fake = SelectiveFake {
+            ping: Ping::Answers,
+            good_community: Some("typed-in".to_owned()),
+            good_v3_user: None,
+        };
+        let mut c = ctx(cands);
+        c.rate = shipped_rate_without_the_sleep();
+        let d = probe_one(target(), &c, &fake)
+            .await
+            .expect("the ad-hoc community answers and is reached");
+        assert_eq!(
+            d.matched_credential, None,
+            "an ad-hoc community has no store id, so the match is reported by value-less reference"
+        );
+        assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
+    }
+
+    /// The cooldown still ends a device's candidate list **when a config asks for one** — the
+    /// SSH/CLI case ADR-018 sized it for. Kept so that making SNMP exempt cannot turn the
+    /// mechanism into dead code that nothing would notice rotting.
+    ///
+    /// ⚠️ This used to assert the opposite thing and passed: as
+    /// `cooldown_backs_off_remaining_candidates` it pinned the truncation as correct, at an
+    /// overridden limit of 2 rather than the shipped 3, so nobody reading it learned that five
+    /// selected credentials meant three probes.
+    #[tokio::test]
+    async fn a_cooldown_config_backs_off_remaining_candidates() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         // Never answers; counts how many credential attempts actually reached the transport.
@@ -1400,7 +1547,7 @@ mod tests {
         let mut c = ctx(cands);
         c.rate = LimiterConfig {
             min_interval_ms: 0,
-            max_consecutive_failures: 2,
+            max_consecutive_failures: Some(2),
             cooldown_ms: 60_000,
         };
         let d = probe_one(target(), &c, &fake).await;
