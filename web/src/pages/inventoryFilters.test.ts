@@ -7,17 +7,20 @@
 
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
-import { DISPLAY_ORDER } from '../lib/nodeState';
+import { DISPLAY_ORDER, PROBLEM_STATES } from '../lib/nodeState';
 import { NODE_KINDS } from '../types/api';
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import {
+  ATTENTION_STATES,
   inventoryColumns,
   inventoryFilterLabels,
   inventoryKey,
   inventoryQuery,
+  isAttentionOnly,
   isInventoryFiltered,
   NODE_STATE_FILTERS,
   readInventoryFilters,
+  toggleAttention,
   truncationNotice,
   writeInventoryFilters,
 } from './inventoryFilters';
@@ -202,5 +205,90 @@ describe('truncationNotice', () => {
     // it complete.
     expect(truncationNotice(true, 3, 500)).toBe('scan');
     expect(truncationNotice(true, 0, 500)).toBe('scan');
+  });
+});
+
+describe('the "Needs attention" preset (ADR-163)', () => {
+  it('selects the same three states the page header counts, in the filter\'s own order', () => {
+    // The SET is what makes the button agree with the "N need attention" above it — one enumerated
+    // by hand would quietly disagree, and neither surface would look wrong on its own.
+    // ⚠️ The ORDER is pinned here only so the array and the URL read alike; `encodeSet` is what
+    // actually settles the URL, and it re-orders whatever it is handed. So this assertion is the
+    // only thing watching the order, and reversing the array breaks nothing else — do not read it
+    // as proof that the order is load-bearing.
+    expect([...ATTENTION_STATES]).toEqual([...PROBLEM_STATES].sort((a, b) =>
+      NODE_STATE_FILTERS.indexOf(a) - NODE_STATE_FILTERS.indexOf(b),
+    ));
+    expect([...ATTENTION_STATES]).toEqual(['warning', 'critical', 'unreachable']);
+    // Down is `unreachable`, never `critical` — dropping it would take the most urgent rows out of
+    // the one control an operator reaches for during an outage.
+    expect(ATTENTION_STATES).toContain('unreachable');
+    // And the neutral states stay out: `maintenance` is silenced on purpose, `unknown` says
+    // "investigate", not "page someone" (`NodeState::is_problem`).
+    expect(ATTENTION_STATES).not.toContain('maintenance');
+    expect(ATTENTION_STATES).not.toContain('unknown');
+    expect(ATTENTION_STATES).not.toContain('ok');
+  });
+
+  it('turns on from nothing and off again', () => {
+    const on = toggleAttention(f({}));
+    expect(on.state).toBe('warning,critical,unreachable');
+    expect(isAttentionOnly(on)).toBe(true);
+
+    const off = toggleAttention(on);
+    expect(off.state).toBe('');
+    expect(isAttentionOnly(off)).toBe(false);
+  });
+
+  it('replaces the chosen states rather than adding to them', () => {
+    // A preset, not a fourth filter: "everything that is not healthy" plus `ok` is a question
+    // nobody asked, and it would put every healthy node back on screen under a lit button.
+    const on = toggleAttention(f({ state: 'ok' }));
+    expect(on.state).toBe('warning,critical,unreachable');
+  });
+
+  it('leaves every other column alone, both ways', () => {
+    const before = f({ state: 'ok', kind: 'url', pool: 'tokyo' });
+    const on = toggleAttention(before);
+    expect(on.kind).toBe('url');
+    expect(on.pool).toBe('tokyo');
+    const off = toggleAttention(on);
+    expect(off.kind).toBe('url');
+    expect(off.pool).toBe('tokyo');
+  });
+
+  it('reads a hand-typed URL in any order as pressed', () => {
+    // `aria-pressed` compares sets, not strings. A link someone typed — or one an older build
+    // wrote — asks the same question, and a button left unlit above a tree it has narrowed is the
+    // control disagreeing with the screen.
+    expect(isAttentionOnly(f({ state: 'critical,warning,unreachable' }))).toBe(true);
+    expect(isAttentionOnly(f({ state: 'unreachable,critical,warning' }))).toBe(true);
+  });
+
+  it('is not pressed for a subset, a superset, or a different set of the same size', () => {
+    // The three ways an equality check written as "every attention state is chosen" or as
+    // "length matches" would go wrong on its own.
+    expect(isAttentionOnly(f({ state: 'warning,critical' }))).toBe(false);
+    expect(isAttentionOnly(f({ state: 'warning,critical,unreachable,ok' }))).toBe(false);
+    expect(isAttentionOnly(f({ state: 'ok,unknown,maintenance' }))).toBe(false);
+    expect(isAttentionOnly(f({}))).toBe(false);
+  });
+
+  it('survives the URL round trip it will actually take', () => {
+    // The preset writes a `FilterState`; the page writes that to the URL and reads it back on the
+    // next render. If those two disagreed the button would flicker off the moment it was pressed.
+    const params = new URLSearchParams();
+    writeInventoryFilters(COLS, params, toggleAttention(f({})));
+    expect(params.get('state')).toBe('warning,critical,unreachable');
+    expect(isAttentionOnly(readInventoryFilters(COLS, params))).toBe(true);
+  });
+
+  it('counts as narrowing the tree, so "clear all filters" appears and undoes it', () => {
+    // No `extraActive` wiring exists for this button (ADR-163 決定 1): it writes the `state` column,
+    // which `isInventoryFiltered` and `ClearFilters` already watch. That is only true while the
+    // preset keeps writing that column, which is what this pins.
+    const on = toggleAttention(f({}));
+    expect(isInventoryFiltered(on)).toBe(true);
+    expect(isAttentionOnly(defaultFilters(COLS))).toBe(false);
   });
 });

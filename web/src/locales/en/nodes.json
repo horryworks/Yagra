@@ -91,6 +91,8 @@
     "pinnedOnlyHint": "Show only the nodes and folders you pinned, with the folders above them",
     "withNodesOnly": "With nodes",
     "withNodesOnlyHint": "Hide folders that have no nodes in them or in any folder below. A folder you create here stays until you reload the page.",
+    "needAttentionOnly": "Needs attention",
+    "needAttentionOnlyHint": "Show only the nodes that are warning, critical or unreachable — the same ones counted above. A node in a maintenance window is not one of them.",
     "filterScanTruncated": "Some matches are not shown: the filter examined as many nodes as it is allowed to. Add a search term to narrow it.",
     "cols": {
       "state": "State",
