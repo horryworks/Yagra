@@ -352,5 +352,114 @@ test('a folder dragged onto an ungrouped node is refused, and the same drag work
   await expect(page.locator('.ntree-row.dragging')).toHaveCount(1);
   await dropOn(page, '.ntree-ungrouped-head');
   await expect.poll(() => placements.length).toBe(1);
-  await expect.poll(() => placements.length).toBe(1);
+});
+
+/**
+ * Hover a point inside the row matching `selector`, without letting go — and dispatch at **whatever
+ * is really under that point**, not at the element the selector named.
+ *
+ * ⚠️ That difference is the whole reason this helper is not `dragOverNode`. Once the insertion slot
+ * appears it is *on top of* the place the pointer was aiming at, and a test that kept aiming at the
+ * row underneath would be asking a question the browser never asks. `elementFromPoint` is what makes
+ * "hold still and see what the page does" mean the same thing here as it does in a real drag.
+ */
+async function dragOverOn(page: Page, selector: string, band: DropBand = 'middle') {
+  await page.evaluate(
+    ({ sel, band }: { sel: string; band: DropBand }) => {
+      const w = window as unknown as { __dt?: DataTransfer };
+      const anchor = document.querySelector(sel);
+      if (!anchor) throw new Error(`no drop target for ${sel}`);
+      const r = anchor.getBoundingClientRect();
+      const frac = band === 'top' ? 0.2 : band === 'bottom' ? 0.8 : 0.5;
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height * frac;
+      const dst = document.elementFromPoint(x, y);
+      if (!dst) throw new Error(`nothing under (${x}, ${y})`);
+      dst.dispatchEvent(
+        new DragEvent('dragover', {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: w.__dt,
+          clientX: x,
+          clientY: y,
+        }),
+      );
+    },
+    { sel: selector, band },
+  );
+}
+
+test('the insertion slot shows where the drop will write, and does not take itself away', async ({
+  page,
+}) => {
+  // ADR-162 増分 2. The 2px line this replaced drew the same mark for two placements with different
+  // parents, which is what the operator reported. Two things are assertable here and both matter:
+  // the slot lands **between** the right two rows, and it is drawn at the **indentation** of the
+  // level it would land at — the indentation being the half a line could not express.
+  //
+  // 🚨 **The last part is the one nothing else would catch.** A slot inserted before a row sits
+  // exactly where the pointer is, so a `dragover` on it that re-judged would answer "the slot",
+  // withdraw the feedback, restore the rows, and put the pointer back over the target — forever, at
+  // the frame rate. It would read as a flicker and pass every other test in this file.
+  //
+  // ⚠️ Rows are virtualized, so every lookup here goes through `querySelectorAll(...)[n]`, never a
+  // positional CSS selector: a row is not the nth child of anything.
+  const moves = await captureMoves(page);
+  await page.goto('/nodes');
+  const rows = page.locator('.ntree-node');
+  await expect(rows).toHaveCount(3);
+
+  // Grab the first node, hold it over the TOP half of the third: "before that row".
+  await startDrag(page, 0);
+  await expect(page.locator('.ntree-row.dragging')).toHaveCount(1);
+  await expect(page.locator('.ntree-drop-slot')).toHaveCount(0);
+  await dragOverNode(page, 2, 'top');
+
+  const slot = page.locator('.ntree-drop-slot');
+  await expect(slot).toHaveCount(1);
+  // It names what is being carried, so the operator sees WHAT lands as well as where.
+  await expect(slot).toContainText(
+    (await rows.nth(0).locator('.ntree-node-name').innerText()).trim(),
+  );
+
+  const slotBox = await slot.boundingBox();
+  const secondBox = await rows.nth(1).boundingBox();
+  const thirdBox = await rows.nth(2).boundingBox();
+  if (!slotBox || !secondBox || !thirdBox) throw new Error('a row had no box');
+  expect(slotBox.y, 'the slot is above the row it would land before').toBeLessThan(thirdBox.y);
+  expect(slotBox.y, 'the slot is below the row it would land after').toBeGreaterThan(secondBox.y);
+
+  // The depth claim, as it reaches the DOM: indentation is `depth × INDENT + BASE_PAD`, written
+  // inline, and a slot landing beside a row must be indented exactly as that row is.
+  const pads = await page.evaluate(() => {
+    const el = document.querySelector('.ntree-drop-slot');
+    const target = document.querySelectorAll('.ntree-node')[2];
+    if (!el || !target) return null;
+    return {
+      slot: getComputedStyle(el).paddingLeft,
+      target: getComputedStyle(target).paddingLeft,
+    };
+  });
+  expect(pads, 'the slot or the row it lands beside was not on screen').not.toBeNull();
+  expect(pads?.slot, 'the slot is drawn at a different level from the row it lands beside').toBe(
+    pads?.target,
+  );
+
+  // Hold still over the slot itself. Nothing may change — not the count, not the position.
+  await dragOverOn(page, '.ntree-drop-slot');
+  await dragOverOn(page, '.ntree-drop-slot');
+  await expect(slot).toHaveCount(1);
+  expect((await slot.boundingBox())?.y, 'the slot moved while the pointer was held on it').toBe(
+    slotBox.y,
+  );
+
+  // And letting go ON the slot performs the placement the slot was drawing — replayed from the
+  // recorded target, because the row under the pointer is the slot and has no target of its own.
+  await dropOn(page, '.ntree-drop-slot');
+  await expect.poll(() => moves.length).toBe(1);
+  expect(moves[0].node_ids).toEqual([TREE_SIBLING_IDS[0]]);
+  expect(moves[0].before, 'the slot dropped somewhere other than where it was drawn').toBe(
+    TREE_SIBLING_IDS[2],
+  );
+  await expect(page.locator('.ntree-drop-slot')).toHaveCount(0);
 });

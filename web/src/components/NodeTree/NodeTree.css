@@ -120,16 +120,16 @@
   opacity: 0.4;
 }
 
-/* Drop feedback. before/after draw an insertion line on the matching edge (reorder); inside
-   highlights the whole row (nest/assign); bad marks a refused move (e.g. a group into itself). */
-.ntree-row.drop-before {
-  box-shadow: inset 0 2px 0 0 var(--accent-color);
-}
+/* Drop feedback. `inside` highlights the whole row (nest/assign); `bad` marks a refused move (e.g. a
+   group into itself). Reordering has no mark on the target row at all any more — it is shown by the
+   slot row below (ADR-162 増分 2).
 
-.ntree-row.drop-after {
-  box-shadow: inset 0 -2px 0 0 var(--accent-color);
-}
-
+   🚨 **`drop-before` / `drop-after` were a 2px inset edge, and they were removed because they were
+   AMBIGUOUS, not because they were plain.** A line on the bottom edge of a folder's last node and a
+   line on the top edge of the next folder's row are one pixel row apart and land in different
+   parents; the mark was identical, so it could not say which. (The curl at each end was the row's
+   own `border-radius`, which an inset shadow follows — an artefact that read as if it meant
+   something.) The replacement is a real row at the destination's own indentation. */
 .ntree-row.drop-inside,
 .ntree-ungrouped.drop-inside {
   outline: var(--border-width) solid var(--accent-color);
@@ -139,6 +139,56 @@
 
 .ntree-row.drop-bad {
   outline: var(--border-width) solid var(--status-critical);
+  outline-offset: -1px;
+}
+
+/* The insertion slot: the row a drop in flight would create, at the depth it would land (ADR-162
+   増分 2). Dashed, because solid is already spoken for — `.drop-inside` and `.drop-bad` outline the
+   row the pointer is ON, and this is the row the drop would MAKE.
+
+   ⚠️ **`outline`, never `border`.** Every tree row is exactly `--row-h` tall and the virtualizer
+   measures nothing — it places rows at `index × 30px` from a uniform estimate. A 1px border would
+   put every row below the slot half a pixel out and get worse the further down the list it went. */
+.ntree-row.ntree-drop-slot {
+  outline: var(--border-width) dashed var(--accent-color);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  color: var(--accent-color);
+  cursor: copy;
+}
+
+.ntree-slot-name {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ntree-slot-more {
+  font-size: var(--font-xs);
+  opacity: 0.8;
+}
+
+/* Stands in for a node's status dot, so the slot's name starts in the same column a real row's
+   would. Hollow: this row has no state to report. */
+.ntree-slot-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: var(--border-width) dashed currentColor;
+  border-radius: 50%;
+}
+
+/* The folder a permitted drop would write into (ADR-162 増分 2) — the explicit half of the answer
+   the slot's indentation gives implicitly.
+
+   ⚠️ **A channel of its own.** `.sel` owns the inset accent bar and `.checked` owns the accent tint,
+   so either would say something the operator already reads as "selected" or "in the working set".
+   Dashed accent pairs it with the slot instead: same drag, one containing the other. It is placed
+   after `.sel` deliberately, so a destination that is also the selected row still shows as one. */
+.ntree-row.drop-parent {
+  outline: var(--border-width) dashed color-mix(in srgb, var(--accent-color) 55%, transparent);
   outline-offset: -1px;
 }
 

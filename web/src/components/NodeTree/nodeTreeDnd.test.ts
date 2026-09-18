@@ -14,15 +14,21 @@
 // decision is made on.
 import { describe, expect, it } from 'vitest';
 import {
+  dragPreview,
   dropAction,
   dropAllowed,
+  dropParentId,
   dropPosition,
   nodeDragItem,
   rootDropAction,
+  withDropSlot,
   type DragItem,
+  type DropFeedback,
+  type DropPos,
   type Target,
 } from './nodeTreeDnd';
-import type { NodeGroup } from '../../types/api';
+import type { FlatRow, TreeGroup } from '../../lib/nodeTree';
+import type { NodeGroup, NodeSummary } from '../../types/api';
 
 const grp = (id: string, parent_id: string | null = null) =>
   ({ id, name: id, parent_id }) as NodeGroup;
@@ -335,5 +341,201 @@ describe('rootDropAction', () => {
       nodeIds: ['n1', 'n2'],
       groupId: null,
     });
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// The insertion slot (ADR-162 増分 2)
+//
+// 🚨 **The first two cases below are the whole increment, and they land at the same index.** A folder
+// dropped at the bottom edge of `DNS`'s last node and one dropped at the top edge of the next
+// folder's row appear in the same place on screen and go into different parents — which is what the
+// operator asked about, and what a 2px line drawn on somebody else's edge could not answer. The only
+// thing that distinguishes them is the slot's DEPTH, so that is what these assert.
+// ------------------------------------------------------------------------------------------------
+
+const gRow = (id: string, depth: number): FlatRow => ({
+  kind: 'group',
+  depth,
+  group: { id, name: id } as unknown as TreeGroup,
+  isOpen: true,
+  hasChildren: true,
+  tally: null,
+});
+const nRow = (id: string, depth: number, kind: 'node' | 'ungrouped-node' = 'node'): FlatRow =>
+  ({ kind, depth, node: { id, name: id } as unknown as NodeSummary }) as FlatRow;
+
+/**
+ * The screenshot that motivated the increment, as rows:
+ *
+ *     0  Internet Sites            depth 0
+ *     1    DNS                     depth 1
+ *     2      google.com            depth 2
+ *     3      test.horryworks.net   depth 2
+ *     4      wg.horryworks.net     depth 2
+ *     5    ping                    depth 1
+ *     6      cloudflare-dns        depth 2
+ *     7      (still loading)       depth 2
+ *     8  Ungrouped
+ *     9    loose                   depth 1
+ */
+const SCREEN: readonly FlatRow[] = [
+  gRow('sites', 0),
+  gRow('dns', 1),
+  nRow('google', 2),
+  nRow('test', 2),
+  nRow('wg', 2),
+  gRow('ping', 1),
+  nRow('cloudflare', 2),
+  { kind: 'group-loading', depth: 2, groupId: 'ping' },
+  { kind: 'ungrouped-head', count: 1 },
+  nRow('loose', 1, 'ungrouped-node'),
+];
+
+const feedback = (target: Target | 'root', position: DropPos, ok = true): DropFeedback => ({
+  target,
+  position,
+  ok,
+});
+
+/** Where the slot ended up and at what depth — with -1 for "there is no slot", so a test that means
+ *  to find one cannot pass by finding nothing. */
+const slotAt = (rows: readonly FlatRow[]) => {
+  const index = rows.findIndex((r) => r.kind === 'drop-slot');
+  const row = rows[index];
+  return { index, depth: row && row.kind === 'drop-slot' ? row.depth : -1 };
+};
+
+describe('withDropSlot', () => {
+  it('puts a folder dropped below a folder’s last node INSIDE that folder', () => {
+    // The red line in the report. `wg` is the last row `DNS` contains, so landing after it means
+    // becoming its sibling — a member of `DNS`, drawn at the members' own depth.
+    const rows = withDropSlot(SCREEN, feedback(nodeTarget('wg', 'dns'), 'after'));
+    expect(slotAt(rows)).toEqual({ index: 5, depth: 2 });
+  });
+
+  it('puts a folder dropped above the next folder BESIDE it, one level up', () => {
+    // Five pixels lower on screen, and a different parent. Note the index: **the same one**. The
+    // depth is the entire difference, which is why the indentation had to become the indicator.
+    const rows = withDropSlot(SCREEN, feedback(groupTarget('ping', 'sites'), 'before'));
+    expect(slotAt(rows)).toEqual({ index: 5, depth: 1 });
+  });
+
+  it('steps over everything a folder contains when the drop is after the folder', () => {
+    // Dropping after `DNS` makes the dragged item DNS's next sibling, so the slot belongs below the
+    // last row DNS holds. Putting it at index 2 — directly under the folder's own row — would draw
+    // "inside DNS" for a placement that is not.
+    const rows = withDropSlot(SCREEN, feedback(groupTarget('dns', 'sites'), 'after'));
+    expect(slotAt(rows)).toEqual({ index: 5, depth: 1 });
+  });
+
+  it('stops at the Ungrouped header instead of swallowing it into the folder above', () => {
+    // 🚨 The header has no depth of its own and `rowDepth` answers -1 for it. A copy of that helper
+    // answering 0 would let this walk run past the header and off the end of the list, putting the
+    // slot below every ungrouped node — a placement the drop does not make.
+    const rows = withDropSlot(SCREEN, feedback(groupTarget('ping', 'sites'), 'after'));
+    expect(slotAt(rows)).toEqual({ index: 8, depth: 1 });
+  });
+
+  it('finds the folder’s own row, not the loading placeholder standing under it', () => {
+    // Both rows answer to `ping`. `flatRowKey` is what tells them apart (`g:ping` vs `loading:ping`)
+    // — a lookup on a bare id would match the placeholder at index 7 and draw the slot in the wrong
+    // parent, at the wrong depth, with nothing on screen to say it had.
+    const rows = withDropSlot(SCREEN, feedback(groupTarget('ping', 'sites'), 'before'));
+    expect(slotAt(rows)).toEqual({ index: 5, depth: 1 });
+  });
+
+  it('places a node dropped among the Ungrouped rows there', () => {
+    const rows = withDropSlot(SCREEN, feedback(nodeTarget('loose', null), 'before'));
+    expect(slotAt(rows)).toEqual({ index: 9, depth: 1 });
+  });
+
+  it('keeps every original row, in order, and adds exactly one slot', () => {
+    // ⚠️ The slot is ADDED, never a MOVE: the dragged rows stay where they are. Lifting a folder's
+    // subtree out would shift the rows below it by as many rows as the subtree is deep, which
+    // changes what is under the cursor — and re-judging from there moves the slot again.
+    // ⚠️ Exactly one also matters mechanically: `flatRowKey` answers a constant for the slot, so a
+    // second one would collide in the virtualizer's `getItemKey` and in React's key.
+    const rows = withDropSlot(SCREEN, feedback(nodeTarget('wg', 'dns'), 'after'));
+    expect(rows).toHaveLength(SCREEN.length + 1);
+    expect(rows.filter((r) => r.kind === 'drop-slot')).toHaveLength(1);
+    expect(rows.filter((r) => r.kind !== 'drop-slot')).toEqual([...SCREEN]);
+  });
+
+  it('shows nothing for “into this folder”, which the target row already outlines', () => {
+    // `inside` appends to the end of the folder's contents, which is routinely off screen. A slot
+    // the operator cannot see is worse than the outline drawn where they ARE looking.
+    expect(withDropSlot(SCREEN, feedback(groupTarget('dns', 'sites'), 'inside'))).toBe(SCREEN);
+  });
+
+  it('shows nothing for a refused drop, for the Ungrouped header, and for no drag at all', () => {
+    expect(withDropSlot(SCREEN, feedback(nodeTarget('wg', 'dns'), 'after', false))).toBe(SCREEN);
+    expect(withDropSlot(SCREEN, feedback('root', 'inside'))).toBe(SCREEN);
+    expect(withDropSlot(SCREEN, null)).toBe(SCREEN);
+  });
+
+  it('returns the very same array when the target row is not on screen', () => {
+    // Not merely equal — the same reference. An idle tree renders from exactly the array
+    // `flattenTree` produced, so this increment costs a tree nobody is dragging over nothing.
+    expect(withDropSlot(SCREEN, feedback(nodeTarget('nobody', 'dns'), 'after'))).toBe(SCREEN);
+  });
+});
+
+describe('dropParentId', () => {
+  it('names the folder the drop writes into', () => {
+    // The explicit half of the answer: the slot's indent implies `DNS`, this marks its row.
+    expect(dropParentId(feedback(nodeTarget('wg', 'dns'), 'after'))).toBe('dns');
+    expect(dropParentId(feedback(groupTarget('ping', 'sites'), 'before'))).toBe('sites');
+  });
+
+  it('names nothing when there is no folder row standing for the destination', () => {
+    // Top level and the Ungrouped bucket are real destinations with no row of their own, so there
+    // the slot's indentation is the only mark — which is not the same as saying "refused".
+    expect(dropParentId(feedback(nodeTarget('loose', null), 'before'))).toBeNull();
+    expect(dropParentId(feedback('root', 'inside'))).toBeNull();
+  });
+
+  it('names nothing while the target row itself is the destination, or the drop is refused', () => {
+    // `inside` already outlines the target row; marking it twice would say two different things
+    // about one row.
+    expect(dropParentId(feedback(groupTarget('dns', 'sites'), 'inside'))).toBeNull();
+    expect(dropParentId(feedback(nodeTarget('wg', 'dns'), 'after', false))).toBeNull();
+    expect(dropParentId(null)).toBeNull();
+  });
+});
+
+describe('dragPreview', () => {
+  it('names the folder being dragged', () => {
+    expect(dragPreview(SCREEN, GROUPS, groupDrag('rack'))).toEqual({
+      kind: 'group',
+      group: GROUPS[1],
+    });
+  });
+
+  it('names the grabbed node and counts the others travelling with it', () => {
+    // ⚠️ The grabbed row, not the first of the batch — the operator checks three rows and then
+    // grabs whichever one the pointer is over. A slot naming one row of three understates the move,
+    // which is the same defect ADR-124 Inc.4 fixed one level down.
+    expect(dragPreview(SCREEN, GROUPS, grabbed('test', 'google', 'test', 'wg'))).toEqual({
+      kind: 'node',
+      name: 'test',
+      extra: 2,
+    });
+  });
+
+  it('finds a node drawn under Ungrouped as readily as one inside a folder', () => {
+    expect(dragPreview(SCREEN, GROUPS, nodeDrag('loose'))).toEqual({
+      kind: 'node',
+      name: 'loose',
+      extra: 0,
+    });
+  });
+
+  it('answers null when the grabbed row is not among the rows in hand', () => {
+    // A folder collapsed mid-drag. The slot is still drawn — WHERE the drop lands is the answer it
+    // exists to give, and that does not stop being true because the name is momentarily unavailable.
+    expect(dragPreview(SCREEN, GROUPS, nodeDrag('gone'))).toBeNull();
+    expect(dragPreview(SCREEN, GROUPS, groupDrag('gone'))).toBeNull();
+    expect(dragPreview(SCREEN, GROUPS, null)).toBeNull();
   });
 });
