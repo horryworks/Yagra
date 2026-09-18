@@ -708,9 +708,16 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         nodes: repo.clone(),
     };
     // A failed priming load leaves the engine with its empty starting config rather than
-    // installing a degraded one (ADR-080 決定 3). Nothing is active at boot, so an empty ruleset
-    // cannot resolve anything; the leader's 30s refresh installs the real one. Refusing to start
-    // would be worse — a transient query failure right after migrations would take monitoring down.
+    // installing a degraded one (ADR-080 決定 3); the leader's 30s refresh installs the real one.
+    // Refusing to start would be worse — a transient query failure right after migrations would
+    // take monitoring down.
+    //
+    // 🚨 This line used to say "nothing is active at boot, so an empty ruleset cannot resolve
+    // anything", and `restore` above made that false: the active set is already seeded from
+    // `alert_history` by the time this runs. An empty ruleset then reads as "the liveness rule was
+    // deleted", which closes every restored outage on the first poll and leaves nothing that could
+    // re-open it. The engine tells a config it has never loaded from one with no rules in it
+    // (ADR-160 決定 6); this comment is the reason that distinction has to exist.
     match alerts::config::load_alert_config(
         &alerts::config::LiveConfigSources {
             repo: repo.clone(),

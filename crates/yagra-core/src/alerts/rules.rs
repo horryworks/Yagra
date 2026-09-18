@@ -73,10 +73,46 @@ pub struct AlertConfig {
     /// Since ADR-076 increment 6 each bucket is itself indexed — see [`MetricRules`], which is
     /// what stops one metric's bucket being scanned in full for every port.
     pub(super) by_metric: HashMap<String, MetricRules>,
+    /// Whether this snapshot came from a **successful** read of the database, rather than being the
+    /// empty value the engine holds between start-up and the first load (ADR-160 決定 6).
+    ///
+    /// 🚨 Not the same question as "are there any rules" or "are there any nodes", and the
+    /// difference is what a restored alert turns on: with no rule for `__liveness__`,
+    /// `process_check` closes the open alert, because deleting a rule has to close what it stranded
+    /// (ADR-075). An engine that has never loaded a config has no rules either — so a failed
+    /// priming read closed every restored outage on the first poll after a restart, with nothing
+    /// left to re-open them. `false` only for [`Self::default`]; every real load goes through
+    /// [`Self::new`].
+    pub(super) loaded: bool,
     pub(super) node_meta: HashMap<NodeId, NodeMeta>,
     pub(super) topology: Topology,
-    /// Nodes currently inside an active maintenance window (resolved at refresh time).
+    /// Nodes currently inside an active **operator** maintenance window (resolved at refresh time).
+    ///
+    /// ⚠️ A fleet-wide window an upgrade opens is deliberately **not** here — see
+    /// [`Self::paused_until`]. The two mean different things to the state machine, and folding them
+    /// into one set is what closed and reopened a down node's incident on every upgrade (ADR-160).
     pub(super) maintenance: BTreeSet<NodeId>,
+    /// When the fleet-wide pause an upgrade opened stops, in unix milliseconds (ADR-160).
+    ///
+    /// A `WindowScope::System` window means *this deployment* is out of service — core, the bus and
+    /// the co-located poller all restart — rather than any device being worked on. Judging through
+    /// it is what produced a fleet's worth of wrong answers: a restarted poller replays every node's
+    /// checks within seconds, so `__liveness__` (one observation per non-observational result)
+    /// reached its dwell on `Maintenance` inside a 70-second window and **resolved the open alert of
+    /// a node that was still down**, while `snmp_up` and `icmp_loss_pct` (one observation each) did
+    /// not — leaving them to be re-fired by the down-set resweep. So the pause is not a state to
+    /// observe; it is an instruction to observe nothing.
+    ///
+    /// 🚨 **The engine enforces the end itself** rather than waiting to be told. ADR-050 決定 12 says
+    /// the window is always bounded, and until now the refresh loop was the only thing holding that
+    /// up — which was survivable while a stuck window still *showed* as `maintenance` on every node.
+    /// A pause shows nothing, so a refresh loop wedged by a database failure would silence the fleet
+    /// invisibly. With the end carried here, the worst case is the window's own bound (900 s).
+    pub(super) paused_until: Option<i64>,
+    /// Nodes an operator released from the fleet-wide window (migration 0081's exemptions), which
+    /// are therefore **not** paused — they are monitored right through the upgrade, which is what
+    /// the release was asked for.
+    pub(super) pause_exempt: BTreeSet<NodeId>,
     /// Folder groups that have at least one node in each poller pool — what makes a pool-coverage
     /// alert visible to the group-scoped operator whose site went dark (`api/scope.rs`).
     ///
@@ -271,9 +307,12 @@ impl AlertConfig {
         }
         Self {
             by_metric,
+            loaded: true,
             node_meta,
             topology: Topology::new(),
             maintenance: BTreeSet::new(),
+            paused_until: None,
+            pause_exempt: BTreeSet::new(),
             pool_groups: HashMap::new(),
             per_interface: BTreeSet::new(),
             row_rule_metrics,
@@ -292,6 +331,30 @@ impl AlertConfig {
     pub fn with_maintenance(mut self, maintenance: BTreeSet<NodeId>) -> Self {
         self.maintenance = maintenance;
         self
+    }
+
+    /// Attach the fleet-wide pause an upgrade opened: when it stops, and who is released from it
+    /// (ADR-160). `None` means no such window is active.
+    #[must_use]
+    pub fn with_pause(mut self, until: Option<i64>, exempt: BTreeSet<NodeId>) -> Self {
+        self.paused_until = until;
+        self.pause_exempt = exempt;
+        self
+    }
+
+    /// Whether `node` is inside the fleet-wide pause **at this instant** (ADR-160).
+    ///
+    /// Three ways to answer no, and each one is a decision:
+    /// * no such window is active, or this one has run past its own end — the bound the engine keeps
+    ///   itself, so a wedged refresh loop cannot silence the fleet for longer than the window said;
+    /// * the node is released from it (an exemption), so it is monitored through the upgrade;
+    /// * the node is *also* inside an operator's window, which keeps its own meaning — alerts there
+    ///   resolve after the usual dwell, exactly as they did before this existed.
+    #[must_use]
+    pub(super) fn is_paused(&self, node: NodeId, at_unix_ms: i64) -> bool {
+        self.paused_until.is_some_and(|until| at_unix_ms < until)
+            && !self.pause_exempt.contains(&node)
+            && !self.maintenance.contains(&node)
     }
 
     /// Attach the pool → folder-group map used to scope pool-coverage alerts.

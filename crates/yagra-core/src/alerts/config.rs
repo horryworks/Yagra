@@ -308,11 +308,14 @@ async fn resolve_maintenance(
     groups: &groups::GroupRepo,
     repo: &NodeRepo,
     nodes: &[yagra_common::Node],
-) -> std::collections::BTreeSet<NodeId> {
-    let scopes = maintenance.active_scopes().await.unwrap_or_else(|e| {
+) -> Coverage {
+    let windows = maintenance.active_windows().await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load maintenance windows");
         Vec::new()
     });
+    // ADR-160: the fleet-wide window an upgrade opens is not an operator's window and is taken out
+    // here, so everything below resolves exactly the nodes it always did.
+    let (scopes, paused_until) = split_windows(&windows);
     // Best-effort, matching the two reads around it: `active_scopes` above and `groups.edges()`
     // below both warn and carry on rather than failing the refresh. ⚠️ The direction of that
     // degradation is worth naming — losing folder labels *narrows* maintenance coverage, so a node
@@ -353,10 +356,72 @@ async fn resolve_maintenance(
             Err(e) => tracing::warn!(error = %e, "failed to load group edges for maintenance"),
         }
     }
-    for node in exempt_nodes(maintenance, maintenance::ExemptionKind::Maintenance).await {
-        inherited.remove(&node);
+    let exempt = exempt_nodes(maintenance, maintenance::ExemptionKind::Maintenance).await;
+    for node in &exempt {
+        inherited.remove(node);
     }
-    named.union(&inherited).copied().collect()
+    Coverage {
+        maintenance: named.union(&inherited).copied().collect(),
+        paused_until,
+        // The same release, applied to the fleet-wide window: `window_is_inherited_by` says a
+        // `System` window is inherited by every node, so an operator who took one box out of it
+        // asked for that box to stay monitored through the upgrade.
+        pause_exempt: exempt,
+    }
+}
+
+/// Whether this cycle installs a new snapshot: the config base changed, or the windows resolved to
+/// something other than what the engine is holding.
+///
+/// 🚨 Its own function because the comparison is the easiest half to get wrong. Before ADR-160 it
+/// compared the maintenance set alone, and **an ordinary upgrade moves that set not at all** — it is
+/// empty before the window and empty after it, so a pause added beside it would have been installed
+/// once and never lifted, silencing the fleet until the next unrelated config edit.
+pub(crate) fn swap_needed(base_changed: bool, last: Option<&Coverage>, now: &Coverage) -> bool {
+    base_changed || last != Some(now)
+}
+
+/// What the currently active windows mean to the engine (ADR-160).
+///
+/// Two halves, because a window can be two different things. An operator's window says *this
+/// equipment is being worked on*: the engine observes `Maintenance` for it and an open alert
+/// resolves through its dwell. The fleet-wide `System` window an upgrade opens says *this
+/// deployment is out of service*, which is not a statement about any device — so the engine judges
+/// nothing at all while it lasts.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Coverage {
+    /// Nodes inside an operator's window.
+    pub(crate) maintenance: std::collections::BTreeSet<NodeId>,
+    /// When the fleet-wide pause stops, in unix milliseconds; `None` when no such window is open.
+    pub(crate) paused_until: Option<i64>,
+    /// Nodes released from the fleet-wide window, which keep being judged through it.
+    pub(crate) pause_exempt: std::collections::BTreeSet<NodeId>,
+}
+
+/// Split the active windows into the operator scopes and the end of the fleet-wide pause.
+///
+/// The **latest** end wins when more than one `System` window is open — the same rule
+/// [`maintenance::inherited_maintenance_end`] uses, and for the same reason: the pause has to last
+/// as long as the reason for it does. Two can overlap in practice, since the bus-mode switch opens
+/// one under the same scope id as an upgrade does.
+pub(crate) fn split_windows(
+    windows: &[(
+        maintenance::WindowScope,
+        String,
+        chrono::DateTime<chrono::Utc>,
+    )],
+) -> (Vec<(maintenance::WindowScope, String)>, Option<i64>) {
+    let mut scopes = Vec::new();
+    let mut paused_until: Option<i64> = None;
+    for (level, id, ends_at) in windows {
+        if *level == maintenance::WindowScope::System {
+            let end = ends_at.timestamp_millis();
+            paused_until = Some(paused_until.map_or(end, |cur: i64| cur.max(end)));
+        } else {
+            scopes.push((*level, id.clone()));
+        }
+    }
+    (scopes, paused_until)
 }
 
 /// The nodes released from `kind`, or an empty set if the read fails.
@@ -391,11 +456,12 @@ pub(crate) async fn load_alert_config(
     repo: &NodeRepo,
 ) -> anyhow::Result<(AlertConfig, NoReadingMarkers)> {
     let base = load_alert_config_base(sources).await?;
-    let in_maintenance = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
+    let coverage = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
     Ok((
         AlertConfig::new(base.rules, base.meta)
             .with_topology(base.topology)
-            .with_maintenance(in_maintenance)
+            .with_maintenance(coverage.maintenance)
+            .with_pause(coverage.paused_until, coverage.pause_exempt)
             .with_pool_groups(base.pool_groups)
             .with_per_interface(base.per_interface),
         base.no_reading,
@@ -513,7 +579,7 @@ pub(crate) async fn run_alert_config_refresh(
         topo: topo_sources.clone(),
     };
     let mut cached_base: Option<(u64, AlertConfigBase)> = None;
-    let mut last_maintenance: Option<std::collections::BTreeSet<NodeId>> = None;
+    let mut last_coverage: Option<Coverage> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(30)).await;
         let generation = config_gen::current();
@@ -551,16 +617,16 @@ pub(crate) async fn run_alert_config_refresh(
             Ok(n) => tracing::info!(count = n, "re-derived suppression exemptions"),
             Err(e) => tracing::warn!(error = %e, "failed to reconcile suppression exemptions"),
         }
-        let in_maintenance =
-            resolve_maintenance(&maintenance, &group_repo, &repo, &base.nodes).await;
-        if base_changed || last_maintenance.as_ref() != Some(&in_maintenance) {
+        let coverage = resolve_maintenance(&maintenance, &group_repo, &repo, &base.nodes).await;
+        if swap_needed(base_changed, last_coverage.as_ref(), &coverage) {
             let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
                 .with_topology(base.topology.clone())
-                .with_maintenance(in_maintenance.clone())
+                .with_maintenance(coverage.maintenance.clone())
+                .with_pause(coverage.paused_until, coverage.pause_exempt.clone())
                 .with_pool_groups(base.pool_groups.clone())
                 .with_per_interface(base.per_interface.clone());
             alerts.set_config(config);
-            last_maintenance = Some(in_maintenance);
+            last_coverage = Some(coverage);
         }
         // Pick up classification-rule edits without a restart (also reloaded inline by the
         // rule-edit handlers; this catches any drift / multi-instance future).
@@ -869,6 +935,84 @@ mod tests {
         assert!(
             !production.contains("shadow_topology"),
             "a shadow graph must not be a field the engine could be handed"
+        );
+    }
+
+    // ── ADR-160: the fleet-wide window is split out of the operator scopes ───────────────────────
+
+    fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(secs, 0).expect("a valid instant")
+    }
+
+    #[test]
+    fn a_system_window_pauses_rather_than_maintains() {
+        let (scopes, paused_until) = split_windows(&[(
+            maintenance::WindowScope::System,
+            maintenance::UPGRADE_SCOPE_ID.to_owned(),
+            at(600),
+        )]);
+        assert!(
+            scopes.is_empty(),
+            "the upgrade's window resolved to nodes, so every check observes `Maintenance`"
+        );
+        assert_eq!(paused_until, Some(600_000));
+    }
+
+    #[test]
+    fn an_operator_window_inside_a_system_window_keeps_its_own_scope() {
+        let (scopes, paused_until) = split_windows(&[
+            (maintenance::WindowScope::Node, "n-1".to_owned(), at(300)),
+            (
+                maintenance::WindowScope::System,
+                maintenance::UPGRADE_SCOPE_ID.to_owned(),
+                at(600),
+            ),
+        ]);
+        assert_eq!(
+            scopes,
+            vec![(maintenance::WindowScope::Node, "n-1".to_owned())],
+            "an operator's window was swallowed by the upgrade's"
+        );
+        assert_eq!(paused_until, Some(600_000));
+    }
+
+    /// The latest end wins: the bus-mode switch opens a window under the same scope id, so two can
+    /// overlap, and a pause that ended at the earlier one would judge through the second.
+    #[test]
+    fn the_pause_ends_at_the_latest_system_window_end() {
+        let system = maintenance::WindowScope::System;
+        let id = maintenance::UPGRADE_SCOPE_ID.to_owned();
+        let (_, paused_until) =
+            split_windows(&[(system, id.clone(), at(900)), (system, id, at(300))]);
+        assert_eq!(paused_until, Some(900_000));
+    }
+
+    #[test]
+    fn no_window_pauses_nothing() {
+        let (scopes, paused_until) = split_windows(&[]);
+        assert!(scopes.is_empty());
+        assert_eq!(paused_until, None);
+    }
+
+    /// 🚨 The refresh installs a snapshot when the *coverage* changes, not when the maintenance set
+    /// does. An ordinary upgrade leaves that set empty on both sides of the window, so comparing it
+    /// alone would install the pause once and never lift it.
+    #[test]
+    fn the_refresh_swaps_the_config_when_only_the_pause_changes() {
+        let idle = Coverage::default();
+        let paused = Coverage {
+            paused_until: Some(600_000),
+            ..Coverage::default()
+        };
+        assert!(swap_needed(false, Some(&idle), &paused), "the pause opened");
+        assert!(swap_needed(false, Some(&paused), &idle), "the pause lifted");
+        assert!(
+            !swap_needed(false, Some(&paused), &paused),
+            "nothing moved, so the snapshot is rebuilt for nothing"
+        );
+        assert!(
+            swap_needed(true, Some(&idle), &idle),
+            "a changed config base always installs"
         );
     }
 }

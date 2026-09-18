@@ -297,7 +297,7 @@ impl EventEngine {
     /// both resolves rather than flaps), all rules evaluated (no first-match-wins).
     fn plan(&self, msg: &EventMsg, source: Option<Uuid>, node: Uuid, now_ms: i64) -> Planned {
         let node_id = NodeId::from(node);
-        let in_maintenance = self.alerts.in_maintenance(node_id);
+        let in_maintenance = self.alerts.in_maintenance(node_id, now_ms);
         let snap = self.snapshot.read().expect("snapshot rwlock poisoned");
         let mut runtime = self.runtime.lock().expect("runtime mutex poisoned");
         let mut planned = Planned::default();
