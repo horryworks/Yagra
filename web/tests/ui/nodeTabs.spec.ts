@@ -42,9 +42,30 @@ function nodeOf(subject: NodeDetailSubject): Json {
   const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as {
     kind: NodeKind;
     snmp_configured: boolean;
+    wireless: unknown;
   };
   body.kind = subject.kind;
   body.snmp_configured = subject.snmpConfigured;
+  // 🚨 Stated, never inherited. The generator fills every optional field, so the generated node
+  // carries BOTH `wireless.ap` and `wireless.controller` — i.e. the mock claims every node is a
+  // wireless controller, which would make the AP tab appear on all of them and this spec agree
+  // with itself about a screen no deployment can produce (ADR-064 増分 B3).
+  body.wireless = subject.isWlanController
+    ? {
+        controller: {
+          node_id: NODE_ID,
+          flavor: 'huawei',
+          aps_reported: 2,
+          aps_truncated_at: null,
+          last_inventory_at: '2026-09-18T00:00:00Z',
+          import_aps: true,
+          max_aps: 1024,
+          ap_group_id: null,
+          aps_over_cap: 0,
+        },
+        ap: null,
+      }
+    : null;
   return body as unknown as Json;
 }
 
@@ -55,10 +76,25 @@ const SNMP_STATES = [
   { snmpConfigured: false, name: 'ping-only' },
 ] as const;
 
-for (const kind of NODE_KINDS) {
-  for (const { snmpConfigured, name } of SNMP_STATES) {
-    const subject: NodeDetailSubject = { kind, snmpConfigured };
-    test.describe(`a ${kind} node (${name})`, () => {
+/** Every kind × SNMP, plus the one subject the third axis is about: a device that is also a
+ *  wireless controller. Nothing else can produce it — a controller is a `device` polled over
+ *  SNMP, so it is indistinguishable from a switch on the first two axes (ADR-064 増分 B3). */
+const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
+  ...NODE_KINDS.flatMap((kind) =>
+    SNMP_STATES.map(({ snmpConfigured, name }) => ({
+      subject: { kind, snmpConfigured, isWlanController: false },
+      name: `a ${kind} node (${name})`,
+    })),
+  ),
+  {
+    subject: { kind: 'device', snmpConfigured: true, isWlanController: true },
+    name: 'a device that is a wireless controller',
+  },
+];
+
+{
+  for (const { subject, name: describeName } of SUBJECTS) {
+    test.describe(describeName, () => {
       test.use({
         mockConfig: {
           overrides: { ...BOOTSTRAP_OVERRIDES, '/api/v1/nodes/{node_id}': () => nodeOf(subject) },
@@ -71,6 +107,9 @@ for (const kind of NODE_KINDS) {
         await expect(tabs.first()).toBeVisible();
 
         const expected = visibleNodeDetailTabs(subject).map((t) => TAB_LABELS[t]);
+        // Named here so the AP tab's whole reason cannot be lost to a green run: only the last
+        // subject expects it, and every other one is the check that it stays away.
+        expect(expected.includes(TAB_LABELS.ap)).toBe(subject.isWlanController);
         // Order matters: `visibleNodeDetailTabs` filters NODE_DETAIL_TABS, so the declaration
         // fixes the sequence too. A screen that showed the right set in a different order would be
         // a different screen from the one the declaration describes.
@@ -90,8 +129,8 @@ for (const kind of NODE_KINDS) {
           await expect(
             selected,
             allowed
-              ? `?tab=${tab} should open ${tab} on a ${kind}/${name} node`
-              : `?tab=${tab} is not offered to a ${kind}/${name} node and must fall back to Overview`,
+              ? `?tab=${tab} should open ${tab} on ${describeName}`
+              : `?tab=${tab} is not offered to ${describeName} and must fall back to Overview`,
           ).toHaveText(new RegExp(`^${TAB_LABELS[allowed ? tab : 'overview']}`));
         }
       });
@@ -99,7 +138,11 @@ for (const kind of NODE_KINDS) {
   }
 }
 
-const SNMP_DEVICE: NodeDetailSubject = { kind: 'device', snmpConfigured: true };
+const SNMP_DEVICE: NodeDetailSubject = {
+  kind: 'device',
+  snmpConfigured: true,
+  isWlanController: false,
+};
 
 test.describe('clicking a tab', () => {
   test.use({

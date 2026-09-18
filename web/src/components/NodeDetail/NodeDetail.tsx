@@ -30,6 +30,7 @@ import { EditNodeModal } from './EditNodeModal';
 import { OverviewTab } from './OverviewTab';
 import { InterfacesTab } from './InterfacesTab';
 import { NeighborsTab } from './NeighborsTab';
+import { ApTab } from './ApTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
 import { FlowTab } from './FlowTab';
@@ -99,12 +100,20 @@ export function NodeDetail({
   const tick = useRefreshTick();
   const [node, setNode] = useState<NodeDetailData | null>(null);
   // What the tab rules are asked about. `null` until the config load resolves — the render below
-  // returns a loading pane until then, so the bar is never painted from an unresolved node. Both
-  // fields come off the same fetch, so there is no window where one is known and the other is not.
+  // returns a loading pane until then, so the bar is never painted from an unresolved node. All
+  // three fields come off the same fetch, so there is no window where one is known and another is
+  // not — including `wireless.controller`, which the node read fills in (ADR-064 増分 B3).
   // Memoized so it is referentially stable: the tab-correction effect below depends on it, and a
   // fresh object every render would re-run that effect — which writes the URL — on every render.
   const subject: NodeDetailSubject | null = useMemo(
-    () => (node ? { kind: node.kind, snmpConfigured: node.snmp_configured } : null),
+    () =>
+      node
+        ? {
+            kind: node.kind,
+            snmpConfigured: node.snmp_configured,
+            isWlanController: node.wireless?.controller != null,
+          }
+        : null,
     [node],
   );
   // A tab this node does not show falls back to Overview.
@@ -276,6 +285,7 @@ export function NodeDetail({
     collCount,
     hasSnmp: node.snmp_configured,
     state,
+    wlanController: node.wireless?.controller ?? null,
   };
   // Keyed by NodeDetailTab, so adding a tab to NODE_DETAIL_TABS without a body fails to compile.
   const tabBodies: Record<NodeDetailTab, ReactNode> = {
@@ -287,6 +297,15 @@ export function NodeDetail({
         status={status}
         unreachable={state === 'unreachable'}
         canEdit={canEdit}
+        onChanged={() => setRefreshNonce((v) => v + 1)}
+      />
+    ),
+    // Takes `onChanged` for the same reason Overview does: importing an AP creates a node, which
+    // changes this page's own folder contents and the tree beside it.
+    ap: (
+      <ApTab
+        node={node}
+        groups={groups}
         onChanged={() => setRefreshNonce((v) => v + 1)}
       />
     ),

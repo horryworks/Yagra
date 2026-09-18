@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Which rows three node-detail tabs show — Interfaces, Neighbors and Collection.
+// Which rows four node-detail tabs show — Interfaces, Neighbors, Collection and AP.
 //
 // Client-side, and here rather than in the tabs because Vitest never executes a `.tsx` (testing.md).
 // The three are bounded per node: a device has interfaces, neighbours and metrics in the dozens or
 // low hundreds, and the tab already has all of them in hand. They are *not* the fleet-scaling lists
 // `ui-conventions` sends to the server — those are the fleet-wide screens.
 //
-// One module because the three ask the same shape of question and were about to grow three
-// near-identical `.toLowerCase().includes()` blocks. The Interfaces tab already had one, hand-rolled
-// and searching two fields where the row shows five.
+// One module because they ask the same shape of question and were about to grow near-identical
+// `.toLowerCase().includes()` blocks. The Interfaces tab already had one, hand-rolled and searching
+// two fields where the row shows five.
+//
+// ⚠️ Every builder here needs its own row in `lib/filterSpecRegistry.test.ts` — the registry is
+// keyed by builder, not by module, so sharing this file with three others buys nothing there.
 
 import type { TFunction } from 'i18next';
 import {
@@ -19,10 +22,13 @@ import {
 import {
   METRIC_STATUSES,
   NEIGHBOR_PROTOS,
+  WLAN_AP_STATES,
   type InterfaceAddress,
   type Neighbor,
   type NodeMetricEntry,
+  type WirelessApRow,
 } from '../../types/api';
+import { AP_STATE_UNKNOWN, apSearchText, apStateKey, isImported } from './apRows';
 import { addressesOf, formatAddress } from './interfaceAddresses';
 import { DUPLEX_STATES, duplexState, mediaText, SPEED_TIERS, speedTier } from './linkMode';
 
@@ -266,4 +272,66 @@ export function metricFilters(t: TFunction): Record<string, ColumnFilterSpec<Nod
 
 export function metricColumns(t: TFunction): FilterableColumn<NodeMetricEntry>[] {
   return specColumns(metricFilters(t));
+}
+
+// ─────────────────────────────────────────────────────────────────────── ap
+
+/** Whether an AP the controller reports is a node in Yagra — the question the tab is *for*.
+ *
+ *  An enum of two rather than a checkbox because the toolbar counts both sides: "27 not imported"
+ *  is the number an operator opened this tab to act on, and a checkbox can only offer to hide. */
+export const AP_IMPORT_STATES = ['imported', 'not_imported'] as const;
+export type ApImportState = (typeof AP_IMPORT_STATES)[number];
+
+export function apImportState(row: WirelessApRow): ApImportState {
+  return isImported(row) ? 'imported' : 'not_imported';
+}
+
+/**
+ * The AP list's filter row (ADR-064 増分 B3).
+ *
+ * Client-side like its three neighbours here, and for a harder reason than theirs: the tab holds
+ * the controller's whole inventory in one fetch (the cap *is* the page size), so filtering on the
+ * server would answer a different question — "the first page of the matches" — while the toolbar
+ * counted the ones on screen. One of the two would be wrong and neither would say so.
+ *
+ * ⚠️ `run_state` has no spec. It is the vendor's own word (`normal` / `fault` / `standby` on
+ * Huawei, and the list grows with each flavour), so there is no closed option list to offer and no
+ * translation to match against — the column shows it verbatim and `search` does not read it.
+ */
+export function apFilters(t: TFunction): Record<string, ColumnFilterSpec<WirelessApRow>> {
+  return {
+    ap: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: apSearchText,
+      containsSemantics: 'substring',
+      placeholder: t('ap.colAp'),
+      hint: t('ap.searchHint'),
+    },
+    state: {
+      kind: 'enum',
+      // `unknown` is offered alongside the three the controller can say: an AP whose state did not
+      // survive the walk is one an operator wants to be able to single out, not one to hide.
+      options: [...WLAN_AP_STATES, AP_STATE_UNKNOWN].map((v) => ({
+        value: v,
+        label: t(`ap.state.${v}`),
+      })),
+      readValue: apStateKey,
+      allLabel: t('ap.colState'),
+      counts: 'client',
+    },
+    imported: {
+      kind: 'enum',
+      options: AP_IMPORT_STATES.map((v) => ({ value: v, label: t(`ap.import.${v}`) })),
+      readValue: apImportState,
+      allLabel: t('ap.colImported'),
+      counts: 'client',
+    },
+  };
+}
+
+export function apColumns(t: TFunction): FilterableColumn<WirelessApRow>[] {
+  return specColumns(apFilters(t));
 }

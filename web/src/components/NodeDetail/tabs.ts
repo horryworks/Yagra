@@ -2,11 +2,14 @@
 // Single source of truth for the node-detail sub-tabs: the whitelist, the label key, which nodes
 // see each tab, and the count-pill / warning-dot rules.
 //
-// Visibility has TWO axes, and the second one is not the node's kind: a tab is offered when the
-// node's kind is in its `kinds` list AND — if the tab is fed only by an SNMP walk — the node is
-// actually polled over SNMP (ADR-119). A ping-only device is a `device` like any other, so the
-// kind axis alone cannot tell it apart, and Interfaces and Neighbors are structurally empty on it
-// for exactly the reason they are on a URL monitor.
+// Visibility has THREE axes, and none of them is subsumed by the node's kind: a tab is offered
+// when the node's kind is in its `kinds` list AND — if the tab is fed only by an SNMP walk — the
+// node is actually polled over SNMP (ADR-119) AND — if the tab is fed by a wireless controller's
+// AP inventory — the node is one (ADR-064 増分 B3). A ping-only device is a `device` like any
+// other, so the kind axis alone cannot tell it apart, and Interfaces and Neighbors are structurally
+// empty on it for exactly the reason they are on a URL monitor. A wireless controller is a
+// `device` like any other too, and it is the same shape of mistake one axis further out: without
+// the third question every switch in the fleet would grow an AP tab with nothing behind it.
 //
 // Consumed by all three surfaces that host the node detail so they can never drift:
 //  - NodeDetail.tsx     — renders the tab bar from NODE_DETAIL_TAB_META and the body from a
@@ -22,15 +25,25 @@
 // bug was still reachable one level down. Keying every per-tab concern off `NodeDetailTab` makes it
 // structurally impossible: TypeScript requires each Record to be exhaustive.
 //
-// Adding a tab: extend NODE_DETAIL_TABS, add its NODE_DETAIL_TAB_META entry (including `kinds`
-// and `needsSnmp`, both required so the two visibility questions get answered) and
+// Adding a tab: extend NODE_DETAIL_TABS, add its NODE_DETAIL_TAB_META entry (including `kinds`,
+// `needsSnmp` and `needsWlanController`, all required so the three visibility questions get
+// answered) and
 // its body element in NodeDetail.tsx (all enforced by the compiler), and add `tabs.<key>` to the
 // `nodes` EN+JA locales.
 
-import { NODE_KINDS, type InterfaceRow, type NodeKind, type NodeState } from '../../types/api';
+import {
+  NODE_KINDS,
+  type InterfaceRow,
+  type NodeKind,
+  type NodeState,
+  type WirelessControllerSummary,
+} from '../../types/api';
 
 export const NODE_DETAIL_TABS = [
   'overview',
+  // Second, not last: on a wireless controller the AP list is why the page was opened. Every other
+  // node hides it, so the ordering change is invisible outside the one kind it is for.
+  'ap',
   'interfaces',
   'neighbors',
   'collection',
@@ -106,6 +119,13 @@ const DEVICE_ONLY: readonly NodeKind[] = ['device'];
 export interface NodeDetailSubject {
   kind: NodeKind;
   snmpConfigured: boolean;
+  /** True when this node is a wireless controller — i.e. `NodeDetail.wireless.controller` is set.
+   *
+   *  🚨 That row exists once the node has **reported an AP inventory** or been given import
+   *  settings, not when its profile was attached. So a freshly profiled AC shows no AP tab until
+   *  its first successful WLAN walk lands, and during that window there is no on-screen way to
+   *  turn importing on (ADR-064 増分 B3 — known, and measured in the lab rather than guessed at). */
+  isWlanController: boolean;
 }
 
 /** Live node facts the tab bar decorates itself from. Kept free of React types so the badge/warn
@@ -118,6 +138,10 @@ export interface NodeDetailTabStats {
    *  warning dot and the visible tab set cannot answer "is this node polled over SNMP" differently. */
   hasSnmp: boolean;
   state: NodeState;
+  /** The controller summary off the same `NodeDetail` the pane already loaded — so the AP pill
+   *  costs no extra fetch, the way the Interfaces pill reads rows the pane already has. Null on
+   *  every node that is not a controller. */
+  wlanController: WirelessControllerSummary | null;
 }
 
 /** Per-tab presentation rules. `labelKey` resolves in the `nodes` i18n namespace. */
@@ -140,6 +164,13 @@ export interface NodeDetailTabMeta {
    *  and Flow are `false`: syslog, traps and NetFlow are attributed by the device's address, so a
    *  ping-only node can legitimately have both (ADR-119 決定 1). */
   needsSnmp: boolean;
+  /** True when every row this tab can show comes from a wireless controller's AP inventory, so a
+   *  node that is not a controller would be offered a structurally empty tab.
+   *
+   *  **Required for the same reason the other two are.** A controller is a `device` and is polled
+   *  over SNMP, so it passes both of the older axes — meaning the AP tab would appear on every
+   *  switch, router and firewall in the fleet if this question did not exist (ADR-064 増分 B3). */
+  needsWlanController: boolean;
   /** Count pill after the label. Return null for "no pill" (unknown or zero). */
   badge?: (s: NodeDetailTabStats) => number | null;
   /** Warning dot after the label — the tab needs attention. */
@@ -147,19 +178,45 @@ export interface NodeDetailTabMeta {
 }
 
 export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
-  overview: { labelKey: 'tabs.overview', kinds: ALL_KINDS, needsSnmp: false },
+  overview: {
+    labelKey: 'tabs.overview',
+    kinds: ALL_KINDS,
+    needsSnmp: false,
+    needsWlanController: false,
+  },
+  // A wireless controller only. `kinds` and `needsSnmp` are both true of every switch in the
+  // fleet, so `needsWlanController` is the one that actually decides this tab — see its doc.
+  // The pill counts what the controller REPORTS, not what was imported: an AC reporting 30 APs of
+  // which none is a node yet is exactly the state this tab exists to get an operator out of.
+  ap: {
+    labelKey: 'tabs.ap',
+    kinds: DEVICE_ONLY,
+    needsSnmp: true,
+    needsWlanController: true,
+    badge: (s) => s.wlanController?.aps_reported || null,
+    // The controller saw more APs than `max_aps` allows, so the inventory is truncated and the
+    // ones past the cap are invisible to Yagra — a number in the list that quietly means "and
+    // others". The card says how many; the dot says to go and look.
+    warn: (s) => (s.wlanController?.aps_over_cap ?? 0) > 0,
+  },
   // The ifTable walk is the only writer of `interfaces`, so with no SNMP there is nothing to list —
   // and nothing to explain either, which is why the tab goes rather than growing an empty state.
   interfaces: {
     labelKey: 'tabs.interfaces',
     kinds: DEVICE_ONLY,
     needsSnmp: true,
+    needsWlanController: false,
     badge: (s) => s.interfaces.length || null,
     warn: (s) => s.interfaces.some((r) => r.oper_status != null && r.oper_status !== 1),
   },
   // No badge: the count would need a second fetch on every tab-bar render, and adjacency is not
   // something a number in a pill answers ("2 neighbours" tells an operator nothing they wanted).
-  neighbors: { labelKey: 'tabs.neighbors', kinds: DEVICE_ONLY, needsSnmp: true },
+  neighbors: {
+    labelKey: 'tabs.neighbors',
+    kinds: DEVICE_ONLY,
+    needsSnmp: true,
+    needsWlanController: false,
+  },
   // Every kind: since ADR-046 this tab is the node's *metric inventory*, not its SNMP collection
   // set, so it is the only place a URL monitor's http_* / extracted values or a DNS monitor's
   // dns_up / dns_resolve_ms can be charted at all.
@@ -171,6 +228,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     labelKey: 'tabs.collection',
     kinds: ALL_KINDS,
     needsSnmp: false,
+    needsWlanController: false,
     // `|| null` per the doc above: a URL/DNS monitor's built-in profile attaches no SNMP templates,
     // and a bare `Collection 0` pill reads as a fault rather than as "not applicable".
     // ⚠️ Follow-up, deliberately not fixed here: this counts the profile's templates while the tab
@@ -197,8 +255,14 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     labelKey: 'tabs.events',
     kinds: ['device', 'meraki', 'wireless_ap'],
     needsSnmp: false,
+    needsWlanController: false,
   },
-  flow: { labelKey: 'tabs.flow', kinds: DEVICE_ONLY, needsSnmp: false },
+  flow: {
+    labelKey: 'tabs.flow',
+    kinds: DEVICE_ONLY,
+    needsSnmp: false,
+    needsWlanController: false,
+  },
 };
 
 /** The tabs this node shows, in `NODE_DETAIL_TABS` order.
@@ -209,12 +273,16 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
  *  rows, and missing one of them is precisely the ADR-031 bug this file exists to prevent. The
  *  SNMP axis makes that worse rather than better: keyed by kind × SNMP it would be eight rows.
  *
- *  The two axes are ANDed and neither subsumes the other — a URL monitor fails `kinds` for
+ *  The three axes are ANDed and none subsumes the others — a URL monitor fails `kinds` for
  *  Interfaces, a ping-only device passes `kinds` and fails `needsSnmp`. */
 export function visibleNodeDetailTabs(node: NodeDetailSubject): readonly NodeDetailTab[] {
   return NODE_DETAIL_TABS.filter((tab) => {
     const meta = NODE_DETAIL_TAB_META[tab];
-    return meta.kinds.includes(node.kind) && (node.snmpConfigured || !meta.needsSnmp);
+    return (
+      meta.kinds.includes(node.kind) &&
+      (node.snmpConfigured || !meta.needsSnmp) &&
+      (node.isWlanController || !meta.needsWlanController)
+    );
   });
 }
 

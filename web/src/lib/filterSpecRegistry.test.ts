@@ -30,7 +30,12 @@ import {
 
 import { eventFilters } from '../components/EventLog/eventFilterSpec';
 import { flowFilters } from '../components/NodeDetail/flowTabFilters';
-import { interfaceFilters, metricFilters, neighborFilters } from '../components/NodeDetail/tabFilters';
+import {
+  apFilters,
+  interfaceFilters,
+  metricFilters,
+  neighborFilters,
+} from '../components/NodeDetail/tabFilters';
 import { activeAlertFilters } from '../pages/activeAlertFilters';
 import { tokenFilters } from '../pages/apiTokenFilters';
 import { auditFilters } from '../pages/auditQuery';
@@ -115,6 +120,11 @@ const REGISTRY: readonly Entry[] = [
     module: 'components/NodeDetail/tabFilters.ts',
     name: 'metricFilters',
     build: () => specColumns(metricFilters(t)),
+  },
+  {
+    module: 'components/NodeDetail/tabFilters.ts',
+    name: 'apFilters',
+    build: () => specColumns(apFilters(t)),
   },
   {
     module: 'pages/activeAlertFilters.ts',
@@ -317,6 +327,11 @@ interface Route {
 
 /** The node-detail tabs a host renders, each under its tab's prefix. Both hosts render the same set. */
 const NODE_TABS: readonly RouteTable[] = [
+  {
+    entries: ['apFilters'],
+    prefix: nodeTabFilterPrefix('ap'),
+    wiredIn: { file: 'components/NodeDetail/ApTab.tsx', spelling: "nodeTabFilterPrefix('ap')" },
+  },
   {
     entries: ['interfaceFilters'],
     prefix: nodeTabFilterPrefix('interfaces'),

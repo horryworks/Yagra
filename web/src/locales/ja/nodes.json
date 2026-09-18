@@ -226,11 +226,67 @@
   },
   "tabs": {
     "overview": "概要",
+    "ap": "AP",
     "interfaces": "インターフェース",
     "neighbors": "隣接",
     "collection": "収集",
     "events": "イベント",
     "flow": "フロー"
+  },
+  "ap": {
+    "colAp": "アクセスポイント",
+    "colState": "状態",
+    "colAddress": "アドレス",
+    "colModel": "機種",
+    "colClients": "接続数",
+    "colReportedBy": "報告元",
+    "colLastSeen": "最終確認",
+    "colImported": "監視",
+    "openNode": "ノードを開く",
+    "importAction": "監視する",
+    "imported": "{{ap}} をノードとして監視に入れました。",
+    "summary_one": "アクセスポイント {{count}} 台",
+    "summary_other": "アクセスポイント {{count}} 台",
+    "searchHint": "名前・MAC（コロンの有無どちらでも）・アドレス・機種・シリアル・ソフトウェア版を探します。",
+    "overCap_one": "コントローラは下の上限を超えて {{count}} 台のアクセスポイントを報告しました。この一覧には出ず、監視にも入りません。",
+    "overCap_other": "コントローラは下の上限を超えて {{count}} 台のアクセスポイントを報告しました。この一覧には出ず、監視にも入りません。",
+    "morePages": "1 回の応答に収まらない数のアクセスポイントが報告されています。この一覧は全部ではありません。",
+    "signIn": "どのアクセスポイントを監視するか変えるにはサインインしてください。",
+    "state": {
+      "associated": "接続中",
+      "backup": "待機",
+      "not_associated": "未接続",
+      "unknown": "不明"
+    },
+    "import": {
+      "imported": "監視中",
+      "not_imported": "未監視"
+    },
+    "stats": {
+      "reported_one": "報告 {{count}} 台",
+      "reported_other": "報告 {{count}} 台",
+      "lastInventory": "在庫の取得 {{when}}",
+      "neverInventoried": "在庫はまだ届いていません"
+    },
+    "settings": {
+      "title": "アクセスポイントの監視",
+      "importAps": "アクセスポイントを自動で監視に入れる",
+      "maxAps": "上限",
+      "group": "フォルダ",
+      "groupDefault": "— このコントローラと同じフォルダ —",
+      "hint": "一度でも接続したアクセスポイントだけを自動で監視に入れます。1 台につき 1 ノードを、ここで選んだフォルダに作ります。",
+      "save": "保存"
+    },
+    "empty": {
+      "none": "このコントローラはアクセスポイントを報告していません。",
+      "noInventory": "このコントローラからの在庫はまだ届いていません。"
+    },
+    "err": {
+      "load": "アクセスポイントを読み込めませんでした。",
+      "import": "そのアクセスポイントを監視に入れられませんでした。",
+      "save": "設定を保存できませんでした。",
+      "maxAps": "上限は {{min}} 〜 {{max}} の数で入れてください。"
+    }
   },
   "flow": {
     "trend": "プロトコル別トラフィック",
