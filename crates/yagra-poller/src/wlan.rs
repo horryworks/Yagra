@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
 use yagra_bus::{RowName, Sample};
+use yagra_common::{assign_radio_slots, WlanBand, WlanRadioObservation};
 use yagra_common::{
     huawei_run_state, sanitize_wlan_text, ssid_row_key, ApMac, MetricKind, WlanApObservation,
     WlanFlavor, WlanInventory, MAX_APS_PER_CONTROLLER_HARD, METRIC_WLAN_SSID_AP_COUNT,
@@ -131,19 +132,26 @@ fn oids(flavor: WlanFlavor, cols: &[(u32, Field)]) -> Vec<String> {
 /// The inventory in a dialect's rows, bounded to `max_aps` and the byte budget
 /// ([`WlanInventory::bounded`]).
 ///
-/// `optional` carries the second walk's rows and may be empty — that walk is allowed to fail, and
-/// an empty slice is exactly what "it did" looks like here. Both are folded in **before** bounding,
-/// so the byte budget measures the observations that will actually be sent.
+/// `optional` and `radio_rows` carry the second and third walks' rows and may each be empty —
+/// those walks are allowed to fail, and an empty slice is exactly what "it did" looks like here.
+/// All three are folded in **before** bounding, so the byte budget measures the observations that
+/// will actually be sent — which is why the radios are attached here and not by the caller.
 #[must_use]
 pub fn inventory(
     flavor: WlanFlavor,
     rows: &[SnmpInstanceRow],
     optional: &[SnmpInstanceRow],
+    radio_rows: &[SnmpInstanceRow],
     max_aps: u32,
 ) -> WlanInventory {
     match flavor {
         WlanFlavor::Huawei => {
-            WlanInventory::bounded(flavor, huawei_observations(flavor, rows, optional), max_aps)
+            let mut aps = huawei_observations(flavor, rows, optional);
+            let mut by_ap = radios(flavor, radio_rows);
+            for ap in &mut aps {
+                ap.radios = by_ap.remove(&ap.mac).unwrap_or_default();
+            }
+            WlanInventory::bounded(flavor, aps, max_aps)
         }
     }
 }
@@ -196,6 +204,7 @@ fn huawei_observations(
                 temp_c: None,
                 cpu_temp_c: None,
                 power_state: None,
+                radios: Vec::new(),
             };
             for (field, value) in rest.remove(&mac).unwrap_or_default() {
                 match field {
@@ -254,6 +263,189 @@ fn temperature(value: &SnmpValue) -> Option<i32> {
 fn non_negative(value: &SnmpValue) -> Option<u32> {
     match value {
         SnmpValue::Int(v) => u32::try_from(*v).ok(),
+        SnmpValue::Bytes(_) | SnmpValue::Oid(_) => None,
+    }
+}
+
+// ─── Radios (ADR-064 増分 C) ───────────────────────────────────────────────────
+
+/// Huawei `hwWlanRadioInfoEntry` columns read, as `(column number, field)`.
+///
+/// Left out, each for a reason: `.19` (channel bandwidth, measured 20 everywhere) is **not** a
+/// line rate and must never reach `if_speed` — a 20 there would make a utilisation percentage out
+/// of 20 bits per second; `.26` (idle ratio) is `100 - .25` on every measured row; `.23` (packet
+/// error rate) and the frame counters read 0 on every row of the measured controller, so there is
+/// nothing to say about how they behave; `.46` (maximum power) is a platform constant.
+const HUAWEI_RADIO_COLUMNS: [(u32, RadioField); 11] = [
+    (5, RadioField::Band),
+    (6, RadioField::RunState),
+    (7, RadioField::Channel),
+    (24, RadioField::Noise),
+    (25, RadioField::ChannelUtil),
+    (29, RadioField::Interference),
+    (40, RadioField::Clients),
+    (41, RadioField::ClientSignal),
+    (45, RadioField::TxPower),
+    (31, RadioField::InOctets),
+    (36, RadioField::OutOctets),
+];
+
+/// What a radio column contributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RadioField {
+    Band,
+    RunState,
+    Channel,
+    Noise,
+    ChannelUtil,
+    Interference,
+    Clients,
+    ClientSignal,
+    TxPower,
+    InOctets,
+    OutOctets,
+}
+
+/// The most radios one AP may report. Three bands, plus room for a second radio in each.
+const RADIOS_PER_AP_MAX: usize = 6;
+
+/// Huawei `hwWlanRadioActualEIRP` when the controller has no figure: the MIB says so outright
+/// (`Unsigned32 (1..127 | 255)`).
+const HUAWEI_NO_TX_POWER: i64 = 255;
+
+/// The radio column OIDs to walk for a dialect.
+#[must_use]
+pub fn radio_columns(flavor: WlanFlavor) -> Vec<String> {
+    match flavor {
+        WlanFlavor::Huawei => HUAWEI_RADIO_COLUMNS
+            .iter()
+            .map(|(n, _)| format!("{}.{n}", flavor.radio_root_oid()))
+            .collect(),
+    }
+}
+
+/// The most rows the radio walk takes, across every column.
+#[must_use]
+pub fn radio_walk_row_budget(flavor: WlanFlavor) -> usize {
+    radio_columns(flavor).len()
+        * usize::try_from(MAX_APS_PER_CONTROLLER_HARD).unwrap_or(usize::MAX)
+        * RADIOS_PER_AP_MAX
+}
+
+/// The radios in a dialect's rows, grouped by the AP they belong to and numbered into slots.
+///
+/// 🚨 **A radio whose band the controller did not name is dropped.** The band decides the slot,
+/// and a guessed slot is a series attributed to the wrong radio — which looks like a working
+/// reading rather than a missing one.
+#[must_use]
+pub fn radios(
+    flavor: WlanFlavor,
+    rows: &[SnmpInstanceRow],
+) -> BTreeMap<ApMac, Vec<WlanRadioObservation>> {
+    match flavor {
+        WlanFlavor::Huawei => huawei_radios(flavor, rows),
+    }
+}
+
+fn huawei_radios(
+    flavor: WlanFlavor,
+    rows: &[SnmpInstanceRow],
+) -> BTreeMap<ApMac, Vec<WlanRadioObservation>> {
+    let field_of: BTreeMap<String, RadioField> = HUAWEI_RADIO_COLUMNS
+        .iter()
+        .map(|(n, f)| (format!("{}.{n}", flavor.radio_root_oid()), *f))
+        .collect();
+    // Keyed by (AP, the vendor's radio id) — the index's first six sub-identifiers are the AP
+    // table's own index, which is what attaches a radio to an AP without a second lookup.
+    let mut cells: BTreeMap<(ApMac, u32), Vec<(RadioField, &SnmpValue)>> = BTreeMap::new();
+    for row in rows {
+        let Some(field) = field_of.get(row.oid_base.trim_start_matches('.')) else {
+            continue;
+        };
+        let Some((mac, radio_id)) = radio_index(&row.instance) else {
+            continue;
+        };
+        cells
+            .entry((mac, radio_id))
+            .or_default()
+            .push((*field, &row.value));
+    }
+    let mut by_ap: BTreeMap<ApMac, Vec<(u32, WlanRadioObservation)>> = BTreeMap::new();
+    for ((mac, radio_id), fields) in cells {
+        let band = fields.iter().find_map(|(f, v)| match (f, v) {
+            (RadioField::Band, SnmpValue::Int(n)) => WlanBand::from_huawei(*n),
+            _ => None,
+        });
+        let Some(band) = band else { continue };
+        let mut r = WlanRadioObservation {
+            // Replaced by `assign_radio_slots`; a radio is never published with this.
+            slot: 0,
+            band,
+            up: None,
+            clients: None,
+            channel: None,
+            channel_util_pct: None,
+            interference_pct: None,
+            noise_dbm: None,
+            client_signal_dbm: None,
+            tx_power_dbm: None,
+            in_octets: None,
+            out_octets: None,
+        };
+        for (field, value) in fields {
+            match field {
+                RadioField::Band => {}
+                // up(1)/down(2)/invalid(255): the third is not a state, so it stays `None`.
+                RadioField::RunState => {
+                    r.up = match value {
+                        SnmpValue::Int(1) => Some(true),
+                        SnmpValue::Int(2) => Some(false),
+                        _ => None,
+                    };
+                }
+                RadioField::Channel => r.channel = non_negative(value),
+                // 0 is the MIB's own "invalid", and a noise floor of 0 dBm would read as a radio
+                // being drowned rather than as a number the controller does not have.
+                RadioField::Noise => r.noise_dbm = signed_nonzero(value),
+                RadioField::ChannelUtil => r.channel_util_pct = non_negative(value),
+                RadioField::Interference => r.interference_pct = non_negative(value),
+                RadioField::Clients => r.clients = non_negative(value),
+                // 0 here means "no clients to average", not "0 dBm" (which would be a signal
+                // stronger than any real one).
+                RadioField::ClientSignal => r.client_signal_dbm = signed_nonzero(value),
+                RadioField::TxPower => {
+                    r.tx_power_dbm = match value {
+                        SnmpValue::Int(HUAWEI_NO_TX_POWER) => None,
+                        SnmpValue::Int(v) => i32::try_from(*v).ok(),
+                        SnmpValue::Bytes(_) | SnmpValue::Oid(_) => None,
+                    };
+                }
+                RadioField::InOctets => r.in_octets = counter64(value),
+                RadioField::OutOctets => r.out_octets = counter64(value),
+            }
+        }
+        let ap = by_ap.entry(mac).or_default();
+        if ap.len() < RADIOS_PER_AP_MAX {
+            ap.push((radio_id, r));
+        }
+    }
+    by_ap
+        .into_iter()
+        .map(|(mac, radios)| (mac, assign_radio_slots(radios)))
+        .collect()
+}
+
+/// The AP and radio a radio row's index names: six sub-identifiers of MAC, then the radio id.
+fn radio_index(instance: &[u32]) -> Option<(ApMac, u32)> {
+    let (mac, radio_id) = instance.split_at(instance.len().checked_sub(1)?);
+    Some((ApMac::from_subids(mac)?, *radio_id.first()?))
+}
+
+/// A signed reading whose dialect spells "no reading" as zero.
+fn signed_nonzero(value: &SnmpValue) -> Option<i32> {
+    match value {
+        SnmpValue::Int(0) => None,
+        SnmpValue::Int(v) => i32::try_from(*v).ok(),
         SnmpValue::Bytes(_) | SnmpValue::Oid(_) => None,
     }
 }
@@ -499,6 +691,133 @@ mod tests {
 
     const ROOT: &str = "1.3.6.1.4.1.2011.6.139.13.3.3.1";
     const SSID_ROOT: &str = "1.3.6.1.4.1.2011.6.139.17.1.2.1";
+    const RADIO_ROOT: &str = "1.3.6.1.4.1.2011.6.139.16.1.2.1";
+
+    /// One radio column cell: the index is the AP MAC then the vendor radio id.
+    fn radio_cell(column: u32, mac: [u32; 6], radio_id: u32, v: i64) -> SnmpInstanceRow {
+        let mut instance = mac.to_vec();
+        instance.push(radio_id);
+        SnmpInstanceRow {
+            oid_base: format!("{RADIO_ROOT}.{column}"),
+            instance,
+            value: SnmpValue::Int(v),
+        }
+    }
+
+    /// The measured shape: two radios per AP, radio 0 on 2.4 GHz and radio 1 on 5 GHz.
+    #[test]
+    fn radios_are_numbered_by_band_and_attached_to_their_ap() {
+        let up = [84, 246, 226, 131, 80, 128];
+        let rows = vec![
+            radio_cell(5, up, 0, 1),
+            radio_cell(7, up, 0, 11),
+            radio_cell(40, up, 0, 3),
+            radio_cell(5, up, 1, 2),
+            radio_cell(7, up, 1, 44),
+            radio_cell(40, up, 1, 12),
+        ];
+        let by_ap = radios(WlanFlavor::Huawei, &rows);
+        let mine = by_ap
+            .get(&ApMac::new([84, 246, 226, 131, 80, 128]))
+            .expect("the radios are filed under the AP the index names");
+        assert_eq!(mine.len(), 2);
+        assert_eq!(mine[0].band, yagra_common::WlanBand::Band2G4);
+        assert_eq!(mine[0].slot, 1, "2.4 GHz is slot 1");
+        assert_eq!(mine[0].channel, Some(11));
+        assert_eq!(mine[0].clients, Some(3));
+        assert_eq!(mine[1].band, yagra_common::WlanBand::Band5G);
+        assert_eq!(mine[1].slot, 2, "5 GHz is slot 2");
+        assert_eq!(mine[1].clients, Some(12));
+    }
+
+    /// A second radio in one band takes the band base plus the stride, so a band always owns its
+    /// last digit and a future band cannot collide with it (ADR-064 R6).
+    #[test]
+    fn a_second_radio_in_one_band_is_offset_by_the_stride() {
+        let mac = [1, 2, 3, 4, 5, 6];
+        let rows = vec![
+            radio_cell(5, mac, 0, 2),
+            radio_cell(5, mac, 1, 2),
+            radio_cell(5, mac, 2, 3),
+        ];
+        let by_ap = radios(WlanFlavor::Huawei, &rows);
+        let slots: Vec<u32> = by_ap[&ApMac::new([1, 2, 3, 4, 5, 6])]
+            .iter()
+            .map(|r| r.slot)
+            .collect();
+        assert_eq!(slots, vec![2, 12, 3]);
+    }
+
+    /// 🚨 The dialect spells three different "no reading" values three different ways, and each
+    /// one would be a believable measurement if it were stored: a 0 dBm noise floor reads as a
+    /// radio being drowned, a 0 dBm client signal as the strongest possible, and 255 dBm of
+    /// transmit power as nothing at all.
+    #[test]
+    fn the_dialects_invalid_markers_are_not_readings() {
+        let mac = [9, 9, 9, 9, 9, 9];
+        let rows = vec![
+            radio_cell(5, mac, 0, 2),
+            radio_cell(24, mac, 0, 0),
+            radio_cell(41, mac, 0, 0),
+            radio_cell(45, mac, 0, 255),
+        ];
+        let by_ap = radios(WlanFlavor::Huawei, &rows);
+        let r = &by_ap[&ApMac::new([9, 9, 9, 9, 9, 9])][0];
+        assert_eq!(r.noise_dbm, None);
+        assert_eq!(r.client_signal_dbm, None);
+        assert_eq!(r.tx_power_dbm, None);
+
+        // …and a real reading of each is kept, so the check above is not "everything is dropped".
+        let rows = vec![
+            radio_cell(5, mac, 0, 2),
+            radio_cell(24, mac, 0, -96),
+            radio_cell(41, mac, 0, -77),
+            radio_cell(45, mac, 0, 23),
+        ];
+        let by_ap = radios(WlanFlavor::Huawei, &rows);
+        let r = &by_ap[&ApMac::new([9, 9, 9, 9, 9, 9])][0];
+        assert_eq!(r.noise_dbm, Some(-96));
+        assert_eq!(r.client_signal_dbm, Some(-77));
+        assert_eq!(r.tx_power_dbm, Some(23));
+    }
+
+    /// A radio whose band the controller did not name gets no slot, because a guessed slot is a
+    /// series attributed to the wrong radio — which looks like a reading rather than a gap.
+    #[test]
+    fn a_radio_with_no_band_is_dropped() {
+        let mac = [7, 7, 7, 7, 7, 7];
+        let rows = vec![radio_cell(7, mac, 0, 36), radio_cell(40, mac, 0, 5)];
+        assert!(radios(WlanFlavor::Huawei, &rows).is_empty());
+    }
+
+    /// The radios reach the inventory attached to the right AP, which is the join the whole
+    /// increment rests on: the radio index's first six sub-identifiers are the AP table's index.
+    #[test]
+    fn the_inventory_carries_each_aps_own_radios() {
+        let up = [84, 246, 226, 131, 80, 128];
+        let radio_rows = vec![radio_cell(5, up, 0, 1), radio_cell(40, up, 0, 4)];
+        let inv = inventory(
+            WlanFlavor::Huawei,
+            &active_controller_rows(),
+            &[],
+            &radio_rows,
+            1024,
+        );
+        let with_radio: Vec<&str> = inv
+            .aps
+            .iter()
+            .filter(|a| !a.radios.is_empty())
+            .filter_map(|a| a.name.as_deref())
+            .collect();
+        assert_eq!(with_radio, vec!["site-ap-001"]);
+        let ap = inv
+            .aps
+            .iter()
+            .find(|a| a.name.as_deref() == Some("site-ap-001"))
+            .unwrap();
+        assert_eq!(ap.radios[0].clients, Some(4));
+        assert_eq!(ap.radios[0].slot, 1);
+    }
 
     fn row(column: u32, mac: [u32; 6], value: SnmpValue) -> SnmpInstanceRow {
         SnmpInstanceRow {
@@ -533,6 +852,7 @@ mod tests {
             WlanFlavor::Huawei,
             &active_controller_rows(),
             &optional,
+            &[],
             1024,
         );
         let ap = |name: &str| {
@@ -710,7 +1030,13 @@ mod tests {
 
     #[test]
     fn an_active_controller_reads_into_one_observation_per_ap() {
-        let inv = inventory(WlanFlavor::Huawei, &active_controller_rows(), &[], 1024);
+        let inv = inventory(
+            WlanFlavor::Huawei,
+            &active_controller_rows(),
+            &[],
+            &[],
+            1024,
+        );
         assert_eq!(inv.aps.len(), 3);
         assert_eq!(inv.truncated_at, None);
         let up = &inv.aps[0];
@@ -734,7 +1060,13 @@ mod tests {
 
     #[test]
     fn an_ap_that_is_down_has_no_address_and_is_not_associated() {
-        let inv = inventory(WlanFlavor::Huawei, &active_controller_rows(), &[], 1024);
+        let inv = inventory(
+            WlanFlavor::Huawei,
+            &active_controller_rows(),
+            &[],
+            &[],
+            1024,
+        );
         let down = inv
             .aps
             .iter()
@@ -768,7 +1100,7 @@ mod tests {
             row(44, mac, SnmpValue::Int(5)),
             row(41, mac, SnmpValue::Int(0)),
         ];
-        let inv = inventory(WlanFlavor::Huawei, &rows, &[], 1024);
+        let inv = inventory(WlanFlavor::Huawei, &rows, &[], &[], 1024);
         assert_eq!(
             (inv.aps[0].run_state.as_str(), inv.aps[0].state),
             ("standby", WlanApState::Backup)
@@ -783,7 +1115,7 @@ mod tests {
             row(4, [1, 2, 3, 4, 5, 6], bytes("orphan")),
             row(44, [1, 2, 3, 4, 5, 6], SnmpValue::Int(9)),
         ];
-        assert!(inventory(WlanFlavor::Huawei, &rows, &[], 1024)
+        assert!(inventory(WlanFlavor::Huawei, &rows, &[], &[], 1024)
             .aps
             .is_empty());
     }
@@ -802,7 +1134,7 @@ mod tests {
                 value: SnmpValue::Int(8),
             },
         ];
-        assert!(inventory(WlanFlavor::Huawei, &rows, &[], 1024)
+        assert!(inventory(WlanFlavor::Huawei, &rows, &[], &[], 1024)
             .aps
             .is_empty());
     }
@@ -814,7 +1146,7 @@ mod tests {
             row(6, mac, SnmpValue::Int(8)),
             row(4, mac, SnmpValue::Bytes(b"ap\x00\xff-1\n".to_vec())),
         ];
-        let inv = inventory(WlanFlavor::Huawei, &rows, &[], 1024);
+        let inv = inventory(WlanFlavor::Huawei, &rows, &[], &[], 1024);
         assert_eq!(inv.aps[0].name.as_deref(), Some("ap \u{fffd}-1"));
     }
 
@@ -823,7 +1155,7 @@ mod tests {
         let rows: Vec<_> = (0u32..6)
             .map(|i| row(6, [0, 0, 0, 0, 0, i], SnmpValue::Int(8)))
             .collect();
-        let inv = inventory(WlanFlavor::Huawei, &rows, &[], 4);
+        let inv = inventory(WlanFlavor::Huawei, &rows, &[], &[], 4);
         assert_eq!(inv.aps.len(), 4);
         assert_eq!(inv.truncated_at, Some(6));
     }

@@ -683,6 +683,7 @@ mod tests {
             temp_c: None,
             cpu_temp_c: None,
             power_state: None,
+            radios: Vec::new(),
         };
         // A fault AP that has never been in service: the importer leaves it alone.
         let never = obs(9, WlanApState::NotAssociated);
@@ -803,6 +804,7 @@ mod tests {
             temp_c: None,
             cpu_temp_c: None,
             power_state: None,
+            radios: Vec::new(),
         };
         let now = chrono::Utc::now();
         repo.record_inventory(

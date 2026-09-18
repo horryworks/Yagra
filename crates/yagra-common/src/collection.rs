@@ -25,6 +25,7 @@ use crate::wlan::{
     METRIC_WLAN_SSID_AP_COUNT, METRIC_WLAN_SSID_CLIENTS, METRIC_WLAN_SSID_CLIENTS_2G4,
     METRIC_WLAN_SSID_CLIENTS_5G, METRIC_WLAN_SSID_CLIENTS_6G, METRIC_WLAN_SSID_IN_OCTETS,
     METRIC_WLAN_SSID_OUT_OCTETS, METRIC_WLAN_SSID_WALK_COMPLETE, WIRELESS_AP_PROFILE,
+    WLAN_RADIO_METRICS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -399,10 +400,30 @@ pub fn item_publishes_per_interface(item: &CollectionItem) -> bool {
         CollectionKind::Optical => {
             item.metric_name == METRIC_IF_RX_POWER_DBM || item.metric_name == METRIC_IF_TX_POWER_DBM
         }
-        // One sample for the controller node; the per-AP values belong to the AP nodes (ADR-064).
-        CollectionKind::Wlan => false,
+        // 🚨 A WLAN item answers from its **metric name**, because one kind now carries three
+        // shapes (ADR-064). The AP walk publishes a node-level flag and an inventory; the SSID
+        // walk publishes a row per SSID on the controller; the radio walk publishes a slot per
+        // radio on each AP — and only the third is a port, in the sense an interface-tier
+        // threshold rule means. Answering `false` for it would leave `is_per_interface` false
+        // and every radio judged as a table row, which is the trap ADR-064 wrote down for
+        // itself before this increment existed.
+        CollectionKind::Wlan => {
+            crate::wlan::WLAN_RADIO_METRICS.contains(&item.metric_name.as_str())
+        }
     }
 }
+
+/// Bytes received on an interface, raw (ADR-012).
+///
+/// A constant because a **second** producer names it now: a wireless radio publishes its air
+/// traffic under the IF-MIB names so it draws like any other port (ADR-064 R9). Written as a
+/// literal in both places, a rename would move the catalogue and leave the radio publishing to a
+/// series nothing reads.
+pub const METRIC_IF_HC_IN_OCTETS: &str = "if_hc_in_octets";
+/// Bytes sent on an interface, raw. See [`METRIC_IF_HC_IN_OCTETS`].
+pub const METRIC_IF_HC_OUT_OCTETS: &str = "if_hc_out_octets";
+/// An interface's operational status, the IF-MIB enumeration: 1 up, 2 down.
+pub const METRIC_IF_OPER_STATUS: &str = "if_oper_status";
 
 /// The standard scalar + interface-table metrics collected by default.
 ///
@@ -428,12 +449,12 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
         scalar("snmp_sys_uptime_ticks", OID_SYS_UPTIME, MetricKind::Gauge),
         // ifXTable high-capacity octet counters (64-bit) — preferred over ifInOctets.
         table(
-            "if_hc_in_octets",
+            METRIC_IF_HC_IN_OCTETS,
             "1.3.6.1.2.1.31.1.1.1.6",
             MetricKind::Counter,
         ),
         table(
-            "if_hc_out_octets",
+            METRIC_IF_HC_OUT_OCTETS,
             "1.3.6.1.2.1.31.1.1.1.10",
             MetricKind::Counter,
         ),
@@ -471,7 +492,11 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
         ),
         // ifOperStatus / ifAdminStatus (1=up) and ifHighSpeed (Mbps) as gauges. Admin status lets
         // alerting tell an intentionally-shut port (admin-down) from an unplanned outage.
-        table("if_oper_status", "1.3.6.1.2.1.2.2.1.8", MetricKind::Gauge),
+        table(
+            METRIC_IF_OPER_STATUS,
+            "1.3.6.1.2.1.2.2.1.8",
+            MetricKind::Gauge,
+        ),
         table("if_admin_status", "1.3.6.1.2.1.2.2.1.7", MetricKind::Gauge),
         table("if_high_speed", OID_IF_HIGH_SPEED, MetricKind::Gauge),
         // hrProcessorLoad — standard per-CPU load % (HOST-RESOURCES-MIB). Best-effort across
@@ -1071,6 +1096,8 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         wlan_ap_template(WlanFlavor::Huawei),
         // ADR-064 increment D (2026-09-18). Appended at the end: seed ids are array positions.
         wlan_ssid_template(WlanFlavor::Huawei),
+        // ADR-064 increment C (2026-09-18). Appended at the end: seed ids are array positions.
+        wlan_radio_template(WlanFlavor::Huawei),
     ]
 }
 
@@ -1142,6 +1169,39 @@ fn wlan_ssid_template(flavor: WlanFlavor) -> BuiltinTemplate {
             item(METRIC_WLAN_SSID_IN_OCTETS, MetricKind::Counter),
             item(METRIC_WLAN_SSID_OUT_OCTETS, MetricKind::Counter),
         ],
+    }
+}
+
+/// The built-in radio template for one dialect (ADR-064 増分 C).
+///
+/// 🚨 **The items are declared on the controller, and the metrics land on the access points.**
+/// That is not a mistake in either direction: the controller is what is walked, and the radio is
+/// part of an AP. What it buys is the thing the increment exists for —
+/// `per_interface_metric_names` is built from the catalogue across the whole deployment, so
+/// declaring the names here is what lets an interface-tier threshold rule reach one radio of one
+/// AP. Left out of the catalogue they would be judged as table rows instead, where an interface
+/// rule never reaches them, and nothing would have said so.
+fn wlan_radio_template(flavor: WlanFlavor) -> BuiltinTemplate {
+    BuiltinTemplate {
+        name: flavor.radio_template_name(),
+        description: match flavor {
+            WlanFlavor::Huawei => {
+                "Each radio of each access point a Huawei wireless controller manages \
+                 (HUAWEI-WLAN-AP-RADIO-MIB): clients, channel and how busy it is, interference, \
+                 the noise floor, the average client signal and the transmit power. Published on \
+                 the access point as a slot, so a radio reads like a port: 2.4 GHz is 1, 5 GHz \
+                 is 2, 6 GHz is 3. Needs the access points to have been imported as nodes."
+            }
+        },
+        items: WLAN_RADIO_METRICS
+            .iter()
+            .map(|metric| CollectionItem {
+                metric_name: (*metric).to_owned(),
+                oid: flavor.radio_root_oid().to_owned(),
+                kind: CollectionKind::Wlan,
+                metric_kind: MetricKind::Gauge,
+            })
+            .collect(),
     }
 }
 
@@ -1645,6 +1705,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 T_HUAWEI_WLAN_CTL,
                 WlanFlavor::Huawei.template_name(),
                 WlanFlavor::Huawei.ssid_template_name(),
+                WlanFlavor::Huawei.radio_template_name(),
             ],
         ),
         prof(
@@ -2051,6 +2112,7 @@ mod tests {
             T_HUAWEI_WLAN_CTL,
             WlanFlavor::Huawei.template_name(),
             WlanFlavor::Huawei.ssid_template_name(),
+            WlanFlavor::Huawei.radio_template_name(),
         ];
         let actual: Vec<&str> = builtin_templates().iter().map(|t| t.name).collect();
         assert_eq!(

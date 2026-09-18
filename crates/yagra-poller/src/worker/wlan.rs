@@ -30,6 +30,7 @@ pub(super) struct WlanPlan {
     pub(super) flavor: WlanFlavor,
     pub(super) max_aps: u32,
     pub(super) walk_ssids: bool,
+    pub(super) walk_radios: bool,
     pub(super) timeout: Duration,
 }
 
@@ -45,6 +46,7 @@ pub(super) async fn execute_wlan(
         flavor,
         max_aps,
         walk_ssids,
+        walk_radios,
         timeout,
     } = plan;
     let columns = crate::wlan::columns(flavor);
@@ -59,19 +61,33 @@ pub(super) async fn execute_wlan(
         .await
     {
         Ok(walk) if walk.every_column_answered => {
-            let optional = optional_rows(
+            let no_aps = walk.rows.is_empty();
+            let optional = extra_rows(
                 job,
                 transport,
-                flavor,
                 timeout,
                 walker,
-                walk.rows.is_empty(),
+                no_aps,
+                Extra::Optional(flavor),
             )
             .await;
+            let radio = if walk_radios {
+                extra_rows(
+                    job,
+                    transport,
+                    timeout,
+                    walker,
+                    no_aps,
+                    Extra::Radio(flavor),
+                )
+                .await
+            } else {
+                Vec::new()
+            };
             (
                 CheckOutcome::Reachable,
                 Some(crate::wlan::inventory(
-                    flavor, &walk.rows, &optional, max_aps,
+                    flavor, &walk.rows, &optional, &radio, max_aps,
                 )),
             )
         }
@@ -136,54 +152,85 @@ pub(super) async fn execute_wlan(
     r
 }
 
-/// The optional columns' rows, or an empty list if that walk did not work out (ADR-064 増分 E).
+/// Which secondary walk of a controller this is.
+#[derive(Debug, Clone, Copy)]
+enum Extra {
+    /// The AP table columns whose absence must cost a reading and nothing more.
+    Optional(WlanFlavor),
+    /// The radio table (ADR-064 増分 C).
+    Radio(WlanFlavor),
+}
+
+impl Extra {
+    fn columns(self) -> Vec<String> {
+        match self {
+            Self::Optional(f) => crate::wlan::optional_columns(f),
+            Self::Radio(f) => crate::wlan::radio_columns(f),
+        }
+    }
+
+    fn row_budget(self) -> usize {
+        match self {
+            Self::Optional(f) => crate::wlan::optional_walk_row_budget(f),
+            Self::Radio(f) => crate::wlan::radio_walk_row_budget(f),
+        }
+    }
+
+    fn what(self) -> &'static str {
+        match self {
+            Self::Optional(_) => "optional AP columns",
+            Self::Radio(_) => "radio table",
+        }
+    }
+}
+
+/// A secondary walk's rows, or an empty list if it did not work out (ADR-064 増分 C/E).
 ///
 /// 🚨 **Every failure here returns empty rather than propagating.** That asymmetry is the whole
-/// point of the second walk: these columns are readings, and a controller that does not implement
-/// one must cost that reading and nothing else. Folding them into the required walk would hand
-/// `every_column_answered` a veto over the AP list — measured on the PoC's AC6508, six columns of
-/// `hwWlanApEntry` are asked for and never answered, so "a Huawei model that skips one" is the
-/// normal case, not the edge.
+/// point of walking these apart from the AP table: they carry readings, and a controller that
+/// does not implement one must cost that reading and nothing else. Folded into the required
+/// walk they would hand `every_column_answered` a veto over the AP list — measured on the PoC's
+/// AC6508, six columns of `hwWlanApEntry` are asked for and never answered, so "a Huawei model
+/// that skips one" is the normal case, not the edge.
 ///
 /// Skipped entirely when the required walk found no APs: there is nothing to attach readings to,
 /// and the device's time is better left to the next job.
-async fn optional_rows(
+async fn extra_rows(
     job: &PollJob,
     transport: &dyn Transport,
-    flavor: WlanFlavor,
     timeout: Duration,
     walker: &SnmpWalker,
     no_aps: bool,
+    extra: Extra,
 ) -> Vec<yagra_transport::SnmpInstanceRow> {
     if no_aps {
         return Vec::new();
     }
-    let columns = crate::wlan::optional_columns(flavor);
     match walker
         .walk_instance_columns(
             transport,
             job.target,
-            &columns,
+            &extra.columns(),
             timeout,
-            crate::wlan::optional_walk_row_budget(flavor),
+            extra.row_budget(),
         )
         .await
     {
-        // `every_column_answered` is not consulted: a column this controller does not implement is
-        // the expected answer, and the rows of the ones it does implement are still good.
+        // `every_column_answered` is not consulted: a column this controller does not implement
+        // is the expected answer, and the rows of the ones it does implement are still good.
         Ok(walk) => walk.rows,
         Err(err) => {
             tracing::debug!(
                 job_id = %job.job_id,
                 target = %job.target,
                 error = %err,
-                "wireless controller optional AP columns unread; the AP list is unaffected"
+                what = extra.what(),
+                "wireless controller secondary walk unread; the AP list is unaffected"
             );
             Vec::new()
         }
     }
 }
-
 /// The SSID table's samples and row names, and how many SSIDs a **complete** walk found.
 ///
 /// Unlike the AP table there is no all-or-nothing rule here (決定 9b): each SSID is an independent
@@ -246,6 +293,7 @@ mod tests {
                 flavor: WlanFlavor::Huawei,
                 max_aps: 1024,
                 walk_ssids: false,
+                walk_radios: false,
                 timeout_ms: 1000,
             }),
             300,
@@ -275,6 +323,7 @@ mod tests {
                 flavor: WlanFlavor::Huawei,
                 max_aps: 1024,
                 walk_ssids,
+                walk_radios: false,
                 timeout_ms: 1000,
             }),
             300,

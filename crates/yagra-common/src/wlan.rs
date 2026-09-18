@@ -118,6 +118,164 @@ pub const WLAN_NODE_LEVEL_METRICS: [&str; 3] = [
     METRIC_WLAN_CONTROLLER_SSID_COUNT,
 ];
 
+/// One radio of an access point, as a slot on that AP node (ADR-064 R6/R9).
+///
+/// Radio metrics are **per-interface**: they are published against a slot number on the AP node,
+/// the same shape a switch port has, so an interface-tier threshold rule can name one radio of
+/// one AP. That is why they are declared as collection items rather than left to the check
+/// ledger — `per_interface_metric_names` is built from the catalogue, and a name missing from it
+/// is judged as a table row instead, where an interface rule never reaches it.
+pub const METRIC_WLAN_RADIO_CLIENT_COUNT: &str = "wlan_radio_client_count";
+/// How much of the radio channel is in use, percent.
+pub const METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT: &str = "wlan_radio_channel_util_pct";
+/// How much of the radio channel is lost to interference, percent.
+pub const METRIC_WLAN_RADIO_INTERFERENCE_PCT: &str = "wlan_radio_interference_pct";
+/// The radio noise floor, dBm. Absent where the controller answers its invalid marker.
+pub const METRIC_WLAN_RADIO_NOISE_DBM: &str = "wlan_radio_noise_dbm";
+/// The average signal strength of the clients on this radio, dBm. Absent when there are none.
+pub const METRIC_WLAN_RADIO_CLIENT_SIGNAL_DBM: &str = "wlan_radio_client_signal_dbm";
+/// The radio actual transmit power, dBm. Absent where the controller answers its invalid marker.
+pub const METRIC_WLAN_RADIO_TX_POWER_DBM: &str = "wlan_radio_tx_power_dbm";
+/// The channel the radio is working on. An identifier rather than a measurement — useful as a
+/// history (a radio-resource-management change shows as a step), never as a threshold.
+pub const METRIC_WLAN_RADIO_CHANNEL: &str = "wlan_radio_channel";
+
+/// Every metric a radio publishes under its own name, in the order the Overview lists them.
+///
+/// The traffic counters and the operational status are deliberately **not** here: a radio
+/// publishes those under the IF-MIB names (`if_hc_in_octets`, `if_hc_out_octets`,
+/// `if_oper_status`), which are already per-interface and already have their sentences, so a
+/// radio slot reads like any other port on every screen that draws one.
+pub const WLAN_RADIO_METRICS: [&str; 7] = [
+    METRIC_WLAN_RADIO_CLIENT_COUNT,
+    METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT,
+    METRIC_WLAN_RADIO_INTERFERENCE_PCT,
+    METRIC_WLAN_RADIO_NOISE_DBM,
+    METRIC_WLAN_RADIO_CLIENT_SIGNAL_DBM,
+    METRIC_WLAN_RADIO_TX_POWER_DBM,
+    METRIC_WLAN_RADIO_CHANNEL,
+];
+
+/// Which band a radio is working in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WlanBand {
+    /// 2.4 GHz.
+    Band2G4,
+    /// 5 GHz.
+    Band5G,
+    /// 6 GHz.
+    Band6G,
+}
+
+impl WlanBand {
+    /// Every band, lowest first.
+    pub const ALL: [Self; 3] = [Self::Band2G4, Self::Band5G, Self::Band6G];
+
+    /// The slot number a band starts at (ADR-064 R6): 2.4 GHz = 1, 5 GHz = 2, 6 GHz = 3.
+    #[must_use]
+    pub const fn slot_base(self) -> u32 {
+        match self {
+            Self::Band2G4 => 1,
+            Self::Band5G => 2,
+            Self::Band6G => 3,
+        }
+    }
+
+    /// What the slot is called on screen.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Band2G4 => "2.4 GHz",
+            Self::Band5G => "5 GHz",
+            Self::Band6G => "6 GHz",
+        }
+    }
+
+    /// The band a Huawei `hwWlanRadioFreqType` names — frequency2G(1)/5G(2)/6G(3).
+    #[must_use]
+    pub fn from_huawei(value: i64) -> Option<Self> {
+        match value {
+            1 => Some(Self::Band2G4),
+            2 => Some(Self::Band5G),
+            3 => Some(Self::Band6G),
+            _ => None,
+        }
+    }
+}
+
+/// How far apart two radios of the same band sit in the slot numbering (ADR-064 R6).
+///
+/// A second 5 GHz radio is slot 12, a third 22. Ten rather than one so a band always owns its
+/// last digit: an operator reading `12` can tell the band without a lookup, and a future band
+/// cannot collide with a second radio of an existing one.
+pub const WLAN_RADIO_SLOT_STRIDE: u32 = 10;
+
+/// One radio of one AP, as one controller reported it.
+///
+/// Numbers the controller answered with its "no reading" marker are already `None` here — the
+/// markers are a dialect fact and are dropped on the poller (ADR-064 改訂 R10).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WlanRadioObservation {
+    /// The slot this radio occupies on its AP node — its `ifindex` in every series and the row
+    /// key of its `interfaces` row.
+    pub slot: u32,
+    /// The band it is working in.
+    pub band: WlanBand,
+    /// Up (`true`), down (`false`), or unknown (`None`) — the controller's own run state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up: Option<bool>,
+    /// Clients online through this radio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clients: Option<u32>,
+    /// The working channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u32>,
+    /// Channel utilization, percent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_util_pct: Option<u32>,
+    /// Interference ratio, percent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interference_pct: Option<u32>,
+    /// Noise floor, dBm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise_dbm: Option<i32>,
+    /// Average client signal strength, dBm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_signal_dbm: Option<i32>,
+    /// Actual transmit power, dBm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_power_dbm: Option<i32>,
+    /// Bytes received on the air interface, raw (ADR-012).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_octets: Option<u64>,
+    /// Bytes sent on the air interface, raw (ADR-012).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_octets: Option<u64>,
+}
+
+/// Number one AP's radios into slots, in the vendor's own radio order within each band.
+///
+/// 🚨 **The order within a band is the vendor's radio id, not the walk order.** A walk returns
+/// rows in OID order, which happens to agree today; a dialect whose rows arrive by some other key
+/// would otherwise renumber an AP's radios between polls, and a slot that moves is a series that
+/// starts again and a threshold rule that stops matching.
+#[must_use]
+pub fn assign_radio_slots(
+    mut radios: Vec<(u32, WlanRadioObservation)>,
+) -> Vec<WlanRadioObservation> {
+    radios.sort_by_key(|(vendor_id, r)| (r.band, *vendor_id));
+    let mut nth: std::collections::BTreeMap<WlanBand, u32> = std::collections::BTreeMap::new();
+    let mut out = Vec::with_capacity(radios.len());
+    for (_, mut r) in radios {
+        let n = nth.entry(r.band).or_default();
+        r.slot = r.band.slot_base() + *n * WLAN_RADIO_SLOT_STRIDE;
+        *n += 1;
+        out.push(r);
+    }
+    out
+}
+
 /// The row key one SSID's series carry, derived from its **name**.
 ///
 /// FNV-1a over the cleaned name, never over the index's sub-identifiers. Two reasons, and the
@@ -153,16 +311,23 @@ pub const MAX_APS_PER_CONTROLLER_DEFAULT: u32 = 1024;
 
 /// The most APs one controller result may carry, whatever an operator asks for.
 ///
-/// Sized from the payload, not from taste. Re-measured after ADR-064 増分 E added two readings:
-/// one observation with the strings and numbers a real AC answers serializes to about 340 bytes of
-/// JSON, so 2,048 of them are **705 KB** against NATS's 1 MiB `max_payload` — still inside
-/// [`WLAN_INVENTORY_BYTE_BUDGET`], with room for the rest of the result.
+/// Sized from the payload, not from taste — and since ADR-064 増分 C the payload, not this number,
+/// is what actually bounds a large controller.
 ///
-/// ⚠️ **A field added to [`WlanApObservation`] spends this headroom**, and the count cap is not what
-/// stops it: at the worst-case string length the byte budget already cuts the list well below 2,048.
-/// `a_controller_result_at_the_hard_cap_fits_the_bus` in the bus crate measures both cases, and the
-/// realistic one is realistic about **numbers** as well as strings — a ten-digit temperature is not
-/// a measurement, and letting the fixture keep one hid how much of the budget a reading costs.
+/// 🚨 **Radios roughly double an observation, so the two caps no longer agree.** Measured with the
+/// strings and numbers a real AC answers and the two radios a real AP reports: 1,024 APs are
+/// **797 KB**, which fits [`WLAN_INVENTORY_BYTE_BUDGET`] and is the default cap
+/// ([`MAX_APS_PER_CONTROLLER_DEFAULT`]); 2,048 are about 1.4 MB, which fits neither the budget nor
+/// NATS's 1 MiB `max_payload` at any setting. A controller asked for both the hard cap and its
+/// radios is therefore **cut, and says where** ([`WlanInventory::truncated_at`]) — the designed
+/// answer, and much better than a publish silently dropped for being oversized.
+///
+/// ⚠️ **The default cap now has about 0.4% of the budget to spare**, so a field added to
+/// [`WlanApObservation`] or [`WlanRadioObservation`] spends headroom that is no longer there.
+/// Re-measure rather than assume; `a_controller_result_at_the_hard_cap_fits_the_bus` in the bus
+/// crate does both cases, and its realistic one is realistic about **numbers and radios** as well as
+/// strings — a ten-digit temperature and three worst-case radios are not what a device sends, and
+/// letting the fixture keep them hid how much of the budget each reading costs.
 pub const MAX_APS_PER_CONTROLLER_HARD: u32 = 2048;
 
 /// The longest device string kept on an observation (name, serial, model, version, group), in
@@ -318,6 +483,26 @@ impl WlanFlavor {
         }
     }
 
+    /// The entry OID of the dialect's **radio** table (ADR-064 増分 C).
+    ///
+    /// Huawei: `hwWlanRadioInfoTable`, `INDEX { hwWlanRadioInfoApMac, hwWlanRadioID }`. The first
+    /// six sub-identifiers are the AP table's index, which is what lets a radio row be attached to
+    /// an AP without a second lookup — verified on the PoC, where all 60 rows matched.
+    #[must_use]
+    pub const fn radio_root_oid(self) -> &'static str {
+        match self {
+            Self::Huawei => "1.3.6.1.4.1.2011.6.139.16.1.2.1",
+        }
+    }
+
+    /// The built-in collection template that walks this dialect's radio table.
+    #[must_use]
+    pub const fn radio_template_name(self) -> &'static str {
+        match self {
+            Self::Huawei => "Huawei WLAN radios (AC)",
+        }
+    }
+
     /// The built-in collection template that walks this dialect's SSID table.
     #[must_use]
     pub const fn ssid_template_name(self) -> &'static str {
@@ -332,7 +517,7 @@ impl WlanFlavor {
         let oid = oid.trim_start_matches('.');
         Self::ALL
             .into_iter()
-            .find(|f| f.root_oid() == oid || f.ssid_root_oid() == oid)
+            .find(|f| f.root_oid() == oid || f.ssid_root_oid() == oid || f.radio_root_oid() == oid)
     }
 
     /// Whether `oid` is this dialect's SSID table rather than its AP table — what decides which
@@ -340,6 +525,12 @@ impl WlanFlavor {
     #[must_use]
     pub fn is_ssid_root(self, oid: &str) -> bool {
         oid.trim_start_matches('.') == self.ssid_root_oid()
+    }
+
+    /// Whether `oid` is this dialect's radio table.
+    #[must_use]
+    pub fn is_radio_root(self, oid: &str) -> bool {
+        oid.trim_start_matches('.') == self.radio_root_oid()
     }
 
     /// The built-in collection template that walks this dialect's AP table.
@@ -486,6 +677,15 @@ pub struct WlanApObservation {
     /// optional walk, so `None` also means the column went unanswered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power_state: Option<u32>,
+    /// This AP's radios, already numbered into slots (ADR-064 増分 C).
+    ///
+    /// 🚨 **Inside the AP rather than beside it, and that placement does three jobs at once.**
+    /// [`WlanInventory::bounded`] measures each AP's serialized bytes, so radios carried here are
+    /// inside the budget instead of past it; the standby-controller rule that drops an AP's
+    /// readings drops its radios with them, for free; and the owning controller is decided once,
+    /// per AP, rather than once per radio.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub radios: Vec<WlanRadioObservation>,
 }
 
 impl WlanApObservation {
@@ -705,6 +905,7 @@ mod tests {
             temp_c: None,
             cpu_temp_c: None,
             power_state: None,
+            radios: Vec::new(),
         }
     }
 
@@ -784,6 +985,7 @@ mod tests {
             temp_c: None,
             cpu_temp_c: None,
             power_state: None,
+            radios: Vec::new(),
         };
         let clean = raw.sanitized();
         assert_eq!(clean.name.as_deref(), Some("ap 001"));

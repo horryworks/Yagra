@@ -106,6 +106,14 @@ const ALL_KINDS: readonly NodeKind[] = NODE_KINDS;
  *  a `device` and passes it. That half is `needsSnmp`. */
 const DEVICE_ONLY: readonly NodeKind[] = ['device'];
 
+/** An ordinary device, **or** an access point whose controller answers for it (ADR-064 増分 C).
+ *
+ *  An AP node is never polled itself, so it has no ifTable walk of its own — but its controller's
+ *  radio walk writes `interfaces` rows for it, one per radio, and those are as real as any port.
+ *  Only the Interfaces tab is in this position: neighbours and flow have no controller-side
+ *  equivalent, so they stay [`DEVICE_ONLY`] and stay hidden. */
+const DEVICE_OR_AP: readonly NodeKind[] = ['device', 'wireless_ap'];
+
 /**
  * What the tab rules ask about a node. Both facts come off the `NodeDetail` the pane has already
  * loaded, so deciding which tabs to draw costs no extra fetch.
@@ -199,11 +207,16 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     // others". The card says how many; the dot says to go and look.
     warn: (s) => (s.wlanController?.aps_over_cap ?? 0) > 0,
   },
-  // The ifTable walk is the only writer of `interfaces`, so with no SNMP there is nothing to list —
-  // and nothing to explain either, which is why the tab goes rather than growing an empty state.
+  // With no SNMP behind it there is nothing to list — and nothing to explain either, which is why
+  // the tab goes rather than growing an empty state.
+  //
+  // ⚠️ **The ifTable walk is no longer the only writer of `interfaces`.** A wireless controller
+  // writes a row per radio onto each of its access points (ADR-064 増分 C), so an AP node's rows
+  // come from a walk of a *different* node. That is why this tab takes `DEVICE_OR_AP` and why
+  // `snmpFed` asks about the controller as well as the node.
   interfaces: {
     labelKey: 'tabs.interfaces',
-    kinds: DEVICE_ONLY,
+    kinds: DEVICE_OR_AP,
     needsSnmp: true,
     needsWlanController: false,
     badge: (s) => s.interfaces.length || null,
@@ -275,12 +288,21 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
  *
  *  The three axes are ANDed and none subsumes the others — a URL monitor fails `kinds` for
  *  Interfaces, a ping-only device passes `kinds` and fails `needsSnmp`. */
+/** Whether an SNMP walk fills this node's SNMP-fed tabs — **its own walk, or its controller's**.
+ *
+ *  An access point has no SNMP credential and never will: it is answered for by the controller
+ *  that manages it (ADR-064). Asking `snmpConfigured` alone therefore hid the radios a controller
+ *  had already collected, on the one kind of node that cannot ever answer that question itself. */
+function snmpFed(node: NodeDetailSubject): boolean {
+  return node.snmpConfigured || node.kind === 'wireless_ap';
+}
+
 export function visibleNodeDetailTabs(node: NodeDetailSubject): readonly NodeDetailTab[] {
   return NODE_DETAIL_TABS.filter((tab) => {
     const meta = NODE_DETAIL_TAB_META[tab];
     return (
       meta.kinds.includes(node.kind) &&
-      (node.snmpConfigured || !meta.needsSnmp) &&
+      (snmpFed(node) || !meta.needsSnmp) &&
       (node.isWlanController || !meta.needsWlanController)
     );
   });
