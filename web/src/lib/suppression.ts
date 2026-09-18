@@ -217,6 +217,25 @@ export function nextSuppressionExpiry(
   return at.length ? Math.min(...at) : null;
 }
 
+/** The longest delay a browser timer can hold: `setTimeout` stores it as a signed 32-bit integer. */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * How long to wait before re-reading the suppression lists, given {@link nextSuppressionExpiry}.
+ *
+ * A second past the expiry, so the row is gone from the server's answer rather than racing it.
+ *
+ * 🚨 **Capped, and the cap is what stops a refetch loop.** A delay above 2^31−1 ms (24.8 days)
+ * overflows and the timer fires on the next tick. The caller's effect depends on the three lists,
+ * each refetch hands it three fresh arrays, so an overflowing delay re-armed itself forever: three
+ * GETs per round trip, from every open tab, for as long as the nearest expiry was a month away —
+ * which a decommission window or a quarter-long mute is. Capped, the timer fires early once every
+ * 24.8 days, re-reads, and arms again.
+ */
+export function suppressionRefreshDelayMs(expiresAt: number, now: number = Date.now()): number {
+  return Math.min(Math.max(expiresAt - now, 0) + 1000, MAX_TIMER_DELAY_MS);
+}
+
 /**
  * Which nodes/groups are currently in maintenance or muted, for the All Nodes icons. A folder-group
  * target propagates down its subtree — the group, all descendant subgroups, and their member nodes
