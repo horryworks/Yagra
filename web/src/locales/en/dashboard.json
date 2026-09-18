@@ -297,6 +297,9 @@
       "healthy": "Healthy",
       "healthyPct": "% healthy"
     },
+    "fleetSummary": {
+      "error": "Couldn’t load the fleet summary."
+    },
     "nodesDown": {
       "caption": "nodes down"
     },

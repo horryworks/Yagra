@@ -79,9 +79,13 @@ function useNodeInventory(nodeId: string | null): NodeMetricEntry[] | null {
     setEntries(null);
     // A cached answer is fine here: the inventory changes when a collection set is edited, not on
     // the dashboard's 15s cadence.
-    void fetchNodeMetrics(nodeId, INVENTORY_TTL_MS).then((e) => {
-      if (!cancelled) setEntries(e);
-    });
+    fetchNodeMetrics(nodeId, INVENTORY_TTL_MS)
+      .then((e) => {
+        if (!cancelled) setEntries(e);
+      })
+      // Left at `null` — "not seen yet" — which is the honest reading of a failed read and the
+      // safe one: `metricChartPlan` will not call a persisted selection stale on it.
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };

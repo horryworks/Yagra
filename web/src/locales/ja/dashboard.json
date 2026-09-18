@@ -297,6 +297,9 @@
       "healthy": "正常",
       "healthyPct": "% 正常"
     },
+    "fleetSummary": {
+      "error": "フリートの集計を読み込めませんでした。"
+    },
     "nodesDown": {
       "caption": "ダウン中のノード"
     },

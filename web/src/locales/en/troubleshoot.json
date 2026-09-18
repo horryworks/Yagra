@@ -210,6 +210,7 @@
         "running": "An analysis is running — open it from Analysis runs, or start a new one above."
       },
       "jobMissing": "That analysis run no longer exists. Run a new one above.",
+      "findingsFailed": "The findings of this run could not be loaded.",
       "terminal": "Analysis {{state}}{{detail}}. Adjust the scope and run again.",
       "finished": "finished {{time}}",
       "notice": "Not available: {{reason}}",
