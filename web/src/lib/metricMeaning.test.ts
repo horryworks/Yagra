@@ -82,8 +82,8 @@ describe('the generated built-in catalog', () => {
     // is those rows, with the liveness sentinel (a rule token, not a series) put in front.
     for (const m of BUILTIN_METRICS) expect(['check', 'collected']).toContain(m.source);
     const checks = BUILTIN_METRICS.filter((m) => m.source === 'check').map((m) => m.metric_name);
-    // 23 = the 24 rows of `metric_meaning.rs::CHECK_FAMILIES` minus `__liveness__`.
-    expect(checks).toHaveLength(23);
+    // 25 = the 26 rows of `metric_meaning.rs::CHECK_FAMILIES` minus `__liveness__`.
+    expect(checks).toHaveLength(25);
     expect(checks).not.toContain(LIVENESS_METRIC);
     for (const m of BUILTIN_METRICS) {
       if (m.source === 'check') expect(OVERVIEW_FAMILIES).toContain(m.family);

@@ -1901,6 +1901,8 @@ mod tests {
                 cpu_pct: Some(5),
                 mem_pct: None,
                 temp_c: None,
+                cpu_temp_c: None,
+                power_state: None,
             }],
             1024,
         ));

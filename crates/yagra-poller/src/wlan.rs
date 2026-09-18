@@ -28,8 +28,12 @@ use yagra_common::{
 };
 use yagra_transport::{SnmpInstanceRow, SnmpValue};
 
-/// Huawei `hwWlanApEntry` columns read, as `(column number, field)`. Numbers measured on the PoC's
-/// AC6508 and matching HUAWEI-WLAN-AP-MIB.
+/// Huawei `hwWlanApEntry` columns that **must all answer**, as `(column number, field)`. Numbers
+/// measured on the PoC's AC6508 and matching HUAWEI-WLAN-AP-MIB.
+///
+/// This list, and only this list, decides `wlan_ap_walk_complete` and therefore whether an
+/// inventory is published at all (ADR-064 決定 9b). Anything whose absence should cost one reading
+/// rather than the whole AP list belongs in [`HUAWEI_OPTIONAL_COLUMNS`].
 const HUAWEI_COLUMNS: [(u32, Field); 11] = [
     (6, Field::RunState),
     (4, Field::Name),
@@ -43,6 +47,18 @@ const HUAWEI_COLUMNS: [(u32, Field); 11] = [
     (40, Field::Mem),
     (43, Field::Temp),
 ];
+
+/// Huawei `hwWlanApEntry` columns read in a **second walk**, whose absence costs only the readings
+/// they carry (ADR-064 増分 E).
+///
+/// 🚨 **They are kept out of [`HUAWEI_COLUMNS`] deliberately, and this is not tidiness.**
+/// [`yagra_transport::InstanceWalk::every_column_answered`] is one bool for the whole walk, and
+/// 決定 9b throws the entire inventory away when it is false. Put an optional column in the
+/// required walk and any Huawei model that does not implement it stops having an AP list at all —
+/// not "loses a reading". That failure is measured, not imagined: on the PoC's AC6508 the columns
+/// `.19`, `.42` and `.50`–`.53` were asked for and never answered, so a model that skips `.83` is
+/// an ordinary expectation rather than a worry.
+const HUAWEI_OPTIONAL_COLUMNS: [(u32, Field); 2] = [(83, Field::CpuTemp), (80, Field::PowerState)];
 
 /// What a column contributes to an observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,9 +74,14 @@ enum Field {
     Cpu,
     Mem,
     Temp,
+    CpuTemp,
+    PowerState,
 }
 
 /// Huawei's `hwWlanApTemperature` for an AP with no sensor. Measured: 36 of the PoC's 38 APs.
+///
+/// The same number is `hwWlanApCpuTemperature`'s placeholder, where it marks the 8 APs that were
+/// down rather than 36 with no sensor — one value, two reasons, both meaning "not a reading".
 const HUAWEI_NO_TEMPERATURE: i64 = 255;
 
 /// The most rows one AP walk takes, across every column.
@@ -70,15 +91,34 @@ const HUAWEI_NO_TEMPERATURE: i64 = 255;
 /// incomplete walk (`wlan_ap_walk_complete` = 0), never as a partial list.
 #[must_use]
 pub fn walk_row_budget(flavor: WlanFlavor) -> usize {
-    let per_column = usize::try_from(MAX_APS_PER_CONTROLLER_HARD).unwrap_or(usize::MAX) * 2;
-    columns(flavor).len() * per_column
+    per_column_row_budget() * columns(flavor).len()
+}
+
+/// The most rows the optional walk takes, sized the same way as [`walk_row_budget`].
+#[must_use]
+pub fn optional_walk_row_budget(flavor: WlanFlavor) -> usize {
+    per_column_row_budget() * optional_columns(flavor).len()
+}
+
+fn per_column_row_budget() -> usize {
+    usize::try_from(MAX_APS_PER_CONTROLLER_HARD).unwrap_or(usize::MAX) * 2
 }
 
 /// The column OIDs to walk for a dialect, run state first.
 #[must_use]
 pub fn columns(flavor: WlanFlavor) -> Vec<String> {
+    oids(flavor, &HUAWEI_COLUMNS)
+}
+
+/// The column OIDs of the second, optional walk ([`HUAWEI_OPTIONAL_COLUMNS`]).
+#[must_use]
+pub fn optional_columns(flavor: WlanFlavor) -> Vec<String> {
+    oids(flavor, &HUAWEI_OPTIONAL_COLUMNS)
+}
+
+fn oids(flavor: WlanFlavor, cols: &[(u32, Field)]) -> Vec<String> {
     match flavor {
-        WlanFlavor::Huawei => HUAWEI_COLUMNS
+        WlanFlavor::Huawei => cols
             .iter()
             .map(|(n, _)| format!("{}.{n}", flavor.root_oid()))
             .collect(),
@@ -87,25 +127,39 @@ pub fn columns(flavor: WlanFlavor) -> Vec<String> {
 
 /// The inventory in a dialect's rows, bounded to `max_aps` and the byte budget
 /// ([`WlanInventory::bounded`]).
+///
+/// `optional` carries the second walk's rows and may be empty — that walk is allowed to fail, and
+/// an empty slice is exactly what "it did" looks like here. Both are folded in **before** bounding,
+/// so the byte budget measures the observations that will actually be sent.
 #[must_use]
-pub fn inventory(flavor: WlanFlavor, rows: &[SnmpInstanceRow], max_aps: u32) -> WlanInventory {
+pub fn inventory(
+    flavor: WlanFlavor,
+    rows: &[SnmpInstanceRow],
+    optional: &[SnmpInstanceRow],
+    max_aps: u32,
+) -> WlanInventory {
     match flavor {
         WlanFlavor::Huawei => {
-            WlanInventory::bounded(flavor, huawei_observations(flavor, rows), max_aps)
+            WlanInventory::bounded(flavor, huawei_observations(flavor, rows, optional), max_aps)
         }
     }
 }
 
-fn huawei_observations(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<WlanApObservation> {
+fn huawei_observations(
+    flavor: WlanFlavor,
+    rows: &[SnmpInstanceRow],
+    optional: &[SnmpInstanceRow],
+) -> Vec<WlanApObservation> {
     let field_of: BTreeMap<String, Field> = HUAWEI_COLUMNS
         .iter()
+        .chain(HUAWEI_OPTIONAL_COLUMNS.iter())
         .map(|(n, f)| (format!("{}.{n}", flavor.root_oid()), *f))
         .collect();
     // Keyed by MAC, the run state creating the entry. Other columns only fill an existing one, and
     // are collected first so their order in `rows` does not matter.
     let mut states: BTreeMap<ApMac, (String, yagra_common::WlanApState)> = BTreeMap::new();
     let mut rest: BTreeMap<ApMac, Vec<(Field, &SnmpValue)>> = BTreeMap::new();
-    for row in rows {
+    for row in rows.iter().chain(optional.iter()) {
         let Some(field) = field_of.get(row.oid_base.trim_start_matches('.')) else {
             continue;
         };
@@ -137,6 +191,8 @@ fn huawei_observations(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<Wlan
                 cpu_pct: None,
                 mem_pct: None,
                 temp_c: None,
+                cpu_temp_c: None,
+                power_state: None,
             };
             for (field, value) in rest.remove(&mac).unwrap_or_default() {
                 match field {
@@ -150,13 +206,9 @@ fn huawei_observations(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<Wlan
                     Field::Clients => obs.clients = non_negative(value),
                     Field::Cpu => obs.cpu_pct = non_negative(value),
                     Field::Mem => obs.mem_pct = non_negative(value),
-                    Field::Temp => {
-                        obs.temp_c = match value {
-                            SnmpValue::Int(HUAWEI_NO_TEMPERATURE) => None,
-                            SnmpValue::Int(v) => i32::try_from(*v).ok(),
-                            SnmpValue::Bytes(_) | SnmpValue::Oid(_) => None,
-                        }
-                    }
+                    Field::Temp => obs.temp_c = temperature(value),
+                    Field::CpuTemp => obs.cpu_temp_c = temperature(value),
+                    Field::PowerState => obs.power_state = non_negative(value),
                 }
             }
             obs
@@ -182,6 +234,18 @@ fn address(value: &SnmpValue) -> Option<IpAddr> {
     let octets: [u8; 4] = b.as_slice().try_into().ok()?;
     let ip = Ipv4Addr::from(octets);
     (!ip.is_broadcast() && !ip.is_unspecified()).then_some(IpAddr::V4(ip))
+}
+
+/// A temperature column, with the vendor's "no sensor"/"no reading" placeholder taken out.
+///
+/// One function for both temperature columns so they can never come to disagree about what `255`
+/// means — it is the same placeholder in both (ADR-064 改訂 R10).
+fn temperature(value: &SnmpValue) -> Option<i32> {
+    match value {
+        SnmpValue::Int(HUAWEI_NO_TEMPERATURE) => None,
+        SnmpValue::Int(v) => i32::try_from(*v).ok(),
+        SnmpValue::Bytes(_) | SnmpValue::Oid(_) => None,
+    }
 }
 
 fn non_negative(value: &SnmpValue) -> Option<u32> {
@@ -212,6 +276,47 @@ mod tests {
 
     /// Three APs shaped like the PoC's active controller: a working one, one down, and one with a
     /// temperature sensor. Names, serials and addresses are made up.
+    /// The second walk fills the readings it carries, and the vendor placeholder is taken out of
+    /// the CPU temperature exactly as it is out of the operating one (ADR-064 増分 E).
+    ///
+    /// Measured shape: on the PoC the 30 serving APs answered `.83` with 55-69 degrees and the 8
+    /// that were down answered 255, which is why the placeholder has to be dropped on this column
+    /// too rather than only on `.43`.
+    #[test]
+    fn the_optional_walk_fills_its_readings_and_drops_the_placeholder() {
+        let up = [84, 246, 226, 10, 2, 128];
+        let warm = [96, 16, 158, 31, 186, 96];
+        let optional = vec![
+            row(83, up, SnmpValue::Int(66)),
+            row(80, up, SnmpValue::Int(1)),
+            row(83, warm, SnmpValue::Int(255)),
+        ];
+        let inv = inventory(
+            WlanFlavor::Huawei,
+            &active_controller_rows(),
+            &optional,
+            1024,
+        );
+        let ap = |name: &str| {
+            inv.aps
+                .iter()
+                .find(|a| a.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("{name} is in the inventory"))
+                .clone()
+        };
+        assert_eq!(ap("site-ap-001").cpu_temp_c, Some(66));
+        assert_eq!(ap("site-ap-001").power_state, Some(1));
+        assert_eq!(
+            ap("site-ap-014").cpu_temp_c,
+            None,
+            "255 is the controller saying it has no reading, not a temperature"
+        );
+        assert_eq!(
+            ap("site-ap-014").power_state,
+            None,
+            "a column the second walk did not answer for this AP stays absent"
+        );
+    }
     fn active_controller_rows() -> Vec<SnmpInstanceRow> {
         let up = [84, 246, 226, 10, 2, 128];
         let down = [96, 16, 158, 10, 3, 160];
@@ -250,7 +355,7 @@ mod tests {
 
     #[test]
     fn an_active_controller_reads_into_one_observation_per_ap() {
-        let inv = inventory(WlanFlavor::Huawei, &active_controller_rows(), 1024);
+        let inv = inventory(WlanFlavor::Huawei, &active_controller_rows(), &[], 1024);
         assert_eq!(inv.aps.len(), 3);
         assert_eq!(inv.truncated_at, None);
         let up = &inv.aps[0];
@@ -274,7 +379,7 @@ mod tests {
 
     #[test]
     fn an_ap_that_is_down_has_no_address_and_is_not_associated() {
-        let inv = inventory(WlanFlavor::Huawei, &active_controller_rows(), 1024);
+        let inv = inventory(WlanFlavor::Huawei, &active_controller_rows(), &[], 1024);
         let down = inv
             .aps
             .iter()
@@ -308,7 +413,7 @@ mod tests {
             row(44, mac, SnmpValue::Int(5)),
             row(41, mac, SnmpValue::Int(0)),
         ];
-        let inv = inventory(WlanFlavor::Huawei, &rows, 1024);
+        let inv = inventory(WlanFlavor::Huawei, &rows, &[], 1024);
         assert_eq!(
             (inv.aps[0].run_state.as_str(), inv.aps[0].state),
             ("standby", WlanApState::Backup)
@@ -323,7 +428,9 @@ mod tests {
             row(4, [1, 2, 3, 4, 5, 6], bytes("orphan")),
             row(44, [1, 2, 3, 4, 5, 6], SnmpValue::Int(9)),
         ];
-        assert!(inventory(WlanFlavor::Huawei, &rows, 1024).aps.is_empty());
+        assert!(inventory(WlanFlavor::Huawei, &rows, &[], 1024)
+            .aps
+            .is_empty());
     }
 
     #[test]
@@ -340,7 +447,9 @@ mod tests {
                 value: SnmpValue::Int(8),
             },
         ];
-        assert!(inventory(WlanFlavor::Huawei, &rows, 1024).aps.is_empty());
+        assert!(inventory(WlanFlavor::Huawei, &rows, &[], 1024)
+            .aps
+            .is_empty());
     }
 
     #[test]
@@ -350,7 +459,7 @@ mod tests {
             row(6, mac, SnmpValue::Int(8)),
             row(4, mac, SnmpValue::Bytes(b"ap\x00\xff-1\n".to_vec())),
         ];
-        let inv = inventory(WlanFlavor::Huawei, &rows, 1024);
+        let inv = inventory(WlanFlavor::Huawei, &rows, &[], 1024);
         assert_eq!(inv.aps[0].name.as_deref(), Some("ap \u{fffd}-1"));
     }
 
@@ -359,7 +468,7 @@ mod tests {
         let rows: Vec<_> = (0u32..6)
             .map(|i| row(6, [0, 0, 0, 0, 0, i], SnmpValue::Int(8)))
             .collect();
-        let inv = inventory(WlanFlavor::Huawei, &rows, 4);
+        let inv = inventory(WlanFlavor::Huawei, &rows, &[], 4);
         assert_eq!(inv.aps.len(), 4);
         assert_eq!(inv.truncated_at, Some(6));
     }

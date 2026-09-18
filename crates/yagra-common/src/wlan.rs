@@ -45,7 +45,26 @@ pub const METRIC_WLAN_AP_CPU_PCT: &str = "wlan_ap_cpu_pct";
 /// An AP's memory in use, percent, as its controller reports.
 pub const METRIC_WLAN_AP_MEM_PCT: &str = "wlan_ap_mem_pct";
 /// An AP's operating temperature, °C, as its controller reports. Absent for an AP with no sensor.
+///
+/// ⚠️ **Most APs have no such sensor.** Measured on the PoC's AC6508: 36 of 38 answered the
+/// `255` placeholder and only 2 a reading. The die temperature the same APs do report is
+/// [`METRIC_WLAN_AP_CPU_TEMP_C`], and the two are **different sensors** — never fold one into the
+/// other (ADR-064 増分 E).
 pub const METRIC_WLAN_AP_TEMP_C: &str = "wlan_ap_temp_c";
+/// An AP's CPU die temperature, °C, as its controller reports (`hwWlanApCpuTemperature`).
+///
+/// The reading most AirEngine APs actually have: 30 of the PoC's 38 answered 55–69 °C, and the 8
+/// that answered the `255` placeholder were exactly the 8 that were down. Sibling of
+/// [`METRIC_WLAN_AP_TEMP_C`], not a replacement for it.
+pub const METRIC_WLAN_AP_CPU_TEMP_C: &str = "wlan_ap_cpu_temp_c";
+/// An AP's power supply state as its controller reports it, as the MIB's own enumeration —
+/// `1` normal, `2` insufficient, `3` limited, `4` invalid (`hwWlanAPPowerSupplyState`).
+///
+/// ⚠️ Published only for an AP the controller is serving, so `4` (what a down AP answers) never
+/// reaches the TSDB — a down AP is said by `wlan_ap_up`, not by a power state.
+/// ⚠️ **`2` and `3` have never been observed.** Every measured AP answered `1` or `4`, so the two
+/// interesting values rest on the MIB's wording alone (ADR-064 増分 E).
+pub const METRIC_WLAN_AP_POWER_STATE: &str = "wlan_ap_power_state";
 
 /// The built-in profile an imported AP node carries (ADR-064). It attaches no template: an AP is
 /// never polled itself — its controller's walk answers for it.
@@ -56,10 +75,16 @@ pub const MAX_APS_PER_CONTROLLER_DEFAULT: u32 = 1024;
 
 /// The most APs one controller result may carry, whatever an operator asks for.
 ///
-/// Sized from the payload, not from taste: one observation serializes to roughly 200 bytes of JSON,
-/// so 2,048 of them are about 410 KB against NATS's 1 MiB `max_payload` — room for the rest of the
-/// result and for a vendor's longer strings. `every_observation_at_the_hard_cap_fits_the_bus` in the
-/// bus crate measures a worst case against this number.
+/// Sized from the payload, not from taste. Re-measured after ADR-064 増分 E added two readings:
+/// one observation with the strings and numbers a real AC answers serializes to about 340 bytes of
+/// JSON, so 2,048 of them are **705 KB** against NATS's 1 MiB `max_payload` — still inside
+/// [`WLAN_INVENTORY_BYTE_BUDGET`], with room for the rest of the result.
+///
+/// ⚠️ **A field added to [`WlanApObservation`] spends this headroom**, and the count cap is not what
+/// stops it: at the worst-case string length the byte budget already cuts the list well below 2,048.
+/// `a_controller_result_at_the_hard_cap_fits_the_bus` in the bus crate measures both cases, and the
+/// realistic one is realistic about **numbers** as well as strings — a ten-digit temperature is not
+/// a measurement, and letting the fixture keep one hid how much of the budget a reading costs.
 pub const MAX_APS_PER_CONTROLLER_HARD: u32 = 2048;
 
 /// The longest device string kept on an observation (name, serial, model, version, group), in
@@ -342,9 +367,17 @@ pub struct WlanApObservation {
     /// Memory in use, percent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mem_pct: Option<u32>,
-    /// Operating temperature, °C.
+    /// Operating temperature, °C. `None` on the many APs with no such sensor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temp_c: Option<i32>,
+    /// CPU die temperature, °C — read from a **second, optional** walk (ADR-064 増分 E), so `None`
+    /// also covers "this controller never answered that column".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_temp_c: Option<i32>,
+    /// Power supply state, the MIB's own enumeration (see [`METRIC_WLAN_AP_POWER_STATE`]). From the
+    /// optional walk, so `None` also means the column went unanswered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_state: Option<u32>,
 }
 
 impl WlanApObservation {
@@ -562,6 +595,8 @@ mod tests {
             cpu_pct: None,
             mem_pct: None,
             temp_c: None,
+            cpu_temp_c: None,
+            power_state: None,
         }
     }
 
@@ -639,6 +674,8 @@ mod tests {
             cpu_pct: None,
             mem_pct: None,
             temp_c: None,
+            cpu_temp_c: None,
+            power_state: None,
         };
         let clean = raw.sanitized();
         assert_eq!(clean.name.as_deref(), Some("ap 001"));
