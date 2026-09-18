@@ -22,9 +22,12 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
+use yagra_bus::{RowName, Sample};
 use yagra_common::{
-    huawei_run_state, sanitize_wlan_text, ApMac, WlanApObservation, WlanFlavor, WlanInventory,
-    MAX_APS_PER_CONTROLLER_HARD,
+    huawei_run_state, sanitize_wlan_text, ssid_row_key, ApMac, MetricKind, WlanApObservation,
+    WlanFlavor, WlanInventory, MAX_APS_PER_CONTROLLER_HARD, METRIC_WLAN_SSID_AP_COUNT,
+    METRIC_WLAN_SSID_CLIENTS, METRIC_WLAN_SSID_CLIENTS_2G4, METRIC_WLAN_SSID_CLIENTS_5G,
+    METRIC_WLAN_SSID_CLIENTS_6G, METRIC_WLAN_SSID_IN_OCTETS, METRIC_WLAN_SSID_OUT_OCTETS,
 };
 use yagra_transport::{SnmpInstanceRow, SnmpValue};
 
@@ -255,12 +258,247 @@ fn non_negative(value: &SnmpValue) -> Option<u32> {
     }
 }
 
+// ─── SSID statistics (ADR-064 増分 D) ──────────────────────────────────────────
+
+/// Huawei `hwWlanSsidStatisticEntry` columns read, as `(column number, field)`.
+///
+/// Left out, each for a reason: `.15`/`.16` (send/receive rate) carry **no unit in the MIB**, which
+/// is the judgement `collection.rs` already made about `hwWlanGlobalUpSpeed` — and the byte
+/// counters below give the same answer through `rate()` (ADR-012); `.6`/`.8`/`.11`–`.14` are
+/// statistics over the controller's own echo interval, whose length is a device setting, so two
+/// controllers' numbers are not comparable; `.7`/`.10` are frame counts, which the bytes cover.
+const HUAWEI_SSID_COLUMNS: [(u32, SsidField); 6] = [
+    (4, SsidField::ApCount),
+    (2, SsidField::Clients2g4),
+    (3, SsidField::Clients5g),
+    (17, SsidField::Clients6g),
+    (5, SsidField::InOctets),
+    (9, SsidField::OutOctets),
+];
+
+/// What an SSID column contributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SsidField {
+    ApCount,
+    Clients2g4,
+    Clients5g,
+    Clients6g,
+    InOctets,
+    OutOctets,
+}
+
+/// The most SSIDs one controller may publish.
+///
+/// 🚨 **Sized from the row-name budget, not from taste.** Every SSID needs one [`RowName`] per
+/// metric for its name to join, so this walk asks for `WLAN_SSID_ROW_METRICS.len()` names per SSID
+/// against `ROW_NAMES_MAX` = 512: 7 × 64 = 448, with room to spare. Raise this and the names of the
+/// SSIDs past the cap are silently dropped on receipt — the values would arrive as bare numbers
+/// with nothing to call them. The measured AC broadcasts 4.
+pub const WLAN_SSID_MAX: usize = 64;
+
+/// One SSID as one controller reported it, with the row key its series carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WlanSsidReading {
+    /// The SSID, decoded from the table index and cleaned.
+    pub name: String,
+    /// [`yagra_common::ssid_row_key`] of `name`.
+    pub row: u32,
+    pub ap_count: Option<u32>,
+    pub clients_2g4: Option<u32>,
+    pub clients_5g: Option<u32>,
+    pub clients_6g: Option<u32>,
+    pub in_octets: Option<u64>,
+    pub out_octets: Option<u64>,
+}
+
+impl WlanSsidReading {
+    /// Clients over every band the controller answered for, or `None` when it answered for none.
+    ///
+    /// Summing only what was answered is deliberate: a controller with no 6 GHz radios omits that
+    /// column, and treating the absence as zero would be right by luck rather than by evidence.
+    #[must_use]
+    pub fn clients(&self) -> Option<u32> {
+        let parts = [self.clients_2g4, self.clients_5g, self.clients_6g];
+        parts
+            .iter()
+            .any(Option::is_some)
+            .then(|| parts.iter().flatten().sum())
+    }
+}
+
+/// The SSID column OIDs to walk for a dialect.
+#[must_use]
+pub fn ssid_columns(flavor: WlanFlavor) -> Vec<String> {
+    match flavor {
+        WlanFlavor::Huawei => HUAWEI_SSID_COLUMNS
+            .iter()
+            .map(|(n, _)| format!("{}.{n}", flavor.ssid_root_oid()))
+            .collect(),
+    }
+}
+
+/// The most rows the SSID walk takes, across every column.
+#[must_use]
+pub fn ssid_walk_row_budget(flavor: WlanFlavor) -> usize {
+    ssid_columns(flavor).len() * WLAN_SSID_MAX * 2
+}
+
+/// The SSIDs in a dialect's rows, in row-key order and bounded to [`WLAN_SSID_MAX`].
+///
+/// 🚨 **A row key collision drops the row rather than merging it.** Two SSIDs whose names hash the
+/// same would otherwise share one series, and the result would look like one SSID with somebody
+/// else's client count — a wrong number, where a missing one is only a gap.
+#[must_use]
+pub fn ssids(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<WlanSsidReading> {
+    match flavor {
+        WlanFlavor::Huawei => huawei_ssids(flavor, rows),
+    }
+}
+
+fn huawei_ssids(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<WlanSsidReading> {
+    let field_of: BTreeMap<String, SsidField> = HUAWEI_SSID_COLUMNS
+        .iter()
+        .map(|(n, f)| (format!("{}.{n}", flavor.ssid_root_oid()), *f))
+        .collect();
+    let mut by_name: BTreeMap<String, Vec<(SsidField, &SnmpValue)>> = BTreeMap::new();
+    for row in rows {
+        let Some(field) = field_of.get(row.oid_base.trim_start_matches('.')) else {
+            continue;
+        };
+        let Some(name) = ssid_from_index(&row.instance) else {
+            continue;
+        };
+        by_name.entry(name).or_default().push((*field, &row.value));
+    }
+    let mut out: Vec<WlanSsidReading> = Vec::new();
+    let mut seen: BTreeMap<u32, String> = BTreeMap::new();
+    for (name, fields) in by_name {
+        let row = ssid_row_key(&name);
+        if let Some(other) = seen.get(&row) {
+            tracing::warn!(
+                ssid = %name,
+                clashes_with = %other,
+                "two SSIDs share a row key; the second is dropped rather than merged"
+            );
+            metrics::counter!("yagra_wlan_ssid_row_key_collisions_total").increment(1);
+            continue;
+        }
+        seen.insert(row, name.clone());
+        let mut r = WlanSsidReading {
+            name,
+            row,
+            ap_count: None,
+            clients_2g4: None,
+            clients_5g: None,
+            clients_6g: None,
+            in_octets: None,
+            out_octets: None,
+        };
+        for (field, value) in fields {
+            match field {
+                SsidField::ApCount => r.ap_count = non_negative(value),
+                SsidField::Clients2g4 => r.clients_2g4 = non_negative(value),
+                SsidField::Clients5g => r.clients_5g = non_negative(value),
+                SsidField::Clients6g => r.clients_6g = non_negative(value),
+                SsidField::InOctets => r.in_octets = counter64(value),
+                SsidField::OutOctets => r.out_octets = counter64(value),
+            }
+        }
+        out.push(r);
+    }
+    out.sort_by_key(|r| r.row);
+    out.truncate(WLAN_SSID_MAX);
+    out
+}
+
+/// The SSID name inside a table index: a length-prefixed octet string, cleaned.
+///
+/// ⚠️ The length byte is checked against what follows rather than trusted — a controller that
+/// disagrees with itself about the length would otherwise name an SSID out of neighbouring
+/// sub-identifiers.
+fn ssid_from_index(instance: &[u32]) -> Option<String> {
+    let (len, rest) = instance.split_first()?;
+    if *len as usize != rest.len() {
+        return None;
+    }
+    let bytes: Vec<u8> = rest
+        .iter()
+        .map(|b| u8::try_from(*b).unwrap_or(b'?'))
+        .collect();
+    sanitize_wlan_text(&String::from_utf8_lossy(&bytes))
+}
+
+fn counter64(value: &SnmpValue) -> Option<u64> {
+    match value {
+        SnmpValue::Int(v) => u64::try_from(*v).ok(),
+        SnmpValue::Bytes(_) | SnmpValue::Oid(_) => None,
+    }
+}
+
+/// The samples and row names one controller's SSIDs stand for.
+///
+/// ⚠️ **Every SSID gets its names, including one with no clients at all.** The row-name *walk*
+/// skips rows whose value was zero (a switch reports hundreds of entity rows with no memory), and
+/// copying that rule here would delete exactly the SSID an operator is looking for — an empty
+/// guest network is a fact, not noise. This path names what it publishes, unconditionally.
+#[must_use]
+pub fn ssid_samples(readings: &[WlanSsidReading]) -> (Vec<Sample>, Vec<RowName>) {
+    let mut samples = Vec::new();
+    let mut names = Vec::new();
+    for r in readings {
+        let gauges = [
+            (METRIC_WLAN_SSID_CLIENTS, r.clients().map(f64::from)),
+            (METRIC_WLAN_SSID_CLIENTS_2G4, r.clients_2g4.map(f64::from)),
+            (METRIC_WLAN_SSID_CLIENTS_5G, r.clients_5g.map(f64::from)),
+            (METRIC_WLAN_SSID_CLIENTS_6G, r.clients_6g.map(f64::from)),
+            (METRIC_WLAN_SSID_AP_COUNT, r.ap_count.map(f64::from)),
+        ];
+        let counters = [
+            (METRIC_WLAN_SSID_IN_OCTETS, r.in_octets),
+            (METRIC_WLAN_SSID_OUT_OCTETS, r.out_octets),
+        ];
+        for (metric, value) in gauges {
+            if let Some(v) = value {
+                samples.push(Sample::interface(
+                    metric,
+                    yagra_common::IfIndex(r.row),
+                    v,
+                    MetricKind::Gauge,
+                ));
+                names.push(RowName {
+                    metric: metric.to_owned(),
+                    row: r.row,
+                    name: r.name.clone(),
+                });
+            }
+        }
+        for (metric, value) in counters {
+            if let Some(v) = value {
+                #[allow(clippy::cast_precision_loss)]
+                samples.push(Sample::interface(
+                    metric,
+                    yagra_common::IfIndex(r.row),
+                    v as f64,
+                    MetricKind::Counter,
+                ));
+                names.push(RowName {
+                    metric: metric.to_owned(),
+                    row: r.row,
+                    name: r.name.clone(),
+                });
+            }
+        }
+    }
+    (samples, names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use yagra_common::WlanApState;
 
     const ROOT: &str = "1.3.6.1.4.1.2011.6.139.13.3.3.1";
+    const SSID_ROOT: &str = "1.3.6.1.4.1.2011.6.139.17.1.2.1";
 
     fn row(column: u32, mac: [u32; 6], value: SnmpValue) -> SnmpInstanceRow {
         SnmpInstanceRow {
@@ -315,6 +553,123 @@ mod tests {
             ap("site-ap-014").power_state,
             None,
             "a column the second walk did not answer for this AP stays absent"
+        );
+    }
+    /// The four SSIDs of the measured AC6508, as the recording holds them.
+    ///
+    /// Index = the SSID name as a length-prefixed octet string, which is the only place the name
+    /// exists: column 1 is not-accessible and answered nothing on the real controller.
+    fn ssid_rows() -> Vec<SnmpInstanceRow> {
+        let idx = |name: &str| {
+            let mut v = vec![u32::try_from(name.len()).unwrap()];
+            v.extend(name.bytes().map(u32::from));
+            v
+        };
+        let cell = |col: u32, name: &str, v: i64| SnmpInstanceRow {
+            oid_base: format!("{SSID_ROOT}.{col}"),
+            instance: idx(name),
+            value: SnmpValue::Int(v),
+        };
+        vec![
+            // lixilguest: 2 on 2.4 GHz, 11 on 5 GHz, broadcast by 30 APs.
+            cell(2, "lixilguest", 2),
+            cell(3, "lixilguest", 11),
+            cell(17, "lixilguest", 0),
+            cell(4, "lixilguest", 30),
+            cell(5, "lixilguest", 283_912_285_339),
+            cell(9, "lixilguest", 214_712_781_505_206),
+            // global5: 2 clients, all on 5 GHz.
+            cell(2, "global5", 0),
+            cell(3, "global5", 2),
+            cell(4, "global5", 30),
+            // global24 and lixil-biz: broadcast by every AP, nobody on them.
+            cell(2, "global24", 0),
+            cell(3, "global24", 0),
+            cell(4, "global24", 30),
+            cell(2, "lixil-biz", 0),
+            cell(3, "lixil-biz", 0),
+            cell(4, "lixil-biz", 30),
+        ]
+    }
+
+    #[test]
+    fn the_ssid_table_reads_into_one_reading_per_ssid_with_its_name() {
+        let ssids = ssids(WlanFlavor::Huawei, &ssid_rows());
+        let names: Vec<&str> = ssids.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names.len(), 4, "{names:?}");
+        let find = |n: &str| {
+            ssids
+                .iter()
+                .find(|r| r.name == n)
+                .unwrap_or_else(|| panic!("{n} decoded"))
+        };
+        assert_eq!(find("lixilguest").clients_2g4, Some(2));
+        assert_eq!(find("lixilguest").clients_5g, Some(11));
+        assert_eq!(find("lixilguest").clients(), Some(13));
+        assert_eq!(find("lixilguest").in_octets, Some(283_912_285_339));
+        assert_eq!(find("global5").clients(), Some(2));
+        // The measured total: the four SSIDs add up to what the controller reports fleet-wide
+        // in `wlan_controller_clients`, which is the check that the decode is not off by a row.
+        let total: u32 = ssids.iter().filter_map(WlanSsidReading::clients).sum();
+        assert_eq!(total, 15);
+    }
+
+    /// 🚨 An SSID nobody is using is still an SSID, and is the one an operator is most likely to
+    /// be looking for. The row-name **walk** drops rows whose value was zero; copying that rule
+    /// onto this path would delete an empty guest network from the list.
+    #[test]
+    fn an_ssid_with_no_clients_keeps_its_row_and_its_name() {
+        let ssids = ssids(WlanFlavor::Huawei, &ssid_rows());
+        let (samples, names) = ssid_samples(&ssids);
+        let empty = ssids
+            .iter()
+            .find(|r| r.name == "global24")
+            .expect("the empty SSID is in the readings");
+        assert_eq!(empty.clients(), Some(0));
+        assert!(
+            names
+                .iter()
+                .any(|n| n.row == empty.row && n.name == "global24"),
+            "an SSID with no clients is still named"
+        );
+        assert!(
+            samples
+                .iter()
+                .any(|s| s.ifindex == Some(yagra_common::IfIndex(empty.row)) && s.value == 0.0),
+            "and still publishes its zero"
+        );
+        // Every sample carries a row key and every row key has a name, in both directions.
+        for s in &samples {
+            let row = s.ifindex.expect("an SSID sample is keyed by its row").0;
+            assert!(
+                names.iter().any(|n| n.row == row && n.metric == s.metric),
+                "{} row {row} has no name",
+                s.metric
+            );
+        }
+    }
+
+    /// A malformed index names nothing rather than naming neighbouring sub-identifiers.
+    #[test]
+    fn an_index_whose_length_disagrees_with_itself_is_dropped() {
+        let row = SnmpInstanceRow {
+            oid_base: format!("{SSID_ROOT}.4"),
+            // Says nine bytes follow; three do.
+            instance: vec![9, 97, 98, 99],
+            value: SnmpValue::Int(1),
+        };
+        assert!(ssids(WlanFlavor::Huawei, &[row]).is_empty());
+    }
+
+    /// The row key is a fact stored in the TSDB and joined to a name in PostgreSQL: changing it
+    /// orphans both. Pinned to literals for the same reason [`ap_id`] is.
+    #[test]
+    fn an_ssid_row_key_is_pinned_to_its_name() {
+        assert_eq!(yagra_common::ssid_row_key("lixilguest"), 2_035_702_017);
+        assert_eq!(yagra_common::ssid_row_key("global5"), 3_547_817_473);
+        assert_ne!(
+            yagra_common::ssid_row_key("global5"),
+            yagra_common::ssid_row_key("global24")
         );
     }
     fn active_controller_rows() -> Vec<SnmpInstanceRow> {

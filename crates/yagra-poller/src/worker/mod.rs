@@ -66,7 +66,7 @@ use physical::{execute_mau, execute_optical};
 use probes::{execute_dns, execute_http, execute_icmp};
 use snmp::{execute_scalar_get, SnmpWalker};
 pub(crate) use stream::{run_stream, POLL_PHASE_BUCKETS, POLL_PHASE_METRIC};
-use wlan::execute_wlan;
+use wlan::{execute_wlan, WlanPlan};
 
 use crate::limiter::PollLimiter;
 use crate::optical;
@@ -250,32 +250,24 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             .await
         }
         CheckSpec::SnmpWlanAp(check) => {
-            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
             let walker = SnmpWalker::V2c(check.community.clone());
-            execute_wlan(
-                job,
-                transport,
-                at_unix_ms,
-                check.flavor,
-                check.max_aps,
-                timeout,
-                &walker,
-            )
-            .await
+            let plan = WlanPlan {
+                flavor: check.flavor,
+                max_aps: check.max_aps,
+                walk_ssids: check.walk_ssids,
+                timeout: Duration::from_millis(u64::from(check.timeout_ms)),
+            };
+            execute_wlan(job, transport, at_unix_ms, plan, &walker).await
         }
         CheckSpec::SnmpV3WlanAp(check) => {
-            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
             let walker = SnmpWalker::V3(check.auth.clone());
-            execute_wlan(
-                job,
-                transport,
-                at_unix_ms,
-                check.flavor,
-                check.max_aps,
-                timeout,
-                &walker,
-            )
-            .await
+            let plan = WlanPlan {
+                flavor: check.flavor,
+                max_aps: check.max_aps,
+                walk_ssids: check.walk_ssids,
+                timeout: Duration::from_millis(u64::from(check.timeout_ms)),
+            };
+            execute_wlan(job, transport, at_unix_ms, plan, &walker).await
         }
         CheckSpec::MerakiCollect(_) => {
             // Meraki collects fan out to many results and are dispatched via `execute_meraki` in

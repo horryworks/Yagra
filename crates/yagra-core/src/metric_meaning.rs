@@ -228,7 +228,7 @@ impl MetricUnit {
 /// already pins this table to the collection catalogue in **both** directions, so a new metric now
 /// fails to compile until someone decides its unit. That guarantee is bought, not built — there is
 /// no separate check for units and there should not be one.
-pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 124] = [
+pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 131] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.", MetricUnit::None),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).", MetricUnit::Counted("connections")),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.", MetricUnit::None),
@@ -353,6 +353,13 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 124] = [
     ("wlan_controller_clients_2g4", "Wireless clients currently online on the 2.4 GHz band. An HA standby reports the active controller's count.", MetricUnit::Counted("clients")),
     ("wlan_controller_clients_5g", "Wireless clients currently online on the 5 GHz band. An HA standby reports the active controller's count.", MetricUnit::Counted("clients")),
     ("wlan_controller_clients_6g", "Wireless clients currently online on the 6 GHz band. Zero on a controller whose access points have no 6 GHz radio. An HA standby reports the active controller's count.", MetricUnit::Counted("clients")),
+    ("wlan_controller_ssid_count", "How many SSIDs this wireless controller is broadcasting. Published only when the SSID table was read to its end, so it never falls just because a read failed. An HA standby is configured with the same SSIDs as the controller it backs up, so both members of a pair report the same number.", MetricUnit::None),
+    ("wlan_ssid_ap_count", "How many access points are broadcasting this SSID, as the controller reports. One row per SSID, named by the SSID itself.", MetricUnit::None),
+    ("wlan_ssid_clients", "Wireless clients currently online on this SSID, added up over the bands the controller answered for. One row per SSID, named by the SSID itself. An HA standby reports the active controller’s numbers, so do not add the two controllers together.", MetricUnit::None),
+    ("wlan_ssid_clients_2g4", "Wireless clients currently online on this SSID over 2.4 GHz. One row per SSID, named by the SSID itself.", MetricUnit::None),
+    ("wlan_ssid_clients_5g", "Wireless clients currently online on this SSID over 5 GHz. One row per SSID, named by the SSID itself.", MetricUnit::None),
+    ("wlan_ssid_clients_6g", "Wireless clients currently online on this SSID over 6 GHz. Zero on a controller whose access points have no 6 GHz radios. One row per SSID, named by the SSID itself.", MetricUnit::None),
+    ("wlan_ssid_walk_complete", "Did the controller answer every column of its SSID table on this poll (1) or not (0). Unlike the access-point walk, an incomplete read still publishes the SSIDs it did get — each one is an independent reading rather than a member of a list that replaces the stored one — but it will not say how many SSIDs there are.", MetricUnit::None),
 ];
 
 /// Where a metric comes from — the one fact about it that changes how it can be *used*.
