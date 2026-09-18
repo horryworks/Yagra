@@ -13,6 +13,9 @@ export interface Polled<T> {
   loading: boolean;
   /** A human-readable error message, or null. */
   error: string | null;
+  /** The HTTP status behind `error`, when the failure had one. For the caller that must tell
+   *  "you may not read this" (403) from "this could not be read" — they are different sentences. */
+  errorStatus: number | null;
 }
 
 const REFRESH_MS = 15_000;
@@ -29,14 +32,19 @@ export function usePolled<T>(
   deps: readonly unknown[] = [],
   intervalMs: number = REFRESH_MS,
 ): Polled<T> {
-  const [state, setState] = useState<Polled<T>>({ data: null, loading: true, error: null });
+  const [state, setState] = useState<Polled<T>>({
+    data: null,
+    loading: true,
+    error: null,
+    errorStatus: null,
+  });
 
   useEffect(() => {
     let cancelled = false;
     const run = () => {
       fetcher()
         .then((data) => {
-          if (!cancelled) setState({ data, loading: false, error: null });
+          if (!cancelled) setState({ data, loading: false, error: null, errorStatus: null });
         })
         .catch((e: unknown) => {
           if (!cancelled) {
@@ -44,6 +52,7 @@ export function usePolled<T>(
               ...s,
               loading: false,
               error: e instanceof ApiError ? e.message : i18n.t('dashboard:err.requestFailed'),
+              errorStatus: e instanceof ApiError ? e.status : null,
             }));
           }
         });

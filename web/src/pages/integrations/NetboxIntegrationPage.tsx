@@ -339,6 +339,7 @@ function ServerRow({
   };
 
   const toggle = () => {
+    setError(null);
     api
       .updateNetboxServer(server.id, {
         name: server.name,
@@ -351,7 +352,9 @@ function ServerRow({
         site_id_field: server.site_id_field,
       })
       .then(onSynced)
-      .catch(() => undefined);
+      // Into the row's own error slot. Swallowed, the switch simply snapped back, which reads as a
+      // broken control rather than a refused write.
+      .catch((e: unknown) => setError(errMsg(e, t('netbox.err.toggle'))));
   };
 
   return (

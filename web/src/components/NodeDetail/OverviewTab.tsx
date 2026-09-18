@@ -81,7 +81,7 @@ import { formatKb, memPctSeries } from './overviewMetrics';
 import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { metricMeaningKey } from '../../lib/metricMeaning';
-import { certTone, httpToneVar } from './healthTone';
+import { availabilityColorVar, certTone, httpToneVar } from './healthTone';
 import { extractMetricKey, formatExtractedValue, metricsFromKey } from './urlExtracts';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { DnsHealth } from './DnsHealth';
@@ -429,7 +429,6 @@ function UrlHealth({
   }, [nodeId, range, tick, extractNames]);
 
   const code = statusCode == null ? null : Math.round(statusCode);
-  const availabilityTone: 'up' | 'critical' = up === 1 ? 'up' : 'critical';
 
   return (
     <section>
@@ -445,7 +444,7 @@ function UrlHealth({
             <span className="nd-health-metric-label">{t('overview.availability')}</span>
             <span
               className="nd-health-metric-value"
-              style={{ color: httpToneVar(availabilityTone) }}
+              style={{ color: availabilityColorVar(up) }}
             >
               {up == null ? '—' : up === 1 ? t('overview.up') : t('overview.down')}
             </span>
@@ -588,7 +587,6 @@ function MerakiHealth({
     };
   }, [nodeId, tick]);
 
-  const availabilityTone: 'up' | 'critical' = up === 1 ? 'up' : 'critical';
 
   return (
     <section>
@@ -604,7 +602,7 @@ function MerakiHealth({
             <span className="nd-health-metric-label">{t('overview.availability')}</span>
             <span
               className="nd-health-metric-value"
-              style={{ color: httpToneVar(availabilityTone) }}
+              style={{ color: availabilityColorVar(up) }}
             >
               {up == null ? '—' : up === 1 ? t('overview.online') : t('overview.offline')}
             </span>

@@ -16,6 +16,7 @@ const subscribeAnalysis = vi.fn((cb: (j: AnalysisJob) => void) => {
 });
 
 const setJobs = vi.fn();
+const setLoadFailed = vi.fn();
 const upsertJob = vi.fn();
 
 vi.mock('../services/api', () => ({
@@ -25,7 +26,11 @@ vi.mock('../services/sse', () => ({
   subscribeAnalysis: (cb: (j: AnalysisJob) => void) => subscribeAnalysis(cb),
 }));
 vi.mock('./store', () => ({
-  useTroubleshootStore: (sel: (s: unknown) => unknown) => sel({ setJobs, upsertJob }),
+  // The seed reads the store outside React (`getState`) so the runs list can call it for a retry.
+  useTroubleshootStore: Object.assign(
+    (sel: (s: unknown) => unknown) => sel({ setJobs, setLoadFailed, upsertJob }),
+    { getState: () => ({ setJobs, setLoadFailed, upsertJob }) },
+  ),
 }));
 
 const job = (id: string): AnalysisJob => ({ id, state: 'running' }) as unknown as AnalysisJob;
@@ -55,6 +60,25 @@ describe('useTroubleshootStream', () => {
 
     await waitFor(() => expect(subscribeAnalysis).toHaveBeenCalledTimes(1));
     expect(setJobs).not.toHaveBeenCalled();
+  });
+
+  it('records a failed seed, so the runs list can say so instead of loading for ever', async () => {
+    // `loaded` is set by `setJobs` alone. With the failure swallowed, `/troubleshoot/runs` read
+    // "Loading…" for as long as the app stayed open.
+    listAnalysisJobs.mockRejectedValue(new Error('503'));
+    const { useTroubleshootStream } = await import('./useTroubleshootStream');
+    renderHook(() => useTroubleshootStream());
+
+    await waitFor(() => expect(setLoadFailed).toHaveBeenCalledWith(true));
+    expect(setJobs).not.toHaveBeenCalled();
+  });
+
+  it('a retry clears the failure before it asks again', async () => {
+    const { seedAnalysisJobs } = await import('./useTroubleshootStream');
+    seedAnalysisJobs();
+    expect(setLoadFailed).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(setJobs).toHaveBeenCalledWith([job('j1')]));
+    expect(setLoadFailed).not.toHaveBeenCalledWith(true);
   });
 
   it('feeds live job updates into the store', async () => {

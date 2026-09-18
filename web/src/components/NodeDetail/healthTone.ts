@@ -20,6 +20,20 @@ export function httpToneVar(tone: HealthTone): string {
   return 'var(--status-critical)';
 }
 
+/**
+ * The colour of an up/down reading (`1` = up), for the URL monitor's Availability tile and the DNS
+ * monitor's Resolution tile.
+ *
+ * 🚨 **No reading is `unknown`, not `critical`.** Both tiles used to pick between ok and critical
+ * on `up === 1`, so a monitor that had not been polled yet — or whose metric read 404'd — drew its
+ * `—` in the failure colour. Absence of a reading is not a failure, and the colour is the part an
+ * operator reads first.
+ */
+export function availabilityColorVar(up: number | null | undefined): string {
+  if (up == null) return 'var(--status-unknown)';
+  return up === 1 ? 'var(--status-ok)' : 'var(--status-critical)';
+}
+
 /** Days-to-expiry bands for a TLS certificate, matching the thresholds the built-in URL-monitor
  *  profile seeds (warn under 30 days, critical under 7).
  *

@@ -1551,6 +1551,33 @@ describe('api client', () => {
     setUnauthorizedHandler(null);
   });
 
+  it('a download that answers 401 clears the stale token too — it was the one sender that did not', async () => {
+    setToken('stale-token');
+    const onUnauth = vi.fn();
+    setUnauthorizedHandler(onUnauth);
+    mockFetch(401, { error: { code: 'unauthorized', message: 'a valid bearer token is required' } });
+
+    await expect(api.downloadSupportBundle()).rejects.toMatchObject({ status: 401 });
+    expect(getToken()).toBeNull();
+    expect(onUnauth).toHaveBeenCalledOnce();
+
+    setUnauthorizedHandler(null);
+  });
+
+  it('a download that fails for another reason leaves the session alone', async () => {
+    setToken('good-token');
+    const onUnauth = vi.fn();
+    setUnauthorizedHandler(onUnauth);
+    mockFetch(503, { error: { code: 'unavailable', message: 'try again' } });
+
+    await expect(api.downloadSupportBundle()).rejects.toMatchObject({ status: 503 });
+    expect(getToken()).toBe('good-token');
+    expect(onUnauth).not.toHaveBeenCalled();
+
+    setUnauthorizedHandler(null);
+    setToken(null);
+  });
+
   it('does not fire the unauthorized handler when no token was attached (e.g. bad login)', async () => {
     setToken(null);
     const onUnauth = vi.fn();
