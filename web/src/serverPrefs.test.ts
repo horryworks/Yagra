@@ -112,6 +112,30 @@ describe('loadServerPrefs', () => {
     await loadServerPrefs();
     expect(usePrefsStore.getState().interfaceDockHeight).toBe(300);
   });
+
+  it('does not adopt a document that answers after the account signed out', async () => {
+    // The save path has always checked the session; the read path did not. Signing out while the
+    // GET was in flight applied the previous account's layout to whoever signed in next.
+    let answer: (doc: unknown) => void = () => undefined;
+    getPreferences.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const loading = loadServerPrefs();
+    resetServerPrefs(); // sign-out
+    answer({ interfaceDockHeight: 444 });
+    await loading;
+    expect(usePrefsStore.getState().interfaceDockHeight).toBeNull();
+  });
+
+  it('does not let an older load overwrite the answer to a newer one', async () => {
+    const answers: Array<(doc: unknown) => void> = [];
+    getPreferences.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    const first = loadServerPrefs();
+    const second = loadServerPrefs();
+    answers[1]({ interfaceDockHeight: 222 });
+    await second;
+    answers[0]({ interfaceDockHeight: 111 });
+    await first;
+    expect(usePrefsStore.getState().interfaceDockHeight).toBe(222);
+  });
 });
 
 describe('setInterfaceDockHeight', () => {

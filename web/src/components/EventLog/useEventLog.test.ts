@@ -172,6 +172,50 @@ describe('useEventLog', () => {
     expect(listEvents).toHaveBeenLastCalledWith({ limit: EVENT_PAGE_SIZE, kind: 'syslog' });
   });
 
+  it('a slow answer to an older filter cannot overwrite the newer filter it lost to', async () => {
+    // The defect: clear a slow message filter, the fast unfiltered page paints, and then the slow
+    // narrow page lands and replaces it — under a filter row that shows no filter.
+    let answerSlow: (rows: EventRow[]) => void = () => undefined;
+    listEvents.mockImplementation((opts: { msg?: string }) =>
+      opts.msg
+        ? new Promise<EventRow[]>((resolve) => (answerSlow = resolve))
+        : Promise.resolve([row('all-1', '2026-07-25T10:00:00Z'), row('all-2', '2026-07-25T10:00:01Z')]),
+    );
+    const { useEventLog } = await import('./useEventLog');
+    const { result, rerender } = renderHook(({ msg }: { msg: string }) => useEventLog({ msg }), {
+      initialProps: { msg: 'slow.*regex' },
+    });
+    rerender({ msg: '' });
+    await waitFor(() => expect(result.current.rows).toHaveLength(2));
+    expect(result.current.loading).toBe(false);
+
+    answerSlow([row('narrow-1', '2026-07-25T09:00:00Z')]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(result.current.rows.map((r) => r.id)).toEqual(['all-1', 'all-2']);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('a next page asked for under an older filter is not appended to the newer list', async () => {
+    let answerMore: (rows: EventRow[]) => void = () => undefined;
+    listEvents.mockImplementation((opts: { before?: string; kind?: string }) => {
+      if (opts.before) return new Promise<EventRow[]>((resolve) => (answerMore = resolve));
+      return Promise.resolve(opts.kind ? [row('trap-1', '2026-07-25T10:00:00Z')] : fullPage('a'));
+    });
+    const { useEventLog } = await import('./useEventLog');
+    const { result, rerender } = renderHook(
+      ({ kind }: { kind?: EventKind }) => useEventLog({ kind }),
+      { initialProps: {} as { kind?: EventKind } },
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(EVENT_PAGE_SIZE));
+    result.current.loadMore();
+    rerender({ kind: 'trap' });
+    await waitFor(() => expect(result.current.rows.map((r) => r.id)).toEqual(['trap-1']));
+
+    answerMore(fullPage('stale'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(result.current.rows.map((r) => r.id)).toEqual(['trap-1']);
+  });
+
   it('leaves the rows intact and stops loading when a fetch fails', async () => {
     listEvents.mockRejectedValueOnce(new Error('503'));
     const { useEventLog } = await import('./useEventLog');

@@ -132,12 +132,24 @@ export function useEventLog({
     [kind, action, node_id, matched, search, regex, msg, msg_regex, msg_not, src, src_not, start, end],
   );
 
+  // Which question the list on screen answers. Bumped by every reload, so a page that was asked
+  // for under an older filter can tell it is no longer wanted.
+  const generation = useRef(0);
+
   // Reload from the top whenever a filter changes (or reload() bumps the nonce).
+  //
+  // 🚨 **The cleanup is the point.** Two requests for two filters answer in either order, and a
+  // message regex on the log store takes 5–30 s where clearing it answers at once. Without the
+  // guard the slow narrow page landed last: a filter row showing no filter over a list that was
+  // still filtered, with nothing left to ask again. Every other effect in this area had one.
   useEffect(() => {
+    let cancelled = false;
+    generation.current += 1;
     setLoading(true);
     api
       .listEvents(filterOpts())
       .then((page) => {
+        if (cancelled) return;
         setRows(page);
         setExhausted(page.length < EVENT_PAGE_SIZE);
         // Only on success. A failed fetch leaves the previous rows on screen, and calling those
@@ -145,7 +157,12 @@ export function useEventLog({
         setAnswered({ filter: filterOpts });
       })
       .catch(() => undefined)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [filterOpts, nonce]);
 
   const loadMore = useCallback(() => {
@@ -153,9 +170,13 @@ export function useEventLog({
     const last = rows[rows.length - 1];
     if (!last) return;
     loadingMore.current = true;
+    // The same race, one page down: an older filter's next page must not be appended to the
+    // list a newer filter has since replaced.
+    const askedIn = generation.current;
     api
       .listEvents(filterOpts(eventCursor(last)))
       .then((page) => {
+        if (askedIn !== generation.current) return;
         setRows((cur) => [...cur, ...page]);
         setExhausted(page.length < EVENT_PAGE_SIZE);
       })
