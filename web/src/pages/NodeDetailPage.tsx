@@ -46,6 +46,10 @@ export function NodeDetailPage() {
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.all'), to: '/nodes' }]}
       />
       <NodeDetail
+        // Remounted per node, exactly as the split view does (`NodesPage`). Without it every piece
+        // of per-node state in the pane — the Interfaces rows, the dock's selected port, a pending
+        // Poll-now timer — survived a search-box jump or Back/Forward into the next node.
+        key={nodeId}
         nodeId={nodeId}
         variant="page"
         canEdit={canConfig}

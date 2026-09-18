@@ -6,7 +6,7 @@
 // pills + warning dots), and the Edit/Delete modals. Live data (status, RTT, interfaces) refreshes
 // on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
@@ -132,14 +132,34 @@ export function NodeDetail({
   const [polling, setPolling] = useState(false);
   const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  // A re-read that must NOT blank the pane. `refreshNonce` remounts every tab, which is right after
+  // an edit and wrong for **Poll now**: that bumped it at 4 s and again at 30 s, so the pane fell
+  // back to "Loading…" twice, the Interfaces dock closed twice, and the AP tab's "imported" note
+  // was gone before it could be read.
+  const [quietNonce, setQuietNonce] = useState(0);
+  const pollTimers = useRef<number[]>([]);
+  // The timers outlived the pane: on the un-keyed page route they fired into the NEXT node.
+  useEffect(
+    () => () => {
+      for (const h of pollTimers.current) window.clearTimeout(h);
+    },
+    [],
+  );
   const [editingBindings, setEditingBindings] = useState(false);
   const [editingParent, setEditingParent] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Node config (rarely changes): once per node, re-fetched after an edit (refreshNonce bump).
+  // Node config (rarely changes): once per node, re-fetched after an edit (refreshNonce bump) —
+  // and quietly after a Poll now, whose identity read (ADR-149) lands on this same document.
+  const blankedFor = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setNode(null);
+    // Blank for a new node or an edit; a quiet re-read keeps what is on screen until it answers.
+    const identity = `${nodeId}:${refreshNonce}`;
+    if (blankedFor.current !== identity) {
+      blankedFor.current = identity;
+      setNode(null);
+    }
     api
       .getNode(nodeId)
       .then((n) => !cancelled && setNode(n))
@@ -147,14 +167,22 @@ export function NodeDetail({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, refreshNonce]);
+  }, [nodeId, refreshNonce, quietNonce]);
 
   // Blank the live panes when the node changes (or after an edit) so a switch never flashes the
   // previous node's readings. A periodic refresh must NOT blank — that would flicker every tick —
   // so the reset is its own effect keyed on identity, separate from the load below.
+  //
+  // 🚨 `interfaces` and `ifError` belong here and were missing. The page route does not remount
+  // this component per node (the split view does), so node B's Interfaces tab listed node A's
+  // ports under B's name until B's answer landed — and for good when B's read failed, because the
+  // failure path sets the error and leaves the rows. `InterfacesTab` draws rows whatever `loaded`
+  // says; only `loaded && rows.length === 0` is its empty state.
   useEffect(() => {
     setStatus(null);
     setSeries({ timestamps: [], values: [] });
+    setInterfaces([]);
+    setIfError(null);
     setIfLoaded(false);
   }, [nodeId, refreshNonce]);
 
@@ -211,7 +239,7 @@ export function NodeDetail({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, refreshNonce, tick, t, hasInterfaces, livenessMetric]);
+  }, [nodeId, refreshNonce, quietNonce, tick, t, hasInterfaces, livenessMetric]);
 
   // Correct a tab the loaded kind does not show, so the URL (page) or pane state (split) matches
   // what is drawn instead of quietly diverging. Comparing the *normalized* value is deliberate:
@@ -254,9 +282,9 @@ export function NodeDetail({
           tone: 'info',
         });
         for (const ms of POLL_NOW_REFRESH_MS) {
-          window.setTimeout(() => setRefreshNonce((v) => v + 1), ms);
+          pollTimers.current.push(window.setTimeout(() => setQuietNonce((v) => v + 1), ms));
         }
-        window.setTimeout(() => setPollMsg(null), 8000);
+        pollTimers.current.push(window.setTimeout(() => setPollMsg(null), 8000));
       })
       .catch((e: unknown) => setPollMsg({ text: errMsg(e, t('err.requestPoll')), tone: 'error' }))
       .finally(() => setPolling(false));
@@ -306,7 +334,9 @@ export function NodeDetail({
       <ApTab
         node={node}
         groups={groups}
-        onChanged={() => setRefreshNonce((v) => v + 1)}
+        // Quiet: importing an AP changes nothing this pane draws from the controller's own
+        // document, and a remount would take the "imported" note with it.
+        onChanged={() => setQuietNonce((v) => v + 1)}
       />
     ),
     interfaces: (
