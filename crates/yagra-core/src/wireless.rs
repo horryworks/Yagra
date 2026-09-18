@@ -136,7 +136,11 @@ pub struct ControllerRow {
     pub import_aps: bool,
     /// The most APs this controller may import.
     pub max_aps: i32,
-    /// Where its imported AP nodes are filed. `None` ⇒ a folder named after the controller.
+    /// Where its imported AP nodes are filed. `None` ⇒ the folder the controller node itself is
+    /// in. No folder is created: a name derived from one member of an HA pair is wrong as soon as
+    /// the pair switches over, and the standby would file its own APs in a second one (ADR-064 B2
+    /// の手直し). Which controller serves an AP is `wireless_aps.owner_controller_id`, not a name.
+    /// ⚠️ `migrations/0121`'s column comment still describes the first design and cannot be edited.
     pub ap_group_id: Option<Uuid>,
     /// How many APs the cap left out on the importer's last pass.
     pub aps_over_cap: i32,
@@ -855,6 +859,10 @@ impl WirelessRepo {
     /// The node's id **is** the AP id — MAC-derived, so the same AP is the same node whichever
     /// controller files it, and a re-import after a deletion brings back its history. Its address is
     /// the AP's, or `0.0.0.0` while the controller reports none; nothing polls it either way.
+    ///
+    /// It is filed in the controller's `ap_group_id`, else in the folder the controller node is in
+    /// (root when it is in none). **This creates no folder**, and it never re-files a node that
+    /// already exists — an operator who moves an AP keeps it where they put it.
     async fn import_ap(
         &self,
         ap: Uuid,
@@ -864,7 +872,7 @@ impl WirelessRepo {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT a.mac, a.name, host(a.ip) AS ip, a.model, wc.flavor, wc.ap_group_id, \
-                    n.name AS controller_name, n.group_id AS controller_group \
+                    n.group_id AS controller_group \
              FROM wireless_aps a \
              JOIN wireless_controllers wc ON wc.id = $2 \
              JOIN nodes n ON n.id = wc.node_id \
@@ -882,25 +890,10 @@ impl WirelessRepo {
         let name: Option<String> = row.try_get("name")?;
         let ip: Option<String> = row.try_get("ip")?;
         let flavor: Option<String> = row.try_get("flavor")?;
-        let folder = match row.try_get::<Option<Uuid>, _>("ap_group_id")? {
-            Some(group) => group,
-            None => {
-                let controller_name: String = row.try_get("controller_name")?;
-                let folder = Uuid::new_v5(
-                    &yagra_common::WLAN_AP_NS,
-                    format!("ap-folder:{controller}").as_bytes(),
-                );
-                sqlx::query(
-                    "INSERT INTO node_groups (id, name, group_type, parent_id) \
-                     VALUES ($1, $2, 'generic', $3) ON CONFLICT (id) DO NOTHING",
-                )
-                .bind(folder)
-                .bind(ap_folder_name(&controller_name))
-                .bind(row.try_get::<Option<Uuid>, _>("controller_group")?)
-                .execute(&mut *tx)
-                .await?;
-                folder
-            }
+        let folder: Option<Uuid> = match row.try_get::<Option<Uuid>, _>("ap_group_id")? {
+            Some(group) => Some(group),
+            // Beside the controller, in whatever folder it is in — including none.
+            None => row.try_get::<Option<Uuid>, _>("controller_group")?,
         };
         sqlx::query(
             "INSERT INTO nodes (id, name, address, profile_id, vendor, model, group_id) \
@@ -929,11 +922,6 @@ impl WirelessRepo {
         tx.commit().await?;
         Ok(true)
     }
-}
-
-/// The folder a controller's imported APs are filed in when none was chosen.
-fn ap_folder_name(controller: &str) -> String {
-    format!("{controller} APs")
 }
 
 /// The seed id of the built-in "Wireless AP (via controller)" profile — every imported AP node
@@ -1466,16 +1454,20 @@ mod tests {
             repo.controller(active).await.unwrap().unwrap().aps_over_cap,
             1
         );
-        // Filed under the member serving them — in a folder beside it named after it.
-        let folders: Vec<(String, Option<Uuid>)> = sqlx::query_as(
-            "SELECT DISTINCT g.name, g.parent_id FROM nodes n JOIN node_groups g ON g.id = n.group_id \
-             WHERE n.id = ANY($1)",
-        )
-        .bind(ap_nodes.iter().copied().collect::<Vec<_>>())
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        assert_eq!(folders, vec![("wac001 APs".to_owned(), Some(site))]);
+        // Filed in the controller's own folder, and no folder was created for them: a name taken
+        // from one member of a pair would be wrong after a switchover (ADR-064 B2 の手直し).
+        let folders: Vec<Option<Uuid>> =
+            sqlx::query_scalar("SELECT DISTINCT group_id FROM nodes WHERE id = ANY($1)")
+                .bind(ap_nodes.iter().copied().collect::<Vec<_>>())
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(folders, vec![Some(site)]);
+        assert_eq!(
+            pgtest::rows(&pool, "node_groups").await,
+            1,
+            "the importer invented a folder"
+        );
         let bindings = repo.ap_bindings().await.unwrap();
         assert!(
             bindings

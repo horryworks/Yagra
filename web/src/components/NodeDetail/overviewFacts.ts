@@ -19,6 +19,9 @@ export const FACT_ROWS = [
   'group',
   'pool',
   'polledBy',
+  // Which wireless controller serves this AP right now — an AP's own row, next to "Polled by",
+  // which for that kind only says *that* a controller polls it (ADR-064 増分 B2 の手直し).
+  'controller',
   'address',
   'maker',
   'model',
@@ -60,7 +63,9 @@ export const FACT_ROWS_BY_KIND: Record<NodeKind, readonly FactRow[]> = {
   // An imported AP (ADR-064): its address, maker and model follow what its controller reports. No
   // credential — nothing polls it — and no serial row, because the node-level serial is read from
   // ENTITY-MIB, which nobody walks on an AP; the AP list carries the controller's serial instead.
-  wireless_ap: [...PLACEMENT, 'address', 'maker', 'model'],
+  // `controller` is the only kind-specific placement fact: since the 手直し an AP is filed in the
+  // controller's own folder, so the folder no longer says which controller serves it.
+  wireless_ap: [...PLACEMENT, 'controller', 'address', 'maker', 'model'],
   // The URL itself is the header's sub line, so it is not repeated here.
   url: PLACEMENT,
   // A DNS monitor's `address` is its resolver, or 0.0.0.0 when it uses the system one — so it gets

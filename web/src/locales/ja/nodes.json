@@ -30,6 +30,7 @@
     "polledByWirelessController": "担当の無線コントローラ",
     "polledByMeraki": "Meraki コレクタ",
     "polledByUnknown": "不明",
+    "wirelessController": "所属コントローラ",
     "nameRequired": "名前は必須です。",
     "notes": "メモ",
     "notesPlaceholder": "例: 東側廊下の天井裏。脚立が必要",
