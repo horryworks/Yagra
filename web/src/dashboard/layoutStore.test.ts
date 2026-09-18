@@ -49,6 +49,8 @@ function reset(store: typeof useLayoutStore) {
     activeBoardId: 'b1',
     widgets: [],
     status: 'loading',
+    // A board is on screen, so a load has succeeded — which is what permits a save.
+    loaded: true,
     saveError: null,
     editing: false,
   });
@@ -104,12 +106,73 @@ describe('useLayoutStore.load', () => {
     expect(s.widgets).toHaveLength(1);
   });
 
-  it('falls back to default with error status when the fetch fails', async () => {
+  // 🚨 This test used to assert the opposite — that a failed fetch ADOPTS the default — and that
+  // was the defect: the default then looked like the operator's own board, and the first edit PUT
+  // it over every board they had built.
+  it('a failed first load adopts nothing, and refuses to save what it never read', async () => {
+    useLayoutStore.setState({ boards: [], activeBoardId: '', widgets: [], loaded: false });
     getDashboard.mockRejectedValue(new Error('boom'));
     await useLayoutStore.getState().load();
     const s = useLayoutStore.getState();
     expect(s.status).toBe('error');
-    expect(s.widgets).toEqual(defaultWidgets());
+    expect(s.loaded).toBe(false);
+    expect(s.boards).toEqual([]);
+    expect(s.widgets).toEqual([]);
+
+    // The backstop: even if something did reach an edit action, nothing is written.
+    useLayoutStore.getState().resetToDefault();
+    vi.advanceTimersByTime(5_000);
+    expect(putDashboard).not.toHaveBeenCalled();
+    expect(useLayoutStore.getState().saveError).not.toBeNull();
+  });
+
+  it('a refresh that fails keeps the real boards on screen and still lets them be saved', async () => {
+    getDashboard.mockResolvedValue({ version: 1, widgets: defaultWidgets().slice(0, 1) });
+    await useLayoutStore.getState().load();
+    const before = useLayoutStore.getState().widgets;
+    getDashboard.mockRejectedValue(new Error('boom'));
+    await useLayoutStore.getState().load();
+    const s = useLayoutStore.getState();
+    expect(s.status).toBe('error');
+    expect(s.loaded).toBe(true);
+    expect(s.widgets).toEqual(before);
+
+    useLayoutStore.getState().addWidget(firstType);
+    vi.advanceTimersByTime(5_000);
+    expect(putDashboard).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a pending edit before it re-reads, so coming back inside the debounce cannot undo it', async () => {
+    await useLayoutStore.getState().load();
+    useLayoutStore.getState().addWidget(firstType);
+    const edited = useLayoutStore.getState().boards;
+    expect(putDashboard).not.toHaveBeenCalled(); // still inside the debounce
+
+    // The server answers the re-read with whatever was last PUT — as a real one does.
+    getDashboard.mockImplementation(() =>
+      Promise.resolve(putDashboard.mock.calls.at(-1)?.[0] ?? null),
+    );
+    await useLayoutStore.getState().load();
+    expect(putDashboard).toHaveBeenCalledTimes(1);
+    expect(putDashboard.mock.calls[0][0].boards).toEqual(edited);
+    expect(useLayoutStore.getState().boards).toEqual(edited);
+    // …and the debounce does not send it a second time.
+    vi.advanceTimersByTime(5_000);
+    expect(putDashboard).toHaveBeenCalledTimes(1);
+  });
+
+  it('an edit made while a load is in flight is not overwritten by the answer to that load', async () => {
+    await useLayoutStore.getState().load();
+    let answer: (v: unknown) => void = () => undefined;
+    getDashboard.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const loading = useLayoutStore.getState().load();
+    await Promise.resolve();
+    useLayoutStore.getState().addWidget(firstType);
+    const edited = useLayoutStore.getState().boards;
+    answer(null); // the pre-edit document
+    await loading;
+    expect(useLayoutStore.getState().boards).toEqual(edited);
+    expect(useLayoutStore.getState().status).toBe('ready');
   });
 });
 
