@@ -280,6 +280,10 @@ async fn update_node_group(
 
 /// Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) and position it
 /// relative to a sibling. `before`/`after` name the sibling; both omitted ⇒ append.
+///
+/// ⚠️ **A sibling is a folder OR a node** (ADR-162). Under one parent the two are one ordered
+/// list, so `before`/`after` may carry a node id and the folder lands at that row's edge. An id
+/// that names neither appends, as it always has.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct GroupPlacement {
     #[serde(default)]
@@ -318,7 +322,7 @@ async fn place_group(
     reject_cycle(&admin, id, body.parent_id).await?;
     let siblings = admin
         .groups
-        .ordered_siblings(body.parent_id)
+        .ordered_tree_siblings(body.parent_id)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "load group siblings", "failed to move group")
@@ -354,9 +358,9 @@ pub(super) struct SortChildren {
 
 /// Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.
 ///
-/// Subfolders and member nodes are renumbered within their own sibling scopes, so the two never
-/// interleave — the tree draws every folder above every node whatever the values are. Folders
-/// deeper down are untouched: the operator right-clicked one folder.
+/// Subfolders and member nodes are renumbered as **one list** (ADR-162): under a parent they are
+/// siblings, so A→Z means A→Z over everything in the folder and a subfolder can land between two
+/// nodes. Folders deeper down are untouched: the operator right-clicked one folder.
 ///
 /// 🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is
 /// the decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking
@@ -868,11 +872,300 @@ mod tests {
         assert!(list.to_string().contains("tokyo"), "{list}");
     }
 
+    /// **A folder dropped between two nodes lands between them** (ADR-162).
+    ///
+    /// The claim the whole increment rests on, end to end: the WebUI sends a **node** id as the
+    /// placement anchor, and the folder comes back sitting at that node's edge in the merged order.
+    /// Before ADR-162 `place_group` read `node_groups` alone, so a node id matched nothing and
+    /// `placement_order` appended — the request returned 204 and the folder did not move, which is
+    /// the failure this endpoint's arithmetic makes silent.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folder_lands_between_two_nodes(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let groups = GroupRepo::new(pool.clone());
+
+        let parent = groups
+            .create("parent", GroupType::Site, None, None)
+            .await
+            .expect("parent");
+        let a = crate::pgtest::node(&pool, "alpha", 10, Some(parent)).await;
+        let b = crate::pgtest::node(&pool, "bravo", 11, Some(parent)).await;
+        let moving = groups
+            .create("mike", GroupType::Generic, Some(parent), None)
+            .await
+            .expect("folder");
+
+        // The starting state is the one migration 0122 preserves: the folder appended after both
+        // nodes, because `create` takes its max over the whole scope.
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["alpha", "bravo", "mike"]
+        );
+
+        // 204, not `is_success()` — the documented status is what the WebUI branches on.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{moving}/placement"),
+            &tok,
+            Some(serde_json::json!({ "parent_id": parent, "before": b })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["alpha", "mike", "bravo"]
+        );
+
+        // And the other edge, anchored on the first node, so "it happened to land second" cannot
+        // satisfy both halves.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{moving}/placement"),
+            &tok,
+            Some(serde_json::json!({ "parent_id": parent, "before": a })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["mike", "alpha", "bravo"]
+        );
+    }
+
+    /// **A node placed next to a folder lands next to it** — the same claim from the other side
+    /// (ADR-162 decision 2). The two kinds are one list, so this has to work or "one list" is only
+    /// half true; `POST /nodes/move` reads the same merged siblings.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_node_lands_next_to_a_folder(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let groups = GroupRepo::new(pool.clone());
+
+        let parent = groups
+            .create("parent", GroupType::Site, None, None)
+            .await
+            .expect("parent");
+        let first = groups
+            .create("aaa", GroupType::Generic, Some(parent), None)
+            .await
+            .expect("first");
+        groups
+            .create("bbb", GroupType::Generic, Some(parent), None)
+            .await
+            .expect("second");
+        let n = crate::pgtest::node(&pool, "zulu", 12, Some(parent)).await;
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["aaa", "bbb", "zulu"]
+        );
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [n], "group_id": parent, "after": first })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["aaa", "zulu", "bbb"]
+        );
+    }
+
+    /// **A new folder appends below the last node, not below the last folder** (ADR-162 decision 4).
+    ///
+    /// 🚨 The failure this exists for is the quiet one: with the max taken over `node_groups` alone
+    /// the new folder gets the value the first node already has, the two tie, and the browser
+    /// breaks the tie by name. The folder appears in the middle of the list, the write succeeded,
+    /// and there is nothing to read.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_new_folder_appends_below_the_last_node(pool: sqlx::PgPool) {
+        use crate::groups::{GroupRepo, GroupType};
+        let groups = GroupRepo::new(pool.clone());
+        let parent = groups
+            .create("parent", GroupType::Site, None, None)
+            .await
+            .expect("parent");
+        crate::pgtest::node(&pool, "alpha", 10, Some(parent)).await;
+        crate::pgtest::node(&pool, "bravo", 11, Some(parent)).await;
+        let made = groups
+            .create("zulu", GroupType::Generic, Some(parent), None)
+            .await
+            .expect("folder");
+
+        let rows = crate::groups::ordered_tree_siblings(&pool, Some(parent))
+            .await
+            .expect("siblings");
+        assert_eq!(rows.len(), 3, "two nodes and one folder");
+        assert_eq!(rows[2].0, made, "the new folder is last: {rows:?}");
+        // Every position distinct — a tie is what collapses the midpoint arithmetic later.
+        let mut orders: Vec<f64> = rows.iter().map(|(_, o)| *o).collect();
+        orders.sort_by(f64::total_cmp);
+        orders.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+        assert_eq!(orders.len(), 3, "positions must be distinct");
+    }
+
+    /// **A node moved into a folder appends below that folder's sub-folders** — decision 4 again,
+    /// from the node side, where the max used to be taken over `nodes` alone.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn moving_a_node_into_a_folder_appends_below_its_subfolders(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let groups = GroupRepo::new(pool.clone());
+
+        let dest = groups
+            .create("dest", GroupType::Site, None, None)
+            .await
+            .expect("dest");
+        for name in ["aaa", "bbb"] {
+            groups
+                .create(name, GroupType::Generic, Some(dest), None)
+                .await
+                .expect("subfolder");
+        }
+        // Named so that landing *above* the sub-folders would also be the name order — the
+        // assertion has to be about the position, not about what sorts where.
+        let n = crate::pgtest::node(&pool, "000-first-by-name", 13, None).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [n], "group_id": dest })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(
+            merged_names(&pool, &groups, dest).await,
+            ["aaa", "bbb", "000-first-by-name"],
+            "an appended node goes below the sub-folders, whatever its name sorts as"
+        );
+    }
+
+    /// **A→Z sorts the folder's sub-folders and its nodes as one list** (ADR-162 decision 5,
+    /// amending ADR-130 決定 4).
+    ///
+    /// 🚨 `sorting_a_folder_renumbers_its_subfolders_and_its_nodes` cannot see this: it reads the
+    /// two kinds through separate projections, and merging them leaves each projection's own order
+    /// exactly as it was. Both tests are kept — that one is about the renumbering, this one is
+    /// about the two kinds landing in one sequence.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn sorting_a_folder_interleaves_its_subfolders_and_nodes(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let groups = GroupRepo::new(pool.clone());
+
+        let parent = groups
+            .create("parent", GroupType::Site, None, None)
+            .await
+            .expect("parent");
+        for name in ["bravo", "delta"] {
+            groups
+                .create(name, GroupType::Generic, Some(parent), None)
+                .await
+                .expect("subfolder");
+        }
+        for (i, name) in ["alpha", "charlie"].into_iter().enumerate() {
+            crate::pgtest::node(
+                &pool,
+                name,
+                20 + u8::try_from(i).expect("small"),
+                Some(parent),
+            )
+            .await;
+        }
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["bravo", "delta", "alpha", "charlie"],
+            "creation order: folders appended first, then the nodes"
+        );
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/node-groups/{parent}/sort"),
+            &tok,
+            Some(serde_json::json!({ "direction": "asc" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["alpha", "bravo", "charlie", "delta"],
+            "one A→Z sequence over both kinds"
+        );
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/node-groups/{parent}/sort"),
+            &tok,
+            Some(serde_json::json!({ "direction": "desc" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            merged_names(&pool, &groups, parent).await,
+            ["delta", "charlie", "bravo", "alpha"],
+            "and back the other way, still one sequence"
+        );
+    }
+
+    /// The names directly under `parent`, folders and nodes, in the order the tree draws them.
+    ///
+    /// Reads through [`crate::groups::ordered_tree_siblings`] — the same list the placement
+    /// arithmetic uses — rather than through the two per-kind readers, which is the whole point:
+    /// a projection per kind cannot see the two interleave.
+    async fn merged_names(
+        pool: &sqlx::PgPool,
+        groups: &crate::groups::GroupRepo,
+        parent: uuid::Uuid,
+    ) -> Vec<String> {
+        let repo = crate::pgtest::repo(pool.clone());
+        let all = groups.list().await.expect("list");
+        let rows = crate::groups::ordered_tree_siblings(pool, Some(parent))
+            .await
+            .expect("siblings");
+        let mut out = Vec::new();
+        for (id, _) in rows {
+            if let Some(g) = all.iter().find(|g| g.id == id) {
+                out.push(g.name.clone());
+            } else {
+                out.push(repo.get_node(id).await.expect("get").expect("node").name);
+            }
+        }
+        out
+    }
+
     /// Sorting a folder renumbers its subfolders and its member nodes, in name order (ADR-130).
     ///
     /// The two scopes are asserted **separately and both**, because they are two statements over
     /// two tables, and a transaction that renumbered only the folders would look entirely correct
     /// from a screenshot of the folder list.
+    ///
+    /// ⚠️ **Reading them separately is also this test's blind spot** (ADR-162): since the two kinds
+    /// share one sequence, a merged renumber leaves each of these projections in exactly the order
+    /// it was in before. `sorting_a_folder_interleaves_its_subfolders_and_nodes` is the one that
+    /// runs the merged list.
     ///
     /// Names are deliberately mixed-case and deliberately not in creation order: `create` appends
     /// at `MAX(sort_order)+1`, so the starting state is creation order. Spelled ASCII-betically,
@@ -912,7 +1205,7 @@ mod tests {
         let read_folders = || async {
             let all = groups.list().await.expect("list");
             groups
-                .ordered_siblings(Some(parent))
+                .ordered_subfolders(Some(parent))
                 .await
                 .expect("siblings")
                 .into_iter()
@@ -1014,7 +1307,7 @@ mod tests {
         crate::pgtest::node(&pool, "aa", 2, Some(other)).await;
         crate::pgtest::node(&pool, "yy", 3, Some(target)).await;
 
-        let before_folders = groups.ordered_siblings(Some(other)).await.expect("sibs");
+        let before_folders = groups.ordered_subfolders(Some(other)).await.expect("sibs");
         let before_nodes = repo
             .ordered_nodes_in_group(Some(other))
             .await
@@ -1031,7 +1324,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
 
         assert_eq!(
-            groups.ordered_siblings(Some(other)).await.expect("sibs"),
+            groups.ordered_subfolders(Some(other)).await.expect("sibs"),
             before_folders,
             "another folder's subfolders were renumbered"
         );

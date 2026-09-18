@@ -2246,11 +2246,12 @@ async fn place_node(
         ));
     }
     require_visible_destination(&scope, body.group_id)?;
-    // Order among the destination group's current members, excluding the moving node so it doesn't
-    // anchor against itself, then interpolate a fractional order next to the target.
+    // Order among the destination folder's current rows — its sub-folders as well as its nodes
+    // (ADR-162) — excluding the moving node so it doesn't anchor against itself, then interpolate
+    // a fractional order next to the target.
     let siblings: Vec<(Uuid, f64)> = admin
         .repo
-        .ordered_nodes_in_group(body.group_id)
+        .ordered_tree_siblings(body.group_id)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "load node siblings", "failed to move node")

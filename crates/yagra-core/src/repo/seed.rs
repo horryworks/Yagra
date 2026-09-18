@@ -66,11 +66,15 @@ impl NodeRepo {
                 "8.8.8.8",
             ),
         ];
+        // `sort_order` is appended over the top-level scope rather than left at its DEFAULT 0
+        // (ADR-162) — a demo node at 0 would sit above every folder a new deployment then creates.
+        let order = crate::groups::append_base_sql("NULL", "");
         for (id, name, addr) in demo {
-            sqlx::query(
-                "INSERT INTO nodes (id, name, address) VALUES ($1, $2, $3::inet) \
-                 ON CONFLICT (id) DO NOTHING",
-            )
+            sqlx::query(&format!(
+                "INSERT INTO nodes (id, name, address, sort_order) \
+                 VALUES ($1, $2, $3::inet, {order} + 1) \
+                 ON CONFLICT (id) DO NOTHING"
+            ))
             .bind(id)
             .bind(name)
             .bind(addr)

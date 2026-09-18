@@ -352,6 +352,83 @@ pub fn placement_orders(
     }
 }
 
+/// The `(id, sort_order)` of **everything** directly under `parent` — its sub-folders *and* its
+/// member nodes — ordered the way the tree renders them. `None` is the top level.
+///
+/// 🚨 **This is the one answer to "what is a sibling" (ADR-162).** `sort_order` has always meant
+/// "where this row sits among its siblings", and `node_groups.parent_id` / `nodes.group_id` name
+/// the same parent — what kept folders and nodes apart was the renderer walking two lists in turn.
+/// Now that they are one list, a placement computed over half of it lands in a gap that is not
+/// there: [`placement_orders`] divides the space between two *adjacent* rows, so if the row the
+/// operator dropped next to is not adjacent in the real order, the value it returns is somewhere
+/// else. Reading one table is how "the write returned 204 and nothing moved" happens.
+///
+/// A free function rather than a method on either repository because both need it and neither owns
+/// it: `GroupRepo` would be reaching into `nodes`, `NodeRepo` into `node_groups`. It lives beside
+/// [`placement_order`] so "which list" and "where in the list" are read together.
+///
+/// ⚠️ **Deliberately not scope-filtered**, exactly as `NodeRepo::ordered_nodes_in_group` is not:
+/// this feeds arithmetic, and dropping rows a caller may not *see* would compute a position among
+/// a list that does not exist. Nothing here reaches a response — the placement endpoints answer
+/// 204 with no body — so no id is disclosed.
+///
+/// ⚠️ The ordering must stay `sort_order, name, id`: it is the third implementation of the tree's
+/// order, after `GroupRepo::list`'s `ORDER BY` and the browser's `byOrder`
+/// (`web/src/lib/nodeTree.ts`).
+pub async fn ordered_tree_siblings(
+    pool: &PgPool,
+    parent: Option<Uuid>,
+) -> anyhow::Result<Vec<(Uuid, f64)>> {
+    let rows = sqlx::query(
+        "SELECT id, sort_order FROM ( \
+           SELECT id, sort_order, name FROM node_groups \
+             WHERE parent_id IS NOT DISTINCT FROM $1::uuid \
+           UNION ALL \
+           SELECT id, sort_order, name FROM nodes \
+             WHERE group_id IS NOT DISTINCT FROM $1::uuid \
+         ) t ORDER BY sort_order, name, id",
+    )
+    .bind(parent)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| Ok((row.try_get("id")?, row.try_get("sort_order")?)))
+        .collect()
+}
+
+/// The `MAX(sort_order)` of a scope — folders and nodes counted **together** (ADR-162).
+///
+/// The caller adds its own step (`+ 1` for a single append, `+ t.ord` for a batch), so this
+/// returns the base rather than the next value. `scope_bind` is the bind position holding the
+/// scope id (`NULL` ⇒ top level) and is read twice; `node_filter` is an extra predicate for the
+/// `nodes` half, used by the movers to exclude the rows they are moving (`" AND id <> $1"`).
+/// Pass `""` when nothing is moving.
+///
+/// 🚨 **Every append has to read both tables.** After migration 0122 a scope is one integer
+/// sequence with the folders first, so a max taken over `node_groups` alone lands a new folder
+/// *on top of* the first node's value — a tie, which the browser then breaks by name. The folder
+/// appears in the middle of the list and the operator has no way to tell why. The same the other
+/// way round: a node appended against `nodes` alone in a scope that holds only folders starts at
+/// 1 and lands above every one of them.
+///
+/// A SQL fragment rather than a number so the append stays inside one statement: reading the max
+/// and then inserting would let a concurrent append take the same value.
+///
+/// ⚠️ Nothing an operator typed reaches this — both arguments are `&'static str` written at the
+/// call sites (`security.md`).
+#[must_use]
+pub fn append_base_sql(scope_bind: &str, node_filter: &str) -> String {
+    format!(
+        "(SELECT COALESCE(MAX(sort_order), 0) FROM ( \
+           SELECT sort_order FROM node_groups \
+             WHERE parent_id IS NOT DISTINCT FROM {scope_bind}::uuid \
+           UNION ALL \
+           SELECT sort_order FROM nodes \
+             WHERE group_id IS NOT DISTINCT FROM {scope_bind}::uuid{node_filter} \
+         ) t)"
+    )
+}
+
 /// Whether re-parenting `moving` under `new_parent` would create a cycle, given the current
 /// `(id, parent_id)` edges. A group cannot become its own ancestor (or its own parent). Pure so
 /// it can be unit-tested without a database; the API calls it before persisting a move.
@@ -1052,9 +1129,18 @@ impl GroupRepo {
         Ok(n > 0)
     }
 
-    /// The `(id, sort_order)` of the groups directly under `parent` (NULL ⇒ top level), ordered.
-    /// Feeds [`placement_order`] when a drag drops a group before/after a sibling.
-    pub async fn ordered_siblings(&self, parent: Option<Uuid>) -> anyhow::Result<Vec<(Uuid, f64)>> {
+    /// The `(id, sort_order)` of the **sub-folders** directly under `parent` (NULL ⇒ top level),
+    /// ordered.
+    ///
+    /// ⚠️ **This is not what a placement is computed against** (ADR-162). A folder and a node under
+    /// one parent are siblings in one list, so the midpoint arithmetic reads
+    /// [`ordered_tree_siblings`]; this half-list is for callers that are asking about folders —
+    /// which, since ADR-162, is the tests and nothing else.
+    #[cfg(test)]
+    pub async fn ordered_subfolders(
+        &self,
+        parent: Option<Uuid>,
+    ) -> anyhow::Result<Vec<(Uuid, f64)>> {
         let rows = sqlx::query(
             "SELECT id, sort_order FROM node_groups \
              WHERE parent_id IS NOT DISTINCT FROM $1::uuid ORDER BY sort_order, name, id",
@@ -1065,6 +1151,15 @@ impl GroupRepo {
         rows.into_iter()
             .map(|row| Ok((row.try_get("id")?, row.try_get("sort_order")?)))
             .collect()
+    }
+
+    /// Everything directly under `parent` — sub-folders and member nodes in one ordered list.
+    /// The list a drag's before/after anchor is looked up in; see [`ordered_tree_siblings`].
+    pub async fn ordered_tree_siblings(
+        &self,
+        parent: Option<Uuid>,
+    ) -> anyhow::Result<Vec<(Uuid, f64)>> {
+        ordered_tree_siblings(&self.pool, parent).await
     }
 
     /// Re-parent a group and set its order in one update (drag reorder/nest). The caller must
@@ -1199,14 +1294,16 @@ impl GroupRepo {
         pool: Option<&str>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
-        // Append to the end of the parent scope (max sort_order + 1) so a new group lands at the
-        // bottom of its siblings rather than jumping to the top (the DEFAULT 0).
-        sqlx::query(
+        // Append to the end of the parent scope so a new folder lands at the bottom of its
+        // siblings rather than jumping to the top (the DEFAULT 0).
+        //
+        // 🚨 **Siblings means folders AND nodes** (ADR-162). Taken over `node_groups` alone the
+        // max lands on the first node's value, and the new folder appears in the middle.
+        let order = append_base_sql("$4", "");
+        sqlx::query(&format!(
             "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order, pool) VALUES \
-             ($1, $2, $3, $4, \
-              (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM node_groups \
-               WHERE parent_id IS NOT DISTINCT FROM $4::uuid), $5)",
-        )
+             ($1, $2, $3, $4, {order} + 1, $5)"
+        ))
         .bind(id)
         .bind(name)
         .bind(group_type.key())
@@ -1282,17 +1379,23 @@ impl GroupRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Renumber one folder's **direct** children by name (ADR-130). Returns whether the folder
-    /// existed.
+    /// Renumber one folder's **direct** children by name — its sub-folders and its member nodes as
+    /// **one list** (ADR-130, amended by ADR-162). Returns whether the folder existed.
     ///
-    /// Two scopes, not one: subfolders are `node_groups` sharing this `parent_id`, member nodes
-    /// are `nodes` sharing this `group_id`. They are separate sibling sets by construction, which
-    /// is why folders can never interleave with nodes in the tree however this is called — the
-    /// renderer walks the two lists in turn (`web/src/lib/nodeTree.ts`). Grandchildren are not
+    /// One scope, not two. Sub-folders are `node_groups` sharing this `parent_id` and member nodes
+    /// are `nodes` sharing this `group_id`, but those name the same parent and the tree renders
+    /// them as one ordered list — so a sort that renumbered each table from 1 would leave every
+    /// folder tied with a node, and the browser would break the tie by name. Grandchildren are not
     /// touched: the operator right-clicked one folder and that is the scope that changes.
     ///
-    /// The statements are the ones migration `0015_tree_ordering.sql` already uses to seed this
-    /// column, so nothing new is invented here — `row_number()` over the sibling scope. Two
+    /// ⚠️ **This is a behaviour change to a shipped command.** Before ADR-162 sorting a folder left
+    /// its sub-folders above its nodes, because the renderer could not do otherwise. Now A→Z means
+    /// A→Z over everything in the folder, and a sub-folder named `m` lands between the nodes named
+    /// `k` and `p`. Chosen deliberately: a tree an operator can interleave by hand, and a sort that
+    /// un-interleaves it, are two rules for one list.
+    ///
+    /// `row_number()` over the merged scope is the shape migration `0015_tree_ordering.sql`
+    /// seeded this column with and `0122_tree_ordering_single_scale.sql` re-seeded it with. Two
     /// consequences worth knowing: the values land as **integers from 1**, which re-spaces a scope
     /// whose fractions have been squeezed by a long run of midpoint drags; and `lower(name)` is
     /// what makes `SW-01` and `sw-02` fall where a person expects, with `id` last so the same
@@ -1316,20 +1419,27 @@ impl GroupRepo {
             return Ok(false);
         }
         let keyword = dir.sql();
+        // The rank is computed once over the merged scope and applied to each table in turn. Both
+        // statements are inside the transaction opened above, so a reader never sees half of it.
+        let ranked = format!(
+            "SELECT id, is_group, \
+               row_number() OVER (ORDER BY lower(name) {keyword}, id) AS rn \
+             FROM ( \
+               SELECT id, name, TRUE AS is_group FROM node_groups WHERE parent_id = $1 \
+               UNION ALL \
+               SELECT id, name, FALSE AS is_group FROM nodes WHERE group_id = $1 \
+             ) m"
+        );
         sqlx::query(&format!(
-            "UPDATE node_groups g SET sort_order = s.rn FROM ( \
-               SELECT id, row_number() OVER (ORDER BY lower(name) {keyword}, id) AS rn \
-               FROM node_groups WHERE parent_id = $1 \
-             ) s WHERE g.id = s.id"
+            "UPDATE node_groups g SET sort_order = s.rn FROM ({ranked}) s \
+             WHERE g.id = s.id AND s.is_group"
         ))
         .bind(id)
         .execute(&mut *tx)
         .await?;
         sqlx::query(&format!(
-            "UPDATE nodes n SET sort_order = s.rn, updated_at = now() FROM ( \
-               SELECT id, row_number() OVER (ORDER BY lower(name) {keyword}, id) AS rn \
-               FROM nodes WHERE group_id = $1 \
-             ) s WHERE n.id = s.id"
+            "UPDATE nodes n SET sort_order = s.rn, updated_at = now() FROM ({ranked}) s \
+             WHERE n.id = s.id AND NOT s.is_group"
         ))
         .bind(id)
         .execute(&mut *tx)
@@ -1342,6 +1452,114 @@ impl GroupRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The anchor does not have to be the same kind as the thing being placed** (ADR-162).
+    ///
+    /// This is the property the whole increment rests on and it needed no code change: the function
+    /// looks an id up in the list it is handed, so widening "what is a sibling" was enough and the
+    /// wire shape (`before`/`after`, one uuid) never moved. Written down because the argument is
+    /// easy to make and hard to remember — a reader asking "can `before` carry a node id?" has to
+    /// be able to find the answer.
+    #[test]
+    fn a_placement_anchors_on_any_row_in_the_list_it_is_given() {
+        let folder = Uuid::new_v4();
+        let node_a = Uuid::new_v4();
+        let node_b = Uuid::new_v4();
+        // A merged scope: node, node, folder.
+        let siblings = [(node_a, 1.0), (node_b, 2.0), (folder, 3.0)];
+        // Placing the folder between the two nodes — the gesture ADR-162 exists for. (The folder
+        // is left in the list here; the API filters the moving row out before calling.)
+        let between = placement_order(&siblings[..2], Some(node_b), None);
+        assert!(
+            between > 1.0 && between < 2.0,
+            "a folder anchored on a node lands between the two nodes, got {between}"
+        );
+        // And the mirror: a node anchored on a folder.
+        let after_folder = placement_order(&siblings, None, Some(folder));
+        assert!(
+            after_folder > 3.0,
+            "a node anchored after the folder lands past it, got {after_folder}"
+        );
+        // An id that is in neither list appends, which is what a stale anchor does — unchanged by
+        // ADR-162 and the reason a deleted row never turns a drop into a 404.
+        let unknown = placement_order(&siblings, Some(Uuid::new_v4()), None);
+        assert!(unknown > 3.0, "an unknown anchor appends, got {unknown}");
+    }
+    /// **Every `INSERT` into the two tree tables names `sort_order`.**
+    ///
+    /// 🚨 This is the class ADR-162 could not afford to leave to review. A scope is one ordering
+    /// sequence now, so a row inserted at the column's `DEFAULT 0` sits above everything in it —
+    /// and a row appended with a `MAX` taken over one of the two tables lands on a value the other
+    /// table is already using. A tie is not an error: `placement_orders` divides the gap between
+    /// two neighbours, and when they are equal every midpoint collapses onto the same value. **The
+    /// write returns 204 and the row does not move.** There is nothing on screen to read, and the
+    /// operator concludes the drag is broken.
+    ///
+    /// Four inserts were sitting at `DEFAULT 0` when this was written (two Meraki folders, the
+    /// Meraki device node, the imported AP) and were invisible for as long as the renderer kept
+    /// the two lists apart.
+    ///
+    /// ⚠️ **It cannot see the other half**: an append that names `sort_order` but computes it over
+    /// one table passes this. That half is [`append_base_sql`] having one call shape and being read
+    /// by a person. What this closes is the forgotten column.
+    ///
+    /// Read through `srcread`, so test fixtures and this test's own needles are not in the text,
+    /// and with whole-line comments dropped — `config_bundle/guards.rs` describes an
+    /// `INSERT INTO nodes` in its own module doc.
+    #[test]
+    fn every_insert_into_a_tree_table_names_sort_order() {
+        use std::path::Path;
+        use yagra_common::srcread as sr;
+
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut paths = Vec::new();
+        sr::rs_files(&src, &mut paths);
+        assert!(
+            paths.len() >= 150,
+            "only {} source files walked; the crate is larger than that",
+            paths.len()
+        );
+        let mut inspected = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for path in &paths {
+            let name = sr::file_name(path);
+            let code = sr::strip_and_check(&name, &sr::read(path))
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for table in ["INSERT INTO nodes ", "INSERT INTO node_groups "] {
+                let mut from = 0usize;
+                while let Some(hit) = code[from..].find(table) {
+                    let at = from + hit;
+                    // The column list runs to the first `)` after the table name. Slicing to it
+                    // rather than taking a fixed window keeps the check stable under `cargo fmt`,
+                    // which decides for itself where the string literal's continuations fall.
+                    let end = code[at..].find(')').map_or(code.len(), |o| at + o);
+                    let cols = &code[at..end];
+                    inspected += 1;
+                    if !cols.contains("sort_order") {
+                        offenders.push(format!(
+                            "{name}: {}",
+                            cols.split_whitespace().collect::<Vec<_>>().join(" ")
+                        ));
+                    }
+                    from = end.max(at + table.len());
+                }
+            }
+        }
+        assert!(
+            inspected >= 8,
+            "only {inspected} tree-table inserts inspected — the needle stopped matching, which \
+             reads exactly like a codebase where every insert is correct"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these INSERT into a tree table without naming `sort_order`, so the row lands at the \
+             column's DEFAULT 0 and sits above everything in its scope (ADR-162):\n  {}",
+            offenders.join("\n  ")
+        );
+    }
 
     #[test]
     fn sort_direction_token_and_serde_agree() {

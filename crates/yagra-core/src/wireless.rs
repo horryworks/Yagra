@@ -895,11 +895,16 @@ impl WirelessRepo {
             // Beside the controller, in whatever folder it is in — including none.
             None => row.try_get::<Option<Uuid>, _>("controller_group")?,
         };
-        sqlx::query(
-            "INSERT INTO nodes (id, name, address, profile_id, vendor, model, group_id) \
-             VALUES ($1, $2, $3::inet, (SELECT id FROM profiles WHERE id = $4), $5, $6, $7) \
-             ON CONFLICT (id) DO NOTHING",
-        )
+        // Appended over the destination folder's whole scope (ADR-162). Left at its DEFAULT 0 an
+        // imported AP would sit above every sub-folder of the controller's folder.
+        let ap_order = crate::groups::append_base_sql("$7", "");
+        sqlx::query(&format!(
+            "INSERT INTO nodes \
+               (id, name, address, profile_id, vendor, model, group_id, sort_order) \
+             VALUES ($1, $2, $3::inet, (SELECT id FROM profiles WHERE id = $4), $5, $6, $7, \
+               {ap_order} + 1) \
+             ON CONFLICT (id) DO NOTHING"
+        ))
         .bind(ap)
         .bind(name.unwrap_or_else(|| mac.clone()))
         .bind(ip.unwrap_or_else(|| "0.0.0.0".to_owned()))

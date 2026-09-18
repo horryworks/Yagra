@@ -1480,15 +1480,18 @@ export const api = {
   ): Promise<void> => apiPut('/api/v1/node-groups/{id}', { path: { id }, body }),
 
   /** Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) next to a sibling
-   *  group. `before`/`after` name the sibling (at most one; omit both to append). Cycle-guarded. */
+   *  row. `before`/`after` name the sibling (at most one; omit both to append). Cycle-guarded.
+   *
+   *  ⚠️ **The sibling may be a node** (ADR-162): a folder and a node under one parent are one
+   *  ordered list, and the server looks the anchor up in the merged list. */
   placeNodeGroup: (
     id: string,
     body: { parent_id: string | null; before?: string; after?: string },
   ): Promise<void> => apiPut('/api/v1/node-groups/{id}/placement', { path: { id }, body }),
 
   /** Arrange a folder's **direct** children in name order, writing the tree's stored order
-   *  (ADR-130). Subfolders and member nodes are renumbered in their own sibling scopes, so the two
-   *  never interleave; folders deeper down are untouched.
+   *  (ADR-130, amended by ADR-162). Subfolders and member nodes are renumbered as **one list**, so
+   *  A→Z means A→Z over everything in the folder; folders deeper down are untouched.
    *
    *  🚨 **This replaces an order somebody arranged by hand and there is no undo.** The caller is
    *  expected to have named the folder deliberately — it is reached by right-clicking it. */

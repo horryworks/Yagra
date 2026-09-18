@@ -157,9 +157,35 @@ describe('dropAllowed', () => {
     expect(dropAllowed(GROUPS, batch, groupTarget('site'), 'inside')).toBe(true);
   });
 
-  it('refuses a group dropped on a node, or on itself', () => {
+  it('lets a folder land beside a node inside another folder', () => {
+    // 🚨 **The ADR-162 change, and the whole point of it.** This read `toBe(false)` for every node
+    // row: "a folder relates to folders only". True while the renderer drew every folder above
+    // every node — and it made the entire area a folder's members occupy undroppable, which is
+    // what the operator hit. The drop re-parents `site` into `other`, at that node's edge.
     const g = groupDrag('site');
-    expect(dropAllowed(GROUPS, g, nodeTarget('n1', 'site'), 'before')).toBe(false);
+    expect(dropAllowed(GROUPS, g, nodeTarget('n1', 'other'), 'before')).toBe(true);
+    expect(dropAllowed(GROUPS, g, nodeTarget('n1', 'other'), 'after')).toBe(true);
+  });
+
+  it('refuses a folder dropped among the Ungrouped nodes', () => {
+    // ADR-162 decision 6: top-level nodes are drawn under their own header, apart from the
+    // top-level folders, so a folder dropped there would appear somewhere else. `scope === null`
+    // is exactly that row — `buildNodeTree` sends every node with no `group_id` to that bucket.
+    const g = groupDrag('site');
+    expect(dropAllowed(GROUPS, g, nodeTarget('n1', null), 'before')).toBe(false);
+    expect(dropAllowed(GROUPS, g, nodeTarget('n1', null), 'after')).toBe(false);
+  });
+
+  it('refuses a folder dropped beside a node that sits inside its own subtree', () => {
+    // The cycle guard again, reached through the new branch: landing beside a node in `shelf`
+    // re-parents `site` into `rack`, which is beneath it.
+    const g = groupDrag('site');
+    expect(dropAllowed(GROUPS, g, nodeTarget('n1', 'shelf'), 'before')).toBe(false);
+    expect(dropAllowed(GROUPS, g, nodeTarget('n1', 'site'), 'after')).toBe(false);
+  });
+
+  it('refuses a group dropped on itself', () => {
+    const g = groupDrag('site');
     expect(dropAllowed(GROUPS, g, groupTarget('site'), 'inside')).toBe(false);
   });
 
@@ -255,6 +281,25 @@ describe('dropAction', () => {
       groupId: 'rack',
       parentId: null,
       before: 'other',
+    });
+  });
+
+  it('anchors a folder against the NODE it was dropped beside', () => {
+    // 🚨 The claim ADR-162 rests on, as a value: `before` carries a **node** id and `parentId` is
+    // that node's folder. Nothing on the wire changed for this — the server looks the anchor up in
+    // the merged sibling list (`groups::ordered_tree_siblings`), which is why `GroupPlacement` did
+    // not need a second field and the OpenAPI document did not move.
+    expect(dropAction(groupDrag('rack'), nodeTarget('n7', 'other'), 'before')).toEqual({
+      kind: 'reorder-group',
+      groupId: 'rack',
+      parentId: 'other',
+      before: 'n7',
+    });
+    expect(dropAction(groupDrag('rack'), nodeTarget('n7', 'other'), 'after')).toEqual({
+      kind: 'reorder-group',
+      groupId: 'rack',
+      parentId: 'other',
+      after: 'n7',
     });
   });
 

@@ -402,7 +402,10 @@ describe('flattenTree — Pinned only over the lazy tree (ADR-146)', () => {
       loadedGroups: new Set(),
       pinned: pinnedView(groups, new Set(['g1b']), new Set(['n9']), [core]),
     });
-    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g1b', 'loading:g1b', 'n:n9']);
+    // 🚨 The order is the ADR-162 merge: `core` carries sort_order 0 and the pinned folder Osaka
+    // carries 2, so the node draws above the folder. Before ADR-162 every folder came first
+    // whatever the values were. What this test is about is the COUNT below.
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n9', 'g:g1b', 'loading:g1b']);
     const top = rows[0];
     expect(top.kind === 'group' && top.tally?.total).toBe(4);
     expect(top.kind === 'group' && top.tally?.counts.critical).toBe(1);
@@ -1105,7 +1108,7 @@ describe('flattenTree — a filter that matches a GROUP reveals its contents', (
       [node('n1', 'sw1', 'g2'), node('n2', 'fw1', 'g1'), node('n3', 'sw9', 'g3')],
     );
     const rows = flattenTree(t, { collapsed: { g1: true }, filter: 'tokyo' });
-    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'n:n1', 'n:n2']);
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n2', 'g:g2', 'n:n1']);
   });
 
   it('places the loading row after the matches it already has, for a revealed unloaded group', () => {
@@ -1242,26 +1245,66 @@ describe('buildNodeTree', () => {
     expect(tree.ungrouped.map((n) => n.name)).toEqual(['zzz', 'aaa']);
   });
 
-  it('keeps every folder above every node, whatever the sort_order values are', () => {
-    // 🚨 A property of the **structure**, not of the comparator: a `TreeGroup` holds folders and
-    // nodes in two separate arrays and `flattenTree` walks the children before the members, so the
-    // two can never interleave. The ADR-130 sort commands lean on this — they renumber the two
-    // scopes independently and never compare a folder against a node — so merging the two lists
-    // into one ordered array would make "Sort descending" interleave them, and no other test here
-    // would notice.
+  it('interleaves folders and nodes on sort_order, in one list', () => {
+    // 🚨 **The reverse of what this test asserted until ADR-162.** It used to demand that every
+    // folder stays above every node "whatever the sort_order values are", and it was true
+    // structurally: `walkGroup` walked the children and then the members, so the two could not
+    // interleave. That is exactly what stopped a folder being dropped between two nodes, and
+    // ADR-162 withdrew it (ADR-130 決定 6).
     //
-    // Chosen so the assertion can only hold structurally: the folder sorts last by name *and* last
-    // by sort_order, the node first on both. One merged list would put the node on top.
+    // The fixture is the old one, unchanged, because it is the case that tells the two rules
+    // apart: the folder sorts last by name *and* last by sort_order, the node first on both. The
+    // old rule put the folder first; one merged list puts the node first.
     const tree = buildNodeTree(
       [group('p', 'parent'), group('c', 'zzz', 'p', 99)],
       [node('n1', 'aaa', 'p', 1)],
     );
     expect(flattenTree(tree, { collapsed: {}, filter: '' }).map(flatRowKey)).toEqual([
       'g:p',
-      'g:c',
       'n:n1',
+      'g:c',
       // The Ungrouped header is always emitted while there is any inventory — it is the root drop
       // zone, not a row about these three.
+      'ungrouped-head',
+    ]);
+  });
+
+  it('breaks a tie between a folder and a node of the same name by putting the folder first', () => {
+    // The third sort key, and the one place the browser and the server are allowed to disagree:
+    // PostgreSQL orders `sort_order, name, id` and would pick by uuid. It can only be reached by
+    // two rows sharing a sort_order *and* a name, which migration 0122 and every append since are
+    // what keep from happening — so the tie-break is about being deterministic, not about being
+    // the same answer.
+    const tree = buildNodeTree(
+      [group('p', 'parent'), group('c', 'same', 'p', 5)],
+      [node('n1', 'same', 'p', 5)],
+    );
+    expect(flattenTree(tree, { collapsed: {}, filter: '' }).map(flatRowKey)).toEqual([
+      'g:p',
+      'g:c',
+      'n:n1',
+      'ungrouped-head',
+    ]);
+  });
+
+  it('keeps the still-loading placeholder at the end, below both kinds', () => {
+    // "Where the rows that have not arrived go" has no honest answer but the end — their
+    // sort_order is not in the browser yet. A folder ordered after them still draws above them.
+    const tree = buildNodeTree(
+      [group('p', 'parent'), group('c', 'zzz', 'p', 99)],
+      [node('n1', 'aaa', 'p', 1)],
+    );
+    const rows = flattenTree(tree, {
+      collapsed: {},
+      filter: '',
+      groupCounts: { p: { ok: 4, warning: 0, critical: 0, unreachable: 0, maintenance: 0, unknown: 0 }, c: { ok: 0, warning: 0, critical: 0, unreachable: 0, maintenance: 0, unknown: 0 } },
+      loadedGroups: new Set(['c']),
+    });
+    expect(rows.map(flatRowKey)).toEqual([
+      'g:p',
+      'n:n1',
+      'g:c',
+      'loading:p',
       'ungrouped-head',
     ]);
   });

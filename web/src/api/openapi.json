@@ -10379,7 +10379,7 @@
           "groups"
         ],
         "summary": "Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.",
-        "description": "Subfolders and member nodes are renumbered within their own sibling scopes, so the two never\ninterleave — the tree draws every folder above every node whatever the values are. Folders\ndeeper down are untouched: the operator right-clicked one folder.\n\n🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is\nthe decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking\nthe folder it acts on, which is the same consent a file manager asks for.\n\n⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per\nchild would be a partial write with nothing to read back when it fails halfway. One request,\none transaction — the same shape `POST /nodes/move` takes for a multi-node drag, which places\nthe whole batch in a single statement rather than calling the single-node writer N times.",
+        "description": "Subfolders and member nodes are renumbered as **one list** (ADR-162): under a parent they are\nsiblings, so A→Z means A→Z over everything in the folder and a subfolder can land between two\nnodes. Folders deeper down are untouched: the operator right-clicked one folder.\n\n🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is\nthe decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking\nthe folder it acts on, which is the same consent a file manager asks for.\n\n⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per\nchild would be a partial write with nothing to read back when it fails halfway. One request,\none transaction — the same shape `POST /nodes/move` takes for a multi-node drag, which places\nthe whole batch in a single statement rather than calling the single-node writer N times.",
         "operationId": "sort_group_children",
         "parameters": [
           {
@@ -29331,7 +29331,7 @@
       },
       "GroupPlacement": {
         "type": "object",
-        "description": "Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) and position it\nrelative to a sibling. `before`/`after` name the sibling; both omitted ⇒ append.",
+        "description": "Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) and position it\nrelative to a sibling. `before`/`after` name the sibling; both omitted ⇒ append.\n\n⚠️ **A sibling is a folder OR a node** (ADR-162). Under one parent the two are one ordered\nlist, so `before`/`after` may carry a node id and the folder lands at that row's edge. An id\nthat names neither appends, as it always has.",
         "properties": {
           "after": {
             "type": [

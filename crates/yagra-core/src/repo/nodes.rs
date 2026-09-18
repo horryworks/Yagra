@@ -357,11 +357,17 @@ impl NodeRepo {
         model: Option<&str>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
-        sqlx::query(
+        // Append to the end of the top-level scope rather than leaving the column at its DEFAULT 0
+        // (ADR-162). A node created here has no folder, so the scope is the same one the top-level
+        // folders live in — and after migration 0122 that scope is one integer sequence. A 0 would
+        // put every newly created node above every folder in it.
+        let order = crate::groups::append_base_sql("NULL", "");
+        sqlx::query(&format!(
             "INSERT INTO nodes \
-             (id, name, address, pool, profile_id, credential_id, parent_id, vendor, model) \
-             VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9)",
-        )
+             (id, name, address, pool, profile_id, credential_id, parent_id, vendor, model, \
+              sort_order) \
+             VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, {order} + 1)"
+        ))
         .bind(id)
         .bind(name)
         .bind(address.to_string())
@@ -486,6 +492,9 @@ impl NodeRepo {
                 taken.insert(addr);
             }
         }
+        // The scope is the row's own destination folder (`$8`), so this fragment is the same for
+        // every row of the batch; built once.
+        let order = crate::groups::append_base_sql("$8", "");
         let mut outcome = ImportOutcome::default();
         for (i, n) in nodes.iter().enumerate() {
             // `insert` returning false is the second row of this batch at an address the first one
@@ -498,13 +507,15 @@ impl NodeRepo {
             // the column default: every imported node would otherwise share one value and sort
             // ahead of whatever the operator had already placed in that folder. Inside the
             // transaction each row sees the previous one, so a batch lands in order.
-            sqlx::query(
+            //
+            // 🚨 **Over the whole scope, folders included** (ADR-162): the destination folder's
+            // sub-folders share this sequence, so a max taken over `nodes` alone lands the import
+            // on top of them.
+            sqlx::query(&format!(
                 "INSERT INTO nodes \
                    (id, name, address, profile_id, credential_id, vendor, model, group_id, sort_order) \
-                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, \
-                   (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM nodes \
-                     WHERE group_id IS NOT DISTINCT FROM $8::uuid))",
-            )
+                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, {order} + 1)"
+            ))
             .bind(Uuid::new_v4())
             .bind(n.name)
             .bind(n.address.to_string())
@@ -642,18 +653,21 @@ impl NodeRepo {
     }
 
     /// Move a node into a group (or `None` to ungroup it), appending it to the **end** of the
-    /// destination scope (max sort_order + 1) so it lands predictably at the bottom. Returns
-    /// whether the node exists. Used by the "Move to…" picker and a drop directly onto a group;
-    /// drag-reorder between siblings goes through [`Self::place_node_batch`] instead (the WebUI
-    /// sends every move through the bulk path since ADR-124 増分 4; [`Self::place_node`] is what
-    /// the single-node `PUT /nodes/{id}/placement` still serves for an external client).
+    /// destination scope so it lands predictably at the bottom. Returns whether the node exists.
+    /// Used by the "Move to…" picker and a drop directly onto a group; drag-reorder between
+    /// siblings goes through [`Self::place_node_batch`] instead (the WebUI sends every move
+    /// through the bulk path since ADR-124 増分 4; [`Self::place_node`] is what the single-node
+    /// `PUT /nodes/{id}/placement` still serves for an external client).
+    ///
+    /// ⚠️ **"The end" counts the destination's sub-folders too** (ADR-162) — they share this
+    /// sequence — and excludes the node being moved, which may already be in the destination.
     pub async fn set_node_group(&self, id: Uuid, group: Option<Uuid>) -> anyhow::Result<bool> {
-        let res = sqlx::query(
+        let order = crate::groups::append_base_sql("$2", " AND id <> $1");
+        let res = sqlx::query(&format!(
             "UPDATE nodes SET group_id = $2, updated_at = now(), \
-             sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM nodes \
-                           WHERE group_id IS NOT DISTINCT FROM $2::uuid AND id <> $1) \
-             WHERE id = $1",
-        )
+             sort_order = {order} + 1 \
+             WHERE id = $1"
+        ))
         .bind(id)
         .bind(group)
         .execute(&self.pool)
@@ -696,15 +710,17 @@ impl NodeRepo {
         if ids.is_empty() {
             return Ok((0, 0));
         }
-        let res = sqlx::query(
+        // The base the batch counts up from: the destination's highest position, folders included
+        // (ADR-162), minus the rows being moved — a node already sitting there would otherwise
+        // raise the base with its own value and the batch would land after itself.
+        let base = crate::groups::append_base_sql("$2", " AND NOT (id = ANY($1))");
+        let res = sqlx::query(&format!(
             "UPDATE nodes SET group_id = $2, updated_at = now(), \
-             sort_order = (SELECT COALESCE(MAX(peer.sort_order), 0) FROM nodes AS peer \
-                           WHERE peer.group_id IS NOT DISTINCT FROM $2::uuid \
-                             AND NOT (peer.id = ANY($1))) + t.ord::double precision \
+             sort_order = {base} + t.ord::double precision \
              FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord) \
              WHERE nodes.id = t.id \
-               AND ($3::uuid[] IS NULL OR nodes.group_id = ANY($3))",
-        )
+               AND ($3::uuid[] IS NULL OR nodes.group_id = ANY($3))"
+        ))
         .bind(&ids)
         .bind(group)
         .bind(Self::scope_bind(scope))
@@ -749,10 +765,13 @@ impl NodeRepo {
         if ids.is_empty() {
             return Ok((0, 0));
         }
-        // The destination's current members, minus whatever is moving, so the gap is measured
-        // against the rows that will still be there afterwards.
-        let siblings: Vec<(Uuid, f64)> = self
-            .ordered_nodes_in_group(group)
+        // The destination's current rows, minus whatever is moving, so the gap is measured against
+        // the rows that will still be there afterwards.
+        //
+        // 🚨 **Sub-folders are among them** (ADR-162). Measuring the gap over the nodes alone puts
+        // the batch between two rows that are not adjacent, so it lands somewhere else — or, when
+        // the two nodes have a folder between them and equal-looking neighbours, nowhere at all.
+        let siblings: Vec<(Uuid, f64)> = crate::groups::ordered_tree_siblings(&self.pool, group)
             .await?
             .into_iter()
             .filter(|(sid, _)| !seen.contains(sid))
@@ -849,15 +868,29 @@ impl NodeRepo {
             .await?;
         Ok(res.rows_affected() > 0)
     }
+    /// Everything directly under `group` — its sub-folders and its member nodes in one ordered
+    /// list. The list a drag's before/after anchor is looked up in; see
+    /// [`crate::groups::ordered_tree_siblings`], which owns the statement because it names both
+    /// tables and neither repository owns the other's.
+    pub async fn ordered_tree_siblings(
+        &self,
+        group: Option<Uuid>,
+    ) -> anyhow::Result<Vec<(Uuid, f64)>> {
+        crate::groups::ordered_tree_siblings(&self.pool, group).await
+    }
 
-    /// The `(id, sort_order)` of the nodes in `group` (NULL ⇒ ungrouped), ordered. Feeds
-    /// [`crate::groups::placement_orders`] when a drag drops one or more nodes before/after a
-    /// sibling — read by [`Self::place_node_batch`] and by the single-node placement endpoint.
+    /// The `(id, sort_order)` of the nodes in `group` (NULL ⇒ ungrouped), ordered.
+    ///
+    /// ⚠️ **This is not what a placement is computed against** (ADR-162). A node and a sub-folder
+    /// under one parent are siblings in one list, so the midpoint arithmetic reads
+    /// [`crate::groups::ordered_tree_siblings`]; this half-list is for callers that are asking
+    /// about nodes — which, since ADR-162, is the tests and nothing else.
     ///
     /// ⚠️ **Deliberately not scope-narrowed.** It only ever answers "what is already in this
     /// folder", and the folder itself has been checked against the caller's scope before anything
     /// reads this; every member of a visible folder is visible. Narrowing here would make the
     /// anchor invisible to a scoped caller and silently turn their drop into an append.
+    #[cfg(test)]
     pub async fn ordered_nodes_in_group(
         &self,
         group: Option<Uuid>,

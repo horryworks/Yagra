@@ -2055,9 +2055,9 @@ export interface paths {
         put?: never;
         /**
          * Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.
-         * @description Subfolders and member nodes are renumbered within their own sibling scopes, so the two never
-         *     interleave — the tree draws every folder above every node whatever the values are. Folders
-         *     deeper down are untouched: the operator right-clicked one folder.
+         * @description Subfolders and member nodes are renumbered as **one list** (ADR-162): under a parent they are
+         *     siblings, so A→Z means A→Z over everything in the folder and a subfolder can land between two
+         *     nodes. Folders deeper down are untouched: the operator right-clicked one folder.
          *
          *     🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is
          *     the decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking
@@ -7582,6 +7582,10 @@ export interface components {
         /**
          * @description Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) and position it
          *     relative to a sibling. `before`/`after` name the sibling; both omitted ⇒ append.
+         *
+         *     ⚠️ **A sibling is a folder OR a node** (ADR-162). Under one parent the two are one ordered
+         *     list, so `before`/`after` may carry a node id and the folder lands at that row's edge. An id
+         *     that names neither appends, as it always has.
          */
         GroupPlacement: {
             /** Format: uuid */
