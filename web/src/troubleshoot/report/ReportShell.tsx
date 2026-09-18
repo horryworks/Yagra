@@ -14,7 +14,7 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Field';
-import { api } from '../../services/api';
+import { api, errMsg } from '../../services/api';
 import { ScopePicker } from '../../components/ScopePicker/ScopePicker';
 import { allScope, type ScopeValue } from '../../components/ScopePicker/scope';
 import { relTime } from '../format';
@@ -117,21 +117,36 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
   const job = storeJob ?? (fetched?.id === jobId ? fetched : undefined);
 
   // ── Findings ──
-  const [rows, setRows] = useState<AnalysisFinding[]>([]);
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<{ jobId: string; rows: AnalysisFinding[] } | null>(null);
+  const [findingsError, setFindingsError] = useState<string | null>(null);
+  const [findingsNonce, setFindingsNonce] = useState(0);
+  const doneJobId = job && job.state === 'done' ? job.id : null;
   useEffect(() => {
-    if (job && job.state === 'done' && loadedFor !== job.id) {
-      api
-        .getAnalysisFindings(job.id)
-        .then((f) => {
-          setRows(f);
-          setLoadedFor(job.id);
-        })
-        .catch(() => {
-          /* transient — SSE will re-trigger */
-        });
-    }
-  }, [job, loadedFor]);
+    if (!doneJobId) return undefined;
+    let cancelled = false;
+    setFindingsError(null);
+    api
+      .getAnalysisFindings(doneJobId)
+      .then((f) => !cancelled && setLoaded({ jobId: doneJobId, rows: f }))
+      // 🚨 Surfaced, not swallowed. The comment here used to say "transient — SSE will
+      // re-trigger", which is false for exactly the state this runs in: a `done` job receives no
+      // further frames, so nothing ever asked again. The page then drew a finished report over
+      // an empty list — "0 critical · 0 warning · nothing found" — for a read that had failed.
+      .catch(
+        (e: unknown) =>
+          !cancelled && setFindingsError(errMsg(e, t('report.common.findingsFailed'))),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [doneJobId, findingsNonce, t]);
+  // Only the rows that answer THIS job. Holding the job id beside them is what stops a switch
+  // from `?job=A` to `?job=B` drawing A's findings under B's heading until B's arrive.
+  const rows = useMemo(
+    () => (loaded && loaded.jobId === doneJobId ? loaded.rows : []),
+    [loaded, doneJobId],
+  );
+  const findingsReady = loaded !== null && loaded.jobId === doneJobId;
   const { findings, notices } = useMemo(() => splitNotices(rows), [rows]);
 
   // A `?job=` belonging to another tool would render this body over foreign findings — send it to
@@ -159,8 +174,7 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
     };
     try {
       const j = await createJob(buildJobInput(descriptor, state, t(windowLabel)));
-      setRows([]);
-      setLoadedFor(null);
+      // The rows are keyed by job id, so the new run starts empty without being told to.
       setFetched(null);
       // Only `job` changes: the body's chips, sort and filter row are the operator's view of this
       // tool's findings (ADR-153), and a new run of the same tool is still the same view.
@@ -307,7 +321,23 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
         </Card>
       )}
 
-      {job && job.state === 'done' && (
+      {job && job.state === 'done' && !findingsReady && (
+        <Card>
+          <div className="ts-empty-note">
+            {findingsError ?? t('common:loading')}
+            {findingsError && (
+              <>
+                {' '}
+                <Button onClick={() => setFindingsNonce((n) => n + 1)}>
+                  {t('common:actions.retry')}
+                </Button>
+              </>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {job && job.state === 'done' && findingsReady && (
         <>
           <div className="ts-res-summary">
             {descriptor.summary.map((s) => (

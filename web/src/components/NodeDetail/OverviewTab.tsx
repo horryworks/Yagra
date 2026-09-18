@@ -280,10 +280,14 @@ function IcmpHealth({
   useEffect(() => {
     let cancelled = false;
     // Through the shared cache: this, Device health and the generic sections make one request.
-    void fetchNodeMetrics(nodeId).then((items) => {
-      if (cancelled) return;
-      setHasLoss(items.some((i) => i.metric === ICMP_LOSS_METRIC && i.status !== 'no_data'));
-    });
+    fetchNodeMetrics(nodeId)
+      .then((items) => {
+        if (cancelled) return;
+        setHasLoss(items.some((i) => i.metric === ICMP_LOSS_METRIC && i.status !== 'no_data'));
+      })
+      // Device health below is where a failed inventory read is reported; here it only means the
+      // loss series is not offered.
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -825,7 +829,7 @@ const MIN_MEM_TOTAL_BYTES = 1024 * 1024;
 function DeviceHealth({ nodeId }: { nodeId: string }) {
   const { t } = useTranslation('nodes');
   // `null` = still resolving. Once set, every card's presence is known at once.
-  const [health, setHealth] = useState<ResolvedHealth | null>(null);
+  const [health, setHealth] = useState<ResolvedHealth | 'failed' | null>(null);
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
 
@@ -837,8 +841,12 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
       // reports whether each metric has actually reported rather than only that it was asked for.
       // Through the shared cache, so this and the scalar strip below make one request between them
       // (and so the dashboard's fleet Top-N learns the names this node has).
-      const items = await fetchNodeMetrics(nodeId);
-      if (!cancelled) setHealth(resolveHealth(items));
+      try {
+        const items = await fetchNodeMetrics(nodeId);
+        if (!cancelled) setHealth(resolveHealth(items));
+      } catch {
+        if (!cancelled) setHealth('failed');
+      }
     })();
     return () => {
       cancelled = true;
@@ -846,6 +854,17 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   }, [nodeId]);
 
   if (!health) return null; // still resolving
+  // 🚨 Said, not hidden. A missing section reads as "this device reports nothing".
+  if (health === 'failed') {
+    return (
+      <section>
+        <div className="nd-section-head">
+          <div className="nd-section-t">{t('overview.deviceHealth')}</div>
+        </div>
+        <p className="form-error">{t('overview.healthLoadFailed')}</p>
+      </section>
+    );
+  }
   if (!hasAnyHealth(health)) return null; // nothing to show
 
   return (
@@ -1231,8 +1250,10 @@ function OverviewSections({ node }: { node: NodeDetail }) {
       // An empty inventory (skeleton mode, or the node is gone) yields no sections; the component
       // hides itself below. `resolveHealth` over the same items is what the subtraction needs — it
       // is the only thing that knows which candidate each curated card actually landed on.
-      const items = await fetchNodeMetrics(node.id);
-      if (cancelled) return;
+      // A failed read draws nothing here on purpose: Device health above reports it once, and a
+      // second copy of the same sentence under it would say nothing new.
+      const items = await fetchNodeMetrics(node.id).catch(() => null);
+      if (cancelled || items === null) return;
       const claimed = new Set([
         ...claimedMetrics(resolveHealth(items)),
         ...claimKey.split('|').filter((m) => m !== ''),

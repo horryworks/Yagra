@@ -28,8 +28,14 @@ const cache = new Map<string, { at: number; entries: NodeMetricEntry[] }>();
 const inflight = new Map<string, Promise<NodeMetricEntry[]>>();
 
 /**
- * One node's metric inventory. Never rejects: a node the caller can no longer see, or a store that
- * is down, resolves to an empty inventory, which every surface already renders as "nothing to show".
+ * One node's metric inventory. **Rejects when the read fails**, and every caller says what that
+ * means for its own surface.
+ *
+ * 🚨 It used to resolve `[]` instead, on the grounds that every surface "already renders that as
+ * nothing to show". Two did not: the Collection tab read an empty inventory on an SNMP node as
+ * **"Collection failing"**, and the Overview dropped its whole Device-health section without a
+ * word. A store that was briefly unreachable therefore painted a healthy device red. An empty
+ * inventory is an answer; a failed read is not one.
  *
  * `maxAgeMs` is how old a cached answer may be; the default of 0 always re-reads. Concurrent callers
  * share one request either way.
@@ -46,7 +52,6 @@ export function fetchNodeMetrics(nodeId: string, maxAgeMs = 0): Promise<NodeMetr
       rememberMetrics(entries);
       return entries;
     })
-    .catch(() => [] as NodeMetricEntry[])
     .finally(() => {
       inflight.delete(nodeId);
     });

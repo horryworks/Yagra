@@ -36,13 +36,14 @@ import { buildPredicate } from '../../lib/filterPredicate';
 import { metricColumns } from './tabFilters';
 import { viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
+import { collectionState, type CollectionState } from './collectionState';
 import { agoSec } from '../../lib/format';
 
-type CollState = 'ok' | 'failing' | 'none';
 
 interface Loaded {
   sets: CollectionTemplate[];
-  metrics: NodeMetricEntry[];
+  /** `null` when the inventory could not be read — never folded into `[]`. */
+  metrics: NodeMetricEntry[] | null;
   profileName: string | null;
   credentialName: string | null;
 }
@@ -208,7 +209,8 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
           : Promise.resolve(null),
         // Through the shared cache — never stale here (no `maxAgeMs`, so it re-reads), but it is
         // what teaches the dashboard's fleet Top-N the metric names this node has.
-        fetchNodeMetrics(node.id),
+        // `null` = the inventory could not be read, which is not an empty one — `collectionState`.
+        fetchNodeMetrics(node.id).catch(() => null),
       ]);
       if (!cancelled) setData({ sets, metrics, profileName, credentialName });
     })();
@@ -221,10 +223,12 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   // any deployment setting `YAGRA_SNMP_COMMUNITY`: the scheduler falls back to it for nodes with no
   // bound credential, so this panel told a node that was being walked it was `ICMP-only` (ADR-119).
   const hasSnmp = node.snmp_configured;
-  const flowing = data?.metrics.filter((m) => m.status !== 'no_data') ?? [];
-  const state: CollState = !hasSnmp ? 'none' : flowing.length > 0 ? 'ok' : 'failing';
+  const state: CollectionState = collectionState(hasSnmp, data ? data.metrics : undefined);
+  // The two states about Yagra's own read draw neutrally — red is a claim about the device.
+  const tone = state === 'ok' || state === 'failing' ? state : 'none';
 
   const allMetrics = data?.metrics ?? [];
+  const metricCount = data?.metrics ? data.metrics.length : null;
   const shownMetrics = allMetrics.filter(buildPredicate(columns, filters, Date.now()));
   const metricCounts = Object.fromEntries(
     columns
@@ -240,8 +244,8 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
 
   return (
     <div className="nd-coll">
-      <div className={`nd-coll-status ${state}`}>
-        <span className={`nd-coll-icon ${state}`} aria-hidden>
+      <div className={`nd-coll-status ${tone}`}>
+        <span className={`nd-coll-icon ${tone}`} aria-hidden>
           {state === 'ok' ? '✓' : state === 'failing' ? '!' : '○'}
         </span>
         <div>
@@ -250,14 +254,22 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
               ? t('collection.statusOk')
               : state === 'failing'
                 ? t('collection.statusFailing')
-                : t('collection.statusNone')}
+                : state === 'unknown'
+                  ? t('collection.statusUnknown')
+                  : state === 'loading'
+                    ? t('common:loading')
+                    : t('collection.statusNone')}
           </div>
           <div className="nd-coll-status-s">
             {state === 'ok'
               ? t('collection.setsActive', { count: data?.sets.length ?? 0 })
               : state === 'failing'
                 ? t('collection.subFailing')
-                : t('collection.subNone')}
+                : state === 'unknown'
+                  ? t('collection.subUnknown')
+                  : state === 'loading'
+                    ? ''
+                    : t('collection.subNone')}
           </div>
         </div>
         <div className="nd-coll-status-r">
@@ -271,7 +283,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
           </div>
           <div>
             <div className="nd-coll-stat-k">{t('collection.metrics')}</div>
-            <div className="nd-coll-stat-v">{data ? data.metrics.length : '—'}</div>
+            <div className="nd-coll-stat-v">{metricCount ?? '—'}</div>
           </div>
         </div>
       </div>
@@ -295,7 +307,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
         </section>
       )}
 
-      {data && data.metrics.length > 0 && (
+      {allMetrics.length > 0 && (
         <section>
           <div className="nd-section-head">
             <div className="nd-section-t">{t('collection.allMetrics')}</div>

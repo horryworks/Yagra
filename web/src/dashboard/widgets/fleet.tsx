@@ -15,9 +15,19 @@ import { KpiTile } from '../primitives/KpiTile';
 import { useFleetSummary } from '../useFleetSummary';
 import { usePolled } from '../usePolled';
 
+/** 🚨 The three tiles below all read `useFleetSummary`, and all three used to ignore its `error`.
+ *  A failed `/fleet/summary` then drew a large **0** under "nodes down", "no nodes" in the ring
+ *  and an empty tally — a failure to ask, shown as a healthy fleet. `sites.tsx` has always
+ *  checked; these are the fleet-health tiles, so they are the ones that must. */
+function FleetSummaryFailed() {
+  const { t } = useTranslation('dashboard');
+  return <p className="muted">{t('widgets.fleetSummary.error')}</p>;
+}
+
 export function StatusSummaryWidget() {
   // Server-computed fleet tally (`/fleet/summary`), correct beyond the first page of nodes (S12).
-  const { summary, loading } = useFleetSummary();
+  const { summary, loading, error } = useFleetSummary();
+  if (error) return <FleetSummaryFailed />;
   return (
     <StatusSummary counts={summary?.states ?? {}} total={summary?.total ?? 0} loading={loading} />
   );
@@ -25,7 +35,8 @@ export function StatusSummaryWidget() {
 
 export function HealthRingWidget() {
   const { t } = useTranslation('dashboard');
-  const { summary, loading } = useFleetSummary();
+  const { summary, loading, error } = useFleetSummary();
+  if (error) return <FleetSummaryFailed />;
   if (loading && !summary) return <p className="muted">{t('widgets.loadingNodes')}</p>;
   if (!summary || summary.total === 0) return <p className="muted">{t('widgets.noNodes')}</p>;
   const c = summary.states;
@@ -52,7 +63,8 @@ export function HealthRingWidget() {
 
 export function NodesDownWidget() {
   const { t } = useTranslation('dashboard');
-  const { summary, loading } = useFleetSummary();
+  const { summary, loading, error } = useFleetSummary();
+  if (error) return <FleetSummaryFailed />;
   if (loading && !summary) return <p className="muted">{t('widgets.loadingNodes')}</p>;
   // Hard-down over the whole fleet (the one HARD_DOWN_STATES definition).
   const down = summary ? HARD_DOWN_STATES.reduce((n, s) => n + summary.states[s], 0) : 0;
