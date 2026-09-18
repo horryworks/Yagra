@@ -15,7 +15,7 @@
 // (`.claude/rules/testing.md`), and ADR-124 paid twice for judgement left beside a handler. No DOM
 // type appears in any signature: a test hands over plain objects.
 
-import type { FlatRow } from '../../lib/nodeTree';
+import { rowDepth, type FlatRow } from '../../lib/nodeTree';
 import type { NodeSummary } from '../../types/api';
 // Type-only, so nothing here loads a `.tsx` — the same shape `nodeTreeSelect.ts` uses.
 import type { TreeSelection } from './NodeTree';
@@ -95,10 +95,14 @@ export function ariaLevel(row: FlatRow): number {
     case 'ungrouped-node':
     case 'ungrouped-head':
       return 1;
+    // The drop slot belongs here too: it announces the level it would land at, which is the level it
+    // is drawn at (ADR-162 増分 2). It is never a keyboard stop — `rowSelection` answers null for it
+    // — so this is what a screen reader hears while a drag is in flight, and nothing else.
     case 'group':
     case 'node':
     case 'group-loading':
     case 'group-failed':
+    case 'drop-slot':
       return row.depth + 1;
   }
 }
@@ -142,16 +146,12 @@ export function pageRows(clientHeight: number, rowHeight: number): number {
   return Math.max(1, Math.floor(clientHeight / rowHeight) - 1);
 }
 
-function depthOf(row: FlatRow | undefined): number {
-  return row && 'depth' in row ? row.depth : -1;
-}
-
 /** The folder row directly above this row in the hierarchy, or -1. A node in Ungrouped has none —
  *  the header above it is not a folder. */
 export function parentIndex(flat: readonly FlatRow[], index: number): number {
   const row = flat[index];
   if (!row || row.kind === 'ungrouped-node' || row.kind === 'ungrouped-head') return -1;
-  const want = depthOf(row) - 1;
+  const want = rowDepth(row) - 1;
   if (want < 0) return -1;
   for (let i = index - 1; i >= 0; i -= 1) {
     const above = flat[i];
@@ -167,7 +167,7 @@ export function firstChildIndex(flat: readonly FlatRow[], index: number): number
   const row = flat[index];
   if (row?.kind !== 'group' || !row.isOpen) return -1;
   const next = flat[index + 1];
-  return next && depthOf(next) === row.depth + 1 && isStop(next) ? index + 1 : -1;
+  return next && rowDepth(next) === row.depth + 1 && isStop(next) ? index + 1 : -1;
 }
 
 /** How a key that moves the cursor treats the working set — the click gesture it corresponds to

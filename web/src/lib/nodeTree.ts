@@ -163,7 +163,23 @@ export type FlatRow =
    *  which is ADR-055 R6: the screen must say what it cannot do, where the operator is looking. */
   | { kind: 'group-failed'; depth: number; groupId: string }
   | { kind: 'ungrouped-head'; count: number }
-  | { kind: 'ungrouped-node'; depth: number; node: NodeSummary };
+  | { kind: 'ungrouped-node'; depth: number; node: NodeSummary }
+  /**
+   * The insertion slot: where a drag in flight would land (ADR-162 増分 2). Carried in the row list
+   * rather than drawn over it, so the virtualizer places it and the rows below move down by exactly
+   * one row — an overlay would sit on top of a real row and hide it.
+   *
+   * 🚨 **`flattenTree` never produces one.** It is a function of the inventory and the filters and
+   * knows nothing about a drag; the slot is inserted afterwards by
+   * `withDropSlot` in `components/NodeTree/nodeTreeDnd.ts`, which is where every other drop
+   * judgement already lives. Its `depth` is the destination's, which is the whole point: the
+   * indentation is what says *which folder* the drop writes into, and a 2px line could not.
+   *
+   * ⚠️ **At most one exists at a time**, because {@link flatRowKey} answers a constant for it. Two
+   * would collide in the virtualizer's `getItemKey` and in React's key — a silent broken list, not
+   * an error.
+   */
+  | { kind: 'drop-slot'; depth: number };
 
 /** A stable key for a flat row (for React keys + virtualizer identity). */
 export function flatRowKey(row: FlatRow): string {
@@ -179,7 +195,28 @@ export function flatRowKey(row: FlatRow): string {
       return `failed:${row.groupId}`;
     case 'ungrouped-head':
       return 'ungrouped-head';
+    // One slot exists at a time, so it needs no id of its own — and a constant is what makes the
+    // virtualizer treat the slot moving from one position to another as the SAME row rather than
+    // as one row unmounting and another mounting. See the variant's own note.
+    case 'drop-slot':
+      return 'drop-slot';
   }
+}
+
+/**
+ * How deep a row sits, or -1 for a row that has no depth of its own.
+ *
+ * Only `ungrouped-head` has none — it is a label above the top-level bucket, not a level. -1 rather
+ * than 0 or undefined because every caller is asking "is the row below still *inside* this one",
+ * and -1 stops that walk at the header without a second condition.
+ *
+ * ⚠️ One spelling, because two callers ask the same question for opposite reasons: the keyboard
+ * walks up to a row's parent (`nodeTreeKeys`), and a drag walks down past a folder's whole subtree
+ * to find where "after it" is (`nodeTreeDnd.withDropSlot`). A copy that answered 0 for the header
+ * would make the second one swallow the Ungrouped section into the folder above it.
+ */
+export function rowDepth(row: FlatRow | undefined): number {
+  return row && 'depth' in row ? row.depth : -1;
 }
 
 /** The inventory filter's comparison form: trimmed and lower-cased; empty means "not filtering".

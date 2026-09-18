@@ -674,6 +674,8 @@
     "custom": "Custom…",
     "editMoveGroup": "Edit / move group",
     "moveToGroup": "Move to group…",
+    "dropHere": "Will be placed here",
+    "dropMore": "+{{count}} more",
     "dragHint": "Drag onto a group to nest/assign; drag between rows to reorder.",
     "loadingNodes": "Loading nodes…",
     "loadFailed": "Could not load this folder's nodes.",

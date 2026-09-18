@@ -59,13 +59,17 @@ import { WrenchIcon, BellIcon, BellOffIcon, PinIcon } from '../ui/icons';
 import { nothingPinned, type PinnedView } from '../../lib/pins';
 import { HealthBar } from '../HealthBar/HealthBar';
 import {
+  dragPreview,
   dropAction,
   dropAllowed,
+  dropParentId,
   dropPosition,
   nodeDragItem,
   rootDropAction,
+  withDropSlot,
   type DragItem,
   type DropAction,
+  type DropFeedback,
   type DropPos,
   type Target,
 } from './nodeTreeDnd';
@@ -133,7 +137,10 @@ const EMPTY_CHECKED: CheckedNodes = new Map();
  *  has created none passes nothing, and a fresh `Set` per render would rebuild the flat list. */
 const NO_KEPT_GROUPS: ReadonlySet<string> = new Set();
 
-type DropTarget = { id: string | 'root'; position: DropPos; ok: boolean } | null;
+/** What the tree is telling the operator about a drag in flight. The shape lives in
+ *  `nodeTreeDnd.ts`, beside the judgements that read it and the tests that can run them — and since
+ *  ADR-162 増分 2 it carries the whole `Target`, because the slot row replays it (see `DropFeedback`). */
+type DropTarget = DropFeedback | null;
 type Menu =
   | { x: number; y: number; kind: 'group'; group: TreeGroup }
   | { x: number; y: number; kind: 'node'; node: NodeSummary }
@@ -472,13 +479,27 @@ export function NodeTree({
       withNodes,
     ],
   );
+  /**
+   * The rows actually drawn: `flat`, plus the one insertion slot a drag in flight would land in
+   * (ADR-162 増分 2).
+   *
+   * 🚨 **Everything that turns a row index into something is measured against THIS list, never
+   * `flat`.** The two differ by one row while a drag is over a droppable row, and an index taken
+   * from one and spent on the other is off by one *silently* — the visible symptom would be a
+   * loading placeholder asking for a different folder's members than the one it is drawn under.
+   * `flat` survives as the input to this memo and nowhere else.
+   *
+   * ⚠️ When nothing is being dragged `withDropSlot` returns `flat` itself, so an idle tree renders
+   * from exactly the array `flattenTree` produced and this whole increment costs it nothing.
+   */
+  const drawn = useMemo(() => withDropSlot(flat, dropTarget), [flat, dropTarget]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
-    count: flat.length,
+    count: drawn.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_H,
     overscan: 16,
-    getItemKey: (index) => flatRowKey(flat[index]),
+    getItemKey: (index) => flatRowKey(drawn[index]),
   });
   // Row click selects (drives the split detail pane); without a select handler, fall back to the
   // legacy "open node" behaviour so the tree still works on its own.
@@ -537,7 +558,7 @@ export function NodeTree({
   const clickNode = (e: React.MouseEvent, node: NodeSummary) => {
     if (!onCheckedChange) return selectNode(node);
     const outcome = clickOutcome(e, node, {
-      flat,
+      flat: drawn,
       anchorId: anchorId ?? null,
       // Passed whole: whether a folder selection may start a batch is decided in the `.ts`.
       selection: selected ?? null,
@@ -838,6 +859,10 @@ export function NodeTree({
     [drag],
   );
 
+  /** What the drag is carrying, for the insertion slot to name (ADR-162 増分 2). Resolved from what
+   *  is already in hand rather than captured at `dragstart` — see `dragPreview`. */
+  const dragged = useMemo(() => dragPreview(flat, groups, drag), [flat, groups, drag]);
+
   /** The cursor's position inside the row, as the numbers `dropPosition` decides from. */
   const positionFor = (e: React.DragEvent, targetIsGroup: boolean): DropPos => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -850,7 +875,56 @@ export function NodeTree({
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
     const position = positionFor(e, targetIsGroup);
-    setDropTarget({ id: target.id, position, ok: dropAllowed(groups, drag, target, position) });
+    const ok = dropAllowed(groups, drag, target, position);
+    // 🚨 **Only write when the answer changed.** `dragover` fires continuously while the pointer is
+    // held still, and a fresh object every time re-rendered the whole tree sixty times a second for
+    // nothing. It was merely wasteful before; since ADR-162 増分 2 each of those renders also
+    // rebuilds the drawn row list, which is the length of the inventory.
+    setDropTarget((prev) =>
+      prev &&
+      prev.ok === ok &&
+      prev.position === position &&
+      prev.target !== 'root' &&
+      prev.target.id === target.id &&
+      prev.target.scope === target.scope
+        ? prev
+        : { target, position, ok },
+    );
+  };
+
+  /**
+   * A drag held over the insertion slot itself.
+   *
+   * 🚨 **A slot placed *before* a row sits exactly where the pointer is**, so it is not decoration —
+   * it is where the operator actually lets go. That makes it owe two things, and getting either
+   * wrong fails quietly (ADR-162 増分 2):
+   *
+   * 1. **It must accept the drag.** An element is only a drop target while its `dragover` is
+   *    cancelled, so without this handler the browser refuses the drop and the gesture dies at the
+   *    one place the operator is aiming at. Nothing flickers; nothing errors; the folder stays put.
+   * 2. **It must not re-judge.** The slot has no target of its own, so asking again answers
+   *    "nothing" — the feedback withdraws, the rows close back up, the pointer is over the original
+   *    row again and the slot returns. `dragover` keeps firing while the pointer is held still, so
+   *    that is a standing flicker, not a one-off. Verified by doing it: adding `setDropTarget(null)`
+   *    here turns the Tier1 slot test red and nothing else.
+   */
+  const onSlotDragOver = (e: React.DragEvent) => {
+    if (!drag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  /** Letting go on the slot performs the placement the slot is drawing — replayed from the recorded
+   *  target, because the row under the pointer is the slot and has no target of its own. */
+  const onSlotDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const at = dropTarget;
+    if (drag && at && at.ok && at.target !== 'root') {
+      perform(dropAction(drag, at.target, at.position));
+    }
+    reset();
   };
 
   const onRowDrop = (e: React.DragEvent, target: Target, targetIsGroup: boolean) => {
@@ -917,11 +991,23 @@ export function NodeTree({
     if (next.touched !== touched) useTreeTouchedStore.getState().setTouched(next.touched);
   };
 
-  /** Drop-feedback class for a row that is the current target. */
+  /**
+   * Drop-feedback class for a row that is the current target.
+   *
+   * ⚠️ **Only `inside` and a refusal mark the target row now** (ADR-162 増分 2). `before`/`after`
+   * used to draw a 2px line on the matching edge and no longer draw anything: the placement is shown
+   * by the slot row `withDropSlot` inserts, which can say at what depth — and therefore into which
+   * folder — the drop lands, where an edge on a row could not.
+   */
   const dropClass = (id: string): string => {
-    if (!dropTarget || dropTarget.id !== id) return '';
-    return dropTarget.ok ? ` drop-${dropTarget.position}` : ' drop-bad';
+    if (!dropTarget || dropTarget.target === 'root' || dropTarget.target.id !== id) return '';
+    if (!dropTarget.ok) return ' drop-bad';
+    return dropTarget.position === 'inside' ? ' drop-inside' : '';
   };
+
+  /** The folder a permitted drop would write into, so its row can say so as well (ADR-162 増分 2).
+   *  Null at the top level and among the Ungrouped nodes, which have no folder row. */
+  const parentMarkId = dropParentId(dropTarget);
 
   const groupRow = (row: Extract<FlatRow, { kind: 'group' }>): React.ReactNode => {
     const { group, depth, isOpen, hasChildren, tally } = row;
@@ -934,7 +1020,7 @@ export function NodeTree({
         aria-level={ariaLevel(row)}
         aria-selected={isSel}
         aria-expanded={hasChildren ? isOpen : undefined}
-        className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${draggingIds.has(group.id) ? ' dragging' : ''}`}
+        className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${parentMarkId === group.id ? ' drop-parent' : ''}${draggingIds.has(group.id) ? ' dragging' : ''}`}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
         draggable={canEdit}
         onClick={() => selectGroup(group)}
@@ -1183,7 +1269,7 @@ export function NodeTree({
   // the right-click "add at top level" target. In the flattened list it's a single row; the old
   // wrapper's dashed separator moves onto the row via `.ntree-ungrouped-head`.
   const ungroupedHeadRow = (count: number): React.ReactNode => {
-    const rootDropActive = dropTarget?.id === 'root' && !!drag;
+    const rootDropActive = dropTarget?.target === 'root' && !!drag;
     return (
       <div
         role="none"
@@ -1192,7 +1278,7 @@ export function NodeTree({
         onDragOver={(e) => {
           if (!drag) return;
           e.preventDefault();
-          setDropTarget({ id: 'root', position: 'inside', ok: true });
+          setDropTarget({ target: 'root', position: 'inside', ok: true });
         }}
         onDrop={(e) => {
           e.preventDefault();
@@ -1235,8 +1321,53 @@ export function NodeTree({
     </div>
   );
 
+  /**
+   * The insertion slot: the row the drop would create, drawn where it would land (ADR-162 増分 2).
+   *
+   * 🚨 **The indentation is the message.** A folder dropped at the bottom edge of a folder's last
+   * node lands *inside* that folder; five pixels lower it lands beside it, one level up. The 2px
+   * line this replaced drew the same mark in both cases and could say nothing about which — the
+   * operator's report was exactly that question. Here the name sits in the column it will occupy.
+   *
+   * ⚠️ `role="none"` and out of the keyboard's reach (`rowSelection` answers null for this kind), so
+   * the slot cannot become a cursor position or a selection. It is feedback, not inventory.
+   */
+  const slotRow = (depth: number): React.ReactNode => (
+    <div
+      className="ntree-row ntree-drop-slot"
+      role="none"
+      style={{ paddingLeft: depth * INDENT + BASE_PAD }}
+      // The slot sits under the pointer whenever the placement is "before" something, so it is where
+      // the operator lets go — it has to accept the drop and perform it. See `onSlotDragOver`.
+      onDragOver={onSlotDragOver}
+      onDrop={onSlotDrop}
+      title={t('tree.dropHere')}
+    >
+      <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
+      <span className="ntree-icon">
+        {dragged?.kind === 'group' ? (
+          <GroupIcon type={asGroupType(dragged.group.group_type)} />
+        ) : (
+          <span className="ntree-slot-dot" aria-hidden="true" />
+        )}
+      </span>
+      <span className="ntree-slot-name">
+        {dragged === null
+          ? t('tree.dropHere')
+          : dragged.kind === 'group'
+            ? dragged.group.name
+            : dragged.name}
+      </span>
+      {dragged?.kind === 'node' && dragged.extra > 0 && (
+        <span className="ntree-slot-more">{t('tree.dropMore', { count: dragged.extra })}</span>
+      )}
+    </div>
+  );
+
   const renderRow = (row: FlatRow): React.ReactNode => {
     switch (row.kind) {
+      case 'drop-slot':
+        return slotRow(row.depth);
       case 'group':
         return groupRow(row);
       case 'node':
@@ -1280,8 +1411,8 @@ export function NodeTree({
    *  comma cannot appear inside one. */
   const publishedOnce = useRef(false);
   const pendingKey = pendingGroupKeys(
-    // An index can briefly fall outside `flat` between a virtualizer measure and a re-render.
-    virtualRows.map((v) => flat[v.index]).filter((r): r is FlatRow => r !== undefined),
+    // An index can briefly fall outside `drawn` between a virtualizer measure and a re-render.
+    virtualRows.map((v) => drawn[v.index]).filter((r): r is FlatRow => r !== undefined),
   ).join(',');
   const settledKey = useDebouncedValue(pendingKey, publishedOnce.current ? PENDING_SETTLE_MS : 0);
   useEffect(() => {
@@ -1296,7 +1427,7 @@ export function NodeTree({
   // `selected` and the page's callbacks are new objects on every render, so this runs on most renders
   // anyway; `settleCursor` holds the identity checks that make a re-run a no-op.
   useEffect(() => {
-    const index = indexOfSelection(flat, settledCursor);
+    const index = indexOfSelection(drawn, settledCursor);
     switch (settleCursor(settledCursor, cursor, selected ?? null, committed.current, index >= 0)) {
       case 'wait':
         return;
@@ -1305,7 +1436,7 @@ export function NodeTree({
         return;
       case 'commit': {
         committed.current = settledCursor;
-        const row = flat[index];
+        const row = drawn[index];
         if (row.kind === 'group') {
           if (onSelectGroup) onSelectGroup(row.group);
           else setCursor(null);
@@ -1323,7 +1454,7 @@ export function NodeTree({
       }
     }
   }, [
-    flat,
+    drawn,
     settledCursor,
     cursor,
     selected,
@@ -1346,13 +1477,13 @@ export function NodeTree({
   /** Put the cursor on a row: the working set first (it is page state, and not debounced), then the
    *  cursor, then the scroll — the one scroll this tree writes (ADR-155 決定 4). */
   const moveCursor = (index: number, gesture: MoveGesture) => {
-    const row = flat[index];
+    const row = drawn[index];
     const sel = rowSelection(row);
     if (!sel) return;
     const node = rowNode(row);
     if (node && onCheckedChange) {
       const change = moveCheckedChange(gesture, node, {
-        flat,
+        flat: drawn,
         anchorId: anchorId ?? null,
         selection: shown,
         checked: checkedNodes,
@@ -1375,7 +1506,7 @@ export function NodeTree({
     root ? [...root.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')] : [];
 
   const openMenuFromKey = (index: number) => {
-    const row = flat[index];
+    const row = drawn[index];
     const sel = rowSelection(row);
     if (!sel) return;
     rowVirtualizer.scrollToIndex(index, { align: 'auto' });
@@ -1439,8 +1570,8 @@ export function NodeTree({
     const target = e.target as HTMLElement;
     if (!keyBelongsToTree(target, body, body.contains(target))) return;
     const outcome = treeKeyAction(e, {
-      flat,
-      cursor: indexOfSelection(flat, shown),
+      flat: drawn,
+      cursor: indexOfSelection(drawn, shown),
       page: pageRows(body.clientHeight, ROW_H),
     });
     if (!outcome) return;
@@ -1454,19 +1585,19 @@ export function NodeTree({
       case 'move':
         return moveCursor(outcome.index, outcome.gesture);
       case 'set-open': {
-        const row = flat[outcome.index];
+        const row = drawn[outcome.index];
         if (row.kind === 'group') pressFolder(row.group.id, row.isOpen);
         return;
       }
       case 'check': {
-        const node = rowNode(flat[outcome.index]);
+        const node = rowNode(drawn[outcome.index]);
         if (!node || !onCheckedChange) return;
         const change = spaceCheckedChange(node, checkedNodes);
         onCheckedChange(change.checked, change.anchorId);
         return;
       }
       case 'open-node': {
-        const node = rowNode(flat[outcome.index]);
+        const node = rowNode(drawn[outcome.index]);
         if (node) onOpenNode(node);
         return;
       }
@@ -1477,7 +1608,7 @@ export function NodeTree({
 
   /** `aria-activedescendant` only while the current row is rendered: a reference to an id that is not
    *  in the document (a row scrolled out of the virtualized window) is an error, not a hint. */
-  const activeIndex = indexOfSelection(flat, shown);
+  const activeIndex = indexOfSelection(drawn, shown);
   const activeDescendant =
     shown && virtualRows.some((v) => v.index === activeIndex) ? rowDomId(shown) : undefined;
 
@@ -1624,7 +1755,7 @@ export function NodeTree({
           }
         }}
       >
-        {flat.length === 0 ? (
+        {drawn.length === 0 ? (
           // Empty flat list: a blank body while filtering with no matches, else loading / empty-state.
           // Pinned only with nothing pinned says how to pin instead (ADR-146, ADR-055 R6) — a blank
           // pane after pressing a button reads as a broken button.
@@ -1645,7 +1776,7 @@ export function NodeTree({
             </p>
           )
         ) : (
-          // Virtualized body: only the on-screen window of `flat` is turned into DOM (S13).
+          // Virtualized body: only the on-screen window of `drawn` is turned into DOM (S13).
           <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
             {virtualRows.map((vi) => (
               <div
@@ -1659,7 +1790,7 @@ export function NodeTree({
                   transform: `translateY(${vi.start}px)`,
                 }}
               >
-                {renderRow(flat[vi.index])}
+                {renderRow(drawn[vi.index])}
               </div>
             ))}
           </div>

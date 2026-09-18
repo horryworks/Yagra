@@ -24,6 +24,7 @@ import {
   pendingGroupKeys,
   pressTwisty,
   revealedGroupKeys,
+  rowDepth,
   sameNameNodeIds,
   shouldForgetTouched,
   subtreeGroupIds,
@@ -1663,5 +1664,24 @@ describe('sameNameNodeIds', () => {
 
   it('does not count one node listed twice as a duplicate of itself', () => {
     expect(ids([node('a', 'as001', 'g1'), node('a', 'as001', 'g1')])).toEqual([]);
+  });
+});
+
+describe('flatRowKey / rowDepth for the insertion slot (ADR-162 増分 2)', () => {
+  it('gives the slot a constant key, because only one exists at a time', () => {
+    // ⚠️ The constant is not laziness. It is what makes the virtualizer treat the slot moving from
+    // one position to another as the SAME row rather than as one row unmounting and another
+    // mounting — and it is why `withDropSlot` may only ever add one: two would collide here, in
+    // React's key and in the virtualizer's `getItemKey`, with no error anywhere.
+    expect(flatRowKey({ kind: 'drop-slot', depth: 2 })).toBe('drop-slot');
+    expect(flatRowKey({ kind: 'drop-slot', depth: 0 })).toBe('drop-slot');
+  });
+
+  it('reports the slot’s depth, and -1 for the row that has none', () => {
+    // The Ungrouped header is a label above the top-level bucket, not a level. -1 is what stops the
+    // "after a folder" walk there instead of running past it and off the end of the list.
+    expect(rowDepth({ kind: 'drop-slot', depth: 2 })).toBe(2);
+    expect(rowDepth({ kind: 'ungrouped-head', count: 3 })).toBe(-1);
+    expect(rowDepth(undefined)).toBe(-1);
   });
 });
