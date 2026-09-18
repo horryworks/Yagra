@@ -145,14 +145,23 @@ function currentDoc(): ServerPrefsDoc {
 export async function loadServerPrefs(): Promise<void> {
   if (!getToken()) return;
   const seq = ++loadSeq;
+  // Whose document this is. `resetServerPrefs` moves `session` on at sign-out.
+  const askedIn = session;
   let settle: () => void = () => undefined;
   loading = new Promise<void>((resolve) => {
     settle = resolve;
   });
   try {
-    adopt(await api.getPreferences());
+    const doc = await api.getPreferences();
+    // 🚨 Not adopted if the account changed, or a newer load was started, while this was in flight.
+    // The save path has always asked (`queuedIn !== session`); the read path did not, so signing
+    // out mid-load applied the previous account's dock height, column widths and collapsed
+    // folders to whoever signed in next — and left them there if that account's own load failed.
+    if (askedIn !== session || seq !== loadSeq) return;
+    adopt(doc);
     supported = true;
   } catch {
+    if (askedIn !== session || seq !== loadSeq) return;
     // 404/405 ⇒ a core older than ADR-058; anything else ⇒ transient. Both mean "keep local".
     // Marking it unsupported on a *transient* failure only costs this session's syncing, whereas
     // retrying against a genuine 404 would PUT into it on every adjustment.

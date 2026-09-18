@@ -1673,10 +1673,11 @@ export function PollersPage() {
   // The open drill-down follows the same cadence as the fleet table, so a reassignment shows up
   // without the operator reopening it. A read error just leaves the last page on screen.
   useEffect(() => {
-    if (!drillId) {
-      setDrill(null);
-      return;
-    }
+    // Cleared on every change, not only on close. Going from poller A straight to poller B left
+    // A's node list on screen — under A's name, since the panel titles itself from the data —
+    // until B answered, on the one screen that exists to say which nodes a poller carries.
+    setDrill(null);
+    if (!drillId) return;
     let cancelled = false;
     const fetch = () => {
       api
