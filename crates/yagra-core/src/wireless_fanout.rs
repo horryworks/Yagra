@@ -45,7 +45,8 @@ use uuid::Uuid;
 use yagra_bus::{CheckOutcome, PollResult, Sample};
 use yagra_common::{
     ap_id, NodeId, WlanApObservation, WlanApState, METRIC_WLAN_AP_CLIENT_COUNT,
-    METRIC_WLAN_AP_CPU_PCT, METRIC_WLAN_AP_MEM_PCT, METRIC_WLAN_AP_TEMP_C, METRIC_WLAN_AP_UP,
+    METRIC_WLAN_AP_CPU_PCT, METRIC_WLAN_AP_CPU_TEMP_C, METRIC_WLAN_AP_MEM_PCT,
+    METRIC_WLAN_AP_POWER_STATE, METRIC_WLAN_AP_TEMP_C, METRIC_WLAN_AP_UP,
 };
 
 use crate::wireless::{ownership, ApBinding, Ownership, WirelessRepo, OWNER_STALE_AFTER_SECS};
@@ -158,6 +159,11 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
                 (METRIC_WLAN_AP_CPU_PCT, ap.cpu_pct.map(f64::from)),
                 (METRIC_WLAN_AP_MEM_PCT, ap.mem_pct.map(f64::from)),
                 (METRIC_WLAN_AP_TEMP_C, ap.temp_c.map(f64::from)),
+                (METRIC_WLAN_AP_CPU_TEMP_C, ap.cpu_temp_c.map(f64::from)),
+                // Only reachable from this arm, which is the point: a down AP answers `invalid(4)`
+                // and would publish a power fault where the real fact is that the AP is down —
+                // `wlan_ap_up` says that, and says it once.
+                (METRIC_WLAN_AP_POWER_STATE, ap.power_state.map(f64::from)),
             ];
             samples.extend(
                 readings
@@ -275,6 +281,8 @@ mod tests {
             cpu_pct: Some(cpu),
             mem_pct: Some(30),
             temp_c: None,
+            cpu_temp_c: None,
+            power_state: None,
         }
     }
 

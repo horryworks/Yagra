@@ -1101,6 +1101,8 @@ mod tests {
             cpu_pct: Some(if state == WlanApState::Backup { 0 } else { 3 }),
             mem_pct: None,
             temp_c: None,
+            cpu_temp_c: None,
+            power_state: None,
         }
     }
 

@@ -98,6 +98,7 @@
     "ups_charge_remaining_pct": "%",
     "ups_output_load_pct": "%",
     "wlan_ap_cpu_pct": "%",
+    "wlan_ap_cpu_temp_c": "°C",
     "wlan_ap_mem_pct": "%",
     "wlan_ap_temp_c": "°C",
     "wlan_controller_ap_normal_pct": "%"

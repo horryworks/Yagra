@@ -591,6 +591,16 @@ pub struct FakeTransport {
     /// reports that not every column answered — the walk a real agent produces when one column
     /// times out between two that answer (ADR-138 Increment 3).
     pub snmp_instances_unanswered: bool,
+    /// Column OIDs whose presence in a walk's request makes **that walk** report an incomplete
+    /// answer, while every other walk at the same device stays complete.
+    ///
+    /// 🚨 [`Self::snmp_instances_unanswered`] is device-wide, which makes it useless for a caller
+    /// that fires **more than one** walk and depends on only some of them — every walk fails
+    /// together, so a test cannot tell "the list survived the column that failed" from "nothing
+    /// failed". That is not hypothetical: it is why the first version of ADR-064 増分 E's
+    /// regression test stayed green with the optional columns moved back into the required walk
+    /// (`failure-injection-must-break-only-the-read-under-test`).
+    pub unanswered_instance_columns: Vec<String>,
     /// The per-round-trip timeout every instance walk (v2c and v3) was called with, oldest first —
     /// so a test can see that a caller which stretches one walk's patience really passed it on
     /// (ADR-138 Increment 4). [`Self::asked`] records what was asked, never how long to wait.
@@ -726,7 +736,10 @@ impl FakeTransport {
                 .take(max_rows)
                 .cloned()
                 .collect(),
-            every_column_answered: !self.snmp_instances_unanswered,
+            every_column_answered: !self.snmp_instances_unanswered
+                && !column_oids
+                    .iter()
+                    .any(|c| self.unanswered_instance_columns.contains(c)),
         }
     }
 
@@ -846,6 +859,7 @@ impl FakeTransport {
             snmp_gets_silent: false,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
+            unanswered_instance_columns: Vec::new(),
             instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
             walk_limits: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
@@ -884,6 +898,7 @@ impl FakeTransport {
             snmp_gets_silent: false,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
+            unanswered_instance_columns: Vec::new(),
             instance_walk_timeouts: Arc::new(Mutex::new(Vec::new())),
             walk_limits: Arc::new(Mutex::new(Vec::new())),
             snmp_walk_truncated: None,
@@ -929,6 +944,15 @@ impl FakeTransport {
     #[must_use]
     pub fn with_unanswered_instance_columns(mut self) -> Self {
         self.snmp_instances_unanswered = true;
+        self
+    }
+
+    /// Make only the walks that ask for `column_oids` report an incomplete answer — the device
+    /// implements everything else. See [`Self::unanswered_instance_columns`] for why the
+    /// device-wide switch above cannot stand in for this.
+    #[must_use]
+    pub fn with_unanswered_instance_column(mut self, oid: impl Into<String>) -> Self {
+        self.unanswered_instance_columns.push(oid.into());
         self
     }
 

@@ -82,7 +82,7 @@ impl CheckFamily {
 ///
 /// `__liveness__` is the one row with no family: it is the liveness rule's sentinel, not a
 /// series, so the catalog generator skips it and no Overview card can ever carry it.
-pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 24] = [
+pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 26] = [
     ("__liveness__", None),
     ("icmp_rtt_ms", Some(CheckFamily::Icmp)),
     ("icmp_loss_pct", Some(CheckFamily::Icmp)),
@@ -109,6 +109,8 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 24] = [
     ("wlan_ap_cpu_pct", Some(CheckFamily::Wlan)),
     ("wlan_ap_mem_pct", Some(CheckFamily::Wlan)),
     ("wlan_ap_temp_c", Some(CheckFamily::Wlan)),
+    ("wlan_ap_cpu_temp_c", Some(CheckFamily::Wlan)),
+    ("wlan_ap_power_state", Some(CheckFamily::Wlan)),
 ];
 
 /// The names in [`CHECK_FAMILIES`], in the same order.
@@ -117,10 +119,10 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 24] = [
 /// that makes [`METRIC_MEANINGS`] checkable — without the list, a sentence for a metric nothing
 /// collects would look identical to a sentence for one that does. Derived from the family table
 /// so the two cannot disagree about a name.
-pub const CHECK_METRICS: [&str; 24] = check_names(&CHECK_FAMILIES);
+pub const CHECK_METRICS: [&str; 26] = check_names(&CHECK_FAMILIES);
 
-const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 24]) -> [&'static str; 24] {
-    let mut out = [""; 24];
+const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 26]) -> [&'static str; 26] {
+    let mut out = [""; 26];
     let mut i = 0;
     while i < rows.len() {
         out[i] = rows[i].0;
@@ -226,7 +228,7 @@ impl MetricUnit {
 /// already pins this table to the collection catalogue in **both** directions, so a new metric now
 /// fails to compile until someone decides its unit. That guarantee is bought, not built — there is
 /// no separate check for units and there should not be one.
-pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 122] = [
+pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 124] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.", MetricUnit::None),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).", MetricUnit::Counted("connections")),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.", MetricUnit::None),
@@ -337,8 +339,10 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 122] = [
     ("ups_output_load_pct","Output load as a percentage of the UPS’s rated capacity. One row per output line.", MetricUnit::Symbol("%")),
     ("wlan_ap_client_count", "Wireless clients online through this access point, as the controller serving it reports. Only an AP imported as a node has it, and only while a controller reports the AP in service.", MetricUnit::Counted("clients")),
     ("wlan_ap_cpu_pct", "CPU in use on this access point, in percent, as the controller serving it reports. An HA standby's view (always 0) is never recorded.", MetricUnit::Symbol("%")),
+    ("wlan_ap_cpu_temp_c", "Temperature of this access point's CPU in degrees Celsius, as the controller serving it reports. A different sensor from the operating temperature, and the one most models actually have. Absent rather than 0 when the controller reports no reading.", MetricUnit::Symbol("°C")),
     ("wlan_ap_mem_pct", "Memory in use on this access point, in percent, as the controller serving it reports. An HA standby's view (always 0) is never recorded.", MetricUnit::Symbol("%")),
-    ("wlan_ap_temp_c", "Operating temperature of this access point in degrees Celsius, as the controller serving it reports. Absent for a model with no sensor rather than recorded as 0.", MetricUnit::Symbol("°C")),
+    ("wlan_ap_power_state", "How this access point is being powered, as the controller reports it: 1 normal, 2 insufficient, 3 limited. Published only while the controller is serving the access point, so a down access point has no value here — that is what the up/down metric says. Values 2 and 3 have not been observed on the hardware this was measured against.", MetricUnit::None),
+    ("wlan_ap_temp_c", "Operating temperature of this access point in degrees Celsius, as the controller serving it reports. Absent for a model with no sensor rather than recorded as 0 — most access points have none, so the reading to watch is usually the CPU temperature instead.", MetricUnit::Symbol("°C")),
     ("wlan_ap_up", "Does the controller serving this access point report it in service. 1 = in service; 0 = the controller reports it down, not joined or failing. When no controller reports the AP at all, nothing is recorded — the value stops arriving rather than dropping to 0.", MetricUnit::None),
     ("wlan_ap_walk_complete", "Did the wireless controller's access-point table read to its end on this poll. 1 = yes; 0 = a column did not answer, so no AP list was published and the stored list was left as it was. Stuck at 0 means the AP list has stopped refreshing.", MetricUnit::None),
     ("wlan_controller_ap_license", "Access points the wireless controller is licensed to manage. Compare it with the configured count to see how much licence headroom is left. An HA standby reports the same licence.", MetricUnit::Counted("access points")),

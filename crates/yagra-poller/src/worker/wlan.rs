@@ -39,10 +39,23 @@ pub(super) async fn execute_wlan(
         )
         .await
     {
-        Ok(walk) if walk.every_column_answered => (
-            CheckOutcome::Reachable,
-            Some(crate::wlan::inventory(flavor, &walk.rows, max_aps)),
-        ),
+        Ok(walk) if walk.every_column_answered => {
+            let optional = optional_rows(
+                job,
+                transport,
+                flavor,
+                timeout,
+                walker,
+                walk.rows.is_empty(),
+            )
+            .await;
+            (
+                CheckOutcome::Reachable,
+                Some(crate::wlan::inventory(
+                    flavor, &walk.rows, &optional, max_aps,
+                )),
+            )
+        }
         Ok(walk) => {
             tracing::warn!(
                 job_id = %job.job_id,
@@ -85,6 +98,54 @@ pub(super) async fn execute_wlan(
     r.observational = true;
     r.judge_samples = true;
     r
+}
+
+/// The optional columns' rows, or an empty list if that walk did not work out (ADR-064 増分 E).
+///
+/// 🚨 **Every failure here returns empty rather than propagating.** That asymmetry is the whole
+/// point of the second walk: these columns are readings, and a controller that does not implement
+/// one must cost that reading and nothing else. Folding them into the required walk would hand
+/// `every_column_answered` a veto over the AP list — measured on the PoC's AC6508, six columns of
+/// `hwWlanApEntry` are asked for and never answered, so "a Huawei model that skips one" is the
+/// normal case, not the edge.
+///
+/// Skipped entirely when the required walk found no APs: there is nothing to attach readings to,
+/// and the device's time is better left to the next job.
+async fn optional_rows(
+    job: &PollJob,
+    transport: &dyn Transport,
+    flavor: WlanFlavor,
+    timeout: Duration,
+    walker: &SnmpWalker,
+    no_aps: bool,
+) -> Vec<yagra_transport::SnmpInstanceRow> {
+    if no_aps {
+        return Vec::new();
+    }
+    let columns = crate::wlan::optional_columns(flavor);
+    match walker
+        .walk_instance_columns(
+            transport,
+            job.target,
+            &columns,
+            timeout,
+            crate::wlan::optional_walk_row_budget(flavor),
+        )
+        .await
+    {
+        // `every_column_answered` is not consulted: a column this controller does not implement is
+        // the expected answer, and the rows of the ones it does implement are still good.
+        Ok(walk) => walk.rows,
+        Err(err) => {
+            tracing::debug!(
+                job_id = %job.job_id,
+                target = %job.target,
+                error = %err,
+                "wireless controller optional AP columns unread; the AP list is unaffected"
+            );
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +211,74 @@ mod tests {
         let r = execute(&job(), &t, 1).await;
         assert_eq!(sample(&r), 1.0);
         assert_eq!(r.wlan.map(|i| i.aps.len()), Some(0));
+    }
+
+    /// 🚨 The regression this file's second walk exists for (ADR-064 増分 E).
+    ///
+    /// A controller whose CPU-temperature column fails still gets its AP list — the reading is
+    /// simply absent. Move `.83` back into [`crate::wlan::columns`] and this goes red, because the
+    /// failure is then injected into the walk the inventory depends on.
+    ///
+    /// 🚨 **The injection has to be per column, and the first version of this test was wrong about
+    /// that.** `with_unanswered_instance_columns` fails every walk at the device, so with the
+    /// columns moved back it failed both walks — which the old assertions could not distinguish
+    /// from nothing failing, and the test stayed green over exactly the defect it names.
+    #[tokio::test]
+    async fn a_failing_optional_column_costs_its_reading_and_not_the_ap_list() {
+        let t = FakeTransport {
+            snmp_instances: vec![
+                instance(6, [1, 2, 3, 4, 5, 6], SnmpValue::Int(8)),
+                instance(4, [1, 2, 3, 4, 5, 6], SnmpValue::Bytes(b"ap-1".to_vec())),
+                instance(83, [1, 2, 3, 4, 5, 6], SnmpValue::Int(66)),
+            ],
+            ..FakeTransport::reachable(1.0)
+        }
+        .with_unanswered_instance_column(format!("{ROOT}.83"));
+        let r = execute(&job(), &t, 1).await;
+        assert_eq!(sample(&r), 1.0, "the required walk was complete");
+        let inv = r
+            .wlan
+            .expect("the AP list survives a column the inventory does not depend on");
+        assert_eq!(inv.aps.len(), 1);
+        assert_eq!(
+            t.asked().len(),
+            2,
+            "two walks: the one the inventory depends on, and the one it does not"
+        );
+    }
+
+    /// The other half: a controller that simply does not implement the optional columns answers an
+    /// empty walk, and the readings are absent rather than zero.
+    #[tokio::test]
+    async fn an_unimplemented_optional_column_leaves_its_reading_absent() {
+        let t = FakeTransport {
+            snmp_instances: vec![
+                instance(6, [1, 2, 3, 4, 5, 6], SnmpValue::Int(8)),
+                instance(4, [1, 2, 3, 4, 5, 6], SnmpValue::Bytes(b"ap-1".to_vec())),
+            ],
+            ..FakeTransport::reachable(1.0)
+        };
+        let inv = execute(&job(), &t, 1).await.wlan.expect("an inventory");
+        assert_eq!(inv.aps[0].cpu_temp_c, None);
+        assert_eq!(inv.aps[0].power_state, None);
+    }
+
+    /// The two column sets are disjoint, and the optional one holds exactly the columns whose
+    /// absence must not cost the AP list. Structural, and deliberately so: the test above cannot
+    /// tell "walked separately" from "walked together and happened to answer".
+    #[test]
+    fn the_optional_columns_are_not_the_ones_the_inventory_depends_on() {
+        let required = crate::wlan::columns(WlanFlavor::Huawei);
+        let optional = crate::wlan::optional_columns(WlanFlavor::Huawei);
+        assert!(!optional.is_empty());
+        for oid in &optional {
+            assert!(
+                !required.contains(oid),
+                "{oid} is in the required walk, so a device that skips it loses its whole AP list"
+            );
+        }
+        assert!(optional.iter().any(|o| o.ends_with(".83")), "{optional:?}");
+        assert!(optional.iter().any(|o| o.ends_with(".80")), "{optional:?}");
     }
 
     /// 決定 9b, the side that matters: a walk that missed a column publishes nothing, so the stored

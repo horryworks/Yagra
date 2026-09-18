@@ -4250,7 +4250,24 @@ mod tests {
                 cpu_pct: Some(u32::MAX),
                 mem_pct: Some(u32::MAX),
                 temp_c: Some(i32::MIN),
+                cpu_temp_c: Some(i32::MIN),
+                power_state: Some(u32::MAX),
             }
+        };
+        // The same shape with the numbers a real controller answers, measured on the PoC AC6508:
+        // the worst case above widens every integer to prove the budget holds, but an inventory is
+        // sized by what devices actually send, and a two-digit temperature is not a ten-digit one.
+        let realistic_observation = |i: u32, text: &str, ip: &str| {
+            let mut obs = observation(i, text, ip);
+            obs.run_state = "normal".into();
+            obs.state = yagra_common::WlanApState::Associated;
+            obs.clients = Some(25);
+            obs.cpu_pct = Some(5);
+            obs.mem_pct = Some(66);
+            obs.temp_c = None;
+            obs.cpu_temp_c = Some(66);
+            obs.power_state = Some(1);
+            obs
         };
         let empty = || -> PollResult {
             serde_json::from_str(
@@ -4283,7 +4300,7 @@ mod tests {
         // Realistic lengths (the longest string measured on the PoC was 22 characters): the whole
         // hard cap is kept, nothing is cut, and it is well inside the budget.
         let realistic = (0..hard)
-            .map(|i| observation(i, "AirEngine5776-26-L37004", "10.125.171.227"))
+            .map(|i| realistic_observation(i, "AirEngine5776-26-L37004", "10.125.171.227"))
             .collect();
         let mut result = empty();
         result.wlan = Some(yagra_common::WlanInventory::bounded(
