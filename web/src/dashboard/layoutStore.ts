@@ -70,6 +70,15 @@ export interface LayoutStore {
   /** The active board's widgets (derived; kept in sync so consumers stay shape-stable). */
   widgets: WidgetInstance[];
   status: LayoutStatus;
+  /** Whether this session has ever held the document the server holds. **Nothing is saved until
+   *  it has**, and the pages draw no edit control until it has.
+   *
+   *  🚨 A load that failed used to adopt the five-widget default as if it were the operator's own
+   *  board, and the first edit after that PUT the default over every board they had built. A failed
+   *  read is not an empty board, and an empty board must never be written back. Separate from
+   *  `status` on purpose: a later refresh that fails leaves `loaded` true, because what is on
+   *  screen is still the real document. */
+  loaded: boolean;
   /** A human-readable message when the last persist failed, else null. */
   saveError: string | null;
   /** Customize mode: shows per-widget drag/remove/resize controls + the catalog picker. */
@@ -130,6 +139,11 @@ function cloneBoards(boards: Board[]): Board[] {
 
 export function createLayoutStore(config: LayoutStoreConfig) {
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  // What the armed timer will write, so `load()` can send it NOW instead of racing it.
+  let pendingSave: Board[] | null = null;
+  // Bumped by every edit. A load that was already in flight when one happened is answering a
+  // question that is now out of date, and adopting it would silently undo the edit on screen.
+  let editSeq = 0;
   // Snapshot of `boards` taken when edit mode is entered; null outside an edit session. Cancel
   // restores it. Kept in the closure (like saveTimer) rather than store state — it's edit-session
   // scratch, not something the UI subscribes to.
@@ -138,31 +152,50 @@ export function createLayoutStore(config: LayoutStoreConfig) {
   return create<LayoutStore>((set, get) => {
     /** Persist the current boards after a short quiet period (coalesces rapid edits into one save).
      *  Skips when unauthenticated — there's no row to write. */
+    /** Write `boards` now. Never rejects — a failure becomes `saveError`. */
+    const persist = (boards: Board[]): Promise<void> =>
+      config
+        .save({ version: DASHBOARD_VERSION, boards })
+        .then(() => set({ saveError: null }))
+        .catch((e: unknown) => {
+          // Don't swallow the failure: otherwise edits look saved but vanish on the next load.
+          // 401 ⇒ session expired; 403 ⇒ not permitted (shared board, non-admin); else transient.
+          // Resolve via the global i18n instance (like lib/format) so the message follows the
+          // active language without threading a hook through this store.
+          const msg =
+            e instanceof ApiError && e.status === 401
+              ? i18n.t('dashboard:save.expired')
+              : e instanceof ApiError && e.status === 403
+                ? i18n.t('dashboard:save.forbidden')
+                : i18n.t('dashboard:save.failed');
+          set({ saveError: msg });
+        });
+
+    /** Send the armed save immediately, if there is one. */
+    const flushSave = (): Promise<void> => {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = undefined;
+      const boards = pendingSave;
+      pendingSave = null;
+      return boards ? persist(boards) : Promise.resolve();
+    };
+
     const scheduleSave = (boards: Board[]) => {
       // 🚨 Session only, deliberately — `maySave` takes no permission. Gating this on
       // `manage_config` would discard an admin's edit during the window before the role matrix
       // arrives, because `useCan` is fail-closed while it resolves. Which boards a signed-in user
       // may actually write is enforced by the API guard and by not drawing the Customize button.
       if (!maySave(currentViewer())) return;
+      // See `loaded`. The pages do not draw an edit control before a load has succeeded, so
+      // this is the backstop — and it says so, because an edit that is quietly not saved is the
+      // other half of the same defect.
+      if (!get().loaded) {
+        set({ saveError: i18n.t('dashboard:save.notLoaded') });
+        return;
+      }
       if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        config
-          .save({ version: DASHBOARD_VERSION, boards })
-          .then(() => set({ saveError: null }))
-          .catch((e: unknown) => {
-            // Don't swallow the failure: otherwise edits look saved but vanish on the next load.
-            // 401 ⇒ session expired; 403 ⇒ not permitted (shared board, non-admin); else transient.
-            // Resolve via the global i18n instance (like lib/format) so the message follows the
-            // active language without threading a hook through this store.
-            const msg =
-              e instanceof ApiError && e.status === 401
-                ? i18n.t('dashboard:save.expired')
-                : e instanceof ApiError && e.status === 403
-                  ? i18n.t('dashboard:save.forbidden')
-                  : i18n.t('dashboard:save.failed');
-            set({ saveError: msg });
-          });
-      }, SAVE_DEBOUNCE_MS);
+      pendingSave = boards;
+      saveTimer = setTimeout(() => void flushSave(), SAVE_DEBOUNCE_MS);
     };
 
     /** The active board's widgets (empty if the id is stale). */
@@ -183,6 +216,7 @@ export function createLayoutStore(config: LayoutStoreConfig) {
 
     /** Commit a new boards array: update state (+ derived widgets) optimistically and save. */
     const commit = (boards: Board[], activeBoardId = get().activeBoardId) => {
+      editSeq += 1;
       showBoard({ boards, activeBoardId });
       scheduleSave(boards);
     };
@@ -204,6 +238,7 @@ export function createLayoutStore(config: LayoutStoreConfig) {
       const boards = doc.boards.length ? doc.boards : config.defaultDoc().boards;
       const remembered = useLastBoardStore.getState().byBoard[config.key];
       const activeBoardId = boards.some((b) => b.id === remembered) ? remembered : boards[0].id;
+      set({ loaded: true });
       showBoard({ boards, activeBoardId, status });
     };
 
@@ -212,6 +247,7 @@ export function createLayoutStore(config: LayoutStoreConfig) {
       activeBoardId: '',
       widgets: [],
       status: 'loading',
+      loaded: false,
       saveError: null,
       editing: false,
 
@@ -227,14 +263,28 @@ export function createLayoutStore(config: LayoutStoreConfig) {
           adopt(config.defaultDoc(), 'ready');
           return;
         }
+        // ⚠️ `load()` runs on every mount, and an edit waits `SAVE_DEBOUNCE_MS` before it is sent.
+        // Leaving the dashboard and coming back inside that window read the document as it was
+        // BEFORE the edit and adopted it; the next edit was then built on that and overwrote the
+        // first. Send what is pending, then ask.
+        await flushSave();
+        const asked = editSeq;
         try {
           const raw = await config.load();
+          // An edit made while this was in flight is newer than the answer, and is being saved.
+          if (asked !== editSeq) {
+            set({ status: 'ready' });
+            return;
+          }
           // null ⇒ never saved → default. Otherwise sanitize the saved doc (migrates v1, drops
           // retired widget types, clamps spans). A cleared board stays cleared.
           const doc = raw == null ? config.defaultDoc() : sanitizeLayout(raw, registryView);
           adopt(doc, 'ready');
         } catch {
-          adopt(config.defaultDoc(), 'error');
+          // 🚨 **Not the default.** Whatever was on screen stays (nothing, on a first load), and
+          // `loaded` stays as it was — so a first load that failed leaves a store that refuses
+          // to write, and the page offers a retry instead of an edit button.
+          set({ status: 'error' });
         }
       },
 

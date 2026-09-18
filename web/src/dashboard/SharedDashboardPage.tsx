@@ -46,6 +46,7 @@ export function SharedDashboardPage() {
 
   const widgets = useSharedLayoutStore((s) => s.widgets);
   const status = useSharedLayoutStore((s) => s.status);
+  const loaded = useSharedLayoutStore((s) => s.loaded);
   const saveError = useSharedLayoutStore((s) => s.saveError);
   const dismissSaveError = useSharedLayoutStore((s) => s.dismissSaveError);
   const editing = useSharedLayoutStore((s) => s.editing);
@@ -102,6 +103,8 @@ export function SharedDashboardPage() {
     else cancelEditing();
   };
 
+  // 🚨 No edit control before a load has succeeded. A failed load used to show the default board
+  // under a live Customize button, and the first edit wrote that default over the real one.
   const actions = editing ? (
     <>
       <Button onClick={() => setCatalogOpen(true)}>{t('actions.addWidget')}</Button>
@@ -115,7 +118,7 @@ export function SharedDashboardPage() {
         {t('actions.done')}
       </Button>
     </>
-  ) : canConfig ? (
+  ) : canConfig && loaded ? (
     // Not `disabled` with an explanatory tooltip, which is what this was: a control nobody may use
     // is not drawn (ADR-056 Inc.2). A tooltip is hover-only, so on a phone the button read as
     // broken rather than as forbidden.
@@ -147,7 +150,23 @@ export function SharedDashboardPage() {
           </div>
         )}
 
-        {status === 'loading' && widgets.length === 0 ? (
+        {status === 'error' && loaded && (
+          <div className="mydash-save-error" role="alert">
+            <span>{t('shared.refreshFailed')}</span>
+            <Button variant="ghost" onClick={() => void load()}>
+              {t('common:actions.retry')}
+            </Button>
+          </div>
+        )}
+
+        {status === 'error' && !loaded ? (
+          <div className="mydash-empty">
+            <p className="muted">{t('shared.loadFailed')}</p>
+            <Button variant="primary" onClick={() => void load()}>
+              {t('common:actions.retry')}
+            </Button>
+          </div>
+        ) : status === 'loading' && widgets.length === 0 ? (
           loadSlow ? (
             <div className="mydash-empty">
               <p className="muted">{t('shared.loadSlow')}</p>

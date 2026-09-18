@@ -11,6 +11,8 @@
   "my": {
     "pageNote": "Your own boards. Nobody else sees them.",
     "loadSlow": "Loading your dashboard is taking longer than expected.",
+    "loadFailed": "Your dashboard could not be loaded. Nothing has been changed — your boards are still saved.",
+    "refreshFailed": "Your dashboard could not be refreshed. This is what was loaded earlier.",
     "loading": "Loading your dashboard…",
     "empty": "This board is empty.",
     "addFirst": "Add your first widget",
@@ -23,6 +25,8 @@
     "pageNote": "The board every user sees. Only an admin can change it.",
     "editingWarning": "Editing the shared dashboard — changes are visible to all users.",
     "loadSlow": "Loading the shared dashboard is taking longer than expected.",
+    "loadFailed": "The shared dashboard could not be loaded. Nothing has been changed — it is still saved.",
+    "refreshFailed": "The shared dashboard could not be refreshed. This is what was loaded earlier.",
     "loading": "Loading the shared dashboard…",
     "empty": "The shared dashboard has no widgets yet.",
     "confirmEditTitle": "Customize the shared dashboard?",
@@ -36,6 +40,7 @@
   "save": {
     "expired": "Your session expired — sign in again to save dashboard changes.",
     "forbidden": "You don’t have permission to change the shared dashboard.",
+    "notLoaded": "Nothing was saved: this dashboard has not been loaded yet, and saving now would overwrite it. Reload the page and try again.",
     "failed": "Couldn’t save your dashboard changes. They’ll be retried on your next edit."
   },
   "boardTabs": {

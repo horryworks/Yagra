@@ -41,6 +41,7 @@ export function MyDashboardPage() {
 
   const widgets = useLayoutStore((s) => s.widgets);
   const status = useLayoutStore((s) => s.status);
+  const loaded = useLayoutStore((s) => s.loaded);
   const saveError = useLayoutStore((s) => s.saveError);
   const dismissSaveError = useLayoutStore((s) => s.dismissSaveError);
   const editing = useLayoutStore((s) => s.editing);
@@ -115,6 +116,8 @@ export function MyDashboardPage() {
     return () => document.removeEventListener('keydown', onKey);
   }, [editing, isDirty, cancelEditing]);
 
+  // 🚨 No edit control before a load has succeeded. A failed load used to show the default board
+  // under a live Customize button, and the first edit wrote that default over the real one.
   const actions = editing ? (
     <>
       <Button onClick={() => setCatalogOpen(true)}>{t('actions.addWidget')}</Button>
@@ -128,9 +131,9 @@ export function MyDashboardPage() {
         {t('actions.done')}
       </Button>
     </>
-  ) : (
+  ) : loaded ? (
     <Button onClick={() => setEditing(true)}>{t('actions.customize')}</Button>
-  );
+  ) : null;
 
   return (
     <LayoutStoreProvider store={useLayoutStore}>
@@ -151,9 +154,25 @@ export function MyDashboardPage() {
           </div>
         )}
 
-        {status !== 'loading' && <BoardTabs editing={editing} />}
+        {status === 'error' && loaded && (
+          <div className="mydash-save-error" role="alert">
+            <span>{t('my.refreshFailed')}</span>
+            <Button variant="ghost" onClick={() => void load()}>
+              {t('common:actions.retry')}
+            </Button>
+          </div>
+        )}
 
-        {status === 'loading' && widgets.length === 0 ? (
+        {status !== 'loading' && loaded && <BoardTabs editing={editing} />}
+
+        {status === 'error' && !loaded ? (
+          <div className="mydash-empty">
+            <p className="muted">{t('my.loadFailed')}</p>
+            <Button variant="primary" onClick={() => void load()}>
+              {t('common:actions.retry')}
+            </Button>
+          </div>
+        ) : status === 'loading' && widgets.length === 0 ? (
           loadSlow ? (
             <div className="mydash-empty">
               <p className="muted">{t('my.loadSlow')}</p>
