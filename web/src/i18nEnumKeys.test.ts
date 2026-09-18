@@ -45,6 +45,7 @@ import {
   BUNDLE_NOTE_CODES,
   NEIGHBOR_CAPABILITIES,
   NEIGHBOR_PROTOS,
+  WLAN_AP_STATES,
   LINK_SOURCES,
   TOPOLOGY_MODES,
   TLS_CERT_SOURCES,
@@ -70,6 +71,7 @@ import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
 import { PREFIX_PROBLEMS } from './components/GroupModal/prefixFields';
+import { AP_IMPORT_STATES } from './components/NodeDetail/tabFilters';
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { LABEL_PROBLEMS } from './components/ui/labelRules';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
@@ -927,6 +929,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'none',
     ]);
     expectKeys('neighbor diff kind', locales, 'neighbors.diff.', ['added', 'removed', 'changed']);
+  });
+
+  it('every access-point state and monitoring state has strings (nodes:ap.*)', () => {
+    // Both are built at runtime from a value the controller supplied, and both are the whole
+    // content of their column — a raw `not_associated` in the State column is the one cell an
+    // operator reads to decide whether an AP is a problem.
+    const locales = { en: enNodes, ja: jaNodes };
+    // `unknown` is not one of the three the API can answer: it is what the screen shows when the
+    // controller sent a token this build does not know, and it needs a string exactly as much.
+    expectKeys('wireless ap state', locales, 'ap.state.', [...WLAN_AP_STATES, 'unknown']);
+    expectKeys('wireless ap import state', locales, 'ap.import.', AP_IMPORT_STATES);
   });
 
   it('every link source has strings (topology:map.source.*)', () => {

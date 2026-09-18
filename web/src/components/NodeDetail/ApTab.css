@@ -1,0 +1,154 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* AP tab (ADR-064 増分 B3). A settings card, then the controller's AP list. */
+
+.nd-ap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.nd-ap-settings {
+  margin: var(--space-4) var(--space-4) var(--space-2);
+}
+
+.nd-ap-stats {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--font-sm);
+  margin: 0 0 var(--space-3);
+}
+
+/* Three controls side by side, wrapping to one column when the pane is narrow — the split view
+   makes this pane arbitrarily thin, so a fixed row would push the folder picker off the edge. */
+.nd-ap-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.nd-ap-form .form-label {
+  min-width: 180px;
+  flex: 1 1 180px;
+}
+
+/* The switch reads as a sentence rather than a labelled field, so it opts out of the column. */
+.nd-ap-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.nd-ap-save {
+  margin-top: var(--space-3);
+}
+
+.nd-ap-ok {
+  color: var(--status-ok);
+  font-size: var(--font-sm);
+}
+
+/* Explicit height for the same reason the Neighbors table has one: this pane is not a
+   height-constrained flex column, so a bare `flex: 1` collapses to ~150px. */
+.nd-ap-table {
+  height: 46vh;
+  min-height: 240px;
+  padding: 0 var(--space-4);
+}
+
+.nd-ap-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.nd-ap-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nd-ap-name .mono {
+  font-size: var(--font-xs);
+}
+
+.nd-ap-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.nd-ap-state .mono {
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status colours, not invented ones: an AP the controller is serving is up, a backup radio is the
+   maintenance colour (present, deliberately not carrying traffic), one that has fallen out of
+   association is down, and a state we could not read is unknown. */
+.nd-ap-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--status-unknown);
+}
+
+.nd-ap-dot-associated {
+  background: var(--status-ok);
+}
+
+.nd-ap-dot-backup {
+  background: var(--status-maintenance);
+}
+
+.nd-ap-dot-not_associated {
+  background: var(--status-critical);
+}
+
+.nd-ap-reported {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.nd-ap-reported a {
+  color: var(--accent-color);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nd-ap-reported a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* The `+N` is the HA tell — it must not be mistaken for part of the name. */
+.nd-ap-reported .nd-muted {
+  font-size: var(--font-xs);
+  flex: 0 0 auto;
+}
+
+html[data-viewport='mobile'] .nd-ap-settings {
+  margin: var(--space-3) var(--space-3) var(--space-2);
+}
+
+html[data-viewport='mobile'] .nd-ap-table {
+  height: auto;
+  min-height: 320px;
+  flex: 1 1 auto;
+  padding: 0 var(--space-3);
+}

@@ -32,6 +32,7 @@ export const TABLE_IDS = [
   'node.flows',
   'node.interfaces',
   'node.neighbors',
+  'node.wirelessAps',
   // Alerts
   'alerts.eventRules',
   'alerts.history',

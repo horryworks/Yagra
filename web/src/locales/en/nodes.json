@@ -226,11 +226,67 @@
   },
   "tabs": {
     "overview": "Overview",
+    "ap": "APs",
     "interfaces": "Interfaces",
     "neighbors": "Neighbors",
     "collection": "Collection",
     "events": "Events",
     "flow": "Flow"
+  },
+  "ap": {
+    "colAp": "Access point",
+    "colState": "State",
+    "colAddress": "Address",
+    "colModel": "Model",
+    "colClients": "Clients",
+    "colReportedBy": "Reported by",
+    "colLastSeen": "Last seen",
+    "colImported": "Monitoring",
+    "openNode": "Open node",
+    "importAction": "Monitor",
+    "imported": "{{ap}} is now monitored as a node.",
+    "summary_one": "{{count}} access point",
+    "summary_other": "{{count}} access points",
+    "searchHint": "Searches the name, MAC (with or without colons), address, model, serial and software version.",
+    "overCap_one": "The controller reported {{count}} access point beyond the limit below. It is not listed and will not be monitored.",
+    "overCap_other": "The controller reported {{count}} access points beyond the limit below. They are not listed and will not be monitored.",
+    "morePages": "The controller reported more access points than one response can carry. This list is incomplete.",
+    "signIn": "Sign in to change which access points are monitored.",
+    "state": {
+      "associated": "Associated",
+      "backup": "Backup",
+      "not_associated": "Not associated",
+      "unknown": "Unknown"
+    },
+    "import": {
+      "imported": "Monitored",
+      "not_imported": "Not monitored"
+    },
+    "stats": {
+      "reported_one": "{{count}} access point reported",
+      "reported_other": "{{count}} access points reported",
+      "lastInventory": "inventory {{when}}",
+      "neverInventoried": "no inventory received yet"
+    },
+    "settings": {
+      "title": "Access point monitoring",
+      "importAps": "Monitor access points automatically",
+      "maxAps": "Limit",
+      "group": "Folder",
+      "groupDefault": "— Same folder as this controller —",
+      "hint": "Only access points that have associated at least once are monitored automatically. A new node is created for each, in the folder chosen here.",
+      "save": "Save"
+    },
+    "empty": {
+      "none": "This controller reports no access points.",
+      "noInventory": "No inventory received from this controller yet."
+    },
+    "err": {
+      "load": "Could not load the access points.",
+      "import": "Could not start monitoring that access point.",
+      "save": "Could not save the settings.",
+      "maxAps": "Enter a limit between {{min}} and {{max}}."
+    }
   },
   "flow": {
     "trend": "Traffic by protocol",

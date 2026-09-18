@@ -819,6 +819,12 @@ export type WirelessApRow = components['schemas']['WirelessApRow'];
 export type WirelessControllerSummary = components['schemas']['WirelessControllerSummary'];
 export type NodeWireless = components['schemas']['NodeWireless'];
 export type WlanApState = components['schemas']['WlanApState'];
+/** The three states a controller reports for an AP. The API answers `null` for a token this build
+ *  does not know, which the screen renders as `unknown` — deliberately not a fourth member here,
+ *  because it is not something a controller can say. */
+export const WLAN_AP_STATES = ['associated', 'backup', 'not_associated'] as const;
+/** One controller's sighting of an AP — the array is how an HA pair shows as two rows (ADR-064). */
+export type WirelessApSighting = components['schemas']['WirelessApSighting'];
 
 /** How many nodes an import created — shared by the scan import and the endpoint promotion. */
 export type ImportResult = components['schemas']['ImportResult'];
