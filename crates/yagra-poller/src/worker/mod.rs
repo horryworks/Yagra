@@ -255,6 +255,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 flavor: check.flavor,
                 max_aps: check.max_aps,
                 walk_ssids: check.walk_ssids,
+                walk_radios: check.walk_radios,
                 timeout: Duration::from_millis(u64::from(check.timeout_ms)),
             };
             execute_wlan(job, transport, at_unix_ms, plan, &walker).await
@@ -265,6 +266,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 flavor: check.flavor,
                 max_aps: check.max_aps,
                 walk_ssids: check.walk_ssids,
+                walk_radios: check.walk_radios,
                 timeout: Duration::from_millis(u64::from(check.timeout_ms)),
             };
             execute_wlan(job, transport, at_unix_ms, plan, &walker).await

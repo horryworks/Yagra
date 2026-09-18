@@ -868,6 +868,55 @@
     "source": "collected"
   },
   {
+    "family": "Huawei WLAN radios (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_channel",
+    "per_interface": true,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN radios (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_channel_util_pct",
+    "per_interface": true,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN radios (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_client_count",
+    "per_interface": true,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN radios (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_client_signal_dbm",
+    "per_interface": true,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN radios (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_interference_pct",
+    "per_interface": true,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN radios (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_noise_dbm",
+    "per_interface": true,
+    "source": "collected"
+  },
+  {
+    "family": "Huawei WLAN radios (AC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_tx_power_dbm",
+    "per_interface": true,
+    "source": "collected"
+  },
+  {
     "family": "Huawei WLAN SSIDs (AC)",
     "metric_kind": "gauge",
     "metric_name": "wlan_ssid_ap_count",

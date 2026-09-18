@@ -241,12 +241,10 @@ fn dimension_of_item(item: &CollectionItem) -> MetricDimension {
     // SSID walk, which publishes exactly the rows `entity` means (ADR-064 増分 D). Answering `none`
     // for the second would leave the SSID rows unreadable from both the screen and `/mcp`, which
     // share this function.
-    if item.kind == yagra_common::CollectionKind::Wlan {
-        return if yagra_common::WLAN_NODE_LEVEL_METRICS.contains(&item.metric_name.as_str()) {
-            MetricDimension::None
-        } else {
-            MetricDimension::Entity
-        };
+    if item.kind == yagra_common::CollectionKind::Wlan
+        && yagra_common::WLAN_NODE_LEVEL_METRICS.contains(&item.metric_name.as_str())
+    {
+        return MetricDimension::None;
     }
     if yagra_common::item_publishes_per_interface(item) {
         MetricDimension::Interface
@@ -1639,6 +1637,20 @@ mod tests {
                 "if_out_errors",
                 "if_rx_power_dbm",
                 "if_tx_power_dbm",
+                // A wireless radio is a port in the only sense this list means: it is one
+                // addressable thing on a node that a rule may name on its own (ADR-064 R9).
+                // Its traffic and status ride the `if_*` names above, so only the seven
+                // radio-specific readings appear here. They are the first entries that are not
+                // IF-MIB columns, which is why the test name no longer reads as the whole rule —
+                // the rule is "one series per addressable port", and the IF-MIB was simply the
+                // only source of those until now.
+                "wlan_radio_channel",
+                "wlan_radio_channel_util_pct",
+                "wlan_radio_client_count",
+                "wlan_radio_client_signal_dbm",
+                "wlan_radio_interference_pct",
+                "wlan_radio_noise_dbm",
+                "wlan_radio_tx_power_dbm",
             ],
             "a metric joined or left this list — say which side it belongs on and why"
         );

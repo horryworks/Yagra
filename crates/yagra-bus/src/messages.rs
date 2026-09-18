@@ -1891,6 +1891,10 @@ pub struct SnmpWlanApCheck {
     /// only the AP table, and an N-1 core never sets it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub walk_ssids: bool,
+    /// Also walk the controller's radio table (ADR-064 増分 C). Same shape as
+    /// [`SnmpWlanApCheck::walk_ssids`]: set from the collection set, defaulted for N-1.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub walk_radios: bool,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -1913,6 +1917,10 @@ pub struct SnmpV3WlanApCheck {
     /// See [`SnmpWlanApCheck::walk_ssids`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub walk_ssids: bool,
+    /// Also walk the controller's radio table (ADR-064 増分 C). Same shape as
+    /// [`SnmpWlanApCheck::walk_ssids`]: set from the collection set, defaulted for N-1.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub walk_radios: bool,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -4263,6 +4271,24 @@ mod tests {
                 temp_c: Some(i32::MIN),
                 cpu_temp_c: Some(i32::MIN),
                 power_state: Some(u32::MAX),
+                // Three radios, every field at its widest: the byte budget has to hold against an
+                // AP that reports the most a radio can say, not the least.
+                radios: (0..3)
+                    .map(|i| yagra_common::WlanRadioObservation {
+                        slot: u32::MAX,
+                        band: yagra_common::WlanBand::ALL[i],
+                        up: Some(true),
+                        clients: Some(u32::MAX),
+                        channel: Some(u32::MAX),
+                        channel_util_pct: Some(u32::MAX),
+                        interference_pct: Some(u32::MAX),
+                        noise_dbm: Some(i32::MIN),
+                        client_signal_dbm: Some(i32::MIN),
+                        tx_power_dbm: Some(i32::MIN),
+                        in_octets: Some(u64::MAX),
+                        out_octets: Some(u64::MAX),
+                    })
+                    .collect(),
             }
         };
         // The same shape with the numbers a real controller answers, measured on the PoC AC6508:
@@ -4278,6 +4304,30 @@ mod tests {
             obs.temp_c = None;
             obs.cpu_temp_c = Some(66);
             obs.power_state = Some(1);
+            // Two radios with the numbers the measured controller answers. The worst case above
+            // gives every AP three at their widest, which is the bound; this is the load.
+            obs.radios = [
+                (yagra_common::WlanBand::Band2G4, 1, 1, 4),
+                (yagra_common::WlanBand::Band5G, 2, 44, 14),
+            ]
+            .into_iter()
+            .map(
+                |(band, slot, channel, util)| yagra_common::WlanRadioObservation {
+                    slot,
+                    band,
+                    up: Some(true),
+                    clients: Some(13),
+                    channel: Some(channel),
+                    channel_util_pct: Some(util),
+                    interference_pct: Some(3),
+                    noise_dbm: Some(-96),
+                    client_signal_dbm: Some(-77),
+                    tx_power_dbm: Some(23),
+                    in_octets: Some(2_555_209_504),
+                    out_octets: Some(5_819_880_561),
+                },
+            )
+            .collect();
             obs
         };
         let empty = || -> PollResult {
@@ -4308,23 +4358,50 @@ mod tests {
         );
         assert!(result.wlan.as_ref().unwrap().truncated_at.is_some());
 
-        // Realistic lengths (the longest string measured on the PoC was 22 characters): the whole
-        // hard cap is kept, nothing is cut, and it is well inside the budget.
-        let realistic = (0..hard)
-            .map(|i| realistic_observation(i, "AirEngine5776-26-S90001", "10.225.171.227"))
-            .collect();
+        // Realistic lengths (the longest string measured on the PoC was 22 characters), with the
+        // two radios a measured AP reports: the **default** cap is kept whole and well inside the
+        // budget.
+        //
+        // 🚨 The hard cap is not, and that is the fact to know rather than a number to raise
+        // (ADR-064 増分 C). Radios roughly double an observation, so a controller asked for both
+        // 2,048 APs and their radios does not fit one NATS message however the budget is set —
+        // 2,048 of these is about 1.4 MB against a 1 MiB `max_payload`. The list is cut and says
+        // where, which is the designed answer; what must never happen is a publish that is
+        // silently dropped for being too large.
+        let realistic = |n: u32| -> Vec<yagra_common::WlanApObservation> {
+            (0..n)
+                .map(|i| realistic_observation(i, "AirEngine5776-26-S90001", "10.225.171.227"))
+                .collect()
+        };
+        let default_cap = yagra_common::MAX_APS_PER_CONTROLLER_DEFAULT;
         let mut result = empty();
         result.wlan = Some(yagra_common::WlanInventory::bounded(
             yagra_common::WlanFlavor::Huawei,
-            realistic,
-            hard,
+            realistic(default_cap),
+            default_cap,
         ));
         let inv = result.wlan.as_ref().unwrap();
-        assert_eq!(inv.aps.len(), hard as usize);
-        assert_eq!(inv.truncated_at, None);
+        assert_eq!(inv.aps.len(), default_cap as usize);
+        assert_eq!(inv.truncated_at, None, "the default cap is carried whole");
         let bytes = serde_json::to_vec(&result).unwrap().len();
         assert!(
             bytes < 900_000,
+            "a realistic controller result at the default cap is {bytes} bytes"
+        );
+
+        // At the hard cap it truncates rather than overflowing, and says so.
+        let mut result = empty();
+        result.wlan = Some(yagra_common::WlanInventory::bounded(
+            yagra_common::WlanFlavor::Huawei,
+            realistic(hard),
+            hard,
+        ));
+        let inv = result.wlan.as_ref().unwrap();
+        assert_eq!(inv.truncated_at, Some(hard), "and says how many there were");
+        assert!(inv.aps.len() >= default_cap as usize, "{}", inv.aps.len());
+        let bytes = serde_json::to_vec(&result).unwrap().len();
+        assert!(
+            bytes < 1_000_000,
             "a realistic controller result at the hard cap is {bytes} bytes"
         );
     }

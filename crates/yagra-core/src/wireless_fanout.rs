@@ -42,11 +42,16 @@ use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use uuid::Uuid;
+use yagra_bus::DiscoveredInterface;
 use yagra_bus::{CheckOutcome, PollResult, Sample};
 use yagra_common::{
-    ap_id, NodeId, WlanApObservation, WlanApState, METRIC_WLAN_AP_CLIENT_COUNT,
-    METRIC_WLAN_AP_CPU_PCT, METRIC_WLAN_AP_CPU_TEMP_C, METRIC_WLAN_AP_MEM_PCT,
-    METRIC_WLAN_AP_POWER_STATE, METRIC_WLAN_AP_TEMP_C, METRIC_WLAN_AP_UP,
+    ap_id, IfIndex, MetricKind, NodeId, WlanApObservation, WlanApState, WlanRadioObservation,
+    METRIC_IF_HC_IN_OCTETS, METRIC_IF_HC_OUT_OCTETS, METRIC_IF_OPER_STATUS,
+    METRIC_WLAN_AP_CLIENT_COUNT, METRIC_WLAN_AP_CPU_PCT, METRIC_WLAN_AP_CPU_TEMP_C,
+    METRIC_WLAN_AP_MEM_PCT, METRIC_WLAN_AP_POWER_STATE, METRIC_WLAN_AP_TEMP_C, METRIC_WLAN_AP_UP,
+    METRIC_WLAN_RADIO_CHANNEL, METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT, METRIC_WLAN_RADIO_CLIENT_COUNT,
+    METRIC_WLAN_RADIO_CLIENT_SIGNAL_DBM, METRIC_WLAN_RADIO_INTERFERENCE_PCT,
+    METRIC_WLAN_RADIO_NOISE_DBM, METRIC_WLAN_RADIO_TX_POWER_DBM,
 };
 
 use crate::wireless::{ownership, ApBinding, Ownership, WirelessRepo, OWNER_STALE_AFTER_SECS};
@@ -170,6 +175,9 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
                     .into_iter()
                     .filter_map(|(metric, value)| value.map(|v| Sample::gauge(metric, v))),
             );
+            for radio in &ap.radios {
+                samples.extend(radio_samples(radio));
+            }
             (CheckOutcome::Reachable, samples)
         }
         WlanApState::NotAssociated => (
@@ -184,7 +192,11 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
         at_unix_ms: controller.at_unix_ms,
         outcome,
         samples,
-        interfaces: Vec::new(),
+        // The AP node has no ifTable walk of its own, so its radios are the only rows it ever
+        // gets. They exist for three independent reasons: the Interfaces tab and
+        // `get_interface_series` read this table, `dimension_of` falls back to it for a node with
+        // no collection items of its own, and the threshold editor picks a port out of it.
+        interfaces: radio_interfaces(ap),
         sys_descr: None,
         os_version: None,
         os_version_without_patch: None,
@@ -205,6 +217,101 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
         trace_context: controller.trace_context.clone(),
     })
 }
+
+/// One radio's samples, keyed by its slot so the AP node reads it as a port (ADR-064 R6/R9).
+///
+/// The traffic counters and the operational status go out under the **IF-MIB** names, which is
+/// what makes a radio draw on every screen that already draws a port — throughput, the up/down
+/// dot, the interface-tier threshold rules — without any of them learning what a radio is.
+///
+/// ⚠️ A reading the controller did not have is absent, never zero: `radio.noise_dbm` is `None`
+/// where the dialect answered its invalid marker, and a 0 dBm noise floor would read as a radio
+/// being drowned (ADR-064 改訂 R10).
+fn radio_samples(radio: &WlanRadioObservation) -> Vec<Sample> {
+    let slot = IfIndex(radio.slot);
+    let gauge = |metric: &'static str, value: Option<f64>| {
+        value.map(move |v| Sample::interface(metric, slot, v, MetricKind::Gauge))
+    };
+    let mut out: Vec<Sample> = [
+        gauge(METRIC_WLAN_RADIO_CLIENT_COUNT, radio.clients.map(f64::from)),
+        gauge(
+            METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT,
+            radio.channel_util_pct.map(f64::from),
+        ),
+        gauge(
+            METRIC_WLAN_RADIO_INTERFERENCE_PCT,
+            radio.interference_pct.map(f64::from),
+        ),
+        gauge(METRIC_WLAN_RADIO_NOISE_DBM, radio.noise_dbm.map(f64::from)),
+        gauge(
+            METRIC_WLAN_RADIO_CLIENT_SIGNAL_DBM,
+            radio.client_signal_dbm.map(f64::from),
+        ),
+        gauge(
+            METRIC_WLAN_RADIO_TX_POWER_DBM,
+            radio.tx_power_dbm.map(f64::from),
+        ),
+        gauge(METRIC_WLAN_RADIO_CHANNEL, radio.channel.map(f64::from)),
+        radio.up.map(|up| {
+            Sample::interface(
+                METRIC_IF_OPER_STATUS,
+                slot,
+                if up { 1.0 } else { 2.0 },
+                MetricKind::Gauge,
+            )
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    #[allow(clippy::cast_precision_loss)]
+    for (metric, value) in [
+        (METRIC_IF_HC_IN_OCTETS, radio.in_octets),
+        (METRIC_IF_HC_OUT_OCTETS, radio.out_octets),
+    ] {
+        if let Some(v) = value {
+            out.push(Sample::interface(
+                metric,
+                slot,
+                v as f64,
+                MetricKind::Counter,
+            ));
+        }
+    }
+    out
+}
+
+/// The `interfaces` rows an AP's radios stand for.
+///
+/// 🚨 **`if_speed` stays `None`, and the channel width must never be put there.** A radio reports
+/// a 20 MHz channel, which is not a line rate: stored as a speed it would make `if_in_util_pct`
+/// out of twenty bits per second, and every radio would read as thousands of percent utilised.
+/// `if_type` is IANAifType 71, `ieee80211`, so a reader can tell "this is not an Ethernet port"
+/// from "we could not read it".
+fn radio_interfaces(ap: &WlanApObservation) -> Vec<DiscoveredInterface> {
+    ap.radios
+        .iter()
+        .map(|r| DiscoveredInterface {
+            ifindex: IfIndex(r.slot),
+            if_name: Some(r.band.label().to_owned()),
+            if_alias: r.channel.map(|c| format!("channel {c}")),
+            if_speed: None,
+            if_duplex: None,
+            if_type: Some(IF_TYPE_IEEE80211),
+            // A radio has no pluggable and no optical window; every one of these is a question
+            // about a wired port, and answering it would be inventing an answer.
+            if_media: None,
+            transceiver_model: None,
+            rx_power_low_dbm: None,
+            rx_power_high_dbm: None,
+            tx_power_low_dbm: None,
+            tx_power_high_dbm: None,
+        })
+        .collect()
+}
+
+/// IANAifType for a radio: `ieee80211(71)`.
+const IF_TYPE_IEEE80211: i32 = 71;
 
 /// Leader-only upkeep of the fan-out: re-read the node bindings every [`BINDINGS_REFRESH`], and run
 /// the importer once a minute (ADR-064 決定 8).
@@ -283,7 +390,34 @@ mod tests {
             temp_c: None,
             cpu_temp_c: None,
             power_state: None,
+            radios: Vec::new(),
         }
+    }
+
+    /// One AP with the two radios a measured AP reports.
+    fn ap_with_radios(n: u8, state: WlanApState) -> WlanApObservation {
+        let mut a = ap(n, state, 5);
+        a.radios = [
+            (yagra_common::WlanBand::Band2G4, 1, 11),
+            (yagra_common::WlanBand::Band5G, 2, 44),
+        ]
+        .into_iter()
+        .map(|(band, slot, channel)| yagra_common::WlanRadioObservation {
+            slot,
+            band,
+            up: Some(true),
+            clients: Some(3),
+            channel: Some(channel),
+            channel_util_pct: Some(14),
+            interference_pct: Some(2),
+            noise_dbm: Some(-96),
+            client_signal_dbm: Some(-77),
+            tx_power_dbm: Some(23),
+            in_octets: Some(2_555_209_504),
+            out_octets: Some(5_819_880_561),
+        })
+        .collect();
+        a
     }
 
     fn inventory_result(controller: u128, at_secs: i64, aps: Vec<WlanApObservation>) -> PollResult {
@@ -504,5 +638,74 @@ mod tests {
         let mut r = inventory_result(ACTIVE, 0, Vec::new());
         r.wlan = None;
         assert!(fanout.results_for(&r, Replay::Live).is_empty());
+    }
+    /// ADR-064 増分 C: a radio reaches the AP node as a **port** — a row in `interfaces` and a
+    /// series keyed by its slot — so every screen that already draws a port draws a radio.
+    #[tokio::test]
+    async fn an_aps_radios_arrive_as_ports_on_its_node() {
+        let fanout = imported(&[1]);
+        let out = fanout.results_for(
+            &inventory_result(1, 1_000, vec![ap_with_radios(1, WlanApState::Associated)]),
+            Replay::Live,
+        );
+        let r = out.first().expect("the AP gets a result");
+
+        // Two interface rows, named by band, with no speed and the ieee80211 type.
+        let slots: Vec<u32> = r.interfaces.iter().map(|i| i.ifindex.0).collect();
+        assert_eq!(slots, vec![1, 2]);
+        assert_eq!(r.interfaces[0].if_name.as_deref(), Some("2.4 GHz"));
+        assert_eq!(r.interfaces[1].if_alias.as_deref(), Some("channel 44"));
+        for i in &r.interfaces {
+            assert_eq!(
+                i.if_speed, None,
+                "a channel width is not a line rate and must never become one"
+            );
+            assert_eq!(i.if_type, Some(71));
+        }
+
+        // The radio-specific readings are keyed by the slot, not by the node.
+        let at = |metric: &str, slot: u32| {
+            r.samples
+                .iter()
+                .find(|s| s.metric == metric && s.ifindex == Some(yagra_common::IfIndex(slot)))
+                .map(|s| s.value)
+        };
+        assert_eq!(at("wlan_radio_client_count", 1), Some(3.0));
+        assert_eq!(at("wlan_radio_noise_dbm", 2), Some(-96.0));
+        assert_eq!(at("wlan_radio_channel_util_pct", 2), Some(14.0));
+        // …and the traffic and status ride the IF-MIB names, which is what makes a radio draw
+        // like a port without any screen learning what a radio is.
+        assert_eq!(at("if_oper_status", 1), Some(1.0));
+        assert_eq!(at("if_hc_in_octets", 1), Some(2_555_209_504.0));
+
+        // The AP's own readings are still node-level, not attributed to a radio.
+        let clients = r
+            .samples
+            .iter()
+            .find(|s| s.metric == "wlan_ap_client_count")
+            .expect("the AP client count is still published");
+        assert_eq!(clients.ifindex, None);
+    }
+
+    /// The standby rule covers radios for free, which is the point of carrying them inside the AP:
+    /// a standby reports every radio value as 0, and none of it may reach the node.
+    #[tokio::test]
+    async fn a_standbys_radios_are_not_recorded_either() {
+        let fanout = imported(&[1]);
+        // The active says it serves the AP, so the standby is the one whose word does not stand.
+        fanout.results_for(
+            &inventory_result(1, 1_000, vec![ap_with_radios(1, WlanApState::Associated)]),
+            Replay::Live,
+        );
+        let mut standby = ap_with_radios(1, WlanApState::Backup);
+        for r in &mut standby.radios {
+            r.clients = Some(0);
+            r.channel_util_pct = Some(0);
+        }
+        let out = fanout.results_for(&inventory_result(2, 1_010, vec![standby]), Replay::Live);
+        assert!(
+            out.is_empty(),
+            "a standby's view produces no result at all, radios included"
+        );
     }
 }

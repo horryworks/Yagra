@@ -236,22 +236,45 @@ fn optical_probes(items: &[CollectionItem]) -> Vec<OpticalProbe> {
 /// An item's `oid` names the dialect, as for optics. An OID no dialect claims is dropped here rather
 /// than sent, for `optical_probes`' reason: a walk the poller cannot interpret is a session spent
 /// for nothing. Two items naming one dialect (a template item and a node override) walk it once.
-fn wlan_flavors(items: &[CollectionItem]) -> Vec<(WlanFlavor, bool)> {
-    let mut flavors: Vec<(WlanFlavor, bool)> = Vec::new();
+/// One wireless controller job: which dialect, and which of its tables this node asks for.
+///
+/// Two booleans rather than a tuple of them, because a `(WlanFlavor, bool, bool)` is exactly the
+/// shape whose arguments get swapped in a later edit — and swapping these two would walk the
+/// radio table on a controller that asked for SSIDs and never notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WlanWalk {
+    /// The dialect, from the collection item that named it.
+    pub flavor: WlanFlavor,
+    /// Walk the SSID statistics table (ADR-064 増分 D).
+    pub ssids: bool,
+    /// Walk the radio table (ADR-064 増分 C).
+    pub radios: bool,
+}
+
+fn wlan_flavors(items: &[CollectionItem]) -> Vec<WlanWalk> {
+    let mut walks: Vec<WlanWalk> = Vec::new();
     for item in items.iter().filter(|i| i.kind == CollectionKind::Wlan) {
         let Some(flavor) = WlanFlavor::from_root(&item.oid) else {
             continue;
         };
-        let ssid = flavor.is_ssid_root(&item.oid);
-        match flavors.iter_mut().find(|(f, _)| *f == flavor) {
-            // One walk per dialect however many items name it, and the SSID table is asked for if
-            // **any** of them named it — the two templates are attached independently, so a node
-            // carrying both must not get two jobs for one controller.
-            Some((_, walk_ssids)) => *walk_ssids |= ssid,
-            None => flavors.push((flavor, ssid)),
+        let ssids = flavor.is_ssid_root(&item.oid);
+        let radios = flavor.is_radio_root(&item.oid);
+        match walks.iter_mut().find(|w| w.flavor == flavor) {
+            // One job per dialect however many items name it, and a table is asked for if **any**
+            // of them named it — the three templates are attached independently, so a node
+            // carrying all three must not get three jobs for one controller.
+            Some(w) => {
+                w.ssids |= ssids;
+                w.radios |= radios;
+            }
+            None => walks.push(WlanWalk {
+                flavor,
+                ssids,
+                radios,
+            }),
         }
     }
-    flavors
+    walks
 }
 
 /// Build the SNMP v2c AP walks a wireless controller's collection set asks for — none for any other
@@ -264,11 +287,12 @@ pub fn build_snmp_wlan_ap_checks(
 ) -> Vec<SnmpWlanApCheck> {
     wlan_flavors(items)
         .into_iter()
-        .map(|(flavor, walk_ssids)| SnmpWlanApCheck {
+        .map(|walk| SnmpWlanApCheck {
             community: community.to_owned(),
-            flavor,
+            flavor: walk.flavor,
             max_aps: MAX_APS_PER_CONTROLLER_DEFAULT,
-            walk_ssids,
+            walk_ssids: walk.ssids,
+            walk_radios: walk.radios,
             timeout_ms,
         })
         .collect()
@@ -283,11 +307,12 @@ pub fn build_snmp_v3_wlan_ap_checks(
 ) -> Vec<SnmpV3WlanApCheck> {
     wlan_flavors(items)
         .into_iter()
-        .map(|(flavor, walk_ssids)| SnmpV3WlanApCheck {
+        .map(|walk| SnmpV3WlanApCheck {
             auth: secret.auth(),
-            flavor,
+            flavor: walk.flavor,
             max_aps: MAX_APS_PER_CONTROLLER_DEFAULT,
-            walk_ssids,
+            walk_ssids: walk.ssids,
+            walk_radios: walk.radios,
             timeout_ms,
         })
         .collect()

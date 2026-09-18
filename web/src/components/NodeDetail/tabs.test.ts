@@ -74,6 +74,26 @@ const label = (n: NodeDetailSubject) =>
   `${n.kind}/${n.snmpConfigured ? 'snmp' : 'ping-only'}${n.isWlanController ? '/wlc' : ''}`;
 
 describe('node-detail tab visibility', () => {
+  // ADR-064 増分 C. An access point is never polled itself, so `snmpConfigured` is false on every
+  // one of them — and asking only that question hid the radios its controller had already
+  // collected. The two halves are separate and both are needed: `kinds` lets the tab through for
+  // this node kind, and `snmpFed` lets it through despite the node having no credential.
+  it('shows Interfaces on an access point, whose rows come from its controller', () => {
+    const ap = { kind: 'wireless_ap' as const, snmpConfigured: false, isWlanController: false };
+    expect(visibleNodeDetailTabs(ap)).toContain('interfaces');
+    // And only Interfaces: neighbours and flow have no controller-side equivalent, so opening
+    // them would promise a tab nothing can ever fill.
+    expect(visibleNodeDetailTabs(ap)).not.toContain('neighbors');
+    expect(visibleNodeDetailTabs(ap)).not.toContain('flow');
+  });
+
+  // The other side of the same rule: widening it for access points must not widen it for a
+  // device nobody gave an SNMP credential, which is the case ADR-119 exists for.
+  it('still hides Interfaces on a ping-only device', () => {
+    const pingOnly = { kind: 'device' as const, snmpConfigured: false, isWlanController: false };
+    expect(visibleNodeDetailTabs(pingOnly)).not.toContain('interfaces');
+  });
+
   it('gives every whitelisted tab a non-empty list of real node kinds', () => {
     for (const tab of NODE_DETAIL_TABS) {
       const kinds = NODE_DETAIL_TAB_META[tab].kinds;

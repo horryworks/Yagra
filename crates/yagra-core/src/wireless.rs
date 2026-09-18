@@ -1103,6 +1103,7 @@ mod tests {
             temp_c: None,
             cpu_temp_c: None,
             power_state: None,
+            radios: Vec::new(),
         }
     }
 
