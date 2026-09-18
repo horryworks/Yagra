@@ -596,8 +596,15 @@ mod tests {
                 checked += 1;
                 // Either constructor: `within` is how a table walk takes the caller's deadline
                 // (ADR-110 Increment 10), and it falls back to `new` when there is none.
+                //
+                // …or delegation to `read_scalars`, the shared v3 scalar loop (ADR-161), whose own
+                // budget is asserted by `the_shared_scalar_read_takes_a_budget` below. Named
+                // rather than pattern-matched: a check that accepted "calls some other function"
+                // in general would accept anything, and this reader cannot follow a call.
                 assert!(
-                    body.contains("WalkBudget::new(") || body.contains("WalkBudget::within("),
+                    body.contains("WalkBudget::new(")
+                        || body.contains("WalkBudget::within(")
+                        || body.contains("read_scalars("),
                     "yagra-transport/src/{name}: `{signature}` walks a list of columns without a \
                      budget. A device that answers nothing then costs one timeout per column — the \
                      defect ADR-110 Increment 3 exists to close, measured at 51,299 ms"
@@ -608,6 +615,35 @@ mod tests {
             checked >= 9,
             "only {checked} multi-column calls were examined across the two SNMP files; the \
              assertion above ran over almost nothing. Four v2c and five v3 is what this crate has"
+        );
+    }
+
+    /// The other half of the delegation the check above permits: the shared v3 scalar loop still
+    /// takes a budget itself (ADR-161). Without this, moving the budget out of the two public
+    /// functions would have silently emptied the assertion for both of them — the shape of failure
+    /// ADR-112 paid for, where a refactor left a needle matching nothing and every assertion
+    /// around it was a negation.
+    #[test]
+    fn the_shared_scalar_read_takes_a_budget() {
+        use crate::module_source::{files_no_comments, roots};
+
+        let files = files_no_comments(&roots("src", "snmp_v3"));
+        let code = files
+            .iter()
+            .map(|(_, c)| c.as_str())
+            .find(|c| c.contains("async fn read_scalars"))
+            .expect("snmp_v3 defines the shared scalar read the check above delegates to");
+        let at = code
+            .find("async fn read_scalars")
+            .expect("just matched above");
+        let body = &code[at..];
+        let end = body
+            .find("\n}")
+            .expect("a top-level fn closes with a brace at column zero");
+        assert!(
+            body[..end].contains("WalkBudget::new("),
+            "read_scalars is what the two v3 scalar GETs delegate their budget to; without one \
+             here, both of them walk their OIDs unbudgeted and the check above still passes"
         );
     }
 

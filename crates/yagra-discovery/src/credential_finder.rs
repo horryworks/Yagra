@@ -2,11 +2,30 @@
 //! Credential Finder rate limiting (ADR-018).
 //!
 //! When probing a device with candidate credentials, attempts must be **rate-limited per
-//! device** so the finder never trips an account lockout. Defaults (all configurable):
-//! serial attempts spaced ≥ 2 s, and after 3 consecutive failures a 15-minute cooldown —
-//! deliberately below the common 5-attempt lockout threshold. This is the pure gate; the
+//! device** so the finder never trips an account lockout. This is the pure gate; the
 //! actual auth attempts run through `yagra_transport`. Time is injected (Unix ms) so it is
 //! deterministic and testable without a clock. Attempted credentials are never logged.
+//!
+//! **Two mechanisms, and they protect against different things** (ADR-161):
+//!
+//! * **Spacing** (`min_interval_ms`, 2 s) paces attempts at one device. It applies to every
+//!   credential kind and is what `security.md` asks for.
+//! * **Cooldown** (`max_consecutive_failures` + `cooldown_ms`) stops probing a device
+//!   altogether. It exists for a credential kind whose repeated failures **lock an account
+//!   out** — SSH/CLI login, which ADR-018 anticipated and which does not exist yet. The 3
+//!   attempts / 15 minutes are sized to sit below the common 5-attempt lockout threshold.
+//!
+//! 🚨 **SNMP has no account to lock out, so its sweep passes `max_consecutive_failures: None`**
+//! ([`LimiterConfig::snmp_sweep`]). A v2c community is not a login and USM has no standard
+//! lockout, so a cooldown there deletes candidate credentials and buys nothing. It shipped as
+//! `Some(3)` and silently dropped every credential after the third — the operator's correct
+//! community among them (ADR-161).
+//!
+//! 🚨 **A cooldown is only worth anything if the limiter outlives what it is protecting.**
+//! `yagra-poller`'s `probe_one` builds one **per target** and drops it on return, so a
+//! cooldown set there could never span two sweeps, two targets, or even one re-run a second
+//! later. When SSH/CLI probing lands, its limiter has to be hoisted out of the per-target
+//! call — otherwise it will be exactly as inert, and look exactly as protective.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -17,18 +36,46 @@ use yagra_common::NodeId;
 pub struct LimiterConfig {
     /// Minimum spacing between attempts on the same device.
     pub min_interval_ms: i64,
-    /// Consecutive failures before a device enters cooldown.
-    pub max_consecutive_failures: u32,
-    /// How long a device stays in cooldown after tripping the failure limit.
+    /// Consecutive failures before a device enters cooldown, or `None` when this credential
+    /// kind **cannot lock an account out** and so must never have its candidate list cut
+    /// short. See the module doc; `None` is what SNMP uses (ADR-161).
+    ///
+    /// Deliberately an `Option` rather than a large sentinel: `u32::MAX` says "a very big
+    /// number" where the truth is "this question does not apply", and the test helper that
+    /// already spelled it that way is how the shipped value of `3` went unexercised.
+    pub max_consecutive_failures: Option<u32>,
+    /// How long a device stays in cooldown after tripping the failure limit. Unused when
+    /// `max_consecutive_failures` is `None`.
     pub cooldown_ms: i64,
 }
 
 impl Default for LimiterConfig {
+    /// The lockout-protecting profile: for a credential kind where repeated failures lock an
+    /// account (SSH/CLI, ADR-018). **Not what the SNMP sweep uses** — see
+    /// [`LimiterConfig::snmp_sweep`].
     fn default() -> Self {
         Self {
-            min_interval_ms: 2_000,       // 2 s between attempts
-            max_consecutive_failures: 3,  // below the usual 5-attempt lockout
-            cooldown_ms: 15 * 60 * 1_000, // 15 min cooldown
+            min_interval_ms: 2_000,            // 2 s between attempts
+            max_consecutive_failures: Some(3), // below the usual 5-attempt lockout
+            cooldown_ms: 15 * 60 * 1_000,      // 15 min cooldown
+        }
+    }
+}
+
+impl LimiterConfig {
+    /// The profile the discovery sweep uses: spacing, and **no cooldown** (ADR-161).
+    ///
+    /// SNMP has nothing to lock out — a v2c community is not an account, and USM defines no
+    /// lockout — so a consecutive-failure limit here does not protect the device, it only
+    /// stops trying the operator's remaining credentials. And every non-answer looks alike to
+    /// the prober: a dropped packet, an ACL on 161 and a wrong community all arrive as
+    /// silence, so a budget of 3 was spent on things that say nothing about the credential.
+    #[must_use]
+    pub fn snmp_sweep() -> Self {
+        Self {
+            min_interval_ms: 2_000,
+            max_consecutive_failures: None,
+            cooldown_ms: 0,
         }
     }
 }
@@ -98,13 +145,17 @@ impl<K: Eq + Hash> CredentialProbeLimiter<K> {
         AttemptDecision::Allow
     }
 
-    /// Record that the last attempt on `device` failed. Trips cooldown at the failure limit.
+    /// Record that the last attempt on `device` failed. Trips cooldown at the failure limit,
+    /// if this config has one — a `None` limit means failures are counted and never acted on,
+    /// so the caller's whole candidate list is tried (ADR-161).
     pub fn record_failure(&mut self, device: K, now_ms: i64) {
         let cfg = self.config;
         let state = self.devices.entry(device).or_default();
         state.consecutive_failures += 1;
-        if state.consecutive_failures >= cfg.max_consecutive_failures {
-            state.cooldown_until_ms = Some(now_ms + cfg.cooldown_ms);
+        if let Some(max) = cfg.max_consecutive_failures {
+            if state.consecutive_failures >= max {
+                state.cooldown_until_ms = Some(now_ms + cfg.cooldown_ms);
+            }
         }
     }
 
@@ -173,6 +224,75 @@ mod tests {
         l.record_success(d); // matched a credential
                              // Next attempt is spaced but not in cooldown.
         assert_eq!(l.begin_attempt(d, 4_000), AttemptDecision::Allow);
+    }
+
+    /// ADR-161: the cooldown mechanism is still alive for the credential kind it exists for
+    /// (SSH/CLI, which locks accounts out). Stated on its own so that making SNMP exempt cannot
+    /// quietly turn the whole thing into dead code.
+    #[test]
+    fn a_config_with_a_failure_limit_still_backs_off() {
+        let mut l = CredentialProbeLimiter::<NodeId>::new(LimiterConfig {
+            min_interval_ms: 0,
+            max_consecutive_failures: Some(2),
+            cooldown_ms: 60_000,
+        });
+        let d = NodeId::new();
+        for i in 0..2 {
+            assert_eq!(l.begin_attempt(d, i), AttemptDecision::Allow);
+            l.record_failure(d, i);
+        }
+        assert!(
+            matches!(l.begin_attempt(d, 2), AttemptDecision::CoolingDown { .. }),
+            "two failures under a limit of two must back the device off"
+        );
+    }
+
+    /// ADR-161: `None` means the failures are counted and never acted on — the caller gets its
+    /// whole candidate list. This is what the SNMP sweep relies on, and it is the half that
+    /// shipped wrong: `Some(3)` deleted every credential after the third.
+    #[test]
+    fn a_config_with_no_failure_limit_never_backs_off() {
+        let mut l = CredentialProbeLimiter::<NodeId>::new(LimiterConfig {
+            min_interval_ms: 0,
+            max_consecutive_failures: None,
+            cooldown_ms: 60_000,
+        });
+        let d = NodeId::new();
+        for i in 0..50 {
+            assert_eq!(
+                l.begin_attempt(d, i),
+                AttemptDecision::Allow,
+                "attempt {i} must be allowed: nothing here can lock out"
+            );
+            l.record_failure(d, i);
+        }
+    }
+
+    /// The shipped SNMP profile, named rather than reconstructed — a test that builds its own
+    /// config proves nothing about the one `probe_one` passes.
+    #[test]
+    fn the_snmp_sweep_profile_spaces_attempts_and_has_no_cooldown() {
+        let cfg = LimiterConfig::snmp_sweep();
+        assert_eq!(cfg.max_consecutive_failures, None);
+        assert!(
+            cfg.min_interval_ms > 0,
+            "spacing is the half that does protect the device, and must survive"
+        );
+        let mut l = CredentialProbeLimiter::<NodeId>::new(cfg);
+        let d = NodeId::new();
+        let mut now = 0;
+        for _ in 0..10 {
+            loop {
+                match l.begin_attempt(d, now) {
+                    AttemptDecision::Allow => break,
+                    AttemptDecision::TooSoon { wait_ms } => now += wait_ms,
+                    AttemptDecision::CoolingDown { .. } => {
+                        panic!("the SNMP profile must never cool down")
+                    }
+                }
+            }
+            l.record_failure(d, now);
+        }
     }
 
     #[test]

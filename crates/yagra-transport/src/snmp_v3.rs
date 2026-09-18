@@ -76,6 +76,113 @@ async fn open_session(
     Ok(session)
 }
 
+/// What one scalar exchange produced. Owned, so the seam below does not have to hand back a
+/// `Pdu<'_>` borrowed from the session it was read through.
+#[derive(Debug, PartialEq, Eq)]
+enum Exchange<T> {
+    /// The agent answered; these are its varbinds that the mapper could use.
+    Answered(Vec<T>),
+    /// The agent answered by complaining — a report PDU, a decode failure, `noSuchObject`.
+    /// Still an answer: see [`AGENT_SAID_NOTHING`].
+    Complained,
+    /// Nothing came back inside the timeout.
+    Silent,
+}
+
+/// One scalar GET, with the answer already mapped out of the borrowed PDU.
+///
+/// A seam rather than a direct `session.get` call because `AsyncSession` is a concrete type with
+/// no constructor a test can drive, so the rule in [`read_scalars`] — the one that shipped wrong —
+/// was unreachable by any test for the whole life of the v3 client (ADR-161).
+#[async_trait::async_trait]
+trait ScalarSession: Send {
+    async fn scalar_get<T: Send + 'static>(
+        &mut self,
+        oid: &Oid<'_>,
+        timeout: Duration,
+        map: for<'a, 'b> fn(&'a Value<'b>) -> Option<T>,
+    ) -> Exchange<T>;
+}
+
+#[async_trait::async_trait]
+impl ScalarSession for AsyncSession {
+    async fn scalar_get<T: Send + 'static>(
+        &mut self,
+        oid: &Oid<'_>,
+        timeout: Duration,
+        map: for<'a, 'b> fn(&'a Value<'b>) -> Option<T>,
+    ) -> Exchange<T> {
+        match tokio::time::timeout(timeout, self.get(oid)).await {
+            Ok(Ok(pdu)) => Exchange::Answered(
+                pdu.varbinds
+                    .filter_map(|(_, value)| map(&value))
+                    .collect::<Vec<T>>(),
+            ),
+            Ok(Err(e)) => {
+                tracing::debug!(error = %e, "snmp v3 scalar get failed");
+                Exchange::Complained
+            }
+            Err(_) => Exchange::Silent,
+        }
+    }
+}
+
+/// Read scalar `oids` one at a time off an open session, mapping each answer with `map`.
+///
+/// Shared by the numeric and string reads, which differ only in the mapper and in what they make
+/// of a session that heard nothing (`extensibility.md` §3).
+///
+/// 🚨 **A silent exchange ends the read, and that is a correctness rule, not a budget.**
+/// `tokio::time::timeout` cancels the `get` future but the socket stays open inside the session,
+/// and the vendored `snmp2` does a single un-matched `recv` and validates the request-id
+/// *afterwards* (`vendor/snmp2/src/asyncsession.rs:177`, `pdu.rs:699`) — there is no "keep reading
+/// until the id matches" loop. So the late reply to the timed-out request is what the **next**
+/// OID's `recv` returns, and it fails validation as `RequestIdMismatch`, which arrives here as
+/// [`Exchange::Complained`] — an *answer*. The session is one reply behind from then on, every
+/// remaining OID yields nothing, and the caller reads the empty result as "this credential does
+/// not work". For discovery that meant a correct v3 credential on a slow device being scored as a
+/// failure (ADR-161). Once anything has been silent the session cannot be trusted, so we stop.
+async fn read_scalars<S: ScalarSession + ?Sized, T: Send + 'static>(
+    session: &mut S,
+    target: IpAddr,
+    oids: &[String],
+    timeout: Duration,
+    map: for<'a, 'b> fn(&'a Value<'b>) -> Option<T>,
+) -> (Vec<(String, T)>, WalkBudget) {
+    let mut read = Vec::with_capacity(oids.len());
+    let mut budget = WalkBudget::new(timeout);
+    for (asked, oid_str) in oids.iter().enumerate() {
+        if let Some(reason) = budget.spent() {
+            note_truncation(reason, target, oids.len() - asked);
+            break;
+        }
+        let Some(oid) = parse_oid(oid_str) else {
+            tracing::warn!(%oid_str, "skipping malformed OID");
+            budget.record(ColumnOutcome::Skipped);
+            continue;
+        };
+        match session.scalar_get(&oid, timeout, map).await {
+            Exchange::Answered(values) => {
+                read.extend(values.into_iter().map(|v| (oid_str.clone(), v)));
+                budget.record(AGENT_ANSWERED);
+            }
+            Exchange::Complained => budget.record(AGENT_ANSWERED),
+            Exchange::Silent => {
+                tracing::debug!(%oid_str, "snmp v3 scalar get timed out");
+                budget.record(AGENT_SAID_NOTHING);
+                // See the 🚨 above: this session is now desynced. Stopping costs the remaining
+                // OIDs of a device that has already proved slow; continuing costs correctness.
+                let skipped = oids.len() - asked - 1;
+                if skipped > 0 {
+                    note_truncation(Truncation::Silent, target, skipped);
+                }
+                break;
+            }
+        }
+    }
+    (read, budget)
+}
+
 /// Fetch `oids` from `target` via SNMP v3 (USM). Per-OID failures are logged and skipped
 /// so a single bad OID doesn't fail the whole poll; an auth/engine failure fails the call.
 ///
@@ -89,40 +196,11 @@ pub async fn snmp_get_v3(
     timeout: Duration,
 ) -> Result<Vec<SnmpSample>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
-    let mut samples = Vec::with_capacity(oids.len());
-    let mut budget = WalkBudget::new(timeout);
-    for (asked, oid_str) in oids.iter().enumerate() {
-        if let Some(reason) = budget.spent() {
-            note_truncation(reason, target, oids.len() - asked);
-            break;
-        }
-        let Some(oid) = parse_oid(oid_str) else {
-            tracing::warn!(%oid_str, "skipping malformed OID");
-            budget.record(ColumnOutcome::Skipped);
-            continue;
-        };
-        match tokio::time::timeout(timeout, session.get(&oid)).await {
-            Ok(Ok(pdu)) => {
-                for (_, value) in pdu.varbinds {
-                    if let Some(v) = numeric(&value) {
-                        samples.push(SnmpSample {
-                            oid: oid_str.clone(),
-                            value: v,
-                        });
-                    }
-                }
-                budget.record(AGENT_ANSWERED);
-            }
-            Ok(Err(e)) => {
-                tracing::debug!(%oid_str, error = %e, "snmp v3 get failed");
-                budget.record(AGENT_ANSWERED);
-            }
-            Err(_) => {
-                tracing::debug!(%oid_str, "snmp v3 get timed out");
-                budget.record(AGENT_SAID_NOTHING);
-            }
-        }
-    }
+    let (read, budget) = read_scalars(&mut session, target, oids, timeout, numeric).await;
+    let samples: Vec<SnmpSample> = read
+        .into_iter()
+        .map(|(oid, value)| SnmpSample { oid, value })
+        .collect();
     // As the v2c GET: a session that opened and then heard nothing is reported as silent, so the
     // caller can tell it from an agent that answered `noSuchObject` to everything (ADR-138
     // Increment 5). A device that is silent from the start never reaches here — engine discovery
@@ -146,41 +224,11 @@ pub async fn snmp_get_v3_strings(
     timeout: Duration,
 ) -> Result<Vec<SnmpStringSample>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
-    let mut samples = Vec::with_capacity(oids.len());
-    let mut budget = WalkBudget::new(timeout);
-    for (asked, oid_str) in oids.iter().enumerate() {
-        if let Some(reason) = budget.spent() {
-            note_truncation(reason, target, oids.len() - asked);
-            break;
-        }
-        let Some(oid) = parse_oid(oid_str) else {
-            tracing::warn!(%oid_str, "skipping malformed OID");
-            budget.record(ColumnOutcome::Skipped);
-            continue;
-        };
-        match tokio::time::timeout(timeout, session.get(&oid)).await {
-            Ok(Ok(pdu)) => {
-                for (_, value) in pdu.varbinds {
-                    if let Some(v) = string_value(&value) {
-                        samples.push(SnmpStringSample {
-                            oid: oid_str.clone(),
-                            value: v,
-                        });
-                    }
-                }
-                budget.record(AGENT_ANSWERED);
-            }
-            Ok(Err(e)) => {
-                tracing::debug!(%oid_str, error = %e, "snmp v3 string get failed");
-                budget.record(AGENT_ANSWERED);
-            }
-            Err(_) => {
-                tracing::debug!(%oid_str, "snmp v3 string get timed out");
-                budget.record(AGENT_SAID_NOTHING);
-            }
-        }
-    }
-    Ok(samples)
+    let (read, _budget) = read_scalars(&mut session, target, oids, timeout, string_value).await;
+    Ok(read
+        .into_iter()
+        .map(|(oid, value)| SnmpStringSample { oid, value })
+        .collect())
 }
 
 /// Walk numeric table columns from `target` via SNMP v3 (USM) GETBULK — the v3 analogue of
@@ -616,6 +664,141 @@ fn string_value(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scripted session: one outcome per call, and it counts the calls.
+    ///
+    /// It answers with a real `Value` rather than a pre-mapped `T` so one fake serves both
+    /// mappers — the only way to write it, since [`ScalarSession::scalar_get`] is generic in `T`
+    /// and a fake cannot conjure one.
+    struct ScriptedSession {
+        script: Vec<Exchange<&'static [u8]>>,
+        asked: usize,
+    }
+
+    impl ScriptedSession {
+        fn new(script: Vec<Exchange<&'static [u8]>>) -> Self {
+            Self { script, asked: 0 }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ScalarSession for ScriptedSession {
+        async fn scalar_get<T: Send + 'static>(
+            &mut self,
+            _oid: &Oid<'_>,
+            _timeout: Duration,
+            map: for<'a, 'b> fn(&'a Value<'b>) -> Option<T>,
+        ) -> Exchange<T> {
+            let step = self.script.get(self.asked);
+            self.asked += 1;
+            match step {
+                Some(Exchange::Answered(bytes)) => Exchange::Answered(
+                    bytes
+                        .iter()
+                        .filter_map(|b| map(&Value::OctetString(b)))
+                        .collect(),
+                ),
+                Some(Exchange::Complained) => Exchange::Complained,
+                Some(Exchange::Silent) | None => Exchange::Silent,
+            }
+        }
+    }
+
+    /// One scripted answer carrying a single octet-string varbind.
+    fn answered(value: &'static [u8]) -> Exchange<&'static [u8]> {
+        Exchange::Answered(vec![value])
+    }
+
+    fn three_oids() -> Vec<String> {
+        vec![
+            "1.3.6.1.2.1.1.1.0".to_owned(),
+            "1.3.6.1.2.1.1.2.0".to_owned(),
+            "1.3.6.1.2.1.1.5.0".to_owned(),
+        ]
+    }
+
+    fn here() -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    }
+
+    /// 🚨 ADR-161: the rule that could not be tested before this seam existed, and was wrong.
+    ///
+    /// The first OID goes unanswered. Its reply is still in flight, and `snmp2` has no loop that
+    /// discards a reply whose request-id does not match — so asking the second OID reads the
+    /// *first* one's answer and fails validation. The scripted `Complained` after the `Silent` is
+    /// exactly that, and it used to be recorded as "the agent answered".
+    #[tokio::test]
+    async fn a_silent_scalar_get_ends_the_read() {
+        let mut session = ScriptedSession::new(vec![
+            Exchange::Silent,
+            Exchange::Complained,
+            answered(b"never reached"),
+        ]);
+        let (read, budget) = read_scalars(
+            &mut session,
+            here(),
+            &three_oids(),
+            Duration::from_millis(10),
+            string_value,
+        )
+        .await;
+        assert_eq!(
+            session.asked, 1,
+            "the session is one reply behind after a timeout, so nothing more may be asked of it"
+        );
+        assert!(read.is_empty());
+        assert!(
+            budget.heard_nothing(),
+            "and the silence must survive as silence — recording the desynced reply as an answer              is what turned a slow device into a wrong credential"
+        );
+    }
+
+    /// The other direction, so the fix cannot be "stop on anything that is not a value".
+    /// A complaint is an answer (see [`AGENT_SAID_NOTHING`]): `noSuchObject` for an OID a device
+    /// does not implement must not end the read of the OIDs it does.
+    #[tokio::test]
+    async fn a_complaint_is_an_answer_and_the_read_continues() {
+        let mut session = ScriptedSession::new(vec![
+            Exchange::Complained,
+            answered(b"VRP (R) software"),
+            answered(b"core-sw-01"),
+        ]);
+        let (read, budget) = read_scalars(
+            &mut session,
+            here(),
+            &three_oids(),
+            Duration::from_millis(10),
+            string_value,
+        )
+        .await;
+        assert_eq!(session.asked, 3);
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].1, "VRP (R) software");
+        assert!(!budget.heard_nothing());
+    }
+
+    /// The ordinary path, stated because the two tests above are both about not-answers and a
+    /// read that returned nothing at all would satisfy neither.
+    #[tokio::test]
+    async fn every_oid_is_read_when_the_agent_answers() {
+        let mut session =
+            ScriptedSession::new(vec![answered(b"a"), answered(b"b"), answered(b"c")]);
+        let oids = three_oids();
+        let (read, _) = read_scalars(
+            &mut session,
+            here(),
+            &oids,
+            Duration::from_millis(10),
+            string_value,
+        )
+        .await;
+        assert_eq!(session.asked, 3);
+        assert_eq!(
+            read.iter().map(|(o, _)| o.clone()).collect::<Vec<_>>(),
+            oids,
+            "each value is tagged with the OID it was read for"
+        );
+    }
 
     fn params(level: &str) -> SnmpV3Params {
         SnmpV3Params {

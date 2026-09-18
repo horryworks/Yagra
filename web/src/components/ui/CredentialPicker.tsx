@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { CredentialSummary } from '../../types/api';
+import { toggleSelection } from './credentialSelection';
 import './CredentialPicker.css';
 
 interface CredentialPickerProps {
@@ -44,11 +45,12 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
     };
   }, [open]);
 
-  const toggle = (id: string) =>
-    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const toggle = (id: string) => onChange(toggleSelection(options, selected, id));
   const remove = (id: string) => onChange(selected.filter((x) => x !== id));
 
-  // Render chips in the picker's own option order so they stay stable as selection changes.
+  // Render chips in the picker's own option order so they stay stable as selection changes —
+  // which is also the order `toggleSelection` keeps `selected` in, so what the operator reads
+  // left-to-right is the order the sweep tries the credentials in (ADR-161).
   const chosen = options.filter((o) => selected.includes(o.id));
 
   return (
