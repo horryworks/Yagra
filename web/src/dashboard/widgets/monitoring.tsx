@@ -162,10 +162,14 @@ export function DiscoveryQueueWidget() {
 
 export function AuditWidget() {
   const { t } = useTranslation('dashboard');
-  const { data, loading, error } = usePolled(() => api.listAudit({ limit: 8 }), []);
-  // The audit log is admin-only; a viewer/operator gets a 403 — show a gate, not a raw error.
+  const { data, loading, error, errorStatus } = usePolled(() => api.listAudit({ limit: 8 }), []);
+  // The audit log needs `view_audit`; a caller without it gets a 403 — show a gate, not a raw
+  // error. ⚠️ Only for a 403. Every failure used to land here, so an admin whose read was failing
+  // for an infrastructure reason was told they lacked a permission they hold.
   if (error) {
-    return <p className="muted">{t('widgets.audit.forbidden')}</p>;
+    return (
+      <p className="muted">{errorStatus === 403 ? t('widgets.audit.forbidden') : error}</p>
+    );
   }
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   if ((data ?? []).length === 0) return <p className="muted">{t('widgets.audit.empty')}</p>;

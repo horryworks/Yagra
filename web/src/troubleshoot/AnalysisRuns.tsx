@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ResultCount, TableSpacer, TableToolbar } from '../components/ui/TableToolbar';
+import { Button } from '../components/ui/Button';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
@@ -20,6 +21,7 @@ import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { runColumns, runFilterLabels } from './runFilters';
 import { useTroubleshootStore } from './store';
+import { seedAnalysisJobs } from './useTroubleshootStream';
 import { reportPathFor, toolById } from './data';
 import { relTime, inputFromJob } from './format';
 import type { AnalysisJob } from '../types/api';
@@ -135,6 +137,7 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
   const { t } = useTranslation('troubleshoot');
   const jobs = useTroubleshootStore((s) => s.jobs);
   const loaded = useTroubleshootStore((s) => s.loaded);
+  const loadFailed = useTroubleshootStore((s) => s.loadFailed);
   // Only the dedicated Runs page gets the filter controls; the catalog embeds this as a short
   // summary where three controls above five rows would be noise.
   const columns = useMemo(() => runColumns(t), [t]);
@@ -159,6 +162,14 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
   );
 
   if (jobs.length === 0) {
+    if (loadFailed) {
+      return (
+        <p className="form-error" role="alert">
+          {t('runs.loadFailed')}{' '}
+          <Button onClick={seedAnalysisJobs}>{t('common:actions.retry')}</Button>
+        </p>
+      );
+    }
     return <p className="muted">{loaded ? (empty ?? t('runs.empty')) : t('common:loading')}</p>;
   }
   return (

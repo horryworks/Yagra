@@ -31,19 +31,27 @@ export function ReportViewer({ runId, onClose }: Props) {
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Whether the last answer said the run was still generating. A poll that fails while it is
+    // must be asked again: the catch used to be final, so one proxy hiccup froze the progress bar
+    // for good and the viewer never noticed the run finishing.
+    let inFlight = false;
     const load = () => {
       api
         .getReportRun(runId)
         .then((d) => {
           if (!alive) return;
           setDetail(d);
+          setError(null);
+          inFlight = isRunInFlight(d.state);
           // Still generating → poll until it reaches a terminal state.
           if (isRunInFlight(d.state)) {
             timer = setTimeout(load, 2500);
           }
         })
         .catch((e: unknown) => {
-          if (alive) setError(e instanceof ApiError ? e.message : t('viewer.err.loadFailed'));
+          if (!alive) return;
+          setError(e instanceof ApiError ? e.message : t('viewer.err.loadFailed'));
+          if (inFlight) timer = setTimeout(load, 2500);
         });
     };
     load();

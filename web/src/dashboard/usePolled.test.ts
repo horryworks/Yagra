@@ -22,9 +22,14 @@ describe('usePolled', () => {
     const fetcher = vi.fn().mockResolvedValue({ n: 1 });
     const { result } = renderHook(() => usePolled(fetcher));
 
-    expect(result.current).toEqual({ data: null, loading: true, error: null });
+    expect(result.current).toEqual({ data: null, loading: true, error: null, errorStatus: null });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current).toEqual({ data: { n: 1 }, loading: false, error: null });
+    expect(result.current).toEqual({
+      data: { n: 1 },
+      loading: false,
+      error: null,
+      errorStatus: null,
+    });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -46,6 +51,8 @@ describe('usePolled', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toBe('flow tier disabled');
+    // …and its status, for the one caller that must tell 403 from everything else.
+    expect(result.current.errorStatus).toBe(503);
   });
 
   it('falls back to a generic message for a non-ApiError failure', async () => {
@@ -56,6 +63,7 @@ describe('usePolled', () => {
     expect(result.current.error).toBeTruthy();
     // A raw transport/exception string must not be shown to the operator as-is.
     expect(result.current.error).not.toContain('NetworkError');
+    expect(result.current.errorStatus).toBeNull();
   });
 
   it('keeps the last good data when a later poll fails', async () => {

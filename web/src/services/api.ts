@@ -371,7 +371,10 @@ async function fetchBlob(
   // whose *response* is the archive, because the token exists only at that instant (ADR-065 Inc.4).
   // It is not a download of a resource that could be fetched again.
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) };
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  // `requestToken()`, as `request` does — never `authToken` directly, which would send the
+  // admin's bearer during an anonymous preview.
+  const token = requestToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${url}`, { ...init, headers });
   if (!res.ok) {
     let code = fallbackCode;
@@ -384,6 +387,14 @@ async function fetchBlob(
       }
     } catch {
       // Non-JSON error body — keep the generic message.
+    }
+    // 🚨 The same rule as `request`, and this was the one sender without it. After a core restart
+    // dropped its sessions, every download — a poller's token kit, the support bundle, a report
+    // export, the relocation archive — answered 401 into a dialog, left the dead token in place
+    // and `authed` true, and so failed identically on every retry with nothing prompting a sign-in.
+    if (res.status === 401 && token) {
+      setToken(null);
+      onUnauthorized?.();
     }
     throw new ApiError(code, message, res.status);
   }

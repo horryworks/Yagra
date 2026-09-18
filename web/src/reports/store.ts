@@ -10,6 +10,10 @@ interface ReportRunsStore {
   runs: ReportRun[];
   /** True once the initial fetch has resolved (so the UI can tell "empty" from "loading"). */
   loaded: boolean;
+  /** The initial fetch failed. Its own flag because `loaded` cannot say it: only `setRuns` sets
+   *  that, so a seed that failed once left the list on "Loading…" for the life of the page. */
+  loadFailed: boolean;
+  setLoadFailed: (failed: boolean) => void;
   setRuns: (runs: ReportRun[]) => void;
   /** Upsert one run by id (SSE tick or run-now response), newest-first. */
   upsertRun: (run: ReportRun) => void;
@@ -24,7 +28,9 @@ function byNewest(a: ReportRun, b: ReportRun): number {
 export const useReportRunsStore = create<ReportRunsStore>((set) => ({
   runs: [],
   loaded: false,
-  setRuns: (runs) => set({ runs: [...runs].sort(byNewest), loaded: true }),
+  loadFailed: false,
+  setLoadFailed: (loadFailed) => set({ loadFailed }),
+  setRuns: (runs) => set({ runs: [...runs].sort(byNewest), loaded: true, loadFailed: false }),
   upsertRun: (run) =>
     set((s) => {
       const rest = s.runs.filter((r) => r.id !== run.id);

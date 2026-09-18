@@ -4,7 +4,7 @@
 // resource — everyone views, only admins create/edit/run/delete (the write controls are hidden for
 // non-admins; the server enforces it too).
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -25,7 +25,7 @@ import {
   type ReportTab,
 } from './reportListFilters';
 import { usePolled } from '../dashboard/usePolled';
-import { api } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { subscribeReportRuns } from '../services/sse';
 import { useCan } from '../store';
 import { formatTimestamp } from '../lib/format';
@@ -71,20 +71,22 @@ export function ReportsPage() {
   const setRuns = useReportRunsStore((s) => s.setRuns);
   const upsertRun = useReportRunsStore((s) => s.upsertRun);
   const removeRun = useReportRunsStore((s) => s.removeRun);
-  useEffect(() => {
-    let alive = true;
+  const runsFailed = useReportRunsStore((s) => s.loadFailed);
+  const setRunsFailed = useReportRunsStore((s) => s.setLoadFailed);
+  // 🚨 The failure is recorded. It was swallowed, and `loaded` is set by `setRuns` alone — so one
+  // failed seed left Saved reports on "Loading…" for as long as the page stayed open, with no
+  // error and nothing to press.
+  const seedRuns = useCallback(() => {
+    setRunsFailed(false);
     api
       .listReportRuns(100)
-      .then((r) => {
-        if (alive) setRuns(r);
-      })
-      .catch(() => undefined);
-    const unsub = subscribeReportRuns((run) => upsertRun(run));
-    return () => {
-      alive = false;
-      unsub();
-    };
-  }, [setRuns, upsertRun]);
+      .then(setRuns)
+      .catch(() => setRunsFailed(true));
+  }, [setRuns, setRunsFailed]);
+  useEffect(() => {
+    seedRuns();
+    return subscribeReportRuns((run) => upsertRun(run));
+  }, [seedRuns, upsertRun]);
 
   // Catalog + definitions + schedules. Manual reload bumps refetch immediately after a mutation.
   const sections = usePolled(() => api.listReportSections(), [], 300_000);
@@ -102,6 +104,7 @@ export function ReportsPage() {
   const [viewerRunId, setViewerRunId] = useState<string | null>(null);
   const [scheduleFor, setScheduleFor] = useState<ReportSchedule | 'new' | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
   // Destructive-action consent via the shared ConfirmDeleteModal — a failed delete keeps the
   // dialog open and shows the message rather than closing silently.
   const [confirm, setConfirm] = useState<{ text: string; run: () => Promise<void> } | null>(null);
@@ -114,15 +117,24 @@ export function ReportsPage() {
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
   const schedules: ReportSchedule[] = scheds.data ?? [];
+  // A first read that failed has no answer yet, and "none yet" is an answer. `usePolled` keeps
+  // the last good data and asks again on its interval, so this only covers the gap before the
+  // first success — which is exactly when these tabs told an operator to create what they had.
+  const defsUnread = defs.data === null ? defs.error : null;
+  const schedsUnread = scheds.data === null ? (scheds.error ?? defsUnread) : defsUnread;
 
   async function runNow(def: ReportDefinition) {
     setBusy(def.id);
+    setRunError(null);
     try {
       const run = await api.runReport(def.id);
       upsertRun(run);
       setTab('saved');
-    } catch {
-      // surfaced by the next list refresh; keep the UI responsive
+    } catch (e: unknown) {
+      // Said here. The comment used to promise "surfaced by the next list refresh" — but a POST
+      // that failed created no run, so there was never a row for a refresh to surface, and the
+      // button simply went back to "Run now" as if the click had not registered.
+      setRunError(errMsg(e, t('defs.err.runFailed')));
     } finally {
       setBusy(null);
     }
@@ -325,8 +337,20 @@ export function ReportsPage() {
         ))}
       </div>
 
+      {runError && (
+        <p className="form-error" role="alert">
+          {runError}
+        </p>
+      )}
+
       {tab === 'saved' && (
         <>
+          {runsFailed && (
+            <p className="form-error" role="alert">
+              {t('runs.loadFailed')}{' '}
+              <Button onClick={seedRuns}>{t('common:actions.retry')}</Button>
+            </p>
+          )}
           <TableToolbar>
             <FilterButton
               columns={runF.filterCols}
@@ -354,8 +378,14 @@ export function ReportsPage() {
             filterCounts={runF.counts}
             rowKey={(r) => r.id}
             onRowClick={(r) => setViewerRunId(r.id)}
-            empty={runF.anyFiltered ? t('common:filter.noMatch') : t('runs.empty')}
-            loading={!runsLoaded}
+            empty={
+              runsFailed
+                ? t('runs.loadFailed')
+                : runF.anyFiltered
+                  ? t('common:filter.noMatch')
+                  : t('runs.empty')
+            }
+            loading={!runsLoaded && !runsFailed}
           />
           {sheet === 'saved' && (
             <MobileFilterSheet
@@ -409,9 +439,11 @@ export function ReportsPage() {
             filterCounts={defF.counts}
             rowKey={(d) => d.id}
             empty={
-              defF.anyFiltered
-                ? t('common:filter.noMatch')
-                : canConfig
+              defsUnread
+                ? defsUnread
+                : defF.anyFiltered
+                  ? t('common:filter.noMatch')
+                  : canConfig
                   ? t('defs.emptyAdmin')
                   : t('defs.empty')
             }
@@ -471,9 +503,11 @@ export function ReportsPage() {
             filterCounts={schedF.counts}
             rowKey={(s) => s.id}
             empty={
-              schedF.anyFiltered
-                ? t('common:filter.noMatch')
-                : definitions.length === 0
+              schedsUnread
+                ? schedsUnread
+                : schedF.anyFiltered
+                  ? t('common:filter.noMatch')
+                  : definitions.length === 0
                   ? t('scheds.emptyNoDefs')
                   : t('scheds.empty')
             }

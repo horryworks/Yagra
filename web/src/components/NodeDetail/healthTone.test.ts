@@ -4,7 +4,7 @@
 // bands are written as a range instead of a ladder.
 
 import { describe, expect, it } from 'vitest';
-import { certTone, httpToneVar, operLabel, operState } from './healthTone';
+import { availabilityColorVar, certTone, httpToneVar, operLabel, operState } from './healthTone';
 import type { TFunction } from 'i18next';
 
 describe('certTone', () => {
@@ -62,5 +62,19 @@ describe('operLabel', () => {
     // 3 testing / 4 unknown / 5 dormant / 6 notPresent / 7 lowerLayerDown — none of them is up, and
     // the tab's summary counts on exactly that.
     for (const v of [3, 4, 5, 6, 7, 0]) expect(operLabel(v, t)).toBe('interfaces.operDown');
+  });
+});
+
+describe('availabilityColorVar', () => {
+  it('is ok for up and critical for down', () => {
+    expect(availabilityColorVar(1)).toBe('var(--status-ok)');
+    expect(availabilityColorVar(0)).toBe('var(--status-critical)');
+  });
+
+  it('is unknown — never critical — when there is no reading yet', () => {
+    // The defect: both tiles chose on `up === 1`, so the `—` of a monitor that had not been
+    // polled was drawn in the failure colour.
+    expect(availabilityColorVar(null)).toBe('var(--status-unknown)');
+    expect(availabilityColorVar(undefined)).toBe('var(--status-unknown)');
   });
 });

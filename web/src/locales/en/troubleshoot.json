@@ -20,6 +20,7 @@
     "pageNote": "{{n}} running · background diagnostic jobs with live progress and results",
     "card": "Runs",
     "empty": "No analysis runs yet.",
+    "loadFailed": "The analysis runs could not be loaded.",
     "running": "Running…",
     "done": "done",
     "findingCount_one": "{{count}} finding",

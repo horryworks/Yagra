@@ -24,6 +24,10 @@ interface TroubleshootStore {
   jobs: AnalysisJob[];
   /** True once the initial fetch has resolved (so the UI can tell "empty" from "loading"). */
   loaded: boolean;
+  /** The seed failed. `loaded` cannot say so — only `setJobs` sets it — so a seed that failed once
+   *  left the runs list on "Loading…" for good. */
+  loadFailed: boolean;
+  setLoadFailed: (failed: boolean) => void;
 
   setJobs: (jobs: AnalysisJob[]) => void;
   /** Upsert one job by id (SSE tick or create response), keeping newest-first order. */
@@ -56,8 +60,10 @@ function byNewest(a: AnalysisJob, b: AnalysisJob): number {
 export const useTroubleshootStore = create<TroubleshootStore>((set, get) => ({
   jobs: [],
   loaded: false,
+  loadFailed: false,
+  setLoadFailed: (loadFailed) => set({ loadFailed }),
 
-  setJobs: (jobs) => set({ jobs: [...jobs].sort(byNewest), loaded: true }),
+  setJobs: (jobs) => set({ jobs: [...jobs].sort(byNewest), loaded: true, loadFailed: false }),
 
   watched: new Set<string>(),
   watchJob: (id) => set((s) => ({ watched: new Set(s.watched).add(id) })),

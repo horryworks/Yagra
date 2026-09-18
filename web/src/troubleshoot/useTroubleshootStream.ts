@@ -8,18 +8,25 @@ import { api } from '../services/api';
 import { subscribeAnalysis } from '../services/sse';
 import { useTroubleshootStore } from './store';
 
+/** Fetch the recent jobs into the store. Exported so the runs list can offer a retry.
+ *
+ *  🚨 A failure is recorded, not swallowed. SSE does deliver later updates, but it never delivers
+ *  the jobs that already exist — and `loaded` is set by `setJobs` alone, so one failed seed left
+ *  `/troubleshoot/runs` reading "Loading…" for as long as the app stayed open. */
+export function seedAnalysisJobs(): void {
+  const { setJobs, setLoadFailed } = useTroubleshootStore.getState();
+  setLoadFailed(false);
+  api
+    .listAnalysisJobs(50)
+    .then(setJobs)
+    .catch(() => setLoadFailed(true));
+}
+
 export function useTroubleshootStream(): void {
-  const setJobs = useTroubleshootStore((s) => s.setJobs);
   const upsertJob = useTroubleshootStore((s) => s.upsertJob);
 
   useEffect(() => {
-    // Seed: fetch recent jobs once (tolerates transient failure — SSE still delivers updates).
-    api
-      .listAnalysisJobs(50)
-      .then(setJobs)
-      .catch(() => {
-        /* transient / gated */
-      });
+    seedAnalysisJobs();
     return subscribeAnalysis(upsertJob);
-  }, [setJobs, upsertJob]);
+  }, [upsertJob]);
 }

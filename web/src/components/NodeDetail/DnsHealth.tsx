@@ -24,6 +24,7 @@ import { useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { chainSummary, chainToRows, failureLabel } from './dnsChain';
 import type { DnsChainChange, DnsChainCurrent, DnsCheckConfig } from '../../types/api';
+import { availabilityColorVar } from './healthTone';
 import { DNS_CARD } from './overviewClaims';
 import './DnsHealth.css';
 
@@ -143,7 +144,7 @@ export function DnsHealth({
             <span className="nd-health-metric-label">{t('overview.resolution')}</span>
             <span
               className="nd-health-metric-value"
-              style={{ color: resolves ? 'var(--status-ok)' : 'var(--status-critical)' }}
+              style={{ color: availabilityColorVar(up) }}
             >
               {up == null ? '—' : resolves ? t('overview.resolves') : t('overview.doesNotResolve')}
             </span>

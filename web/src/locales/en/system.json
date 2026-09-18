@@ -708,6 +708,7 @@
       "test": "Could not test the connection",
       "save": "Could not save the NetBox deployment",
       "sync": "Sync failed",
+      "toggle": "Could not change whether this server is enabled",
       "delete": "Could not remove the NetBox deployment"
     }
   }
