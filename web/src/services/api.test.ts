@@ -1671,6 +1671,27 @@ describe('api client', () => {
     });
   });
 
+  it('sends the filing choice with an import and hands back how the devices were filed', async () => {
+    const answer = {
+      imported: 2,
+      ranges_configured: true,
+      filed: { matched: 1, ambiguous: 0, unmatched: 1, no_address: 0 },
+    };
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => answer } as Response);
+    globalThis.fetch = spy;
+    const got = await api.importMerakiDevices({
+      org_uuid: 'org-1',
+      monitored_network_ids: [],
+      devices: [],
+      file_by_prefix: false,
+    });
+    // `false` has to survive: dropped, the server reads the field as absent, which means true.
+    expect(JSON.parse(spy.mock.calls[0][1].body).file_by_prefix).toBe(false);
+    expect(got).toEqual(answer);
+  });
+
   it('toggles the global Meraki kill switch', async () => {
     const spy = vi
       .fn()

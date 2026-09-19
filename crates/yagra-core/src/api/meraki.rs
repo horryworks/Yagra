@@ -39,7 +39,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::meraki_inventory::{DeviceRecord, MerakiDeviceCounts, MerakiDeviceState};
+use crate::meraki_filing::{addresses_to_match, plan_filing, MerakiFiled};
+use crate::meraki_inventory::{
+    usable_address, DeviceRecord, MerakiDeviceCounts, MerakiDeviceState,
+};
 use crate::meraki_sync::{MerakiSyncFailure, MerakiSyncReport, SyncError};
 
 /// Timeout for a control-plane Meraki API call (discover/enumerate) from core.
@@ -976,6 +979,16 @@ pub(super) struct MerakiImportReq {
     #[serde(default)]
     monitored_network_ids: Vec<String>,
     devices: Vec<MerakiImportDeviceReq>,
+    /// File each device into the folder whose IP range holds its address, when exactly one does.
+    /// Defaults to true; false files every device under the organization's network folders.
+    #[serde(default = "file_by_prefix_default")]
+    file_by_prefix: bool,
+}
+
+/// Absent means yes: a client written before the field existed gets the behaviour a new one asks
+/// for, which is the point of the feature — a deployment with no IP ranges sees no difference.
+fn file_by_prefix_default() -> bool {
+    true
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -993,21 +1006,30 @@ pub(super) struct MerakiImportDeviceReq {
     lan_ip: Option<String>,
 }
 
-/// How many devices an import created.
+/// What an import created, and where it put it.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiImported {
+    /// Devices that became nodes. A serial that already was one is not counted.
     imported: u32,
+    /// How those devices were filed. The four add up to `imported`, except that all four are zero
+    /// when the request switched filing by IP range off.
+    filed: MerakiFiled,
+    /// Whether any folder carries an IP range at all. False means `filed.unmatched` says nothing
+    /// about the devices: there was nothing for an address to match.
+    ranges_configured: bool,
 }
 
 /// Import selected devices as nodes, atomically.
 ///
-/// Already-imported serials are skipped rather than rejected, so re-running the wizard after a
-/// partial selection does the obvious thing instead of erroring on the ones already there.
+/// A device whose address falls inside exactly one folder's IP range is filed in that folder;
+/// every other device goes under the organization's folder, in a folder named after its network.
+/// Already-imported serials are skipped rather than rejected, so importing again after a partial
+/// selection does the obvious thing instead of erroring on the ones already there.
 #[utoipa::path(
     post, path = "/api/v1/meraki/import", tag = "meraki",
     request_body = MerakiImportReq,
     responses(
-        (status = 201, description = "How many devices became nodes; already-imported serials are skipped", body = MerakiImported),
+        (status = 201, description = "How many devices became nodes and how they were filed; already-imported serials are skipped", body = MerakiImported),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
@@ -1039,37 +1061,61 @@ async fn import_meraki_devices(
             .set_networks_monitored(org.id, &body.monitored_network_ids, true)
             .await;
     }
-    let imported = admin
-        .meraki_devices
-        .serials(org.id)
-        .await
-        .unwrap_or_default();
+    // Where each device goes is decided here and written by `import_devices`; which serials are
+    // already nodes is decided *there*, under its lock. Reading them here first is what let two
+    // imports of one device both see it free.
+    //
+    // 🚨 A failed range read fails the import. Falling back to the network folders would turn
+    // "the database could not be read" into "no range matched", and file a site's devices in the
+    // wrong place with a 201 to show for it.
+    let addresses: Vec<Option<std::net::IpAddr>> = body
+        .devices
+        .iter()
+        .map(|d| d.lan_ip.as_deref().and_then(usable_address))
+        .collect();
+    let ranges_configured = admin.groups.any_prefixes(None).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "import: read ip ranges",
+            "failed to import meraki devices",
+        )
+    })?;
+    let fold = if body.file_by_prefix && ranges_configured {
+        let asked = addresses_to_match(&addresses);
+        // Unscoped: a folder-scoped caller was refused above, so there is no scope to narrow by.
+        let hits = admin
+            .groups
+            .match_address_prefixes(&asked, None)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "import: match ip ranges",
+                    "failed to import meraki devices",
+                )
+            })?;
+        crate::groups::fold_prefix_matches(&asked, hits)
+    } else {
+        // Nothing to ask, or nothing to ask against: an empty answer, which `plan_filing` reads as
+        // "no range holds it" for every address.
+        crate::groups::fold_prefix_matches::<std::net::IpAddr>(&[], Vec::new())
+    };
+    let filings = plan_filing(&addresses, &fold, body.file_by_prefix);
 
     let mut to_import = Vec::new();
-    for d in &body.devices {
-        if imported.contains(&d.serial) {
-            continue;
-        }
-        // Prefer the built-in Meraki-API profile for the product type; fall back to the category's
-        // profile so an unrecognized product type still gets monitored rather than nothing.
-        let profile_id = match yagra_common::api_profile_name_for_product_type(&d.product_type) {
-            Some(name) => admin.repo.profile_id_for_name(name).await.unwrap_or(None),
-            None => None,
+    // One lookup per product type, not per device: a request names a handful of types and may name
+    // a thousand devices, most of which the writer will skip as already imported.
+    let mut profiles: std::collections::HashMap<String, Option<Uuid>> =
+        std::collections::HashMap::new();
+    for ((d, lan_ip), filing) in body.devices.iter().zip(addresses).zip(filings) {
+        let profile_id = match profiles.get(&d.product_type) {
+            Some(known) => *known,
+            None => {
+                let found = meraki_profile_for(&admin, &d.product_type).await;
+                profiles.insert(d.product_type.clone(), found);
+                found
+            }
         };
-        let profile_id = match profile_id {
-            Some(p) => Some(p),
-            None => admin
-                .repo
-                .profile_id_for_category(
-                    yagra_common::category_for_product_type(&d.product_type).as_str(),
-                )
-                .await
-                .unwrap_or(None),
-        };
-        let lan_ip = d
-            .lan_ip
-            .as_deref()
-            .and_then(|s| s.parse::<std::net::IpAddr>().ok());
         // A device with no name is identified by its serial, which is always present.
         let name = if d.name.trim().is_empty() {
             d.serial.clone()
@@ -1090,9 +1136,10 @@ async fn import_meraki_devices(
             network_name,
             lan_ip,
             profile_id,
+            filing,
         });
     }
-    let count = admin
+    let outcome = admin
         .meraki_orgs
         .import_devices(&org, &to_import)
         .await
@@ -1105,8 +1152,31 @@ async fn import_meraki_devices(
         })?;
     Ok((
         StatusCode::CREATED,
-        Json(MerakiImported { imported: count }),
+        Json(MerakiImported {
+            imported: outcome.imported,
+            filed: outcome.filed,
+            ranges_configured,
+        }),
     ))
+}
+
+/// The profile a Meraki device of this product type is monitored with: the built-in Meraki-API
+/// profile for the type, else its category's profile, so an unrecognized product type still gets
+/// monitored rather than nothing. A failed read is `None` — the node is created without a profile
+/// and an operator can set one; refusing the import over it would be the worse trade.
+async fn meraki_profile_for(admin: &super::AdminState, product_type: &str) -> Option<Uuid> {
+    let by_name = match yagra_common::api_profile_name_for_product_type(product_type) {
+        Some(name) => admin.repo.profile_id_for_name(name).await.unwrap_or(None),
+        None => None,
+    };
+    match by_name {
+        Some(p) => Some(p),
+        None => admin
+            .repo
+            .profile_id_for_category(yagra_common::category_for_product_type(product_type).as_str())
+            .await
+            .unwrap_or(None),
+    }
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -1593,5 +1663,121 @@ mod tests {
         let unknown = format!("/api/v1/meraki/orgs/{ID}/devices");
         let (status, answer) = send(&st, "GET", &unknown, &operator, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    }
+
+    /// An import is accepted, files each device by its address, and says how (ADR-164): the one
+    /// folder whose IP range holds the address, otherwise the organization's network folder — and
+    /// `0.0.0.0` is not an address, whatever range would hold it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_import_files_each_device_by_its_address_and_says_how(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let caller = token(&st, yagra_common::Role::Admin);
+        let device = |serial: &str, ip: Option<&str>| {
+            serde_json::json!({
+                "serial": serial, "name": serial, "model": "MR46", "product_type": "wireless",
+                "network_id": "N_1", "network_name": "One", "lan_ip": ip,
+            })
+        };
+        let folder_of = |pool: sqlx::PgPool, serial: &'static str| async move {
+            sqlx::query_scalar::<_, Option<Uuid>>(
+                "SELECT n.group_id FROM nodes n JOIN meraki_devices d ON d.node_id = n.id \
+                 WHERE d.serial = $1",
+            )
+            .bind(serial)
+            .fetch_one(&pool)
+            .await
+            .expect("the node's folder")
+        };
+        let network = crate::meraki::network_group_id(org, "N_1");
+
+        // No folder carries a range yet: everything goes under the network, and the answer says
+        // that "unmatched" is not a statement about the devices.
+        let (status, answer) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &caller,
+            Some(serde_json::json!({ "org_uuid": org, "devices": [device("Q3-0", Some("10.1.0.4"))] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{answer}");
+        assert_eq!(answer["imported"], 1, "{answer}");
+        assert_eq!(answer["ranges_configured"], false, "{answer}");
+        assert_eq!(folder_of(pool.clone(), "Q3-0").await, Some(network));
+
+        // A site with a range, and a catch-all that would swallow an address-less device if
+        // `0.0.0.0` were treated as an address.
+        let site = crate::pgtest::group(&pool, "Matsuyama").await;
+        crate::pgtest::prefix(&pool, site, "10.1.0.0/24").await;
+        let everything = crate::pgtest::group(&pool, "Everything").await;
+        crate::pgtest::prefix(&pool, everything, "0.0.0.0/0").await;
+
+        let (status, answer) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &caller,
+            Some(serde_json::json!({
+                "org_uuid": org,
+                "devices": [
+                    device("Q3-1", Some("10.1.0.5")),
+                    device("Q3-2", None),
+                    device("Q3-3", Some("0.0.0.0")),
+                    device("Q3-0", Some("10.1.0.4")),
+                ],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{answer}");
+        assert_eq!(
+            answer["imported"], 3,
+            "the already-imported serial was counted: {answer}"
+        );
+        assert_eq!(answer["ranges_configured"], true, "{answer}");
+        assert_eq!(
+            answer["filed"],
+            serde_json::json!({ "matched": 1, "ambiguous": 0, "unmatched": 0, "no_address": 2 }),
+            "{answer}"
+        );
+        assert_eq!(
+            folder_of(pool.clone(), "Q3-1").await,
+            Some(site),
+            "the longest range did not win over the catch-all"
+        );
+        assert_eq!(folder_of(pool.clone(), "Q3-2").await, Some(network));
+        assert_eq!(
+            folder_of(pool.clone(), "Q3-3").await,
+            Some(network),
+            "0.0.0.0 was matched against the catch-all range"
+        );
+
+        // Switched off, the same address goes under the network and nothing is claimed about it.
+        let (status, answer) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &caller,
+            Some(serde_json::json!({
+                "org_uuid": org, "file_by_prefix": false,
+                "devices": [device("Q3-4", Some("10.1.0.6"))],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{answer}");
+        assert_eq!(
+            answer["filed"],
+            serde_json::json!({ "matched": 0, "ambiguous": 0, "unmatched": 0, "no_address": 0 }),
+            "{answer}"
+        );
+        assert_eq!(folder_of(pool.clone(), "Q3-4").await, Some(network));
     }
 }

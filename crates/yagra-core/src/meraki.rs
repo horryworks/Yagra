@@ -20,6 +20,7 @@ use uuid::Uuid;
 use yagra_bus::{MerakiCollectCheck, MerakiDeviceRef};
 use yagra_common::{MerakiDeviceConfig, MerakiTier};
 
+use crate::meraki_filing::{Filing, MerakiFiled};
 use crate::secrets::{CredentialStore, MerakiApiSecret, KIND_MERAKI_API};
 
 /// Default page-size cap sent to paginated Dashboard endpoints.
@@ -44,6 +45,27 @@ pub fn network_group_id(org_uuid: Uuid, network_id: &str) -> Uuid {
         &MERAKI_GROUP_NS,
         format!("{org_uuid}:{network_id}").as_bytes(),
     )
+}
+
+/// Namespace for the node ids below. Its own, so a node id can never equal a folder id whatever a
+/// serial happens to spell.
+const MERAKI_NODE_NS: Uuid = Uuid::from_u128(0x6d65_7261_6b69_0000_0000_0000_0000_0002);
+
+/// The node id a Meraki device gets when it is imported (ADR-164) — derived from its serial alone.
+///
+/// A node's id is the key of everything Yagra remembers about it outside PostgreSQL: its series in
+/// the TSDB, its alert history. A random id meant that deleting a device and importing it again
+/// produced a stranger with an empty past. Keyed by the serial, the same device comes back as
+/// itself — the choice ADR-064 made for an access point.
+///
+/// 🚨 **The organization is deliberately not part of it.** A serial is unique across all of Meraki,
+/// and an organization's own id is random per registration, so including it would lose the history
+/// on exactly the day someone removes an organization and adds it back.
+///
+/// ⚠️ Nodes imported before this existed keep their random ids; nothing re-keys them.
+#[must_use]
+pub fn device_node_id(serial: &str) -> Uuid {
+    Uuid::new_v5(&MERAKI_NODE_NS, serial.as_bytes())
 }
 
 /// A Cisco Meraki organization row (the polling + rate-limit unit).
@@ -221,7 +243,11 @@ impl MerakiInflight {
     }
 }
 
-/// One device to import (pre-resolved by the API handler from the enumerate candidates).
+/// One device to import, with **where it goes already decided** (ADR-164).
+///
+/// The caller resolves the profile and the [`Filing`]; [`MerakiOrgRepo::import_devices`] only
+/// writes. That split is what lets the manual import and the automatic one be one writer: they
+/// differ in which devices they pick, never in what happens to a picked device.
 pub struct MerakiImportDevice {
     pub serial: String,
     pub name: String,
@@ -231,6 +257,15 @@ pub struct MerakiImportDevice {
     pub network_name: String,
     pub lan_ip: Option<IpAddr>,
     pub profile_id: Option<Uuid>,
+    pub filing: Filing,
+}
+
+/// What one [`MerakiOrgRepo::import_devices`] call did. A device it skipped appears in neither
+/// number.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MerakiImportOutcome {
+    pub imported: u32,
+    pub filed: MerakiFiled,
 }
 
 /// PostgreSQL-backed store for Meraki orgs + their network scope + device import.
@@ -544,53 +579,150 @@ impl MerakiOrgRepo {
 
     // ── Import ───────────────────────────────────────────────────────────────────────────
 
-    /// Bulk-import Meraki devices **atomically**: create one HostTree group per network (idempotent,
-    /// under the org root group), then each node + its `meraki_devices` row, all in one transaction.
-    /// Devices whose serial is already imported are skipped by the caller. Nodes carry no per-node
-    /// credential (the org owns the key). Returns how many were inserted.
+    /// The advisory lock [`Self::import_devices`] serialises on.
+    ///
+    /// 🚨 Its own key. Not [`crate::leader`]'s, which the leader holds as a *session* lock for its
+    /// whole life, and not `NodeRepo`'s import key either — a Meraki device is identified by its
+    /// serial and an address import by its address, so the two contend on nothing and sharing a
+    /// key would only make one wait for the other. Transaction-scoped, so a failed import cannot
+    /// leave it held. (The bytes spell `YAGRMRKI`.)
+    const IMPORT_LOCK_KEY: i64 = 0x5941_4752_4d52_4b49;
+
+    /// Turn Meraki devices into nodes, **atomically** — the one writer every import goes through
+    /// (ADR-164). Each device arrives with its [`Filing`] decided; this only writes.
+    ///
+    /// - **A serial that is already a node is skipped, and that is decided in here**, under
+    ///   [`Self::IMPORT_LOCK_KEY`]. The caller used to read the bound serials first and filter, so
+    ///   two imports of one device both saw it free; the second then hit `meraki_devices.serial`'s
+    ///   `UNIQUE` and took the whole batch down with a 500. ⚠️ The read is across **every**
+    ///   organization, because that is what the constraint spans.
+    /// - **A device goes to the folder its filing names, otherwise under `Organization ▸ Network`.**
+    ///   A network's folder is created only when a device actually lands in it, so an organization
+    ///   whose devices all match an IP range grows no parallel tree.
+    /// - **The organization's own folder is put back if an operator deleted it** — same
+    ///   deterministic id, and the row re-pointed at it. Deleting it sets `meraki_orgs.group_id`
+    ///   to NULL (`ON DELETE SET NULL`), and until this writer every later device was then filed
+    ///   nowhere at all, at the top of the tree, with nothing saying why.
+    /// - A matched folder that was deleted between the match and this transaction is read as
+    ///   no match, rather than failing the batch on the foreign key.
+    /// - The node id comes from [`device_node_id`], and `meraki_inventory.imported_at` is stamped
+    ///   in this transaction — so "this device was a node once" cannot be lost to a crash between
+    ///   the two, which is the fact that keeps a deleted device from being imported again.
+    ///
+    /// Nodes carry no per-node credential (the organization owns the key).
     pub async fn import_devices(
         &self,
         org: &MerakiOrg,
         devices: &[MerakiImportDevice],
-    ) -> anyhow::Result<u32> {
+    ) -> anyhow::Result<MerakiImportOutcome> {
+        let mut outcome = MerakiImportOutcome::default();
+        if devices.is_empty() {
+            return Ok(outcome);
+        }
         let mut tx = self.pool.begin().await?;
-        let mut created_groups: HashSet<Uuid> = HashSet::new();
-        let mut count = 0u32;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(Self::IMPORT_LOCK_KEY)
+            .execute(&mut *tx)
+            .await?;
+
+        let wanted: Vec<String> = devices.iter().map(|d| d.serial.clone()).collect();
+        let mut taken: HashSet<String> =
+            sqlx::query_scalar("SELECT serial FROM meraki_devices WHERE serial = ANY($1)")
+                .bind(&wanted)
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .collect();
+        let chosen: Vec<Uuid> = devices.iter().filter_map(|d| d.filing.folder()).collect();
+        let standing: HashSet<Uuid> =
+            sqlx::query_scalar("SELECT id FROM node_groups WHERE id = ANY($1)")
+                .bind(&chosen)
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .collect();
+
+        let root = org_group_id(org.id);
+        let mut root_ready = false;
+        let mut networks_ready: HashSet<Uuid> = HashSet::new();
+        let mut created: Vec<String> = Vec::new();
 
         for d in devices {
-            // Network folder (idempotent), parented to the org root folder. Appended over the
-            // parent's whole scope (ADR-162) — the org folder holds nodes as well as networks.
-            let group = network_group_id(org.id, &d.network_id);
-            let group_order = crate::groups::append_base_sql("$3", "");
-            if org.group_id.is_some() && created_groups.insert(group) {
-                sqlx::query(&format!(
-                    "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
-                     VALUES ($1, $2, 'site', $3, {group_order} + 1) ON CONFLICT (id) DO NOTHING"
-                ))
-                .bind(group)
-                .bind(&d.network_name)
-                .bind(org.group_id)
-                .execute(&mut *tx)
-                .await?;
+            // `insert`, not `contains`: a serial listed twice in one batch is one device too.
+            if !taken.insert(d.serial.clone()) {
+                continue;
             }
-            let node_group = org.group_id.map(|_| group);
+            let filing = match &d.filing {
+                Filing::Matched { folder, .. } if !standing.contains(folder) => Filing::Unmatched,
+                other => other.clone(),
+            };
+            let group = match filing.folder() {
+                Some(folder) => folder,
+                None => {
+                    if !root_ready {
+                        // Top level, appended over that whole scope (ADR-162). A no-op when the
+                        // folder is where `create` put it — or wherever an operator moved it.
+                        let order = crate::groups::append_base_sql("NULL", "");
+                        sqlx::query(&format!(
+                            "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
+                             VALUES ($1, $2, 'region', NULL, {order} + 1) \
+                             ON CONFLICT (id) DO NOTHING"
+                        ))
+                        .bind(root)
+                        .bind(&org.name)
+                        .execute(&mut *tx)
+                        .await?;
+                        sqlx::query(
+                            "UPDATE meraki_orgs SET group_id = $2, updated_at = now() \
+                             WHERE id = $1 AND group_id IS DISTINCT FROM $2",
+                        )
+                        .bind(org.id)
+                        .bind(root)
+                        .execute(&mut *tx)
+                        .await?;
+                        root_ready = true;
+                    }
+                    // Network folder (idempotent), parented to the org root folder. Appended over
+                    // the parent's whole scope (ADR-162) — that folder holds nodes as well.
+                    let network = network_group_id(org.id, &d.network_id);
+                    if networks_ready.insert(network) {
+                        let order = crate::groups::append_base_sql("$3", "");
+                        sqlx::query(&format!(
+                            "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
+                             VALUES ($1, $2, 'site', $3, {order} + 1) ON CONFLICT (id) DO NOTHING"
+                        ))
+                        .bind(network)
+                        .bind(&d.network_name)
+                        .bind(root)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
+                    network
+                }
+            };
 
-            let node_id = Uuid::new_v4();
+            let node_id = device_node_id(&d.serial);
             let address = d.lan_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
             // Appended over the destination folder's whole scope (ADR-162). Left at its DEFAULT 0
             // every imported device would sit above that folder's sub-folders.
+            //
+            // `ON CONFLICT DO NOTHING` because the id is derived: a node can already stand at it
+            // with no binding (one carried here by a configuration bundle, which knows nothing of
+            // `meraki_devices`). That node *is* this device, so it is bound below where it stands
+            // rather than failing the batch on the primary key.
             let node_order = crate::groups::append_base_sql("$6", "");
             sqlx::query(&format!(
                 "INSERT INTO nodes \
                    (id, name, address, profile_id, vendor, model, group_id, sort_order) \
-                 VALUES ($1, $2, $3::inet, $4, 'Cisco Meraki', $5, $6, {node_order} + 1)"
+                 VALUES ($1, $2, $3::inet, $4, 'Cisco Meraki', $5, $6, {node_order} + 1) \
+                 ON CONFLICT (id) DO NOTHING"
             ))
             .bind(node_id)
             .bind(&d.name)
             .bind(address.to_string())
             .bind(d.profile_id)
             .bind(&d.model)
-            .bind(node_group)
+            .bind(group)
             .execute(&mut *tx)
             .await?;
 
@@ -607,10 +739,25 @@ impl MerakiOrgRepo {
             .bind(&d.model)
             .execute(&mut *tx)
             .await?;
-            count += 1;
+            outcome.imported += 1;
+            outcome.filed.count(&filing);
+            created.push(d.serial.clone());
+        }
+
+        // A device imported before the organization's first sync has no inventory row yet, and this
+        // touches nothing; the next sync writes the row and takes the stamp from the binding.
+        if !created.is_empty() {
+            sqlx::query(
+                "UPDATE meraki_inventory SET imported_at = COALESCE(imported_at, now()) \
+                 WHERE org_id = $1 AND serial = ANY($2)",
+            )
+            .bind(org.id)
+            .bind(&created)
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
-        Ok(count)
+        Ok(outcome)
     }
 }
 
@@ -820,6 +967,35 @@ mod tests {
         assert_ne!(
             network_group_id(org_uuid, "N_1"),
             network_group_id(org_uuid, "N_2")
+        );
+    }
+
+    /// The node id is a function of the serial and of nothing else — in particular not of the
+    /// organization, whose own id is random per registration.
+    #[test]
+    fn a_devices_node_id_depends_on_its_serial_alone() {
+        assert_eq!(
+            device_node_id("Q2XX-AAAA-BBBB"),
+            device_node_id("Q2XX-AAAA-BBBB")
+        );
+        assert_ne!(
+            device_node_id("Q2XX-AAAA-BBBB"),
+            device_node_id("Q2XX-AAAA-BBBC")
+        );
+        // Pinned by value: changing the namespace or the input would re-key every Meraki node
+        // imported since ADR-164 and orphan its history, and nothing else would notice.
+        assert_eq!(
+            device_node_id("Q2XX-AAAA-BBBB"),
+            Uuid::new_v5(
+                &Uuid::from_u128(0x6d65_7261_6b69_0000_0000_0000_0000_0002),
+                b"Q2XX-AAAA-BBBB"
+            )
+        );
+        // Its own namespace, so it cannot equal a folder id derived from the same bytes.
+        let as_org = Uuid::from_u128(7);
+        assert_ne!(
+            Uuid::new_v5(&MERAKI_NODE_NS, as_org.as_bytes()),
+            org_group_id(as_org)
         );
     }
 
@@ -1196,7 +1372,28 @@ mod tests {
             network_name: network_name.to_owned(),
             lan_ip: Some("10.4.0.9".parse().expect("addr")),
             profile_id: None,
+            // What the match says when no folder carries a range: the network folder.
+            filing: Filing::Unmatched,
         }
+    }
+
+    fn filed_in(mut d: MerakiImportDevice, folder: Uuid) -> MerakiImportDevice {
+        d.filing = Filing::Matched {
+            folder,
+            prefix: "10.4.0.0/24".to_owned(),
+        };
+        d
+    }
+
+    async fn group_of(pool: &sqlx::PgPool, serial: &str) -> Option<Uuid> {
+        sqlx::query_scalar(
+            "SELECT n.group_id FROM nodes n JOIN meraki_devices d ON d.node_id = n.id \
+             WHERE d.serial = $1",
+        )
+        .bind(serial)
+        .fetch_one(pool)
+        .await
+        .expect("the node's folder")
     }
 
     /// Importing devices creates one HostTree group per network under the org's root, one node per
@@ -1225,7 +1422,15 @@ mod tests {
             )
             .await
             .expect("import");
-        assert_eq!(imported, 3);
+        assert_eq!(imported.imported, 3);
+        assert_eq!(
+            imported.filed,
+            MerakiFiled {
+                unmatched: 3,
+                ..MerakiFiled::default()
+            },
+            "every device was filed by what its filing said"
+        );
         assert_eq!(pgtest::rows(&pool, "nodes").await, 3);
         assert_eq!(pgtest::rows(&pool, "meraki_devices").await, 3);
         assert_eq!(
@@ -1294,6 +1499,266 @@ mod tests {
         assert_eq!(bound.network_id, "N_1");
         assert_eq!(bound.product_type, "wireless");
         assert_eq!(bound.model.as_deref(), Some("MR46"));
+    }
+
+    async fn acme(pool: &sqlx::PgPool) -> (MerakiOrgRepo, MerakiOrg) {
+        let cred = pgtest::credential(pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let id = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+        let org = repo.get(id).await.expect("get").expect("the org");
+        (repo, org)
+    }
+
+    /// A device goes where its filing says, and a network's folder exists only if a device landed
+    /// in it — an organization whose devices all match an IP range grows no parallel tree.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_device_is_filed_where_its_filing_says_and_only_used_network_folders_exist(
+        pool: sqlx::PgPool,
+    ) {
+        let (repo, org) = acme(&pool).await;
+        let site = pgtest::group(&pool, "Matsuyama").await;
+
+        let mut ambiguous = device("Q3-4", "N_1", "One");
+        ambiguous.filing = Filing::Ambiguous { folders: 2 };
+        let outcome = repo
+            .import_devices(
+                &org,
+                &[
+                    filed_in(device("Q3-1", "N_2", "Two"), site),
+                    filed_in(device("Q3-2", "N_3", "Three"), site),
+                    device("Q3-3", "N_1", "One"),
+                    ambiguous,
+                ],
+            )
+            .await
+            .expect("import");
+        assert_eq!(outcome.imported, 4);
+        assert_eq!(
+            outcome.filed,
+            MerakiFiled {
+                matched: 2,
+                ambiguous: 1,
+                unmatched: 1,
+                no_address: 0
+            }
+        );
+        assert_eq!(group_of(&pool, "Q3-1").await, Some(site));
+        assert_eq!(group_of(&pool, "Q3-2").await, Some(site));
+        let n1 = network_group_id(org.id, "N_1");
+        assert_eq!(group_of(&pool, "Q3-3").await, Some(n1));
+        assert_eq!(
+            group_of(&pool, "Q3-4").await,
+            Some(n1),
+            "an ambiguous address was resolved instead of falling to the network folder"
+        );
+        // The site, the org's root and N_1. N_2 and N_3 held only matched devices.
+        assert_eq!(
+            pgtest::rows(&pool, "node_groups").await,
+            3,
+            "a network folder was created for devices that were filed elsewhere"
+        );
+    }
+
+    /// Which serials are already nodes is decided inside the writer, under its lock: two imports of
+    /// one device leave one node, and neither fails. Before ADR-164 the caller filtered first, so
+    /// the loser hit `meraki_devices.serial`'s UNIQUE and the whole batch answered 500.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn two_imports_of_one_device_leave_one_node_and_neither_fails(pool: sqlx::PgPool) {
+        let (repo, org) = acme(&pool).await;
+        let first = [device("Q3-1", "N_1", "One"), device("Q3-2", "N_1", "One")];
+        let second = [device("Q3-1", "N_1", "One"), device("Q3-3", "N_1", "One")];
+        let (a, b) = tokio::join!(
+            repo.import_devices(&org, &first),
+            repo.import_devices(&org, &second)
+        );
+        let (a, b) = (a.expect("first import"), b.expect("second import"));
+        assert_eq!(
+            a.imported + b.imported,
+            3,
+            "the shared serial was counted by both imports, or by neither"
+        );
+        assert_eq!(pgtest::rows(&pool, "meraki_devices").await, 3);
+        assert_eq!(pgtest::rows(&pool, "nodes").await, 3);
+
+        // Again, alone: everything is already there, so nothing is created and nothing is counted.
+        let again = repo.import_devices(&org, &first).await.expect("again");
+        assert_eq!(again, MerakiImportOutcome::default());
+        // …and a serial named twice in one batch is one device.
+        let twice = [device("Q3-9", "N_1", "One"), device("Q3-9", "N_1", "One")];
+        let once = repo.import_devices(&org, &twice).await.expect("twice");
+        assert_eq!(once.imported, 1);
+    }
+
+    /// The UNIQUE on `meraki_devices.serial` spans every organization, so the skip has to as well:
+    /// a serial bound under another organization is left alone, and the rest of the batch lands.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_serial_bound_under_another_organization_is_skipped_not_fatal(pool: sqlx::PgPool) {
+        let (repo, org) = acme(&pool).await;
+        let cred = pgtest::credential(&pool, "other-key", "meraki_api").await;
+        let other = repo
+            .create("2", "Other", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+        let other = repo.get(other).await.expect("get").expect("the other org");
+        repo.import_devices(&other, &[device("Q3-1", "N_9", "Nine")])
+            .await
+            .expect("the other org's import");
+
+        let outcome = repo
+            .import_devices(
+                &org,
+                &[device("Q3-1", "N_1", "One"), device("Q3-2", "N_1", "One")],
+            )
+            .await
+            .expect("a serial held elsewhere must not fail the batch");
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(
+            group_of(&pool, "Q3-1").await,
+            Some(network_group_id(other.id, "N_9")),
+            "the other organization's device was moved"
+        );
+    }
+
+    /// A device deleted and imported again comes back as itself: same node id, so its series and
+    /// its alert history are its own again. The id is a function of the serial alone.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_deleted_device_comes_back_under_the_same_node_id(pool: sqlx::PgPool) {
+        let (repo, org) = acme(&pool).await;
+        let id_of = |pool: sqlx::PgPool| async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT node_id FROM meraki_devices WHERE serial = 'Q3-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("the binding")
+        };
+        repo.import_devices(&org, &[device("Q3-1", "N_1", "One")])
+            .await
+            .expect("import");
+        let first = id_of(pool.clone()).await;
+        assert_eq!(first, device_node_id("Q3-1"));
+        assert_ne!(first, device_node_id("Q3-2"));
+
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(first)
+            .execute(&pool)
+            .await
+            .expect("delete the node");
+        assert_eq!(pgtest::rows(&pool, "meraki_devices").await, 0);
+
+        let back = repo
+            .import_devices(&org, &[device("Q3-1", "N_1", "One")])
+            .await
+            .expect("import again");
+        assert_eq!(
+            back.imported, 1,
+            "a deleted device could not be imported by hand"
+        );
+        assert_eq!(id_of(pool.clone()).await, first);
+    }
+
+    /// An operator who deletes the organization's folder sets `meraki_orgs.group_id` to NULL
+    /// (`ON DELETE SET NULL`). The next import puts the folder back under the same id and points
+    /// the row at it — before ADR-164 every later device was filed nowhere, at the top of the tree.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_deleted_organization_folder_is_put_back_under_the_same_id(pool: sqlx::PgPool) {
+        let (repo, org) = acme(&pool).await;
+        let root = org_group_id(org.id);
+        sqlx::query("DELETE FROM node_groups WHERE id = $1")
+            .bind(root)
+            .execute(&pool)
+            .await
+            .expect("delete the folder");
+        let org = repo.get(org.id).await.expect("get").expect("the org");
+        assert_eq!(org.group_id, None, "the fixture did not orphan the org");
+
+        repo.import_devices(&org, &[device("Q3-1", "N_1", "One")])
+            .await
+            .expect("import");
+        let org = repo.get(org.id).await.expect("get").expect("the org");
+        assert_eq!(org.group_id, Some(root), "the row was not pointed back");
+        let n1 = network_group_id(org.id, "N_1");
+        assert_eq!(group_of(&pool, "Q3-1").await, Some(n1));
+        let parent: Option<Uuid> =
+            sqlx::query_scalar("SELECT parent_id FROM node_groups WHERE id = $1")
+                .bind(n1)
+                .fetch_one(&pool)
+                .await
+                .expect("the network folder");
+        assert_eq!(parent, Some(root));
+    }
+
+    /// A matched folder deleted between the match and the write is no match: the device falls to
+    /// its network folder and is counted that way, instead of the batch failing on the foreign key.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_matched_folder_that_is_gone_is_read_as_no_match(pool: sqlx::PgPool) {
+        let (repo, org) = acme(&pool).await;
+        let gone = Uuid::from_u128(0xdead);
+        let outcome = repo
+            .import_devices(&org, &[filed_in(device("Q3-1", "N_1", "One"), gone)])
+            .await
+            .expect("a vanished folder must not fail the import");
+        assert_eq!(
+            outcome.filed,
+            MerakiFiled {
+                unmatched: 1,
+                ..MerakiFiled::default()
+            }
+        );
+        assert_eq!(
+            group_of(&pool, "Q3-1").await,
+            Some(network_group_id(org.id, "N_1"))
+        );
+    }
+
+    /// The import stamps the inventory row in its own transaction, once. A second import of the
+    /// same device creates nothing and so moves nothing.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_import_stamps_the_inventory_row_once(pool: sqlx::PgPool) {
+        let (repo, org) = acme(&pool).await;
+        for serial in ["Q3-1", "Q3-2"] {
+            sqlx::query("INSERT INTO meraki_inventory (org_id, serial) VALUES ($1, $2)")
+                .bind(org.id)
+                .bind(serial)
+                .execute(&pool)
+                .await
+                .expect("an inventory row");
+        }
+        let stamp = |pool: sqlx::PgPool, serial: &'static str| async move {
+            sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+                "SELECT imported_at FROM meraki_inventory WHERE serial = $1",
+            )
+            .bind(serial)
+            .fetch_one(&pool)
+            .await
+            .expect("the inventory row")
+        };
+
+        repo.import_devices(&org, &[device("Q3-1", "N_1", "One")])
+            .await
+            .expect("import");
+        let first = stamp(pool.clone(), "Q3-1").await;
+        assert!(first.is_some(), "the imported device was not stamped");
+        assert_eq!(
+            stamp(pool.clone(), "Q3-2").await,
+            None,
+            "a device that was not imported was stamped"
+        );
+
+        repo.import_devices(&org, &[device("Q3-1", "N_1", "One")])
+            .await
+            .expect("import again");
+        assert_eq!(stamp(pool.clone(), "Q3-1").await, first, "the stamp moved");
     }
 
     /// The device reads answer for the org they were asked about, and `filter_meraki` keeps only

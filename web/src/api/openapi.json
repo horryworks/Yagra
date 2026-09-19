@@ -7449,7 +7449,7 @@
           "meraki"
         ],
         "summary": "Import selected devices as nodes, atomically.",
-        "description": "Already-imported serials are skipped rather than rejected, so re-running the wizard after a\npartial selection does the obvious thing instead of erroring on the ones already there.",
+        "description": "A device whose address falls inside exactly one folder's IP range is filed in that folder;\nevery other device goes under the organization's folder, in a folder named after its network.\nAlready-imported serials are skipped rather than rejected, so importing again after a partial\nselection does the obvious thing instead of erroring on the ones already there.",
         "operationId": "import_meraki_devices",
         "requestBody": {
           "content": {
@@ -7463,7 +7463,7 @@
         },
         "responses": {
           "201": {
-            "description": "How many devices became nodes; already-imported serials are skipped",
+            "description": "How many devices became nodes and how they were filed; already-imported serials are skipped",
             "content": {
               "application/json": {
                 "schema": {
@@ -31741,6 +31741,42 @@
           }
         }
       },
+      "MerakiFiled": {
+        "type": "object",
+        "description": "How the devices an import **created** were filed. Skipped devices are not counted.\n\nThe four add up to the number imported, except when the match was switched off — then all four\nare zero, because nothing was asked and \"unmatched\" would be a claim about ranges nobody read.",
+        "required": [
+          "matched",
+          "ambiguous",
+          "unmatched",
+          "no_address"
+        ],
+        "properties": {
+          "ambiguous": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Two or more folders claimed the address equally; filed under the network folder.",
+            "minimum": 0
+          },
+          "matched": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Filed into the one folder whose IP range holds the device's address.",
+            "minimum": 0
+          },
+          "no_address": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Meraki reported no address; filed under the network folder.",
+            "minimum": 0
+          },
+          "unmatched": {
+            "type": "integer",
+            "format": "int32",
+            "description": "No folder's range holds the address; filed under the network folder.",
+            "minimum": 0
+          }
+        }
+      },
       "MerakiImportDeviceReq": {
         "type": "object",
         "required": [
@@ -31794,6 +31830,10 @@
               "$ref": "#/components/schemas/MerakiImportDeviceReq"
             }
           },
+          "file_by_prefix": {
+            "type": "boolean",
+            "description": "File each device into the folder whose IP range holds its address, when exactly one does.\nDefaults to true; false files every device under the organization's network folders."
+          },
           "monitored_network_ids": {
             "type": "array",
             "items": {
@@ -31808,15 +31848,26 @@
       },
       "MerakiImported": {
         "type": "object",
-        "description": "How many devices an import created.",
+        "description": "What an import created, and where it put it.",
         "required": [
-          "imported"
+          "imported",
+          "filed",
+          "ranges_configured"
         ],
         "properties": {
+          "filed": {
+            "$ref": "#/components/schemas/MerakiFiled",
+            "description": "How those devices were filed. The four add up to `imported`, except that all four are zero\nwhen the request switched filing by IP range off."
+          },
           "imported": {
             "type": "integer",
             "format": "int32",
+            "description": "Devices that became nodes. A serial that already was one is not counted.",
             "minimum": 0
+          },
+          "ranges_configured": {
+            "type": "boolean",
+            "description": "Whether any folder carries an IP range at all. False means `filed.unmatched` says nothing\nabout the devices: there was nothing for an address to match."
           }
         }
       },

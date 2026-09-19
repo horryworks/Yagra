@@ -61,3 +61,28 @@
   color: var(--text-tertiary);
   font-size: var(--font-xs);
 }
+
+/* The "file by IP range" choice, under the list. The hint wraps; the label does not shrink. */
+.meraki-import-filing {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  cursor: pointer;
+}
+
+.meraki-import-filing-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.meraki-import-filing-label {
+  color: var(--text-primary);
+}
+
+.meraki-import-filing-hint {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
