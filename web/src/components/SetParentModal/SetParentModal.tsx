@@ -29,7 +29,15 @@ export function SetParentModal({
 }) {
   const { t } = useTranslation('nodes');
   const [topo, setTopo] = useState<TopologyNode[] | null>(null);
-  const [parent, setParent] = useState<{ id: string; name: string } | null>(null);
+  // 🚨 Seeded from the id the caller already holds, not left `null` until the graph answers. The
+  // name comes from `/topology`; the FACT that there is an upstream does not. It used to start
+  // at `null` and be filled in by that read — so when the read failed, the picker said "no
+  // upstream" about a node that had one, and Save sent `null`: clearing a dependency the
+  // operator had never been shown.
+  const [parent, setParent] = useState<{ id: string; name: string } | null>(
+    currentParentId ? { id: currentParentId, name: '' } : null,
+  );
+  const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -43,9 +51,15 @@ export function SetParentModal({
         if (cancelled) return;
         setTopo(r.nodes);
         const cur = currentParentId ? r.nodes.find((n) => n.id === currentParentId) : undefined;
-        setParent(cur ? { id: cur.id, name: cur.name } : null);
+        // Only the name is news here. An upstream the graph does not list (out of this caller's
+        // scope, say) stays selected rather than being read as "none".
+        if (cur) setParent({ id: cur.id, name: cur.name });
       })
-      .catch(() => !cancelled && setTopo([]));
+      .catch(() => {
+        if (cancelled) return;
+        setTopo([]);
+        setLoadFailed(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -88,13 +102,14 @@ export function SetParentModal({
           {t('setParent.dependsOn')}
           <NodePicker
             value={parent?.id ?? null}
-            valueLabel={parent?.name}
+            valueLabel={parent ? parent.name || t('setParent.currentUnnamed') : undefined}
             onChange={setParent}
             exclude={exclude}
             placeholder={t('setParent.noUpstream')}
           />
         </label>
         <p className="form-hint">{t('setParent.hint', { name: nodeName })}</p>
+        {loadFailed && <p className="form-error">{t('setParent.loadFailed')}</p>}
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>

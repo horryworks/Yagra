@@ -103,7 +103,7 @@ import { EditNodeModalById } from '../components/NodeDetail/EditNodeModal';
 import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { memberFetchState } from '../components/NodeDetail/groupMembers';
-import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
+import { MoveNodeModal, type MoveTarget } from '../components/MoveNodeModal/MoveNodeModal';
 import { MoveByPrefixModal } from '../components/MoveByPrefixModal/MoveByPrefixModal';
 import { BulkTagModal } from '../components/NodeTree/BulkTagModal';
 import { DeleteNodesModal } from '../components/NodeTree/DeleteNodesModal';
@@ -326,7 +326,7 @@ export function NodesPage() {
   const [deletingNodes, setDeletingNodes] = useState<NodeSummary[] | null>(null);
   /** Nodes the move dialog is about: one from the tree's own "Move…", or the whole working set
    *  from the selection bar. `null` ⇒ closed. */
-  const [moving, setMoving] = useState<NodeSummary[] | null>(null);
+  const [moving, setMoving] = useState<MoveTarget[] | null>(null);
   /** Nodes the IP-range proposal is about. Same two entry points, same shape (ADR-124 決定 6). */
   const [movingByPrefix, setMovingByPrefix] = useState<NodeSummary[] | null>(null);
   const [taggingNodes, setTaggingNodes] = useState<NodeSummary[] | null>(null);
@@ -972,7 +972,6 @@ export function NodesPage() {
   // members that was three linear scans per flush for three single-row answers.
   const nodeById = useMemo(() => new Map(treeNodes.map((n) => [n.id, n])), [treeNodes]);
   const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
-  const selectedNode = selected?.kind === 'node' ? nodeById.get(selected.id) ?? null : null;
   const selectedGroup = selected?.kind === 'group' ? groupById.get(selected.id) ?? null : null;
   // What the pane-head ＋ acts on: the selected group, a selected node's folder, else top level.
   const addTarget = addMenuTarget(selected, groupById, nodeById);
@@ -1429,7 +1428,8 @@ export function NodesPage() {
               onTabChange={setTab}
               groups={groups}
               nodes={treeNodes}
-              onMove={() => selectedNode && setMoving([selectedNode])}
+              // The pane hands over the node it loaded by id — see `NodeDetail`'s `onMove`.
+              onMove={(n) => setMoving([n])}
               onOpenDetail={() => navigate(`/nodes/${selected.id}`)}
               // The breadcrumb opens a folder the same way its tree row does (ADR-142), so Escape
               // and the dropped `tab` behave exactly as they do after a row click.

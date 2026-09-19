@@ -47,6 +47,7 @@ import { SetParentModal } from '../SetParentModal/SetParentModal';
 import { PinButton } from './PinButton';
 import { nodeSubLineParts } from './nodeIdentity';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
+import type { MoveTarget } from '../MoveNodeModal/MoveNodeModal';
 import './NodeDetail.css';
 
 const RTT_WINDOW_SECS = 30 * 60;
@@ -65,7 +66,10 @@ interface Props {
   groups: NodeGroup[];
   nodes?: NodeSummary[];
   /** Inline only: open the move-to-group picker / jump to the full-page detail. */
-  onMove?: () => void;
+  /** Handed the node this pane has loaded. 🚨 The host used to look the node up among its own
+   *  loaded rows instead, and the button did nothing whenever it was not there — a deep link into
+   *  a folder below the fold, or a selection the active filter no longer matches. */
+  onMove?: (node: MoveTarget) => void;
   onOpenDetail?: () => void;
   /** Open a folder from the eyebrow breadcrumb (ADR-142) — a pane in the split, All nodes on the
    *  route. Absent ⇒ the breadcrumb stays plain text. */
@@ -391,7 +395,12 @@ export function NodeDetail({
               </Button>
             )}
             {variant === 'inline' && canEdit && onMove && (
-              <Button variant="outline" onClick={onMove}>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  onMove({ id: node.id, name: node.name, group_id: node.group_id ?? null })
+                }
+              >
                 {t('detail.move')}
               </Button>
             )}

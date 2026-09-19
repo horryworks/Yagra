@@ -747,6 +747,8 @@
     "title": "Dependency for {{name}}",
     "dependsOn": "Depends on (upstream)",
     "noUpstream": "— No upstream (top-level) —",
+    "currentUnnamed": "The current upstream (name not loaded)",
+    "loadFailed": "The dependency map could not be loaded, so upstream names are missing and choices that would form a loop are not filtered out here. The server still refuses a loop.",
     "hint": "When this upstream is down, {{name}}'s alert is suppressed and rolled up under it."
   },
   "checkEdit": {

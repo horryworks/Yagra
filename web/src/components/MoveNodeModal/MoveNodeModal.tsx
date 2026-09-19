@@ -22,6 +22,10 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { GroupPicker } from '../ui/GroupPicker';
 
+/** What this dialog reads of a node — and nothing more, so a caller that holds the node in another
+ *  shape (the detail pane has the full document, not a list row) can still hand it over. */
+export type MoveTarget = Pick<NodeSummary, 'id' | 'name' | 'group_id'>;
+
 export function MoveNodeModal({
   targets,
   groups,
@@ -29,7 +33,7 @@ export function MoveNodeModal({
   onMoved,
 }: {
   /** The nodes to move. One is the ordinary case; the selection bar passes many. */
-  targets: readonly NodeSummary[];
+  targets: readonly MoveTarget[];
   groups: NodeGroup[];
   onClose: () => void;
   /** Refresh the inventory. **Does not close** — this dialog decides that itself. */
