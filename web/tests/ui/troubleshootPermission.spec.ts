@@ -30,6 +30,9 @@ const RUN = { name: /^run$/i };
 test('an admin is offered Run on every tool', async ({ page }) => {
   await page.goto('/troubleshoot');
   const runs = page.locator('.ts-tool').getByRole('button', RUN);
+  // `count()` does not wait, and `useCan` answers false until the role matrix arrives — so the
+  // control appears a moment after the card it sits on. Wait for one before counting them.
+  await expect(runs.first()).toBeVisible();
   // A floor, not an exact count: the point is that the control exists at all for this caller.
   expect(await runs.count()).toBeGreaterThanOrEqual(10);
 });
@@ -50,7 +53,15 @@ test.describe('as a Viewer', () => {
 
   test('no tool offers Run, and the page says which privilege is missing', async ({ page, mock }) => {
     await page.goto('/troubleshoot');
-    // The cards still render — this is a page a Viewer may read.
+    // The cards still render — this is a page a Viewer may read. (Waited for: `count()` does not.)
+    await expect(page.locator('.ts-tool').first()).toBeVisible();
+    // 🚨 The zero below has to be a SETTLED zero. `useCan` answers false until the role matrix
+    // arrives, so for a moment nobody is offered Run — an admin included — and a count taken then
+    // would pass for the wrong reason. Wait until the matrix has been served and drawn from.
+    await expect
+      .poll(() => mock.requests.some((r) => r.pathname === '/api/v1/roles'))
+      .toBe(true);
+    await page.waitForTimeout(250);
     expect(await page.locator('.ts-tool').count()).toBeGreaterThanOrEqual(10);
     await expect(page.locator('.ts-tool').getByRole('button', RUN)).toHaveCount(0);
     // Named from the server's catalogue, not a generic "no permission".

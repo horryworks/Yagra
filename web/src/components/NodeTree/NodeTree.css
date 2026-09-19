@@ -289,6 +289,17 @@
   display: inline-flex;
 }
 
+/* No hover to reveal them with, so they are simply there (ui-conventions: every hover-revealed
+   action is always visible under `(hover: none)`). `display: none` had also taken them out of
+   reach entirely on touch — the right-click menu carries the same verbs, but iOS Safari fires no
+   `contextmenu` on a long press, so there these were the only way in. Keyed on the input, not on
+   the layout mode: a tablet forced to the desktop shell still has fingers. */
+@media (hover: none) {
+  .ntree-actions {
+    display: inline-flex;
+  }
+}
+
 .ntree-act {
   border: none;
   background: none;

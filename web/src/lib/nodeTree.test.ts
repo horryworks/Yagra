@@ -295,6 +295,23 @@ describe('flattenTree — Folders with nodes only (ADR-159)', () => {
     ]);
   });
 
+  it('draws nothing at all when every folder is empty — not a lone Ungrouped header', () => {
+    // A folder tree created by a sync before any node is imported. The header used to be the only
+    // row ("Ungrouped 0", no explanation), and being a row it kept the tree out of its empty state,
+    // where the reason can be said.
+    const empty = (opts: Partial<Parameters<typeof flattenTree>[1]>) =>
+      flattenTree(buildNodeTree(groups, []), {
+        collapsed: {},
+        filter: '',
+        groupCounts: {},
+        loadedGroups: new Set(),
+        ...opts,
+      }).map(flatRowKey);
+    expect(empty({ withNodesOnly: { keep: new Set() } })).toEqual([]);
+    // The switch is what hides them: without it the same inventory draws its folders and the header.
+    expect(empty({})).toContain('g:g1');
+    expect(empty({})).toContain('ungrouped-head');
+  });
   it('combines with a term: an empty folder whose name matches is dropped too', () => {
     expect(keys({ filter: 'osaka', withNodesOnly: { keep: new Set() } })).toEqual([]);
   });

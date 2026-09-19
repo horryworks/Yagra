@@ -802,9 +802,14 @@ export function flattenTree(
   // Show the ungrouped header + its root drop zone whenever there's any inventory (so the drop zone
   // is reachable next to the groups), but not while narrowing with nothing ungrouped to show, and
   // not for a completely empty inventory (the page shows its own empty-state message instead).
+  // …and not when "With nodes" has hidden every folder and nothing is ungrouped either. The header
+  // would then be the only row — a lone "Ungrouped 0" with no explanation — and, being a row, it
+  // kept the tree from reaching its empty state, where the reason can be said.
+  const hidEverything =
+    opts.withNodesOnly !== undefined && rows.length === 0 && tree.ungrouped.length === 0;
   const showUngrouped = narrowing
     ? ungroupedShown.length > 0
-    : tree.roots.length > 0 || tree.ungrouped.length > 0;
+    : !hidEverything && (tree.roots.length > 0 || tree.ungrouped.length > 0);
   if (showUngrouped) {
     // Under Pinned only the header counts the pins it shows; the whole bucket is not what is on screen.
     rows.push({

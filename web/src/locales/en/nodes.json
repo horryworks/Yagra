@@ -717,6 +717,7 @@
     "pinNamed": "Pin \"{{name}}\"",
     "unpinNamed": "Unpin \"{{name}}\"",
     "pinnedMark": "Pinned",
+    "withNodesEmpty": "No folder holds a node, so “With nodes” is hiding all of them. Turn it off to see the folders.",
     "pinnedEmpty": "Nothing is pinned yet. Right-click a node or folder and choose Pin, or press Pin in its detail pane.",
     "pinFailed": "failed to change the pin",
     "menuFor": "Actions for {{name}}",
