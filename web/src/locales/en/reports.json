@@ -144,6 +144,7 @@
     "saving": "Saving…",
     "report": "Report",
     "frequency": "Frequency",
+    "freqChoose": "Choose how often…",
     "dayOfWeek": "Day of week",
     "dayOfMonth": "Day of month (1–28)",
     "timeUtc": "Time (UTC)",
@@ -157,6 +158,7 @@
     "err": {
       "chooseReport": "Choose a report.",
       "invalidTime": "Enter a valid time.",
+      "chooseFrequency": "Choose how often this report should run. Its stored frequency is one this version does not know, and saving would replace it.",
       "saveFailed": "Failed to save the schedule."
     }
   },

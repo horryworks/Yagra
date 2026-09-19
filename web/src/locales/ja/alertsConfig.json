@@ -261,6 +261,7 @@
       "autoClose": "自動解消（秒）",
       "fireAfter": "N 回で発報",
       "within": "以内（秒）",
+      "numberRange": "「{{field}}」は {{min}} から {{max}} までの整数で入力してください。",
       "enabled": "有効",
       "test": "サンプルでテスト",
       "samplePlaceholder": "サンプルのイベントメッセージを貼り付け…",

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { LOGIN_PATH, PUBLIC_PATH, appView } from './appGate';
+import { LOGIN_PATH, PUBLIC_PATH, appView, postLoginTarget } from './appGate';
 
 /** Any path that is neither the login form nor the public board. */
 const ELSEWHERE = '/dashboard';
@@ -64,5 +64,20 @@ describe('appView', () => {
     // header, the banner and the editing controls. The chromeless shell is for visitors only.
     expect(appView('ready', true, true, ELSEWHERE)).toBe('app');
     expect(appView('ready', true, true, PUBLIC_PATH)).toBe('app');
+  });
+});
+
+describe('postLoginTarget', () => {
+  it('sends a sign-in from nowhere in particular to the dashboard', () => {
+    expect(postLoginTarget(LOGIN_PATH)).toBe('/dashboard');
+    expect(postLoginTarget('/')).toBe('/dashboard');
+  });
+
+  it('leaves a deep link alone — the form was swapped in above the router, so the link is still in the bar', () => {
+    // The defect: every sign-in navigated to the dashboard, so a link pasted into chat during an
+    // incident was lost by everyone who had to sign in before opening it.
+    expect(postLoginTarget('/alerts/history')).toBeNull();
+    expect(postLoginTarget('/nodes')).toBeNull();
+    expect(postLoginTarget(PUBLIC_PATH)).toBeNull();
   });
 });

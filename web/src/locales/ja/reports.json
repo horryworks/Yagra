@@ -141,6 +141,7 @@
     "saving": "保存中…",
     "report": "レポート",
     "frequency": "頻度",
+    "freqChoose": "頻度を選択…",
     "dayOfWeek": "曜日",
     "dayOfMonth": "日付 (1–28)",
     "timeUtc": "時刻 (UTC)",
@@ -154,6 +155,7 @@
     "err": {
       "chooseReport": "レポートを選択してください。",
       "invalidTime": "有効な時刻を入力してください。",
+      "chooseFrequency": "このレポートを実行する頻度を選択してください。保存されている頻度はこのバージョンが知らないもので、保存すると置き換わります。",
       "saveFailed": "スケジュールの保存に失敗しました。"
     }
   },

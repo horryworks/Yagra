@@ -1874,7 +1874,11 @@ export function PollersPage() {
       {registering && <RegisterPollerModal onClose={() => setRegistering(false)} />}
       {tokenFor && (
         <PollerTokenModal
-          poller={tokenFor}
+          // 🚨 The row as it is NOW. `tokenFor` is the object captured at click time, and the dialog
+          // stays open across an issue (that is what `onChanged={load}` is for). Reading the
+          // snapshot, it went on saying "uses the shared secret", kept its button on "Issue", never
+          // drew Revoke, and re-issued without the warning — invalidating the token just handed over.
+          poller={pollers.find((p) => p.id === tokenFor.id) ?? tokenFor}
           onClose={() => setTokenFor(null)}
           // Reload rather than close: after issuing, the dialog stays open showing that the
           // download happened, and the row behind it has to stop saying "shared".
