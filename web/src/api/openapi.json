@@ -39151,7 +39151,7 @@
           },
           "import_aps": {
             "type": "boolean",
-            "description": "Whether access points this controller reports become nodes. Only APs that have been in\nservice at least once are imported automatically; importing starts within a minute."
+            "description": "Whether access points this controller reports become nodes (on unless someone turned it\noff). Only APs that have been in service at least once are imported automatically;\nimporting starts within a minute."
           },
           "max_aps": {
             "type": [
@@ -39213,7 +39213,7 @@
           },
           "import_aps": {
             "type": "boolean",
-            "description": "Whether access points this controller reports become nodes. Only APs that have been in\nservice at least once are imported automatically."
+            "description": "Whether access points this controller reports become nodes. On by default for a controller\nYagra has just started reading; only APs that have been in service at least once are\nimported automatically."
           },
           "last_inventory_at": {
             "type": [

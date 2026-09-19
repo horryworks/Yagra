@@ -278,7 +278,7 @@
       "maxAps": "Limit",
       "group": "Folder",
       "groupDefault": "— Same folder as this controller —",
-      "hint": "Only access points that have associated at least once are monitored automatically. A new node is created for each, in the folder chosen here.",
+      "hint": "On by default. Only access points that have associated at least once are monitored automatically. A new node is created for each, in the folder chosen here.",
       "save": "Save"
     },
     "empty": {

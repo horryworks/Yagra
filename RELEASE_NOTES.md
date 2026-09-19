@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Access points behind a wireless controller now become nodes without anyone switching it on.** "Monitor access points automatically" on a controller's **APs** tab is now on by default, for every controller: one Yagra starts reading gets it from its first AP inventory, and every controller already registered is switched on by the upgrade — including one someone switched off, because nothing recorded which were chosen and which were merely the old default. ⚠️ **Within a minute of upgrading, every access point that has ever been in service becomes a node**, up to each controller's `max_aps` (1024 unless set otherwise), filed in the controller's own folder unless the tab names another; an AP that has never been in service stays in the list only. To keep a controller's APs out, switch it off on the tab after the upgrade — AP nodes already created stay, and can be deleted; a deleted AP node is not re-created automatically. `GET /api/v1/wireless/aps` and the node detail now report `import_aps: true` for such controllers. Only the core needs upgrading.
+
 ## v0.3.27 — Access points behind a Huawei wireless controller become monitored nodes (radios as ports, SSIDs as the controller's own rows), the inventory tree narrows to what needs attention and lets a folder sit between nodes, an upgrade no longer re-fires the alerts of devices that are still down, discovery tries every selected credential
 
 ### New Features
