@@ -21,7 +21,7 @@ use yagra_common::NeighborSet;
 /// Default cadence for the neighbour walk. Adjacency changes on the order of months, so this is
 /// deliberately two orders of magnitude slower than the metric interval — walking `lldpRemTable` on
 /// a 48-port switch every minute would spend device time and rate-limit budget re-reading a
-/// constant. (Meraki's inventory tier makes the same call at 21600s.)
+/// constant.
 pub const DEFAULT_NEIGHBOR_INTERVAL_SECS: u32 = 3600;
 /// Floor on the cadence, matching the `CHECK` on `app_settings.neighbor_interval_secs`.
 pub const MIN_NEIGHBOR_INTERVAL_SECS: u32 = 300;
