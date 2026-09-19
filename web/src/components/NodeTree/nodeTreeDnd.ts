@@ -252,6 +252,34 @@ export type DropFeedback = {
 };
 
 /**
+ * Where a drop on a ROW should write: what the last `dragover` showed, not what the row under the
+ * pointer would say now.
+ *
+ * 🚨 **The two differ, and the difference is a wrong write** (ADR-162 増分 3). The insertion slot is a
+ * real row, so adding or removing it moves every row below it by one row height — while the
+ * pointer stays where it is. Coming down from a node onto the folder under it: `after node` puts
+ * the slot directly above the folder; reaching the folder reads `inside`, which draws no slot, so
+ * the slot goes and the folder jumps up by a row. The pointer is now over the row BELOW the folder.
+ * Re-judging from that row at `drop` wrote into the parent, a moment after the folder had been
+ * outlined as the destination. Reproduced in a browser before this was written
+ * (`tests/ui/treeDragIntoFolder.spec.ts`).
+ *
+ * The slot has always done it this way (増分 2 決定 3: "replayed from the recorded target"). This
+ * extends the same rule to rows, so the write is what the screen said — one rule for both.
+ *
+ * `judged` is the fallback for a drop nothing preceded: no `dragover` was seen, or it was on the
+ * Ungrouped header, which records `root` and has its own handler. A refused placement stays
+ * refused — `shown.ok` is the answer `dropAllowed` already gave for it.
+ */
+export function dropToPerform(
+  shown: DropFeedback | null,
+  judged: { target: Target; position: DropPos; ok: boolean },
+): { target: Target; position: DropPos } | null {
+  const at = shown && shown.target !== 'root' ? { ...shown, target: shown.target } : judged;
+  return at.ok ? { target: at.target, position: at.position } : null;
+}
+
+/**
  * The rows to draw while a drag is in flight: the same list, with **one** slot row inserted exactly
  * where the drop would write.
  *
