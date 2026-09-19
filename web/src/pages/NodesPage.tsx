@@ -64,7 +64,11 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
-import { useNodeStates } from '../dashboard/useNodeStates';
+import {
+  LIVE_RECONCILE_MS,
+  useNodeStateResyncs,
+  useNodeStates,
+} from '../dashboard/useNodeStates';
 import {
   buildSuppressionIndex,
   nextSuppressionExpiry,
@@ -527,6 +531,14 @@ export function NodesPage() {
   //
   // ⚠️ **Only the folder list is awaited, and that is deliberate.** `moveNodes` awaits this call
   // before reporting a partial move, and what it needs current is the tree — not the health bars.
+  /** The two server-computed rollups: per-folder tallies and the fleet total.
+   *
+   *  ⚠️ A failure leaves the previous answer in place — see the note inside `reload`. */
+  const refreshRollups = useCallback(() => {
+    api.getFleetGroupSummary().then(setGroupSummary).catch(() => undefined);
+    api.getFleetSummary().then(setFleetSummary).catch(() => undefined);
+  }, []);
+
   const reload = useCallback(async () => {
     setError(null);
     // ⚠️ **A failure leaves the previous answer in place, and `null` when there was none**
@@ -535,8 +547,7 @@ export function NodesPage() {
     // `group-loading` rows, therefore nothing asking for members, therefore every folder drawn as
     // empty — for as long as the page stayed open. `countsPending` below says "not answered"
     // instead, and the members arrive whether or not this endpoint ever does.
-    api.getFleetGroupSummary().then(setGroupSummary).catch(() => undefined);
-    api.getFleetSummary().then(setFleetSummary).catch(() => undefined);
+    refreshRollups();
     try {
       const g = await api.listNodeGroups();
       setGroups(g);
@@ -551,11 +562,27 @@ export function NodesPage() {
     } finally {
       setLoading(false);
     }
-  }, [t, invalidateMembers, refetchSearch]);
+  }, [t, invalidateMembers, refetchSearch, refreshRollups]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // 🚨 The rollups used to be read on mount and after a write, and never again. The stream moves
+  // the row dots and nothing else, so a tab left open showed red dots under a green folder bar,
+  // with a header count from whenever it was opened. Re-read on the same slow clock the topology
+  // views reconcile on. Members are NOT re-read — that is what the viewport-driven fetch is for.
+  useEffect(() => {
+    const id = setInterval(refreshRollups, LIVE_RECONCILE_MS);
+    return () => clearInterval(id);
+  }, [refreshRollups]);
+
+  // …and at once when the stream says it missed frames. `useNodeStates` has already dropped its
+  // overlay by then, so what is on screen is the base data — which has to be current.
+  const resyncs = useNodeStateResyncs();
+  useEffect(() => {
+    if (resyncs > 0) void reload();
+  }, [resyncs, reload]);
 
   // Active maintenance windows + mutes for the per-row suppression icons. Refetched after any
   // maintenance/mute action from the tree so the icons update immediately (node `maintenance`
@@ -918,7 +945,9 @@ export function NodesPage() {
   };
 
   // Header stats come from the server fleet summary (whole fleet, not the lazily-loaded subset).
-  const nodeCount = fleetSummary?.total ?? treeNodes.length;
+  // `null` until `/fleet/summary` has answered. It used to fall back to `treeNodes.length` — the
+  // handful of members the viewport happened to load — and presented that as the fleet total.
+  const nodeCount = fleetSummary?.total ?? null;
   const attention = fleetSummary
     ? fleetSummary.states.warning + fleetSummary.states.critical + fleetSummary.states.unreachable
     : 0;
@@ -955,7 +984,11 @@ export function NodesPage() {
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.all') }]}
         note={
           <>
-            {nodeCount} {t('common:noun.node', { count: nodeCount })} ·{' '}
+            {nodeCount !== null && (
+              <>
+                {nodeCount} {t('common:noun.node', { count: nodeCount })} ·{' '}
+              </>
+            )}
             {t('inventory.groupCount', { count: groups.length })}
             {attention > 0 && (
               <>
@@ -992,6 +1025,15 @@ export function NodesPage() {
       />
 
       {error && <p className="form-error">{error}</p>}
+      {/* 🚨 Said, with a way to ask again. A failed search used to come back as an empty list, and an
+          empty filtered tree draws nothing — so under "Needs attention" a failed read was a blank
+          pane, which reads as "nothing needs attention". */}
+      {filtering && search.failed && (
+        <p className="form-error" role="alert">
+          {t('err.searchNodes')}{' '}
+          <Button onClick={search.refetch}>{t('common:actions.retry')}</Button>
+        </p>
+      )}
       {anyGroupTruncated && (
         <p className="muted nodes-truncated">{t('inventory.groupTruncated')}</p>
       )}
@@ -1473,7 +1515,7 @@ export function NodesPage() {
             i18nKey="deleteGroup.confirm"
             values={{
               name: deletingGroup.name,
-              impact: groupDeletionImpact(groups, groupCounts, deletingGroup, t),
+              impact: groupDeletionImpact(groups, groupSummary ? groupCounts : null, deletingGroup, t),
             }}
             components={{ b: <strong /> }}
           />

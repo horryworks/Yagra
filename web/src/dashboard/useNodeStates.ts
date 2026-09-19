@@ -18,9 +18,12 @@ interface NodeStateStore {
   /** id → live display state. A fresh Map identity is published on each flush so `useMemo`
    *  consumers keyed on it recompute. */
   states: Map<string, NodeState>;
+  /** How many times the stream has said frames were missed. A view whose own numbers are not
+   *  carried by this stream (a server-computed rollup) re-reads them when this moves. */
+  resyncs: number;
 }
 
-const useStore = create<NodeStateStore>(() => ({ states: new Map() }));
+const useStore = create<NodeStateStore>(() => ({ states: new Map(), resyncs: 0 }));
 
 /** Slow reconcile cadence for views that keep node state live via SSE (S14): the periodic fetch now
  *  only catches structural/inventory changes (parent edges, new/removed nodes, root-cause) and
@@ -46,6 +49,19 @@ function flush(): void {
   if (changed) useStore.setState({ states: next });
 }
 
+/**
+ * The stream missed frames. Drop the overlay and tell the views.
+ *
+ * 🚨 **Dropping it is the point.** The overlay WINS over a fetched state (`live.get(id) ??
+ * base.state`), so a node whose recovery frame was the one that got dropped stays red under every
+ * re-read a view can make — the re-read is correct and is overruled. Clearing the map hands the
+ * answer back to the base data until the next frame for that node arrives. Exported for tests.
+ */
+export function nodeStatesResynced(): void {
+  pending = [];
+  useStore.setState((s) => ({ states: new Map(), resyncs: s.resyncs + 1 }));
+}
+
 /** Buffer one live state change; a flush is scheduled to apply the batch. Exported for tests. */
 export function ingestNodeState(id: string, state: NodeState): void {
   pending.push([id, state]);
@@ -67,7 +83,7 @@ export function ingestNodeState(id: string, state: NodeState): void {
  */
 export function resetNodeStates(): void {
   pending = [];
-  useStore.setState({ states: new Map() });
+  useStore.setState({ states: new Map(), resyncs: 0 });
 }
 
 let subscribers = 0;
@@ -82,7 +98,11 @@ export function useNodeStates(): Map<string, NodeState> {
   useEffect(() => {
     subscribers += 1;
     if (subscribers === 1) {
-      unsub = subscribeNodeStates((ev) => ingestNodeState(ev.node_id, ev.state));
+      unsub = subscribeNodeStates(
+        (ev) => ingestNodeState(ev.node_id, ev.state),
+        undefined,
+        nodeStatesResynced,
+      );
     }
     return () => {
       subscribers -= 1;
@@ -93,4 +113,10 @@ export function useNodeStates(): Map<string, NodeState> {
     };
   }, []);
   return states;
+}
+
+/** Moves each time the stream missed frames — see `nodeStatesResynced`. Needs `useNodeStates`
+ *  mounted somewhere on the page to mean anything; it does not open the stream itself. */
+export function useNodeStateResyncs(): number {
+  return useStore((s) => s.resyncs);
 }

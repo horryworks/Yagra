@@ -11,14 +11,26 @@ import type { NodeState } from '../types/api';
 
 const unsubscribe = vi.fn();
 let emit: (ev: { node_id: string; state: NodeState }) => void = () => {};
-const subscribeNodeStates = vi.fn((cb: (ev: { node_id: string; state: NodeState }) => void) => {
-  emit = cb;
-  return unsubscribe;
-});
+/** The stream saying it dropped frames — the third argument `useNodeStates` passes. */
+let resync: () => void = () => {};
+const subscribeNodeStates = vi.fn(
+  (
+    cb: (ev: { node_id: string; state: NodeState }) => void,
+    _onError?: unknown,
+    onResync?: () => void,
+  ) => {
+    emit = cb;
+    resync = onResync ?? (() => {});
+    return unsubscribe;
+  },
+);
 
 vi.mock('../services/sse', () => ({
-  subscribeNodeStates: (cb: (ev: { node_id: string; state: NodeState }) => void) =>
-    subscribeNodeStates(cb),
+  subscribeNodeStates: (
+    cb: (ev: { node_id: string; state: NodeState }) => void,
+    onError?: unknown,
+    onResync?: () => void,
+  ) => subscribeNodeStates(cb, onError, onResync),
 }));
 
 const load = async () => await import('./useNodeStates');
@@ -124,6 +136,28 @@ describe('useNodeStates', () => {
 
     await vi.advanceTimersByTimeAsync(150);
     await waitFor(() => expect(result.current.size).toBe(5_000));
+  });
+
+  it('drops the overlay when the stream says it missed frames, and tells the views', async () => {
+    // 🚨 The overlay WINS over a fetched state. A node whose recovery frame was the dropped one
+    // therefore stays red under every re-read a view can make — so a resync has to clear it.
+    const { useNodeStates, useNodeStateResyncs } = await load();
+    const { result } = renderHook(() => ({ states: useNodeStates(), resyncs: useNodeStateResyncs() }));
+    emit({ node_id: 'n1', state: 'critical' });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(result.current.states.get('n1')).toBe('critical');
+    expect(result.current.resyncs).toBe(0);
+
+    emit({ node_id: 'n2', state: 'warning' }); // still buffered when the hint lands
+    resync();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(result.current.states.size).toBe(0);
+    expect(result.current.resyncs).toBe(1);
+    // …and the stream keeps feeding it afterwards.
+    emit({ node_id: 'n1', state: 'ok' });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(result.current.states.get('n1')).toBe('ok');
   });
 
   it('resetNodeStates clears both the map and the pending buffer', async () => {

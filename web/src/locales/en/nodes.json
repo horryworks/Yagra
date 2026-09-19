@@ -171,10 +171,12 @@
   },
   "deleteGroup": {
     "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>no nodes are deleted</b>.",
-    "impact": "{{subgroups}} and {{members}} move up to the parent"
+    "impact": "{{subgroups}} and {{members}} move up to the parent",
+    "impactUncounted": "{{subgroups}} and its member nodes (still being counted) move up to the parent"
   },
   "err": {
     "loadNodes": "failed to load nodes",
+    "searchNodes": "The search could not be run. An empty list here does not mean nothing matches.",
     "loadNode": "failed to load node",
     "setMaintenance": "failed to set maintenance",
     "mute": "failed to mute",

@@ -99,6 +99,18 @@ export function parseReportRun(data: string): ReportRun | null {
  * or null when the block carries no data — a keep-alive comment (`:`...) or a control event such
  * as the streams' lagged-subscriber `resync` hint, which our parsers reject anyway.
  */
+/**
+ * Whether an event block is the streams' `resync` hint — `event: resync`, sent when this
+ * subscriber fell behind and frames were dropped for it (`sse_with_resync` in `api/alerts.rs`).
+ *
+ * 🚨 It used to be discarded: `dataFromEventBlock` ignores `event:` and the parsers reject its
+ * bare-number payload. The server's own doc says why that matters — "a slow client that silently
+ * missed `n` events would show a stale list forever".
+ */
+export function isResyncBlock(block: string): boolean {
+  return block.split(/\r?\n/).some((line) => /^event:\s*resync\s*$/.test(line));
+}
+
 export function dataFromEventBlock(block: string): string | null {
   const dataLines: string[] = [];
   for (const line of block.split(/\r?\n/)) {
@@ -141,10 +153,14 @@ function subscribeSSE(
   path: string,
   onData: (data: string) => void,
   onError?: (err: unknown) => void,
+  /** Frames were missed: the server said so (`resync`), or the stream dropped and was reopened —
+   *  there is no replay, so a reconnect has missed whatever happened in between. */
+  onResync?: () => void,
 ): () => void {
   if (typeof fetch === 'undefined') return () => {};
   const controller = new AbortController();
   let closed = false;
+  let opened = 0;
 
   const run = async (): Promise<void> => {
     while (!closed) {
@@ -167,6 +183,8 @@ function subscribeSSE(
           }
           throw new Error(`stream ${path} failed with status ${res.status}`);
         }
+        opened += 1;
+        if (opened > 1) onResync?.();
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -180,8 +198,12 @@ function subscribeSSE(
             const block = buffer.slice(0, boundary);
             const sep = buffer.slice(boundary).match(/^\r?\n\r?\n/);
             buffer = buffer.slice(boundary + (sep ? sep[0].length : 2));
-            const data = dataFromEventBlock(block);
-            if (data !== null) onData(data);
+            if (isResyncBlock(block)) {
+              onResync?.();
+            } else {
+              const data = dataFromEventBlock(block);
+              if (data !== null) onData(data);
+            }
             boundary = buffer.search(/\r?\n\r?\n/);
           }
         }
@@ -230,6 +252,7 @@ export function subscribeAlerts(
 export function subscribeNodeStates(
   onState: (ev: NodeStateEvent) => void,
   onError?: (err: unknown) => void,
+  onResync?: () => void,
 ): () => void {
   return subscribeSSE(
     '/api/v1/stream/node-states',
@@ -238,6 +261,7 @@ export function subscribeNodeStates(
       if (ev) onState(ev);
     },
     onError,
+    onResync,
   );
 }
 

@@ -1137,14 +1137,20 @@ export function findTreeGroup(roots: TreeGroup[], id: string): TreeGroup | null 
  *  rollup (A-3) so it's correct without loading the group's members. Pluralised for readability. */
 export function groupDeletionImpact(
   groups: NodeGroup[],
-  groupCounts: Record<string, StateCounts>,
+  /** `null` while the server rollup has not answered. 🚨 Not `{}`: an empty map is the valid
+   *  answer "every folder is empty", and the consent then said "0 member nodes" about a folder
+   *  holding hundreds — for as long as `/fleet/group-summary` took, which the page does not wait
+   *  for. */
+  groupCounts: Record<string, StateCounts> | null,
   g: NodeGroup,
   t: TFunction,
 ): string {
   const subs = groups.filter((x) => x.parent_id === g.id).length;
+  const subgroups = t('count.subgroup', { count: subs });
+  if (groupCounts === null) return t('deleteGroup.impactUncounted', { subgroups });
   const members = groupCounts[g.id] ? countsTotal(groupCounts[g.id]) : 0;
   return t('deleteGroup.impact', {
-    subgroups: t('count.subgroup', { count: subs }),
+    subgroups,
     members: t('count.memberNode', { count: members }),
   });
 }
