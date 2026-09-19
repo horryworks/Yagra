@@ -353,6 +353,43 @@ describe('useLazyGroupMembers', () => {
     });
   });
 
+  it('an answer asked for BEFORE invalidate is not adopted after it', async () => {
+    // The window the next test never opens: it invalidates after every fetch has settled. Here a
+    // node is moved out of g1 while g1 is still loading, and g1's pre-move answer lands last.
+    const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+    const one = { ...OPTS, groups: [group('g1')], visibleGroupKeys: ['g1'] };
+    const first = deferred<{ nodes: NodeSummary[]; truncated: boolean }>();
+    const second = deferred<{ nodes: NodeSummary[]; truncated: boolean }>();
+    const ungrouped = { nodes: [], truncated: false };
+    const g1Answers = [first, second];
+    getGroupNodes.mockImplementation((id: string | null) =>
+      id === null ? Promise.resolve(ungrouped) : g1Answers.shift()!.promise,
+    );
+
+    const { result } = renderHook(() => useLazyGroupMembers(one));
+    await waitFor(() => expect(getGroupNodes).toHaveBeenCalledWith('g1'));
+
+    await act(async () => {
+      result.current.invalidate(); // the write happened; g1 is still in flight
+    });
+    // It is asked again — `enqueue` used to refuse, because the key was still in `inflight`.
+    await waitFor(() =>
+      expect(getGroupNodes.mock.calls.filter(([id]) => id === 'g1')).toHaveLength(2),
+    );
+
+    await act(async () => {
+      first.resolve({ nodes: [node('moved-away')], truncated: false }); // the pre-move answer
+    });
+    expect(result.current.nodes.map((n) => n.id)).not.toContain('moved-away');
+    expect(result.current.loadedGroups.has('g1')).toBe(false);
+
+    await act(async () => {
+      second.resolve({ nodes: [node('still-here')], truncated: false });
+    });
+    await waitFor(() => expect(result.current.loadedGroups.has('g1')).toBe(true));
+    expect(result.current.nodes.map((n) => n.id)).toEqual(['still-here']);
+  });
+
   it('invalidate drops the cache so open groups fetch again', async () => {
     // Called after any write that can change membership — without it the tree would keep showing
     // the pre-edit members until the page is reloaded.
