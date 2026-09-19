@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   dataFromEventBlock,
+  isResyncBlock,
   parseAlertEvent,
   parseAnalysisJob,
   parseNodeStateEvent,
@@ -68,6 +69,21 @@ describe('parseAlertEvent', () => {
     expect(event?.acked?.source).toBe('pagerduty');
     // No `resolved` flag ⇒ subscribeAlerts treats it as an upsert, not a recovery.
     expect(event?.resolved).toBeUndefined();
+  });
+});
+
+describe('isResyncBlock', () => {
+  it('recognises the hint the server sends a lagged subscriber', () => {
+    // `Event::default().event("resync").data(n)` — api/alerts.rs::sse_with_resync.
+    expect(isResyncBlock('event: resync\ndata: 12')).toBe(true);
+    expect(isResyncBlock('event:resync\r\ndata: 3')).toBe(true);
+  });
+
+  it('is false for an ordinary frame, a keep-alive, and a payload that merely mentions the word', () => {
+    expect(isResyncBlock('data: {"node_id":"n1","state":"ok"}')).toBe(false);
+    expect(isResyncBlock(': keep-alive')).toBe(false);
+    expect(isResyncBlock('data: resync')).toBe(false);
+    expect(isResyncBlock('event: resynced\ndata: 1')).toBe(false);
   });
 });
 

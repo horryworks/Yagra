@@ -48,6 +48,11 @@ export interface FilterSearch {
    *  still incomplete. Inferring truncation from `nodes.length` would report "complete" exactly
    *  when the answer is least trustworthy. */
   truncated: boolean;
+  /** The search could not be read. 🚨 `nodes` is `[]` then too, and that alone used to be the whole
+   *  answer: the tree draws nothing for an empty filtered list, so under the "Needs attention"
+   *  preset a failed read was a blank pane — which reads as "nothing needs attention". It was the
+   *  one read on the page with no error surface at all. */
+  failed: boolean;
   /** Re-issue the search for the current term. Stable identity, so a caller can hold it in a
    *  `useCallback`'s deps. Call it after any write that can change what matches — the search page
    *  is a cache like the per-group members are, and it has to be invalidated the same way. */
@@ -59,6 +64,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
   const [loading, setLoading] = useState(false);
   const [appliedTerm, setAppliedTerm] = useState('');
   const [truncated, setTruncated] = useState(false);
+  const [failed, setFailed] = useState(false);
   /** Bumped by `refetch`. Its only job is to be in the effect's deps: asking for the SAME term
    *  again has to re-run the effect, and the term alone cannot say that. */
   const [nonce, setNonce] = useState(0);
@@ -95,6 +101,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
       setAppliedTerm('');
       setLoading(false);
       setTruncated(false);
+      setFailed(false);
       return undefined;
     }
     let cancelled = false;
@@ -109,12 +116,17 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
         if (!cancelled) {
           setNodes(page.nodes);
           setTruncated(page.truncated);
+          setFailed(false);
         }
       })
       .catch(() => {
+        // The rows go, deliberately: the previous page answered a DIFFERENT term, and leaving it
+        // under the new one would be a list that does not match its own box. What was missing is
+        // `failed` — without it this empty list was indistinguishable from "no matches".
         if (!cancelled) {
           setNodes([]);
           setTruncated(false);
+          setFailed(true);
         }
       })
       .finally(() => {
@@ -130,5 +142,13 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term, key, nonce]);
 
-  return { nodes, loading: loading || settling, appliedTerm, settledTerm: term, truncated, refetch };
+  return {
+    nodes,
+    loading: loading || settling,
+    appliedTerm,
+    settledTerm: term,
+    truncated,
+    failed,
+    refetch,
+  };
 }

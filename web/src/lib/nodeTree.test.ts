@@ -1629,12 +1629,23 @@ describe('groupDeletionImpact', () => {
     expect(out).toContain('count.memberNode=4');
   });
 
-  it('says zero rather than nothing when the roll-up has not arrived', () => {
-    // `groupCounts` is fetched separately, so the dialog can open before it lands. Reporting
-    // "0 members" is honest; omitting the clause would read as "this group is empty".
+  it('says zero for a folder the answered roll-up does not list', () => {
+    // An answered roll-up with no entry for this folder means it holds no nodes. Omitting the
+    // clause would read as "this group is empty" by accident rather than by statement.
     const out = groupDeletionImpact([grp('a')], {}, grp('a'), t);
     expect(out).toContain('count.subgroup=0');
     expect(out).toContain('count.memberNode=0');
+  });
+
+  it('does not say a number while the roll-up has not answered', () => {
+    // 🚨 `null`, not `{}`. The page does not wait for `/fleet/group-summary` (ADR-133), so the
+    // dialog can open first — and this used to be modelled as `{}`, which made the consent read
+    // "0 member nodes" about a folder holding hundreds. Neither a number nor silence: it says the
+    // members move, and that they have not been counted.
+    const out = groupDeletionImpact([grp('a'), grp('b', 'a')], null, grp('a'), t);
+    expect(out).toContain('deleteGroup.impactUncounted');
+    expect(out).toContain('count.subgroup=1');
+    expect(out).not.toContain('count.memberNode');
   });
 });
 

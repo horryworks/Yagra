@@ -262,6 +262,32 @@ describe('useFilterSearch', () => {
     // A failed search must also drop the previous answer's truncation notice, or the page keeps
     // warning that matches are missing from a list that is now empty for an unrelated reason.
     expect(result.current.truncated).toBe(false);
+    // 🚨 …and it says so. An empty list alone is what "no matches" looks like, and under the
+    // "Needs attention" preset that reads as a healthy fleet.
+    expect(result.current.failed).toBe(true);
+  });
+
+  it('clears the failure as soon as a search answers, or the box is emptied', async () => {
+    listNodesPage.mockRejectedValueOnce(new Error('boom'));
+    const { result, rerender } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {
+      initialProps: 'a',
+    });
+    await tick(200);
+    expect(result.current.failed).toBe(true);
+
+    listNodesPage.mockResolvedValueOnce({ nodes: [node('n1')], truncated: false });
+    rerender('ab');
+    await tick(200);
+    expect(result.current.failed).toBe(false);
+    expect(ids(result.current.nodes)).toEqual(['n1']);
+
+    listNodesPage.mockRejectedValueOnce(new Error('boom'));
+    rerender('abc');
+    await tick(200);
+    expect(result.current.failed).toBe(true);
+    rerender('');
+    await tick(50);
+    expect(result.current.failed).toBe(false);
   });
 
   // ── The state / kind / pool filters ─────────────────────────────────────────────────────────
