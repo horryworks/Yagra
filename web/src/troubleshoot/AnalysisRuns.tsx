@@ -21,6 +21,7 @@ import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { runColumns, runFilterLabels } from './runFilters';
 import { useTroubleshootStore } from './store';
+import { useCan } from '../store';
 import { seedAnalysisJobs } from './useTroubleshootStream';
 import { reportPathFor, toolById } from './data';
 import { relTime, inputFromJob } from './format';
@@ -28,6 +29,10 @@ import type { AnalysisJob } from '../types/api';
 
 function RunRow({ job }: { job: AnalysisJob }) {
   const { t } = useTranslation('troubleshoot');
+  // `POST /analysis/jobs` and `…/cancel` take `RequireAckAlerts`; reading runs stays View. A control
+  // the caller may not use is not drawn (ADR-056) — a Viewer used to see every Run button here and
+  // get "could not start" with no reason.
+  const canRun = useCan('ack_alerts');
   const navigate = useNavigate();
   const cancelJob = useTroubleshootStore((s) => s.cancelJob);
   const createJob = useTroubleshootStore((s) => s.createJob);
@@ -77,9 +82,11 @@ function RunRow({ job }: { job: AnalysisJob }) {
         <div className="ts-run-eta">{pct}%</div>
         <div className="ts-run-time">{relTime(job.created_ms)}</div>
         <div className="ts-run-action">
-          <button className="ts-linkbtn ts-run-link" onClick={() => void cancelJob(job.id)}>
-            {t('common:actions.cancel')}
-          </button>
+          {canRun && (
+            <button className="ts-linkbtn ts-run-link" onClick={() => void cancelJob(job.id)}>
+              {t('common:actions.cancel')}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -125,9 +132,11 @@ function RunRow({ job }: { job: AnalysisJob }) {
       <div className="ts-run-eta">—</div>
       <div className="ts-run-time">{relTime(job.finished_ms)}</div>
       <div className="ts-run-action">
-        <button className="ts-linkbtn ts-run-link" onClick={() => void retry()}>
-          {t('common:actions.retry')}
-        </button>
+        {canRun && (
+          <button className="ts-linkbtn ts-run-link" onClick={() => void retry()}>
+            {t('common:actions.retry')}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -47,6 +47,8 @@ function scheduleColumns(
   t: TFunction,
   onEdit: (s: AnalysisSchedule) => void,
   onDelete: (s: AnalysisSchedule) => void,
+  /** Whether the caller may change a schedule — `PUT`/`DELETE` take `RequireAckAlerts`. */
+  canWrite: boolean,
 ): Column<AnalysisSchedule>[] {
   const specs = scheduleFilters(t);
   const cols: Column<AnalysisSchedule>[] = [
@@ -101,7 +103,9 @@ function scheduleColumns(
       header: '',
       width: '56px',
       align: 'right',
-      render: (s) => (
+      render: (s) =>
+        // Not drawn for a caller who may not use it (ADR-056) — it used to be, under a gated + Add.
+        !canWrite ? null : (
         <OverflowMenu
           actions={[
             {
@@ -160,7 +164,12 @@ export function ScheduledPage() {
       .catch(() => undefined);
   }, [authed, load]);
 
-  const columns = useMemo(() => scheduleColumns(t, setEditing, setDeleting), [t]);
+  // `canWrite` reaches the columns: the row menu was the one write control here that did not ask,
+  // so a Viewer got Edit and Delete on every row and a 403 on Save.
+  const columns = useMemo(
+    () => scheduleColumns(t, setEditing, setDeleting, canWrite),
+    [t, canWrite],
+  );
   // Client-side: the list is bounded by what an operator set up, not by fleet size
   // (ui-conventions). URL-backed — one table on this route.
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(

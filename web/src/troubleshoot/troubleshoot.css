@@ -1013,3 +1013,9 @@ html[data-viewport='mobile'] .ts-cfgbar .field {
     transition: none;
   }
 }
+
+/* A caller who may not run an analysis gets the card as a description: no Run, no pointer, and
+   no hover lift promising a click that does nothing (ADR-056). */
+.ts-tool.ts-tool-readonly {
+  cursor: default;
+}

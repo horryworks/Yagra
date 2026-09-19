@@ -16,12 +16,17 @@ import { METHODS, toolById, type Tool, reportPathFor } from './data';
 // The slider→σ mapping lives (tested) in report/format.ts — the reports read the same scale back.
 import { sigmaFor } from './report/format';
 import { useTroubleshootStore } from './store';
+import { useCan } from '../store';
 import type { AnalysisJobInput } from '../types/api';
 
 const BASELINE_SECS = 14 * 86_400;
 
 export function LaunchDrawer() {
   const { t } = useTranslation('troubleshoot');
+  // `POST /analysis/jobs` and `…/cancel` take `RequireAckAlerts`; reading runs stays View. A control
+  // the caller may not use is not drawn (ADR-056) — a Viewer used to see every Run button here and
+  // get "could not start" with no reason.
+  const canRun = useCan('ack_alerts');
   const openToolId = useTroubleshootStore((s) => s.openToolId);
   const closeDrawer = useTroubleshootStore((s) => s.closeDrawer);
   const createJob = useTroubleshootStore((s) => s.createJob);
@@ -222,9 +227,11 @@ export function LaunchDrawer() {
             <div className="ts-drawer-foot">
               <span className="ts-est">{t('launch.est', { est: t(tool.est) })}</span>
               <Button onClick={closeDrawer}>{t('common:actions.cancel')}</Button>
-              <Button variant="primary" onClick={() => void submit()} disabled={submitting}>
-                {submitting ? t('actions.starting') : t('actions.runAnalysis')}
-              </Button>
+              {canRun && (
+                <Button variant="primary" onClick={() => void submit()} disabled={submitting}>
+                  {submitting ? t('actions.starting') : t('actions.runAnalysis')}
+                </Button>
+              )}
             </div>
           </>
         )}

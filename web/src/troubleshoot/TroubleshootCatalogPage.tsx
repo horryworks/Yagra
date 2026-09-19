@@ -9,6 +9,8 @@ import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { TOOLS, TOOL_GROUPS } from './data';
 import { runningCount, useTroubleshootStore } from './store';
+import { useCan } from '../store';
+import { PermissionHint } from '../components/ui/PermissionHint';
 import { ToolCard } from './ToolCard';
 import { LaunchDrawer } from './LaunchDrawer';
 import { avgRuntime, runsToday } from './catalogStats';
@@ -16,6 +18,7 @@ import './troubleshoot.css';
 
 export function TroubleshootCatalogPage() {
   const { t } = useTranslation('troubleshoot');
+  const canRun = useCan('ack_alerts');
   const jobs = useTroubleshootStore((s) => s.jobs);
   const running = runningCount(jobs);
 
@@ -53,6 +56,8 @@ export function TroubleshootCatalogPage() {
         <h2>{t('catalog.toolsHeading')}</h2>
         <span>{t('catalog.toolsSub')}</span>
       </div>
+      {/* Fifteen cards with no button would read as a broken page; this says which privilege. */}
+      {!canRun && <PermissionHint permission="ack_alerts" signInHint={t('catalog.signInPrompt')} />}
       {/* Grouped by what each tool reads, not flat (ADR-055 Inc.5 / R7). Fifteen cards in one grid
           is a wall an operator has to read end to end to find the one for the question they have;
           four clusters of two to five is a decision they can make from the headings. The design
