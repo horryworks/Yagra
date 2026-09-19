@@ -7,6 +7,7 @@
       "runsToday": "本日の実行",
       "avgRuntime": "平均実行時間"
     },
+    "signInPrompt": "分析を実行するにはサインインしてください。",
     "toolsHeading": "診断ツール",
     "toolsSub": "ツールを選び、範囲を設定してジョブとして実行します。",
     "group": {

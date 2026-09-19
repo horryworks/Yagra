@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { METHODS, type Tool, reportPathFor } from './data';
 import { useTroubleshootStore } from './store';
+import { useCan } from '../store';
 import { defaultAnalysisInput } from './analysisDefaults';
 
 function DepthPips({ depth }: { depth: number }) {
@@ -26,6 +27,10 @@ function DepthPips({ depth }: { depth: number }) {
 
 export function ToolCard({ tool }: { tool: Tool }) {
   const { t } = useTranslation('troubleshoot');
+  // `POST /analysis/jobs` and `…/cancel` take `RequireAckAlerts`; reading runs stays View. A control
+  // the caller may not use is not drawn (ADR-056) — a Viewer used to see every Run button here and
+  // get "could not start" with no reason.
+  const canRun = useCan('ack_alerts');
   const openDrawer = useTroubleshootStore((s) => s.openDrawer);
   const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
@@ -69,7 +74,10 @@ export function ToolCard({ tool }: { tool: Tool }) {
   };
 
   return (
-    <article className="ts-tool" onClick={configure}>
+    <article
+      className={canRun ? 'ts-tool' : 'ts-tool ts-tool-readonly'}
+      onClick={canRun ? configure : undefined}
+    >
       <div className="ts-tool-top">
         <div className="ts-tool-mono">{tool.mono}</div>
         <div className="ts-tool-titles">
@@ -92,6 +100,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
           {t(tool.est)}
         </span>
         <DepthPips depth={tool.depth} />
+        {canRun && (
         <div className="ts-tool-actions">
           <div className="ts-run-split" ref={menuRef}>
             <Button
@@ -145,6 +154,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
             )}
           </div>
         </div>
+        )}
       </div>
     </article>
   );

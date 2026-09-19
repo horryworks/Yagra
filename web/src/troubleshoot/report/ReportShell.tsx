@@ -20,6 +20,8 @@ import { allScope, type ScopeValue } from '../../components/ScopePicker/scope';
 import { relTime } from '../format';
 import { TERMINAL_JOB_STATES, reportPathFor, toolById } from '../data';
 import { runningCount, useTroubleshootStore } from '../store';
+import { useCan } from '../../store';
+import { PermissionHint } from '../../components/ui/PermissionHint';
 import { NoticeRow } from './kit';
 import { sigmaFor, splitNotices, toCsv } from './format';
 import { buildJobInput, initialControlState } from './jobInput';
@@ -38,7 +40,8 @@ function Processing({
   pct: number;
   phase: string;
   phaseKeys: string[];
-  onCancel: () => void;
+  /** Absent when the caller may not cancel a run — the button is then not drawn. */
+  onCancel?: () => void;
 }) {
   const { t } = useTranslation('troubleshoot');
   const phases = useMemo(() => phaseKeys.map((k) => t(k)), [t, phaseKeys]);
@@ -60,9 +63,11 @@ function Processing({
             </div>
           ))}
         </div>
-        <Button style={{ marginTop: 8 }} onClick={onCancel}>
-          {t('common:actions.cancel')}
-        </Button>
+        {onCancel && (
+          <Button style={{ marginTop: 8 }} onClick={onCancel}>
+            {t('common:actions.cancel')}
+          </Button>
+        )}
       </div>
     </Card>
   );
@@ -76,6 +81,10 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
   const createJob = useTroubleshootStore((s) => s.createJob);
   const cancelJob = useTroubleshootStore((s) => s.cancelJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
+  // `POST /analysis/jobs` and `…/cancel` take `RequireAckAlerts`; reading runs stays View. A control
+  // the caller may not use is not drawn (ADR-056) — a Viewer used to see every Run button here and
+  // get "could not start" with no reason.
+  const canRun = useCan('ack_alerts');
 
   const tool = toolById(descriptor.tool);
   const toolName = tool ? t(tool.name) : descriptor.tool;
@@ -213,12 +222,14 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
         note={t(`${descriptor.i18nKey}.note`)}
         actions={
           <>
-            <Button onClick={() => void run()}>{t('actions.rerun')}</Button>
+            {canRun && <Button onClick={() => void run()}>{t('actions.rerun')}</Button>}
             <Button onClick={exportCsv}>{t('actions.export')}</Button>
           </>
         }
       />
 
+      {/* The bar only parameterizes a run, so it goes with the button (ADR-056). */}
+      {canRun && (
       <div className="ts-cfgbar">
         {shows('scope') && (
           <div className="ts-fgroup">
@@ -288,11 +299,14 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
           {t('actions.runAnalysis')}
         </Button>
       </div>
+      )}
 
       {!job && (
         <Card>
           <div className="ts-empty-note">
-            {missing
+            {!canRun ? (
+              <PermissionHint permission="ack_alerts" signInHint={t('catalog.signInPrompt')} />
+            ) : missing
               ? t('report.common.jobMissing')
               : running > 0
                 ? t('report.common.idle.running')
@@ -306,7 +320,7 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
           pct={job.pct}
           phase={job.phase ?? ''}
           phaseKeys={descriptor.phaseKeys}
-          onCancel={() => void cancelJob(job.id)}
+          onCancel={canRun ? () => void cancelJob(job.id) : undefined}
         />
       )}
 
