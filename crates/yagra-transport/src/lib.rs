@@ -30,7 +30,8 @@ mod snmp_v3;
 mod walk_budget;
 pub use icmp::SurgePingTransport;
 pub use meraki::{
-    list_devices, list_networks, list_organizations, MerakiDeviceInfo, MerakiNetworkInfo,
+    fetch_inventory, list_devices, list_networks, list_organizations, MerakiAvailability,
+    MerakiDeviceInfo, MerakiFetchError, MerakiInventory, MerakiInventoryDevice, MerakiNetworkInfo,
     MerakiOrgInfo,
 };
 /// Why a multi-column walk stopped early, how long one may run, and how each of its columns ended.

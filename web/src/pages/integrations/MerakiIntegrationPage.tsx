@@ -25,6 +25,7 @@ import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { tierList } from '../merakiTiers';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS } from './merakiRegions';
+import { canSyncNow, orgHasInventory, orgSyncSummary } from './merakiOrgRow';
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select). */
 function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -331,7 +332,7 @@ function CadenceModal({
       {numField(t('meraki.cadence.availabilityInterval'), availability, setAvailability, '60–3600')}
       {numField(t('meraki.cadence.uplinkInterval'), uplink, setUplink, '60–3600')}
       {numField(t('meraki.cadence.trafficInterval'), traffic, setTraffic, '300–86400')}
-      {numField(t('meraki.cadence.inventoryInterval'), inventory, setInventory, '900–604800')}
+      {numField(t('meraki.cadence.inventoryInterval'), inventory, setInventory, '60–604800')}
       {numField(
         t('meraki.cadence.rateBudget'),
         targetRps,
@@ -340,6 +341,135 @@ function CadenceModal({
       )}
       {error && <p className="form-error">{error}</p>}
     </Modal>
+  );
+}
+
+/** One organization's row: what it is, how its last inventory sync went, and what can be done.
+ *
+ *  Its own component so "Sync now" has somewhere to keep its busy flag and its failure — a sync is
+ *  the one write on this page that takes seconds, and a row that gave no sign of it would be
+ *  pressed twice. The judgement (which sync column wins, when counts mean anything, whether the
+ *  button is drawn) is in `merakiOrgRow.ts`, where a test reaches it. */
+function OrgRow({
+  org,
+  canConfig,
+  pollingOn,
+  onSynced,
+  onImport,
+  onNetworks,
+  onCadence,
+  onToggle,
+  onDelete,
+}: {
+  org: MerakiOrg;
+  canConfig: boolean;
+  pollingOn: boolean;
+  onSynced: () => void;
+  onImport: () => void;
+  onNetworks: () => void;
+  onCadence: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const summary = orgSyncSummary(org);
+  const when = (iso: string) => new Date(iso).toLocaleString();
+
+  const sync = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .syncMerakiOrg(org.id)
+      .catch((e: unknown) => setError(errMsg(e, t('meraki.err.sync'))))
+      // Reloaded on failure too: a sync that ran and failed has written its reason on the row,
+      // and that reason is the useful half of the answer.
+      .finally(() => {
+        setBusy(false);
+        onSynced();
+      });
+  };
+
+  return (
+    <div className="meraki-org">
+      <div className="meraki-org-info">
+        <div className="meraki-org-main">
+          <span className="meraki-org-name">{org.name}</span>
+          <span className="meraki-org-id mono">{t('meraki.orgs.orgId', { id: org.org_id })}</span>
+          <span className={`meraki-org-state ${org.enabled ? 'on' : 'off'}`}>
+            {org.enabled ? t('meraki.orgs.stateEnabled') : t('meraki.orgs.statePaused')}
+          </span>
+          <span className="meraki-org-tiers">
+            {t('meraki.tiersPrefix')} {tierList(org.enabled_tiers, t)}
+          </span>
+        </div>
+
+        <div className="meraki-org-sync">
+          {summary.kind === 'never' && <span className="muted">{t('meraki.sync.never')}</span>}
+          {summary.kind === 'ok' && <span>{t('meraki.sync.ok', { when: when(summary.at) })}</span>}
+          {summary.kind === 'failed' && (
+            <>
+              <span className="meraki-org-sync-failed">
+                {t('meraki.sync.failed', { reason: t(`meraki.sync.reason.${summary.reason}`) })}
+              </span>
+              {summary.lastGoodAt && (
+                <span className="muted">
+                  {t('meraki.sync.lastGood', { when: when(summary.lastGoodAt) })}
+                </span>
+              )}
+            </>
+          )}
+          {orgHasInventory(org) && (
+            <>
+              <span>
+                {t('meraki.sync.devices', {
+                  monitored: org.devices.monitored,
+                  seen: org.devices.seen,
+                })}
+              </span>
+              {org.devices.new > 0 && (
+                <span className="meraki-org-sync-new">
+                  {t('meraki.sync.new', { count: org.devices.new })}
+                </span>
+              )}
+              {/* Marked, never acted on: the node and its alerts stay as they are (ADR-156 決定 3). */}
+              {org.devices.missing > 0 && (
+                <span className="meraki-org-sync-failed">
+                  {t('meraki.sync.missing', { count: org.devices.missing })}
+                </span>
+              )}
+            </>
+          )}
+          {error && <span className="meraki-org-sync-failed">{error}</span>}
+        </div>
+      </div>
+
+      {canConfig && (
+        <div className="meraki-org-actions">
+          {canSyncNow(org, pollingOn) && (
+            <Button variant="outline" onClick={sync} disabled={busy}>
+              {busy ? t('meraki.sync.running') : t('meraki.sync.now')}
+            </Button>
+          )}
+          <Button variant="outline" onClick={onImport}>
+            {t('meraki.org.import')}
+          </Button>
+          <Button variant="outline" onClick={onNetworks}>
+            {t('meraki.org.networks')}
+          </Button>
+          <Button variant="outline" onClick={onCadence}>
+            {t('meraki.org.cadence')}
+          </Button>
+          <Button variant="outline" onClick={onToggle}>
+            {org.enabled ? t('meraki.org.pause') : t('meraki.org.resume')}
+          </Button>
+          <Button variant="danger" onClick={onDelete}>
+            {t('common:actions.delete')}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -431,39 +561,18 @@ export function MerakiIntegrationPage() {
           ) : (
             <div className="meraki-org-list">
               {orgs.map((o) => (
-                <div className="meraki-org" key={o.id}>
-                  <div className="meraki-org-main">
-                    <span className="meraki-org-name">{o.name}</span>
-                    <span className="meraki-org-id mono">{t('meraki.orgs.orgId', { id: o.org_id })}</span>
-                    <span
-                      className={`meraki-org-state ${o.enabled ? 'on' : 'off'}`}
-                    >
-                      {o.enabled ? t('meraki.orgs.stateEnabled') : t('meraki.orgs.statePaused')}
-                    </span>
-                    <span className="meraki-org-tiers">
-                      {t('meraki.tiersPrefix')} {tierList(o.enabled_tiers, t)}
-                    </span>
-                  </div>
-                  {canConfig && (
-                    <div className="meraki-org-actions">
-                      <Button variant="outline" onClick={() => setImporting(o)}>
-                        {t('meraki.org.import')}
-                      </Button>
-                      <Button variant="outline" onClick={() => setScoping(o)}>
-                        {t('meraki.org.networks')}
-                      </Button>
-                      <Button variant="outline" onClick={() => setEditing(o)}>
-                        {t('meraki.org.cadence')}
-                      </Button>
-                      <Button variant="outline" onClick={() => toggleEnabled(o)}>
-                        {o.enabled ? t('meraki.org.pause') : t('meraki.org.resume')}
-                      </Button>
-                      <Button variant="danger" onClick={() => setDeleting(o)}>
-                        {t('common:actions.delete')}
-                      </Button>
-                    </div>
-                  )}
-                </div>
+                <OrgRow
+                  key={o.id}
+                  org={o}
+                  canConfig={canConfig}
+                  pollingOn={pollingOn}
+                  onSynced={load}
+                  onImport={() => setImporting(o)}
+                  onNetworks={() => setScoping(o)}
+                  onCadence={() => setEditing(o)}
+                  onToggle={() => toggleEnabled(o)}
+                  onDelete={() => setDeleting(o)}
+                />
               ))}
             </div>
           )}

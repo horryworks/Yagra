@@ -126,7 +126,7 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 ///
 /// ## What is faked — and this is the whole list
 ///
-/// Five handles cannot come from a pool. They are named here rather than left to be discovered,
+/// Six handles cannot come from a pool. They are named here rather than left to be discovered,
 /// because the compiler cannot tell a field wired differently from production from one wired the
 /// same: it only insists every field is named, since [`super::AdminState`] has no `Default`.
 ///
@@ -137,6 +137,7 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 /// | Redis | `VolatileStore::disabled` | the liveness mirror is a no-op; PostgreSQL still holds the durable copy |
 /// | the KEK | `StaticKeyProvider::single` | a sealed value round-trips inside this test and nowhere else |
 /// | the notifier | `Notifier::with_default(None)` | nothing is delivered — see below |
+/// | the Meraki Dashboard | [`EmptyDashboard`] | every organization holds no devices; what a sync *finds* is `meraki_sync.rs`'s to test |
 ///
 /// 🚨 **The notifier is never `Notifier::from_env()`.** That reader takes `YAGRA_WEBHOOK_URL` and
 /// `YAGRA_SMTP_*` from the process environment, so a developer who happens to have one exported
@@ -159,6 +160,25 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 /// outcome.
 pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
     live_state_with(pool, None, None).await
+}
+
+/// The Meraki Dashboard the live fixture talks to: reachable, and empty.
+///
+/// 🚨 Never the real `DashboardApi`. A test that pressed "Sync now" would otherwise send a request
+/// to `api.meraki.com` from whatever machine runs the suite. It answers a *complete* empty listing
+/// rather than an error so the endpoint's accepted path is reachable; it therefore says nothing
+/// about what a sync does with devices, which `meraki_sync.rs` tests against its own fake.
+pub(crate) struct EmptyDashboard;
+
+#[async_trait::async_trait]
+impl crate::meraki_sync::MerakiDirectory for EmptyDashboard {
+    async fn inventory(
+        &self,
+        _org: &crate::meraki::MerakiOrg,
+        _api_key: &str,
+    ) -> Result<yagra_transport::MerakiInventory, yagra_transport::MerakiFetchError> {
+        Ok(yagra_transport::MerakiInventory::default())
+    }
 }
 
 /// [`live_state`], with a hand-off directory the upgrade and relocation mechanisms can use.
@@ -239,6 +259,17 @@ async fn live_state_with(
     let url_checks = Arc::new(crate::url_check::UrlCheckRepo::new(pool.clone()));
     let dns_checks = Arc::new(crate::dns_check::DnsCheckRepo::new(pool.clone()));
     let meraki_devices = Arc::new(crate::meraki::MerakiDeviceRepo::new(pool.clone()));
+    let meraki_orgs = Arc::new(crate::meraki::MerakiOrgRepo::new(pool.clone()));
+    let meraki_inventory = Arc::new(crate::meraki_inventory::MerakiInventoryRepo::new(
+        pool.clone(),
+    ));
+    let meraki_sync = Arc::new(crate::meraki_sync::MerakiSync::new(
+        meraki_orgs.clone(),
+        meraki_inventory.clone(),
+        creds.clone(),
+        Arc::new(EmptyDashboard),
+        Arc::new(crate::meraki::MerakiInflight::new()),
+    ));
     let reports_repo = Arc::new(crate::reports::ReportsRepo::new(pool.clone()));
     let audit_repo = Arc::new(crate::audit::AuditRepo::new(pool.clone()));
     let forward_store = Arc::new(crate::forward_store::ForwardStore::new(
@@ -341,7 +372,9 @@ async fn live_state_with(
         wireless: Arc::new(crate::wireless::WirelessRepo::new(pool.clone())),
         topology_links: topo_link_repo,
         link_overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
-        meraki_orgs: Arc::new(crate::meraki::MerakiOrgRepo::new(pool.clone())),
+        meraki_orgs,
+        meraki_inventory,
+        meraki_sync,
         netbox: Arc::new(crate::netbox::NetboxRepo::new(pool.clone())),
         meraki_devices,
         events: events_repo,

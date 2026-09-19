@@ -20,15 +20,18 @@ pub const MIN_POLL_INTERVAL_SECS: u32 = 10;
 pub const MAX_POLL_INTERVAL_SECS: u32 = 3600;
 
 // ── Cisco Meraki cadence bounds (own band, NOT the per-node 1h cap — slow tiers must not be
-// blocked). Mirror the CHECK constraints in migration 0038; the API validates against these. ──
+// blocked). Mirror the CHECK constraints in migration 0038 — and 0124 for the inventory floor; the
+// API validates against these. ──
 /// Availability/uplink tier cadence bounds (seconds).
 pub const MERAKI_FAST_MIN_SECS: i32 = 60;
 pub const MERAKI_FAST_MAX_SECS: i32 = 3600;
 /// Traffic tier cadence bounds (seconds).
 pub const MERAKI_TRAFFIC_MIN_SECS: i32 = 300;
 pub const MERAKI_TRAFFIC_MAX_SECS: i32 = 86_400;
-/// Inventory tier cadence bounds (seconds).
-pub const MERAKI_INVENTORY_MIN_SECS: i32 = 900;
+/// Inventory sync cadence bounds (seconds). The floor was 900 while the tier did nothing; since
+/// ADR-164 it is how long a newly connected device waits to be noticed, and three paged GETs a
+/// minute is still under 1% of the Dashboard API's per-organization limit (migration 0124).
+pub const MERAKI_INVENTORY_MIN_SECS: i32 = 60;
 pub const MERAKI_INVENTORY_MAX_SECS: i32 = 604_800;
 /// Hard cap on the per-org request-rate budget (requests/sec) — a safeguard so an operator can't
 /// dial polling up to a level that would starve the customer's own Dashboard API usage.

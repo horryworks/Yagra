@@ -172,11 +172,20 @@ const PRE_AGGREGATED: Scoping = Refused(
      not at all; a group-scoped caller gets the refusal rather than the fleet's numbers",
 );
 
+/// The **Meraki device list**. A read, and refused to a group-scoped caller all the same (ADR-164) —
+/// see `api/meraki.rs::meraki_devices_are_deployment_wide`. The other Meraki reads stay
+/// `ADMIN_CFG`: an organization's name and cadence are configuration, but this one is inventory.
+const MERAKI_DEVICES: Scoping = Refused(
+    "the list names every device in a Meraki organization with its address, and an unimported \
+     device is in no folder to be inside or outside of, so there is nothing to narrow it by",
+);
+
 /// A **Meraki write**. Refused to a group-scoped caller (ADR-164) — see
 /// `api/meraki.rs::meraki_is_deployment_wide`.
 ///
-/// These nine lines read `ADMIN_CFG` until ADR-164, and that reason was false: the handlers take
-/// `RequireManageConfig`, which an Operator holds, and an Operator can be scoped. The reads stay
+/// The nine lines older than ADR-164 read `ADMIN_CFG` until then, and that reason was false: the
+/// handlers take `RequireManageConfig`, which an Operator holds, and an Operator can be scoped.
+/// (`…/sync` arrived with the ADR and was never anything else.) The configuration reads stay
 /// `ADMIN_CFG` — an organization's name and cadence are configuration, not monitored-node data.
 const MERAKI_WRITE: Scoping = Refused(
     "a Meraki organization is monitored as a whole, across every folder — importing files nodes \
@@ -785,6 +794,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "GET",
+        "/api/v1/meraki/orgs/:id/devices",
+        MERAKI_DEVICES,
+        Tool("get_config"),
+    ),
+    (
         "PUT",
         "/api/v1/meraki/orgs/:id/cadence",
         MERAKI_WRITE,
@@ -811,6 +826,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/meraki/orgs/:id/networks",
+        MERAKI_WRITE,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/meraki/orgs/:id/sync",
         MERAKI_WRITE,
         NO_MCP_WRITE,
     ),

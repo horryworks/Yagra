@@ -154,16 +154,70 @@ impl Session {
     /// GET `path` (with `query`), following `Link: rel=next` pagination, and return the flattened
     /// JSON array items across all pages. **GET only.** Every page's host is re-checked against the
     /// allow-list. A network/5xx failure returns the items gathered so far (best-effort).
+    ///
+    /// ⚠️ **"Best-effort" means a short answer is an `Ok`.** That is right for a metric collect — a
+    /// device missing from this round is a gap in a chart — and wrong for anything that concludes
+    /// from absence. A caller that asks "which devices exist" uses [`Self::get_paged_strict`].
     async fn get_paged(
         &mut self,
         path: &str,
         query: &[(&str, String)],
         per_page: u32,
     ) -> Result<Vec<Value>, TransportError> {
-        let mut url = self
-            .base
-            .join(path)
-            .map_err(|e| io(format!("invalid meraki path {path}: {e}")))?;
+        let (items, stop) = self.get_paged_traced(path, query, per_page).await;
+        match stop {
+            Some(stop) if stop.fails_a_collect() => Err(io(stop.collect_message())),
+            _ => Ok(items),
+        }
+    }
+
+    /// [`Self::get_paged`], except that anything short of "the server said there is no next page"
+    /// is an error (ADR-164 決定 2).
+    ///
+    /// The inventory sync marks a device `missing` when a listing does not contain it. Through the
+    /// lenient reader a dropped connection on page 2 of 3 would do that to a third of an
+    /// organization, and a 429 storm to all of it.
+    async fn get_paged_strict(
+        &mut self,
+        path: &str,
+        query: &[(&str, String)],
+        per_page: u32,
+    ) -> Result<Vec<Value>, MerakiFetchError> {
+        let (items, stop) = self.get_paged_traced(path, query, per_page).await;
+        match stop {
+            None => Ok(items),
+            Some(stop) => Err(stop.into()),
+        }
+    }
+
+    /// The paging loop both readers share: the items gathered, and why it stopped if the server did
+    /// not say it was finished. `None` is the only complete answer.
+    async fn get_paged_traced(
+        &mut self,
+        path: &str,
+        query: &[(&str, String)],
+        per_page: u32,
+    ) -> (Vec<Value>, Option<Stop>) {
+        let mut items: Vec<Value> = Vec::new();
+        let stop = self
+            .page_through(path, query, per_page, &mut items)
+            .await
+            .err();
+        (items, stop)
+    }
+
+    /// Page through `path`, pushing into `items`. `Ok(())` only when the listing ran to its end.
+    async fn page_through(
+        &mut self,
+        path: &str,
+        query: &[(&str, String)],
+        per_page: u32,
+        items: &mut Vec<Value>,
+    ) -> Result<(), Stop> {
+        let mut url = self.base.join(path).map_err(|e| {
+            tracing::debug!(error = %e, path, "invalid meraki path");
+            Stop::Malformed
+        })?;
         {
             let mut qp = url.query_pairs_mut();
             for (k, v) in query {
@@ -172,7 +226,6 @@ impl Session {
             qp.append_pair("perPage", &per_page.to_string());
         }
 
-        let mut items: Vec<Value> = Vec::new();
         let mut visited: Vec<reqwest::Url> = Vec::new();
         let mut rate_retries = 0u32;
 
@@ -180,17 +233,15 @@ impl Session {
             // Host allow-list on EVERY request (initial URL + each next-link).
             let host = url.host_str().unwrap_or_default();
             if !is_meraki_api_host(host) {
-                return Err(io(
-                    "meraki request host is not allow-listed (refusing to send key)",
-                ));
+                return Err(Stop::Host);
             }
 
             self.pace().await;
             let resp = match self.client.get(url.clone()).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!(error = %e, "meraki request did not complete; returning partial");
-                    break;
+                    tracing::debug!(error = %e, "meraki request did not complete");
+                    return Err(Stop::Network);
                 }
             };
             let status = resp.status();
@@ -198,8 +249,8 @@ impl Session {
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 rate_retries += 1;
                 if rate_retries > MAX_RATE_LIMIT_RETRIES {
-                    tracing::warn!("meraki 429 budget exhausted; returning partial results");
-                    break;
+                    tracing::warn!("meraki 429 budget exhausted");
+                    return Err(Stop::RateLimited);
                 }
                 let wait = retry_after(&resp).unwrap_or_else(|| Duration::from_secs(1));
                 tracing::warn!(
@@ -212,64 +263,181 @@ impl Session {
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
             {
-                return Err(io(format!("meraki api auth failed ({})", status.as_u16())));
+                return Err(Stop::Auth(status.as_u16()));
             }
             if !status.is_success() {
-                tracing::debug!(
-                    status = status.as_u16(),
-                    "meraki non-success; returning partial"
-                );
-                break;
+                tracing::debug!(status = status.as_u16(), "meraki non-success");
+                return Err(Stop::Status(status.as_u16()));
             }
             rate_retries = 0;
 
             let next = next_link(&resp);
-            let body = resp
-                .text()
-                .await
-                .map_err(|e| io(format!("meraki response read failed: {e}")))?;
+            let body = resp.text().await.map_err(|e| {
+                tracing::debug!(error = %e, "meraki response read failed");
+                Stop::Malformed
+            })?;
             match serde_json::from_str::<Value>(&body) {
                 Ok(Value::Array(arr)) => items.extend(arr),
                 Ok(other) => items.push(other),
-                Err(e) => return Err(io(format!("meraki json parse failed: {e}"))),
+                Err(e) => {
+                    tracing::debug!(error = %e, "meraki json parse failed");
+                    return Err(Stop::Malformed);
+                }
             }
             visited.push(url);
 
-            match next_page(&visited, next.as_deref())? {
-                Some(n) => url = n,
-                None => break,
+            match next_page(&visited, next.as_deref()) {
+                PageStep::Next(n) => url = n,
+                PageStep::Done => return Ok(()),
+                PageStep::Stop(stop) => return Err(stop),
             }
         }
-        Ok(items)
     }
 }
 
-/// Where paging goes after the pages in `visited`: the `rel=next` URL, or `None` to stop.
+/// Why a paged read ended before the server said it had no more pages.
+///
+/// One vocabulary for both readers, because which of these is an error is the *caller's* question:
+/// the lenient reader keeps what it has for the last five, the strict one refuses all eight.
+/// Nothing here carries request or response text — a Dashboard API error body can quote the request,
+/// and the request carries the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// A URL named a host outside the allow-list; the key was not sent.
+    Host,
+    /// 401/403 — the key is wrong, revoked, or lacks access to this organization.
+    Auth(u16),
+    /// The path, a next link, or a response body could not be read as what it should be.
+    Malformed,
+    /// The request did not complete (DNS, connect, TLS, timeout).
+    Network,
+    /// 429s outlasted [`MAX_RATE_LIMIT_RETRIES`].
+    RateLimited,
+    /// Any other non-success status.
+    Status(u16),
+    /// The next link named a page already fetched (ADR-158 B5).
+    Cycle,
+    /// [`MAX_PAGES`] pages were read and the server still offered another.
+    PageCap,
+}
+
+impl Stop {
+    /// Whether the lenient reader reports this rather than returning what it gathered. These three
+    /// were errors before the vocabulary existed, and a collect that swallowed a refused key would
+    /// report every device as simply having no data.
+    fn fails_a_collect(self) -> bool {
+        match self {
+            Self::Host | Self::Auth(_) | Self::Malformed => true,
+            Self::Network | Self::RateLimited | Self::Status(_) | Self::Cycle | Self::PageCap => {
+                false
+            }
+        }
+    }
+
+    /// The lenient reader's error text for the three it reports.
+    fn collect_message(self) -> String {
+        match self {
+            Self::Host => "meraki request host is not allow-listed (refusing to send key)".into(),
+            Self::Auth(code) => format!("meraki api auth failed ({code})"),
+            Self::Malformed
+            | Self::Network
+            | Self::RateLimited
+            | Self::Status(_)
+            | Self::Cycle
+            | Self::PageCap => "meraki response could not be read".into(),
+        }
+    }
+}
+
+/// Why a strict inventory read failed (ADR-164).
+///
+/// Every variant is a fact about the exchange and none quotes it, so core may store one on the
+/// organization's row and show it to an operator. That is the reason this is its own type rather
+/// than a [`TransportError::Io`] string: a string would have to be hidden, and "sync failed" with
+/// no reason is the state this exists to end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum MerakiFetchError {
+    /// The session could not be built: the base URL is not an https allow-listed host, or the key
+    /// holds characters a header cannot carry. Nothing was sent.
+    #[error("the organization's base URL or API key cannot be used")]
+    Config,
+    /// A next link named a host outside the allow-list; the key was not sent there.
+    #[error("the Meraki API host is not allow-listed")]
+    Host,
+    /// 401/403.
+    #[error("the Dashboard API refused the key ({0})")]
+    Auth(u16),
+    /// 429s outlasted the retry budget.
+    #[error("the Dashboard API kept rate-limiting the request")]
+    RateLimited,
+    /// Any other non-success status.
+    #[error("the Dashboard API answered {0}")]
+    Status(u16),
+    /// The request did not complete.
+    #[error("the Dashboard API could not be reached")]
+    Network,
+    /// A response could not be read as JSON, or a next link as a URL.
+    #[error("the Dashboard API answered something that could not be read")]
+    Malformed,
+    /// The listing did not run to its end: a repeating next link, or more pages than the cap.
+    #[error("the listing did not run to its end")]
+    Truncated,
+}
+
+impl From<Stop> for MerakiFetchError {
+    fn from(stop: Stop) -> Self {
+        match stop {
+            Stop::Host => Self::Host,
+            Stop::Auth(code) => Self::Auth(code),
+            Stop::Malformed => Self::Malformed,
+            Stop::Network => Self::Network,
+            Stop::RateLimited => Self::RateLimited,
+            Stop::Status(code) => Self::Status(code),
+            Stop::Cycle | Stop::PageCap => Self::Truncated,
+        }
+    }
+}
+
+/// Where paging goes after the pages in `visited`.
+#[derive(Debug, PartialEq, Eq)]
+enum PageStep {
+    /// Fetch this page next.
+    Next(reqwest::Url),
+    /// The server offered no next link: the listing is complete.
+    Done,
+    /// Paging ends here although the server offered more.
+    Stop(Stop),
+}
+
+/// Decide the step after the pages in `visited`, given the response's `rel=next` URL.
 ///
 /// Stops at [`MAX_PAGES`], and — ADR-158 B5 — at a next link naming a page already fetched. A
 /// server that answered with its own URL, or a cycle between two pages, used to be followed to the
 /// cap and every repeat taken in again: the same devices fifty times over, each one a sample.
-fn next_page(
-    visited: &[reqwest::Url],
-    next: Option<&str>,
-) -> Result<Option<reqwest::Url>, TransportError> {
+///
+/// 🚨 Those two stops are **not** [`PageStep::Done`]. They used to be indistinguishable from it
+/// (both were `None`), which is harmless to a collect and would be read by the inventory sync as
+/// "the organization has exactly these devices" (ADR-164).
+fn next_page(visited: &[reqwest::Url], next: Option<&str>) -> PageStep {
     let Some(next) = next else {
-        return Ok(None);
+        return PageStep::Done;
     };
-    let next =
-        reqwest::Url::parse(next).map_err(|e| io(format!("invalid meraki next link: {e}")))?;
+    let Ok(next) = reqwest::Url::parse(next) else {
+        tracing::debug!("invalid meraki next link");
+        return PageStep::Stop(Stop::Malformed);
+    };
     if visited.contains(&next) {
         tracing::warn!(
             pages = visited.len(),
             "meraki next link names a page already fetched; stopping pagination"
         );
-        return Ok(None);
+        return PageStep::Stop(Stop::Cycle);
     }
     if visited.len() >= MAX_PAGES {
         tracing::warn!(max = MAX_PAGES, "meraki pagination truncated at page cap");
-        return Ok(None);
+        return PageStep::Stop(Stop::PageCap);
     }
-    Ok(Some(next))
+    PageStep::Next(next)
 }
 
 /// Parse a `Retry-After` header value (delta-seconds) into a duration.
@@ -406,7 +574,7 @@ fn parse_availability(items: &[Value]) -> Vec<DeviceDatum> {
         .filter_map(|it| {
             let serial = it.get("serial")?.as_str()?.to_owned();
             let status = it.get("status").and_then(Value::as_str).unwrap_or("");
-            let up = matches!(status.to_ascii_lowercase().as_str(), "online" | "alerting");
+            let up = MerakiAvailability::from_status(status).is_up();
             Some(DeviceDatum {
                 serial,
                 sample: MerakiSample {
@@ -600,19 +768,7 @@ pub async fn list_networks(
     let mut s = Session::new(base_url, api_key, 2.0, timeout)?;
     let path = format!("{API_PREFIX}/organizations/{org_id}/networks");
     let items = s.get_paged(&path, &[], 1000).await?;
-    Ok(items
-        .iter()
-        .filter_map(|it| {
-            Some(MerakiNetworkInfo {
-                id: it.get("id")?.as_str()?.to_owned(),
-                name: it
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned(),
-            })
-        })
-        .collect())
+    Ok(items.iter().filter_map(parse_network_info).collect())
 }
 
 /// List the devices in an org (`GET /organizations/{orgId}/devices`). Read-only.
@@ -626,6 +782,143 @@ pub async fn list_devices(
     let path = format!("{API_PREFIX}/organizations/{org_id}/devices");
     let items = s.get_paged(&path, &[], 1000).await?;
     Ok(items.iter().filter_map(parse_device_info).collect())
+}
+
+// ── Inventory (core's periodic sync, ADR-164) ───────────────────────────────────────────────
+
+/// What the Dashboard API says about whether a device is reachable *from the Meraki cloud*.
+///
+/// The one reading of the `status` word, shared by the availability collect and the inventory sync,
+/// so "this device has been seen online" and `meraki_device_up = 1` cannot come to mean different
+/// things.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MerakiAvailability {
+    /// `online`.
+    Online,
+    /// `alerting` — up, with something Meraki wants looked at.
+    Alerting,
+    /// `offline`.
+    Offline,
+    /// `dormant` — has not checked in for a long time (or never has).
+    Dormant,
+    /// A word this build does not know. Read as not up: claiming a device is reachable on the
+    /// strength of a word nobody has seen is the wrong way to be wrong.
+    Other,
+}
+
+impl MerakiAvailability {
+    /// Read the API's status word (case-insensitive).
+    #[must_use]
+    pub fn from_status(status: &str) -> Self {
+        match status.to_ascii_lowercase().as_str() {
+            "online" => Self::Online,
+            "alerting" => Self::Alerting,
+            "offline" => Self::Offline,
+            "dormant" => Self::Dormant,
+            _ => Self::Other,
+        }
+    }
+
+    /// Whether the device is up. `alerting` is up: it is answering, which is the question.
+    #[must_use]
+    pub fn is_up(self) -> bool {
+        match self {
+            Self::Online | Self::Alerting => true,
+            Self::Offline | Self::Dormant | Self::Other => false,
+        }
+    }
+}
+
+/// One device in a complete inventory read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MerakiInventoryDevice {
+    /// What `GET …/devices` said.
+    pub info: MerakiDeviceInfo,
+    /// What `GET …/devices/availabilities` said, or `None` when that listing did not name the
+    /// serial — which is not the same as the device being down.
+    pub availability: Option<MerakiAvailability>,
+}
+
+/// An organization's networks and devices, read **to the end** (ADR-164 決定 2).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MerakiInventory {
+    /// Every network in the organization.
+    pub networks: Vec<MerakiNetworkInfo>,
+    /// Every device in the organization, whichever network it is in.
+    pub devices: Vec<MerakiInventoryDevice>,
+}
+
+/// Read an organization's whole inventory: networks, devices, and each device's availability.
+/// Three paged GETs on one session, paced to `target_rps`. Read-only.
+///
+/// 🚨 **All three listings complete, or this is an error.** The caller marks a device missing when
+/// it is absent from the answer, so an answer that is merely short must never be returned — see
+/// [`Session::get_paged_strict`]. Deliberately **not** narrowed by network: core has to know about
+/// the devices in a network nobody is watching in order to say that they are there.
+///
+/// `timeout` bounds one request. Bounding the whole read is the caller's job.
+pub async fn fetch_inventory(
+    base_url: &str,
+    api_key: &str,
+    org_id: &str,
+    target_rps: f64,
+    timeout: Duration,
+) -> Result<MerakiInventory, MerakiFetchError> {
+    let mut s = Session::new(base_url, api_key, target_rps, timeout).map_err(|e| {
+        tracing::debug!(error = %e, "meraki inventory session refused");
+        MerakiFetchError::Config
+    })?;
+    let org = format!("{API_PREFIX}/organizations/{org_id}");
+
+    let networks = s
+        .get_paged_strict(&format!("{org}/networks"), &[], 1000)
+        .await?;
+    let devices = s
+        .get_paged_strict(&format!("{org}/devices"), &[], 1000)
+        .await?;
+    let availabilities = s
+        .get_paged_strict(&format!("{org}/devices/availabilities"), &[], 1000)
+        .await?;
+
+    Ok(assemble_inventory(&networks, &devices, &availabilities))
+}
+
+/// Join the three listings. Pure, so the join is tested without a server.
+fn assemble_inventory(
+    networks: &[Value],
+    devices: &[Value],
+    availabilities: &[Value],
+) -> MerakiInventory {
+    let status: BTreeMap<&str, MerakiAvailability> = availabilities
+        .iter()
+        .filter_map(|it| {
+            let serial = it.get("serial")?.as_str()?;
+            let word = it.get("status").and_then(Value::as_str).unwrap_or("");
+            Some((serial, MerakiAvailability::from_status(word)))
+        })
+        .collect();
+    MerakiInventory {
+        networks: networks.iter().filter_map(parse_network_info).collect(),
+        devices: devices
+            .iter()
+            .filter_map(parse_device_info)
+            .map(|info| MerakiInventoryDevice {
+                availability: status.get(info.serial.as_str()).copied(),
+                info,
+            })
+            .collect(),
+    }
+}
+
+fn parse_network_info(it: &Value) -> Option<MerakiNetworkInfo> {
+    Some(MerakiNetworkInfo {
+        id: it.get("id")?.as_str()?.to_owned(),
+        name: it
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+    })
 }
 
 fn parse_device_info(it: &Value) -> Option<MerakiDeviceInfo> {
@@ -707,15 +1000,18 @@ mod tests {
     fn a_next_link_that_repeats_the_current_page_ends_the_paging() {
         let first = page("Q2-A");
         assert_eq!(
-            next_page(std::slice::from_ref(&first), Some(first.as_str())).unwrap(),
-            None
+            next_page(std::slice::from_ref(&first), Some(first.as_str())),
+            PageStep::Stop(Stop::Cycle)
         );
     }
 
     #[test]
     fn a_next_link_back_to_an_earlier_page_ends_the_paging() {
         let (a, b) = (page("Q2-A"), page("Q2-B"));
-        assert_eq!(next_page(&[a.clone(), b], Some(a.as_str())).unwrap(), None);
+        assert_eq!(
+            next_page(&[a.clone(), b], Some(a.as_str())),
+            PageStep::Stop(Stop::Cycle)
+        );
     }
 
     /// The ordinary case still pages, and the cap still stops it.
@@ -723,17 +1019,179 @@ mod tests {
     fn a_new_next_link_is_followed_until_the_page_cap() {
         let fresh = page("Q2-NEW");
         assert_eq!(
-            next_page(&[page("Q2-A")], Some(fresh.as_str())).unwrap(),
-            Some(fresh.clone())
+            next_page(&[page("Q2-A")], Some(fresh.as_str())),
+            PageStep::Next(fresh.clone())
         );
-        assert_eq!(next_page(&[page("Q2-A")], None).unwrap(), None);
 
         let full: Vec<reqwest::Url> = (0..MAX_PAGES).map(|i| page(&i.to_string())).collect();
-        assert_eq!(next_page(&full, Some(fresh.as_str())).unwrap(), None);
-        assert!(next_page(&full[..MAX_PAGES - 1], Some(fresh.as_str()))
-            .unwrap()
-            .is_some());
-        assert!(next_page(&[], Some("not a url")).is_err());
+        assert_eq!(
+            next_page(&full, Some(fresh.as_str())),
+            PageStep::Stop(Stop::PageCap)
+        );
+        assert_eq!(
+            next_page(&full[..MAX_PAGES - 1], Some(fresh.as_str())),
+            PageStep::Next(fresh)
+        );
+        assert_eq!(
+            next_page(&[], Some("not a url")),
+            PageStep::Stop(Stop::Malformed)
+        );
+    }
+
+    /// ADR-164 決定 2, the distinction the inventory sync rests on. "The server offered no next
+    /// page" is the **only** complete ending. A cycle and the page cap used to be spelled the same
+    /// way (`None`), so nothing downstream could tell a finished listing from an abandoned one —
+    /// and the sync marks every device the listing does not contain as missing.
+    #[test]
+    fn only_the_absence_of_a_next_link_is_a_complete_listing() {
+        let (a, fresh) = (page("Q2-A"), page("Q2-NEW"));
+        assert_eq!(next_page(std::slice::from_ref(&a), None), PageStep::Done);
+
+        let full: Vec<reqwest::Url> = (0..MAX_PAGES).map(|i| page(&i.to_string())).collect();
+        for abandoned in [
+            next_page(std::slice::from_ref(&a), Some(a.as_str())),
+            next_page(&full, Some(fresh.as_str())),
+            next_page(&[], Some("not a url")),
+        ] {
+            assert_ne!(abandoned, PageStep::Done);
+            assert!(matches!(abandoned, PageStep::Stop(_)), "{abandoned:?}");
+        }
+    }
+
+    /// Both directions of the split between the two readers. The lenient one keeps its old
+    /// contract exactly — a refused key, an off-list host and an unreadable body were always
+    /// errors, everything else returned what had been gathered — and the strict one refuses all
+    /// eight, because it may not return a short answer at all.
+    #[test]
+    fn every_stop_fails_a_strict_read_and_three_fail_a_collect() {
+        let all = [
+            Stop::Host,
+            Stop::Auth(401),
+            Stop::Malformed,
+            Stop::Network,
+            Stop::RateLimited,
+            Stop::Status(503),
+            Stop::Cycle,
+            Stop::PageCap,
+        ];
+        let failing: Vec<Stop> = all.into_iter().filter(|s| s.fails_a_collect()).collect();
+        assert_eq!(failing, [Stop::Host, Stop::Auth(401), Stop::Malformed]);
+
+        // The strict reader's error says which, and never "complete".
+        assert_eq!(
+            MerakiFetchError::from(Stop::Auth(403)),
+            MerakiFetchError::Auth(403)
+        );
+        assert_eq!(
+            MerakiFetchError::from(Stop::Status(503)),
+            MerakiFetchError::Status(503)
+        );
+        assert_eq!(
+            MerakiFetchError::from(Stop::Cycle),
+            MerakiFetchError::Truncated
+        );
+        assert_eq!(
+            MerakiFetchError::from(Stop::PageCap),
+            MerakiFetchError::Truncated
+        );
+        assert_eq!(
+            MerakiFetchError::from(Stop::RateLimited),
+            MerakiFetchError::RateLimited
+        );
+        assert_eq!(
+            MerakiFetchError::from(Stop::Network),
+            MerakiFetchError::Network
+        );
+
+        // The collect's two historical messages are unchanged.
+        assert_eq!(
+            Stop::Auth(401).collect_message(),
+            "meraki api auth failed (401)"
+        );
+        assert!(Stop::Host
+            .collect_message()
+            .contains("refusing to send key"));
+    }
+
+    /// A fetch error is stored on the organization's row and shown to an operator, so none may
+    /// quote the exchange. The variants carry a status code at most; this pins that the rendered
+    /// text does too.
+    #[test]
+    fn a_fetch_error_renders_without_a_url_or_a_key() {
+        for e in [
+            MerakiFetchError::Config,
+            MerakiFetchError::Host,
+            MerakiFetchError::Auth(401),
+            MerakiFetchError::RateLimited,
+            MerakiFetchError::Status(502),
+            MerakiFetchError::Network,
+            MerakiFetchError::Malformed,
+            MerakiFetchError::Truncated,
+        ] {
+            let text = e.to_string();
+            assert!(!text.contains("http"), "{text}");
+            assert!(!text.contains("Bearer"), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_status_word_is_read_once_for_the_collect_and_the_inventory() {
+        for (word, up) in [
+            ("online", true),
+            ("Online", true),
+            ("alerting", true),
+            ("offline", false),
+            ("dormant", false),
+            ("", false),
+            ("rebooting", false),
+        ] {
+            assert_eq!(
+                MerakiAvailability::from_status(word).is_up(),
+                up,
+                "{word:?}"
+            );
+        }
+        assert_eq!(
+            MerakiAvailability::from_status("dormant"),
+            MerakiAvailability::Dormant
+        );
+        assert_eq!(
+            MerakiAvailability::from_status("rebooting"),
+            MerakiAvailability::Other
+        );
+    }
+
+    #[test]
+    fn the_inventory_joins_availability_onto_devices_by_serial() {
+        let networks = vec![json!({"id": "N_1", "name": "HQ"}), json!({"name": "no id"})];
+        let devices = vec![
+            json!({"serial": "Q2-A", "name": "edge", "productType": "appliance", "networkId": "N_1", "lanIp": "10.0.0.1"}),
+            json!({"serial": "Q2-B", "productType": "switch", "networkId": "N_1"}),
+            json!({"serial": "Q2-C", "productType": "wireless", "networkId": "N_2"}),
+            json!({"name": "no serial"}),
+        ];
+        let availabilities = vec![
+            json!({"serial": "Q2-A", "status": "online"}),
+            json!({"serial": "Q2-B", "status": "dormant"}),
+            // Q2-C is absent from the listing; a serial nothing else names is ignored.
+            json!({"serial": "Q2-Z", "status": "online"}),
+        ];
+        let inv = assemble_inventory(&networks, &devices, &availabilities);
+        assert_eq!(inv.networks.len(), 1);
+        let got: Vec<(&str, Option<MerakiAvailability>)> = inv
+            .devices
+            .iter()
+            .map(|d| (d.info.serial.as_str(), d.availability))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Q2-A", Some(MerakiAvailability::Online)),
+                ("Q2-B", Some(MerakiAvailability::Dormant)),
+                // Not named by the availability listing: unknown, which is not "down".
+                ("Q2-C", None),
+            ]
+        );
     }
 
     #[test]

@@ -96,7 +96,7 @@ import { DISCOVERY_WALKS } from './pages/neighborSettings';
 import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
 import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
 import { DESTINATION_KINDS } from './pages/importFiling';
-import { PREFIX_SOURCES } from './types/api';
+import { MERAKI_SYNC_FAILURES, PREFIX_SOURCES } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
@@ -911,6 +911,19 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enSystem, ja: jaSystem },
       'meraki.regions.',
       MERAKI_REGION_KEYS,
+    );
+  });
+
+  it('every reason a Meraki sync can fail has its sentence (system:meraki.sync.reason.*)', () => {
+    // The organization's row renders `t(`meraki.sync.reason.${reason}`)` inside "Sync failed: …".
+    // The vocabulary is closed on the backend (`MerakiSyncFailure`) and pinned to it by
+    // `schemaEnumPins`, so an eleventh reason fails to compile there and is demanded here — instead
+    // of reaching an operator as "Sync failed: meraki.sync.reason.quota" (ADR-164).
+    expectKeys(
+      'meraki sync failure',
+      { en: enSystem, ja: jaSystem },
+      'meraki.sync.reason.',
+      MERAKI_SYNC_FAILURES,
     );
   });
 

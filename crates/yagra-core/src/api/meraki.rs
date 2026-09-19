@@ -28,7 +28,7 @@
 //! could not see. The same hole `cfeda70b` closed for wireless controllers.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
+use super::extract::{Admin, Leader, RequireManageConfig, RequireView, Scoped};
 use super::ApiState;
 use axum::{
     extract::Path,
@@ -38,6 +38,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::meraki_inventory::{DeviceRecord, MerakiDeviceCounts, MerakiDeviceState};
+use crate::meraki_sync::{MerakiSyncFailure, MerakiSyncReport, SyncError};
 
 /// Timeout for a control-plane Meraki API call (discover/enumerate) from core.
 const MERAKI_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -56,6 +59,8 @@ const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
     list_meraki_networks,
     set_meraki_networks_monitored,
     enumerate_meraki_org,
+    sync_meraki_org,
+    list_meraki_devices,
     import_meraki_devices,
     get_meraki_polling,
     set_meraki_polling
@@ -90,6 +95,8 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/meraki/orgs/:id/enumerate",
             post(enumerate_meraki_org),
         )
+        .route("/api/v1/meraki/orgs/:id/sync", post(sync_meraki_org))
+        .route("/api/v1/meraki/orgs/:id/devices", get(list_meraki_devices))
         .route("/api/v1/meraki/import", post(import_meraki_devices))
         .route(
             "/api/v1/meraki/polling",
@@ -230,11 +237,19 @@ pub(crate) struct MerakiOrgView {
     enabled_tiers: Vec<String>,
     target_rps: f64,
     group_id: Option<Uuid>,
+    /// When the last **successful** inventory sync ran. A failed sync does not move it.
+    last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// `null` until a sync has run — "has not synced yet" is not "failed".
+    last_sync_ok: Option<bool>,
+    /// Why the last sync failed; `null` after a success. A closed vocabulary, never upstream text.
+    last_sync_error: Option<MerakiSyncFailure>,
+    /// What the last successful sync found, read against which devices are nodes here.
+    devices: MerakiDeviceCounts,
 }
 
 /// Project a stored org into its API view. **The credential reference is not in it** — the view
 /// exists partly so an org row cannot accidentally serialize the field that points at the key.
-fn meraki_org_view(o: &crate::meraki::MerakiOrg) -> MerakiOrgView {
+fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) -> MerakiOrgView {
     MerakiOrgView {
         id: o.id,
         org_id: o.org_id.clone(),
@@ -248,6 +263,14 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg) -> MerakiOrgView {
         enabled_tiers: o.enabled_tiers.clone(),
         target_rps: o.target_rps,
         group_id: o.group_id,
+        last_sync_at: o.last_sync_at,
+        last_sync_ok: o.last_sync_ok,
+        // Only a failed sync has a reason. A row written by a newer core may carry a token this
+        // build does not know; `from_token` reads that as `internal`, never as "no failure".
+        last_sync_error: (o.last_sync_ok == Some(false)).then(|| {
+            MerakiSyncFailure::from_token(o.last_sync_error.as_deref().unwrap_or_default())
+        }),
+        devices,
     }
 }
 
@@ -279,7 +302,18 @@ pub(crate) async fn org_views(admin: &super::AdminState) -> ApiResult<Vec<Meraki
             "failed to list meraki organizations",
         )
     })?;
-    Ok(orgs.iter().map(meraki_org_view).collect())
+    let counts = admin.meraki_inventory.counts().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "count meraki inventory",
+            "failed to list meraki organizations",
+        )
+    })?;
+    Ok(orgs
+        .iter()
+        // An organization that has not synced yet has no rows, and so no entry: all zero.
+        .map(|o| meraki_org_view(o, counts.get(&o.id).copied().unwrap_or_default()))
+        .collect())
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -705,8 +739,13 @@ async fn enumerate_meraki_org(
         yagra_transport::list_devices(&org.base_url, &api_key, &org.org_id, MERAKI_API_TIMEOUT)
             .await
             .map_err(|e| meraki_upstream_error("list devices", &e))?;
-    // Persist the network list + stamp the sync. Both are best-effort: failing the wizard because
-    // a cache write missed would be worse than showing the freshly-fetched data.
+    // Persist the network list. Best-effort: failing the wizard because a cache write missed would
+    // be worse than showing the freshly-fetched data.
+    //
+    // It no longer stamps `last_sync_at` (ADR-164). These two reads are the lenient ones — they
+    // return what they gathered when a page fails — so "synced" was never a claim they could make,
+    // and since the inventory sync reads that column to decide when it is next due, stamping it
+    // here would postpone a real sync by a whole interval on the strength of a partial one.
     let net_pairs: Vec<(String, String)> = networks
         .iter()
         .map(|n| (n.id.clone(), n.name.clone()))
@@ -714,7 +753,6 @@ async fn enumerate_meraki_org(
     if let Err(e) = admin.meraki_orgs.upsert_networks(org.id, &net_pairs).await {
         tracing::warn!(error = %e, "enumerate: upsert networks failed");
     }
-    let _ = admin.meraki_orgs.touch_sync(org.id).await;
 
     let imported = admin
         .meraki_devices
@@ -756,6 +794,180 @@ async fn enumerate_meraki_org(
         networks: networks_view,
         devices: candidates,
     }))
+}
+
+/// Refuse a folder-scoped caller the device list (ADR-164 決定 11).
+///
+/// A read, and refused all the same. The list names every device in the organization with its
+/// address, and most of those are not in anybody's folders yet — an unimported device has no folder
+/// to be inside or outside of — so there is no honest way to narrow it. Serving it whole would hand
+/// a scoped account the inventory of sites it was restricted away from.
+fn meraki_devices_are_deployment_wide(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
+    super::scope::require_fleet_wide(
+        scope,
+        "the device list covers a whole Meraki organization, most of it not yet filed in any \
+         folder, so it cannot be narrowed to an account restricted to folders",
+    )
+}
+
+/// Sync one organization's inventory now, rather than waiting for the periodic sync.
+///
+/// Read-only upstream (three paged GETs). It goes through the same single flight as the periodic
+/// sync and the collector, so pressing it while a collect is running answers 409 rather than
+/// spending the organization's rate budget twice.
+#[utoipa::path(
+    post, path = "/api/v1/meraki/orgs/{id}/sync", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    responses(
+        (status = 200, description = "The sync completed; what it found and how many rows it wrote", body = MerakiSyncReport),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
+        (status = 409, description = "Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), or a collect or another sync is running for it (`meraki_sync_busy`)", body = super::error::ErrorBody),
+        (status = 502, description = "The sync ran and failed (`meraki_sync_failed`); the reason is recorded on the organization as `last_sync_error`", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode), or this core is a standby (`not_leader`)", body = super::error::ErrorBody),
+    ),
+)]
+async fn sync_meraki_org(
+    _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    // Leader-gated because the organization's single flight lives in the leader's process: a
+    // standby syncing would run beside the leader's collector with neither knowing about the other.
+    _leader: Leader,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<MerakiSyncReport>> {
+    meraki_is_deployment_wide(&scope)?;
+    let org = admin
+        .meraki_orgs
+        .get(id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "sync: load org",
+                "failed to load meraki organization",
+            )
+        })?
+        .ok_or_else(|| no_org(id))?;
+    // Both switches mean "send nothing to the Dashboard API", and a button must not be a way round
+    // them. Said as a conflict rather than done silently, so the operator learns which switch.
+    if !admin.repo.get_meraki_polling_enabled().await {
+        return Err(ApiError::conflict(
+            "meraki_polling_paused",
+            "Meraki polling is paused for the whole deployment; resume it before syncing",
+        ));
+    }
+    if !org.enabled {
+        return Err(ApiError::conflict(
+            "meraki_org_paused",
+            "this organization is paused; resume it before syncing",
+        ));
+    }
+    match admin.meraki_sync.sync_org(&org).await {
+        Ok(report) => Ok(Json(report)),
+        Err(SyncError::Busy) => Err(ApiError::conflict(
+            "meraki_sync_busy",
+            "a collect or another sync is running for this organization; try again in a moment",
+        )),
+        // The reason is a closed vocabulary (`MerakiSyncFailure`), so naming it is safe — unlike
+        // `meraki_upstream_error`, which has only an upstream string and must stay generic.
+        Err(SyncError::Failed(reason)) => Err(ApiError::bad_gateway(
+            "meraki_sync_failed",
+            format!("the sync failed ({})", reason.as_str()),
+        )),
+    }
+}
+
+/// One device of an organization, as the last successful sync recorded it.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct MerakiDeviceView {
+    serial: String,
+    name: String,
+    model: Option<String>,
+    product_type: String,
+    network_id: String,
+    /// The network's name; `null` for a network the sync has not recorded.
+    network_name: Option<String>,
+    /// Whether the device's network is one this organization watches.
+    network_monitored: bool,
+    /// The address Meraki reports, when it reports a usable one.
+    #[schema(value_type = Option<String>)]
+    lan_ip: Option<std::net::IpAddr>,
+    state: MerakiDeviceState,
+    /// The node this device is monitored as; `null` unless `state` is `monitored` or `missing`.
+    node_id: Option<Uuid>,
+    first_seen_at: chrono::DateTime<chrono::Utc>,
+    /// When a complete listing first failed to contain the device; `null` while Meraki lists it.
+    missing_since: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<DeviceRecord> for MerakiDeviceView {
+    fn from(d: DeviceRecord) -> Self {
+        Self {
+            serial: d.serial,
+            name: d.name,
+            model: d.model,
+            product_type: d.product_type,
+            network_id: d.network_id,
+            network_name: d.network_name,
+            network_monitored: d.network_monitored,
+            lan_ip: d.lan_ip,
+            state: d.state,
+            node_id: d.node_id,
+            first_seen_at: d.first_seen_at,
+            missing_since: d.missing_since,
+        }
+    }
+}
+
+/// An organization's devices as the last successful sync recorded them — monitored or not — with
+/// each one's state. Served from PostgreSQL: it never calls the Dashboard API.
+#[utoipa::path(
+    get, path = "/api/v1/meraki/orgs/{id}/devices", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    responses(
+        (status = 200, description = "The organization's devices; empty until its first sync", body = Vec<MerakiDeviceView>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_meraki_devices(
+    _guard: RequireView,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Vec<MerakiDeviceView>>> {
+    Ok(Json(device_views(&admin, &scope, id).await?))
+}
+
+/// One organization's devices — the seam both edges call, so the scoped refusal is decided once.
+pub(crate) async fn device_views(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    org: Uuid,
+) -> ApiResult<Vec<MerakiDeviceView>> {
+    meraki_devices_are_deployment_wide(scope)?;
+    let exists = admin.meraki_orgs.get(org).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "devices: load org",
+            "failed to load meraki organization",
+        )
+    })?;
+    if exists.is_none() {
+        return Err(no_org(org));
+    }
+    let devices = admin.meraki_inventory.devices(org).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list meraki devices",
+            "failed to list meraki devices",
+        )
+    })?;
+    Ok(devices.into_iter().map(MerakiDeviceView::from).collect())
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -983,6 +1195,7 @@ mod tests {
             ("PUT", format!("/api/v1/meraki/orgs/{ID}/cadence")),
             ("PUT", format!("/api/v1/meraki/orgs/{ID}/networks")),
             ("POST", format!("/api/v1/meraki/orgs/{ID}/enumerate")),
+            ("POST", format!("/api/v1/meraki/orgs/{ID}/sync")),
             ("POST", "/api/v1/meraki/import".to_owned()),
             ("PUT", "/api/v1/meraki/polling".to_owned()),
         ]
@@ -1185,6 +1398,7 @@ mod tests {
                 Some(json!({ "network_ids": [], "monitored": true })),
             ),
             ("POST", format!("/api/v1/meraki/orgs/{ID}/enumerate"), None),
+            ("POST", format!("/api/v1/meraki/orgs/{ID}/sync"), None),
             (
                 "POST",
                 "/api/v1/meraki/import".to_owned(),
@@ -1282,5 +1496,102 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
         assert!(!admin.repo.get_meraki_polling_enabled().await);
+    }
+
+    /// "Sync now" is accepted, recorded on the organization's row, and refused by each switch that
+    /// means "send nothing to Meraki" (ADR-164). The device list answers from the database.
+    ///
+    /// ⚠️ The fixture's Dashboard is [`crate::api::tests_support::EmptyDashboard`], so this proves
+    /// the endpoint — the flight, the key, the stamp, the two 409s — and nothing about what a sync
+    /// does with devices. That is `meraki_sync.rs`'s, against its own fake.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn syncing_an_organization_is_accepted_and_recorded_on_its_row(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        // A real sealed key: the sync opens it before it asks the Dashboard anything.
+        let credential = admin
+            .creds
+            .create(
+                "Meraki API — Acme",
+                crate::secrets::KIND_MERAKI_API,
+                br#"{"api_key":"not-a-real-key"}"#,
+            )
+            .await
+            .expect("seal key");
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let operator = token(&st, yagra_common::Role::Operator);
+        let sync = format!("/api/v1/meraki/orgs/{org}/sync");
+        let devices = format!("/api/v1/meraki/orgs/{org}/devices");
+
+        // Before any sync: not failed, not synced, and no counts to show.
+        let (status, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{orgs}");
+        assert!(orgs[0]["last_sync_ok"].is_null(), "{orgs}");
+        assert!(orgs[0]["last_sync_at"].is_null(), "{orgs}");
+
+        let (status, report) = send(&st, "POST", &sync, &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{report}");
+        assert_eq!(report["devices"], 0, "{report}");
+
+        let (_, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
+        assert_eq!(orgs[0]["last_sync_ok"], true, "{orgs}");
+        assert!(orgs[0]["last_sync_at"].is_string(), "{orgs}");
+        assert!(orgs[0]["last_sync_error"].is_null(), "{orgs}");
+        assert_eq!(
+            orgs[0]["devices"],
+            serde_json::json!({ "seen": 0, "monitored": 0, "new": 0, "missing": 0 })
+        );
+        assert!(
+            orgs[0].get("credential_id").is_none(),
+            "the view must not carry the reference to the key"
+        );
+
+        let (status, list) = send(&st, "GET", &devices, &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list, serde_json::json!([]));
+
+        // The device list is refused to a folder-restricted account, read though it is.
+        let folder = crate::pgtest::group(&pool, "Branch").await;
+        let scoped = scoped_token(&st, &[folder]);
+        let (status, answer) = send(&st, "GET", &devices, &scoped, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+
+        // A paused organization is not synced…
+        admin
+            .meraki_orgs
+            .set_enabled(org, false)
+            .await
+            .expect("pause");
+        let (status, answer) = send(&st, "POST", &sync, &operator, None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+        assert_eq!(answer["error"]["code"], "meraki_org_paused");
+        admin
+            .meraki_orgs
+            .set_enabled(org, true)
+            .await
+            .expect("resume");
+
+        // …and neither is any organization while the kill switch is engaged.
+        admin
+            .repo
+            .set_meraki_polling_enabled(false)
+            .await
+            .expect("kill switch");
+        let (status, answer) = send(&st, "POST", &sync, &operator, None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+        assert_eq!(answer["error"]["code"], "meraki_polling_paused");
+
+        let unknown = format!("/api/v1/meraki/orgs/{ID}/sync");
+        let (status, answer) = send(&st, "POST", &unknown, &operator, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+        let unknown = format!("/api/v1/meraki/orgs/{ID}/devices");
+        let (status, answer) = send(&st, "GET", &unknown, &operator, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
     }
 }
