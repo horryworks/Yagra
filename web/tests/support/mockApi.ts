@@ -92,6 +92,9 @@ export async function installMockApi(page: Page, config: MockConfig = {}): Promi
     // `AppShell` mounts `TroubleshootToast`, so all four streams open on *every* screen.
     // An immediately-ended stream makes the client reconnect after RECONNECT_MS (3s); over a
     // page-load test that is at most one extra request, which is cheaper than holding a route open.
+    // ⚠️ Not only a request: every reconnect after the first is a RESYNC to the page (frames were
+    // missed), so All nodes re-reads its members every 3 s under this harness. `nodesResync.spec.ts`
+    // depends on that, and a screen that reacts to a resync badly shows up here as a flake.
     if (pathname.startsWith(SSE_PREFIX)) {
       state.served.push(label);
       await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ':ok\n\n' });
