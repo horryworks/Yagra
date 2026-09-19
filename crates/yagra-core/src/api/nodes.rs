@@ -309,8 +309,8 @@ pub(crate) struct NodePageQuery {
     /// `maintenance`); empty or absent means every state. An unknown token is rejected rather than
     /// ignored.
     pub state: Option<String>,
-    /// Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent
-    /// means every kind.
+    /// Comma-separated monitoring kinds (`wireless_ap` | `meraki` | `url` | `dns` | `device`);
+    /// empty or absent means every kind.
     pub kind: Option<String>,
     /// Comma-separated **effective** poll pools — a node's own pool when it sets one, otherwise the
     /// nearest folder ancestor that does, otherwise the default pool. Filtering on the stored column
@@ -2205,9 +2205,13 @@ async fn set_node_parent(
     node_write_result(found, id)
 }
 
-/// Drag-reorder a node within (or into) a group, positioning it relative to a sibling node.
+/// Drag-reorder a node within (or into) a group, positioning it relative to a sibling.
 /// `group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling to
 /// land next to (both omitted ⇒ append to the end). At most one of before/after may be set.
+///
+/// ⚠️ **A sibling is a folder OR a node** (ADR-162). Under one group the two are one ordered list,
+/// so `before`/`after` may carry a folder id and the node lands at that row's edge. An id that
+/// names neither appends.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct NodePlacement {
     #[serde(default)]

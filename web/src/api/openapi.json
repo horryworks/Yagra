@@ -10643,7 +10643,7 @@
           {
             "name": "kind",
             "in": "query",
-            "description": "Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent\nmeans every kind.",
+            "description": "Comma-separated monitoring kinds (`wireless_ap` | `meraki` | `url` | `dns` | `device`);\nempty or absent means every kind.",
             "required": false,
             "schema": {
               "type": "string"
@@ -21829,7 +21829,7 @@
           {
             "name": "kind",
             "in": "query",
-            "description": "Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent\nmeans every kind.",
+            "description": "Comma-separated monitoring kinds (`wireless_ap` | `meraki` | `url` | `dns` | `device`);\nempty or absent means every kind.",
             "required": false,
             "schema": {
               "type": "string"
@@ -23071,7 +23071,7 @@
             }
           },
           "409": {
-            "description": "The access point is already a node (`ap_already_imported`), or no controller that reports it is monitored any more (`ap_has_no_controller`)",
+            "description": "The access point is already a node (`ap_already_imported`), no controller in the caller's scope that reports it is monitored any more (`ap_has_no_controller`), or that controller files access points in a folder outside the caller's scope (`ap_destination_out_of_scope`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -32937,7 +32937,7 @@
       },
       "NodePlacement": {
         "type": "object",
-        "description": "Drag-reorder a node within (or into) a group, positioning it relative to a sibling node.\n`group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling to\nland next to (both omitted ⇒ append to the end). At most one of before/after may be set.",
+        "description": "Drag-reorder a node within (or into) a group, positioning it relative to a sibling.\n`group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling to\nland next to (both omitted ⇒ append to the end). At most one of before/after may be set.\n\n⚠️ **A sibling is a folder OR a node** (ADR-162). Under one group the two are one ordered list,\nso `before`/`after` may carry a folder id and the node lands at that row's edge. An id that\nnames neither appends.",
         "properties": {
           "after": {
             "type": [
@@ -38943,7 +38943,7 @@
               },
               {
                 "$ref": "#/components/schemas/WirelessControllerSummary",
-                "description": "The controller named by `controller_node_id`, when one was named and it has reported an\ninventory. `null` otherwise."
+                "description": "The controller named by `controller_node_id`, when one was named, the caller can see it,\nand it has either reported an inventory or had its import settings saved (then\n`last_inventory_at` is `null`). `null` otherwise."
               }
             ]
           },

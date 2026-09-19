@@ -112,8 +112,8 @@ pub(super) struct ListNodesParams {
     /// `unreachable` | `unknown` | `maintenance`. Omit for all. `warning,critical,unreachable` is
     /// "everything that is not healthy". An unknown token is an error rather than being ignored.
     state: Option<String>,
-    /// Monitoring kinds to include, comma-separated: `meraki` | `url` | `dns` | `device`. Omit for
-    /// all.
+    /// Monitoring kinds to include, comma-separated: `wireless_ap` | `meraki` | `url` | `dns` |
+    /// `device`. Omit for all.
     kind: Option<String>,
     /// Effective poll pools to include, comma-separated (a node's own pool, else the nearest folder
     /// ancestor that sets one, else `default`). Omit for all. Pool names are chosen by the
@@ -247,11 +247,11 @@ impl YagraMcp {
         description = "List monitored nodes with their rolled-up state. Optional case-insensitive \
                        `search` matches name or address; narrow further with `state` \
                        (ok|warning|critical|unreachable|unknown|maintenance), `kind` \
-                       (meraki|url|dns|device) and `pool` (the effective poll pool, inherited from \
-                       the folder tree when the node sets none); `limit` is 1–100 (default 50). \
-                       Returns node id, name, address, state, kind, parent, group, vendor, model, \
-                       and tags. `kind` says what a node is — `device`, `url`, `dns` or `meraki` \
-                       — and therefore which metrics it can have."
+                       (wireless_ap|meraki|url|dns|device) and `pool` (the effective poll pool, \
+                       inherited from the folder tree when the node sets none); `limit` is 1–100 \
+                       (default 50). Returns node id, name, address, state, kind, parent, group, \
+                       vendor, model, and tags. `kind` says what a node is — `device`, `url`, \
+                       `dns`, `meraki` or `wireless_ap` — and therefore which metrics it can have."
     )]
     async fn list_nodes(
         &self,

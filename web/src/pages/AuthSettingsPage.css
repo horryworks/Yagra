@@ -27,12 +27,12 @@
 
 .auth-provider-meta {
   margin-top: 4px;
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
 .auth-badge {
-  font-size: calc(var(--font-size-base) * 0.8);
+  font-size: var(--font-xs);
   font-weight: 600;
   padding: 1px 8px;
   border-radius: 10px;
@@ -60,7 +60,7 @@
 .auth-advanced > summary {
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
   margin-bottom: 8px;
 }
 .auth-advanced > summary:hover {
@@ -107,7 +107,7 @@
   width: 100%;
   resize: vertical;
   font-family: var(--font-family);
-  font-size: var(--font-size-base);
+  font-size: var(--font-md);
   color: var(--text-primary);
   background: var(--bg-primary);
   border: var(--border-width) solid var(--border-color);
@@ -121,7 +121,7 @@
 
 .auth-saved {
   color: var(--status-ok);
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
 }
 
 .auth-test {

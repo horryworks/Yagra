@@ -9428,9 +9428,13 @@ export interface components {
             parent_id?: string | null;
         };
         /**
-         * @description Drag-reorder a node within (or into) a group, positioning it relative to a sibling node.
+         * @description Drag-reorder a node within (or into) a group, positioning it relative to a sibling.
          *     `group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling to
          *     land next to (both omitted ⇒ append to the end). At most one of before/after may be set.
+         *
+         *     ⚠️ **A sibling is a folder OR a node** (ADR-162). Under one group the two are one ordered list,
+         *     so `before`/`after` may carry a folder id and the node lands at that row's edge. An id that
+         *     names neither appends.
          */
         NodePlacement: {
             /** Format: uuid */
@@ -20850,8 +20854,8 @@ export interface operations {
                  */
                 state?: string;
                 /**
-                 * @description Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent
-                 *     means every kind.
+                 * @description Comma-separated monitoring kinds (`wireless_ap` | `meraki` | `url` | `dns` | `device`);
+                 *     empty or absent means every kind.
                  */
                 kind?: string;
                 /**
@@ -29946,8 +29950,8 @@ export interface operations {
                  */
                 state?: string;
                 /**
-                 * @description Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent
-                 *     means every kind.
+                 * @description Comma-separated monitoring kinds (`wireless_ap` | `meraki` | `url` | `dns` | `device`);
+                 *     empty or absent means every kind.
                  */
                 kind?: string;
                 /**
@@ -30955,7 +30959,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The access point is already a node (`ap_already_imported`), or no controller that reports it is monitored any more (`ap_has_no_controller`) */
+            /** @description The access point is already a node (`ap_already_imported`), no controller in the caller's scope that reports it is monitored any more (`ap_has_no_controller`), or that controller files access points in a folder outside the caller's scope (`ap_destination_out_of_scope`) */
             409: {
                 headers: {
                     [name: string]: unknown;

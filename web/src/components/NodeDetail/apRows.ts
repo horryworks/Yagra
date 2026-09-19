@@ -17,7 +17,8 @@ import type { WirelessApRow, WirelessControllerSummary, WlanApState } from '../.
  *  🚨 `MAX_APS_HARD` is also the list page size: the tab asks for the cap itself, so one fetch is
  *  the whole inventory and there is no cursor to follow. A second copy of a backend constant is
  *  normally the thing to avoid — this one is load-bearing on the client (it decides the fetch) and
- *  cannot be read from the API, so it is written down once, here, with this note. */
+ *  cannot be read from the API, so it is written down once, here, with this note — and
+ *  `apRows.test.ts` reads `wlan.rs` to hold the two copies together. */
 export const MAX_APS_MIN = 1;
 export const MAX_APS_HARD = 2048;
 export const MAX_APS_DEFAULT = 1024;

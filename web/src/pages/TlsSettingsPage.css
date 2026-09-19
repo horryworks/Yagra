@@ -31,7 +31,7 @@
 
 .tls-facts dt {
   color: var(--text-secondary);
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
 }
 
 .tls-facts dd {
@@ -43,7 +43,7 @@
 }
 
 .tls-fingerprint {
-  font-size: calc(var(--font-size-base) * 0.85);
+  font-size: var(--font-xs);
   letter-spacing: 0.02em;
 }
 
@@ -74,7 +74,7 @@
   border-radius: 6px;
   border: var(--border-width) solid var(--border-color);
   color: var(--text-primary);
-  font-size: calc(var(--font-size-base) * 0.95);
+  font-size: var(--font-sm);
 }
 
 .tls-alert p {

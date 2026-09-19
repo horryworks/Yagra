@@ -55,8 +55,14 @@
 }
 
 /* Explicit height for the same reason the Neighbors table has one: this pane is not a
-   height-constrained flex column, so a bare `flex: 1` collapses to ~150px. */
+   height-constrained flex column, so a bare `flex: 1` collapses to ~150px.
+   ⚠️ The height only reaches `.dt` because this box is a flex column: `.dt` sizes itself with
+   `flex: 1`, which a block parent ignores. Without it the table grew to its full content height
+   (measured 90,152px for a 2,048-row controller), the virtualizer saw every row as on screen and
+   rendered all of them, and the whole tab scrolled instead of the table. */
 .nd-ap-table {
+  display: flex;
+  flex-direction: column;
   height: 46vh;
   min-height: 240px;
   padding: 0 var(--space-4);

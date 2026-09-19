@@ -48,7 +48,8 @@ pub struct NodeSummaryDto {
     pub state: String,
     /// What this node is, and therefore what it can be asked about:
     /// `device` (ICMP, plus SNMP when configured) / `url` (an HTTP endpoint monitor) /
-    /// `dns` (a name-resolution monitor) / `meraki` (polled through the Meraki Dashboard API).
+    /// `dns` (a name-resolution monitor) / `meraki` (polled through the Meraki Dashboard API) /
+    /// `wireless_ap` (an access point, read through its wireless controller's poll).
     ///
     /// Worth reading before `list_node_metrics`: a URL monitor has `http_*` and no interfaces, a
     /// DNS monitor has `dns_*`, and neither is ever pinged — so an absent `icmp_rtt_ms` on one of

@@ -34,8 +34,8 @@ use yagra_common::WlanApState;
 /// Default page size for the AP list.
 const AP_DEFAULT_LIMIT: i64 = 200;
 /// Hard cap on the page size (api-conventions): the most APs one controller may report, so a whole
-/// controller fits one page.
-const AP_MAX_LIMIT: i64 = 2048;
+/// controller fits one page. Derived, not restated — the two must move together.
+const AP_MAX_LIMIT: i64 = yagra_common::MAX_APS_PER_CONTROLLER_HARD as i64;
 /// The longest search string accepted, in characters.
 const AP_SEARCH_MAX_CHARS: usize = 64;
 
@@ -169,8 +169,9 @@ pub(crate) struct WirelessApPage {
     pub aps: Vec<WirelessApRow>,
     /// `null` ⇒ this was the last page.
     pub next: Option<WirelessApCursor>,
-    /// The controller named by `controller_node_id`, when one was named and it has reported an
-    /// inventory. `null` otherwise.
+    /// The controller named by `controller_node_id`, when one was named, the caller can see it,
+    /// and it has either reported an inventory or had its import settings saved (then
+    /// `last_inventory_at` is `null`). `null` otherwise.
     pub controller: Option<WirelessControllerSummary>,
 }
 
@@ -264,7 +265,7 @@ impl WirelessApRequest {
         if search.is_some_and(|s| s.chars().count() > AP_SEARCH_MAX_CHARS) {
             return Err(ApiError::bad_request(
                 "invalid_search",
-                "search must be at most 64 characters",
+                format!("search must be at most {AP_SEARCH_MAX_CHARS} characters"),
             ));
         }
         let after = match (after_key, after_id) {
@@ -492,7 +493,10 @@ async fn set_wireless_controller(
     if !(1..=yagra_common::MAX_APS_PER_CONTROLLER_HARD as i32).contains(&max_aps) {
         return Err(ApiError::bad_request(
             "invalid_max_aps",
-            "max_aps must be between 1 and 2048",
+            format!(
+                "max_aps must be between 1 and {}",
+                yagra_common::MAX_APS_PER_CONTROLLER_HARD
+            ),
         ));
     }
     if let Some(group) = body.ap_group_id {
@@ -550,7 +554,7 @@ async fn set_wireless_controller(
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such access point, or none a controller in the caller's scope reports", body = super::error::ErrorBody),
-        (status = 409, description = "The access point is already a node (`ap_already_imported`), or no controller that reports it is monitored any more (`ap_has_no_controller`)", body = super::error::ErrorBody),
+        (status = 409, description = "The access point is already a node (`ap_already_imported`), no controller in the caller's scope that reports it is monitored any more (`ap_has_no_controller`), or that controller files access points in a folder outside the caller's scope (`ap_destination_out_of_scope`)", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -582,7 +586,7 @@ async fn import_wireless_ap(
     }
     let outcome = admin
         .wireless
-        .import_one(ap_id, chrono::Utc::now())
+        .import_one(ap_id, scope.group_filter(), chrono::Utc::now())
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -593,13 +597,24 @@ async fn import_wireless_ap(
         })?;
     match outcome {
         ImportOne::Imported(id) => Ok((StatusCode::CREATED, Json(CreatedId { id }))),
+        // An AP node's id *is* the AP id, so naming it discloses nothing. What changes for a node
+        // outside the scope is the advice: the list showed it unimported (`list_page` blanks a
+        // `node_id` the caller cannot open), and "already node X" would send them to a 404.
         ImportOne::AlreadyImported(node) => Err(ApiError::conflict(
             "ap_already_imported",
-            format!("access point {ap_id} is already node {node}"),
+            if visible.first().is_some_and(|r| r.node_id == Some(node)) {
+                format!("access point {ap_id} is already node {node}")
+            } else {
+                format!("access point {ap_id} is already monitored, as a node outside your scope")
+            },
         )),
         ImportOne::NoController => Err(ApiError::conflict(
             "ap_has_no_controller",
             "no controller that reports this access point is monitored any more",
+        )),
+        ImportOne::OutOfScope => Err(ApiError::conflict(
+            "ap_destination_out_of_scope",
+            "its controller files access points in a folder outside your scope",
         )),
         ImportOne::NotFound => Err(missing()),
     }
@@ -882,5 +897,161 @@ mod tests {
         let uri = format!("/api/v1/wireless/aps?limit=1&after_key={key}&after_id={id}");
         let (_, next) = send(&st, "GET", &uri, &viewer, None).await;
         assert_eq!(next["aps"][0]["name"], "ap-2");
+    }
+
+    /// ADR-014 across an HA pair filed in two folders: a caller scoped to the standby's folder sees
+    /// the AP, but neither the active member, nor a node filed beside it, nor a way to create one
+    /// there. The case the single-controller test above cannot reach — every AP in it had one
+    /// reporter.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_neither_sees_nor_files_into_the_other_members_folder(
+        pool: sqlx::PgPool,
+    ) {
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let active = crate::pgtest::node(&pool, "wac-active", 1, Some(theirs)).await;
+        let standby = crate::pgtest::node(&pool, "wac-standby", 2, Some(mine)).await;
+        let repo = WirelessRepo::new(pool.clone());
+        let obs = |mac: u8, state: WlanApState| WlanApObservation {
+            mac: ApMac::new([0, 0, 0, 0, 0, mac]),
+            name: Some(format!("ap-{mac}")),
+            serial: None,
+            model: None,
+            sw_version: None,
+            ip: None,
+            vendor_group: None,
+            run_state: "normal".into(),
+            state,
+            clients: None,
+            cpu_pct: None,
+            mem_pct: None,
+            temp_c: None,
+            cpu_temp_c: None,
+            power_state: None,
+            radios: Vec::new(),
+        };
+        let inv = |aps| WlanInventory::bounded(WlanFlavor::Huawei, aps, 1024);
+        let now = chrono::Utc::now();
+        // ap-1: served by the active, seen as backup by the standby. ap-2: the standby's alone.
+        repo.record_inventory(active, &inv(vec![obs(1, WlanApState::Associated)]), now)
+            .await
+            .unwrap();
+        repo.record_inventory(
+            standby,
+            &inv(vec![
+                obs(1, WlanApState::Backup),
+                obs(2, WlanApState::Associated),
+            ]),
+            now,
+        )
+        .await
+        .unwrap();
+        let ap1 = yagra_common::ap_id(ApMac::new([0, 0, 0, 0, 0, 1]));
+        let ap2 = yagra_common::ap_id(ApMac::new([0, 0, 0, 0, 0, 2]));
+
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, Role::Admin);
+        let scoped = scoped_token(&st, &[mine]);
+        let row = |body: &serde_json::Value, name: &str| {
+            body["aps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["name"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("{name} is not listed: {body}"))
+        };
+
+        // Unrestricted, the row names both members and the active one serves it.
+        let (_, all) = send(&st, "GET", "/api/v1/wireless/aps", &admin, None).await;
+        let ap = row(&all, "ap-1");
+        assert_eq!(ap["controller_node_id"], active.to_string());
+        assert_eq!(ap["reported_by"].as_array().map(Vec::len), Some(2));
+
+        // Scoped to the standby's folder: the AP is listed, the active member is not named.
+        let (status, body) = send(&st, "GET", "/api/v1/wireless/aps", &scoped, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let ap = row(&body, "ap-1");
+        assert!(
+            ap["controller_node_id"].is_null(),
+            "the serving controller outside the scope was named: {ap}"
+        );
+        let reporters: Vec<&str> = ap["reported_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|s| s["controller_node_id"].as_str())
+            .collect();
+        assert_eq!(reporters, [standby.to_string()], "{ap}");
+        assert_eq!(
+            row(&body, "ap-2")["controller_node_id"],
+            standby.to_string()
+        );
+        // Naming the out-of-scope member as a filter matches nothing, rather than confirming which
+        // APs it reports.
+        let uri = format!("/api/v1/wireless/aps?controller_node_id={active}");
+        let (_, body) = send(&st, "GET", &uri, &scoped, None).await;
+        assert_eq!(body["aps"].as_array().map(Vec::len), Some(0), "{body}");
+
+        // An unrestricted import files ap-1 beside the member serving it — outside the scope.
+        let import = |ap: Uuid| format!("/api/v1/wireless/aps/{ap}/import");
+        let (status, body) = send(&st, "POST", &import(ap1), &admin, None).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let (_, body) = send(&st, "GET", "/api/v1/wireless/aps", &scoped, None).await;
+        assert!(
+            row(&body, "ap-1")["node_id"].is_null(),
+            "a node outside the scope was named"
+        );
+        let (status, body) = send(&st, "POST", &import(ap1), &scoped, None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["code"], "ap_already_imported");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("outside your scope")),
+            "the refusal pointed at a node the caller cannot open: {body}"
+        );
+
+        // The standby files into a folder the caller cannot see: refused, and nothing written.
+        let settings = format!("/api/v1/nodes/{standby}/wireless-controller");
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &settings,
+            &admin,
+            Some(serde_json::json!({ "import_aps": false, "ap_group_id": theirs })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = send(&st, "POST", &import(ap2), &scoped, None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["code"], "ap_destination_out_of_scope");
+        let node: Option<Uuid> =
+            sqlx::query_scalar("SELECT node_id FROM wireless_aps WHERE ap_id = $1")
+                .bind(ap2)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(node, None, "a refused import still created a node");
+
+        // Filed beside the standby again, the same request is accepted, into the caller's folder.
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &settings,
+            &admin,
+            Some(serde_json::json!({ "import_aps": false, "ap_group_id": null })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send(&st, "POST", &import(ap2), &scoped, None).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let folder: Option<Uuid> = sqlx::query_scalar("SELECT group_id FROM nodes WHERE id = $1")
+            .bind(ap2)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(folder, Some(mine));
     }
 }

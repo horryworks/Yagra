@@ -2460,7 +2460,8 @@ mod tests {
         (
             "GET",
             "/readyz",
-            "readiness probe — the same callers as /healthz, gated on the stores being reachable",
+            "readiness probe — the load balancer or orchestrator in front of an HA pair \
+             (docker-compose.ha.yml); 200 only on the leader, never a browser",
         ),
         (
             "GET",
