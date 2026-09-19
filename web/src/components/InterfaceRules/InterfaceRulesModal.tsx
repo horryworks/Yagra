@@ -27,6 +27,7 @@ import {
   newPortRuleForm,
   portRuleFrom,
   portRuleToThreshold,
+  storedBound,
   type PortRuleBasis,
   type PortRuleForm,
   type PortRuleSubject,
@@ -430,7 +431,7 @@ function PortRuleFormView({
         {t('interfaces.rules.storedAs', {
           metric: body.metric,
           direction: body.direction,
-          value: body.critical ?? body.warning ?? '—',
+          value: storedBound(body) ?? '—',
         })}
       </p>
       {error && <p className="form-error">{error}</p>}

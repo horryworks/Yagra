@@ -12,6 +12,7 @@ import {
   portRuleToThreshold,
   boundText,
   splitRate,
+  storedBound,
   type PortRuleForm,
 } from './portRuleForm';
 import type { StoredThreshold } from '../types/api';
@@ -187,5 +188,23 @@ describe('portRuleForm', () => {
     expect(body.warning_above).toBeUndefined();
     // `Number('')` is 0, and an `above 0` warning fires on every sample forever.
     expect(body.critical_above).toBe(90);
+  });
+});
+
+describe('storedBound', () => {
+  it('reads the side the writer fills — the dialog used to read the legacy pair and always drew a dash', () => {
+    const form = { ...newPortRuleForm('in_traffic'), critical: '90', warning: '' };
+    const body = portRuleToThreshold(form, 'n1', 3);
+    // The premise of the defect: the writer never sets the legacy fields.
+    expect(body.critical).toBeUndefined();
+    expect(body.warning).toBeUndefined();
+    expect(storedBound(body)).toBe(90);
+  });
+
+  it('falls back to the warning bound, and is undefined when the form holds no number', () => {
+    const warn = portRuleToThreshold({ ...newPortRuleForm('in_traffic'), critical: '', warning: '70' }, 'n1', 3);
+    expect(storedBound(warn)).toBe(70);
+    const none = portRuleToThreshold({ ...newPortRuleForm('in_traffic'), critical: '', warning: '' }, 'n1', 3);
+    expect(storedBound(none)).toBeUndefined();
   });
 });

@@ -16,6 +16,7 @@ import {
   formatDaysToExpiry,
   formatDbm,
   formatPps,
+  formatSi,
   formatUptimeTicks,
   formatUtil,
   httpStatusLabel,
@@ -656,5 +657,39 @@ describe('metric units', () => {
       expect(rendered).not.toBe(`format:unit.${noun}`);
       expect(rendered).not.toBe('');
     }
+  });
+});
+
+describe('rounding that carries a value over a unit boundary', () => {
+  // Each formatter picked the unit first and rounded second, so the last half-step below a
+  // boundary printed a number the unit loop would have rescaled.
+  it('formatBps steps up instead of printing 1000 of the smaller unit', () => {
+    expect(formatBps(999_999_999)).toBe('1.0 Gbps');
+    expect(formatBps(999_950)).toBe('1.0 Mbps');
+    // …and leaves everything that was already right alone.
+    expect(formatBps(999_400_000)).toBe('999 Mbps');
+    expect(formatBps(1_000_000_000)).toBe('1.0 Gbps');
+    expect(formatBps(999)).toBe('999 bps');
+  });
+
+  it('formatPps does the same', () => {
+    expect(formatPps(999_999)).toBe('1.0 Mpps');
+    expect(formatPps(999_400)).toBe('999 kpps');
+  });
+
+  it('formatBytes carries at 1024, not 1000', () => {
+    expect(formatBytes(1_073_741_823)).toBe('1.0 GB');
+    expect(formatBytes(1023 * 1024 ** 3)).toBe('1023 GB');
+    expect(formatBytes(1023 * 1024 ** 2)).toBe('1023 MB');
+  });
+
+  it('formatSi carries on an axis tick, on either side of zero', () => {
+    expect(formatSi(999_999)).toBe('1.0M');
+    expect(formatSi(-999_999)).toBe('-1.0M');
+    expect(formatSi(999_400)).toBe('999k');
+  });
+
+  it('the largest unit has nowhere to carry to, and says so rather than overflowing the table', () => {
+    expect(formatBps(999_999_999_999_999)).toBe('1000 Tbps');
   });
 });
