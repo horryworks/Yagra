@@ -26,6 +26,8 @@ export function Modal({ title, onClose, footer, size = 'default', children }: Pr
   const { t } = useTranslation('common');
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Whether the press that is about to become a click STARTED on the backdrop.
+  const pressedOnBackdrop = useRef(false);
 
   // Escape closes; Tab is contained. Without the containment a dialog is modal only visually —
   // `aria-modal` promises assistive tech that the rest of the page is inert, and tabbing into the
@@ -79,7 +81,23 @@ export function Modal({ title, onClose, footer, size = 'default', children }: Pr
   }, []);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    // 🚨 **A backdrop click closes; a drag that merely ENDS on the backdrop does not.** The browser
+    // dispatches `click` on the nearest common ancestor of where the button went down and where it
+    // came up. Selecting text in a field and letting go a few pixels past the dialog's edge is
+    // therefore a click whose target is this overlay — the dialog's own `stopPropagation` is not on
+    // its path — and a bare `onClick={onClose}` closed the dialog and took every field with it
+    // (a pasted CA certificate, a token). Both ends of the gesture have to be on the backdrop.
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => {
+        pressedOnBackdrop.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        const dismiss = pressedOnBackdrop.current && e.target === e.currentTarget;
+        pressedOnBackdrop.current = false;
+        if (dismiss) onClose();
+      }}
+    >
       <div
         className={size === 'wide' ? 'modal modal-wide' : 'modal'}
         role="dialog"
