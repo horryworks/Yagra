@@ -2287,6 +2287,12 @@ pub struct PollResult {
     /// hourly to daily. Their count samples would then outlive the freshness sweep's window
     /// (`alerts/stale.rs`), and a dwell counted in their polls would be days long.
     ///
+    /// One deliberate exception (ADR-164): a Meraki org's **uplink and traffic tiers** set it on
+    /// their own cadence. Their samples were always judged — those results used to be ordinary
+    /// ones — so this keeps what was true and removes only their say over liveness, which belongs
+    /// to the availability tier. The freshness argument does not apply: Meraki nodes are excluded
+    /// from that sweep altogether (`alerts/stale.rs::MerakiNodeSet`).
+    ///
     /// Defaulted and omitted when false, like `observational`: an N-1 poller's optical results stay
     /// unjudged exactly as before, and an N-1 core ignores the field.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

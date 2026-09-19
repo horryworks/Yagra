@@ -2088,6 +2088,39 @@ mod tests {
         );
     }
 
+    /// The Meraki shape (ADR-164), and the direction the two tests above leave open: a **judged**
+    /// observational result reaches the engine, carrying a `Reachable` placeholder. A Meraki node is
+    /// never pinged, so its availability tier is the only thing that speaks for liveness — and an
+    /// uplink or traffic result arriving between two availability results must not answer for it.
+    /// Before ADR-164 those tiers were ordinary results, so they did exactly that.
+    #[tokio::test]
+    async fn a_judged_observational_result_cannot_cancel_a_real_outage() {
+        let node = NodeId::new();
+        let mut stream = Vec::new();
+        for i in 0..6 {
+            stream.push(liveness_result(
+                node,
+                CheckOutcome::Unreachable,
+                1_000 + i * 2,
+            ));
+            let mut uplink = observational_result(node, CheckOutcome::Reachable, 1_001 + i * 2);
+            uplink.neighbors = None;
+            uplink.judge_samples = true;
+            uplink.samples = vec![Sample::gauge(
+                yagra_common::METRIC_MERAKI_UPLINK_LOSS_PCT,
+                0.0,
+            )];
+            stream.push(uplink);
+        }
+        let actions = drive_ingest(stream).await;
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, crate::alerts::NotifyAction::Fire(_))),
+            "the device is down; a healthy uplink reading says nothing about that: {actions:?}"
+        );
+    }
+
     /// And a slow walk's count sample stays out of the rules, which is why the field exists at all
     /// rather than every observational sample being judged: the neighbour walk runs hourly, so its
     /// dwell would be counted in hours and the freshness sweep (`alerts/stale.rs`) would close what
