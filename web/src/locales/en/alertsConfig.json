@@ -264,6 +264,7 @@
       "autoClose": "Auto-close (s)",
       "fireAfter": "Fire after N",
       "within": "within (s)",
+      "numberRange": "“{{field}}” must be a whole number from {{min}} to {{max}}.",
       "enabled": "Enabled",
       "test": "Test against a sample",
       "samplePlaceholder": "paste a sample event message…",

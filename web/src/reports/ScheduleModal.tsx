@@ -26,12 +26,12 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
   const [definitionId, setDefinitionId] = useState(
     schedule?.definition_id ?? definitions[0]?.id ?? '',
   );
-  // A stored `unknown` cadence (written by a newer core) is not offerable, so the form opens on
-  // daily rather than preselecting an option the operator cannot have meant.
-  const stored = schedule?.frequency;
-  const [frequency, setFrequency] = useState<Cadence>(
-    stored && stored !== 'unknown' ? stored : 'daily',
-  );
+  // 🚨 A stored `unknown` cadence (written by a newer core) stays `unknown` until the operator
+  // picks one. This used to open on `daily`, and Save then wrote daily — so opening a monthly
+  // report's schedule on an older bundle and pressing Save turned it into a nightly one, with
+  // nothing on screen saying the cadence had changed. `troubleshoot/scheduleForm.ts` refuses the
+  // same case for the same reason; this is its twin catching up.
+  const [frequency, setFrequency] = useState<Cadence>(schedule?.frequency ?? 'daily');
   const [dayOfWeek, setDayOfWeek] = useState<number>(schedule?.day_of_week ?? 1);
   const [dayOfMonth, setDayOfMonth] = useState<number>(schedule?.day_of_month ?? 1);
   const [time, setTime] = useState<string>(
@@ -44,6 +44,10 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
   async function save() {
     if (!definitionId) {
       setError(t('schedule.err.chooseReport'));
+      return;
+    }
+    if (frequency === 'unknown') {
+      setError(t('schedule.err.chooseFrequency'));
       return;
     }
     const [h, m] = time.split(':');
@@ -111,6 +115,11 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
           >
             {/* Iterated from the deliberate subset, so a cadence added to the backend either
                 appears here or is consciously excluded — never silently missing. */}
+            {frequency === 'unknown' && (
+              <option value="unknown" disabled>
+                {t('schedule.freqChoose')}
+              </option>
+            )}
             {SELECTABLE_CADENCES.map((f) => (
               <option key={f} value={f}>
                 {t(`schedule.freq.${f}`)}

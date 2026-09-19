@@ -7,7 +7,12 @@
 // the input type has"**, derived from an object rather than from a hand-written list, so a field
 // added to `EventRuleInput` fails here instead of being quietly dropped in production.
 import { describe, expect, it } from 'vitest';
-import { ruleToInput } from './eventRuleForm';
+import {
+  EVENT_RULE_BOUNDS,
+  eventRuleNumberProblem,
+  ruleToInput,
+  typedInteger,
+} from './eventRuleForm';
 import type { EventRule, EventRuleInput } from '../types/api';
 
 /** One of every field, each with a value distinguishable from a default. */
@@ -54,5 +59,56 @@ describe('ruleToInput', () => {
     const wide = ruleToInput({ ...STORED, node_id: null, source_id: null } as EventRule);
     expect(wide.node_id).toBeNull();
     expect(wide.source_id).toBeNull();
+  });
+});
+
+const ok = { ttl_secs: '3600', min_count: '1', window_secs: '60' };
+
+describe('typedInteger', () => {
+  it('reads an empty box as absent, never as zero', () => {
+    // The trap: `Number('')` is 0.
+    expect(typedInteger('')).toBeUndefined();
+    expect(typedInteger('   ')).toBeUndefined();
+  });
+
+  it('reads a whole number, and nothing that is not one', () => {
+    expect(typedInteger(' 90 ')).toBe(90);
+    expect(typedInteger('1.5')).toBeUndefined();
+    expect(typedInteger('abc')).toBeUndefined();
+  });
+});
+
+describe('eventRuleNumberProblem', () => {
+  it('accepts values inside the bounds, edges included', () => {
+    expect(eventRuleNumberProblem(ok)).toBeNull();
+    expect(eventRuleNumberProblem({ ttl_secs: '60', min_count: '100', window_secs: '3600' })).toBeNull();
+    expect(eventRuleNumberProblem({ ttl_secs: '604800', min_count: '1', window_secs: '1' })).toBeNull();
+  });
+
+  it('names a cleared field — the case that used to be sent as 0', () => {
+    expect(eventRuleNumberProblem({ ...ok, ttl_secs: '' })).toBe('ttl_secs');
+    expect(eventRuleNumberProblem({ ...ok, min_count: '' })).toBe('min_count');
+    expect(eventRuleNumberProblem({ ...ok, window_secs: '' })).toBe('window_secs');
+  });
+
+  it('names a value outside the bounds, on either side', () => {
+    expect(eventRuleNumberProblem({ ...ok, ttl_secs: '59' })).toBe('ttl_secs');
+    expect(eventRuleNumberProblem({ ...ok, ttl_secs: '604801' })).toBe('ttl_secs');
+    expect(eventRuleNumberProblem({ ...ok, min_count: '0' })).toBe('min_count');
+    expect(eventRuleNumberProblem({ ...ok, window_secs: '3601' })).toBe('window_secs');
+  });
+
+  it('reports the first problem in form order', () => {
+    expect(eventRuleNumberProblem({ ttl_secs: '', min_count: '', window_secs: '' })).toBe('ttl_secs');
+  });
+
+  it('carries the bounds the server enforces', () => {
+    // A mirror of `validate_rule` in `api/events.rs`. Nothing compares the two; if the server's
+    // bounds move, the server still refuses — this form just stops explaining it first.
+    expect(EVENT_RULE_BOUNDS).toEqual({
+      ttl_secs: { min: 60, max: 604_800 },
+      min_count: { min: 1, max: 100 },
+      window_secs: { min: 1, max: 3_600 },
+    });
   });
 });

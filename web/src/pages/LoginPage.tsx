@@ -8,14 +8,14 @@
 
 import { useEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore, useConfigStore } from '../store';
 import { Logo } from '../components/shell/Logo';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/Field';
-import { PUBLIC_PATH } from '../appGate';
+import { PUBLIC_PATH, postLoginTarget } from '../appGate';
 import './LoginPage.css';
 
 type ErrTone = 'danger' | 'warning';
@@ -25,6 +25,7 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
   const setAuthed = useAuthStore((s) => s.setAuthed);
   const setRole = useAuthStore((s) => s.setRole);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<{ tone: ErrTone; message: string } | null>(null);
@@ -73,7 +74,9 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
         setPassword('');
         setRole(res.role);
         setAuthed(true);
-        if (!embedded) navigate('/dashboard');
+        // A deep link stays a deep link — see `postLoginTarget`.
+        const target = postLoginTarget(pathname);
+        if (!embedded && target) navigate(target);
       })
       .catch((x: unknown) => {
         // Lockout/expiry are recoverable (warning); everything else is a hard danger.

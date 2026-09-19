@@ -28,7 +28,12 @@ import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import './EventRulesPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
-import { ruleToInput } from './eventRuleForm';
+import {
+  EVENT_RULE_BOUNDS,
+  eventRuleNumberProblem,
+  ruleToInput,
+  type EventRuleNumberField,
+} from './eventRuleForm';
 
 function SeverityBadge({ value }: { value: Severity }) {
   return <Badge tone={SEVERITY_TONE[value]}>{severityLabel(value)}</Badge>;
@@ -263,6 +268,14 @@ export function EventRulesPage() {
   );
 }
 
+/** The label each bounded number is drawn under, so the range message can name the box. Exhaustive
+ *  over the fields `eventRuleForm.ts` checks: a fourth one fails to compile here. */
+const NUMBER_FIELD_LABEL_KEY = {
+  ttl_secs: 'eventRules.modal.autoClose',
+  min_count: 'eventRules.modal.fireAfter',
+  window_secs: 'eventRules.modal.within',
+} as const satisfies Record<EventRuleNumberField, string>;
+
 function RuleModal({
   mode,
   rule,
@@ -298,7 +311,13 @@ function RuleModal({
   const [sample, setSample] = useState('');
   const [testResult, setTestResult] = useState<string | null>(null);
 
-  const valid = name.trim() !== '' && pattern.trim() !== '';
+  // A cleared number box is `''`, and `Number('')` is 0 — see `eventRuleForm.ts`.
+  const numberProblem = eventRuleNumberProblem({
+    ttl_secs: ttl,
+    min_count: minCount,
+    window_secs: windowSecs,
+  });
+  const valid = name.trim() !== '' && pattern.trim() !== '' && numberProblem === null;
 
   const runTest = () => {
     setTestResult(null);
@@ -459,6 +478,16 @@ function RuleModal({
           />
         </div>
       </div>
+      {/* Which box, and what it may hold — Save alone going grey says neither. */}
+      {numberProblem && (
+        <p className="form-error">
+          {t('eventRules.modal.numberRange', {
+            field: t(NUMBER_FIELD_LABEL_KEY[numberProblem]),
+            min: EVENT_RULE_BOUNDS[numberProblem].min,
+            max: EVENT_RULE_BOUNDS[numberProblem].max,
+          })}
+        </p>
+      )}
       <label className="eventrules-enabled">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         <span>{t('eventRules.modal.enabled')}</span>
