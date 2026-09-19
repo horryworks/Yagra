@@ -238,6 +238,21 @@ function sideBounds(
     : { warning_above: warning, critical_above: critical };
 }
 
+/**
+ * The bound a rule stores, for the dialog's "Stored as …" line: critical if there is one, else
+ * warning, on whichever side the rule reads.
+ *
+ * 🚨 The dialog used to read `body.critical ?? body.warning` — the LEGACY pair. `portRuleToThreshold`
+ * has written the sided fields (`*_above` / `*_below`) since ADR-081 and never sets those two, so
+ * the line read `—` for every subject and every number typed: the one place tying this form to
+ * what the rules screen will list, permanently blank. The rule itself always saved correctly.
+ */
+export function storedBound(body: ThresholdInput): number | undefined {
+  return (
+    body.critical_above ?? body.critical_below ?? body.warning_above ?? body.warning_below ?? undefined
+  );
+}
+
 /** Every (subject, basis) pair, as the metric it stores. Built from the specs so it cannot drift. */
 const METRIC_TO_SHAPE: Record<string, { subject: PortRuleSubject; basis: PortRuleBasis }> =
   Object.fromEntries(

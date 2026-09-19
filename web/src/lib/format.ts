@@ -191,6 +191,30 @@ export function formatRtt(ms: number): string {
   return `${ms.toFixed(1)} ms`;
 }
 
+/**
+ * Step up one more unit when ROUNDING is what carries the value over the boundary.
+ *
+ * The scaling loops below stop as soon as the value is under one unit of the next size — and then
+ * round it. Anything in the last half-step below the boundary rounds up into a number the loop
+ * would have rescaled: `999_999_999` bps printed `1000 Mbps`, `999_999` printed `1000k` on a
+ * chart's axis, and a memory total one byte short of a gibibyte printed `1024 MB`. The window is
+ * narrow (0.05% of each unit), which is why it survived: it needs a rate or a total that lands on
+ * it, and a link running at line rate is exactly that.
+ *
+ * `digits` is the caller's own rule, asked twice — once to see what the rounding does, and again
+ * by the caller for the value that comes back.
+ */
+function carryUnit(
+  v: number,
+  u: number,
+  base: number,
+  lastUnit: number,
+  digits: (v: number, u: number) => number,
+): [number, number] {
+  if (u < lastUnit && Number(v.toFixed(digits(v, u))) >= base) return [v / base, u + 1];
+  return [v, u];
+}
+
 /** Format a bits-per-second rate with SI-ish units (k/M/G), or `—` when unknown. */
 export function formatBps(bps: number | null): string {
   if (bps == null) return '—';
@@ -201,7 +225,9 @@ export function formatBps(bps: number | null): string {
     v /= 1000;
     u += 1;
   }
-  return `${v.toFixed(v >= 100 || u === 0 ? 0 : 1)} ${units[u]}`;
+  const digits = (x: number, unit: number) => (x >= 100 || unit === 0 ? 0 : 1);
+  [v, u] = carryUnit(v, u, 1000, units.length - 1, digits);
+  return `${v.toFixed(digits(v, u))} ${units[u]}`;
 }
 
 /** Format a packets-per-second rate with SI-ish units (k/M/G), or `—` when unknown. The pps
@@ -226,7 +252,9 @@ export function formatPps(pps: number | null): string {
     v /= 1000;
     u += 1;
   }
-  return `${v.toFixed(v >= 100 || Number.isInteger(v) ? 0 : 1)} ${units[u]}`;
+  const digits = (x: number) => (x >= 100 || Number.isInteger(x) ? 0 : 1);
+  [v, u] = carryUnit(v, u, 1000, units.length - 1, digits);
+  return `${v.toFixed(digits(v))} ${units[u]}`;
 }
 
 /** Format an optical power level in dBm, or `—` when the port reports none (ADR-062).
@@ -265,8 +293,9 @@ export function formatBytes(bytes: number | null): string {
     v /= 1024;
     u += 1;
   }
-  const digits = u === 0 || Number.isInteger(v) || v >= 100 ? 0 : 1;
-  return `${v.toFixed(digits)} ${units[u]}`;
+  const digits = (x: number, unit: number) => (unit === 0 || Number.isInteger(x) || x >= 100 ? 0 : 1);
+  [v, u] = carryUnit(v, u, 1024, units.length - 1, digits);
+  return `${v.toFixed(digits(v, u))} ${units[u]}`;
 }
 
 /** {@link formatBytes} without the space or the `B`, for a chart's value axis: `13.4M`, `214M`, `512`.
@@ -649,10 +678,19 @@ export function formatSi(n: number): string {
     [1e6, 'M'],
     [1e3, 'k'],
   ];
-  for (const [div, suffix] of units) {
+  const digits = (x: number) => (Math.abs(x) >= 100 || Number.isInteger(x) ? 0 : 1);
+  for (let i = 0; i < units.length; i++) {
+    const [div, suffix] = units[i];
     if (abs >= div) {
       const v = n / div;
-      return `${v.toFixed(v >= 100 || Number.isInteger(v) ? 0 : 1)}${suffix}`;
+      // The same carry as `carryUnit`, walking this table the other way: `999_999` is `1000k`
+      // unless the rounding is allowed to reach the next suffix up.
+      if (i > 0 && Math.abs(Number(v.toFixed(digits(v)))) >= 1000) {
+        const [bigger, biggerSuffix] = units[i - 1];
+        const w = n / bigger;
+        return `${w.toFixed(digits(w))}${biggerSuffix}`;
+      }
+      return `${v.toFixed(digits(v))}${suffix}`;
     }
   }
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
