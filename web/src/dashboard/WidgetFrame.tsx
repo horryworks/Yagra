@@ -18,6 +18,7 @@ import { widgetHeading, widgetLabel, WIDGET_TITLE_MAX } from './layout';
 import { getDefinition } from './registry';
 import { useResizeHandle } from './useResizeHandle';
 import type { WidgetDefinition, WidgetInstance, WidgetSettings } from './types';
+import { isImeComposing } from '../lib/ime';
 import './WidgetFrame.css';
 
 // Placeholder definition so `useResizeHandle` can be called before the (rare) unknown-type early
@@ -235,6 +236,8 @@ function WidgetName({
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => onCommit(draft)}
       onKeyDown={(e) => {
+        // A card may be named in Japanese; its Enter belongs to the IME (`lib/ime.ts`).
+        if (isImeComposing(e)) return;
         if (e.key === 'Enter') {
           e.preventDefault();
           onCommit(draft);

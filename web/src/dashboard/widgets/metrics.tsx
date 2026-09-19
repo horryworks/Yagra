@@ -54,6 +54,7 @@ import {
   type VpnNodeRef,
   type VpnNodeSeries,
 } from './vpnSessions';
+import { isImeComposing } from '../../lib/ime';
 
 /** Trailing window for the chart (last 6 hours).
  *
@@ -226,6 +227,7 @@ export function MetricTopSettings({ instance, setSettings }: WidgetProps) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
+          if (isImeComposing(e)) return; // `lib/ime.ts`
           if (e.key === 'Enter') {
             e.preventDefault();
             commit();

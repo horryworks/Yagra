@@ -12,6 +12,7 @@ import {
   removeLabel,
   splitPastedLabels,
 } from './labelRules';
+import { isImeComposing } from '../../lib/ime';
 import './ChipInput.css';
 
 // A list of short free-text values edited as removable chips (ADR-135 inc. 2).
@@ -74,6 +75,9 @@ export function ChipInput({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    // An IME owns the key while it is composing — Enter confirms a conversion, the arrows walk its
+    // candidates. See `lib/ime.ts`.
+    if (isImeComposing(e)) return;
     if (e.key === 'Enter' || e.key === ',') {
       // Enter would submit the dialog and `,` would land in the box; both mean "that is one label".
       e.preventDefault();

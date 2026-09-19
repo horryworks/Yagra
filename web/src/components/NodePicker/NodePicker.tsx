@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchField } from '../ui/SearchField';
 import { useNodeSearch } from '../../lib/useNodeSearch';
+import { isImeComposing } from '../../lib/ime';
 import './NodePicker.css';
 
 /** Server search cap: request (and show) at most this many hits — keep typing to narrow. */
@@ -141,6 +142,9 @@ export function NodePicker({
 
   // Arrow-key roving over the results (Enter selects the active row).
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // An IME owns the key while it is composing — Enter confirms a conversion, the arrows walk its
+    // candidates. See `lib/ime.ts`.
+    if (isImeComposing(e)) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setActive((a) => Math.min(a + 1, shown.length - 1));
