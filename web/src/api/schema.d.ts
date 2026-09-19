@@ -1466,8 +1466,10 @@ export interface paths {
         put?: never;
         /**
          * Import selected devices as nodes, atomically.
-         * @description Already-imported serials are skipped rather than rejected, so re-running the wizard after a
-         *     partial selection does the obvious thing instead of erroring on the ones already there.
+         * @description A device whose address falls inside exactly one folder's IP range is filed in that folder;
+         *     every other device goes under the organization's folder, in a folder named after its network.
+         *     Already-imported serials are skipped rather than rejected, so importing again after a partial
+         *     selection does the obvious thing instead of erroring on the ones already there.
          */
         post: operations["import_meraki_devices"];
         delete?: never;
@@ -8711,6 +8713,34 @@ export interface components {
             devices: components["schemas"]["MerakiCandidate"][];
             networks: components["schemas"]["MerakiNetworkView"][];
         };
+        /**
+         * @description How the devices an import **created** were filed. Skipped devices are not counted.
+         *
+         *     The four add up to the number imported, except when the match was switched off — then all four
+         *     are zero, because nothing was asked and "unmatched" would be a claim about ranges nobody read.
+         */
+        MerakiFiled: {
+            /**
+             * Format: int32
+             * @description Two or more folders claimed the address equally; filed under the network folder.
+             */
+            ambiguous: number;
+            /**
+             * Format: int32
+             * @description Filed into the one folder whose IP range holds the device's address.
+             */
+            matched: number;
+            /**
+             * Format: int32
+             * @description Meraki reported no address; filed under the network folder.
+             */
+            no_address: number;
+            /**
+             * Format: int32
+             * @description No folder's range holds the address; filed under the network folder.
+             */
+            unmatched: number;
+        };
         MerakiImportDeviceReq: {
             lan_ip?: string | null;
             model?: string | null;
@@ -8722,14 +8752,32 @@ export interface components {
         };
         MerakiImportReq: {
             devices: components["schemas"]["MerakiImportDeviceReq"][];
+            /**
+             * @description File each device into the folder whose IP range holds its address, when exactly one does.
+             *     Defaults to true; false files every device under the organization's network folders.
+             */
+            file_by_prefix?: boolean;
             monitored_network_ids?: string[];
             /** Format: uuid */
             org_uuid: string;
         };
-        /** @description How many devices an import created. */
+        /** @description What an import created, and where it put it. */
         MerakiImported: {
-            /** Format: int32 */
+            /**
+             * @description How those devices were filed. The four add up to `imported`, except that all four are zero
+             *     when the request switched filing by IP range off.
+             */
+            filed: components["schemas"]["MerakiFiled"];
+            /**
+             * Format: int32
+             * @description Devices that became nodes. A serial that already was one is not counted.
+             */
             imported: number;
+            /**
+             * @description Whether any folder carries an IP range at all. False means `filed.unmatched` says nothing
+             *     about the devices: there was nothing for an address to match.
+             */
+            ranges_configured: boolean;
         };
         MerakiMonitoredReq: {
             monitored: boolean;
@@ -18418,7 +18466,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description How many devices became nodes; already-imported serials are skipped */
+            /** @description How many devices became nodes and how they were filed; already-imported serials are skipped */
             201: {
                 headers: {
                     [name: string]: unknown;

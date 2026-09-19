@@ -592,6 +592,15 @@
       "done_one": "Imported {{count}} device.",
       "done_other": "Imported {{count}} devices.",
       "doneNone": "Nothing was imported — every selected device was already monitored.",
+      "fileByPrefix": "File by IP range",
+      "fileByPrefixHint": "A device whose address falls in a folder's IP range is filed there. Everything else goes under {{folder}}.",
+      "filed": {
+        "all": "All were filed into folders by IP range.",
+        "none": "All were filed under {{folder}}.",
+        "some": "{{matched}} filed by IP range, {{rest}} under {{folder}}.",
+        "ambiguous_one": "{{count}} device matched more than one folder equally and was not filed by range — check for overlapping IP ranges.",
+        "ambiguous_other": "{{count}} devices matched more than one folder equally and were not filed by range — check for overlapping IP ranges."
+      },
       "err": {
         "enumerate": "failed to enumerate the organization",
         "import": "failed to import devices"

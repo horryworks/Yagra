@@ -902,6 +902,9 @@ export type MerakiSyncFailure = (typeof MERAKI_SYNC_FAILURES)[number];
 /** What one successful inventory sync found (`POST /api/v1/meraki/orgs/:id/sync`). */
 export type MerakiSyncReport = components['schemas']['MerakiSyncReport'];
 
+/** What an import created and how it was filed (`POST /api/v1/meraki/import`). */
+export type MerakiImported = components['schemas']['MerakiImported'];
+
 /** One device of an organization as the last sync recorded it
  *  (`GET /api/v1/meraki/orgs/:id/devices`). */
 export type MerakiDevice = components['schemas']['MerakiDeviceView'];

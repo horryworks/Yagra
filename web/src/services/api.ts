@@ -72,6 +72,7 @@ import type {
   MerakiCandidate,
   MerakiDevice,
   MerakiEnumeration,
+  MerakiImported,
   MerakiNetwork,
   MerakiOrg,
   MerakiOrgOption,
@@ -1071,12 +1072,15 @@ export const api = {
   listMerakiDevices: (id: string): Promise<MerakiDevice[]> =>
     apiGet('/api/v1/meraki/orgs/{id}/devices', { path: { id } }),
 
-  /** Import selected devices as nodes (atomic), setting the chosen networks in scope. */
+  /** Import selected devices as nodes (atomic), setting the chosen networks in scope. A device
+   *  whose address falls in exactly one folder's IP range is filed there unless `file_by_prefix`
+   *  is false; the answer says how many went where. */
   importMerakiDevices: (body: {
     org_uuid: string;
     monitored_network_ids: string[];
     devices: MerakiCandidate[];
-  }): Promise<{ imported: number }> => apiPost('/api/v1/meraki/import', { body }),
+    file_by_prefix?: boolean;
+  }): Promise<MerakiImported> => apiPost('/api/v1/meraki/import', { body }),
 
   /** Read the global Meraki polling kill switch. */
   getMerakiPolling: (): Promise<{ enabled: boolean }> => apiGet('/api/v1/meraki/polling'),

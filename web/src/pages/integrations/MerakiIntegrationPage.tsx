@@ -26,6 +26,7 @@ import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { tierList } from '../merakiTiers';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS } from './merakiRegions';
 import { canSyncNow, orgHasInventory, orgSyncSummary } from './merakiOrgRow';
+import { merakiImportMessage } from './merakiImportResult';
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select). */
 function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -600,11 +601,12 @@ export function MerakiIntegrationPage() {
         <MerakiImportModal
           org={importing}
           onClose={() => setImporting(null)}
-          onImported={(count) => {
+          onImported={(result) => {
+            // Everything not filed by IP range went under the organization's own folder, which
+            // is named after it.
+            const parts = merakiImportMessage(result, importing.name);
             setImporting(null);
-            setImportNote(
-              count > 0 ? t('meraki.import.done', { count }) : t('meraki.import.doneNone'),
-            );
+            setImportNote(parts.map((part) => t(part.key, part.args)).join(' '));
             load();
           }}
         />

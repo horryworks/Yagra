@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
-import type { MerakiCandidate, MerakiOrg } from '../../types/api';
+import type { MerakiCandidate, MerakiImported, MerakiOrg } from '../../types/api';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import './MerakiImportModal.css';
@@ -18,13 +18,17 @@ export function MerakiImportModal({
 }: {
   org: MerakiOrg;
   onClose: () => void;
-  /** How many devices became nodes. Already-imported serials are skipped by the server, so this
-   *  can be fewer than were ticked — which is why the caller is told rather than left to assume. */
-  onImported: (count: number) => void;
+  /** What the server did. Already-imported serials are skipped there, so the count can be fewer
+   *  than were ticked, and where each device went is decided there too — which is why the caller
+   *  is told rather than left to assume. */
+  onImported: (result: MerakiImported) => void;
 }) {
   const { t } = useTranslation('system');
   const [candidates, setCandidates] = useState<MerakiCandidate[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // On by default, as it is on the server. Off is for an organization whose sites reuse one
+  // private range: there, a range match would gather every site's devices into one folder.
+  const [fileByPrefix, setFileByPrefix] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -79,8 +83,13 @@ export function MerakiImportModal({
     setBusy(true);
     setError(null);
     api
-      .importMerakiDevices({ org_uuid: org.id, monitored_network_ids, devices })
-      .then((res) => onImported(res.imported))
+      .importMerakiDevices({
+        org_uuid: org.id,
+        monitored_network_ids,
+        devices,
+        file_by_prefix: fileByPrefix,
+      })
+      .then((res) => onImported(res))
       .catch((e: unknown) => {
         setError(errMsg(e, t('meraki.import.err.import')));
         setBusy(false);
@@ -150,6 +159,22 @@ export function MerakiImportModal({
             );
           })}
         </div>
+      )}
+      {candidates !== null && candidates.length > 0 && (
+        <label className="meraki-import-filing">
+          <input
+            type="checkbox"
+            checked={fileByPrefix}
+            disabled={busy}
+            onChange={(e) => setFileByPrefix(e.target.checked)}
+          />
+          <span className="meraki-import-filing-text">
+            <span className="meraki-import-filing-label">{t('meraki.import.fileByPrefix')}</span>
+            <span className="meraki-import-filing-hint">
+              {t('meraki.import.fileByPrefixHint', { folder: org.name })}
+            </span>
+          </span>
+        </label>
       )}
       {error && <p className="form-error">{error}</p>}
     </Modal>

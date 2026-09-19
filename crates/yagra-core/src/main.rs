@@ -69,6 +69,7 @@ mod mcp;
 // all twenty-one onto `module_source`, which removes each test-only item instead of cutting at
 // the first, so the constraint is gone and this line has come home to prove it.
 mod meraki;
+mod meraki_filing;
 mod meraki_inventory;
 mod meraki_sync;
 mod metric_meaning;
