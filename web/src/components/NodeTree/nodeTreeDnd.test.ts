@@ -14,18 +14,19 @@
 // decision is made on.
 import { describe, expect, it } from 'vitest';
 import {
+  type DragItem,
   dragPreview,
   dropAction,
   dropAllowed,
+  type DropFeedback,
   dropParentId,
+  type DropPos,
   dropPosition,
+  dropToPerform,
   nodeDragItem,
   rootDropAction,
-  withDropSlot,
-  type DragItem,
-  type DropFeedback,
-  type DropPos,
   type Target,
+  withDropSlot,
 } from './nodeTreeDnd';
 import type { FlatRow, TreeGroup } from '../../lib/nodeTree';
 import type { NodeGroup, NodeSummary } from '../../types/api';
@@ -537,5 +538,34 @@ describe('dragPreview', () => {
     expect(dragPreview(SCREEN, GROUPS, nodeDrag('gone'))).toBeNull();
     expect(dragPreview(SCREEN, GROUPS, groupDrag('gone'))).toBeNull();
     expect(dragPreview(SCREEN, GROUPS, null)).toBeNull();
+  });
+});
+
+describe('dropToPerform', () => {
+  const folder = { kind: 'group', id: 'F', scope: 'P' } as const;
+  const below = { kind: 'node', id: 'n2', scope: 'P' } as const;
+
+  it('performs what was SHOWN, not what the row under the pointer says now', () => {
+    // The defect: the slot above the folder is removed when the judgement turns `inside`, the
+    // folder jumps up a row, and the drop event lands on the node that slid under the pointer.
+    const shown = { target: folder, position: 'inside', ok: true } as const;
+    const judgedNow = { target: below, position: 'before', ok: true } as const;
+    expect(dropToPerform(shown, judgedNow)).toEqual({ target: folder, position: 'inside' });
+  });
+
+  it('keeps a refused placement refused, whatever the row under the pointer would allow', () => {
+    const shown = { target: folder, position: 'inside', ok: false } as const;
+    const judgedNow = { target: below, position: 'before', ok: true } as const;
+    expect(dropToPerform(shown, judgedNow)).toBeNull();
+  });
+
+  it('falls back to the row when nothing was shown, or what was shown belongs to the Ungrouped header', () => {
+    const judgedNow = { target: below, position: 'after', ok: true } as const;
+    expect(dropToPerform(null, judgedNow)).toEqual({ target: below, position: 'after' });
+    expect(dropToPerform({ target: 'root', position: 'inside', ok: true }, judgedNow)).toEqual({
+      target: below,
+      position: 'after',
+    });
+    expect(dropToPerform(null, { ...judgedNow, ok: false })).toBeNull();
   });
 });

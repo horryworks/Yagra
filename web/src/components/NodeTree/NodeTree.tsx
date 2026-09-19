@@ -61,6 +61,7 @@ import { HealthBar } from '../HealthBar/HealthBar';
 import {
   dragPreview,
   dropAction,
+  dropToPerform,
   dropAllowed,
   dropParentId,
   dropPosition,
@@ -931,12 +932,15 @@ export function NodeTree({
     e.preventDefault();
     e.stopPropagation();
     if (!drag) return;
+    // What was SHOWN, not what is under the pointer now — see `dropToPerform`. The row here may
+    // have slid under a pointer that never moved.
     const position = positionFor(e, targetIsGroup);
-    if (!dropAllowed(groups, drag, target, position)) {
-      reset();
-      return;
-    }
-    perform(dropAction(drag, target, position));
+    const at = dropToPerform(dropTarget, {
+      target,
+      position,
+      ok: dropAllowed(groups, drag, target, position),
+    });
+    if (at) perform(dropAction(drag, at.target, at.position));
     reset();
   };
 
