@@ -579,10 +579,25 @@ export function NodesPage() {
 
   // …and at once when the stream says it missed frames. `useNodeStates` has already dropped its
   // overlay by then, so what is on screen is the base data — which has to be current.
+  //
+  // 🚨 **In place, never `reload`** (ADR-133 増分 7 決定 4). `reload` is for after a write: it
+  // empties the member cache, so for a round trip every loaded row was gone — the tree flashed
+  // "Loading…" on each reconnect and an arrow key pressed meanwhile was dropped. What was missed is
+  // states, not moves and not folders, so the folder list is not re-read either.
+  //
+  // Counted against the resyncs this page has SEEN: a new callback identity is not a new resync, and
+  // one that happened on another screen before this one mounted is not replayed (the mount reads
+  // everything anyway).
+  const refreshMembers = members.refresh;
   const resyncs = useNodeStateResyncs();
+  const seenResyncs = useRef(resyncs);
   useEffect(() => {
-    if (resyncs > 0) void reload();
-  }, [resyncs, reload]);
+    if (resyncs === seenResyncs.current) return;
+    seenResyncs.current = resyncs;
+    refreshRollups();
+    refreshMembers();
+    refetchSearch();
+  }, [resyncs, refreshRollups, refreshMembers, refetchSearch]);
 
   // Active maintenance windows + mutes for the per-row suppression icons. Refetched after any
   // maintenance/mute action from the tree so the icons update immediately (node `maintenance`

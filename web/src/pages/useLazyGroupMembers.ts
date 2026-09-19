@@ -66,6 +66,10 @@ export interface LazyGroupMembers {
   anyTruncated: boolean;
   /** Drop everything so open groups re-fetch. Call after any write that can change membership. */
   invalidate: () => void;
+  /** Re-read every loaded group IN PLACE: its rows stay on screen and are swapped when its answer
+   *  lands. For "the states on screen may be stale" (the live stream missed frames) — never after a
+   *  write, which can move a node between groups and so needs `invalidate` (ADR-133 増分 7 決定 4). */
+  refresh: () => void;
   /** Clear one group's failure so it is fetched again. The ONLY automatic retry is `invalidate`;
    *  everything else goes through here, driven by the operator pressing the failed row's control. */
   retry: (key: string) => void;
@@ -112,10 +116,14 @@ export function useLazyGroupMembers(opts: {
    *  🚨 **In a ref, not state.** A queue change that re-rendered would change `loadMissing`'s
    *  identity and re-run all three effects — the very churn the failed-set fix exists to stop.
    *  Nothing on screen is derived from it (`loadingGroups` is the state the tree reads), so it has
-   *  no business causing a render. */
-  const queue = useRef<{ waiting: string[]; inflight: Set<string> }>({
+   *  no business causing a render.
+   *
+   *  `rereads` are the keys `refresh` queued: loaded already, and asked again. A failure of one of
+   *  those keeps the rows it has rather than turning the folder into a failed row. */
+  const queue = useRef<{ waiting: string[]; inflight: Set<string>; rereads: Set<string> }>({
     waiting: [],
     inflight: new Set(),
+    rereads: new Set(),
   });
 
   /** Whether this core understands the batch form. Flipped to `false` the first time an answer
@@ -196,7 +204,7 @@ export function useLazyGroupMembers(opts: {
           // it again on the next render, forever — the exact loop this whole change began with,
           // arriving through the door the fix for it opened. Found by the browser suite, whose
           // generated mock echoes a set unrelated to the request: 179 requests and climbing.
-          const missing = keys.filter((k) => !covered.has(k));
+          const missing = keys.filter((k) => !covered.has(k) && !q.rereads.has(k));
           if (missing.length > 0) {
             setFailedGroups((prev) => {
               const next = new Set(prev);
@@ -221,15 +229,25 @@ export function useLazyGroupMembers(opts: {
           // Leaving it out of `loadedGroups` is still right — marking it loaded would show an empty
           // folder forever, which reads as "this folder has no nodes". What was missing is the third
           // set, so the retry becomes a decision rather than a side effect of a Set identity.
+          //
+          // A folder `refresh` was re-reading keeps the rows it had: the previous answer stands, as
+          // it does for the rollups, and a passing failure must not hide a folder that works.
+          const failed = keys.filter((k) => !q.rereads.has(k));
+          if (failed.length === 0) return;
           setFailedGroups((prev) => {
             const next = new Set(prev);
-            for (const k of keys) next.add(k);
+            for (const k of failed) next.add(k);
             return next;
           });
         })
         .finally(() => {
           if (stale()) return;
-          for (const k of keys) q.inflight.delete(k);
+          for (const k of keys) {
+            q.inflight.delete(k);
+            // Not while it is queued again (the N-1 fallback above puts keys back): it is still a
+            // re-read until that attempt settles.
+            if (!q.waiting.includes(k)) q.rereads.delete(k);
+          }
           setLoadingGroups((prev) => {
             const next = new Set(prev);
             for (const k of keys) next.delete(k);
@@ -324,6 +342,7 @@ export function useLazyGroupMembers(opts: {
     generation.current += 1;
     queue.current.waiting = [];
     queue.current.inflight = new Set();
+    queue.current.rereads = new Set();
     setLoadedNodes({});
     setLoadedGroups(new Set());
     setLoadingGroups(new Set());
@@ -332,6 +351,33 @@ export function useLazyGroupMembers(opts: {
     // reloaded — including across the write that might have fixed it.
     setFailedGroups(new Set());
   }, []);
+
+  /** The groups loaded so far, for `refresh` — a ref, so `refresh` keeps one identity. */
+  const loaded = useRef(loadedGroups);
+  useEffect(() => {
+    loaded.current = loadedGroups;
+  }, [loadedGroups]);
+
+  // 🚨 **Not `invalidate`, and the difference is the whole point** (ADR-133 増分 7 決定 4). The page
+  // first answered a resync with the reload it uses after a write, which empties the cache: every
+  // loaded row vanished for a round trip, the tree flashed "Loading…" on each reconnect, and an arrow
+  // key pressed meanwhile was dropped (a cursor whose row is not on screen is cleared, not written).
+  // A resync means STATES were missed, not moves, so no node can end up in two folders here — each
+  // folder keeps its rows until its own answer replaces them.
+  const refresh = useCallback(() => {
+    const q = queue.current;
+    // What was already on its way is asked again as well: it was asked before the frames were
+    // missed. `generation` disowns those answers, exactly as `invalidate` does.
+    const pending = [...q.waiting, ...q.inflight];
+    const reread = [...loaded.current];
+    generation.current += 1;
+    q.waiting = [...new Set([...reread, ...pending])];
+    q.inflight = new Set();
+    q.rereads = new Set(reread);
+    // `loadingGroups` needs no change: the pending keys are in it already, and a loaded key is
+    // refused by `loadMissing` whatever it says.
+    pump();
+  }, [pump]);
 
   const retry = useCallback((key: string) => {
     setFailedGroups((prev) => {
@@ -352,6 +398,7 @@ export function useLazyGroupMembers(opts: {
     revealTruncated: revealedGroups.size >= REVEAL_GROUP_CAP,
     anyTruncated,
     invalidate,
+    refresh,
     retry,
   };
 }

@@ -30,10 +30,12 @@ const node = (id: string): NodeSummary => ({ id, name: id }) as unknown as NodeS
 /** A promise whose resolution this test controls, so "still in flight" is an observable state. */
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const OPTS = {
@@ -388,6 +390,104 @@ describe('useLazyGroupMembers', () => {
     });
     await waitFor(() => expect(result.current.loadedGroups.has('g1')).toBe(true));
     expect(result.current.nodes.map((n) => n.id)).toEqual(['still-here']);
+  });
+
+  describe('refresh — the re-read a missed-frames resync asks for (ADR-133 増分 7 決定 4)', () => {
+    type Answer = { nodes: NodeSummary[]; truncated: boolean };
+    /** One folder, loaded once with `before`; every later ask of it is handed back to the test. */
+    async function loadedOnce(before: NodeSummary[]) {
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const one = { ...OPTS, groups: [group('g1')], visibleGroupKeys: ['g1'] };
+      const later: ReturnType<typeof deferred<Answer>>[] = [];
+      let asked = 0;
+      getGroupNodes.mockImplementation((id: string | null) => {
+        if (id === null) return Promise.resolve({ nodes: [], truncated: false });
+        asked += 1;
+        if (asked === 1) return Promise.resolve({ nodes: before, truncated: false });
+        const d = deferred<Answer>();
+        later.push(d);
+        return d.promise;
+      });
+      const hook = renderHook(() => useLazyGroupMembers(one));
+      await waitFor(() => expect(hook.result.current.loadedGroups.has('g1')).toBe(true));
+      return { ...hook, later, asks: () => asked };
+    }
+
+    it('keeps the rows on screen while the re-read is in flight, and swaps them when it lands', async () => {
+      // 🚨 The defect: the resync went through `invalidate`, which empties the cache first — every
+      // row vanished for a round trip, and a key pressed in that window was dropped.
+      const { result, later, asks } = await loadedOnce([node('n1')]);
+      await act(async () => {
+        result.current.refresh();
+      });
+      await waitFor(() => expect(asks()).toBe(2));
+      expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']);
+      expect(result.current.loadedGroups.has('g1')).toBe(true);
+
+      await act(async () => {
+        later[0].resolve({ nodes: [node('n1'), node('n2')], truncated: false });
+      });
+      await waitFor(() => expect(result.current.nodes.map((n) => n.id)).toEqual(['n1', 'n2']));
+    });
+
+    it('a failed re-read keeps the rows it had, and does not mark the folder failed', async () => {
+      // The folder works — one read of it failed. Drawing the failed row would hide its members.
+      const { result, later } = await loadedOnce([node('n1')]);
+      await act(async () => {
+        result.current.refresh();
+      });
+      await waitFor(() => expect(later).toHaveLength(1));
+      await act(async () => {
+        later[0].reject(new Error('503'));
+      });
+      // Settled: a fresh ask would be the proof it was queued again, and none comes.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      expect(result.current.failedGroups.has('g1')).toBe(false);
+      expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']);
+    });
+
+    it('a FIRST load that failed still becomes a failed row — only a re-read is spared', async () => {
+      // The other direction: without it, "never mark failed" would pass this suite too.
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const one = { ...OPTS, groups: [group('g1')], visibleGroupKeys: ['g1'] };
+      getGroupNodes.mockImplementation((id: string | null) =>
+        id === null ? Promise.resolve({ nodes: [], truncated: false }) : Promise.reject(new Error('503')),
+      );
+      const { result } = renderHook(() => useLazyGroupMembers(one));
+      await waitFor(() => expect(result.current.failedGroups.has('g1')).toBe(true));
+    });
+
+    it('an answer asked for BEFORE the refresh is not adopted, and a first load in flight is asked again', async () => {
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const one = { ...OPTS, groups: [group('g1')], visibleGroupKeys: ['g1'] };
+      const answers: ReturnType<typeof deferred<Answer>>[] = [];
+      getGroupNodes.mockImplementation((id: string | null) => {
+        if (id === null) return Promise.resolve({ nodes: [], truncated: false });
+        const d = deferred<Answer>();
+        answers.push(d);
+        return d.promise;
+      });
+      const { result } = renderHook(() => useLazyGroupMembers(one));
+      await waitFor(() => expect(answers).toHaveLength(1)); // g1's first load, still in flight
+
+      await act(async () => {
+        result.current.refresh();
+      });
+      // Asked again — otherwise it would sit in `loadingGroups` with nothing on its way, forever.
+      await waitFor(() => expect(answers).toHaveLength(2));
+
+      await act(async () => {
+        answers[0].resolve({ nodes: [node('before-the-gap')], truncated: false });
+      });
+      expect(result.current.nodes.map((n) => n.id)).not.toContain('before-the-gap');
+
+      await act(async () => {
+        answers[1].resolve({ nodes: [node('after-the-gap')], truncated: false });
+      });
+      await waitFor(() => expect(result.current.nodes.map((n) => n.id)).toEqual(['after-the-gap']));
+    });
   });
 
   it('invalidate drops the cache so open groups fetch again', async () => {
