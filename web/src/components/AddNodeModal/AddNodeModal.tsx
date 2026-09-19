@@ -90,7 +90,10 @@ export function AddNodeModal({
   const title = t(spec.titleKey);
   const canSubmit =
     form.name.trim() !== '' &&
-    targetFilled(kind, { address: form.address, url: form.url, dnsName: form.dnsName });
+    targetFilled(kind, { address: form.address, url: form.url, dnsName: form.dnsName }) &&
+    // `GroupModal` and `SetPoolModal` both refuse an invalid pool name; this one drew the same red
+    // hint and left Add live, so the create went out and came back as a 400.
+    isValidPoolName(form.pool);
 
   /** Nodes already monitored at the address being added, once the lookup found some (ADR-139
    *  増分 2). While set, the dialog names them and the primary button becomes "Add anyway". */
