@@ -216,6 +216,11 @@ pub struct AdminState {
     pub link_overrides: Arc<crate::link_overrides::LinkOverrideRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
+    /// What the Dashboard says each organization holds, kept between syncs (ADR-164).
+    pub meraki_inventory: Arc<crate::meraki_inventory::MerakiInventoryRepo>,
+    /// The inventory sync itself — the same value the leader's loop runs, so "Sync now" and the
+    /// loop share one single flight per organization.
+    pub meraki_sync: Arc<crate::meraki_sync::MerakiSync>,
     /// Configured NetBox deployments and the folder tree pulled from them (ADR-100). Read-only
     /// and outbound from core; the API token lives sealed in `creds`, never on this row.
     pub netbox: Arc<crate::netbox::NetboxRepo>,

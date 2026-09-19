@@ -1555,6 +1555,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/meraki/orgs/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An organization's devices as the last successful sync recorded them — monitored or not — with
+         *     each one's state. Served from PostgreSQL: it never calls the Dashboard API.
+         */
+        get: operations["list_meraki_devices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meraki/orgs/{id}/enabled": {
         parameters: {
             query?: never;
@@ -1606,6 +1626,28 @@ export interface paths {
         /** Set the monitored (watch/skip) flag for a set of the org's networks. */
         put: operations["set_meraki_networks_monitored"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meraki/orgs/{id}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync one organization's inventory now, rather than waiting for the periodic sync.
+         * @description Read-only upstream (three paged GETs). It goes through the same single flight as the periodic
+         *     sync and the collector, so pressing it while a collect is running answers 409 rather than
+         *     spending the organization's rate budget twice.
+         */
+        post: operations["sync_meraki_org"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8599,6 +8641,61 @@ export interface components {
             /** @description The device serial — the join key returned by the org-bulk endpoints. */
             serial: string;
         };
+        /** @description How many of an organization's devices are in each state an operator is told about. */
+        MerakiDeviceCounts: {
+            /**
+             * Format: int32
+             * @description Nodes whose device Meraki no longer lists.
+             */
+            missing: number;
+            /**
+             * Format: int32
+             * @description Of those, the ones that are nodes.
+             */
+            monitored: number;
+            /**
+             * Format: int32
+             * @description Listed, online at least once, never a node here.
+             */
+            new: number;
+            /**
+             * Format: int32
+             * @description Devices Meraki currently lists, whatever their state here.
+             */
+            seen: number;
+        };
+        /**
+         * @description What a device's row is shown as (ADR-164 決定 9). Serialized as the snake_case token.
+         * @enum {string}
+         */
+        MerakiDeviceState: "monitored" | "new" | "never_online" | "deleted" | "missing";
+        /** @description One device of an organization, as the last successful sync recorded it. */
+        MerakiDeviceView: {
+            /** Format: date-time */
+            first_seen_at: string;
+            /** @description The address Meraki reports, when it reports a usable one. */
+            lan_ip?: string | null;
+            /**
+             * Format: date-time
+             * @description When a complete listing first failed to contain the device; `null` while Meraki lists it.
+             */
+            missing_since?: string | null;
+            model?: string | null;
+            name: string;
+            network_id: string;
+            /** @description Whether the device's network is one this organization watches. */
+            network_monitored: boolean;
+            /** @description The network's name; `null` for a network the sync has not recorded. */
+            network_name?: string | null;
+            /**
+             * Format: uuid
+             * @description The node this device is monitored as; `null` unless `state` is `monitored` or `missing`.
+             */
+            node_id?: string | null;
+            product_type: string;
+            serial: string;
+            state: components["schemas"]["MerakiDeviceState"];
+        };
         MerakiDiscoverReq: {
             api_key: string;
             base_url?: string | null;
@@ -8651,6 +8748,8 @@ export interface components {
             /** Format: int32 */
             availability_secs: number;
             base_url: string;
+            /** @description What the last successful sync found, read against which devices are nodes here. */
+            devices: components["schemas"]["MerakiDeviceCounts"];
             enabled: boolean;
             enabled_tiers: string[];
             /** Format: uuid */
@@ -8659,6 +8758,14 @@ export interface components {
             id: string;
             /** Format: int32 */
             inventory_secs: number;
+            /**
+             * Format: date-time
+             * @description When the last **successful** inventory sync ran. A failed sync does not move it.
+             */
+            last_sync_at?: string | null;
+            last_sync_error?: null | components["schemas"]["MerakiSyncFailure"];
+            /** @description `null` until a sync has run — "has not synced yet" is not "failed". */
+            last_sync_ok?: boolean | null;
             name: string;
             org_id: string;
             /** Format: double */
@@ -8674,6 +8781,36 @@ export interface components {
         };
         MerakiPollingReq: {
             enabled: boolean;
+        };
+        /**
+         * @description Why a sync failed. Stored on the organization's row as its token and shown to an operator, so
+         *     every variant is a closed fact and none carries upstream text — a Dashboard error body can quote
+         *     the request, and the request carries the key.
+         * @enum {string}
+         */
+        MerakiSyncFailure: "credential" | "config" | "auth" | "rate_limited" | "upstream" | "unreachable" | "malformed" | "truncated" | "timeout" | "internal";
+        /** @description What one successful sync found and did. */
+        MerakiSyncReport: {
+            /**
+             * Format: int32
+             * @description Devices the Dashboard lists.
+             */
+            devices: number;
+            /**
+             * Format: int32
+             * @description Networks the Dashboard lists.
+             */
+            networks: number;
+            /**
+             * Format: int32
+             * @description Devices that were listed last time and are not now.
+             */
+            newly_missing: number;
+            /**
+             * Format: int32
+             * @description Inventory and network rows written. Zero is the ordinary answer.
+             */
+            written: number;
         };
         /**
          * @description The dimension a metric's series carry, which decides how it can be read.
@@ -18640,6 +18777,65 @@ export interface operations {
             };
         };
     };
+    list_meraki_devices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Organization row id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's devices; empty until its first sync */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MerakiDeviceView"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View, or the account is restricted to folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     set_meraki_org_enabled: {
         parameters: {
             query?: never;
@@ -18870,6 +19066,83 @@ export interface operations {
                 };
             };
             /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    sync_meraki_org: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Organization row id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sync completed; what it found and how many rows it wrote */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MerakiSyncReport"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), or a collect or another sync is running for it (`meraki_sync_busy`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The sync ran and failed (`meraki_sync_failed`); the reason is recorded on the organization as `last_sync_error` */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode), or this core is a standby (`not_leader`) */
             503: {
                 headers: {
                     [name: string]: unknown;

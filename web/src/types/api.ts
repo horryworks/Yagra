@@ -94,6 +94,7 @@ const schemaEnumPins: {
   // The runtime array `i18nEnumKeys` and the AP filter iterate — a fourth backend state would
   // otherwise reach the screen as a raw `ap.state.<token>` key with every gate green.
   WlanApState: AssertEqual<(typeof WLAN_AP_STATES)[number], components['schemas']['WlanApState']>;
+  MerakiSyncFailure: AssertEqual<MerakiSyncFailure, components['schemas']['MerakiSyncFailure']>;
 } = {
   Severity: true,
   Role: true,
@@ -129,6 +130,7 @@ const schemaEnumPins: {
   RcaConfidence: true,
   TlsCertSource: true,
   WlanApState: true,
+  MerakiSyncFailure: true,
   DuplicateEvidenceKind: true,
   DuplicateConfidence: true,
   DuplicateContradiction: true,
@@ -875,6 +877,34 @@ export type MerakiDeviceConfig = components['schemas']['MerakiDeviceConfig'];
 
 /** A configured Meraki organization (`GET /api/v1/meraki/orgs`). */
 export type MerakiOrg = components['schemas']['MerakiOrgView'];
+
+/** Why an organization's last inventory sync failed (`MerakiOrg.last_sync_error`, ADR-164).
+ *
+ *  An `as const` array because the row builds its `t()` key from the token
+ *  (`` t(`meraki.sync.reason.${reason}`) ``): `i18nEnumKeys.test.ts` iterates it so both locales
+ *  carry every reason, and `schemaEnumPins` holds it equal to the backend's closed vocabulary. */
+export const MERAKI_SYNC_FAILURES = [
+  'credential',
+  'config',
+  'auth',
+  'rate_limited',
+  'upstream',
+  'unreachable',
+  'malformed',
+  'truncated',
+  'timeout',
+  'internal',
+] as const;
+
+/** One reason an inventory sync can fail. */
+export type MerakiSyncFailure = (typeof MERAKI_SYNC_FAILURES)[number];
+
+/** What one successful inventory sync found (`POST /api/v1/meraki/orgs/:id/sync`). */
+export type MerakiSyncReport = components['schemas']['MerakiSyncReport'];
+
+/** One device of an organization as the last sync recorded it
+ *  (`GET /api/v1/meraki/orgs/:id/devices`). */
+export type MerakiDevice = components['schemas']['MerakiDeviceView'];
 
 /** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`). */
 export type MerakiOrgOption = components['schemas']['MerakiOrgOption'];

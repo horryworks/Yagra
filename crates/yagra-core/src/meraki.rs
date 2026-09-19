@@ -62,6 +62,13 @@ pub struct MerakiOrg {
     pub target_rps: f64,
     pub group_id: Option<Uuid>,
     pub enabled: bool,
+    /// When the last **successful** inventory sync ran. A failure never moves it (ADR-164 決定 3).
+    pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// `None` until a sync has run: "has not synced yet" is not "failed".
+    pub last_sync_ok: Option<bool>,
+    /// Why the last sync failed — a [`crate::meraki_sync::MerakiSyncFailure`] token, never upstream
+    /// text. `None` after a success.
+    pub last_sync_error: Option<String>,
 }
 
 impl MerakiOrg {
@@ -84,6 +91,9 @@ impl MerakiOrg {
             target_rps: row.try_get("target_rps")?,
             group_id: row.try_get("group_id")?,
             enabled: row.try_get("enabled")?,
+            last_sync_at: row.try_get("last_sync_at")?,
+            last_sync_ok: row.try_get("last_sync_ok")?,
+            last_sync_error: row.try_get("last_sync_error")?,
         })
     }
 
@@ -235,7 +245,8 @@ impl MerakiOrgRepo {
     }
 
     const COLUMNS: &'static str = "id, org_id, name, base_url, credential_id, availability_secs, \
-        uplink_secs, traffic_secs, inventory_secs, enabled_tiers, target_rps, group_id, enabled";
+        uplink_secs, traffic_secs, inventory_secs, enabled_tiers, target_rps, group_id, enabled, \
+        last_sync_at, last_sync_ok, last_sync_error";
 
     /// Every org (for the Integrations UI).
     pub async fn list(&self) -> anyhow::Result<Vec<MerakiOrg>> {
@@ -350,12 +361,35 @@ impl MerakiOrgRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Stamp `last_sync_at = now()` after an enumerate/reconcile.
-    pub async fn touch_sync(&self, id: Uuid) -> anyhow::Result<()> {
+    /// Record a **successful** inventory sync.
+    ///
+    /// 🚨 There is deliberately no `ok` flag that could be passed `false` beside a timestamp — the
+    /// shape `NetboxRepo::record_success` has, for the same reason. `last_sync_at` is what decides
+    /// when the next sync is due and what the row shows as "last sync", and it moves only here.
+    ///
+    /// This replaced `touch_sync`, which the import wizard's enumerate called after a read that
+    /// could have been cut short. Stamping "synced" on that was harmless while nothing read the
+    /// column; it would now postpone the real sync by a whole interval.
+    pub async fn record_sync_success(&self, id: Uuid) -> anyhow::Result<()> {
         sqlx::query(
-            "UPDATE meraki_orgs SET last_sync_at = now(), updated_at = now() WHERE id = $1",
+            "UPDATE meraki_orgs SET last_sync_at = now(), last_sync_ok = TRUE, \
+                    last_sync_error = NULL, updated_at = now() WHERE id = $1",
         )
         .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record a **failed** inventory sync: the reason, and nothing else. `last_sync_at` stays where
+    /// the last success left it. `reason` is a `MerakiSyncFailure` token.
+    pub async fn record_sync_failure(&self, id: Uuid, reason: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE meraki_orgs SET last_sync_ok = FALSE, last_sync_error = $2, \
+                    updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(reason)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -411,6 +445,43 @@ impl MerakiOrgRepo {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Record the networks a sync saw: insert the new ones, rename the renamed ones, and leave every
+    /// other row untouched. Returns how many rows were written.
+    ///
+    /// [`Self::upsert_networks`] rewrites every row on every call (it bumps `last_seen_at`), which
+    /// is fine from a wizard and wrong from a loop that runs every five minutes (ADR-164 決定 4).
+    /// The `WHERE` on the conflict arm is what makes an unchanged network a no-op rather than an
+    /// update to the same values. A new network takes the column default for `monitored`.
+    pub async fn record_networks(
+        &self,
+        org_uuid: Uuid,
+        networks: &[(String, String)],
+    ) -> anyhow::Result<u64> {
+        if networks.is_empty() {
+            return Ok(0);
+        }
+        // One entry per network id: PostgreSQL refuses an `ON CONFLICT DO UPDATE` that would touch
+        // the same row twice in one statement, and a listing is not ours to trust.
+        let unique: std::collections::BTreeMap<&str, &str> = networks
+            .iter()
+            .map(|(id, name)| (id.as_str(), name.as_str()))
+            .collect();
+        let (ids, names): (Vec<&str>, Vec<&str>) = unique.into_iter().unzip();
+        let res = sqlx::query(
+            "INSERT INTO meraki_org_networks (org_id, network_id, name, last_seen_at) \
+             SELECT $1, t.id, t.name, now() FROM unnest($2::text[], $3::text[]) AS t(id, name) \
+             ON CONFLICT (org_id, network_id) DO UPDATE \
+               SET name = EXCLUDED.name, last_seen_at = now() \
+               WHERE meraki_org_networks.name IS DISTINCT FROM EXCLUDED.name",
+        )
+        .bind(org_uuid)
+        .bind(&ids)
+        .bind(&names)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Set the `monitored` flag for a set of the org's networks.
@@ -662,11 +733,16 @@ mod tests {
             availability_secs: 300,
             uplink_secs: 300,
             traffic_secs: 1800,
-            inventory_secs: 21600,
+            // Not the column default (300): it has to differ from the other three, or
+            // `tier_cadence_maps_each_tier` could not tell Inventory from Availability.
+            inventory_secs: 900,
             enabled_tiers: vec!["availability".into(), "uplink".into(), "inventory".into()],
             target_rps: 2.0,
             group_id: Some(Uuid::nil()),
             enabled: true,
+            last_sync_at: None,
+            last_sync_ok: None,
+            last_sync_error: None,
         }
     }
 
@@ -684,7 +760,7 @@ mod tests {
         let o = org();
         assert_eq!(o.tier_cadence(MerakiTier::Availability), 300);
         assert_eq!(o.tier_cadence(MerakiTier::Traffic), 1800);
-        assert_eq!(o.tier_cadence(MerakiTier::Inventory), 21600);
+        assert_eq!(o.tier_cadence(MerakiTier::Inventory), 900);
     }
 
     #[test]
@@ -1290,10 +1366,8 @@ mod tests {
     }
 
     /// Purging removes the org, its device nodes and its groups, and leaves every other org alone.
-    /// `touch_sync` stamps the column that says when the last reconcile happened.
-    ///
-    /// ⚠️ `last_sync_at` is read through [`pgtest::timestamp_of`] because **nothing in production
-    /// selects it** — it is not in `MerakiOrgRepo::COLUMNS`.
+    /// On the way: the two sync-outcome writers, in both directions (ADR-164 決定 3) — a success
+    /// moves `last_sync_at`, a failure records its reason and leaves the stamp exactly where it was.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn purging_an_org_takes_its_devices_and_groups_and_leaves_the_others(pool: sqlx::PgPool) {
@@ -1316,12 +1390,89 @@ mod tests {
             .await
             .expect("enumerate");
 
-        repo.touch_sync(acme).await.expect("touch");
-        let synced = pgtest::timestamp_of(&pool, "meraki_orgs", "last_sync_at", "id", acme).await;
-        repo.touch_sync(acme).await.expect("touch again");
+        let fresh = repo.get(acme).await.expect("get").expect("org");
+        assert_eq!(
+            (
+                fresh.last_sync_at,
+                fresh.last_sync_ok,
+                fresh.last_sync_error
+            ),
+            (None, None, None),
+            "an organization that has never synced must not read as failed"
+        );
+
+        repo.record_sync_success(acme).await.expect("success");
+        let ok = repo.get(acme).await.expect("get").expect("org");
+        let synced = ok.last_sync_at.expect("a success stamps last_sync_at");
+        assert_eq!(
+            (ok.last_sync_ok, ok.last_sync_error.clone()),
+            (Some(true), None)
+        );
+
+        repo.record_sync_failure(acme, "auth")
+            .await
+            .expect("failure");
+        let failed = repo.get(acme).await.expect("get").expect("org");
+        assert_eq!(
+            failed.last_sync_at,
+            Some(synced),
+            "a failed sync moved last_sync_at — the next sync would be postponed by a failure"
+        );
+        assert_eq!(
+            (failed.last_sync_ok, failed.last_sync_error.as_deref()),
+            (Some(false), Some("auth"))
+        );
+
+        repo.record_sync_success(acme).await.expect("success again");
+        let again = repo.get(acme).await.expect("get").expect("org");
         assert!(
-            pgtest::timestamp_of(&pool, "meraki_orgs", "last_sync_at", "id", acme).await > synced,
-            "the reconcile stamp did not move"
+            again.last_sync_at.expect("stamp") > synced,
+            "the stamp did not move"
+        );
+        assert_eq!(
+            (again.last_sync_ok, again.last_sync_error),
+            (Some(true), None),
+            "a success must clear the previous failure's reason"
+        );
+
+        // `record_networks` writes what changed and nothing else (ADR-164 決定 4).
+        let nets = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(i, n)| ((*i).to_owned(), (*n).to_owned()))
+                .collect()
+        };
+        assert_eq!(
+            repo.record_networks(acme, &nets(&[("N_1", "One"), ("N_2", "Two")]))
+                .await
+                .expect("record"),
+            1,
+            "N_1 is already stored under that name; only N_2 is new"
+        );
+        assert_eq!(
+            repo.record_networks(acme, &nets(&[("N_1", "One"), ("N_2", "Two")]))
+                .await
+                .expect("record again"),
+            0,
+            "an unchanged listing must write nothing"
+        );
+        assert_eq!(
+            repo.record_networks(
+                acme,
+                &nets(&[("N_2", "Two, renamed"), ("N_2", "Two, renamed")])
+            )
+            .await
+            .expect("rename, listed twice"),
+            1
+        );
+        let stored = repo.list_networks(acme).await.expect("list");
+        assert_eq!(
+            stored,
+            [
+                ("N_1".to_owned(), "One".to_owned(), false),
+                ("N_2".to_owned(), "Two, renamed".to_owned(), false),
+            ],
+            "a network the sync found must not become monitored by being found"
         );
 
         assert_eq!(pgtest::rows(&pool, "nodes").await, 2);

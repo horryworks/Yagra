@@ -53,6 +53,35 @@
   flex-wrap: wrap;
 }
 
+/* The row's left half: what the organization is, above how its last inventory sync went. */
+.meraki-org-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 18rem;
+}
+
+.meraki-org-sync {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+/* Not a --status-* colour, on purpose: a sync that failed is not a node that is down, and painting
+   it red would put a critical-looking thing on screen that no alert corresponds to. The same
+   choice, and the same token, as the NetBox page's .netbox-failed. */
+.meraki-org-sync-failed {
+  color: var(--accent-color);
+  overflow-wrap: anywhere;
+}
+
+.meraki-org-sync-new {
+  color: var(--text-primary);
+}
+
 .meraki-org-main {
   display: flex;
   align-items: baseline;

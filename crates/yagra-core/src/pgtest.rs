@@ -244,7 +244,8 @@ pub async fn node_timestamp(
 /// case this was written for: the ARP store keeps "this port has looked like this for three weeks"
 /// and nothing in production ever selects it, so without this the rule that an unchanged walk must
 /// not restart the clock is assertable only as text — which cannot tell a `CASE` that works from
-/// one that is spelled right and evaluates the wrong way. `meraki_orgs.last_sync_at` is the second.
+/// one that is spelled right and evaluates the wrong way. (`meraki_orgs.last_sync_at` was the
+/// second such column until ADR-164 gave it a reader, `MerakiOrg::last_sync_at`.)
 ///
 /// Deliberately narrow rather than a general "run this statement": a test that can spell any SQL
 /// becomes a second copy of the schema, which is what the fixtures above exist to avoid.

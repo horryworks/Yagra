@@ -70,10 +70,12 @@ import type {
   MaintenanceWindow,
   MatchingThreshold,
   MerakiCandidate,
+  MerakiDevice,
   MerakiEnumeration,
   MerakiNetwork,
   MerakiOrg,
   MerakiOrgOption,
+  MerakiSyncReport,
   MetricAgg,
   MetricKind,
   MetricRange,
@@ -1057,6 +1059,17 @@ export const api = {
   /** Enumerate an org's networks + device candidates from the Dashboard API (read-only). */
   enumerateMerakiOrg: (id: string): Promise<MerakiEnumeration> =>
     apiPost('/api/v1/meraki/orgs/{id}/enumerate', { path: { id } }),
+
+  /** Sync an org's inventory now instead of waiting for the periodic sync (read-only upstream).
+   *  Rejects with 409 while the org is paused or busy, and with 502 when the sync ran and failed —
+   *  the reason is then on the org as `last_sync_error`, so reload the list either way. */
+  syncMerakiOrg: (id: string): Promise<MerakiSyncReport> =>
+    apiPost('/api/v1/meraki/orgs/{id}/sync', { path: { id } }),
+
+  /** Every device the last successful sync found in an org, monitored or not, with its state.
+   *  Served from the database; it never calls the Dashboard API. */
+  listMerakiDevices: (id: string): Promise<MerakiDevice[]> =>
+    apiGet('/api/v1/meraki/orgs/{id}/devices', { path: { id } }),
 
   /** Import selected devices as nodes (atomic), setting the chosen networks in scope. */
   importMerakiDevices: (body: {

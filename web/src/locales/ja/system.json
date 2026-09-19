@@ -514,6 +514,29 @@
       "pause": "一時停止",
       "resume": "再開"
     },
+    "sync": {
+      "never": "まだ同期していません",
+      "ok": "最終同期 {{when}}",
+      "failed": "同期に失敗しました: {{reason}}",
+      "lastGood": "最後に成功した同期 {{when}}",
+      "devices": "デバイス {{seen}} 台中 {{monitored}} 台を監視中",
+      "new_other": "新規 {{count}} 台",
+      "missing_other": "Meraki 側に見つからない {{count}} 台",
+      "now": "今すぐ同期",
+      "running": "同期中…",
+      "reason": {
+        "credential": "保存した API キーを読めません",
+        "config": "保存したベース URL か API キーが使えません",
+        "auth": "Meraki が API キーを拒否しました",
+        "rate_limited": "Meraki のレート制限が続きました",
+        "upstream": "Meraki API がエラーを返しました",
+        "unreachable": "Meraki API に接続できません",
+        "malformed": "Meraki API の応答を読めません",
+        "truncated": "デバイスの一覧を最後まで取得できませんでした",
+        "timeout": "同期が時間内に終わりませんでした",
+        "internal": "Yagra が自分のデータベースを読み書きできません"
+      }
+    },
     "addOrg": {
       "title": "Meraki 組織を追加",
       "find": "組織を検索",
@@ -528,7 +551,7 @@
     "networks": {
       "title": "ネットワーク範囲 — {{name}}",
       "hint": "収集の対象になるのは、監視対象にしたネットワークだけです。チェックを外すと、そのネットワークに絞った API 呼び出しを行わなくなります（既存のデバイスノードはそのまま残ります。デバイスの監視を止めるには、ノードを削除してください）。",
-      "empty": "ネットワークがまだありません — まず「デバイスをインポート」を実行して組織を列挙してください。"
+      "empty": "ネットワークがまだありません — 組織の最初の同期が終わると表示されます。"
     },
     "cadence": {
       "title": "取得間隔 — {{name}}",
@@ -536,7 +559,7 @@
       "availabilityInterval": "可用性の取得間隔（秒）",
       "uplinkInterval": "アップリンクの取得間隔（秒）",
       "trafficInterval": "トラフィックの取得間隔（秒）",
-      "inventoryInterval": "インベントリの取得間隔（秒）",
+      "inventoryInterval": "デバイス一覧の同期間隔（秒）",
       "rateBudget": "レート予算（req/s）",
       "rateBudgetHint": "控えめな値 — 組織の API 上限に対して十分な余裕を残すよう抑えています。"
     },
@@ -565,6 +588,7 @@
       "saveCadence": "取得間隔の保存に失敗しました",
       "polling": "ポーリングの切り替えに失敗しました",
       "toggleOrg": "組織の一時停止・再開に失敗しました",
+      "sync": "組織の同期に失敗しました",
       "delete": "組織の削除に失敗しました"
     }
   },

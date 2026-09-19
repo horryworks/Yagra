@@ -182,6 +182,7 @@ pub(super) enum ConfigKind {
     DiscoveryScans,
     MerakiOrgs,
     MerakiNetworks,
+    MerakiDevices,
     MerakiPolling,
     NetboxServers,
     ForwardDestinations,
@@ -227,6 +228,7 @@ impl ConfigKind {
         "discovery_scans",
         "meraki_orgs",
         "meraki_networks",
+        "meraki_devices",
         "meraki_polling",
         "netbox_servers",
         "forward_destinations",
@@ -267,6 +269,7 @@ impl ConfigKind {
             "discovery_scans" => Self::DiscoveryScans,
             "meraki_orgs" => Self::MerakiOrgs,
             "meraki_networks" => Self::MerakiNetworks,
+            "meraki_devices" => Self::MerakiDevices,
             "meraki_polling" => Self::MerakiPolling,
             "netbox_servers" => Self::NetboxServers,
             "forward_destinations" => Self::ForwardDestinations,
@@ -292,7 +295,7 @@ impl ConfigKind {
             Self::NodeCollection | Self::UrlCheck | Self::DnsCheck => Some(ConfigId::Node),
             Self::TemplateItems => Some(ConfigId::Template),
             Self::ProfileTemplates => Some(ConfigId::Profile),
-            Self::MerakiNetworks => Some(ConfigId::Org),
+            Self::MerakiNetworks | Self::MerakiDevices => Some(ConfigId::Org),
             Self::DiscoveryScan => Some(ConfigId::Scan),
             Self::Thresholds
             | Self::EventRules
@@ -348,6 +351,7 @@ impl ConfigKind {
             Self::DiscoveryScans => "discovery_scans",
             Self::MerakiOrgs => "meraki_orgs",
             Self::MerakiNetworks => "meraki_networks",
+            Self::MerakiDevices => "meraki_devices",
             Self::MerakiPolling => "meraki_polling",
             Self::NetboxServers => "netbox_servers",
             Self::ForwardDestinations => "forward_destinations",
@@ -379,7 +383,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 33 values.
+    /// Which configuration to read. Required; see the tool description for the 34 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -387,7 +391,8 @@ pub(super) struct ConfigParams {
     template_id: Option<Uuid>,
     /// The profile whose templates to list (kind=profile_templates).
     profile_id: Option<Uuid>,
-    /// The Meraki organization whose networks to list (kind=meraki_networks).
+    /// The Meraki organization whose networks or devices to list (kind=meraki_networks,
+    /// kind=meraki_devices).
     org_id: Option<Uuid>,
     /// The discovery scan to report on (kind=discovery_scan).
     scan_id: Option<Uuid>,
@@ -821,8 +826,12 @@ impl YagraMcp {
                        `scan_id`; its `existing` list names the candidates that are already device nodes), \
                        discovery_scans (the sweeps this core is holding, newest \
                        first, `limit` 1–50, default 20 — this is how to find a `scan_id`); \
-                       **Meraki** — meraki_orgs, meraki_networks (needs `org_id`), \
-                       meraki_polling; **NetBox** — netbox_servers (the configured NetBox \
+                       **Meraki** — meraki_orgs (each with its last inventory sync result and \
+                       how many of its devices are monitored, new, or no longer listed by \
+                       Meraki), meraki_networks (needs `org_id`), meraki_devices (needs \
+                       `org_id`; every device the last successful sync found in that \
+                       organization, monitored or not, with its state — refused for a token \
+                       restricted to folders), meraki_polling; **NetBox** — netbox_servers (the configured NetBox \
                        deployments the folder tree is pulled from, with each one's last sync \
                        result and how many of its folders NetBox no longer lists; the API token \
                        is never included); **forwarding** — forward_destinations; **reports** — \
@@ -863,7 +872,7 @@ impl YagraMcp {
                        Kinds require different permissions: oidc and ldap need manage-users; \
                        notification_channels, routing_rules, forward_destinations and llm need \
                        manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
-                       discovery_candidates, the three meraki kinds, the two report kinds, \
+                       discovery_candidates, the four meraki kinds, the two report kinds, \
                        retention, adjacency_settings and roles need view; the rest need \
                        manage-config. This reads configuration only — no tool changes it. No \
                        stored secret is returned: url_check reports whether a credential is \
@@ -1092,6 +1101,14 @@ impl YagraMcp {
                 Ok(list) => ok_json(TOOL, &list),
                 Err(e) => tool_api_error(TOOL, &e),
             },
+            // Through the seam the REST route calls, which is where a folder-restricted caller is
+            // refused — so the refusal cannot be present on one surface and absent on the other.
+            ConfigKind::MerakiDevices => {
+                match crate::api::meraki::device_views(a, scope, id).await {
+                    Ok(list) => ok_json(TOOL, &list),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
             // ── NetBox ───────────────────────────────────────────────────────
             // Through the same `server_views` the REST route calls, so the two surfaces cannot
             // answer differently (ADR-042 read parity). The view type has no field that could
@@ -1497,7 +1514,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            33,
+            34,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }
@@ -1535,7 +1552,7 @@ mod tests {
         assert!(ConfigKind::parse("").is_none());
     }
 
-    /// The five kinds that need an id say so rather than answering about something else.
+    /// The kinds that need an id say so rather than answering about something else.
     #[tokio::test]
     async fn the_config_kinds_that_need_an_id_refuse_without_one() {
         let m = mcp();
@@ -1546,6 +1563,7 @@ mod tests {
             ConfigKind::TemplateItems,
             ConfigKind::ProfileTemplates,
             ConfigKind::MerakiNetworks,
+            ConfigKind::MerakiDevices,
             ConfigKind::DiscoveryScan,
         ] {
             let r = m

@@ -526,6 +526,31 @@
       "pause": "Pause",
       "resume": "Resume"
     },
+    "sync": {
+      "never": "Never synced",
+      "ok": "Last sync {{when}}",
+      "failed": "Sync failed: {{reason}}",
+      "lastGood": "Last successful sync {{when}}",
+      "devices": "{{monitored}} of {{seen}} devices monitored",
+      "new_one": "{{count}} new",
+      "new_other": "{{count}} new",
+      "missing_one": "{{count}} not found in Meraki",
+      "missing_other": "{{count}} not found in Meraki",
+      "now": "Sync now",
+      "running": "Syncing…",
+      "reason": {
+        "credential": "the stored API key could not be read",
+        "config": "the stored base URL or API key cannot be used",
+        "auth": "Meraki refused the API key",
+        "rate_limited": "Meraki kept rate-limiting the requests",
+        "upstream": "the Meraki API answered an error",
+        "unreachable": "the Meraki API could not be reached",
+        "malformed": "the Meraki API answered something unreadable",
+        "truncated": "the device list did not arrive complete",
+        "timeout": "the sync did not finish in time",
+        "internal": "Yagra could not read or write its own database"
+      }
+    },
     "addOrg": {
       "title": "Add Meraki organization",
       "find": "Find organizations",
@@ -541,7 +566,7 @@
     "networks": {
       "title": "Network scope — {{name}}",
       "hint": "Only monitored networks are collected. Un-checking a network stops narrowing API calls to it (existing device nodes are untouched — remove them to stop monitoring a device).",
-      "empty": "No networks yet — run “Import devices” to enumerate the org first."
+      "empty": "No networks yet — they appear after the organization's first sync."
     },
     "cadence": {
       "title": "Cadence — {{name}}",
@@ -549,7 +574,7 @@
       "availabilityInterval": "Availability interval (s)",
       "uplinkInterval": "Uplink interval (s)",
       "trafficInterval": "Traffic interval (s)",
-      "inventoryInterval": "Inventory interval (s)",
+      "inventoryInterval": "Device sync interval (s)",
       "rateBudget": "Rate budget (req/s)",
       "rateBudgetHint": "Conservative — kept well under the org API cap so the customer keeps headroom."
     },
@@ -580,6 +605,7 @@
       "saveCadence": "failed to save cadence",
       "polling": "failed to change the polling switch",
       "toggleOrg": "failed to pause or resume the organization",
+      "sync": "failed to sync the organization",
       "delete": "failed to delete the organization"
     }
   },

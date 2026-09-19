@@ -69,6 +69,8 @@ mod mcp;
 // all twenty-one onto `module_source`, which removes each test-only item instead of cutting at
 // the first, so the constraint is gone and this line has come home to prove it.
 mod meraki;
+mod meraki_inventory;
+mod meraki_sync;
 mod metric_meaning;
 mod mib;
 #[cfg(test)]
@@ -640,6 +642,16 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::new(repo.pool(), kek.clone()));
+    // The Meraki inventory sync (ADR-164). Built once and shared: the leader's periodic loop and
+    // the "Sync now" endpoint must go through the same single flight, which lives in this value.
+    let meraki_inventory = Arc::new(meraki_inventory::MerakiInventoryRepo::new(repo.pool()));
+    let meraki_sync = Arc::new(meraki_sync::MerakiSync::new(
+        meraki_orgs.clone(),
+        meraki_inventory.clone(),
+        creds.clone(),
+        Arc::new(meraki_sync::DashboardApi),
+        meraki_inflight.clone(),
+    ));
 
     // SNMP v2c (ADR-021): community is resolved per node from its bound credential; an env
     // community is a fallback for nodes without one. What to collect comes from the node's
@@ -842,6 +854,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         meraki_inflight: meraki_inflight.clone(),
         meraki_devices: meraki_devices.clone(),
         meraki_orgs: meraki_orgs.clone(),
+        meraki_sync: meraki_sync.clone(),
         netbox: netbox.clone(),
         meraki_pool,
         flow_system_log_days: cfg.flow_system_log_days,
@@ -931,6 +944,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
         meraki_orgs,
+        meraki_inventory,
+        meraki_sync,
         netbox: netbox.clone(),
         meraki_devices,
         events: events_repo,
@@ -1115,6 +1130,10 @@ struct LeaderTasks {
     meraki_inflight: Arc<meraki::MerakiInflight>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
+    /// The Meraki inventory sync (ADR-164). Leader-only, and for a stronger reason than NetBox's:
+    /// an organization's single flight lives in this process, so two cores syncing would each
+    /// believe they held it alone.
+    meraki_sync: Arc<meraki_sync::MerakiSync>,
     /// Configured NetBox deployments (ADR-100). Leader-only: two cores syncing one server would
     /// write the same folders twice — idempotent, but twice the load on someone else's NetBox.
     netbox: Arc<netbox::NetboxRepo>,
@@ -1441,6 +1460,12 @@ impl LeaderTasks {
                 self.repo.clone(),
                 std::mem::take(&mut self.meraki_pool),
             ),
+        );
+        // The Meraki inventory sync (ADR-164). Shares `meraki_inflight` with the scheduler above, so
+        // the two never hold one organization at once; the loop decides which are due.
+        spawn_cancellable(
+            &self.shutdown,
+            meraki_sync::run_sync_loop(self.meraki_sync.clone(), self.repo.clone()),
         );
         // NetBox's folder-tree pull (ADR-100 Inc.1). Leader-only for the reason the field's doc
         // gives; the loop itself decides which servers are due.

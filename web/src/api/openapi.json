@@ -7884,6 +7884,82 @@
         }
       }
     },
+    "/api/v1/meraki/orgs/{id}/devices": {
+      "get": {
+        "tags": [
+          "meraki"
+        ],
+        "summary": "An organization's devices as the last successful sync recorded them — monitored or not — with\neach one's state. Served from PostgreSQL: it never calls the Dashboard API.",
+        "operationId": "list_meraki_devices",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Organization row id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The organization's devices; empty until its first sync",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MerakiDeviceView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View, or the account is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meraki/orgs/{id}/enabled": {
       "put": {
         "tags": [
@@ -8173,6 +8249,100 @@
           },
           "503": {
             "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meraki/orgs/{id}/sync": {
+      "post": {
+        "tags": [
+          "meraki"
+        ],
+        "summary": "Sync one organization's inventory now, rather than waiting for the periodic sync.",
+        "description": "Read-only upstream (three paged GETs). It goes through the same single flight as the periodic\nsync and the collector, so pressing it while a collect is running answers 409 rather than\nspending the organization's rate budget twice.",
+        "operationId": "sync_meraki_org",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Organization row id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sync completed; what it found and how many rows it wrote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerakiSyncReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), or a collect or another sync is running for it (`meraki_sync_busy`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The sync ran and failed (`meraki_sync_failed`); the reason is recorded on the organization as `last_sync_error`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode), or this core is a standby (`not_leader`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -31400,6 +31570,127 @@
           }
         }
       },
+      "MerakiDeviceCounts": {
+        "type": "object",
+        "description": "How many of an organization's devices are in each state an operator is told about.",
+        "required": [
+          "seen",
+          "monitored",
+          "new",
+          "missing"
+        ],
+        "properties": {
+          "missing": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Nodes whose device Meraki no longer lists.",
+            "minimum": 0
+          },
+          "monitored": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, the ones that are nodes.",
+            "minimum": 0
+          },
+          "new": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Listed, online at least once, never a node here.",
+            "minimum": 0
+          },
+          "seen": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices Meraki currently lists, whatever their state here.",
+            "minimum": 0
+          }
+        }
+      },
+      "MerakiDeviceState": {
+        "type": "string",
+        "description": "What a device's row is shown as (ADR-164 決定 9). Serialized as the snake_case token.",
+        "enum": [
+          "monitored",
+          "new",
+          "never_online",
+          "deleted",
+          "missing"
+        ]
+      },
+      "MerakiDeviceView": {
+        "type": "object",
+        "description": "One device of an organization, as the last successful sync recorded it.",
+        "required": [
+          "serial",
+          "name",
+          "product_type",
+          "network_id",
+          "network_monitored",
+          "state",
+          "first_seen_at"
+        ],
+        "properties": {
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lan_ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address Meraki reports, when it reports a usable one."
+          },
+          "missing_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a complete listing first failed to contain the device; `null` while Meraki lists it."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "network_id": {
+            "type": "string"
+          },
+          "network_monitored": {
+            "type": "boolean",
+            "description": "Whether the device's network is one this organization watches."
+          },
+          "network_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The network's name; `null` for a network the sync has not recorded."
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node this device is monitored as; `null` unless `state` is `monitored` or `missing`."
+          },
+          "product_type": {
+            "type": "string"
+          },
+          "serial": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MerakiDeviceState"
+          }
+        }
+      },
       "MerakiDiscoverReq": {
         "type": "object",
         "required": [
@@ -31594,7 +31885,8 @@
           "traffic_secs",
           "inventory_secs",
           "enabled_tiers",
-          "target_rps"
+          "target_rps",
+          "devices"
         ],
         "properties": {
           "availability_secs": {
@@ -31604,6 +31896,10 @@
           },
           "base_url": {
             "type": "string"
+          },
+          "devices": {
+            "$ref": "#/components/schemas/MerakiDeviceCounts",
+            "description": "What the last successful sync found, read against which devices are nodes here."
           },
           "enabled": {
             "type": "boolean"
@@ -31629,6 +31925,32 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "last_sync_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the last **successful** inventory sync ran. A failed sync does not move it."
+          },
+          "last_sync_error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiSyncFailure",
+                "description": "Why the last sync failed; `null` after a success. A closed vocabulary, never upstream text."
+              }
+            ]
+          },
+          "last_sync_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`null` until a sync has run — \"has not synced yet\" is not \"failed\"."
           },
           "name": {
             "type": "string"
@@ -31672,6 +31994,58 @@
         "properties": {
           "enabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "MerakiSyncFailure": {
+        "type": "string",
+        "description": "Why a sync failed. Stored on the organization's row as its token and shown to an operator, so\nevery variant is a closed fact and none carries upstream text — a Dashboard error body can quote\nthe request, and the request carries the key.",
+        "enum": [
+          "credential",
+          "config",
+          "auth",
+          "rate_limited",
+          "upstream",
+          "unreachable",
+          "malformed",
+          "truncated",
+          "timeout",
+          "internal"
+        ]
+      },
+      "MerakiSyncReport": {
+        "type": "object",
+        "description": "What one successful sync found and did.",
+        "required": [
+          "devices",
+          "networks",
+          "written",
+          "newly_missing"
+        ],
+        "properties": {
+          "devices": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices the Dashboard lists.",
+            "minimum": 0
+          },
+          "networks": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Networks the Dashboard lists.",
+            "minimum": 0
+          },
+          "newly_missing": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices that were listed last time and are not now.",
+            "minimum": 0
+          },
+          "written": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Inventory and network rows written. Zero is the ordinary answer.",
+            "minimum": 0
           }
         }
       },
