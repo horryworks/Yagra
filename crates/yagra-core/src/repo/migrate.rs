@@ -460,6 +460,78 @@ mod tests {
         assert_eq!(orders.len(), 4, "every position distinct after the repair");
     }
 
+    /// **Migration 0123 turns AP import on — for the controllers that exist and for every one
+    /// after** (ADR-064 R22).
+    ///
+    /// Both halves are claims about this file, not about the seeding: an existing row that says
+    /// `FALSE` becomes `TRUE`, and a row created afterwards by a first inventory — whose INSERT
+    /// never names the column — comes out `TRUE`, because the column default is the only place the
+    /// default is written. As with 0122 the harness has already applied it, so the fixture puts
+    /// the table back into the pre-0123 shape first and applies the file's own statements.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_import_default_migration_switches_existing_and_future_controllers_on(
+        pool: sqlx::PgPool,
+    ) {
+        use yagra_common::{WlanFlavor, WlanInventory};
+        let repo = crate::wireless::WirelessRepo::new(pool.clone());
+        let empty = WlanInventory::bounded(WlanFlavor::Huawei, Vec::new(), 1024);
+        let existing = crate::pgtest::node(&pool, "wac-existing", 50, None).await;
+        repo.record_inventory(existing, &empty, chrono::Utc::now())
+            .await
+            .expect("first inventory");
+
+        // Back to the pre-0123 shape: the 0121 default, and a row that inherited it.
+        for stmt in [
+            "ALTER TABLE wireless_controllers ALTER COLUMN import_aps SET DEFAULT FALSE",
+            "UPDATE wireless_controllers SET import_aps = FALSE",
+        ] {
+            sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .expect("restore the pre-0123 shape");
+        }
+        assert!(
+            !repo.controller(existing).await.unwrap().unwrap().import_aps,
+            "the fixture did not put the row back to off"
+        );
+
+        let sql = include_str!("../../../../migrations/0123_wireless_import_default_on.sql");
+        let code = sql
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut applied = 0usize;
+        for stmt in code.split(';') {
+            if stmt.trim().is_empty() {
+                continue;
+            }
+            sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .expect("the migration's statement applies");
+            applied += 1;
+        }
+        assert_eq!(
+            applied, 2,
+            "0123 is two statements; the split found {applied}"
+        );
+
+        assert!(
+            repo.controller(existing).await.unwrap().unwrap().import_aps,
+            "an existing controller is switched on"
+        );
+        let later = crate::pgtest::node(&pool, "wac-later", 51, None).await;
+        repo.record_inventory(later, &empty, chrono::Utc::now())
+            .await
+            .expect("first inventory");
+        assert!(
+            repo.controller(later).await.unwrap().unwrap().import_aps,
+            "a controller registered afterwards starts on"
+        );
+    }
+
     /// Foreign-key columns deliberately left without an index, and why each one is safe.
     ///
     /// PostgreSQL runs one referential action per deleted row against every table whose foreign

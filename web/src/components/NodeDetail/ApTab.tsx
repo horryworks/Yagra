@@ -317,7 +317,9 @@ interface SettingsProps {
 function ApSettings({ node, groups, summary, canConfig, onSaved }: SettingsProps) {
   const { t } = useTranslation('nodes');
   const [edited, setEdited] = useState(false);
-  const [importAps, setImportAps] = useState(summary?.import_aps ?? false);
+  // `true` only before the controller has a row at all: the row its first inventory creates starts
+  // on (migration 0123, ADR-064 R22). The stored value wins as soon as there is one.
+  const [importAps, setImportAps] = useState(summary?.import_aps ?? true);
   const [maxAps, setMaxAps] = useState(String(summary?.max_aps ?? MAX_APS_DEFAULT));
   const [group, setGroup] = useState(summary?.ap_group_id ?? '');
   const [busy, setBusy] = useState(false);
@@ -325,7 +327,7 @@ function ApSettings({ node, groups, summary, canConfig, onSaved }: SettingsProps
 
   useEffect(() => {
     if (edited) return;
-    setImportAps(summary?.import_aps ?? false);
+    setImportAps(summary?.import_aps ?? true);
     setMaxAps(String(summary?.max_aps ?? MAX_APS_DEFAULT));
     setGroup(summary?.ap_group_id ?? '');
   }, [edited, summary?.import_aps, summary?.max_aps, summary?.ap_group_id]);

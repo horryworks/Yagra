@@ -12471,8 +12471,9 @@ export interface components {
              */
             ap_group_id?: string | null;
             /**
-             * @description Whether access points this controller reports become nodes. Only APs that have been in
-             *     service at least once are imported automatically; importing starts within a minute.
+             * @description Whether access points this controller reports become nodes (on unless someone turned it
+             *     off). Only APs that have been in service at least once are imported automatically;
+             *     importing starts within a minute.
              */
             import_aps: boolean;
             /**
@@ -12510,8 +12511,9 @@ export interface components {
             aps_truncated_at?: number | null;
             flavor?: null | components["schemas"]["WlanFlavor"];
             /**
-             * @description Whether access points this controller reports become nodes. Only APs that have been in
-             *     service at least once are imported automatically.
+             * @description Whether access points this controller reports become nodes. On by default for a controller
+             *     Yagra has just started reading; only APs that have been in service at least once are
+             *     imported automatically.
              */
             import_aps: boolean;
             /** @description When its last complete inventory arrived (RFC 3339). `null` if none has. */

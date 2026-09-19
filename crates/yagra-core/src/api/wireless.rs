@@ -140,8 +140,9 @@ pub(crate) struct WirelessControllerSummary {
     pub aps_truncated_at: Option<i32>,
     /// When its last complete inventory arrived (RFC 3339). `null` if none has.
     pub last_inventory_at: Option<String>,
-    /// Whether access points this controller reports become nodes. Only APs that have been in
-    /// service at least once are imported automatically.
+    /// Whether access points this controller reports become nodes. On by default for a controller
+    /// Yagra has just started reading; only APs that have been in service at least once are
+    /// imported automatically.
     pub import_aps: bool,
     /// The most access points this controller imports (1–2048).
     pub max_aps: i32,
@@ -448,8 +449,9 @@ pub(crate) async fn node_wireless(
 /// How a controller's access points are imported.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub(super) struct WirelessControllerSettingsBody {
-    /// Whether access points this controller reports become nodes. Only APs that have been in
-    /// service at least once are imported automatically; importing starts within a minute.
+    /// Whether access points this controller reports become nodes (on unless someone turned it
+    /// off). Only APs that have been in service at least once are imported automatically;
+    /// importing starts within a minute.
     import_aps: bool,
     /// The most access points this controller imports, 1–2048. Omitted ⇒ 1024.
     #[serde(default)]

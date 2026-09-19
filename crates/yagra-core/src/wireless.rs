@@ -132,7 +132,10 @@ pub struct ControllerRow {
     pub aps_reported: i32,
     pub aps_truncated_at: Option<i32>,
     pub last_inventory_at: Option<DateTime<Utc>>,
-    /// Whether this controller's APs become nodes (ADR-064 決定 8). Off until an operator turns it on.
+    /// Whether this controller's APs become nodes (ADR-064 決定 8). **On unless an operator turns it
+    /// off** — since ADR-064 R22 the column defaults to `TRUE` (migration 0123), and that default is
+    /// the only place it is written: the row is created by the first inventory, whose INSERT does
+    /// not name the column.
     pub import_aps: bool,
     /// The most APs this controller may import.
     pub max_aps: i32,
@@ -1437,9 +1440,10 @@ mod tests {
         assert_eq!(summary.aps_reported, 0);
     }
 
-    /// The importer (ADR-064 決定 8, 改訂 R7): nothing while import is off; with it on, only APs that
-    /// have been in service, up to the cap, with the rest counted; each under the member of a pair
-    /// that serves it; and an AP whose node someone deleted is never brought back.
+    /// The importer (ADR-064 決定 8, 改訂 R7 and R22): on by default once a controller's first
+    /// inventory arrives; nothing while import is off; with it on, only APs that have been in
+    /// service, up to the cap, with the rest counted; each under the member of a pair that serves
+    /// it; and an AP whose node someone deleted is never brought back.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_importer_takes_in_service_aps_up_to_the_cap_and_never_undoes_a_deletion(
@@ -1488,6 +1492,28 @@ mod tests {
         .await
         .unwrap();
 
+        // Registered by its first inventory, a controller imports by default (ADR-064 R22). That is
+        // the column default doing it — `record_inventory` never names the column.
+        for node in [active, standby] {
+            assert!(
+                repo.controller(node).await.unwrap().unwrap().import_aps,
+                "a controller's first inventory leaves import on"
+            );
+        }
+        // Switched off, nothing becomes a node.
+        for node in [active, standby] {
+            assert!(repo
+                .set_controller_settings(
+                    node,
+                    ControllerSettings {
+                        import_aps: false,
+                        max_aps: 2,
+                        ap_group_id: None,
+                    },
+                )
+                .await
+                .unwrap());
+        }
         assert_eq!(
             repo.import_pending(at(2)).await.unwrap(),
             ImportPass::default()
@@ -1495,7 +1521,7 @@ mod tests {
         assert_eq!(
             pgtest::rows(&pool, "nodes").await,
             2,
-            "import is off by default"
+            "nothing is imported while import is off"
         );
 
         for node in [active, standby] {
