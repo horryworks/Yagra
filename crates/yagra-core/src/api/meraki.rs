@@ -18,9 +18,17 @@
 //!
 //! Reads are `View`, writes are `ManageConfig`. `set_meraki_polling` is the global kill switch —
 //! the one control that instantly halts all Meraki collection without losing configuration.
+//!
+//! **Every write also refuses a folder-scoped caller** ([`meraki_is_deployment_wide`], ADR-164).
+//! `ManageConfig` is held by Operators, and an Operator can be restricted to folders (ADR-014). An
+//! organization is not inside anybody's folders: its key sees every device in it, importing files
+//! nodes wherever they belong, and deleting it purges all of them. Until ADR-164 these routes were
+//! ledgered "admin-only, an Admin is unscoped by construction" while taking a guard an Operator
+//! passes — so a scoped Operator could create nodes outside their folders and delete nodes they
+//! could not see. The same hole `cfeda70b` closed for wireless controllers.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::ApiState;
 use axum::{
     extract::Path,
@@ -112,6 +120,36 @@ fn meraki_base_url(base: Option<String>) -> Result<String, ApiError> {
     Ok(url)
 }
 
+/// Refuse a folder-scoped caller a Meraki write. **Call it first**, before the body is looked at and
+/// before anything is sent to the Dashboard API.
+///
+/// Refused rather than narrowed because there is nothing to narrow by: a device that has not been
+/// imported yet belongs to no folder, the organization's folder sits at the top of the tree, and
+/// pausing or deleting an organization reaches every node in it. Letting a caller through when they
+/// can see the organization's folder is a possible later loosening and would be purely additive.
+///
+/// The reason string is repeated by the route ledger's `MERAKI_WRITE` line.
+fn meraki_is_deployment_wide(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
+    super::scope::require_fleet_wide(
+        scope,
+        "a Meraki organization is monitored as a whole, across every folder, so an account \
+         restricted to folders cannot change it",
+    )
+}
+
+/// The name an onboarding batch's shared credential is stored under.
+///
+/// Names the organizations rather than counting them. It used to be `Meraki API (N org)`, so two
+/// batches of the same size produced two credentials nobody could tell apart on the Credentials
+/// page — which is exactly the case once a deployment holds more than one API key (ADR-164).
+fn meraki_credential_name(org_names: &[&str]) -> String {
+    match org_names {
+        [] => "Meraki API".to_owned(),
+        [only] => format!("Meraki API — {only}"),
+        [first, rest @ ..] => format!("Meraki API — {first} +{}", rest.len()),
+    }
+}
+
 /// Map a Meraki upstream failure to a generic 502.
 ///
 /// Generic on purpose: a Dashboard API error body can quote the request that produced it, and that
@@ -146,16 +184,18 @@ pub(crate) struct MerakiOrgOption {
         (status = 200, description = "The organizations the key can access", body = Vec<MerakiOrgOption>),
         (status = 400, description = "The key is empty, or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 502, description = "The Dashboard API call failed; the detail is logged, never returned", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn meraki_discover(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     _admin: Admin,
     Json(body): Json<MerakiDiscoverReq>,
 ) -> ApiResult<Json<Vec<MerakiOrgOption>>> {
+    meraki_is_deployment_wide(&scope)?;
     if body.api_key.trim().is_empty() {
         return Err(ApiError::bad_request(
             "invalid_api_key",
@@ -271,16 +311,18 @@ pub(crate) struct MerakiCreated {
         (status = 201, description = "How many organizations the batch created; a per-org failure is skipped, not fatal", body = MerakiCreated),
         (status = 400, description = "The key or org list is empty, or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 502, description = "The Dashboard API rejected the key or was unreachable", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn create_meraki_orgs(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Json(body): Json<CreateMerakiOrgsReq>,
 ) -> ApiResult<(StatusCode, Json<MerakiCreated>)> {
+    meraki_is_deployment_wide(&scope)?;
     if body.api_key.trim().is_empty() || body.org_ids.is_empty() {
         return Err(ApiError::bad_request(
             "invalid_request",
@@ -293,7 +335,14 @@ async fn create_meraki_orgs(
         .await
         .map_err(|e| meraki_upstream_error("validate key / list organizations", &e))?;
     let secret = serde_json::json!({ "api_key": body.api_key }).to_string();
-    let cred_name = format!("Meraki API ({} org)", body.org_ids.len());
+    // The name each requested org goes by, falling back to its id exactly as the row below does.
+    let org_name = |oid: &String| -> String {
+        orgs.iter()
+            .find(|o| &o.id == oid)
+            .map_or_else(|| oid.clone(), |o| o.name.clone())
+    };
+    let names: Vec<String> = body.org_ids.iter().map(org_name).collect();
+    let cred_name = meraki_credential_name(&names.iter().map(String::as_str).collect::<Vec<_>>());
     let cred_id = admin
         .creds
         .create(
@@ -310,11 +359,7 @@ async fn create_meraki_orgs(
             )
         })?;
     let mut created = 0u32;
-    for oid in &body.org_ids {
-        let name = orgs
-            .iter()
-            .find(|o| &o.id == oid)
-            .map_or(oid.as_str(), |o| o.name.as_str());
+    for (oid, name) in body.org_ids.iter().zip(&names) {
         match admin.meraki_orgs.create(oid, name, &base, cred_id).await {
             Ok(_) => created += 1,
             Err(e) => tracing::warn!(org = %oid, error = %e, "create meraki org failed (skipped)"),
@@ -335,16 +380,18 @@ fn no_org(id: Uuid) -> ApiError {
     responses(
         (status = 204, description = "Organization, its device nodes and its folder tree removed"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_meraki_org(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    meraki_is_deployment_wide(&scope)?;
     match admin.meraki_orgs.purge(id).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(no_org(id)),
@@ -369,17 +416,19 @@ pub(super) struct MerakiEnabledReq {
     responses(
         (status = 204, description = "Collection paused or resumed; config and history are kept"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_meraki_org_enabled(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<MerakiEnabledReq>,
 ) -> ApiResult<StatusCode> {
+    meraki_is_deployment_wide(&scope)?;
     match admin.meraki_orgs.set_enabled(id, body.enabled).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(no_org(id)),
@@ -459,17 +508,19 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
         (status = 204, description = "Cadence, enabled tiers and rate budget updated"),
         (status = 400, description = "A cadence value is outside its band, target_rps is outside the cap, or a tier is unknown", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_meraki_org_cadence(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<MerakiCadenceReq>,
 ) -> ApiResult<StatusCode> {
+    meraki_is_deployment_wide(&scope)?;
     check_cadence(&body)?;
     match admin
         .meraki_orgs
@@ -556,16 +607,18 @@ pub(super) struct MerakiMonitoredReq {
     responses(
         (status = 204, description = "Network scope updated"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_meraki_networks_monitored(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<MerakiMonitoredReq>,
 ) -> ApiResult<StatusCode> {
+    meraki_is_deployment_wide(&scope)?;
     admin
         .meraki_orgs
         .set_networks_monitored(id, &body.network_ids, body.monitored)
@@ -611,7 +664,7 @@ pub(crate) struct MerakiEnumeration {
         (status = 200, description = "The org's networks and the devices not already imported", body = MerakiEnumeration),
         (status = 400, description = "The org's stored API key could not be resolved", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
         (status = 502, description = "The Dashboard API call failed; the detail is logged, never returned", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
@@ -619,9 +672,11 @@ pub(crate) struct MerakiEnumeration {
 )]
 async fn enumerate_meraki_org(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MerakiEnumeration>> {
+    meraki_is_deployment_wide(&scope)?;
     let org = admin
         .meraki_orgs
         .get(id)
@@ -742,16 +797,18 @@ pub(crate) struct MerakiImported {
     responses(
         (status = 201, description = "How many devices became nodes; already-imported serials are skipped", body = MerakiImported),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn import_meraki_devices(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Json(body): Json<MerakiImportReq>,
 ) -> ApiResult<(StatusCode, Json<MerakiImported>)> {
+    meraki_is_deployment_wide(&scope)?;
     let org = admin
         .meraki_orgs
         .get(body.org_uuid)
@@ -880,15 +937,17 @@ pub(crate) async fn polling_switch(admin: &super::AdminState) -> MerakiPolling {
     responses(
         (status = 204, description = "Collection halted or resumed globally; no configuration is lost"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_meraki_polling(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Json(body): Json<MerakiPollingReq>,
 ) -> ApiResult<StatusCode> {
+    meraki_is_deployment_wide(&scope)?;
     admin
         .repo
         .set_meraki_polling_enabled(body.enabled)
@@ -1040,6 +1099,164 @@ mod tests {
         tier.enabled_tiers = vec!["not-a-tier".to_owned()];
         assert_eq!(check_cadence(&tier).unwrap_err().code(), "invalid_tier");
     }
+
+    #[test]
+    fn a_batchs_credential_is_named_after_its_organizations() {
+        // Two batches of one organization each used to be two rows both called
+        // "Meraki API (1 org)" — indistinguishable on the Credentials page (ADR-164).
+        assert_eq!(meraki_credential_name(&["Acme"]), "Meraki API — Acme");
+        assert_eq!(
+            meraki_credential_name(&["Acme", "Beta", "Gamma"]),
+            "Meraki API — Acme +2"
+        );
+        assert_ne!(
+            meraki_credential_name(&["Acme"]),
+            meraki_credential_name(&["Beta"])
+        );
+        // The handler refuses an empty batch before it gets here; this only must not panic.
+        assert_eq!(meraki_credential_name(&[]), "Meraki API");
+    }
+
+    /// Every region the WebUI's picker offers is one this edge accepts.
+    ///
+    /// The picker and the allow-list are two copies of one fact in two languages, and nothing
+    /// compared them: the picker offered Canada (`api.meraki.ca`) while the allow-list refused it,
+    /// so choosing that region answered `400 invalid_base_url` every time (ADR-164). This reads the
+    /// picker's own file and runs each URL through the function the endpoint runs.
+    #[test]
+    fn every_region_the_webui_offers_passes_the_base_url_allowlist() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/src/pages/integrations/merakiRegions.ts"
+        );
+        let text = std::fs::read_to_string(path).expect("the WebUI's Meraki region list");
+        let urls: Vec<&str> = text
+            .split(['\'', '"'])
+            .filter(|s| s.starts_with("https://"))
+            .collect();
+        // A floor on what was INSPECTED: a reader that stopped finding URLs would otherwise pass.
+        assert!(
+            urls.len() >= 4,
+            "found only {} region URLs in {path} — did the file's shape change?",
+            urls.len()
+        );
+        for url in urls {
+            assert!(
+                meraki_base_url(Some(url.to_owned())).is_ok(),
+                "the WebUI offers {url}, which this API refuses as invalid_base_url"
+            );
+        }
+    }
+
+    // ── A folder-scoped caller (ADR-164) ─────────────────────────────────────────────
+
+    /// A body each write route deserializes, so the request reaches the handler rather than being
+    /// turned away at the JSON extractor — the refusal under test lives in the handler body.
+    fn write_requests() -> Vec<(&'static str, String, Option<serde_json::Value>)> {
+        use serde_json::json;
+        vec![
+            (
+                "POST",
+                "/api/v1/meraki/orgs".to_owned(),
+                Some(json!({ "api_key": "k", "org_ids": ["1"] })),
+            ),
+            (
+                "POST",
+                "/api/v1/meraki/orgs/discover".to_owned(),
+                Some(json!({ "api_key": "k" })),
+            ),
+            ("DELETE", format!("/api/v1/meraki/orgs/{ID}"), None),
+            (
+                "PUT",
+                format!("/api/v1/meraki/orgs/{ID}/enabled"),
+                Some(json!({ "enabled": false })),
+            ),
+            (
+                "PUT",
+                format!("/api/v1/meraki/orgs/{ID}/cadence"),
+                Some(json!({
+                    "availability_secs": 300, "uplink_secs": 300, "traffic_secs": 1800,
+                    "inventory_secs": 21600, "enabled_tiers": [], "target_rps": 1.0,
+                })),
+            ),
+            (
+                "PUT",
+                format!("/api/v1/meraki/orgs/{ID}/networks"),
+                Some(json!({ "network_ids": [], "monitored": true })),
+            ),
+            ("POST", format!("/api/v1/meraki/orgs/{ID}/enumerate"), None),
+            (
+                "POST",
+                "/api/v1/meraki/import".to_owned(),
+                Some(json!({ "org_uuid": ID, "devices": [] })),
+            ),
+            (
+                "PUT",
+                "/api/v1/meraki/polling".to_owned(),
+                Some(json!({ "enabled": false })),
+            ),
+        ]
+    }
+
+    #[test]
+    fn the_scoped_refusal_is_tried_against_every_write_route() {
+        // `write_requests` is a second list of the write routes; it must not quietly fall behind
+        // the first, or a new write route would ship without its refusal being exercised.
+        let mut routes: Vec<(&str, String)> = write_routes();
+        let mut requests: Vec<(&str, String)> = write_requests()
+            .into_iter()
+            .map(|(m, p, _)| (m, p))
+            .collect();
+        routes.sort();
+        requests.sort();
+        assert_eq!(routes, requests);
+    }
+
+    /// A caller restricted to folders can change nothing about a Meraki organization.
+    ///
+    /// `ManageConfig` is an Operator's permission and an Operator can be scoped (ADR-014), while an
+    /// organization spans every folder: importing files nodes wherever they belong, and deleting one
+    /// purges every node it holds. Before ADR-164 none of these routes asked for the scope at all.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folder_scoped_caller_is_refused_every_meraki_write(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let folder = crate::pgtest::group(&pool, "Branch").await;
+        let scoped = scoped_token(&st, &[folder]);
+        // Assembled rather than written out: `scope.rs::no_handler_spells_the_scope_refusal_by_hand`
+        // counts the quoted code across this directory, tests included, so that a handler cannot
+        // hand-roll the refusal. The handlers here call `require_fleet_wide`; this is the only
+        // place the file needs the word, and the same spelling that guard's own test uses.
+        let refusal = format!("{}_unsupported", "scope");
+        for (method, path, body) in write_requests() {
+            let (status, answer) = send(&st, method, &path, &scoped, body).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {answer}");
+            assert_eq!(
+                answer["error"]["code"].as_str(),
+                Some(refusal.as_str()),
+                "{method} {path}"
+            );
+        }
+        // Refused means refused: the kill switch the last request tried to flip is untouched.
+        let admin = st.admin.clone().expect("live state");
+        assert!(admin.repo.get_meraki_polling_enabled().await);
+
+        // And it is the *scope* that was refused, not the route: the same request from an unscoped
+        // caller gets as far as looking the organization up.
+        let unscoped = token(&st, yagra_common::Role::Operator);
+        let (status, answer) = send(
+            &st,
+            "DELETE",
+            &format!("/api/v1/meraki/orgs/{ID}"),
+            &unscoped,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+        assert_eq!(answer["error"]["code"], "meraki_org_not_found");
+    }
+
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// The Meraki polling switch is written to the deployment's settings.

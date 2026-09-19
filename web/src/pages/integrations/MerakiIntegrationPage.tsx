@@ -16,6 +16,7 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
+import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../../components/ui/Field';
 import { MerakiImportModal } from '../../components/MerakiImport/MerakiImportModal';
 import { SELECTABLE_MERAKI_TIERS } from '../merakiTiers';
@@ -23,20 +24,13 @@ import './MerakiIntegrationPage.css';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { tierList } from '../merakiTiers';
-
-// The visible region name is a translation key; the base_url (the technical Meraki endpoint) is not.
-const REGIONS: { labelKey: string; base_url: string }[] = [
-  { labelKey: 'meraki.regions.global', base_url: 'https://api.meraki.com' },
-  { labelKey: 'meraki.regions.canada', base_url: 'https://api.meraki.ca' },
-  { labelKey: 'meraki.regions.china', base_url: 'https://api.meraki.cn' },
-  { labelKey: 'meraki.regions.usGov', base_url: 'https://api.gov-meraki.com' },
-];
+import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS } from './merakiRegions';
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select). */
 function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation('system');
   const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState(REGIONS[0].base_url);
+  const [baseUrl, setBaseUrl] = useState<string>(DEFAULT_MERAKI_BASE_URL);
   const [orgs, setOrgs] = useState<MerakiOrgOption[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -104,9 +98,9 @@ function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
           <div className="modal-field">
             <label className="modal-field-label">{t('meraki.addOrg.region')}</label>
             <Select value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}>
-              {REGIONS.map((r) => (
+              {MERAKI_REGIONS.map((r) => (
                 <option key={r.base_url} value={r.base_url}>
-                  {t(r.labelKey)}
+                  {t(`meraki.regions.${r.key}`)}
                 </option>
               ))}
             </Select>
@@ -361,6 +355,12 @@ export function MerakiIntegrationPage() {
   const [editing, setEditing] = useState<MerakiOrg | null>(null);
   const [scoping, setScoping] = useState<MerakiOrg | null>(null);
   const [deleting, setDeleting] = useState<MerakiOrg | null>(null);
+  // A write made straight from this page (the kill switch, pause/resume) has no dialog to report
+  // into, so its failure lands here. All three of this page's inline writes used to swallow theirs
+  // (`.catch(() => undefined)`): a refused pause looked exactly like one that worked (ADR-164).
+  const [actionError, setActionError] = useState<string | null>(null);
+  // What the last import did. The endpoint has always answered with a count; the wizard dropped it.
+  const [importNote, setImportNote] = useState<string | null>(null);
 
   const load = useCallback(() => {
     Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()])
@@ -380,14 +380,19 @@ export function MerakiIntegrationPage() {
   const togglePolling = () => {
     const next = !pollingOn;
     setPollingOn(next);
-    api.setMerakiPolling(next).catch(() => setPollingOn(!next));
+    setActionError(null);
+    api.setMerakiPolling(next).catch((e: unknown) => {
+      setPollingOn(!next);
+      setActionError(errMsg(e, t('meraki.err.polling')));
+    });
   };
 
   const toggleEnabled = (org: MerakiOrg) => {
+    setActionError(null);
     api
       .setMerakiOrgEnabled(org.id, !org.enabled)
       .then(load)
-      .catch(() => undefined);
+      .catch((e: unknown) => setActionError(errMsg(e, t('meraki.err.toggleOrg'))));
   };
 
   const content = useMemo(() => {
@@ -396,6 +401,8 @@ export function MerakiIntegrationPage() {
     }
     return (
       <>
+        {actionError && <p className="form-error meraki-page-note">{actionError}</p>}
+        {importNote && <p className="meraki-page-note meraki-page-note-ok">✓ {importNote}</p>}
         <Card title={t('meraki.polling.title')} className="meraki-killswitch-card">
           <label className="meraki-switch">
             <input
@@ -464,7 +471,7 @@ export function MerakiIntegrationPage() {
       </>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgs, loading, block, pollingOn, canConfig, t]);
+  }, [orgs, loading, block, pollingOn, canConfig, actionError, importNote, t]);
 
   return (
     <div>
@@ -484,8 +491,11 @@ export function MerakiIntegrationPage() {
         <MerakiImportModal
           org={importing}
           onClose={() => setImporting(null)}
-          onImported={() => {
+          onImported={(count) => {
             setImporting(null);
+            setImportNote(
+              count > 0 ? t('meraki.import.done', { count }) : t('meraki.import.doneNone'),
+            );
             load();
           }}
         />
@@ -501,36 +511,26 @@ export function MerakiIntegrationPage() {
         <CadenceModal org={editing} onClose={() => setEditing(null)} onSaved={load} />
       )}
       {deleting && (
-        <Modal
+        // The shared dialog, not a hand-built one: this used to close itself *before* the request
+        // and drop the rejection, so a delete the server refused looked like one that worked until
+        // the organization was still there on the next load.
+        <ConfirmDeleteModal
           title={t('meraki.delete.title')}
+          onConfirm={() => api.deleteMerakiOrg(deleting.id)}
+          errorFallback={t('meraki.err.delete')}
           onClose={() => setDeleting(null)}
-          footer={
-            <>
-              <Button variant="outline" onClick={() => setDeleting(null)}>
-                {t('common:actions.cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  const id = deleting.id;
-                  setDeleting(null);
-                  api.deleteMerakiOrg(id).then(load).catch(() => undefined);
-                }}
-              >
-                {t('common:actions.delete')}
-              </Button>
-            </>
-          }
+          onDone={() => {
+            setDeleting(null);
+            load();
+          }}
         >
-          <p className="modal-confirm-text">
-            <Trans
-              t={t}
-              i18nKey="meraki.delete.confirmText"
-              values={{ name: deleting.name }}
-              components={{ b: <strong /> }}
-            />
-          </p>
-        </Modal>
+          <Trans
+            t={t}
+            i18nKey="meraki.delete.confirmText"
+            values={{ name: deleting.name }}
+            components={{ b: <strong /> }}
+          />
+        </ConfirmDeleteModal>
       )}
     </div>
   );

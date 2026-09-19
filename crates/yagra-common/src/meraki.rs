@@ -164,14 +164,27 @@ pub const PROFILE_MERAKI_MR_API: &str = "Cisco Meraki MR (API)";
 /// The integration is read-only, but every request still carries the org API key, so we refuse any
 /// host not on this list — on the initial URL **and** on every pagination `Link: rel=next` — so a
 /// redirect/next-link can never exfiltrate the key to a non-Meraki host. Suffix matches are safe:
-/// Meraki owns `meraki.com` / `meraki.cn` / `gov-meraki.com`, so a third party can't register a
-/// matching subdomain.
+/// Meraki owns `meraki.com` / `meraki.ca` / `meraki.cn` / `gov-meraki.com`, so a third party can't
+/// register a matching subdomain.
+///
+/// **Every region the WebUI offers has to be on this list**, and for a while one was not: the
+/// region picker listed Canada (`api.meraki.ca`) while this function refused it, so choosing it
+/// answered `400 invalid_base_url` every time (ADR-164). The picker's list is
+/// `web/src/pages/integrations/merakiRegions.ts`, and a test beside the API's base-url validator
+/// reads that file and runs each URL through here. ⚠️ The Canada host comes from Meraki's
+/// published regional base URIs; no live Canadian organization has been pointed at it.
 #[must_use]
 pub fn is_meraki_api_host(host: &str) -> bool {
     let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    const EXACT: [&str; 3] = ["api.meraki.com", "api.meraki.cn", "api.gov-meraki.com"];
+    const EXACT: [&str; 4] = [
+        "api.meraki.com",
+        "api.meraki.ca",
+        "api.meraki.cn",
+        "api.gov-meraki.com",
+    ];
     EXACT.contains(&h.as_str())
         || h.ends_with(".meraki.com")
+        || h.ends_with(".meraki.ca")
         || h.ends_with(".meraki.cn")
         || h.ends_with(".gov-meraki.com")
 }
@@ -251,6 +264,7 @@ mod tests {
         assert!(is_meraki_api_host("api.meraki.com"));
         assert!(is_meraki_api_host("API.Meraki.com")); // case-insensitive
         assert!(is_meraki_api_host("api.meraki.cn"));
+        assert!(is_meraki_api_host("api.meraki.ca")); // Canada — offered by the WebUI (ADR-164)
         assert!(is_meraki_api_host("api.gov-meraki.com"));
         assert!(is_meraki_api_host("n123.meraki.com")); // shard host
                                                         // Refused: the key-exfiltration surface.
@@ -258,5 +272,7 @@ mod tests {
         assert!(!is_meraki_api_host("api.meraki.com.evil.com"));
         assert!(!is_meraki_api_host("notmeraki.com"));
         assert!(!is_meraki_api_host("meraki.com.attacker.net"));
+        assert!(!is_meraki_api_host("api.meraki.ca.attacker.net"));
+        assert!(!is_meraki_api_host("notmeraki.ca"));
     }
 }

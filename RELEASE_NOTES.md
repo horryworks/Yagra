@@ -10,9 +10,24 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **An account restricted to folders can no longer change a Cisco Meraki organization.** Every Meraki write — `POST /api/v1/meraki/orgs`, `POST …/orgs/discover`, `DELETE …/orgs/{id}`, `PUT …/orgs/{id}/enabled`, `…/cadence` and `…/networks`, `POST …/orgs/{id}/enumerate`, `POST /api/v1/meraki/import` and `PUT /api/v1/meraki/polling` — now answers `403 scope_unsupported` to a caller whose account is limited to folders. The reads are unchanged. An unrestricted Operator or Admin is unaffected. See **Security** below for why.
+
 ### Improvements
 
 - **Access points behind a wireless controller now become nodes without anyone switching it on.** "Monitor access points automatically" on a controller's **APs** tab is now on by default, for every controller: one Yagra starts reading gets it from its first AP inventory, and every controller already registered is switched on by the upgrade — including one someone switched off, because nothing recorded which were chosen and which were merely the old default. ⚠️ **Within a minute of upgrading, every access point that has ever been in service becomes a node**, up to each controller's `max_aps` (1024 unless set otherwise), filed in the controller's own folder unless the tab names another; an AP that has never been in service stays in the list only. To keep a controller's APs out, switch it off on the tab after the upgrade — AP nodes already created stay, and can be deleted; a deleted AP node is not re-created automatically. `GET /api/v1/wireless/aps` and the node detail now report `import_aps: true` for such controllers. Only the core needs upgrading.
+
+### Bug Fixes
+
+- **Adding a Meraki organization in the Canada region always failed.** The "Add organization" dialog offered `Canada (api.meraki.ca)` while the backend's allow-list of Meraki API hosts did not contain it, so choosing that region answered `400 invalid_base_url` before the key was ever tried. The host is now allow-listed, and a test reads the dialog's region list and runs each entry through the same check the endpoint runs, so the two cannot drift apart again. ⚠️ No live Canadian organization was available to point at it.
+- **Settings ▸ Integrations ▸ Cisco Meraki no longer hides a failed action.** Pausing or resuming an organization, flipping the polling kill switch and deleting an organization each dropped the server's refusal: a pause that was rejected looked exactly like one that worked, and the delete dialog closed itself before the request was sent. Each now shows the error, and deleting uses the same confirmation dialog as the rest of the product, which stays open on a failure.
+- **Importing Meraki devices now says how many became nodes.** The endpoint has always answered with a count and the wizard discarded it. Devices that were already monitored are skipped, so the count can be lower than the number ticked — that is now visible instead of silent.
+- **Two Meraki API keys no longer show up as two credentials with the same name.** A key stored by "Add organization" was named `Meraki API (N org)`, so two batches of the same size were indistinguishable on the Credentials page. New ones are named after their organizations (`Meraki API — Acme`, or `Meraki API — Acme +2`). Existing credentials keep their names; rename them on the Credentials page if needed.
+
+### Security
+
+- **A folder-restricted Operator could create and delete nodes outside their folders through the Meraki integration.** The Meraki endpoints required `ManageConfig`, which Operators hold, but never looked at the caller's folder scope — they were recorded as admin-only while an Operator could pass their guard. Importing devices filed nodes wherever the organization's folders were, and deleting an organization purged every node in it, whether or not the caller could see them. All Meraki writes now refuse a folder-restricted account (`403 scope_unsupported`). Refused rather than narrowed because an organization is monitored as a whole: its key sees every device in it, and a device that has not been imported yet belongs to no folder. Deployments with no folder-restricted accounts, or no Meraki organizations, were not exposed.
 
 ## v0.3.27 — Access points behind a Huawei wireless controller become monitored nodes (radios as ports, SSIDs as the controller's own rows), the inventory tree narrows to what needs attention and lets a folder sit between nodes, an upgrade no longer re-fires the alerts of devices that are still down, discovery tries every selected credential
 
