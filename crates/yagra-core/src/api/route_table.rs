@@ -812,8 +812,8 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
-        "POST",
-        "/api/v1/meraki/orgs/:id/enumerate",
+        "PUT",
+        "/api/v1/meraki/orgs/:id/import-settings",
         MERAKI_WRITE,
         NO_MCP_WRITE,
     ),

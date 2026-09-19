@@ -52,6 +52,47 @@ impl Filing {
             Self::Ambiguous { .. } | Self::Unmatched | Self::NoAddress | Self::NotAsked => None,
         }
     }
+
+    /// Which of the five this is, without what it carries — what the device list says beside a
+    /// device that is not a node yet.
+    #[must_use]
+    pub fn reason(&self) -> FilingReason {
+        match self {
+            Self::Matched { .. } => FilingReason::Matched,
+            Self::Ambiguous { .. } => FilingReason::Ambiguous,
+            Self::Unmatched => FilingReason::Unmatched,
+            Self::NoAddress => FilingReason::NoAddress,
+            Self::NotAsked => FilingReason::NotAsked,
+        }
+    }
+}
+
+/// Why a device would be filed where it would be. Serialized as the snake_case token; never stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FilingReason {
+    /// Exactly one folder's IP range holds the address: it goes there.
+    Matched,
+    /// Two or more folders claim the address equally: it goes under the network's folder.
+    Ambiguous,
+    /// No folder's IP range holds the address: it goes under the network's folder.
+    Unmatched,
+    /// Meraki reports no address for it: it goes under the network's folder.
+    NoAddress,
+    /// The organization does not file by IP range: it goes under the network's folder.
+    NotAsked,
+}
+
+#[cfg(test)]
+impl FilingReason {
+    /// Every reason. Test-only, like `MerakiDeviceState::ALL`: nothing in production iterates them.
+    const ALL: [Self; 5] = [
+        Self::Matched,
+        Self::Ambiguous,
+        Self::Unmatched,
+        Self::NoAddress,
+        Self::NotAsked,
+    ];
 }
 
 /// The addresses worth asking the match about: each usable one, once.
@@ -276,5 +317,42 @@ mod tests {
                 no_address: 1
             }
         );
+    }
+
+    /// The WebUI keys a sentence on each token (`meraki.devices.filing.<token>`), so the spelling
+    /// is a contract. Only a match carries a folder; the other four all mean the network's folder.
+    #[test]
+    fn every_reason_has_the_token_the_webui_keys_on_and_only_a_match_names_a_folder() {
+        let tokens: Vec<String> = FilingReason::ALL
+            .iter()
+            .map(|r| serde_json::to_value(r).expect("serialize"))
+            .map(|v| v.as_str().expect("a string token").to_owned())
+            .collect();
+        assert_eq!(
+            tokens,
+            [
+                "matched",
+                "ambiguous",
+                "unmatched",
+                "no_address",
+                "not_asked"
+            ]
+        );
+        for f in [
+            Filing::Matched {
+                folder: Uuid::from_u128(1),
+                prefix: "10.0.0.0/8".to_owned(),
+            },
+            Filing::Ambiguous { folders: 2 },
+            Filing::Unmatched,
+            Filing::NoAddress,
+            Filing::NotAsked,
+        ] {
+            assert_eq!(
+                f.folder().is_some(),
+                f.reason() == FilingReason::Matched,
+                "{f:?}"
+            );
+        }
     }
 }

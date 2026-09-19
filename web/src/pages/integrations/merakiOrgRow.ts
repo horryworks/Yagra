@@ -54,6 +54,19 @@ export function orgHasInventory(org: Pick<MerakiOrg, 'last_sync_at'>): boolean {
   return Boolean(org.last_sync_at);
 }
 
+/** The Meraki integration's own page. */
+export const MERAKI_PAGE_PATH = '/settings/integrations/meraki';
+
+/** One organization's page: its devices and how new ones are imported (ADR-164 Inc.4/5).
+ *
+ *  One spelling, because three places need it — the row's name, the row's "Devices" button, and
+ *  the page's own way back — and a path typed three times is a link that breaks in one of them.
+ *  The id is the organization's Yagra uuid (`MerakiOrg.id`), never Meraki's `org_id`: the uuid is
+ *  what every `/meraki/orgs/{id}/…` endpoint the page calls is keyed by. */
+export function merakiOrgPath(orgUuid: string): string {
+  return `${MERAKI_PAGE_PATH}/${encodeURIComponent(orgUuid)}`;
+}
+
 /** Whether "Sync now" is drawn for this organization.
  *
  *  Both switches make the server refuse the request (409), and a button that can only be refused

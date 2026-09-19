@@ -19,6 +19,11 @@
 //! Reads are `View`, writes are `ManageConfig`. `set_meraki_polling` is the global kill switch —
 //! the one control that instantly halts all Meraki collection without losing configuration.
 //!
+//! **Nothing here asks the Dashboard API what an organization holds.** That is the inventory sync's
+//! (`meraki_sync.rs`); the device list and an import both read what it recorded. The import
+//! wizard's own `POST …/enumerate` did ask, leniently, and was removed with the wizard (ADR-164
+//! Inc.5) — two readers of one listing, one of which accepted a partial answer.
+//!
 //! **Every write also refuses a folder-scoped caller** ([`meraki_is_deployment_wide`], ADR-164).
 //! `ManageConfig` is held by Operators, and an Operator can be restricted to folders (ADR-014). An
 //! organization is not inside anybody's folders: its key sees every device in it, importing files
@@ -39,13 +44,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::meraki_filing::{addresses_to_match, plan_filing, MerakiFiled};
+use crate::meraki_filing::{Filing, FilingReason, MerakiFiled};
+use crate::meraki_import::ImportCandidate;
 use crate::meraki_inventory::{
     usable_address, DeviceRecord, MerakiDeviceCounts, MerakiDeviceState,
 };
 use crate::meraki_sync::{MerakiSyncFailure, MerakiSyncReport, SyncError};
 
-/// Timeout for a control-plane Meraki API call (discover/enumerate) from core.
+/// Timeout for a control-plane Meraki API call (discover, and validating a key) from core.
 const MERAKI_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Default Dashboard API base URL (the global shard).
 const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
@@ -61,7 +67,7 @@ const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
     set_meraki_org_cadence,
     list_meraki_networks,
     set_meraki_networks_monitored,
-    enumerate_meraki_org,
+    set_meraki_import_settings,
     sync_meraki_org,
     list_meraki_devices,
     import_meraki_devices,
@@ -95,8 +101,8 @@ pub(super) fn routes() -> Router<ApiState> {
             get(list_meraki_networks).put(set_meraki_networks_monitored),
         )
         .route(
-            "/api/v1/meraki/orgs/:id/enumerate",
-            post(enumerate_meraki_org),
+            "/api/v1/meraki/orgs/:id/import-settings",
+            put(set_meraki_import_settings),
         )
         .route("/api/v1/meraki/orgs/:id/sync", post(sync_meraki_org))
         .route("/api/v1/meraki/orgs/:id/devices", get(list_meraki_devices))
@@ -248,6 +254,14 @@ pub(crate) struct MerakiOrgView {
     last_sync_error: Option<MerakiSyncFailure>,
     /// What the last successful sync found, read against which devices are nodes here.
     devices: MerakiDeviceCounts,
+    /// Whether the sync turns newly listed devices into nodes, and watches newly found networks.
+    import_devices: bool,
+    /// Whether an imported device is filed by its address into the folder whose IP range holds it.
+    file_by_prefix: bool,
+    /// The most nodes automatic import lets this organization hold.
+    max_devices: u32,
+    /// How many devices that cap left out on the last sync; zero while automatic import is off.
+    devices_over_cap: u32,
 }
 
 /// Project a stored org into its API view. **The credential reference is not in it** — the view
@@ -274,6 +288,10 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
             MerakiSyncFailure::from_token(o.last_sync_error.as_deref().unwrap_or_default())
         }),
         devices,
+        import_devices: o.import_devices,
+        file_by_prefix: o.file_by_prefix,
+        max_devices: o.max_devices,
+        devices_over_cap: o.devices_over_cap,
     }
 }
 
@@ -670,49 +688,43 @@ async fn set_meraki_networks_monitored(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub(crate) struct MerakiCandidate {
-    serial: String,
-    name: String,
-    model: Option<String>,
-    product_type: String,
-    network_id: String,
-    network_name: String,
-    lan_ip: Option<String>,
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiImportSettingsReq {
+    /// Turn newly listed devices into nodes on every sync, and watch newly found networks.
+    import_devices: bool,
+    /// File an imported device by its address into the folder whose IP range holds it.
+    file_by_prefix: bool,
+    /// The most nodes automatic import lets the organization hold. Absent keeps the current cap.
+    #[serde(default)]
+    max_devices: Option<i32>,
 }
 
-/// What the import wizard reads in one call: the org's network scope, and the devices not yet
-/// imported.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub(crate) struct MerakiEnumeration {
-    networks: Vec<MerakiNetworkView>,
-    devices: Vec<MerakiCandidate>,
-}
-
-/// Enumerate an org's networks and devices from the Dashboard API, for the import wizard.
+/// Set how the inventory sync imports an organization's devices.
 ///
-/// Read-only upstream. It upserts the network scope (**preserving monitored flags** — re-enumerating
-/// must not silently un-watch networks an operator chose) and returns the devices not already
-/// imported.
+/// With `import_devices` on, each sync turns a device into a node when it is in a watched network,
+/// Meraki has reported it online at least once, and it has never been a node here — so a device an
+/// operator deleted stays deleted. A network the sync finds for the first time is watched from then
+/// on; a network already known keeps its flag. Takes effect at the next sync.
 #[utoipa::path(
-    post, path = "/api/v1/meraki/orgs/{id}/enumerate", tag = "meraki",
+    put, path = "/api/v1/meraki/orgs/{id}/import-settings", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
+    request_body = MerakiImportSettingsReq,
     responses(
-        (status = 200, description = "The org's networks and the devices not already imported", body = MerakiEnumeration),
-        (status = 400, description = "The org's stored API key could not be resolved", body = super::error::ErrorBody),
+        (status = 204, description = "Import settings stored; they take effect at the next sync"),
+        (status = 400, description = "max_devices outside 1–50000 (`invalid_max_devices`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
-        (status = 502, description = "The Dashboard API call failed; the detail is logged, never returned", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
-async fn enumerate_meraki_org(
+async fn set_meraki_import_settings(
     _guard: RequireManageConfig,
     Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<MerakiEnumeration>> {
+    Json(body): Json<MerakiImportSettingsReq>,
+) -> ApiResult<StatusCode> {
     meraki_is_deployment_wide(&scope)?;
     let org = admin
         .meraki_orgs
@@ -721,82 +733,37 @@ async fn enumerate_meraki_org(
         .map_err(|e| {
             ApiError::from_internal(
                 e.as_ref(),
-                "enumerate: load org",
+                "import settings: load org",
                 "failed to load meraki organization",
             )
         })?
         .ok_or_else(|| no_org(id))?;
-    let api_key = crate::meraki::resolve_meraki_key(&admin.creds, org.credential_id)
-        .await
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "meraki_credential_unavailable",
-                "the org's API key could not be resolved",
-            )
-        })?;
-    let networks =
-        yagra_transport::list_networks(&org.base_url, &api_key, &org.org_id, MERAKI_API_TIMEOUT)
-            .await
-            .map_err(|e| meraki_upstream_error("list networks", &e))?;
-    let devices =
-        yagra_transport::list_devices(&org.base_url, &api_key, &org.org_id, MERAKI_API_TIMEOUT)
-            .await
-            .map_err(|e| meraki_upstream_error("list devices", &e))?;
-    // Persist the network list. Best-effort: failing the wizard because a cache write missed would
-    // be worse than showing the freshly-fetched data.
-    //
-    // It no longer stamps `last_sync_at` (ADR-164). These two reads are the lenient ones — they
-    // return what they gathered when a page fails — so "synced" was never a claim they could make,
-    // and since the inventory sync reads that column to decide when it is next due, stamping it
-    // here would postpone a real sync by a whole interval on the strength of a partial one.
-    let net_pairs: Vec<(String, String)> = networks
-        .iter()
-        .map(|n| (n.id.clone(), n.name.clone()))
-        .collect();
-    if let Err(e) = admin.meraki_orgs.upsert_networks(org.id, &net_pairs).await {
-        tracing::warn!(error = %e, "enumerate: upsert networks failed");
+    let max_devices = body
+        .max_devices
+        .unwrap_or_else(|| i32::try_from(org.max_devices).unwrap_or(i32::MAX));
+    // Refused, not clamped: a cap silently moved is a cap the operator does not know they have.
+    if !(1..=crate::config::MERAKI_MAX_DEVICES_HARD).contains(&max_devices) {
+        return Err(ApiError::bad_request(
+            "invalid_max_devices",
+            format!(
+                "max_devices must be between 1 and {}",
+                crate::config::MERAKI_MAX_DEVICES_HARD
+            ),
+        ));
     }
-
-    let imported = admin
-        .meraki_devices
-        .serials(org.id)
-        .await
-        .unwrap_or_default();
-    let net_name = |nid: &str| {
-        networks
-            .iter()
-            .find(|n| n.id == nid)
-            .map_or_else(|| nid.to_owned(), |n| n.name.clone())
-    };
-    let candidates: Vec<MerakiCandidate> = devices
-        .into_iter()
-        .filter(|d| !imported.contains(&d.serial))
-        .map(|d| MerakiCandidate {
-            network_name: net_name(&d.network_id),
-            serial: d.serial,
-            name: d.name,
-            model: d.model,
-            product_type: d.product_type,
-            network_id: d.network_id,
-            lan_ip: d.lan_ip,
-        })
-        .collect();
-    let networks_view: Vec<MerakiNetworkView> = admin
+    match admin
         .meraki_orgs
-        .list_networks(org.id)
+        .set_import_settings(id, body.import_devices, body.file_by_prefix, max_devices)
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(network_id, name, monitored)| MerakiNetworkView {
-            network_id,
-            name,
-            monitored,
-        })
-        .collect();
-    Ok(Json(MerakiEnumeration {
-        networks: networks_view,
-        devices: candidates,
-    }))
+    {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(no_org(id)),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "set meraki import settings",
+            "failed to update import settings",
+        )),
+    }
 }
 
 /// Refuse a folder-scoped caller the device list (ADR-164 決定 11).
@@ -903,11 +870,53 @@ pub(crate) struct MerakiDeviceView {
     first_seen_at: chrono::DateTime<chrono::Utc>,
     /// When a complete listing first failed to contain the device; `null` while Meraki lists it.
     missing_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// The folder the device is filed in, when it is a node — or the folder an import would file
+    /// it in, when `filing.reason` is `matched`. `null` for a node at the top of the tree, and for
+    /// a device an import would put under the organization's own folder, in one named after its
+    /// network (that folder is created by the import that first needs it).
+    folder_id: Option<Uuid>,
+    /// Where an import would file the device, and why. `null` for a device that is already a
+    /// node: it is where it is, and no import moves it.
+    filing: Option<MerakiFilingView>,
 }
 
-impl From<DeviceRecord> for MerakiDeviceView {
-    fn from(d: DeviceRecord) -> Self {
+/// Where an import would file a device that is not a node yet, under the organization's current
+/// `file_by_prefix` setting and the IP ranges folders carry right now.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct MerakiFilingView {
+    reason: FilingReason,
+    /// The IP range that claimed the address; only with `matched`.
+    prefix: Option<String>,
+    /// How many folders claim the address equally; only with `ambiguous`.
+    folders: Option<u32>,
+}
+
+impl From<&Filing> for MerakiFilingView {
+    fn from(f: &Filing) -> Self {
+        let (prefix, folders) = match f {
+            Filing::Matched { prefix, .. } => (Some(prefix.clone()), None),
+            Filing::Ambiguous { folders } => {
+                (None, Some(u32::try_from(*folders).unwrap_or(u32::MAX)))
+            }
+            Filing::Unmatched | Filing::NoAddress | Filing::NotAsked => (None, None),
+        };
         Self {
+            reason: f.reason(),
+            prefix,
+            folders,
+        }
+    }
+}
+
+impl MerakiDeviceView {
+    /// `filing` is what an import would do with the device; `None` for one that is already a node.
+    fn new(d: DeviceRecord, filing: Option<&Filing>) -> Self {
+        Self {
+            folder_id: match filing {
+                Some(f) => f.folder(),
+                None => d.node_group_id,
+            },
+            filing: filing.map(MerakiFilingView::from),
             serial: d.serial,
             name: d.name,
             model: d.model,
@@ -953,16 +962,18 @@ pub(crate) async fn device_views(
     org: Uuid,
 ) -> ApiResult<Vec<MerakiDeviceView>> {
     meraki_devices_are_deployment_wide(scope)?;
-    let exists = admin.meraki_orgs.get(org).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "devices: load org",
-            "failed to load meraki organization",
-        )
-    })?;
-    if exists.is_none() {
-        return Err(no_org(org));
-    }
+    let stored = admin
+        .meraki_orgs
+        .get(org)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "devices: load org",
+                "failed to load meraki organization",
+            )
+        })?
+        .ok_or_else(|| no_org(org))?;
     let devices = admin.meraki_inventory.devices(org).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -970,7 +981,37 @@ pub(crate) async fn device_views(
             "failed to list meraki devices",
         )
     })?;
-    Ok(devices.into_iter().map(MerakiDeviceView::from).collect())
+    // Where each device that is not a node would go — asked of the same resolver an import uses,
+    // so the page cannot promise one folder and the import use another. A device that is a node
+    // is not asked about: no import moves it.
+    let addresses: Vec<Option<std::net::IpAddr>> = devices
+        .iter()
+        .filter(|d| d.node_id.is_none())
+        .map(|d| d.lan_ip)
+        .collect();
+    let (filings, _) = admin
+        .meraki_import
+        .filings(&addresses, stored.file_by_prefix)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "devices: match ip ranges",
+                "failed to list meraki devices",
+            )
+        })?;
+    let mut filings = filings.iter();
+    Ok(devices
+        .into_iter()
+        .map(|d| {
+            let filing = if d.node_id.is_none() {
+                filings.next()
+            } else {
+                None
+            };
+            MerakiDeviceView::new(d, filing)
+        })
+        .collect())
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -979,16 +1020,11 @@ pub(super) struct MerakiImportReq {
     #[serde(default)]
     monitored_network_ids: Vec<String>,
     devices: Vec<MerakiImportDeviceReq>,
-    /// File each device into the folder whose IP range holds its address, when exactly one does.
-    /// Defaults to true; false files every device under the organization's network folders.
-    #[serde(default = "file_by_prefix_default")]
-    file_by_prefix: bool,
-}
-
-/// Absent means yes: a client written before the field existed gets the behaviour a new one asks
-/// for, which is the point of the feature — a deployment with no IP ranges sees no difference.
-fn file_by_prefix_default() -> bool {
-    true
+    /// File each device into the folder whose IP range holds its address, when exactly one does;
+    /// false files every device under the organization's network folders. Absent means the
+    /// organization's own `file_by_prefix` setting — what its page shows and the sync uses.
+    #[serde(default)]
+    file_by_prefix: Option<bool>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -1061,87 +1097,39 @@ async fn import_meraki_devices(
             .set_networks_monitored(org.id, &body.monitored_network_ids, true)
             .await;
     }
-    // Where each device goes is decided here and written by `import_devices`; which serials are
-    // already nodes is decided *there*, under its lock. Reading them here first is what let two
-    // imports of one device both see it free.
-    //
-    // 🚨 A failed range read fails the import. Falling back to the network folders would turn
-    // "the database could not be read" into "no range matched", and file a site's devices in the
-    // wrong place with a 201 to show for it.
-    let addresses: Vec<Option<std::net::IpAddr>> = body
+    // Where each device goes is decided by the resolver the sync also uses, and written by
+    // `import_devices`; which serials are already nodes is decided *there*, under its lock. Reading
+    // them here first is what let two imports of one device both see it free.
+    let candidates: Vec<ImportCandidate> = body
         .devices
-        .iter()
-        .map(|d| d.lan_ip.as_deref().and_then(usable_address))
+        .into_iter()
+        .map(|d| ImportCandidate {
+            lan_ip: d.lan_ip.as_deref().and_then(usable_address),
+            serial: d.serial,
+            name: d.name,
+            model: d.model,
+            product_type: d.product_type,
+            network_id: d.network_id,
+            network_name: d.network_name,
+        })
         .collect();
-    let ranges_configured = admin.groups.any_prefixes(None).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "import: read ip ranges",
-            "failed to import meraki devices",
+    let resolved = admin
+        .meraki_import
+        .resolve(
+            candidates,
+            body.file_by_prefix.unwrap_or(org.file_by_prefix),
         )
-    })?;
-    let fold = if body.file_by_prefix && ranges_configured {
-        let asked = addresses_to_match(&addresses);
-        // Unscoped: a folder-scoped caller was refused above, so there is no scope to narrow by.
-        let hits = admin
-            .groups
-            .match_address_prefixes(&asked, None)
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(
-                    e.as_ref(),
-                    "import: match ip ranges",
-                    "failed to import meraki devices",
-                )
-            })?;
-        crate::groups::fold_prefix_matches(&asked, hits)
-    } else {
-        // Nothing to ask, or nothing to ask against: an empty answer, which `plan_filing` reads as
-        // "no range holds it" for every address.
-        crate::groups::fold_prefix_matches::<std::net::IpAddr>(&[], Vec::new())
-    };
-    let filings = plan_filing(&addresses, &fold, body.file_by_prefix);
-
-    let mut to_import = Vec::new();
-    // One lookup per product type, not per device: a request names a handful of types and may name
-    // a thousand devices, most of which the writer will skip as already imported.
-    let mut profiles: std::collections::HashMap<String, Option<Uuid>> =
-        std::collections::HashMap::new();
-    for ((d, lan_ip), filing) in body.devices.iter().zip(addresses).zip(filings) {
-        let profile_id = match profiles.get(&d.product_type) {
-            Some(known) => *known,
-            None => {
-                let found = meraki_profile_for(&admin, &d.product_type).await;
-                profiles.insert(d.product_type.clone(), found);
-                found
-            }
-        };
-        // A device with no name is identified by its serial, which is always present.
-        let name = if d.name.trim().is_empty() {
-            d.serial.clone()
-        } else {
-            d.name.clone()
-        };
-        let network_name = d
-            .network_name
-            .clone()
-            .filter(|n| !n.trim().is_empty())
-            .unwrap_or_else(|| d.network_id.clone());
-        to_import.push(crate::meraki::MerakiImportDevice {
-            serial: d.serial.clone(),
-            name,
-            model: d.model.clone(),
-            product_type: d.product_type.clone(),
-            network_id: d.network_id.clone(),
-            network_name,
-            lan_ip,
-            profile_id,
-            filing,
-        });
-    }
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "import: resolve filing",
+                "failed to import meraki devices",
+            )
+        })?;
     let outcome = admin
         .meraki_orgs
-        .import_devices(&org, &to_import)
+        .import_devices(&org, &resolved.devices)
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -1155,28 +1143,9 @@ async fn import_meraki_devices(
         Json(MerakiImported {
             imported: outcome.imported,
             filed: outcome.filed,
-            ranges_configured,
+            ranges_configured: resolved.ranges_configured,
         }),
     ))
-}
-
-/// The profile a Meraki device of this product type is monitored with: the built-in Meraki-API
-/// profile for the type, else its category's profile, so an unrecognized product type still gets
-/// monitored rather than nothing. A failed read is `None` — the node is created without a profile
-/// and an operator can set one; refusing the import over it would be the worse trade.
-async fn meraki_profile_for(admin: &super::AdminState, product_type: &str) -> Option<Uuid> {
-    let by_name = match yagra_common::api_profile_name_for_product_type(product_type) {
-        Some(name) => admin.repo.profile_id_for_name(name).await.unwrap_or(None),
-        None => None,
-    };
-    match by_name {
-        Some(p) => Some(p),
-        None => admin
-            .repo
-            .profile_id_for_category(yagra_common::category_for_product_type(product_type).as_str())
-            .await
-            .unwrap_or(None),
-    }
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -1264,7 +1233,7 @@ mod tests {
             ("PUT", format!("/api/v1/meraki/orgs/{ID}/enabled")),
             ("PUT", format!("/api/v1/meraki/orgs/{ID}/cadence")),
             ("PUT", format!("/api/v1/meraki/orgs/{ID}/networks")),
-            ("POST", format!("/api/v1/meraki/orgs/{ID}/enumerate")),
+            ("PUT", format!("/api/v1/meraki/orgs/{ID}/import-settings")),
             ("POST", format!("/api/v1/meraki/orgs/{ID}/sync")),
             ("POST", "/api/v1/meraki/import".to_owned()),
             ("PUT", "/api/v1/meraki/polling".to_owned()),
@@ -1431,6 +1400,41 @@ mod tests {
         }
     }
 
+    /// The import cap's bounds exist twice — `config::MERAKI_MAX_DEVICES_HARD` (with migration
+    /// 0125's CHECK) and the organization page's own constants, which refuse a value before the
+    /// request is sent. A form stricter than the server hides a legal setting; a looser one lets the
+    /// operator press Save into a 400. Same shape as the region check above.
+    ///
+    /// ⚠️ It finds each bound as `NAME = <digits>;`, so one computed from another goes unchecked.
+    #[test]
+    fn the_import_cap_the_webui_accepts_is_the_one_this_api_accepts() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/src/pages/integrations/merakiDevices.ts"
+        );
+        let text = std::fs::read_to_string(path).expect("the organization page's judgement module");
+        let bound = |name: &str| -> i32 {
+            let declared = format!("export const {name} = ");
+            let rest = text
+                .split_once(declared.as_str())
+                .unwrap_or_else(|| panic!("{name} is not declared in {path}"))
+                .1;
+            let digits: String = rest
+                .chars()
+                .take_while(|c| *c != ';')
+                .filter(char::is_ascii_digit)
+                .collect();
+            digits
+                .parse()
+                .unwrap_or_else(|_| panic!("{name} in {path} is not a plain number"))
+        };
+        assert_eq!(bound("MAX_DEVICES_MIN"), 1);
+        assert_eq!(
+            bound("MAX_DEVICES_MAX"),
+            crate::config::MERAKI_MAX_DEVICES_HARD
+        );
+    }
+
     // ── A folder-scoped caller (ADR-164) ─────────────────────────────────────────────
 
     /// A body each write route deserializes, so the request reaches the handler rather than being
@@ -1467,7 +1471,11 @@ mod tests {
                 format!("/api/v1/meraki/orgs/{ID}/networks"),
                 Some(json!({ "network_ids": [], "monitored": true })),
             ),
-            ("POST", format!("/api/v1/meraki/orgs/{ID}/enumerate"), None),
+            (
+                "PUT",
+                format!("/api/v1/meraki/orgs/{ID}/import-settings"),
+                Some(json!({ "import_devices": true, "file_by_prefix": true })),
+            ),
             ("POST", format!("/api/v1/meraki/orgs/{ID}/sync"), None),
             (
                 "POST",
@@ -1779,5 +1787,203 @@ mod tests {
             "{answer}"
         );
         assert_eq!(folder_of(pool.clone(), "Q3-4").await, Some(network));
+    }
+
+    /// The import settings are accepted and reach the row, and an absurd cap is refused rather than
+    /// clamped (ADR-164 Inc.4). An absent `max_devices` keeps the cap the organization has.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_import_settings_are_stored_and_an_absurd_cap_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let operator = token(&st, yagra_common::Role::Operator);
+        let path = format!("/api/v1/meraki/orgs/{org}/import-settings");
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &operator,
+            Some(serde_json::json!({
+                "import_devices": false, "file_by_prefix": false, "max_devices": 50,
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        assert_eq!(
+            (
+                stored.import_devices,
+                stored.file_by_prefix,
+                stored.max_devices
+            ),
+            (false, false, 50)
+        );
+        let (_, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
+        assert_eq!(orgs[0]["import_devices"], false, "{orgs}");
+        assert_eq!(orgs[0]["file_by_prefix"], false, "{orgs}");
+        assert_eq!(orgs[0]["max_devices"], 50, "{orgs}");
+        assert_eq!(orgs[0]["devices_over_cap"], 0, "{orgs}");
+
+        // No cap named: the one it has stays.
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &operator,
+            Some(serde_json::json!({ "import_devices": true, "file_by_prefix": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        assert_eq!((stored.import_devices, stored.max_devices), (true, 50));
+
+        for absurd in [0, -1, 50_001] {
+            let (status, answer) = send(
+                &st,
+                "PUT",
+                &path,
+                &operator,
+                Some(serde_json::json!({
+                    "import_devices": true, "file_by_prefix": true, "max_devices": absurd,
+                })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{absurd}: {answer}");
+            assert_eq!(answer["error"]["code"], "invalid_max_devices", "{absurd}");
+        }
+        let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        assert_eq!(stored.max_devices, 50, "a refused cap was stored");
+
+        let unknown = format!("/api/v1/meraki/orgs/{ID}/import-settings");
+        let (status, answer) = send(
+            &st,
+            "PUT",
+            &unknown,
+            &operator,
+            Some(serde_json::json!({ "import_devices": true, "file_by_prefix": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    }
+
+    /// The device list says where each device is, or would go — from the same resolver an import
+    /// uses, so the page cannot promise one folder and the import use another (ADR-164 Inc.5).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_device_list_says_where_each_device_is_or_would_go(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::meraki_inventory::{DeviceWrite, SeenDevice, SyncPlan};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let site = crate::pgtest::group(&pool, "Matsuyama").await;
+        crate::pgtest::prefix(&pool, site, "10.1.0.0/24").await;
+
+        // What a sync would have recorded: three devices, all seen online.
+        let seen = |serial: &str, ip: Option<&str>| DeviceWrite {
+            device: SeenDevice {
+                serial: serial.to_owned(),
+                name: serial.to_owned(),
+                model: Some("MR46".to_owned()),
+                product_type: "wireless".to_owned(),
+                network_id: "N_1".to_owned(),
+                lan_ip: ip.map(|a| a.parse().expect("ip")),
+                online: true,
+            },
+            first_online: true,
+            imported_at: None,
+        };
+        admin
+            .meraki_inventory
+            .apply(
+                org,
+                &SyncPlan {
+                    writes: vec![
+                        seen("Q3-A", Some("10.1.0.5")),
+                        seen("Q3-B", None),
+                        seen("Q3-C", Some("192.168.9.9")),
+                    ],
+                    newly_missing: Vec::new(),
+                },
+            )
+            .await
+            .expect("record the inventory");
+
+        let caller = token(&st, yagra_common::Role::Admin);
+        let path = format!("/api/v1/meraki/orgs/{org}/devices");
+        let row = |list: &serde_json::Value, serial: &str| -> serde_json::Value {
+            list.as_array()
+                .expect("a list")
+                .iter()
+                .find(|d| d["serial"] == serial)
+                .unwrap_or_else(|| panic!("{serial} is not listed: {list}"))
+                .clone()
+        };
+
+        let (status, list) = send(&st, "GET", &path, &caller, None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        let a = row(&list, "Q3-A");
+        assert_eq!(a["state"], "new", "{a}");
+        assert_eq!(a["folder_id"], serde_json::json!(site), "{a}");
+        assert_eq!(
+            a["filing"],
+            serde_json::json!({ "reason": "matched", "prefix": "10.1.0.0/24", "folders": null }),
+            "{a}"
+        );
+        let b = row(&list, "Q3-B");
+        assert!(b["folder_id"].is_null(), "{b}");
+        assert_eq!(b["filing"]["reason"], "no_address", "{b}");
+        assert_eq!(row(&list, "Q3-C")["filing"]["reason"], "unmatched");
+
+        // Imported with no `file_by_prefix` in the request: the organization's own setting decides,
+        // and the device lands where the list said it would.
+        let (status, answer) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &caller,
+            Some(serde_json::json!({
+                "org_uuid": org,
+                "devices": [{
+                    "serial": "Q3-A", "name": "Q3-A", "product_type": "wireless",
+                    "network_id": "N_1", "lan_ip": "10.1.0.5",
+                }],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{answer}");
+        assert_eq!(answer["filed"]["matched"], 1, "{answer}");
+
+        let (_, list) = send(&st, "GET", &path, &caller, None).await;
+        let a = row(&list, "Q3-A");
+        assert_eq!(a["state"], "monitored", "{a}");
+        assert_eq!(a["folder_id"], serde_json::json!(site), "{a}");
+        assert!(
+            a["filing"].is_null(),
+            "a node is where it is; no import moves it: {a}"
+        );
+
+        // With filing by range switched off for the organization, nothing is claimed about ranges.
+        admin
+            .meraki_orgs
+            .set_import_settings(org, true, false, 1000)
+            .await
+            .expect("stop filing by range");
+        let (_, list) = send(&st, "GET", &path, &caller, None).await;
+        assert_eq!(row(&list, "Q3-C")["filing"]["reason"], "not_asked");
+        assert_eq!(row(&list, "Q3-B")["filing"]["reason"], "not_asked");
     }
 }

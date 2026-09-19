@@ -69,9 +69,7 @@ import type {
   MaintenanceScopeLevel,
   MaintenanceWindow,
   MatchingThreshold,
-  MerakiCandidate,
   MerakiDevice,
-  MerakiEnumeration,
   MerakiImported,
   MerakiNetwork,
   MerakiOrg,
@@ -1057,9 +1055,15 @@ export const api = {
   ): Promise<void> =>
     apiPut('/api/v1/meraki/orgs/{id}/networks', { path: { id }, body: { network_ids, monitored } }),
 
-  /** Enumerate an org's networks + device candidates from the Dashboard API (read-only). */
-  enumerateMerakiOrg: (id: string): Promise<MerakiEnumeration> =>
-    apiPost('/api/v1/meraki/orgs/{id}/enumerate', { path: { id } }),
+  /** Set how an org's devices become nodes: whether every sync imports the newly listed ones (and
+   *  watches newly found networks), whether an imported device is filed by IP range, and the most
+   *  nodes automatic import lets the org hold. `max_devices` absent keeps the stored cap; outside
+   *  1–50000 the server answers 400 `invalid_max_devices`. */
+  setMerakiImportSettings: (
+    id: string,
+    body: { import_devices: boolean; file_by_prefix: boolean; max_devices?: number },
+  ): Promise<void> =>
+    apiPut('/api/v1/meraki/orgs/{id}/import-settings', { path: { id }, body }),
 
   /** Sync an org's inventory now instead of waiting for the periodic sync (read-only upstream).
    *  Rejects with 409 while the org is paused or busy, and with 502 when the sync ran and failed —
@@ -1072,13 +1076,23 @@ export const api = {
   listMerakiDevices: (id: string): Promise<MerakiDevice[]> =>
     apiGet('/api/v1/meraki/orgs/{id}/devices', { path: { id } }),
 
-  /** Import selected devices as nodes (atomic), setting the chosen networks in scope. A device
-   *  whose address falls in exactly one folder's IP range is filed there unless `file_by_prefix`
-   *  is false; the answer says how many went where. */
+  /** Import selected devices as nodes (atomic). The answer says how many went where.
+   *
+   *  ⚠️ `file_by_prefix` absent means "the organization's own setting" — what its page shows and
+   *  the periodic sync uses. The organization's page therefore never sends it: a second answer
+   *  here would let a manual import file differently from the automatic one beside it. */
   importMerakiDevices: (body: {
     org_uuid: string;
-    monitored_network_ids: string[];
-    devices: MerakiCandidate[];
+    monitored_network_ids?: string[];
+    devices: {
+      serial: string;
+      name: string;
+      model?: string | null;
+      product_type: string;
+      network_id: string;
+      network_name?: string | null;
+      lan_ip?: string | null;
+    }[];
     file_by_prefix?: boolean;
   }): Promise<MerakiImported> => apiPost('/api/v1/meraki/import', { body }),
 

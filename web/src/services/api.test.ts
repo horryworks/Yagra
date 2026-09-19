@@ -1627,17 +1627,32 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toEqual({ network_ids: ['N_1', 'N_2'], monitored: true });
   });
 
-  it('enumerates an org via POST (no body)', async () => {
-    const spy = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ networks: [], devices: [] }),
-    } as Response);
+  it('saves an org’s import settings via PUT, and leaves the cap out when it is not given', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
     globalThis.fetch = spy;
-    await api.enumerateMerakiOrg('org-1');
+    await api.setMerakiImportSettings('org-1', {
+      import_devices: true,
+      file_by_prefix: false,
+      max_devices: 250,
+    });
     const [url, init] = spy.mock.calls[0];
-    expect(url).toBe('/api/v1/meraki/orgs/org-1/enumerate');
-    expect(init.method).toBe('POST');
+    expect(url).toBe('/api/v1/meraki/orgs/org-1/import-settings');
+    expect(init.method).toBe('PUT');
+    // Both booleans have to survive as `false`: dropped, the server would refuse the body.
+    expect(JSON.parse(init.body)).toEqual({
+      import_devices: true,
+      file_by_prefix: false,
+      max_devices: 250,
+    });
+
+    // Absent means "keep the stored cap" on the server, so it must not be sent as null or 0.
+    await api.setMerakiImportSettings('org-1', { import_devices: false, file_by_prefix: true });
+    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({
+      import_devices: false,
+      file_by_prefix: true,
+    });
   });
 
   it('imports devices with the org, scope, and selected devices', async () => {
@@ -1669,6 +1684,17 @@ describe('api client', () => {
       monitored_network_ids: ['N_1'],
       devices,
     });
+  });
+
+  it('leaves the filing choice out of an import that does not make one', async () => {
+    // Absent is a value here: it means "the organization's own setting". The organization's page
+    // relies on that, so the client must not invent a `file_by_prefix` for it.
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ imported: 0 }) } as Response);
+    globalThis.fetch = spy;
+    await api.importMerakiDevices({ org_uuid: 'org-1', devices: [] });
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ org_uuid: 'org-1', devices: [] });
   });
 
   it('sends the filing choice with an import and hands back how the devices were filed', async () => {

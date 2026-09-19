@@ -91,6 +91,15 @@ pub struct MerakiOrg {
     /// Why the last sync failed — a [`crate::meraki_sync::MerakiSyncFailure`] token, never upstream
     /// text. `None` after a success.
     pub last_sync_error: Option<String>,
+    /// Whether the sync turns newly listed devices into nodes (ADR-164 Inc.4, migration 0125).
+    /// New organizations start on; the ones that existed before the switch start off.
+    pub import_devices: bool,
+    /// Whether an imported device is filed by its address into the folder whose IP range holds it.
+    pub file_by_prefix: bool,
+    /// The most nodes automatic import lets this organization hold.
+    pub max_devices: u32,
+    /// How many devices that cap left out on the last sync.
+    pub devices_over_cap: u32,
 }
 
 impl MerakiOrg {
@@ -99,6 +108,8 @@ impl MerakiOrg {
         let uplink_secs: i32 = row.try_get("uplink_secs")?;
         let traffic_secs: i32 = row.try_get("traffic_secs")?;
         let inventory_secs: i32 = row.try_get("inventory_secs")?;
+        let max_devices: i32 = row.try_get("max_devices")?;
+        let devices_over_cap: i32 = row.try_get("devices_over_cap")?;
         Ok(Self {
             id: row.try_get("id")?,
             org_id: row.try_get("org_id")?,
@@ -116,6 +127,10 @@ impl MerakiOrg {
             last_sync_at: row.try_get("last_sync_at")?,
             last_sync_ok: row.try_get("last_sync_ok")?,
             last_sync_error: row.try_get("last_sync_error")?,
+            import_devices: row.try_get("import_devices")?,
+            file_by_prefix: row.try_get("file_by_prefix")?,
+            max_devices: max_devices.max(0) as u32,
+            devices_over_cap: devices_over_cap.max(0) as u32,
         })
     }
 
@@ -281,7 +296,8 @@ impl MerakiOrgRepo {
 
     const COLUMNS: &'static str = "id, org_id, name, base_url, credential_id, availability_secs, \
         uplink_secs, traffic_secs, inventory_secs, enabled_tiers, target_rps, group_id, enabled, \
-        last_sync_at, last_sync_ok, last_sync_error";
+        last_sync_at, last_sync_ok, last_sync_error, import_devices, file_by_prefix, max_devices, \
+        devices_over_cap";
 
     /// Every org (for the Integrations UI).
     pub async fn list(&self) -> anyhow::Result<Vec<MerakiOrg>> {
@@ -430,6 +446,49 @@ impl MerakiOrgRepo {
         Ok(())
     }
 
+    /// Set how the sync imports this organization's devices (ADR-164 Inc.4). Returns whether the
+    /// organization exists.
+    ///
+    /// Switching the import **off** also clears `devices_over_cap`: that number is a statement about
+    /// the last import pass, and with no pass running it would stay on the page forever, describing
+    /// a cap nothing is applying.
+    pub async fn set_import_settings(
+        &self,
+        id: Uuid,
+        import_devices: bool,
+        file_by_prefix: bool,
+        max_devices: i32,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE meraki_orgs SET import_devices = $2, file_by_prefix = $3, max_devices = $4, \
+                    devices_over_cap = CASE WHEN $2 THEN devices_over_cap ELSE 0 END, \
+                    updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(import_devices)
+        .bind(file_by_prefix)
+        .bind(max_devices)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Write back how many devices the cap left out on this sync. Returns how many rows changed —
+    /// zero on the ordinary sync, where the number is what it already was (ADR-164 決定 4: a sync
+    /// that finds nothing changed writes nothing).
+    pub async fn record_over_cap(&self, id: Uuid, over: u32) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "UPDATE meraki_orgs SET devices_over_cap = $2, updated_at = now() \
+             WHERE id = $1 AND devices_over_cap IS DISTINCT FROM $2",
+        )
+        .bind(id)
+        .bind(i32::try_from(over).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Fully remove an org: delete its device **nodes** (which cascades their `meraki_devices`
     /// rows), the org row (cascades its network scope), and its HostTree groups (root + per-network),
     /// all in one transaction. Returns whether the org existed. Metrics history in the TSDB is left
@@ -458,41 +517,24 @@ impl MerakiOrgRepo {
 
     // ── Network scope ────────────────────────────────────────────────────────────────────
 
-    /// Upsert the org's networks (from enumerate), preserving each `monitored` flag.
-    pub async fn upsert_networks(
-        &self,
-        org_uuid: Uuid,
-        networks: &[(String, String)],
-    ) -> anyhow::Result<()> {
-        let mut tx = self.pool.begin().await?;
-        for (network_id, name) in networks {
-            sqlx::query(
-                "INSERT INTO meraki_org_networks (org_id, network_id, name, last_seen_at) \
-                 VALUES ($1, $2, $3, now()) \
-                 ON CONFLICT (org_id, network_id) DO UPDATE SET name = EXCLUDED.name, \
-                 last_seen_at = now()",
-            )
-            .bind(org_uuid)
-            .bind(network_id)
-            .bind(name)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
     /// Record the networks a sync saw: insert the new ones, rename the renamed ones, and leave every
     /// other row untouched. Returns how many rows were written.
     ///
-    /// [`Self::upsert_networks`] rewrites every row on every call (it bumps `last_seen_at`), which
-    /// is fine from a wizard and wrong from a loop that runs every five minutes (ADR-164 決定 4).
     /// The `WHERE` on the conflict arm is what makes an unchanged network a no-op rather than an
-    /// update to the same values. A new network takes the column default for `monitored`.
+    /// update to the same values — this runs every five minutes, and rewriting every row each time
+    /// (which the import wizard's own upsert did, to bump `last_seen_at`) is thousands of dead
+    /// tuples a day for a table that changes a few times a year (ADR-164 決定 4).
+    ///
+    /// `watch_new` is the flag a network **seen for the first time** is stored with. It is the
+    /// organization's `import_devices`: with automatic import on, a new site is watched from the
+    /// sync that finds it (migration 0125, which overturns 0040 on exactly this point).
+    /// 🚨 It is only ever the INSERT's value. The conflict arm does not name `monitored`, so a
+    /// network an operator took out of scope stays out whatever this argument says.
     pub async fn record_networks(
         &self,
         org_uuid: Uuid,
         networks: &[(String, String)],
+        watch_new: bool,
     ) -> anyhow::Result<u64> {
         if networks.is_empty() {
             return Ok(0);
@@ -505,8 +547,9 @@ impl MerakiOrgRepo {
             .collect();
         let (ids, names): (Vec<&str>, Vec<&str>) = unique.into_iter().unzip();
         let res = sqlx::query(
-            "INSERT INTO meraki_org_networks (org_id, network_id, name, last_seen_at) \
-             SELECT $1, t.id, t.name, now() FROM unnest($2::text[], $3::text[]) AS t(id, name) \
+            "INSERT INTO meraki_org_networks (org_id, network_id, name, monitored, last_seen_at) \
+             SELECT $1, t.id, t.name, $4, now() \
+             FROM unnest($2::text[], $3::text[]) AS t(id, name) \
              ON CONFLICT (org_id, network_id) DO UPDATE \
                SET name = EXCLUDED.name, last_seen_at = now() \
                WHERE meraki_org_networks.name IS DISTINCT FROM EXCLUDED.name",
@@ -514,6 +557,7 @@ impl MerakiOrgRepo {
         .bind(org_uuid)
         .bind(&ids)
         .bind(&names)
+        .bind(watch_new)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
@@ -816,17 +860,6 @@ impl MerakiDeviceRepo {
             .collect()
     }
 
-    /// Already-imported serials for an org (for the import-dedup + reconciliation diff).
-    pub async fn serials(&self, org_uuid: Uuid) -> anyhow::Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT serial FROM meraki_devices WHERE org_id = $1")
-            .bind(org_uuid)
-            .fetch_all(&self.pool)
-            .await?;
-        rows.into_iter()
-            .map(|r| Ok(r.try_get::<String, _>("serial")?))
-            .collect()
-    }
-
     /// Every Meraki node's serial, by node id — one of the duplicate check's serial sources (ADR-148).
     pub async fn serials_by_node(&self) -> anyhow::Result<std::collections::HashMap<Uuid, String>> {
         let rows = sqlx::query("SELECT node_id, serial FROM meraki_devices")
@@ -890,6 +923,10 @@ mod tests {
             last_sync_at: None,
             last_sync_ok: None,
             last_sync_error: None,
+            import_devices: true,
+            file_by_prefix: true,
+            max_devices: 1000,
+            devices_over_cap: 0,
         }
     }
 
@@ -1220,14 +1257,15 @@ mod tests {
         assert!((after.target_rps - 4.5).abs() < f64::EPSILON);
     }
 
-    /// **Re-enumerating an org must not take its networks out of scope.**
+    /// **A later sync must not change which of an organization's networks are in scope.**
     ///
     /// 🚨 The conflict clause writes the name and the timestamp and deliberately not `monitored` —
-    /// that flag is an operator's choice, and every enumerate would otherwise silently reset it,
-    /// which reads as monitoring quietly stopping for the networks somebody asked for.
+    /// that flag is an operator's choice, and every sync would otherwise silently reset it. In one
+    /// direction that reads as monitoring quietly stopping for the networks somebody asked for; in
+    /// the other (`watch_new`, ADR-164 Inc.4) as a site somebody took out of scope coming back.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn re_enumerating_updates_the_name_but_never_the_monitored_flag(pool: sqlx::PgPool) {
+    async fn a_later_sync_renames_a_network_but_never_moves_its_monitored_flag(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let repo = MerakiOrgRepo::new(pool.clone());
         let org = repo
@@ -1235,15 +1273,16 @@ mod tests {
             .await
             .expect("create");
 
-        repo.upsert_networks(
+        repo.record_networks(
             org,
             &[
                 ("N_1".to_owned(), "Branch".to_owned()),
                 ("N_2".to_owned(), "Aylesbury".to_owned()),
             ],
+            false,
         )
         .await
-        .expect("enumerate");
+        .expect("first sync");
         assert_eq!(
             repo.list_networks(org).await.expect("list"),
             vec![
@@ -1261,25 +1300,26 @@ mod tests {
             vec!["N_1".to_owned()]
         );
 
-        // The next enumerate renames one network and re-reports both.
-        repo.upsert_networks(
+        // The next sync renames one network and re-reports both.
+        repo.record_networks(
             org,
             &[
                 ("N_1".to_owned(), "Branch (renamed)".to_owned()),
                 ("N_2".to_owned(), "Aylesbury".to_owned()),
             ],
+            false,
         )
         .await
-        .expect("re-enumerate");
+        .expect("second sync");
         assert_eq!(
             pgtest::rows(&pool, "meraki_org_networks").await,
             2,
-            "re-enumerating duplicated a network"
+            "a second sync duplicated a network"
         );
         assert_eq!(
             repo.monitored_network_ids(org).await.expect("monitored"),
             vec!["N_1".to_owned()],
-            "re-enumerating took a network out of scope, so collection would stop silently"
+            "a second sync took a network out of scope, so collection would stop silently"
         );
         let listed = repo.list_networks(org).await.expect("list");
         let branch = listed
@@ -1288,9 +1328,30 @@ mod tests {
             .expect("the renamed network");
         assert_eq!(
             branch.1, "Branch (renamed)",
-            "the enumerate did not follow the rename"
+            "the sync did not follow the rename"
         );
         assert!(branch.2, "the monitored flag was lost");
+
+        // With automatic import on, a network seen for the FIRST time is watched from that sync —
+        // and that is all the argument may do. N_2 was left out of scope by an operator, and a
+        // sync that re-reports it with `watch_new` must leave it out.
+        repo.record_networks(
+            org,
+            &[
+                ("N_2".to_owned(), "Aylesbury".to_owned()),
+                ("N_3".to_owned(), "Camden".to_owned()),
+            ],
+            true,
+        )
+        .await
+        .expect("sync with automatic import on");
+        let mut monitored = repo.monitored_network_ids(org).await.expect("monitored");
+        monitored.sort();
+        assert_eq!(
+            monitored,
+            vec!["N_1".to_owned(), "N_3".to_owned()],
+            "a new network must arrive watched, and a network taken out of scope must stay out"
+        );
     }
 
     /// Only the monitored networks narrow the collect calls, and an empty selection changes
@@ -1308,25 +1369,26 @@ mod tests {
             .create("2", "Other", "https://api.meraki.com", cred)
             .await
             .expect("other");
-        repo.upsert_networks(
+        repo.record_networks(
             acme,
             &[
                 ("N_1".to_owned(), "One".to_owned()),
                 ("N_2".to_owned(), "Two".to_owned()),
             ],
+            false,
         )
         .await
-        .expect("enumerate acme");
-        repo.upsert_networks(other, &[("N_1".to_owned(), "Theirs".to_owned())])
+        .expect("sync acme");
+        repo.record_networks(other, &[("N_1".to_owned(), "Theirs".to_owned())], false)
             .await
-            .expect("enumerate other");
+            .expect("sync other");
 
         assert!(
             repo.monitored_network_ids(acme)
                 .await
                 .expect("monitored")
                 .is_empty(),
-            "a freshly enumerated network was already in scope"
+            "a network found with automatic import off was already in scope"
         );
 
         repo.set_networks_monitored(acme, &["N_1".to_owned(), "N_2".to_owned()], true)
@@ -1792,18 +1854,12 @@ mod tests {
             2,
             "the fleet-wide set did not return both orgs' devices"
         );
-        assert_eq!(
-            devices.serials(acme).await.expect("serials"),
-            ["Q3-1".to_owned()].into_iter().collect(),
-            "the serial set is not scoped to its org"
-        );
-        assert_eq!(
-            devices.serials(other).await.expect("serials"),
-            ["Q3-9".to_owned()].into_iter().collect()
-        );
         let refs = devices.device_refs(acme).await.expect("device_refs");
-        assert_eq!(refs.len(), 1);
+        assert_eq!(refs.len(), 1, "the device refs are not scoped to their org");
         assert_eq!(refs[0].serial, "Q3-1");
+        let theirs = devices.device_refs(other).await.expect("device_refs");
+        assert_eq!(theirs.len(), 1);
+        assert_eq!(theirs[0].serial, "Q3-9");
 
         let mut mixed: Vec<Uuid> = devices
             .node_ids()
@@ -1853,9 +1909,9 @@ mod tests {
             ids.push(uuid);
         }
         let (acme, other) = (ids[0], ids[1]);
-        repo.upsert_networks(acme, &[("N_1".to_owned(), "One".to_owned())])
+        repo.record_networks(acme, &[("N_1".to_owned(), "One".to_owned())], false)
             .await
-            .expect("enumerate");
+            .expect("record networks");
 
         let fresh = repo.get(acme).await.expect("get").expect("org");
         assert_eq!(
@@ -1910,14 +1966,14 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            repo.record_networks(acme, &nets(&[("N_1", "One"), ("N_2", "Two")]))
+            repo.record_networks(acme, &nets(&[("N_1", "One"), ("N_2", "Two")]), false)
                 .await
                 .expect("record"),
             1,
             "N_1 is already stored under that name; only N_2 is new"
         );
         assert_eq!(
-            repo.record_networks(acme, &nets(&[("N_1", "One"), ("N_2", "Two")]))
+            repo.record_networks(acme, &nets(&[("N_1", "One"), ("N_2", "Two")]), false)
                 .await
                 .expect("record again"),
             0,
@@ -1926,7 +1982,8 @@ mod tests {
         assert_eq!(
             repo.record_networks(
                 acme,
-                &nets(&[("N_2", "Two, renamed"), ("N_2", "Two, renamed")])
+                &nets(&[("N_2", "Two, renamed"), ("N_2", "Two, renamed")]),
+                false,
             )
             .await
             .expect("rename, listed twice"),

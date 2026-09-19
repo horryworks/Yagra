@@ -63,6 +63,7 @@ export const TABLE_IDS = [
   'settings.audit',
   'settings.credentials',
   'settings.forwarding',
+  'settings.merakiDevices',
   'settings.notificationChannels',
   'settings.pollers',
   'settings.routingRules',

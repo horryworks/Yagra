@@ -520,7 +520,7 @@
       "statePaused": "paused"
     },
     "org": {
-      "import": "Import devices",
+      "devices": "Devices",
       "networks": "Networks",
       "cadence": "Cadence",
       "pause": "Pause",
@@ -582,18 +582,66 @@
       "title": "Delete organization",
       "confirmText": "Delete <b>{{name}}</b>? Its imported device nodes, network scope, and HostTree groups are removed. Metric history in the TSDB is left. This cannot be undone."
     },
+    "orgPage": {
+      "note": "What Meraki lists for this organization, which of it is monitored, and how new devices are imported.",
+      "notFound": "This organization does not exist.",
+      "back": "Back to Cisco Meraki"
+    },
+    "settings": {
+      "title": "Device import",
+      "importDevices": "Import new devices automatically",
+      "importDevicesHint": "Devices in watched networks that Meraki has seen online become nodes. New networks are watched automatically. A device you delete is not imported again.",
+      "fileByPrefix": "File by IP range",
+      "fileByPrefixHint": "A device whose address falls in a folder's IP range is filed there. Everything else goes under {{folder}}.",
+      "maxDevices": "Most devices to import",
+      "maxDevicesInvalid": "Enter a whole number from {{min}} to {{max}}.",
+      "unwatched_one": "{{count}} network is not watched, so its devices are not imported.",
+      "unwatched_other": "{{count}} networks are not watched, so their devices are not imported.",
+      "watchAll": "Watch all",
+      "overCap_one": "{{count}} device was not imported because the limit was reached.",
+      "overCap_other": "{{count}} devices were not imported because the limit was reached."
+    },
+    "devices": {
+      "cols": {
+        "select": "Select",
+        "name": "Name",
+        "model": "Model",
+        "network": "Network",
+        "address": "Address",
+        "state": "State",
+        "destination": "Destination"
+      },
+      "state": {
+        "monitored": "Monitored",
+        "new": "New",
+        "never_online": "Never online",
+        "deleted": "Deleted here",
+        "missing": "Not found in Meraki"
+      },
+      "filing": {
+        "matched": "Matches IP range {{prefix}}",
+        "ambiguous": "{{count}} folders match equally",
+        "unmatched": "No matching IP range",
+        "no_address": "No address",
+        "not_asked": "Filing by IP range is off"
+      },
+      "allStates": "All states",
+      "notWatched": "not watched",
+      "underNetwork": "{{folder}} ▸ {{network}}",
+      "treeRoot": "Tree root",
+      "selectDevice": "Select {{name}}",
+      "selectAll": "Select all importable",
+      "clearSelection": "Clear selection",
+      "noun_one": "device",
+      "noun_other": "devices",
+      "empty": "No devices yet. They appear after the first successful sync."
+    },
     "import": {
-      "title": "Import devices — {{name}}",
       "importBtn_one": "Import {{count}} device",
       "importBtn_other": "Import {{count}} devices",
-      "enumerating": "Enumerating organization…",
-      "noData": "No data.",
-      "allImported": "No new devices to import — every device this key can see is already monitored.",
       "done_one": "Imported {{count}} device.",
       "done_other": "Imported {{count}} devices.",
       "doneNone": "Nothing was imported — every selected device was already monitored.",
-      "fileByPrefix": "File by IP range",
-      "fileByPrefixHint": "A device whose address falls in a folder's IP range is filed there. Everything else goes under {{folder}}.",
       "filed": {
         "all": "All were filed into folders by IP range.",
         "none": "All were filed under {{folder}}.",
@@ -602,7 +650,6 @@
         "ambiguous_other": "{{count}} devices matched more than one folder equally and were not filed by range — check for overlapping IP ranges."
       },
       "err": {
-        "enumerate": "failed to enumerate the organization",
         "import": "failed to import devices"
       }
     },
@@ -615,6 +662,9 @@
       "polling": "failed to change the polling switch",
       "toggleOrg": "failed to pause or resume the organization",
       "sync": "failed to sync the organization",
+      "loadOrg": "failed to load the organization",
+      "saveImportSettings": "failed to save the import settings",
+      "watchAll": "failed to watch the networks",
       "delete": "failed to delete the organization"
     }
   },

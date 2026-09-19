@@ -263,12 +263,17 @@ async fn live_state_with(
     let meraki_inventory = Arc::new(crate::meraki_inventory::MerakiInventoryRepo::new(
         pool.clone(),
     ));
+    let meraki_import = Arc::new(crate::meraki_import::ImportResolver::new(
+        group_repo.clone(),
+        repo.clone(),
+    ));
     let meraki_sync = Arc::new(crate::meraki_sync::MerakiSync::new(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
         Arc::new(EmptyDashboard),
         Arc::new(crate::meraki::MerakiInflight::new()),
+        meraki_import.clone(),
     ));
     let reports_repo = Arc::new(crate::reports::ReportsRepo::new(pool.clone()));
     let audit_repo = Arc::new(crate::audit::AuditRepo::new(pool.clone()));
@@ -374,6 +379,7 @@ async fn live_state_with(
         link_overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
         meraki_orgs,
         meraki_inventory,
+        meraki_import,
         meraki_sync,
         netbox: Arc::new(crate::netbox::NetboxRepo::new(pool.clone())),
         meraki_devices,

@@ -508,7 +508,7 @@
       "statePaused": "停止中"
     },
     "org": {
-      "import": "デバイスをインポート",
+      "devices": "デバイス",
       "networks": "ネットワーク",
       "cadence": "取得間隔",
       "pause": "一時停止",
@@ -567,16 +567,61 @@
       "title": "組織を削除",
       "confirmText": "<b>{{name}}</b> を削除しますか？インポートしたデバイスノード・ネットワーク範囲・HostTree グループが削除されます。TSDB 内のメトリクス履歴は残ります。この操作は取り消せません。"
     },
-    "import": {
-      "title": "デバイスをインポート — {{name}}",
-      "importBtn_other": "{{count}} デバイスをインポート",
-      "enumerating": "組織を列挙中…",
-      "noData": "データがありません。",
-      "allImported": "インポートする新しいデバイスはありません — このキーで参照できるデバイスはすべて監視済みです。",
-      "done_other": "{{count}} 台のデバイスをインポートしました。",
-      "doneNone": "インポートしたデバイスはありません — 選んだデバイスはすべて監視済みでした。",
+    "orgPage": {
+      "note": "Meraki がこの組織について返すデバイス、そのうち監視しているもの、新しいデバイスのインポート方法を扱います。",
+      "notFound": "この組織は存在しません。",
+      "back": "Cisco Meraki へ戻る"
+    },
+    "settings": {
+      "title": "デバイスのインポート",
+      "importDevices": "新しいデバイスを自動でインポートする",
+      "importDevicesHint": "監視対象のネットワークにあり、Meraki が一度でもオンラインと報告したデバイスがノードになります。新しいネットワークは自動で監視対象になります。削除したデバイスは自動では戻りません。",
       "fileByPrefix": "IP レンジに合うフォルダへ入れる",
       "fileByPrefixHint": "アドレスがフォルダの IP レンジに入るデバイスは、そのフォルダへ入れます。それ以外は {{folder}} の下へ入れます。",
+      "maxDevices": "インポートする台数の上限",
+      "maxDevicesInvalid": "{{min}} から {{max}} までの整数を入力してください。",
+      "unwatched_other": "{{count}} 個のネットワークが監視対象外のため、そのデバイスはインポートされません。",
+      "watchAll": "すべて監視対象にする",
+      "overCap_other": "上限に達したため {{count}} 台をインポートしていません。"
+    },
+    "devices": {
+      "cols": {
+        "select": "選択",
+        "name": "名前",
+        "model": "モデル",
+        "network": "ネットワーク",
+        "address": "アドレス",
+        "state": "状態",
+        "destination": "入る先"
+      },
+      "state": {
+        "monitored": "監視中",
+        "new": "新規",
+        "never_online": "オンライン未確認",
+        "deleted": "以前に削除",
+        "missing": "Meraki 側に見つからない"
+      },
+      "filing": {
+        "matched": "IP レンジ {{prefix}} に一致",
+        "ambiguous": "{{count}} 個のフォルダが同じ長さで一致",
+        "unmatched": "一致する IP レンジなし",
+        "no_address": "アドレスなし",
+        "not_asked": "IP レンジでの振り分けはオフ"
+      },
+      "allStates": "すべての状態",
+      "notWatched": "監視対象外",
+      "underNetwork": "{{folder}} ▸ {{network}}",
+      "treeRoot": "ツリー直下",
+      "selectDevice": "{{name}} を選択",
+      "selectAll": "インポートできるデバイスをすべて選択",
+      "clearSelection": "選択を外す",
+      "noun_other": "デバイス",
+      "empty": "デバイスはまだありません。最初の同期が成功すると表示されます。"
+    },
+    "import": {
+      "importBtn_other": "{{count}} デバイスをインポート",
+      "done_other": "{{count}} 台のデバイスをインポートしました。",
+      "doneNone": "インポートしたデバイスはありません — 選んだデバイスはすべて監視済みでした。",
       "filed": {
         "all": "すべて IP レンジに合うフォルダへ入れました。",
         "none": "すべて {{folder}} の下へ入れました。",
@@ -584,7 +629,6 @@
         "ambiguous_other": "{{count}} 台は複数のフォルダが同じ長さで一致したため、IP レンジでは入れていません。IP レンジの重なりを確認してください。"
       },
       "err": {
-        "enumerate": "組織の列挙に失敗しました",
         "import": "デバイスのインポートに失敗しました"
       }
     },
@@ -597,6 +641,9 @@
       "polling": "ポーリングの切り替えに失敗しました",
       "toggleOrg": "組織の一時停止・再開に失敗しました",
       "sync": "組織の同期に失敗しました",
+      "loadOrg": "組織の読み込みに失敗しました",
+      "saveImportSettings": "インポート設定の保存に失敗しました",
+      "watchAll": "ネットワークを監視対象にする変更に失敗しました",
       "delete": "組織の削除に失敗しました"
     }
   },

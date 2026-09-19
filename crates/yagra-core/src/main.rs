@@ -70,6 +70,7 @@ mod mcp;
 // the first, so the constraint is gone and this line has come home to prove it.
 mod meraki;
 mod meraki_filing;
+mod meraki_import;
 mod meraki_inventory;
 mod meraki_sync;
 mod metric_meaning;
@@ -646,12 +647,23 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // The Meraki inventory sync (ADR-164). Built once and shared: the leader's periodic loop and
     // the "Sync now" endpoint must go through the same single flight, which lives in this value.
     let meraki_inventory = Arc::new(meraki_inventory::MerakiInventoryRepo::new(repo.pool()));
+    // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
+    // group to its subtree, AdminState serves group CRUD, and a Meraki import reads the folders'
+    // IP ranges — one hierarchy, read in several places.
+    let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
+    // What a Meraki import resolves before it writes (ADR-164 Inc.4). One value, because the
+    // sync's automatic import and the API's manual one must file a device the same way.
+    let meraki_import = Arc::new(meraki_import::ImportResolver::new(
+        group_repo.clone(),
+        repo.clone(),
+    ));
     let meraki_sync = Arc::new(meraki_sync::MerakiSync::new(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
         Arc::new(meraki_sync::DashboardApi),
         meraki_inflight.clone(),
+        meraki_import.clone(),
     ));
 
     // SNMP v2c (ADR-021): community is resolved per node from its bound credential; an env
@@ -709,9 +721,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // periodically so edits (and window start/end boundaries) take effect without a restart.
     let thresholds = Arc::new(ThresholdStore::new(repo.pool()));
     let maintenance = Arc::new(MaintenanceRepo::new(repo.pool()));
-    // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
-    // group to its subtree, and AdminState serves group CRUD — one hierarchy, read in several places.
-    let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
     // Priming: snapshot the alert config now so `GET /alerts` reads populated thresholds/topology
     // from the first request. The 30s refresh loop that follows edits is leader-only (`leader_work`).
     let topo_sources = topology_projection::TopologySources {
@@ -946,6 +955,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         link_overrides: link_override_repo.clone(),
         meraki_orgs,
         meraki_inventory,
+        meraki_import,
         meraki_sync,
         netbox: netbox.clone(),
         meraki_devices,

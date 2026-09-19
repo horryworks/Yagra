@@ -17,10 +17,19 @@
 //! **What it must never do is conclude from a short answer.** A device the listing does not contain
 //! is marked missing, so the listing has to be complete: [`MerakiDirectory::inventory`] is backed by
 //! `yagra_transport::fetch_inventory`, which returns an error rather than a partial result, and a
-//! failed sync writes its reason and nothing else — not one row of `meraki_inventory`, and not
-//! `last_sync_at`.
+//! sync whose listing failed writes its reason and nothing else — not one row of
+//! `meraki_inventory`, and not `last_sync_at`.
 //!
-//! This increment observes only. No node is created here yet (ADR-164 Inc.4).
+//! **Then it imports** (ADR-164 Inc.4), when the organization says so: a device in a watched
+//! network that Meraki has reported online, and that has never been a node here, becomes one. The
+//! pick is [`crate::meraki_import::pick_automatic`] (pure); everything after the pick is the path a
+//! manual import takes — [`ImportResolver`], then the one writer, `MerakiOrgRepo::import_devices`.
+//! ⚠️ The import runs **after** the inventory is written and can fail on its own (a database read).
+//! That sync is recorded as failed (`internal`) and retried an interval later; the inventory rows
+//! it wrote stay, because they came from a complete listing and are true either way.
+//! An import that created nodes bumps the configuration generation, for the reason the wireless
+//! importer does: the scheduler's cached round holds only the nodes it was built from, and until it
+//! is rebuilt it does not know the new ones are Meraki's.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,6 +41,7 @@ use uuid::Uuid;
 use yagra_transport::{MerakiFetchError, MerakiInventory};
 
 use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiOrg, MerakiOrgRepo};
+use crate::meraki_import::{pick_automatic, ImportResolver};
 use crate::meraki_inventory::{plan_sync, seen_devices, MerakiInventoryRepo};
 use crate::repo::NodeRepo;
 use crate::secrets::CredentialStore;
@@ -185,6 +195,11 @@ pub struct MerakiSyncReport {
     pub written: u32,
     /// Devices that were listed last time and are not now.
     pub newly_missing: u32,
+    /// Devices this sync turned into nodes. Always zero for an organization whose automatic import
+    /// is off.
+    pub imported: u32,
+    /// Devices that qualified for import and were left out by the organization's `max_devices`.
+    pub over_cap: u32,
 }
 
 /// Why a sync did not produce a report.
@@ -217,6 +232,7 @@ pub struct MerakiSync {
     creds: Arc<CredentialStore>,
     directory: Arc<dyn MerakiDirectory>,
     inflight: Arc<MerakiInflight>,
+    resolver: Arc<ImportResolver>,
 }
 
 impl MerakiSync {
@@ -227,6 +243,7 @@ impl MerakiSync {
         creds: Arc<CredentialStore>,
         directory: Arc<dyn MerakiDirectory>,
         inflight: Arc<MerakiInflight>,
+        resolver: Arc<ImportResolver>,
     ) -> Self {
         Self {
             orgs,
@@ -234,6 +251,7 @@ impl MerakiSync {
             creds,
             directory,
             inflight,
+            resolver,
         }
     }
 
@@ -264,6 +282,19 @@ impl MerakiSync {
                     newly_missing = report.newly_missing,
                     "meraki sync completed"
                 );
+                if report.imported > 0 {
+                    // No audit row (ADR-164 決定 11): nobody did this. Who switched automatic import
+                    // on is what the audit log holds, from `PUT …/import-settings`.
+                    tracing::info!(
+                        org = %org.org_id,
+                        imported = report.imported,
+                        over_cap = report.over_cap,
+                        "imported meraki devices as nodes"
+                    );
+                    metrics::counter!("yagra_meraki_devices_imported_total")
+                        .increment(u64::from(report.imported));
+                    crate::config_gen::bump();
+                }
                 Ok(report)
             }
             Err(failure) => {
@@ -281,8 +312,8 @@ impl MerakiSync {
         }
     }
 
-    /// The sync itself. Reads first, writes last: every `?` above the two writes leaves the
-    /// database exactly as it was.
+    /// The sync itself. Reads first, writes last: every `?` above the two inventory writes leaves
+    /// the database exactly as it was. The import comes after them — it reads the rows they wrote.
     async fn attempt(&self, org: &MerakiOrg) -> Result<MerakiSyncReport, MerakiSyncFailure> {
         let api_key = resolve_meraki_key(&self.creds, org.credential_id)
             .await
@@ -317,7 +348,9 @@ impl MerakiSync {
             .collect();
         let network_rows = self
             .orgs
-            .record_networks(org.id, &networks)
+            // With automatic import on, a network seen for the first time is watched from this
+            // sync on. One already stored keeps its flag either way (migration 0125).
+            .record_networks(org.id, &networks, org.import_devices)
             .await
             .map_err(internal("recording the networks failed"))?;
         let device_rows = self
@@ -325,13 +358,65 @@ impl MerakiSync {
             .apply(org.id, &plan)
             .await
             .map_err(internal("writing the inventory failed"))?;
+        let (imported, over_cap) = self.import(org).await?;
 
         Ok(MerakiSyncReport {
             devices: count(seen.len()),
             networks: count(listing.networks.len()),
             written: u32::try_from(network_rows + device_rows).unwrap_or(u32::MAX),
             newly_missing: count(plan.newly_missing.len()),
+            imported,
+            over_cap,
         })
+    }
+
+    /// The import stage: `(imported, over_cap)`. Runs on every successful listing, and for an
+    /// organization whose automatic import is off it does one thing — make sure the row does not
+    /// go on claiming a cap is leaving devices out.
+    ///
+    /// Read from the table rather than from the listing in hand: the three conditions are facts the
+    /// inventory holds (`first_online_at`, `imported_at`, the network's watch flag), and reading
+    /// them where [`crate::meraki_inventory::classify`] reads them is what keeps "New" on the page
+    /// and "imported by the sync" the same set.
+    async fn import(&self, org: &MerakiOrg) -> Result<(u32, u32), MerakiSyncFailure> {
+        let internal = |what: &'static str| {
+            move |e: anyhow::Error| {
+                tracing::warn!(error = %e, "meraki sync: {what}");
+                MerakiSyncFailure::Internal
+            }
+        };
+        if !org.import_devices {
+            self.orgs
+                .record_over_cap(org.id, 0)
+                .await
+                .map_err(internal("clearing the import cap count failed"))?;
+            return Ok((0, 0));
+        }
+        let devices = self
+            .inventory
+            .devices(org.id)
+            .await
+            .map_err(internal("reading the devices to import failed"))?;
+        let pick = pick_automatic(&devices, org.max_devices);
+        let mut imported = 0;
+        if !pick.chosen.is_empty() {
+            let resolved = self
+                .resolver
+                .resolve(pick.chosen, org.file_by_prefix)
+                .await
+                .map_err(internal("resolving where imported devices go failed"))?;
+            imported = self
+                .orgs
+                .import_devices(org, &resolved.devices)
+                .await
+                .map_err(internal("importing devices failed"))?
+                .imported;
+        }
+        self.orgs
+            .record_over_cap(org.id, pick.over_cap)
+            .await
+            .map_err(internal("recording the import cap count failed"))?;
+        Ok((imported, pick.over_cap))
     }
 }
 
@@ -448,6 +533,10 @@ mod tests {
             last_sync_at,
             last_sync_ok: None,
             last_sync_error: None,
+            import_devices: true,
+            file_by_prefix: true,
+            max_devices: 1000,
+            devices_over_cap: 0,
         }
     }
 
@@ -607,12 +696,17 @@ mod tests {
         let inventory = Arc::new(MerakiInventoryRepo::new(pool.clone()));
         let inflight = Arc::new(MerakiInflight::new());
         let directory = FakeDirectory::answering(first);
+        let resolver = Arc::new(ImportResolver::new(
+            Arc::new(crate::groups::GroupRepo::new(pool.clone())),
+            Arc::new(NodeRepo::from_pool(pool.clone())),
+        ));
         let sync = MerakiSync::new(
             orgs.clone(),
             inventory.clone(),
             creds,
             directory.clone(),
             inflight.clone(),
+            resolver,
         );
         Rig {
             sync,
@@ -795,6 +889,255 @@ mod tests {
         );
         assert_eq!(r.directory.asked(), 0);
         assert_eq!(r.org().await.last_sync_error.as_deref(), Some("credential"));
+    }
+
+    // ── the import stage (ADR-164 Inc.4) ─────────────────────────────────────────────────────
+
+    /// The serials that are nodes of `org` right now, sorted.
+    async fn nodes_of(pool: &sqlx::PgPool, org: Uuid) -> Vec<String> {
+        sqlx::query_scalar("SELECT serial FROM meraki_devices WHERE org_id = $1 ORDER BY serial")
+            .bind(org)
+            .fetch_all(pool)
+            .await
+            .expect("bound serials")
+    }
+
+    /// The folder a device's node is filed in.
+    async fn folder_of(pool: &sqlx::PgPool, serial: &str) -> Option<Uuid> {
+        sqlx::query_scalar(
+            "SELECT n.group_id FROM nodes n JOIN meraki_devices d ON d.node_id = n.id \
+             WHERE d.serial = $1",
+        )
+        .bind(serial)
+        .fetch_one(pool)
+        .await
+        .expect("the node's folder")
+    }
+
+    /// ADR-164 決定 5: a device becomes a node when it is in a watched network and Meraki has
+    /// reported it online — and a new organization watches a network from the sync that finds it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_sync_imports_what_has_been_online_and_only_that(pool: sqlx::PgPool) {
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP), ("Q2-B", DOWN)]))).await;
+        assert!(
+            r.org().await.import_devices,
+            "migration 0125: an organization added from here on imports automatically"
+        );
+        let generation = crate::config_gen::current();
+
+        let first = r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!((first.imported, first.over_cap), (1, 0));
+        assert_eq!(
+            nodes_of(&pool, r.org).await,
+            ["Q2-A"],
+            "a device Meraki has never reported online was imported, or the online one was not"
+        );
+        assert_eq!(
+            r.orgs.monitored_network_ids(r.org).await.expect("scope"),
+            ["N_1"],
+            "the network the sync found was not watched"
+        );
+        assert_eq!(
+            folder_of(&pool, "Q2-A").await,
+            Some(crate::meraki::network_group_id(r.org, "N_1")),
+            "with no IP range anywhere the device goes under Organization ▸ Network"
+        );
+        assert!(
+            crate::config_gen::current() > generation,
+            "an import that created a node must make the scheduler rebuild its round"
+        );
+
+        // The ordinary sync: nothing new to import, and nothing written.
+        let again = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!((again.imported, again.written), (0, 0));
+
+        // Q2-B is plugged in. The sync that first sees it online imports it.
+        r.directory
+            .now_answers(Ok(listing(&[("Q2-A", UP), ("Q2-B", UP)])));
+        let third = r.sync.sync_org(&r.org().await).await.expect("third sync");
+        assert_eq!(third.imported, 1);
+        assert_eq!(nodes_of(&pool, r.org).await, ["Q2-A", "Q2-B"]);
+    }
+
+    /// A device an operator deleted stays deleted. `imported_at` outlives the node, and that is the
+    /// whole mechanism — without it the next sync, five minutes later, would put the node back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_device_an_operator_deleted_is_not_imported_again(pool: sqlx::PgPool) {
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(nodes_of(&pool, r.org).await, ["Q2-A"]);
+
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(crate::meraki::device_node_id("Q2-A"))
+            .execute(&pool)
+            .await
+            .expect("the operator deletes the node");
+
+        let after = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(
+            after.imported, 0,
+            "the sync put back a node somebody deleted"
+        );
+        assert!(nodes_of(&pool, r.org).await.is_empty());
+        let devices = r.inventory.devices(r.org).await.expect("devices");
+        assert_eq!(
+            devices[0].state,
+            crate::meraki_inventory::MerakiDeviceState::Deleted
+        );
+    }
+
+    /// Both halves of "off", and the trap behind switching it on later: an organization that was
+    /// imported by hand has networks nobody watched, and turning the switch on watches none of them.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn with_automatic_import_off_nothing_is_imported_and_no_network_is_watched(
+        pool: sqlx::PgPool,
+    ) {
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+        assert!(r
+            .orgs
+            .set_import_settings(r.org, false, true, 1000)
+            .await
+            .expect("switch off"));
+
+        let off = r.sync.sync_org(&r.org().await).await.expect("sync, off");
+        assert_eq!(off.imported, 0);
+        assert!(nodes_of(&pool, r.org).await.is_empty());
+        assert!(
+            r.orgs
+                .monitored_network_ids(r.org)
+                .await
+                .expect("scope")
+                .is_empty(),
+            "a network was watched on behalf of an organization that imports nothing"
+        );
+
+        // Switched on afterwards: N_1 is already known, so it keeps the flag it has, and a device
+        // in a network nobody watches is not imported.
+        r.orgs
+            .set_import_settings(r.org, true, true, 1000)
+            .await
+            .expect("switch on");
+        let on = r.sync.sync_org(&r.org().await).await.expect("sync, on");
+        assert_eq!(
+            on.imported, 0,
+            "a device in an unwatched network was imported"
+        );
+
+        // Watching the network is the operator's step — "Watch all" on the organization's page.
+        r.orgs
+            .set_networks_monitored(r.org, &["N_1".to_owned()], true)
+            .await
+            .expect("watch");
+        let watched = r
+            .sync
+            .sync_org(&r.org().await)
+            .await
+            .expect("sync, watched");
+        assert_eq!(watched.imported, 1);
+        assert_eq!(nodes_of(&pool, r.org).await, ["Q2-A"]);
+    }
+
+    /// The cap stops the import and is never silent about it: what it left out is on the row, goes
+    /// back to zero when the cap is raised, and does not outlive the switch.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_cap_stops_the_import_and_the_row_says_what_it_left_out(pool: sqlx::PgPool) {
+        let r = rig(
+            &pool,
+            Ok(listing(&[("Q2-A", UP), ("Q2-B", UP), ("Q2-C", UP)])),
+        )
+        .await;
+        assert_eq!(
+            r.org().await.max_devices,
+            1000,
+            "migration 0125's column default"
+        );
+        r.orgs
+            .set_import_settings(r.org, true, true, 1)
+            .await
+            .expect("cap at one");
+
+        let capped = r.sync.sync_org(&r.org().await).await.expect("capped sync");
+        assert_eq!((capped.imported, capped.over_cap), (1, 2));
+        assert_eq!(nodes_of(&pool, r.org).await.len(), 1);
+        assert_eq!(r.org().await.devices_over_cap, 2);
+        assert_eq!(
+            r.orgs.record_over_cap(r.org, 2).await.expect("rewrite"),
+            0,
+            "an unchanged count must write nothing: this runs every five minutes"
+        );
+
+        // At the cap: nothing imported, the same two reported.
+        let full = r.sync.sync_org(&r.org().await).await.expect("full sync");
+        assert_eq!((full.imported, full.over_cap), (0, 2));
+
+        // Switching the import off clears a number that would otherwise describe a cap nothing is
+        // applying — and so does the next sync of an organization that is off.
+        r.orgs
+            .set_import_settings(r.org, false, true, 1)
+            .await
+            .expect("switch off");
+        assert_eq!(r.org().await.devices_over_cap, 0);
+
+        r.orgs
+            .set_import_settings(r.org, true, true, 50)
+            .await
+            .expect("raise the cap");
+        let raised = r.sync.sync_org(&r.org().await).await.expect("raised sync");
+        assert_eq!((raised.imported, raised.over_cap), (2, 0));
+        assert_eq!(r.org().await.devices_over_cap, 0);
+        assert_eq!(nodes_of(&pool, r.org).await, ["Q2-A", "Q2-B", "Q2-C"]);
+
+        // The CHECK is the last line of defence behind the API's own bounds.
+        assert!(r
+            .orgs
+            .set_import_settings(r.org, true, true, 0)
+            .await
+            .is_err());
+        assert!(r
+            .orgs
+            .set_import_settings(r.org, true, true, 50_001)
+            .await
+            .is_err());
+    }
+
+    /// The sync files a device exactly as a manual import does — the folder whose IP range holds
+    /// its address — unless the organization says not to.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_sync_files_by_ip_range_unless_the_organization_says_not_to(pool: sqlx::PgPool) {
+        let site = pgtest::group(&pool, "Matsuyama").await;
+        pgtest::prefix(&pool, site, "10.0.0.0/24").await;
+        // `listing` gives every device 10.0.0.1.
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(folder_of(&pool, "Q2-A").await, Some(site));
+        assert_eq!(
+            pgtest::rows(&pool, "node_groups").await,
+            2,
+            "the site and the organization's own folder; a matched device needs no network folder"
+        );
+
+        r.orgs
+            .set_import_settings(r.org, true, false, 1000)
+            .await
+            .expect("stop filing by range");
+        r.directory
+            .now_answers(Ok(listing(&[("Q2-A", UP), ("Q2-B", UP)])));
+        r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(
+            folder_of(&pool, "Q2-B").await,
+            Some(crate::meraki::network_group_id(r.org, "N_1"))
+        );
+        assert_eq!(
+            folder_of(&pool, "Q2-A").await,
+            Some(site),
+            "a node that is already filed is never moved"
+        );
     }
 
     /// Migration 0124, as a behaviour: the floor is one minute, and the default five.

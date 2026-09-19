@@ -10,6 +10,7 @@
 
 import { NAV, sectionItems } from '../../src/nav';
 import { REPORT_TOOL } from '../support/bootstrap';
+import { defaultBodyFor } from '../support/openapi';
 import { TEST_IDS } from '../../src/testIds';
 
 export interface Screen {
@@ -29,6 +30,19 @@ export const NAV_SCREENS: Screen[] = [
   ).values(),
 ];
 
+/**
+ * One Meraki organization's page, opened on **the organization the mock serves**.
+ *
+ * Unlike `/nodes/{id}`, any UUID will not do here: the page has no endpoint of its own for the
+ * organization — it picks the row whose `id` matches the route out of `GET /meraki/orgs` — so an
+ * invented id renders its "does not exist" notice, which would pass every check below while
+ * walking none of the screen. The id is read from the generated body rather than transcribed, so
+ * it moves with the generator instead of drifting from it.
+ */
+export const MERAKI_ORG_SCREEN = `/settings/integrations/meraki/${
+  (defaultBodyFor('/api/v1/meraki/orgs') as { id: string }[])[0].id
+}`;
+
 /** Routes with no nav entry, because they are parameterized or outside the shell. These ARE a
  *  hand-written list, and that is the honest cost of a route the IA does not name — `routes.tsx`
  *  and the three `routeGroups/` files are where to check it against. */
@@ -36,6 +50,7 @@ export const EXTRA_SCREENS: Screen[] = [
   // Any UUID matches the `/nodes/{id}` template, so the mock answers whatever we ask for.
   { path: '/nodes/00000000-0000-4000-8000-000000000001', label: 'nodes.detail' },
   { path: '/settings/integrations/meraki', label: 'settings.integrations.meraki' },
+  { path: MERAKI_ORG_SCREEN, label: 'settings.integrations.meraki.org' },
   { path: '/settings/integrations/netbox', label: 'settings.integrations.netbox' },
   // A report screen with no `?job=` is a scope form, not a report. The id is arbitrary — the mock
   // answers `/analysis/jobs/{id}` for any of them.
@@ -156,6 +171,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/settings/about': MARKER,
   '/nodes/00000000-0000-4000-8000-000000000001': MARKER,
   '/settings/integrations/meraki': MARKER,
+  [MERAKI_ORG_SCREEN]: MARKER,
   '/settings/integrations/netbox': MARKER,
   [`/troubleshoot/report/${REPORT_TOOL}`]: MARKER,
   '/login': {

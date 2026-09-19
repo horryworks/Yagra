@@ -95,6 +95,11 @@ const schemaEnumPins: {
   // otherwise reach the screen as a raw `ap.state.<token>` key with every gate green.
   WlanApState: AssertEqual<(typeof WLAN_AP_STATES)[number], components['schemas']['WlanApState']>;
   MerakiSyncFailure: AssertEqual<MerakiSyncFailure, components['schemas']['MerakiSyncFailure']>;
+  // Both label a row of the organization's device list from the token the server sent
+  // (`meraki.devices.state.*` / `meraki.devices.filing.*`), so a sixth state or reason has to stop
+  // compiling here before it can reach an operator as a raw key (ADR-164 Inc.4/5).
+  MerakiDeviceState: AssertEqual<MerakiDeviceState, components['schemas']['MerakiDeviceState']>;
+  MerakiFilingReason: AssertEqual<MerakiFilingReason, components['schemas']['FilingReason']>;
 } = {
   Severity: true,
   Role: true,
@@ -131,6 +136,8 @@ const schemaEnumPins: {
   TlsCertSource: true,
   WlanApState: true,
   MerakiSyncFailure: true,
+  MerakiDeviceState: true,
+  MerakiFilingReason: true,
   DuplicateEvidenceKind: true,
   DuplicateConfidence: true,
   DuplicateContradiction: true,
@@ -909,6 +916,43 @@ export type MerakiImported = components['schemas']['MerakiImported'];
  *  (`GET /api/v1/meraki/orgs/:id/devices`). */
 export type MerakiDevice = components['schemas']['MerakiDeviceView'];
 
+/** What a device's row is shown as (`MerakiDevice.state`, ADR-164 決定 9).
+ *
+ *  An `as const` array for the reason `MERAKI_SYNC_FAILURES` is one: the organization's page
+ *  builds the label key from the token (`` t(`meraki.devices.state.${state}`) ``) and offers the
+ *  same list as its State filter, so it has to exist at runtime. `i18nEnumKeys.test.ts` iterates
+ *  it and `schemaEnumPins` holds it equal to the backend's closed vocabulary. */
+export const MERAKI_DEVICE_STATES = [
+  'monitored',
+  'new',
+  'never_online',
+  'deleted',
+  'missing',
+] as const;
+
+/** One state a device's row can be in. */
+export type MerakiDeviceState = (typeof MERAKI_DEVICE_STATES)[number];
+
+/** Where an import would file a device that is not a node yet (`MerakiDevice.filing`). `null` on a
+ *  device that already is one — its `folder_id` is then where it *is*, not where it would go. */
+export type MerakiDeviceFiling = components['schemas']['MerakiFilingView'];
+
+/** Why an import would file a device where it would (`MerakiDeviceFiling.reason`).
+ *
+ *  `as const` for the same reason as the states above: the Destination cell builds
+ *  `` t(`meraki.devices.filing.${reason}`) `` from the token. Pinned by `schemaEnumPins` to the
+ *  schema's `FilingReason`. */
+export const MERAKI_FILING_REASONS = [
+  'matched',
+  'ambiguous',
+  'unmatched',
+  'no_address',
+  'not_asked',
+] as const;
+
+/** One reason a device is filed where it is. */
+export type MerakiFilingReason = (typeof MERAKI_FILING_REASONS)[number];
+
 /** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`). */
 export type MerakiOrgOption = components['schemas']['MerakiOrgOption'];
 
@@ -959,12 +1003,6 @@ export type SiteIdBuiltIn = (typeof SITE_ID_BUILT_INS)[number];
 
 /** A network within an org, with its monitored (watch/skip) flag. */
 export type MerakiNetwork = components['schemas']['MerakiNetworkView'];
-
-/** An import candidate device (from `POST /api/v1/meraki/orgs/:id/enumerate`). */
-export type MerakiCandidate = components['schemas']['MerakiCandidate'];
-
-/** The enumerate response: the org's networks + import candidates. */
-export type MerakiEnumeration = components['schemas']['MerakiEnumeration'];
 
 /** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).
  *  Rates/utilization are derived at query time; `null` when there's no data or no known speed. */

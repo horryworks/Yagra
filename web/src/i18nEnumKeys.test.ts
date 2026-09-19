@@ -96,7 +96,12 @@ import { DISCOVERY_WALKS } from './pages/neighborSettings';
 import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
 import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
 import { DESTINATION_KINDS } from './pages/importFiling';
-import { MERAKI_SYNC_FAILURES, PREFIX_SOURCES } from './types/api';
+import {
+  MERAKI_DEVICE_STATES,
+  MERAKI_FILING_REASONS,
+  MERAKI_SYNC_FAILURES,
+  PREFIX_SOURCES,
+} from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
@@ -924,6 +929,31 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enSystem, ja: jaSystem },
       'meraki.sync.reason.',
       MERAKI_SYNC_FAILURES,
+    );
+  });
+
+  it('every state a Meraki device can be in has a label (system:meraki.devices.state.*)', () => {
+    // The organization's page renders `t(`meraki.devices.state.${d.state}`)` in the State column and
+    // offers the same five as its filter. The label is the *whole* signal there — the integrations
+    // screens carry no status dot — so a sixth state with no strings would put a raw key in the one
+    // column that says whether a device is monitored. Pinned to the backend by `schemaEnumPins`.
+    expectKeys(
+      'meraki device state',
+      { en: enSystem, ja: jaSystem },
+      'meraki.devices.state.',
+      MERAKI_DEVICE_STATES,
+    );
+  });
+
+  it('every reason a Meraki device is filed where it is has its sentence (system:meraki.devices.filing.*)', () => {
+    // The Destination cell renders `t(`meraki.devices.filing.${reason}`)` under where an import
+    // would put the device. `FilingReason` is closed on the backend; a sixth reason arriving with
+    // no strings would explain a destination with its own key.
+    expectKeys(
+      'meraki filing reason',
+      { en: enSystem, ja: jaSystem },
+      'meraki.devices.filing.',
+      MERAKI_FILING_REASONS,
     );
   });
 

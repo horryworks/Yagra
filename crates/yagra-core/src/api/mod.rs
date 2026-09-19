@@ -218,6 +218,8 @@ pub struct AdminState {
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
     /// What the Dashboard says each organization holds, kept between syncs (ADR-164).
     pub meraki_inventory: Arc<crate::meraki_inventory::MerakiInventoryRepo>,
+    /// What a Meraki import resolves before it writes — shared with the sync (ADR-164 Inc.4).
+    pub meraki_import: Arc<crate::meraki_import::ImportResolver>,
     /// The inventory sync itself — the same value the leader's loop runs, so "Sync now" and the
     /// loop share one single flight per organization.
     pub meraki_sync: Arc<crate::meraki_sync::MerakiSync>,

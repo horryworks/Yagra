@@ -154,6 +154,9 @@ pub(crate) async fn run_scheduler(
     // resolver's reason, with a sharper edge: an AP node's address is usually `0.0.0.0`, so letting
     // the fleet's APs fall through to ICMP for one round is a false outage for every one of them.
     let mut ap_node_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    // The same, for nodes the Meraki organization collector polls (ADR-164 Inc.4). A Meraki node's
+    // address is `0.0.0.0` whenever the Dashboard reports none, and it is never pinged on purpose.
+    let mut meraki_node_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     // ADR-009 Increment 1. Three facts the three-way mode decision needs, and none of them can come
     // from the coordinator's live registry — which is exactly the point, because that registry is
     // in-memory and therefore empty for the first beat-interval of every core process.
@@ -195,11 +198,6 @@ pub(crate) async fn run_scheduler(
         }
         metrics::counter!("yagra_sweep_cache_misses_total").increment(1);
 
-        // Meraki device nodes are polled by the org collector, not per-node — preload their ids
-        // once per round (like the interval overrides) and skip them, so no per-node lookup runs in
-        // the hot loop. A load failure degrades to an empty set (they'd fall through to the
-        // per-node dispatcher, which then short-circuits them anyway).
-        let meraki_node_ids = elsewhere.meraki.node_ids().await.unwrap_or_default();
         // Resolve the round's intervals: the global default (DB-backed) and any per-profile
         // overrides. On a read failure, degrade to the compiled default / no overrides rather than
         // stalling the poll loop.
@@ -251,12 +249,28 @@ pub(crate) async fn run_scheduler(
                 // AP node this list holds is already in a set read after it — read the other way
                 // round, a node imported between the two reads would be pinged at `0.0.0.0` for a
                 // round.
-                match elsewhere.wireless.ap_node_ids().await {
-                    Ok(ids) => ap_node_ids = ids,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "scheduler: loading wireless AP nodes failed; reusing the last-known set");
-                    }
-                }
+                keep_on_failure(
+                    &mut ap_node_ids,
+                    elsewhere.wireless.ap_node_ids().await,
+                    "wireless AP",
+                );
+                // Meraki device nodes are polled by the organization collector, not per node. Their
+                // ids are read once per round so no per-node lookup enters the hot loop — and read
+                // HERE, after the node list, for the reason the AP set is: the importer commits a
+                // node and its `meraki_devices` binding in one transaction, so any Meraki node this
+                // list holds is in a set read after it. Since ADR-164 Inc.4 the sync imports on
+                // its own every few minutes, so that window is hit routinely rather than once.
+                //
+                // 🚨 A failed read keeps the last set. It used to degrade to an EMPTY one, on the
+                // strength of a comment saying the per-node dispatcher would short-circuit a
+                // Meraki node anyway. The scheduler uses the dispatch path that deliberately does
+                // not ask (`the_scheduler_path_never_asks_whether_a_node_is_meraki`), so one failed
+                // query sent ICMP and SNMP jobs to every Meraki node for a round.
+                keep_on_failure(
+                    &mut meraki_node_ids,
+                    elsewhere.meraki.node_ids().await,
+                    "Meraki device",
+                );
                 let collected_elsewhere: HashSet<Uuid> =
                     meraki_node_ids.union(&ap_node_ids).copied().collect();
                 // Pair each node with its resolved interval, and find the round's smallest so the
@@ -499,6 +513,26 @@ pub(crate) async fn run_scheduler(
     }
 }
 
+/// Take a freshly read id set, or keep the one already held when the read failed.
+///
+/// For the sets of nodes something other than a pool poller collects. Both hold nodes whose
+/// address is usually `0.0.0.0`, so a failed read that emptied the set would hand every one of
+/// them to ICMP for a round — a false outage per node, caused by a query and not by a device.
+/// Stale is the safe failure: a node imported since the last good read is missing from the set
+/// for one round, which is what a failed read costs either way.
+fn keep_on_failure(
+    held: &mut std::collections::HashSet<Uuid>,
+    read: anyhow::Result<std::collections::HashSet<Uuid>>,
+    what: &str,
+) {
+    match read {
+        Ok(ids) => *held = ids,
+        Err(e) => {
+            tracing::warn!(error = %e, "scheduler: loading {what} nodes failed; reusing the last-known set");
+        }
+    }
+}
+
 /// Sleep until the next round is due, or until waiting has stopped being right.
 ///
 /// Two things end the wait early. A poller joining or announcing it is leaving changes the ring, so
@@ -569,6 +603,35 @@ mod tests {
             "an emptied pool must still be reconciled (with an empty desired set)"
         );
         assert_eq!(groups.get("osaka").map(Vec::len), Some(1));
+    }
+
+    /// A failed read must leave the set as it was — emptying it is what pinged every Meraki node
+    /// at `0.0.0.0` for a round (ADR-164 Inc.4) — and a good read must replace it, removals
+    /// included, or a node that stopped being a Meraki node would never be polled again.
+    #[test]
+    fn a_failed_read_keeps_the_last_set_and_a_good_one_replaces_it() {
+        let (a, b, c) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let mut held: std::collections::HashSet<Uuid> = [a, b].into_iter().collect();
+
+        keep_on_failure(&mut held, Err(anyhow::anyhow!("connection reset")), "test");
+        assert_eq!(
+            held,
+            [a, b].into_iter().collect(),
+            "a failed read emptied the set"
+        );
+
+        keep_on_failure(&mut held, Ok([b, c].into_iter().collect()), "test");
+        assert_eq!(
+            held,
+            [b, c].into_iter().collect(),
+            "a good read did not replace the set"
+        );
+
+        keep_on_failure(&mut held, Ok(std::collections::HashSet::new()), "test");
+        assert!(
+            held.is_empty(),
+            "an empty answer is an answer, not a failure"
+        );
     }
 
     #[test]

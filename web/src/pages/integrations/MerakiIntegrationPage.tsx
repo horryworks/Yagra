@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Settings ▸ Integrations ▸ Cisco Meraki. The detail page for the Meraki integration (reached from
-// the Integrations catalog). Onboard Meraki organizations (read-only Dashboard API), manage per-org
-// enable/cadence/scope, launch the import wizard, and toggle the global kill switch.
+// Settings ▸ Integrations ▸ Cisco Meraki. The page for the Meraki integration as a whole (reached
+// from the Integrations catalog): onboard organizations (read-only Dashboard API), manage each
+// one's enable/cadence/network scope, and toggle the global kill switch.
+//
+// What an organization *holds* is not here. Its devices, which of them are monitored and how new
+// ones are imported live on the organization's own page (`MerakiOrgPage`, ADR-164 Inc.4/5) — each
+// row's name and its "Devices" button go there. That page replaced the import wizard this one used
+// to open: a modal could list candidates, but it had nowhere to keep a setting.
 //
 // The API key is entered inline (it belongs to one org set, unlike a shared SNMP community); the
 // backend seals it into the credentials store as a `meraki_api` credential. Everything here is
@@ -9,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../../types/api';
@@ -18,15 +24,15 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../../components/ui/Field';
-import { MerakiImportModal } from '../../components/MerakiImport/MerakiImportModal';
 import { SELECTABLE_MERAKI_TIERS } from '../merakiTiers';
 import './MerakiIntegrationPage.css';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { tierList } from '../merakiTiers';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS } from './merakiRegions';
-import { canSyncNow, orgHasInventory, orgSyncSummary } from './merakiOrgRow';
-import { merakiImportMessage } from './merakiImportResult';
+import { canSyncNow, merakiOrgPath } from './merakiOrgRow';
+import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
+import { useMerakiSync } from './useMerakiSync';
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select). */
 function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -350,13 +356,13 @@ function CadenceModal({
  *  Its own component so "Sync now" has somewhere to keep its busy flag and its failure — a sync is
  *  the one write on this page that takes seconds, and a row that gave no sign of it would be
  *  pressed twice. The judgement (which sync column wins, when counts mean anything, whether the
- *  button is drawn) is in `merakiOrgRow.ts`, where a test reaches it. */
+ *  button is drawn) is in `merakiOrgRow.ts`, where a test reaches it; the sync line and the button
+ *  are `MerakiSyncStatus`, shared with the organization's own page. */
 function OrgRow({
   org,
   canConfig,
   pollingOn,
   onSynced,
-  onImport,
   onNetworks,
   onCadence,
   onToggle,
@@ -366,37 +372,22 @@ function OrgRow({
   canConfig: boolean;
   pollingOn: boolean;
   onSynced: () => void;
-  onImport: () => void;
   onNetworks: () => void;
   onCadence: () => void;
   onToggle: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation('system');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const summary = orgSyncSummary(org);
-  const when = (iso: string) => new Date(iso).toLocaleString();
-
-  const sync = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .syncMerakiOrg(org.id)
-      .catch((e: unknown) => setError(errMsg(e, t('meraki.err.sync'))))
-      // Reloaded on failure too: a sync that ran and failed has written its reason on the row,
-      // and that reason is the useful half of the answer.
-      .finally(() => {
-        setBusy(false);
-        onSynced();
-      });
-  };
+  const navigate = useNavigate();
+  const sync = useMerakiSync(org.id, t('meraki.err.sync'), onSynced);
 
   return (
     <div className="meraki-org">
       <div className="meraki-org-info">
         <div className="meraki-org-main">
-          <span className="meraki-org-name">{org.name}</span>
+          <Link className="meraki-org-name" to={merakiOrgPath(org.id)}>
+            {org.name}
+          </Link>
           <span className="meraki-org-id mono">{t('meraki.orgs.orgId', { id: org.org_id })}</span>
           <span className={`meraki-org-state ${org.enabled ? 'on' : 'off'}`}>
             {org.enabled ? t('meraki.orgs.stateEnabled') : t('meraki.orgs.statePaused')}
@@ -406,70 +397,33 @@ function OrgRow({
           </span>
         </div>
 
-        <div className="meraki-org-sync">
-          {summary.kind === 'never' && <span className="muted">{t('meraki.sync.never')}</span>}
-          {summary.kind === 'ok' && <span>{t('meraki.sync.ok', { when: when(summary.at) })}</span>}
-          {summary.kind === 'failed' && (
-            <>
-              <span className="meraki-org-sync-failed">
-                {t('meraki.sync.failed', { reason: t(`meraki.sync.reason.${summary.reason}`) })}
-              </span>
-              {summary.lastGoodAt && (
-                <span className="muted">
-                  {t('meraki.sync.lastGood', { when: when(summary.lastGoodAt) })}
-                </span>
-              )}
-            </>
-          )}
-          {orgHasInventory(org) && (
-            <>
-              <span>
-                {t('meraki.sync.devices', {
-                  monitored: org.devices.monitored,
-                  seen: org.devices.seen,
-                })}
-              </span>
-              {org.devices.new > 0 && (
-                <span className="meraki-org-sync-new">
-                  {t('meraki.sync.new', { count: org.devices.new })}
-                </span>
-              )}
-              {/* Marked, never acted on: the node and its alerts stay as they are (ADR-156 決定 3). */}
-              {org.devices.missing > 0 && (
-                <span className="meraki-org-sync-failed">
-                  {t('meraki.sync.missing', { count: org.devices.missing })}
-                </span>
-              )}
-            </>
-          )}
-          {error && <span className="meraki-org-sync-failed">{error}</span>}
-        </div>
+        <MerakiSyncStatus org={org} error={sync.error} />
       </div>
 
-      {canConfig && (
-        <div className="meraki-org-actions">
-          {canSyncNow(org, pollingOn) && (
-            <Button variant="outline" onClick={sync} disabled={busy}>
-              {busy ? t('meraki.sync.running') : t('meraki.sync.now')}
+      <div className="meraki-org-actions">
+        {canConfig && canSyncNow(org, pollingOn) && <MerakiSyncButton sync={sync} />}
+        {/* Not behind `canConfig`: it goes to a screen anyone who can read this one can read. The
+            writes on that screen are gated there, each by its own control (ADR-056). */}
+        <Button variant="outline" onClick={() => navigate(merakiOrgPath(org.id))}>
+          {t('meraki.org.devices')}
+        </Button>
+        {canConfig && (
+          <>
+            <Button variant="outline" onClick={onNetworks}>
+              {t('meraki.org.networks')}
             </Button>
-          )}
-          <Button variant="outline" onClick={onImport}>
-            {t('meraki.org.import')}
-          </Button>
-          <Button variant="outline" onClick={onNetworks}>
-            {t('meraki.org.networks')}
-          </Button>
-          <Button variant="outline" onClick={onCadence}>
-            {t('meraki.org.cadence')}
-          </Button>
-          <Button variant="outline" onClick={onToggle}>
-            {org.enabled ? t('meraki.org.pause') : t('meraki.org.resume')}
-          </Button>
-          <Button variant="danger" onClick={onDelete}>
-            {t('common:actions.delete')}
-          </Button>
-        </div>
-      )}
+            <Button variant="outline" onClick={onCadence}>
+              {t('meraki.org.cadence')}
+            </Button>
+            <Button variant="outline" onClick={onToggle}>
+              {org.enabled ? t('meraki.org.pause') : t('meraki.org.resume')}
+            </Button>
+            <Button variant="danger" onClick={onDelete}>
+              {t('common:actions.delete')}
+            </Button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -482,7 +436,6 @@ export function MerakiIntegrationPage() {
   const [block, setBlock] = useState<LoadBlock | null>(null);
   const [pollingOn, setPollingOn] = useState(true);
   const [adding, setAdding] = useState(false);
-  const [importing, setImporting] = useState<MerakiOrg | null>(null);
   const [editing, setEditing] = useState<MerakiOrg | null>(null);
   const [scoping, setScoping] = useState<MerakiOrg | null>(null);
   const [deleting, setDeleting] = useState<MerakiOrg | null>(null);
@@ -490,8 +443,6 @@ export function MerakiIntegrationPage() {
   // into, so its failure lands here. All three of this page's inline writes used to swallow theirs
   // (`.catch(() => undefined)`): a refused pause looked exactly like one that worked (ADR-164).
   const [actionError, setActionError] = useState<string | null>(null);
-  // What the last import did. The endpoint has always answered with a count; the wizard dropped it.
-  const [importNote, setImportNote] = useState<string | null>(null);
 
   const load = useCallback(() => {
     Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()])
@@ -533,7 +484,6 @@ export function MerakiIntegrationPage() {
     return (
       <>
         {actionError && <p className="form-error meraki-page-note">{actionError}</p>}
-        {importNote && <p className="meraki-page-note meraki-page-note-ok">✓ {importNote}</p>}
         <Card title={t('meraki.polling.title')} className="meraki-killswitch-card">
           <label className="meraki-switch">
             <input
@@ -568,7 +518,6 @@ export function MerakiIntegrationPage() {
                   canConfig={canConfig}
                   pollingOn={pollingOn}
                   onSynced={load}
-                  onImport={() => setImporting(o)}
                   onNetworks={() => setScoping(o)}
                   onCadence={() => setEditing(o)}
                   onToggle={() => toggleEnabled(o)}
@@ -581,7 +530,7 @@ export function MerakiIntegrationPage() {
       </>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgs, loading, block, pollingOn, canConfig, actionError, importNote, t]);
+  }, [orgs, loading, block, pollingOn, canConfig, actionError, t]);
 
   return (
     <div>
@@ -597,20 +546,6 @@ export function MerakiIntegrationPage() {
       {content}
 
       {adding && <AddOrgModal onClose={() => setAdding(false)} onSaved={load} />}
-      {importing && (
-        <MerakiImportModal
-          org={importing}
-          onClose={() => setImporting(null)}
-          onImported={(result) => {
-            // Everything not filed by IP range went under the organization's own folder, which
-            // is named after it.
-            const parts = merakiImportMessage(result, importing.name);
-            setImporting(null);
-            setImportNote(parts.map((part) => t(part.key, part.args)).join(' '));
-            load();
-          }}
-        />
-      )}
       {scoping && (
         <NetworksModal
           org={scoping}

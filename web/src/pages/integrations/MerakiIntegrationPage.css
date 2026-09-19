@@ -1,17 +1,10 @@
 /* Settings ▸ Integrations ▸ Cisco Meraki. Uses the shared theme variables (ui-conventions);
    no hardcoded colors so light/dark both work. */
 
-/* The result of a write made straight from the page (kill switch, pause/resume, an import) — those
-   have no dialog to report into. `.form-error` supplies the failure colour; this only spaces it. */
+/* The failure of a write made straight from the page (kill switch, pause/resume) — those have no
+   dialog to report into. `.form-error` supplies the failure colour; this only spaces it. */
 .meraki-page-note {
   margin: 0 0 var(--space-3);
-}
-
-/* Neutral on purpose, like the NetBox page's `.netbox-probe.ok`: the integrations screens keep out
-   of the `--status-*` node-state palette, because a green thing here would read as a node that is
-   up (the same rule `chip.ts` states for the catalog chips). The ✓ carries the meaning. */
-.meraki-page-note-ok {
-  color: var(--text-secondary);
 }
 
 .meraki-killswitch-card {
@@ -62,25 +55,8 @@
   flex: 1 1 18rem;
 }
 
-.meraki-org-sync {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 12px;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-/* Not a --status-* colour, on purpose: a sync that failed is not a node that is down, and painting
-   it red would put a critical-looking thing on screen that no alert corresponds to. The same
-   choice, and the same token, as the NetBox page's .netbox-failed. */
-.meraki-org-sync-failed {
-  color: var(--accent-color);
-  overflow-wrap: anywhere;
-}
-
-.meraki-org-sync-new {
-  color: var(--text-primary);
-}
+/* The sync line under it is `MerakiSyncStatus` — its rules moved to that component's own file when
+   the organization's page started rendering the same line. */
 
 .meraki-org-main {
   display: flex;
@@ -90,9 +66,20 @@
   min-width: 0;
 }
 
+/* A link to the organization's own page. It keeps the row's text colour so the list still reads as
+   a list of names — the visible way in is the row's "Devices" button, and this is the shortcut for
+   someone who clicks the name expecting it to open. Same hover as the other in-row links
+   (`.nd-ap-reported a`). */
 .meraki-org-name {
   font-weight: var(--weight-semibold);
   color: var(--text-primary);
+  text-decoration: none;
+}
+
+.meraki-org-name:hover,
+.meraki-org-name:focus-visible {
+  color: var(--accent-color);
+  text-decoration: underline;
 }
 
 .meraki-org-id {
@@ -156,8 +143,7 @@
   font-size: var(--font-xs);
 }
 
-.meraki-tier-row,
-.meraki-import-net-head {
+.meraki-tier-row {
   display: flex;
   gap: 14px;
   align-items: center;

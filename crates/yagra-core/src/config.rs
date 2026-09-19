@@ -33,6 +33,11 @@ pub const MERAKI_TRAFFIC_MAX_SECS: i32 = 86_400;
 /// minute is still under 1% of the Dashboard API's per-organization limit (migration 0124).
 pub const MERAKI_INVENTORY_MIN_SECS: i32 = 60;
 pub const MERAKI_INVENTORY_MAX_SECS: i32 = 604_800;
+/// The most nodes one organization may be allowed to hold through automatic import (ADR-164).
+/// Mirrors the CHECK in migration 0125; the default a new organization starts with (1000) is that
+/// column's, and lives nowhere else. The cap is never silent: what it leaves out is written back
+/// as `devices_over_cap` and shown on the organization's page.
+pub const MERAKI_MAX_DEVICES_HARD: i32 = 50_000;
 /// Hard cap on the per-org request-rate budget (requests/sec) — a safeguard so an operator can't
 /// dial polling up to a level that would starve the customer's own Dashboard API usage.
 pub const MERAKI_TARGET_RPS_MAX: f64 = 10.0;

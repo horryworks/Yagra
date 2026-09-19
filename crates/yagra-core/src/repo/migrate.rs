@@ -705,6 +705,80 @@ mod tests {
         }
     }
 
+    /// **Migration 0125 leaves an organization that already exists OFF and starts a new one ON**
+    /// (ADR-164 Inc.4).
+    ///
+    /// The file does it with two statements — `ADD COLUMN … DEFAULT FALSE`, which is what fills the
+    /// existing rows, then `SET DEFAULT TRUE` — and the order is the whole decision: every
+    /// organization in a deployment today was imported by hand, and switching automatic import on
+    /// for it would add every device somebody chose to leave out. A harness that migrates first can
+    /// only ever see the second half, and no lab box holds an organization to see the first on, so
+    /// this applies the history in two steps with a row created in between.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0125_leaves_existing_meraki_organizations_off_and_starts_new_ones_on(
+        pool: sqlx::PgPool,
+    ) {
+        const IMPORT_SETTINGS: i64 = 125;
+        let embedded = embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) =
+            embedded.iter().partition(|m| m.version < IMPORT_SETTINGS);
+        assert!(
+            from.iter().any(|m| m.version == IMPORT_SETTINGS),
+            "migration 0125 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let old = orgs
+            .create(
+                "1",
+                "Imported by hand",
+                "https://api.meraki.com",
+                credential,
+            )
+            .await
+            .expect("an organization from before 0125");
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let new = orgs
+            .create(
+                "2",
+                "Added afterwards",
+                "https://api.meraki.com",
+                credential,
+            )
+            .await
+            .expect("an organization from after 0125");
+
+        let old = orgs.get(old).await.expect("get").expect("old");
+        let new = orgs.get(new).await.expect("get").expect("new");
+        assert!(
+            !old.import_devices,
+            "an organization imported by hand was switched to automatic import by the upgrade"
+        );
+        assert!(
+            new.import_devices,
+            "a new organization must import on its own"
+        );
+        // The other three are the same for both.
+        for o in [&old, &new] {
+            assert!(o.file_by_prefix, "{}", o.name);
+            assert_eq!((o.max_devices, o.devices_over_cap), (1000, 0), "{}", o.name);
+        }
+    }
+
     /// **Migrating twice does nothing the second time**, which is what every restart does.
     #[sqlx::test(migrations = false)]
     #[ignore = "needs DATABASE_URL"]

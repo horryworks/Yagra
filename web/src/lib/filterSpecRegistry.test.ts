@@ -46,6 +46,7 @@ import { candidateFilters, endpointFilters } from '../pages/discoveryFilters';
 import { eventRuleFilters, eventSourceFilters } from '../pages/eventConfigFilters';
 import { forwardingFilters } from '../pages/forwardingListFilters';
 import { historyFilters } from '../pages/historyQuery';
+import { merakiDeviceFilters } from '../pages/integrations/merakiDevices';
 import { inventoryFilterSpecs } from '../pages/inventoryFilters';
 import {
   metricSetFilters,
@@ -191,6 +192,11 @@ const REGISTRY: readonly Entry[] = [
     module: 'pages/historyQuery.ts',
     name: 'historyFilters',
     build: () => specColumns(historyFilters(t)),
+  },
+  {
+    module: 'pages/integrations/merakiDevices.ts',
+    name: 'merakiDeviceFilters',
+    build: () => specColumns(merakiDeviceFilters(t)),
   },
   {
     module: 'pages/inventoryFilters.ts',
@@ -428,6 +434,11 @@ const ROUTES: readonly Route[] = [
     tables: [{ entries: ['dependencyFilters', 'dependencyFilters (comparing)'], prefix: '' }],
   },
   { path: '/settings/pollers', own: [], tables: [{ entries: ['pollerFilters'], prefix: '' }] },
+  {
+    path: '/settings/integrations/meraki/:orgId',
+    own: [],
+    tables: [{ entries: ['merakiDeviceFilters'], prefix: '' }],
+  },
   { path: '/settings/api-tokens', own: ['sort', 'dir'], tables: [{ entries: ['tokenFilters'], prefix: '' }] },
   { path: '/troubleshoot/scheduled', own: [], tables: [{ entries: ['scheduleFilters'], prefix: '' }] },
   { path: '/troubleshoot/runs', own: [], tables: [{ entries: ['runFilters'], prefix: '' }] },

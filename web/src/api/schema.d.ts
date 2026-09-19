@@ -1594,7 +1594,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/meraki/orgs/{id}/enumerate": {
+    "/api/v1/meraki/orgs/{id}/import-settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -1602,14 +1602,15 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
         /**
-         * Enumerate an org's networks and devices from the Dashboard API, for the import wizard.
-         * @description Read-only upstream. It upserts the network scope (**preserving monitored flags** — re-enumerating
-         *     must not silently un-watch networks an operator chose) and returns the devices not already
-         *     imported.
+         * Set how the inventory sync imports an organization's devices.
+         * @description With `import_devices` on, each sync turns a device into a node when it is in a watched network,
+         *     Meraki has reported it online at least once, and it has never been a node here — so a device an
+         *     operator deleted stays deleted. A network the sync finds for the first time is watched from then
+         *     on; a network already known keeps its flag. Takes effect at the next sync.
          */
-        post: operations["enumerate_meraki_org"];
+        put: operations["set_meraki_import_settings"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7233,6 +7234,11 @@ export interface components {
             /** Format: int32 */
             lo: number;
         };
+        /**
+         * @description Why a device would be filed where it would be. Serialized as the snake_case token; never stored.
+         * @enum {string}
+         */
+        FilingReason: "matched" | "ambiguous" | "unmatched" | "no_address" | "not_asked";
         /** @description A destination's filter as stored and edited. `{}` deserializes to "match everything". */
         FilterExpr: {
             /** @description The conditions; empty means match everything. */
@@ -8608,15 +8614,6 @@ export interface components {
             /** Format: int32 */
             uplink_secs: number;
         };
-        MerakiCandidate: {
-            lan_ip?: string | null;
-            model?: string | null;
-            name: string;
-            network_id: string;
-            network_name: string;
-            product_type: string;
-            serial: string;
-        };
         /** @description How many organizations an onboarding batch created. */
         MerakiCreated: {
             /** Format: int32 */
@@ -8673,8 +8670,17 @@ export interface components {
         MerakiDeviceState: "monitored" | "new" | "never_online" | "deleted" | "missing";
         /** @description One device of an organization, as the last successful sync recorded it. */
         MerakiDeviceView: {
+            filing?: null | components["schemas"]["MerakiFilingView"];
             /** Format: date-time */
             first_seen_at: string;
+            /**
+             * Format: uuid
+             * @description The folder the device is filed in, when it is a node — or the folder an import would file
+             *     it in, when `filing.reason` is `matched`. `null` for a node at the top of the tree, and for
+             *     a device an import would put under the organization's own folder, in one named after its
+             *     network (that folder is created by the import that first needs it).
+             */
+            folder_id?: string | null;
             /** @description The address Meraki reports, when it reports a usable one. */
             lan_ip?: string | null;
             /**
@@ -8706,14 +8712,6 @@ export interface components {
             enabled: boolean;
         };
         /**
-         * @description What the import wizard reads in one call: the org's network scope, and the devices not yet
-         *     imported.
-         */
-        MerakiEnumeration: {
-            devices: components["schemas"]["MerakiCandidate"][];
-            networks: components["schemas"]["MerakiNetworkView"][];
-        };
-        /**
          * @description How the devices an import **created** were filed. Skipped devices are not counted.
          *
          *     The four add up to the number imported, except when the match was switched off — then all four
@@ -8741,6 +8739,20 @@ export interface components {
              */
             unmatched: number;
         };
+        /**
+         * @description Where an import would file a device that is not a node yet, under the organization's current
+         *     `file_by_prefix` setting and the IP ranges folders carry right now.
+         */
+        MerakiFilingView: {
+            /**
+             * Format: int32
+             * @description How many folders claim the address equally; only with `ambiguous`.
+             */
+            folders?: number | null;
+            /** @description The IP range that claimed the address; only with `matched`. */
+            prefix?: string | null;
+            reason: components["schemas"]["FilingReason"];
+        };
         MerakiImportDeviceReq: {
             lan_ip?: string | null;
             model?: string | null;
@@ -8753,13 +8765,25 @@ export interface components {
         MerakiImportReq: {
             devices: components["schemas"]["MerakiImportDeviceReq"][];
             /**
-             * @description File each device into the folder whose IP range holds its address, when exactly one does.
-             *     Defaults to true; false files every device under the organization's network folders.
+             * @description File each device into the folder whose IP range holds its address, when exactly one does;
+             *     false files every device under the organization's network folders. Absent means the
+             *     organization's own `file_by_prefix` setting — what its page shows and the sync uses.
              */
-            file_by_prefix?: boolean;
+            file_by_prefix?: boolean | null;
             monitored_network_ids?: string[];
             /** Format: uuid */
             org_uuid: string;
+        };
+        MerakiImportSettingsReq: {
+            /** @description File an imported device by its address into the folder whose IP range holds it. */
+            file_by_prefix: boolean;
+            /** @description Turn newly listed devices into nodes on every sync, and watch newly found networks. */
+            import_devices: boolean;
+            /**
+             * Format: int32
+             * @description The most nodes automatic import lets the organization hold. Absent keeps the current cap.
+             */
+            max_devices?: number | null;
         };
         /** @description What an import created, and where it put it. */
         MerakiImported: {
@@ -8798,12 +8822,21 @@ export interface components {
             base_url: string;
             /** @description What the last successful sync found, read against which devices are nodes here. */
             devices: components["schemas"]["MerakiDeviceCounts"];
+            /**
+             * Format: int32
+             * @description How many devices that cap left out on the last sync; zero while automatic import is off.
+             */
+            devices_over_cap: number;
             enabled: boolean;
             enabled_tiers: string[];
+            /** @description Whether an imported device is filed by its address into the folder whose IP range holds it. */
+            file_by_prefix: boolean;
             /** Format: uuid */
             group_id?: string | null;
             /** Format: uuid */
             id: string;
+            /** @description Whether the sync turns newly listed devices into nodes, and watches newly found networks. */
+            import_devices: boolean;
             /** Format: int32 */
             inventory_secs: number;
             /**
@@ -8814,6 +8847,11 @@ export interface components {
             last_sync_error?: null | components["schemas"]["MerakiSyncFailure"];
             /** @description `null` until a sync has run — "has not synced yet" is not "failed". */
             last_sync_ok?: boolean | null;
+            /**
+             * Format: int32
+             * @description The most nodes automatic import lets this organization hold.
+             */
+            max_devices: number;
             name: string;
             org_id: string;
             /** Format: double */
@@ -8846,6 +8884,12 @@ export interface components {
             devices: number;
             /**
              * Format: int32
+             * @description Devices this sync turned into nodes. Always zero for an organization whose automatic import
+             *     is off.
+             */
+            imported: number;
+            /**
+             * Format: int32
              * @description Networks the Dashboard lists.
              */
             networks: number;
@@ -8854,6 +8898,11 @@ export interface components {
              * @description Devices that were listed last time and are not now.
              */
             newly_missing: number;
+            /**
+             * Format: int32
+             * @description Devices that qualified for import and were left out by the organization's `max_devices`.
+             */
+            over_cap: number;
             /**
              * Format: int32
              * @description Inventory and network rows written. Zero is the ordinary answer.
@@ -18945,7 +18994,7 @@ export interface operations {
             };
         };
     };
-    enumerate_meraki_org: {
+    set_meraki_import_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -18955,18 +19004,20 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerakiImportSettingsReq"];
+            };
+        };
         responses: {
-            /** @description The org's networks and the devices not already imported */
-            200: {
+            /** @description Import settings stored; they take effect at the next sync */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["MerakiEnumeration"];
-                };
+                content?: never;
             };
-            /** @description The org's stored API key could not be resolved */
+            /** @description max_devices outside 1–50000 (`invalid_max_devices`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -18995,15 +19046,6 @@ export interface operations {
             };
             /** @description No such organization */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description The Dashboard API call failed; the detail is logged, never returned */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };

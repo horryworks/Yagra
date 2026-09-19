@@ -280,6 +280,9 @@ pub struct DeviceRecord {
     pub lan_ip: Option<IpAddr>,
     pub state: MerakiDeviceState,
     pub node_id: Option<Uuid>,
+    /// The folder the device's node is filed in. `None` without a node, and for a node at the top
+    /// of the tree.
+    pub node_group_id: Option<Uuid>,
     pub first_seen_at: DateTime<Utc>,
     pub missing_since: Option<DateTime<Utc>>,
 }
@@ -395,9 +398,11 @@ impl MerakiInventoryRepo {
         let rows = sqlx::query(
             "SELECT i.serial, i.name, i.model, i.product_type, i.network_id, i.lan_ip, \
                     i.first_seen_at, i.first_online_at, i.missing_since, i.imported_at, \
-                    d.node_id, n.name AS network_name, COALESCE(n.monitored, false) AS monitored \
+                    d.node_id, nd.group_id AS node_group_id, n.name AS network_name, \
+                    COALESCE(n.monitored, false) AS monitored \
              FROM meraki_inventory i \
              LEFT JOIN meraki_devices d ON d.org_id = i.org_id AND d.serial = i.serial \
+             LEFT JOIN nodes nd ON nd.id = d.node_id \
              LEFT JOIN meraki_org_networks n \
                     ON n.org_id = i.org_id AND n.network_id = i.network_id \
              WHERE i.org_id = $1 \
@@ -426,6 +431,7 @@ impl MerakiInventoryRepo {
                 lan_ip: lan_ip.as_deref().and_then(usable_address),
                 state,
                 node_id,
+                node_group_id: r.try_get("node_group_id")?,
                 first_seen_at: r.try_get("first_seen_at")?,
                 missing_since,
             });

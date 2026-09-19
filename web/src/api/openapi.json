@@ -8036,14 +8036,14 @@
         }
       }
     },
-    "/api/v1/meraki/orgs/{id}/enumerate": {
-      "post": {
+    "/api/v1/meraki/orgs/{id}/import-settings": {
+      "put": {
         "tags": [
           "meraki"
         ],
-        "summary": "Enumerate an org's networks and devices from the Dashboard API, for the import wizard.",
-        "description": "Read-only upstream. It upserts the network scope (**preserving monitored flags** — re-enumerating\nmust not silently un-watch networks an operator chose) and returns the devices not already\nimported.",
-        "operationId": "enumerate_meraki_org",
+        "summary": "Set how the inventory sync imports an organization's devices.",
+        "description": "With `import_devices` on, each sync turns a device into a node when it is in a watched network,\nMeraki has reported it online at least once, and it has never been a node here — so a device an\noperator deleted stays deleted. A network the sync finds for the first time is watched from then\non; a network already known keeps its flag. Takes effect at the next sync.",
+        "operationId": "set_meraki_import_settings",
         "parameters": [
           {
             "name": "id",
@@ -8056,19 +8056,22 @@
             }
           }
         ],
-        "responses": {
-          "200": {
-            "description": "The org's networks and the devices not already imported",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MerakiEnumeration"
-                }
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MerakiImportSettingsReq"
               }
             }
           },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Import settings stored; they take effect at the next sync"
+          },
           "400": {
-            "description": "The org's stored API key could not be resolved",
+            "description": "max_devices outside 1–50000 (`invalid_max_devices`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8099,16 +8102,6 @@
           },
           "404": {
             "description": "No such organization",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "The Dashboard API call failed; the detail is logged, never returned",
             "content": {
               "application/json": {
                 "schema": {
@@ -28734,6 +28727,17 @@
         ],
         "description": "Which HTTP status codes count as \"up\". Serialized as a tagged object (the `expected_status`\nJSONB column), e.g. `{\"kind\":\"two_xx\"}` / `{\"kind\":\"exact\",\"codes\":[200,204]}`."
       },
+      "FilingReason": {
+        "type": "string",
+        "description": "Why a device would be filed where it would be. Serialized as the snake_case token; never stored.",
+        "enum": [
+          "matched",
+          "ambiguous",
+          "unmatched",
+          "no_address",
+          "not_asked"
+        ]
+      },
       "FilterExpr": {
         "type": "object",
         "description": "A destination's filter as stored and edited. `{}` deserializes to \"match everything\".",
@@ -31476,45 +31480,6 @@
           }
         }
       },
-      "MerakiCandidate": {
-        "type": "object",
-        "required": [
-          "serial",
-          "name",
-          "product_type",
-          "network_id",
-          "network_name"
-        ],
-        "properties": {
-          "lan_ip": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "network_id": {
-            "type": "string"
-          },
-          "network_name": {
-            "type": "string"
-          },
-          "product_type": {
-            "type": "string"
-          },
-          "serial": {
-            "type": "string"
-          }
-        }
-      },
       "MerakiCreated": {
         "type": "object",
         "description": "How many organizations an onboarding batch created.",
@@ -31630,9 +31595,28 @@
           "first_seen_at"
         ],
         "properties": {
+          "filing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiFilingView",
+                "description": "Where an import would file the device, and why. `null` for a device that is already a\nnode: it is where it is, and no import moves it."
+              }
+            ]
+          },
           "first_seen_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "folder_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The folder the device is filed in, when it is a node — or the folder an import would file\nit in, when `filing.reason` is `matched`. `null` for a node at the top of the tree, and for\na device an import would put under the organization's own folder, in one named after its\nnetwork (that folder is created by the import that first needs it)."
           },
           "lan_ip": {
             "type": [
@@ -31719,28 +31703,6 @@
           }
         }
       },
-      "MerakiEnumeration": {
-        "type": "object",
-        "description": "What the import wizard reads in one call: the org's network scope, and the devices not yet\nimported.",
-        "required": [
-          "networks",
-          "devices"
-        ],
-        "properties": {
-          "devices": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MerakiCandidate"
-            }
-          },
-          "networks": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MerakiNetworkView"
-            }
-          }
-        }
-      },
       "MerakiFiled": {
         "type": "object",
         "description": "How the devices an import **created** were filed. Skipped devices are not counted.\n\nThe four add up to the number imported, except when the match was switched off — then all four\nare zero, because nothing was asked and \"unmatched\" would be a claim about ranges nobody read.",
@@ -31774,6 +31736,34 @@
             "format": "int32",
             "description": "No folder's range holds the address; filed under the network folder.",
             "minimum": 0
+          }
+        }
+      },
+      "MerakiFilingView": {
+        "type": "object",
+        "description": "Where an import would file a device that is not a node yet, under the organization's current\n`file_by_prefix` setting and the IP ranges folders carry right now.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "folders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many folders claim the address equally; only with `ambiguous`.",
+            "minimum": 0
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IP range that claimed the address; only with `matched`."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/FilingReason"
           }
         }
       },
@@ -31831,8 +31821,11 @@
             }
           },
           "file_by_prefix": {
-            "type": "boolean",
-            "description": "File each device into the folder whose IP range holds its address, when exactly one does.\nDefaults to true; false files every device under the organization's network folders."
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "File each device into the folder whose IP range holds its address, when exactly one does;\nfalse files every device under the organization's network folders. Absent means the\norganization's own `file_by_prefix` setting — what its page shows and the sync uses."
           },
           "monitored_network_ids": {
             "type": "array",
@@ -31843,6 +31836,31 @@
           "org_uuid": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "MerakiImportSettingsReq": {
+        "type": "object",
+        "required": [
+          "import_devices",
+          "file_by_prefix"
+        ],
+        "properties": {
+          "file_by_prefix": {
+            "type": "boolean",
+            "description": "File an imported device by its address into the folder whose IP range holds it."
+          },
+          "import_devices": {
+            "type": "boolean",
+            "description": "Turn newly listed devices into nodes on every sync, and watch newly found networks."
+          },
+          "max_devices": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The most nodes automatic import lets the organization hold. Absent keeps the current cap."
           }
         }
       },
@@ -31937,7 +31955,11 @@
           "inventory_secs",
           "enabled_tiers",
           "target_rps",
-          "devices"
+          "devices",
+          "import_devices",
+          "file_by_prefix",
+          "max_devices",
+          "devices_over_cap"
         ],
         "properties": {
           "availability_secs": {
@@ -31952,6 +31974,12 @@
             "$ref": "#/components/schemas/MerakiDeviceCounts",
             "description": "What the last successful sync found, read against which devices are nodes here."
           },
+          "devices_over_cap": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many devices that cap left out on the last sync; zero while automatic import is off.",
+            "minimum": 0
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -31960,6 +31988,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "file_by_prefix": {
+            "type": "boolean",
+            "description": "Whether an imported device is filed by its address into the folder whose IP range holds it."
           },
           "group_id": {
             "type": [
@@ -31971,6 +32003,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "import_devices": {
+            "type": "boolean",
+            "description": "Whether the sync turns newly listed devices into nodes, and watches newly found networks."
           },
           "inventory_secs": {
             "type": "integer",
@@ -32002,6 +32038,12 @@
               "null"
             ],
             "description": "`null` until a sync has run — \"has not synced yet\" is not \"failed\"."
+          },
+          "max_devices": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most nodes automatic import lets this organization hold.",
+            "minimum": 0
           },
           "name": {
             "type": "string"
@@ -32071,13 +32113,21 @@
           "devices",
           "networks",
           "written",
-          "newly_missing"
+          "newly_missing",
+          "imported",
+          "over_cap"
         ],
         "properties": {
           "devices": {
             "type": "integer",
             "format": "int32",
             "description": "Devices the Dashboard lists.",
+            "minimum": 0
+          },
+          "imported": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices this sync turned into nodes. Always zero for an organization whose automatic import\nis off.",
             "minimum": 0
           },
           "networks": {
@@ -32090,6 +32140,12 @@
             "type": "integer",
             "format": "int32",
             "description": "Devices that were listed last time and are not now.",
+            "minimum": 0
+          },
+          "over_cap": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices that qualified for import and were left out by the organization's `max_devices`.",
             "minimum": 0
           },
           "written": {

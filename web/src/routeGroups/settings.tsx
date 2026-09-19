@@ -21,6 +21,7 @@ import { SystemHealthPage } from '../pages/SystemHealthPage';
 import { PollersPage } from '../pages/PollersPage';
 import { IntegrationsCatalogPage } from '../pages/integrations/IntegrationsCatalogPage';
 import { MerakiIntegrationPage } from '../pages/integrations/MerakiIntegrationPage';
+import { MerakiOrgPage } from '../pages/integrations/MerakiOrgPage';
 import { NetboxIntegrationPage } from '../pages/integrations/NetboxIntegrationPage';
 import { AiSettingsPage } from '../pages/AiSettingsPage';
 import { UsersPage } from '../pages/UsersPage';
@@ -45,6 +46,10 @@ export default function SettingsRoutes() {
       <Route path="pollers" element={<PollersPage />} />
       <Route path="integrations" element={<IntegrationsCatalogPage />} />
       <Route path="integrations/meraki" element={<MerakiIntegrationPage />} />
+      {/* One organization's devices and import settings (ADR-164 Inc.4/5). `:orgId` is the
+          organization's Yagra uuid — `merakiOrgPath` in `merakiOrgRow.ts` is the one place that
+          spells this path for a link. */}
+      <Route path="integrations/meraki/:orgId" element={<MerakiOrgPage />} />
       <Route path="integrations/netbox" element={<NetboxIntegrationPage />} />
       <Route path="ai" element={<AiSettingsPage />} />
       <Route path="users" element={<UsersPage />} />

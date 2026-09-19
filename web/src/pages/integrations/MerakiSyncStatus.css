@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* How one Meraki organization's last sync went. Shared by the organization's row and by the
+   organization's own page, so the rules live with the component and not with either screen. */
+
+.meraki-org-sync {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+/* Not a --status-* colour, on purpose: a sync that failed is not a node that is down, and painting
+   it red would put a critical-looking thing on screen that no alert corresponds to. The same
+   choice, and the same token, as the NetBox page's .netbox-failed. */
+.meraki-org-sync-failed {
+  color: var(--accent-color);
+  overflow-wrap: anywhere;
+}
+
+.meraki-org-sync-new {
+  color: var(--text-primary);
+}

@@ -1,0 +1,176 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Settings ▸ Integrations ▸ Cisco Meraki ▸ <organization> (ADR-164 Inc.4/5). Shared theme variables
+   only, so light and dark both work. The table is `DataTable`'s; what is here is the page around
+   it and the cells that carry two lines. */
+
+/* How the organization is doing, in one wrapping line under the header. */
+.meraki-orgpage-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: var(--space-3);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.meraki-orgpage-orgid {
+  color: var(--text-tertiary);
+}
+
+.meraki-orgpage-settings {
+  margin-bottom: var(--space-3);
+}
+
+/* A checkbox with its sentence and the explanation under it. The box lines up with the first line
+   of text, not with the middle of the block — the hint runs to three lines. */
+.meraki-orgpage-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  cursor: pointer;
+}
+
+.meraki-orgpage-check input {
+  margin-top: 3px;
+  flex: none;
+  cursor: pointer;
+}
+
+.meraki-orgpage-check input:disabled {
+  cursor: not-allowed;
+}
+
+.meraki-orgpage-check-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.meraki-orgpage-check-label {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+
+.meraki-orgpage-check-hint {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+/* The cap is one short number; a full-width box would say it takes a sentence. */
+.meraki-orgpage-max {
+  max-width: 16rem;
+}
+
+.meraki-orgpage-save {
+  margin-top: var(--space-3);
+}
+
+/* Something the operator should read, that is not a failure: networks automatic import cannot
+   reach, devices the cap left out. Marked by the bar rather than by the text colour so the numbers
+   stay readable. The accent, not a --status-* colour, for the reason the sync line gives: nothing
+   here is a node that is down. */
+.meraki-orgpage-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent-color);
+  background: var(--bg-secondary);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+}
+
+/* The result of the import, or the failure of a write made from the toolbar. */
+.meraki-orgpage-line {
+  margin: 0 0 var(--space-3);
+}
+
+/* Neutral on purpose, like the NetBox page's `.netbox-probe.ok`: a green thing on an integrations
+   screen would read as a node that is up. The ✓ carries the meaning. */
+.meraki-orgpage-ok {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.meraki-orgpage-back {
+  margin: var(--space-2) 0 0;
+}
+
+.meraki-orgpage-back a {
+  color: var(--accent-color);
+}
+
+/* Explicit height, and a flex column, for the reason `.nd-ap-table` spells out: the content area
+   is not a height-constrained flex column, so `.dt`'s `flex: 1` has nothing to fill. Left to its
+   content the table grows to every row at once, the virtualizer sees them all as on screen, and an
+   organization's list runs to thousands of devices. */
+.meraki-orgpage-table {
+  display: flex;
+  flex-direction: column;
+  height: 60vh; /* fallback for browsers without dvh */
+  height: 60dvh;
+  min-height: 320px;
+}
+
+/* Two lines in one 44px row: what the thing is, and the smaller fact under it. */
+.meraki-dev-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.meraki-dev-line,
+.meraki-dev-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meraki-dev-sub {
+  font-size: var(--font-xs);
+  line-height: 1.25;
+  color: var(--text-tertiary);
+}
+
+/* `EntityName` brings a 28px copy button with it; without this the folder line is as tall as the
+   button and the reason under it is pushed out of the fixed 44px row. Desktop rows only — a card
+   on a phone has no fixed height to protect, and a 20px button is not something a finger hits. */
+html:not([data-viewport='mobile']) .meraki-dev-line .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+
+.meraki-dev-link {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.meraki-dev-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* "not watched", under a network's name: automatic import does not reach this device. The accent,
+   for the reason the notice above the table uses it — it wants reading, and it is not a node state.
+   The words carry the meaning; the colour only finds them. */
+.meraki-dev-flag {
+  color: var(--accent-color);
+}
+
+html[data-viewport='mobile'] .meraki-orgpage-max {
+  max-width: none;
+}
+
+/* Cards stack to their content on a phone, so the scroller needs the room a desktop table does
+   not: most of the screen, measured against the visible viewport (the URL bar moves). */
+html[data-viewport='mobile'] .meraki-orgpage-table {
+  height: 70vh; /* fallback for browsers without dvh */
+  height: 70dvh;
+}

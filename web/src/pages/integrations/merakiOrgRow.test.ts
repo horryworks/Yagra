@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { canSyncNow, orgHasInventory, orgSyncSummary } from './merakiOrgRow';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  MERAKI_PAGE_PATH,
+  canSyncNow,
+  merakiOrgPath,
+  orgHasInventory,
+  orgSyncSummary,
+} from './merakiOrgRow';
 
 describe('orgSyncSummary', () => {
   it('reads an organization that has never synced as never — not as failed', () => {
@@ -59,5 +67,23 @@ describe('canSyncNow', () => {
     expect(canSyncNow({ enabled: false }, true)).toBe(false);
     expect(canSyncNow({ enabled: true }, false)).toBe(false);
     expect(canSyncNow({ enabled: false }, false)).toBe(false);
+  });
+});
+
+describe('merakiOrgPath', () => {
+  it('puts the organization one segment under the Meraki page', () => {
+    expect(merakiOrgPath('0b0e6a9e-1c1c-4d5e-8a3f-2f4f6a7b8c9d')).toBe(
+      '/settings/integrations/meraki/0b0e6a9e-1c1c-4d5e-8a3f-2f4f6a7b8c9d',
+    );
+  });
+
+  it('is a path the settings routes actually serve', () => {
+    // The link and the route are spelled in two files. A route renamed without this helper (or the
+    // other way round) compiles, and the row's name then lands on the settings group's catch-all —
+    // which redirects to the dashboard, so the link "works" and goes nowhere near the organization.
+    const routes = readFileSync(join(__dirname, '../../routeGroups/settings.tsx'), 'utf8');
+    const under = MERAKI_PAGE_PATH.replace('/settings/', '');
+    expect(routes).toContain(`path="${under}"`);
+    expect(routes).toContain(`path="${under}/:orgId"`);
   });
 });

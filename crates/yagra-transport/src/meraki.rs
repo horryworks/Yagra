@@ -3,9 +3,11 @@
 //!
 //! The Dashboard API is org-scoped and bulk: one paged GET returns data for many devices. A
 //! [`collect`] call pages one [`MerakiTier`] of endpoints for an organization and returns raw
-//! per-device observations; the poller fans those out to per-node results. Control-plane helpers
-//! ([`list_organizations`] / [`list_networks`] / [`list_devices`]) back the operator-initiated
-//! import wizard in core. All of it lives here so every byte of Meraki I/O goes through one place.
+//! per-device observations; the poller fans those out to per-node results. [`list_organizations`]
+//! backs "Add organization" in core, and [`fetch_inventory`] its periodic inventory sync — the one
+//! reader of an organization's networks and devices since the import wizard and its two lenient
+//! listings went (ADR-164 Inc.5). All of it lives here so every byte of Meraki I/O goes through
+//! one place.
 //!
 //! Safeguards baked in (never affect the customer's Meraki):
 //! * **GET only.** The only reqwest verb used anywhere in this module is `.get()`; there is no code
@@ -727,7 +729,7 @@ fn parse_traffic(items: &[Value]) -> Vec<DeviceDatum> {
     out
 }
 
-// ── Control-plane (import wizard) ───────────────────────────────────────────────────────────
+// ── Control-plane (adding an organization) ──────────────────────────────────────────────────
 
 /// List the organizations the API key can access (`GET /organizations`). Read-only.
 pub async fn list_organizations(
@@ -756,32 +758,6 @@ pub async fn list_organizations(
             })
         })
         .collect())
-}
-
-/// List the networks in an org (`GET /organizations/{orgId}/networks`). Read-only.
-pub async fn list_networks(
-    base_url: &str,
-    api_key: &str,
-    org_id: &str,
-    timeout: Duration,
-) -> Result<Vec<MerakiNetworkInfo>, TransportError> {
-    let mut s = Session::new(base_url, api_key, 2.0, timeout)?;
-    let path = format!("{API_PREFIX}/organizations/{org_id}/networks");
-    let items = s.get_paged(&path, &[], 1000).await?;
-    Ok(items.iter().filter_map(parse_network_info).collect())
-}
-
-/// List the devices in an org (`GET /organizations/{orgId}/devices`). Read-only.
-pub async fn list_devices(
-    base_url: &str,
-    api_key: &str,
-    org_id: &str,
-    timeout: Duration,
-) -> Result<Vec<MerakiDeviceInfo>, TransportError> {
-    let mut s = Session::new(base_url, api_key, 2.0, timeout)?;
-    let path = format!("{API_PREFIX}/organizations/{org_id}/devices");
-    let items = s.get_paged(&path, &[], 1000).await?;
-    Ok(items.iter().filter_map(parse_device_info).collect())
 }
 
 // ── Inventory (core's periodic sync, ADR-164) ───────────────────────────────────────────────
