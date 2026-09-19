@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.26 — Threshold rules on optical light levels fire, a crafted SNMP inform no longer stops trap reception, folder-scoped accounts can no longer change nodes outside their folders, IPFIX records with variable-length fields are recorded, an alert open longer than the history retention survives a restart, a crashed listener comes back**
+> Status: **v0.3.27 — Access points behind a Huawei wireless controller become monitored nodes (radios as ports, SSIDs as the controller's own rows), the inventory tree narrows to what needs attention and lets a folder sit between nodes, an upgrade no longer re-fires the alerts of devices that are still down, discovery tries every selected credential**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
