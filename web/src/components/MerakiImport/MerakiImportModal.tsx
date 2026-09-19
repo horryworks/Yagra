@@ -18,7 +18,9 @@ export function MerakiImportModal({
 }: {
   org: MerakiOrg;
   onClose: () => void;
-  onImported: () => void;
+  /** How many devices became nodes. Already-imported serials are skipped by the server, so this
+   *  can be fewer than were ticked — which is why the caller is told rather than left to assume. */
+  onImported: (count: number) => void;
 }) {
   const { t } = useTranslation('system');
   const [candidates, setCandidates] = useState<MerakiCandidate[] | null>(null);
@@ -78,7 +80,7 @@ export function MerakiImportModal({
     setError(null);
     api
       .importMerakiDevices({ org_uuid: org.id, monitored_network_ids, devices })
-      .then(() => onImported())
+      .then((res) => onImported(res.imported))
       .catch((e: unknown) => {
         setError(errMsg(e, t('meraki.import.err.import')));
         setBusy(false);

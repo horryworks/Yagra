@@ -91,6 +91,7 @@ import {
 } from './troubleshoot/report/format';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { MERAKI_TIERS } from './pages/merakiTiers';
+import { MERAKI_REGION_KEYS } from './pages/integrations/merakiRegions';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
 import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
 import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
@@ -899,6 +900,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // had strings, so an org with `inventory` enabled showed the operator the raw key. The cadence
     // dialog's checkboxes are a deliberate subset (`SELECTABLE_MERAKI_TIERS`); the *labels* are not.
     expectKeys('meraki tier', { en: enSystem, ja: jaSystem }, 'meraki.tier.', MERAKI_TIERS);
+  });
+
+  it('every Meraki API region has a label (system:meraki.regions.*)', () => {
+    // The "Add organization" dialog renders `t(`meraki.regions.${r.key}`)` for each entry of
+    // `MERAKI_REGIONS`. The list moved out of the page into a registry (ADR-164), which made the
+    // key runtime-built — so a fifth region needs its strings demanded here.
+    expectKeys(
+      'meraki region',
+      { en: enSystem, ja: jaSystem },
+      'meraki.regions.',
+      MERAKI_REGION_KEYS,
+    );
   });
 
   it('every built-in Site ID field has a label (system:netbox.siteIdField.*)', () => {

@@ -564,6 +564,9 @@
       "enumerating": "Enumerating organization…",
       "noData": "No data.",
       "allImported": "No new devices to import — every device this key can see is already monitored.",
+      "done_one": "Imported {{count}} device.",
+      "done_other": "Imported {{count}} devices.",
+      "doneNone": "Nothing was imported — every selected device was already monitored.",
       "err": {
         "enumerate": "failed to enumerate the organization",
         "import": "failed to import devices"
@@ -574,7 +577,10 @@
       "addOrgs": "failed to add organizations",
       "loadNetworks": "failed to load networks",
       "saveScope": "failed to save network scope",
-      "saveCadence": "failed to save cadence"
+      "saveCadence": "failed to save cadence",
+      "polling": "failed to change the polling switch",
+      "toggleOrg": "failed to pause or resume the organization",
+      "delete": "failed to delete the organization"
     }
   },
   "bundle": {

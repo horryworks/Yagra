@@ -172,6 +172,17 @@ const PRE_AGGREGATED: Scoping = Refused(
      not at all; a group-scoped caller gets the refusal rather than the fleet's numbers",
 );
 
+/// A **Meraki write**. Refused to a group-scoped caller (ADR-164) — see
+/// `api/meraki.rs::meraki_is_deployment_wide`.
+///
+/// These nine lines read `ADMIN_CFG` until ADR-164, and that reason was false: the handlers take
+/// `RequireManageConfig`, which an Operator holds, and an Operator can be scoped. The reads stay
+/// `ADMIN_CFG` — an organization's name and cadence are configuration, not monitored-node data.
+const MERAKI_WRITE: Scoping = Refused(
+    "a Meraki organization is monitored as a whole, across every folder — importing files nodes \
+     wherever they belong and deleting purges all of them — so a scoped caller is refused",
+);
+
 /// The write routes. MCP is read-only and the write surface is frozen (ADR-042 decision 6).
 ///
 /// **This is the only shared exemption, and that asymmetry is the design.** Making the write case
@@ -764,26 +775,31 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         NO_MCP_WRITE,
     ),
-    ("POST", "/api/v1/meraki/import", ADMIN_CFG, NO_MCP_WRITE),
+    ("POST", "/api/v1/meraki/import", MERAKI_WRITE, NO_MCP_WRITE),
     ("GET", "/api/v1/meraki/orgs", ADMIN_CFG, Tool("get_config")),
-    ("POST", "/api/v1/meraki/orgs", ADMIN_CFG, NO_MCP_WRITE),
-    ("DELETE", "/api/v1/meraki/orgs/:id", ADMIN_CFG, NO_MCP_WRITE),
+    ("POST", "/api/v1/meraki/orgs", MERAKI_WRITE, NO_MCP_WRITE),
+    (
+        "DELETE",
+        "/api/v1/meraki/orgs/:id",
+        MERAKI_WRITE,
+        NO_MCP_WRITE,
+    ),
     (
         "PUT",
         "/api/v1/meraki/orgs/:id/cadence",
-        ADMIN_CFG,
+        MERAKI_WRITE,
         NO_MCP_WRITE,
     ),
     (
         "PUT",
         "/api/v1/meraki/orgs/:id/enabled",
-        ADMIN_CFG,
+        MERAKI_WRITE,
         NO_MCP_WRITE,
     ),
     (
         "POST",
         "/api/v1/meraki/orgs/:id/enumerate",
-        ADMIN_CFG,
+        MERAKI_WRITE,
         NO_MCP_WRITE,
     ),
     (
@@ -795,13 +811,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/meraki/orgs/:id/networks",
-        ADMIN_CFG,
+        MERAKI_WRITE,
         NO_MCP_WRITE,
     ),
     (
         "POST",
         "/api/v1/meraki/orgs/discover",
-        ADMIN_CFG,
+        MERAKI_WRITE,
         NO_MCP_WRITE,
     ),
     (
@@ -810,7 +826,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         Tool("get_config"),
     ),
-    ("PUT", "/api/v1/meraki/polling", ADMIN_CFG, NO_MCP_WRITE),
+    ("PUT", "/api/v1/meraki/polling", MERAKI_WRITE, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/metric-meanings",

@@ -18299,7 +18299,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18415,7 +18415,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18484,7 +18484,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18541,7 +18541,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18611,7 +18611,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18672,7 +18672,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18740,7 +18740,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18860,7 +18860,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18956,7 +18956,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
