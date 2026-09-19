@@ -31,6 +31,7 @@ import {
   offersCustomName,
   type MetricOption,
 } from '../../lib/metricCatalog';
+import { isImeComposing } from '../../lib/ime';
 import './MetricPicker.css';
 
 interface Props {
@@ -133,6 +134,9 @@ export function MetricPicker({ value, onChange, id, onlyPerInterface }: Props) {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // An IME owns the key while it is composing — Enter confirms a conversion, the arrows walk its
+    // candidates. See `lib/ime.ts`.
+    if (isImeComposing(e)) return;
     const last = flat.length + (custom ? 1 : 0) - 1;
     if (last < 0) return;
     if (e.key === 'ArrowDown') {

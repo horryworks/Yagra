@@ -12,6 +12,7 @@ import { useNodeSearch } from '../../lib/useNodeSearch';
 import { Segmented } from '../../components/ui/Segmented';
 import { useScopeData } from './useScopeData';
 import { allScope, groupScopeLabel, nodeScopeLabel, type ScopeValue } from './scope';
+import { isImeComposing } from '../../lib/ime';
 import './ScopePicker.css';
 
 type Mode = 'all' | 'group' | 'node';
@@ -109,6 +110,9 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
 
   // Arrow-key roving over the node results (Enter selects the active row).
   const onNodeKeyDown = (e: React.KeyboardEvent) => {
+    // An IME owns the key while it is composing — Enter confirms a conversion, the arrows walk its
+    // candidates. See `lib/ime.ts`.
+    if (isImeComposing(e)) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setActive((a) => Math.min(a + 1, shown.length - 1));

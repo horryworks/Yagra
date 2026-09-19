@@ -25,6 +25,7 @@ import {
   resultRoute,
   shouldFocusOnSlash,
 } from './searchBox';
+import { isImeComposing } from '../../lib/ime';
 import './GlobalSearch.css';
 
 export function GlobalSearch({ mobile = false }: { mobile?: boolean }) {
@@ -78,6 +79,9 @@ export function GlobalSearch({ mobile = false }: { mobile?: boolean }) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // The IME owns the key while it is composing (`lib/ime.ts`) — Enter would otherwise open the
+    // first result for the half-typed name.
+    if (isImeComposing(e)) return;
     const action = keyAction(e.key);
     if (!action) return;
     if (action === 'close') {

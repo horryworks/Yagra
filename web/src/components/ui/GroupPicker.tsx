@@ -28,6 +28,7 @@ import { AnchoredPopover } from './AnchoredPopover';
 import { SearchField } from './SearchField';
 import { SEARCH_THRESHOLD } from './MultiSelectList';
 import { filterGroupOptions, type GroupOption } from '../../lib/nodeTree';
+import { isImeComposing } from '../../lib/ime';
 import './GroupPicker.css';
 
 interface Props {
@@ -102,6 +103,9 @@ export function GroupPicker({
   ];
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // An IME owns the key while it is composing — Enter confirms a conversion, the arrows walk its
+    // candidates. See `lib/ime.ts`.
+    if (isImeComposing(e)) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setActive((a) => Math.min(a + 1, rows.length - 1));

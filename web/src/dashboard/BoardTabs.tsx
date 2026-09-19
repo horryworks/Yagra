@@ -9,6 +9,7 @@ import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/Field';
 import { Modal } from '../components/ui/Modal';
 import { useLayoutStoreContext } from './layoutStoreHook';
+import { isImeComposing } from '../lib/ime';
 import './BoardTabs.css';
 
 export function BoardTabs({ editing }: { editing: boolean }) {
@@ -50,6 +51,8 @@ export function BoardTabs({ editing }: { editing: boolean }) {
                 onChange={(e) => setDraft(e.target.value)}
                 onBlur={commitRename}
                 onKeyDown={(e) => {
+                  // A board may be named in Japanese; its Enter belongs to the IME (`lib/ime.ts`).
+                  if (isImeComposing(e)) return;
                   if (e.key === 'Enter') commitRename();
                   if (e.key === 'Escape') setRenamingId(null);
                 }}

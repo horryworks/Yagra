@@ -28,6 +28,7 @@ import {
   conditionIsActive,
   type TextCondition,
 } from '../../lib/filterCondition';
+import { isImeComposing } from '../../lib/ime';
 import './TextConditionEditor.css';
 
 interface Props {
@@ -140,7 +141,9 @@ export function TextConditionEditor({
         onKeyDown={(e) => {
           // Enter commits immediately rather than waiting out the debounce — the operator has said
           // they are done.
-          if (e.key === 'Enter') commitNow(draft);
+          // Not the Enter that confirms an IME conversion (`lib/ime.ts`) — the debounce commits the
+          // finished text a moment later anyway.
+          if (e.key === 'Enter' && !isImeComposing(e)) commitNow(draft);
         }}
         // Same reading as Enter, and why it is not setDraft: emptying the box is a decision, not a
         // keystroke on the way to one. The mode and the NOT toggle survive it — the cell's own ✕
