@@ -1019,3 +1019,7 @@ html[data-viewport='mobile'] .ts-cfgbar .field {
 .ts-tool.ts-tool-readonly {
   cursor: default;
 }
+.ts-tool.ts-tool-readonly:hover {
+  border-color: var(--border-color);
+  box-shadow: none;
+}

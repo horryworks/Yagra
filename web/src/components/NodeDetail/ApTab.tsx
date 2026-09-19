@@ -15,7 +15,7 @@
 // All judgement lives in `apRows.ts` and `tabFilters.ts` beside it — Vitest never runs a `.tsx`
 // (testing.md), so a helper written here is a helper no test executes.
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../../services/api';
@@ -31,7 +31,7 @@ import type {
   WirelessApRow,
 } from '../../types/api';
 import { DataTable, type Column } from '../ui/DataTable';
-import { TableToolbar, TableSpacer } from '../ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../ui/TableToolbar';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { Button } from '../ui/Button';
@@ -100,94 +100,107 @@ export function ApTab({ node, groups, onChanged }: Props) {
   const summary = page?.controller ?? node.wireless?.controller ?? null;
   const rows = page?.aps ?? [];
 
-  const importOne = (row: WirelessApRow) => {
-    setBusyId(row.ap_id);
-    setNote(null);
-    setError(null);
-    api
-      .importWirelessAp(row.ap_id)
-      .then(() => {
-        setNote(t('ap.imported', { ap: apLabel(row) }));
-        setNonce((v) => v + 1);
-        onChanged();
-      })
-      .catch((e: unknown) => setError(errMsg(e, t('ap.err.import'))))
-      .finally(() => setBusyId(null));
-  };
+  // The parent passes a fresh arrow every render; held in a ref so `importOne` — and the columns
+  // built on it — stay the same across renders.
+  const changedRef = useRef(onChanged);
+  changedRef.current = onChanged;
+  const importOne = useCallback(
+    (row: WirelessApRow) => {
+      setBusyId(row.ap_id);
+      setNote(null);
+      setError(null);
+      api
+        .importWirelessAp(row.ap_id)
+        .then(() => {
+          setNote(t('ap.imported', { ap: apLabel(row) }));
+          setNonce((v) => v + 1);
+          changedRef.current();
+        })
+        .catch((e: unknown) => setError(errMsg(e, t('ap.err.import'))))
+        .finally(() => setBusyId(null));
+    },
+    [t],
+  );
 
-  const specs = apFilters(t);
-  const columns: Column<WirelessApRow>[] = [
-    {
-      key: 'ap',
-      header: t('ap.colAp'),
-      width: '1.6fr',
-      render: (r) => (
-        <span className="nd-ap-name">
-          <span>{apLabel(r)}</span>
-          {r.name?.trim() ? <span className="mono nd-muted">{r.mac}</span> : null}
-        </span>
-      ),
-    },
-    {
-      key: 'state',
-      header: t('ap.colState'),
-      width: '1.2fr',
-      render: (r) => (
-        <span className="nd-ap-state">
-          <span className={`nd-ap-dot nd-ap-dot-${apStateKey(r)}`} aria-hidden="true" />
-          <span>{t(`ap.state.${apStateKey(r)}`)}</span>
-          {/* The vendor's own word, verbatim: `normal` / `fault` / `standby` on Huawei, and the
-              list grows per flavour. Translating it would mean inventing a vocabulary the device
-              does not have (決定 14). */}
-          <span className="mono nd-muted">{r.run_state}</span>
-        </span>
-      ),
-    },
-    {
-      key: 'ip',
-      header: t('ap.colAddress'),
-      width: '1.1fr',
-      render: (r) => <span className="mono">{r.ip ?? '—'}</span>,
-    },
-    { key: 'model', header: t('ap.colModel'), width: '1.1fr', render: (r) => r.model ?? '—' },
-    {
-      key: 'clients',
-      header: t('ap.colClients'),
-      width: '90px',
-      align: 'right',
-      render: (r) => (r.clients == null ? '—' : r.clients),
-    },
-    {
-      key: 'reported',
-      header: t('ap.colReportedBy'),
-      width: '1.3fr',
-      render: (r) => <ReportedBy row={r} />,
-    },
-    {
-      key: 'last_seen',
-      header: t('ap.colLastSeen'),
-      width: '1.1fr',
-      render: (r) => <span title={r.last_seen}>{relativeTime(r.last_seen)}</span>,
-    },
-    {
-      key: 'imported',
-      header: t('ap.colImported'),
-      width: '1.2fr',
-      render: (r) =>
-        r.node_id != null ? (
-          <Link to={nodesPageHref({ kind: 'node', id: r.node_id })}>{t('ap.openNode')}</Link>
-        ) : canConfig ? (
-          <Button variant="primary" disabled={busyId != null} onClick={() => importOne(r)}>
-            {t('ap.importAction')}
-          </Button>
-        ) : (
-          // Not a disabled button: a control nobody here can press is not drawn (ADR-056). The
-          // word still has to appear, or the column reads as "imported" for every row.
-          <span className="nd-muted">{t('ap.import.not_imported')}</span>
+  // Memoized like every other `useClientFilters` caller: a fresh column array per render re-runs
+  // the filter and the facet counts over the whole inventory (up to 2,048 rows) each time the
+  // node detail above re-renders.
+  const columns = useMemo(() => {
+    const specs = apFilters(t);
+    const cols: Column<WirelessApRow>[] = [
+      {
+        key: 'ap',
+        header: t('ap.colAp'),
+        width: '1.6fr',
+        render: (r) => (
+          <span className="nd-ap-name">
+            <span>{apLabel(r)}</span>
+            {r.name?.trim() ? <span className="mono nd-muted">{r.mac}</span> : null}
+          </span>
         ),
-    },
-  ];
-  for (const c of columns) c.filter = specs[c.key];
+      },
+      {
+        key: 'state',
+        header: t('ap.colState'),
+        width: '1.2fr',
+        render: (r) => (
+          <span className="nd-ap-state">
+            <span className={`nd-ap-dot nd-ap-dot-${apStateKey(r)}`} aria-hidden="true" />
+            <span>{t(`ap.state.${apStateKey(r)}`)}</span>
+            {/* The vendor's own word, verbatim: `normal` / `fault` / `standby` on Huawei, and the
+                list grows per flavour. Translating it would mean inventing a vocabulary the device
+                does not have (決定 14). */}
+            <span className="mono nd-muted">{r.run_state}</span>
+          </span>
+        ),
+      },
+      {
+        key: 'ip',
+        header: t('ap.colAddress'),
+        width: '1.1fr',
+        render: (r) => <span className="mono">{r.ip ?? '—'}</span>,
+      },
+      { key: 'model', header: t('ap.colModel'), width: '1.1fr', render: (r) => r.model ?? '—' },
+      {
+        key: 'clients',
+        header: t('ap.colClients'),
+        width: '90px',
+        align: 'right',
+        render: (r) => (r.clients == null ? '—' : r.clients),
+      },
+      {
+        key: 'reported',
+        header: t('ap.colReportedBy'),
+        width: '1.3fr',
+        render: (r) => <ReportedBy row={r} />,
+      },
+      {
+        key: 'last_seen',
+        header: t('ap.colLastSeen'),
+        width: '1.1fr',
+        render: (r) => <span title={r.last_seen}>{relativeTime(r.last_seen)}</span>,
+      },
+      {
+        key: 'imported',
+        header: t('ap.colImported'),
+        width: '1.2fr',
+        render: (r) =>
+          r.node_id != null ? (
+            <Link to={nodesPageHref({ kind: 'node', id: r.node_id })}>{t('ap.openNode')}</Link>
+          ) : canConfig ? (
+            <Button variant="primary" disabled={busyId != null} onClick={() => importOne(r)}>
+              {t('ap.importAction')}
+            </Button>
+          ) : (
+            // Not a disabled button: a control nobody here can press is not drawn (ADR-056). The
+            // word still has to appear, or the column reads as "imported" for every row.
+            <span className="nd-muted">{t('ap.import.not_imported')}</span>
+          ),
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+  }, [t, canConfig, busyId, importOne]);
 
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
@@ -224,7 +237,11 @@ export function ApTab({ node, groups, onChanged }: Props) {
         <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
         <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
         <TableSpacer />
-        <span className="nd-muted">{t('ap.summary', { count: rows.length })}</span>
+        <ResultCount
+          shown={shown.length}
+          total={anyFiltered ? rows.length : undefined}
+          noun={t('ap.noun', { count: anyFiltered ? rows.length : shown.length })}
+        />
       </TableToolbar>
       <div className="nd-ap-table">
         <DataTable

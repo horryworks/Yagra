@@ -91,6 +91,9 @@ const schemaEnumPins: {
   TopologyMode: AssertEqual<TopologyMode, components['schemas']['TopologyMode']>;
   RcaConfidence: AssertEqual<RcaConfidence, components['schemas']['RcaConfidence']>;
   TlsCertSource: AssertEqual<TlsCertSource, components['schemas']['TlsCertSource']>;
+  // The runtime array `i18nEnumKeys` and the AP filter iterate — a fourth backend state would
+  // otherwise reach the screen as a raw `ap.state.<token>` key with every gate green.
+  WlanApState: AssertEqual<(typeof WLAN_AP_STATES)[number], components['schemas']['WlanApState']>;
 } = {
   Severity: true,
   Role: true,
@@ -125,6 +128,7 @@ const schemaEnumPins: {
   TopologyMode: true,
   RcaConfidence: true,
   TlsCertSource: true,
+  WlanApState: true,
   DuplicateEvidenceKind: true,
   DuplicateConfidence: true,
   DuplicateContradiction: true,
@@ -817,7 +821,6 @@ export type DiscoveredEndpointPage = components['schemas']['DiscoveredEndpointPa
 export type WirelessApPage = components['schemas']['WirelessApPage'];
 export type WirelessApRow = components['schemas']['WirelessApRow'];
 export type WirelessControllerSummary = components['schemas']['WirelessControllerSummary'];
-export type NodeWireless = components['schemas']['NodeWireless'];
 export type WlanApState = components['schemas']['WlanApState'];
 /** The three states a controller reports for an AP. The API answers `null` for a token this build
  *  does not know, which the screen renders as `unknown` — deliberately not a fourth member here,
@@ -1016,6 +1019,8 @@ export type PoolsResponse = components['schemas']['PoolOptions'];
  *  - `legacy_fanout` — the pool has NO live poller, so jobs go to `yagra.jobs.{pool}` with nothing
  *    subscribed: no owner, and probably unmonitored.
  *  - `meraki` — core's org collector polls it, not a pool poller.
+ *  - `wireless_controller` — an access point: nothing polls it; its readings arrive with its
+ *    controller's poll (ADR-064).
  *  - `unknown` — this core is an HA standby and runs no coordinator. */
 export type PolledBy = components['schemas']['PolledBy'];
 

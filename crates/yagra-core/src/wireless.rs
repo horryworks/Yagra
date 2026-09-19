@@ -183,6 +183,18 @@ pub enum ImportOne {
     NotFound,
     /// No controller that reports it is still monitored, so there is nowhere to file it.
     NoController,
+    /// Filing it where its controller files APs would put it in a folder the caller cannot see
+    /// (ADR-014). Nothing was written.
+    OutOfScope,
+}
+
+/// What one attempt to file an AP as a node did — [`WirelessRepo::import_ap`]'s answer.
+enum Filed {
+    Imported,
+    /// Imported by someone else, or its controller removed, since it was picked.
+    Gone,
+    /// Its destination folder is outside the caller's scope; nothing was written.
+    OutOfScope,
 }
 
 /// Filters for [`WirelessRepo::list_page`].
@@ -501,6 +513,15 @@ impl WirelessRepo {
     /// until it is imported, so the controllers are what bound it. An AP whose every reporting
     /// controller has been deleted is visible only to an unrestricted caller.
     ///
+    /// 🚨 **Visible is not the same as every field visible** (ADR-014). One AP can be reported by an
+    /// HA pair filed in two folders, and a caller who sees one member must not learn the other from
+    /// the row: the sightings are narrowed to controllers in `groups`, and `owner_node_id` and
+    /// `node_id` come back `None` when the node they name is outside it. A `controller_node`
+    /// filter naming a controller outside `groups` matches nothing, so it cannot be used to ask
+    /// which APs that controller reports. (`api::wireless::node_wireless` reads with `None` and
+    /// narrows the same three things itself, because it is called for a node already proved
+    /// visible.)
+    ///
     /// `after` is the keyset cursor: the sort key and id of the last row of the previous page
     /// (ADR-019 — never OFFSET).
     pub async fn list_page(
@@ -512,24 +533,32 @@ impl WirelessRepo {
     ) -> anyhow::Result<Vec<ApRow>> {
         let rows = sqlx::query(
             "SELECT a.ap_id, a.mac, a.name, a.serial, a.model, a.sw_version, host(a.ip) AS ip, \
-                    a.vendor_group, a.run_state, a.state, a.clients, a.node_id, \
-                    oc.node_id AS owner_node_id, a.first_seen, a.last_seen, a.last_associated_at \
+                    a.vendor_group, a.run_state, a.state, a.clients, \
+                    CASE WHEN $1::UUID[] IS NULL OR apn.group_id = ANY($1) \
+                         THEN a.node_id END AS node_id, \
+                    CASE WHEN $1::UUID[] IS NULL OR ocn.group_id = ANY($1) \
+                         THEN oc.node_id END AS owner_node_id, \
+                    a.first_seen, a.last_seen, a.last_associated_at \
              FROM wireless_aps a \
              LEFT JOIN wireless_controllers oc ON oc.id = a.owner_controller_id \
+             LEFT JOIN nodes ocn ON ocn.id = oc.node_id \
+             LEFT JOIN nodes apn ON apn.id = a.node_id \
              WHERE ($1::UUID[] IS NULL OR EXISTS ( \
                        SELECT 1 FROM wireless_ap_sightings s \
                        JOIN wireless_controllers c ON c.id = s.controller_id \
                        JOIN nodes n ON n.id = c.node_id \
                        WHERE s.ap_id = a.ap_id AND n.group_id = ANY($1))) \
-               AND ($2::UUID IS NULL OR EXISTS ( \
+               AND ($2::UUID IS NULL OR (EXISTS ( \
                        SELECT 1 FROM wireless_ap_sightings s \
                        JOIN wireless_controllers c ON c.id = s.controller_id \
-                       WHERE s.ap_id = a.ap_id AND c.node_id = $2)) \
+                       WHERE s.ap_id = a.ap_id AND c.node_id = $2) \
+                    AND ($1::UUID[] IS NULL OR EXISTS ( \
+                       SELECT 1 FROM nodes fnode WHERE fnode.id = $2 AND fnode.group_id = ANY($1))))) \
                AND ($3::TEXT IS NULL OR a.state = $3) \
                AND ($4::TEXT IS NULL \
                     OR strpos(lower(COALESCE(a.name, '')), lower($4)) > 0 \
                     OR strpos(a.mac, lower($4)) > 0 \
-                    OR strpos(COALESCE(host(a.ip), ''), $4) > 0 \
+                    OR strpos(COALESCE(host(a.ip), ''), lower($4)) > 0 \
                     OR strpos(lower(COALESCE(a.model, '')), lower($4)) > 0) \
                AND ($5::TEXT IS NULL OR (lower(COALESCE(a.name, a.mac)), a.ap_id) > ($5, $6)) \
                AND ($8::UUID IS NULL OR a.node_id = $8) \
@@ -585,9 +614,13 @@ impl WirelessRepo {
              JOIN wireless_controllers c ON c.id = s.controller_id \
              JOIN wireless_aps a ON a.ap_id = s.ap_id \
              WHERE s.ap_id = ANY($1) \
+               AND ($2::UUID[] IS NULL OR EXISTS ( \
+                       SELECT 1 FROM nodes cn \
+                       WHERE cn.id = c.node_id AND cn.group_id = ANY($2))) \
              ORDER BY (s.controller_id = a.owner_controller_id) DESC NULLS LAST, s.last_seen DESC",
         )
         .bind(&ids)
+        .bind(groups.map(<[Uuid]>::to_vec))
         .fetch_all(&self.pool)
         .await?;
         let mut by_ap: HashMap<Uuid, Vec<SightingRow>> = HashMap::new();
@@ -793,7 +826,10 @@ impl WirelessRepo {
                 pass.over_cap += 1;
                 continue;
             }
-            if self.import_ap(ap, controller, now).await? {
+            if matches!(
+                self.import_ap(ap, controller, now, None).await?,
+                Filed::Imported
+            ) {
                 *taken += 1;
                 pass.imported += 1;
             }
@@ -815,7 +851,18 @@ impl WirelessRepo {
 
     /// Import one AP by hand, whatever its state, its controller's switch or an earlier deletion —
     /// an operator asking for one AP is the decision the importer otherwise waits for.
-    pub async fn import_one(&self, ap: Uuid, now: DateTime<Utc>) -> anyhow::Result<ImportOne> {
+    ///
+    /// `groups` is the caller's scope, as in [`Self::list_page`]. 🚨 **It narrows both halves of
+    /// the choice** (ADR-014): only a controller the caller can see may file the AP, and the folder
+    /// that controller files into must be one the caller can see too. Without it, a scoped operator
+    /// who sees an HA pair's standby could create a node in the active member's folder — a node
+    /// they cannot open, in an inventory whose administrator never asked for it.
+    pub async fn import_one(
+        &self,
+        ap: Uuid,
+        groups: Option<&[Uuid]>,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<ImportOne> {
         let row = sqlx::query(
             "SELECT a.node_id, c.controller_id \
              FROM wireless_aps a \
@@ -824,11 +871,15 @@ impl WirelessRepo {
                  FROM wireless_ap_sightings s \
                  JOIN wireless_controllers wc ON wc.id = s.controller_id \
                  WHERE s.ap_id = a.ap_id AND wc.node_id IS NOT NULL \
+                   AND ($2::UUID[] IS NULL OR EXISTS ( \
+                           SELECT 1 FROM nodes cn \
+                           WHERE cn.id = wc.node_id AND cn.group_id = ANY($2))) \
                  ORDER BY (wc.id = a.owner_controller_id) DESC NULLS LAST, s.last_seen DESC \
                  LIMIT 1) c ON TRUE \
              WHERE a.ap_id = $1",
         )
         .bind(ap)
+        .bind(groups.map(<[Uuid]>::to_vec))
         .fetch_optional(&self.pool)
         .await?;
         let Some(row) = row else {
@@ -840,8 +891,10 @@ impl WirelessRepo {
         let Some(controller) = row.try_get::<Option<Uuid>, _>("controller_id")? else {
             return Ok(ImportOne::NoController);
         };
-        if self.import_ap(ap, controller, now).await? {
-            return Ok(ImportOne::Imported(ap));
+        match self.import_ap(ap, controller, now, groups).await? {
+            Filed::Imported => return Ok(ImportOne::Imported(ap)),
+            Filed::OutOfScope => return Ok(ImportOne::OutOfScope),
+            Filed::Gone => {}
         }
         // Lost a race with the importer or another request: report what is there now.
         let node: Option<Uuid> =
@@ -853,8 +906,10 @@ impl WirelessRepo {
         Ok(node.map_or(ImportOne::NotFound, ImportOne::AlreadyImported))
     }
 
-    /// Create AP `ap`'s node, filed for `controller`, in one transaction. `false` when the AP was
-    /// imported (or its controller removed) since it was picked.
+    /// Create AP `ap`'s node, filed for `controller`, in one transaction. [`Filed::Gone`] when the
+    /// AP was imported (or its controller removed) since it was picked; [`Filed::OutOfScope`] when
+    /// `allowed` is a caller's scope and the destination folder is not in it — decided inside the
+    /// transaction, against the settings the insert would use.
     ///
     /// The node's id **is** the AP id — MAC-derived, so the same AP is the same node whichever
     /// controller files it, and a re-import after a deletion brings back its history. Its address is
@@ -868,7 +923,8 @@ impl WirelessRepo {
         ap: Uuid,
         controller: Uuid,
         now: DateTime<Utc>,
-    ) -> anyhow::Result<bool> {
+        allowed: Option<&[Uuid]>,
+    ) -> anyhow::Result<Filed> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT a.mac, a.name, host(a.ip) AS ip, a.model, wc.flavor, wc.ap_group_id, \
@@ -884,7 +940,7 @@ impl WirelessRepo {
         .fetch_optional(&mut *tx)
         .await?;
         let Some(row) = row else {
-            return Ok(false);
+            return Ok(Filed::Gone);
         };
         let mac: String = row.try_get("mac")?;
         let name: Option<String> = row.try_get("name")?;
@@ -895,6 +951,14 @@ impl WirelessRepo {
             // Beside the controller, in whatever folder it is in — including none.
             None => row.try_get::<Option<Uuid>, _>("controller_group")?,
         };
+        // A scoped caller may only file into a folder it can see — the top level included, which
+        // no scope contains (`NodeScope::allows_group(None)` is false for every scoped caller).
+        // Dropping `tx` here rolls back and releases the row lock.
+        if let Some(groups) = allowed {
+            if !folder.is_some_and(|f| groups.contains(&f)) {
+                return Ok(Filed::OutOfScope);
+            }
+        }
         // Appended over the destination folder's whole scope (ADR-162). Left at its DEFAULT 0 an
         // imported AP would sit above every sub-folder of the controller's folder.
         let ap_order = crate::groups::append_base_sql("$7", "");
@@ -925,7 +989,7 @@ impl WirelessRepo {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(true)
+        Ok(Filed::Imported)
     }
 }
 
@@ -1512,7 +1576,7 @@ mod tests {
         );
         // …but asking for it by hand does.
         assert_eq!(
-            repo.import_one(deleted, at(5)).await.unwrap(),
+            repo.import_one(deleted, None, at(5)).await.unwrap(),
             ImportOne::Imported(deleted)
         );
         assert!(repo.is_ap_node(deleted).await.unwrap());
@@ -1534,7 +1598,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            repo.import_one(ap, at(1)).await.unwrap(),
+            repo.import_one(ap, None, at(1)).await.unwrap(),
             ImportOne::Imported(ap)
         );
         let read = |pool: sqlx::PgPool| async move {

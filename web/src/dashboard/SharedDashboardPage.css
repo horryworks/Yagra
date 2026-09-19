@@ -21,7 +21,7 @@
 }
 .public-shell-signin {
   color: var(--text-secondary);
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
   text-decoration: none;
   padding: 6px 10px;
   border: 1px solid var(--border-color);

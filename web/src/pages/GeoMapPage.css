@@ -23,7 +23,7 @@
   overflow: hidden;
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-radius: var(--radius) var(--radius) 0 0;
 }
 
 /* Resize handle along the bottom edge — it reads as the map's own bottom rail, not as a separate
@@ -36,7 +36,7 @@
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-top: none;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  border-radius: 0 0 var(--radius) var(--radius);
   cursor: ns-resize;
   touch-action: none; /* the drag is ours; the browser must not scroll the page instead */
 }

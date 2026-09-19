@@ -3,6 +3,8 @@
 // real controller: an AP nobody named, an HA pair reporting the same AP twice, a scoped operator
 // who can see the standby but not the active, and an inventory cut off at the cap.
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { WirelessApRow, WirelessApSighting, WirelessControllerSummary } from '../../types/api';
 import {
@@ -13,6 +15,8 @@ import {
   awaitingFirstInventory,
   isImported,
   reportingControllers,
+  MAX_APS_DEFAULT,
+  MAX_APS_HARD,
 } from './apRows';
 
 const ACTIVE = '11111111-1111-4111-8111-111111111111';
@@ -173,5 +177,31 @@ describe('the controller summary', () => {
     expect(awaitingFirstInventory(summary({ last_inventory_at: null }))).toBe(true);
     expect(awaitingFirstInventory(summary())).toBe(false);
     expect(awaitingFirstInventory(null)).toBe(false);
+  });
+});
+
+// `apRows.ts` holds a second copy of two backend constants because the API does not serve them
+// (its doc says why). A copy with no check drifts silently — and `MAX_APS_HARD` is the page size
+// the tab fetches, so a smaller copy would show a first page as the whole inventory. Read as text,
+// the way `lib/nodeKind.test.ts` reads `node_kind.rs`.
+describe('the AP caps match yagra_common::wlan', () => {
+  const src = readFileSync(
+    join(__dirname, '..', '..', '..', '..', 'crates', 'yagra-common', 'src', 'wlan.rs'),
+    'utf8',
+  );
+  const rustConst = (name: string): number | undefined => {
+    const m = new RegExp(`^pub const ${name}: u32 = (\\d+);$`, 'm').exec(src);
+    return m ? Number(m[1]) : undefined;
+  };
+
+  it('finds both constants in the Rust source', () => {
+    expect(rustConst('MAX_APS_PER_CONTROLLER_DEFAULT')).toBeTypeOf('number');
+    expect(rustConst('MAX_APS_PER_CONTROLLER_HARD')).toBeTypeOf('number');
+    expect(rustConst('NOT_A_REAL_CONST')).toBeUndefined();
+  });
+
+  it('agrees on the default and the hard cap', () => {
+    expect(MAX_APS_DEFAULT).toBe(rustConst('MAX_APS_PER_CONTROLLER_DEFAULT'));
+    expect(MAX_APS_HARD).toBe(rustConst('MAX_APS_PER_CONTROLLER_HARD'));
   });
 });

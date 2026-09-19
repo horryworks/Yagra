@@ -28,6 +28,10 @@
 /* The table needs an explicit height: this pane is not a height-constrained flex column, so a bare
    `flex: 1` collapses to ~150px (the same trap the topology map's 65vh works around). */
 .nd-nb-table {
+  /* A flex column, or `.dt`'s `flex: 1` is ignored and the table grows past this height —
+     see `.nd-ap-table` in ApTab.css for what that did to the virtualizer. */
+  display: flex;
+  flex-direction: column;
   height: 40vh;
   min-height: 220px;
   padding: 0 var(--space-4);

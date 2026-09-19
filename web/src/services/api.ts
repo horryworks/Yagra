@@ -160,6 +160,7 @@ import type {
   DiscoveredEndpointPage,
   WirelessApPage,
   WirelessControllerSummary,
+  WlanApState,
   ImportResult,
   DnsRecordType,
   UserKind,
@@ -970,7 +971,7 @@ export const api = {
   listWirelessAps: (
     opts: {
       controllerNodeId?: string;
-      state?: 'associated' | 'backup' | 'not_associated';
+      state?: WlanApState;
       search?: string;
       limit?: number;
       after?: { key: string; ap_id: string };

@@ -9,15 +9,15 @@
 .netbox-list {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--space-unit) * 1.5);
+  gap: var(--space-3);
 }
 
 .netbox-row {
   display: flex;
   align-items: center;
-  gap: calc(var(--space-unit) * 2);
+  gap: var(--space-4);
   flex-wrap: wrap;
-  padding: calc(var(--space-unit) * 1.5) 0;
+  padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -28,7 +28,7 @@
 .netbox-row-main {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--space-unit) * 0.25);
+  gap: calc(var(--space-1) / 2);
   min-width: 0;
   flex: 1 1 14rem;
 }
@@ -41,21 +41,21 @@
 /* A URL is a technical identifier, so it goes in the monospace family like an IP or an OID. */
 .netbox-row-url {
   font-family: var(--font-family);
-  font-size: calc(var(--font-size-base) * 0.85);
+  font-size: var(--font-xs);
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
 
 .netbox-row-version {
-  font-size: calc(var(--font-size-base) * 0.8);
+  font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
 
 .netbox-row-sync {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--space-unit) * 0.25);
-  font-size: calc(var(--font-size-base) * 0.9);
+  gap: calc(var(--space-1) / 2);
+  font-size: var(--font-sm);
   color: var(--text-secondary);
   flex: 1 1 16rem;
   min-width: 0;
@@ -73,34 +73,34 @@
 .netbox-row-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-unit);
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .netbox-switch {
   display: inline-flex;
   align-items: center;
-  gap: calc(var(--space-unit) * 0.5);
+  gap: var(--space-1);
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
 }
 
 .netbox-field {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--space-unit) * 0.5);
-  margin-bottom: calc(var(--space-unit) * 2);
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
 }
 
 .netbox-field > span:first-child {
   color: var(--text-secondary);
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
 }
 
 .netbox-hint {
   color: var(--text-tertiary);
-  font-size: calc(var(--font-size-base) * 0.8);
+  font-size: var(--font-xs);
 }
 
 /* A hint the operator has to act on rather than one that merely explains — "your token cannot
@@ -112,7 +112,7 @@
 
 .netbox-probe {
   margin: 0;
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: var(--font-sm);
 }
 
 .netbox-probe.ok {
@@ -124,14 +124,14 @@
 }
 
 .netbox-ownership {
-  margin-top: calc(var(--space-unit) * 2);
+  margin-top: var(--space-4);
   margin-bottom: 0;
-  font-size: calc(var(--font-size-base) * 0.85);
+  font-size: var(--font-xs);
 }
 
 /* Touch: the row's controls stack rather than crowding a 44px target row. */
 @media (hover: none) {
   .netbox-row-actions {
-    gap: calc(var(--space-unit) * 1.5);
+    gap: var(--space-3);
   }
 }

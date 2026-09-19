@@ -331,7 +331,3 @@ export function apFilters(t: TFunction): Record<string, ColumnFilterSpec<Wireles
     },
   };
 }
-
-export function apColumns(t: TFunction): FilterableColumn<WirelessApRow>[] {
-  return specColumns(apFilters(t));
-}
