@@ -851,6 +851,27 @@ export function NodeTree({
     setDropTarget(null);
   };
 
+  // 🚨 The end of a drag is heard on the DOCUMENT, not only on the row that was grabbed. That row
+  // is virtualized: a folder above it delivering its members, or the browser's own edge-scroll,
+  // takes it out of the mounted window mid-drag, and a detached node's `dragend` never reaches
+  // React. The drag state then outlived the drag — rows left dimmed and a phantom insertion slot
+  // wedged into the list until the next drag began. `drop` is here too, for a release over
+  // something that is not a drop target of ours at all.
+  const dragging = drag !== null;
+  useEffect(() => {
+    if (!dragging) return undefined;
+    const end = () => {
+      setDrag(null);
+      setDropTarget(null);
+    };
+    document.addEventListener('dragend', end);
+    document.addEventListener('drop', end);
+    return () => {
+      document.removeEventListener('dragend', end);
+      document.removeEventListener('drop', end);
+    };
+  }, [dragging]);
+
   /** Every row this drag will move. 🚨 **`.dragging` used to name the grabbed row alone**, so a
    *  three-row selection dimmed one row — which was the defect saying so on screen, a release
    *  before anyone read it (ADR-124 Inc.4). A `Set` rather than `ids.includes` because the batch
@@ -1282,7 +1303,13 @@ export function NodeTree({
         onDragOver={(e) => {
           if (!drag) return;
           e.preventDefault();
-          setDropTarget({ target: 'root', position: 'inside', ok: true });
+          e.dataTransfer.dropEffect = 'move';
+          // Only when the answer changed — `dragover` repeats while the pointer is held still, and
+          // each write rebuilds the drawn row list. The rows learnt this in ADR-162 増分 2; this
+          // handler was the one that did not.
+          setDropTarget((prev) =>
+            prev && prev.target === 'root' ? prev : { target: 'root', position: 'inside', ok: true },
+          );
         }}
         onDrop={(e) => {
           e.preventDefault();
@@ -1303,8 +1330,48 @@ export function NodeTree({
   };
 
   // Placeholder shown under an open group whose members are still being lazily fetched (A-3).
-  const loadingRow = (depth: number): React.ReactNode => (
-    <div className="ntree-row ntree-loading" role="none" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
+  // 🚨 Both placeholders accept a drop, as "into the folder they stand in for". They are drawn
+  // indented inside it and read as its interior — but they had no `dragover`, so the browser
+  // refused the drop: a node released on "Loading nodes…" went nowhere, with the folder above
+  // still outlined as the destination and nothing said.
+  const placeholderDrop = (groupId: string) => {
+    const group = groups.find((g) => g.id === groupId);
+    const target: Target = { kind: 'group', id: groupId, scope: group?.parent_id ?? null };
+    return {
+      onDragOver: (e: React.DragEvent) => {
+        if (!drag) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        const ok = dropAllowed(groups, drag, target, 'inside');
+        setDropTarget((prev) =>
+          prev &&
+          prev.ok === ok &&
+          prev.position === 'inside' &&
+          prev.target !== 'root' &&
+          prev.target.id === groupId
+            ? prev
+            : { target, position: 'inside', ok },
+        );
+      },
+      onDrop: (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (drag && dropAllowed(groups, drag, target, 'inside')) {
+          perform(dropAction(drag, target, 'inside'));
+        }
+        reset();
+      },
+    };
+  };
+
+  const loadingRow = (depth: number, groupId: string): React.ReactNode => (
+    <div
+      className="ntree-row ntree-loading"
+      role="none"
+      style={{ paddingLeft: depth * INDENT + BASE_PAD }}
+      {...placeholderDrop(groupId)}
+    >
       <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
       <span className="ntree-loading-label muted">{t('tree.loadingNodes')}</span>
     </div>
@@ -1314,7 +1381,12 @@ export function NodeTree({
   // nothing retries on its own any more, and a row that only said "loading" would be a lie the
   // operator waits on forever (ADR-055 R6: say it where they are looking).
   const failedRow = (depth: number, groupId: string): React.ReactNode => (
-    <div className="ntree-row ntree-failed" role="none" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
+    <div
+      className="ntree-row ntree-failed"
+      role="none"
+      style={{ paddingLeft: depth * INDENT + BASE_PAD }}
+      {...placeholderDrop(groupId)}
+    >
       <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
       <span className="ntree-failed-label">{t('tree.loadFailed')}</span>
       {onRetryGroup && (
@@ -1378,7 +1450,7 @@ export function NodeTree({
       case 'ungrouped-node':
         return renderNode(row.node, row.depth, ariaLevel(row));
       case 'group-loading':
-        return loadingRow(row.depth);
+        return loadingRow(row.depth, row.groupId);
       case 'group-failed':
         return failedRow(row.depth, row.groupId);
       case 'ungrouped-head':
@@ -1514,20 +1586,32 @@ export function NodeTree({
     const sel = rowSelection(row);
     if (!sel) return;
     rowVirtualizer.scrollToIndex(index, { align: 'auto' });
-    const box = (document.getElementById(rowDomId(sel)) ?? scrollRef.current)?.getBoundingClientRect();
-    if (!box) return;
-    const x = box.left + MENU_KEY_INSET_PX;
-    const y = box.bottom;
-    if (row.kind === 'group') {
-      if (!groupMenuHasItems(caps)) return;
-      setMenu({ x, y, kind: 'group', group: row.group });
-    } else {
-      const node = rowNode(row);
-      if (!node) return;
-      setMenu({ x, y, kind: 'node', node });
-    }
-    menuOpenedByKey.current = true;
-    focusMenuOnPlace.current = true;
+    const open = () => {
+      const box = (
+        document.getElementById(rowDomId(sel)) ?? scrollRef.current
+      )?.getBoundingClientRect();
+      if (!box) return;
+      const x = box.left + MENU_KEY_INSET_PX;
+      const y = box.bottom;
+      if (row.kind === 'group') {
+        if (!groupMenuHasItems(caps)) return;
+        setMenu({ x, y, kind: 'group', group: row.group });
+      } else {
+        const node = rowNode(row);
+        if (!node) return;
+        setMenu({ x, y, kind: 'node', node });
+      }
+      menuOpenedByKey.current = true;
+      focusMenuOnPlace.current = true;
+    };
+    // 🚨 Read the row's box once the row EXISTS. `scrollToIndex` only writes `scrollTop`; the
+    // virtualizer renders on the scroll event that follows, so a cursor row outside the mounted
+    // window is not in the DOM on the next line. Reading at once fell through to the scroll
+    // container's box, and the menu — which acts on that row — opened at the corner of the pane
+    // while the row scrolled into view somewhere else. Two frames: one for the scroll event, one
+    // for the render it causes.
+    if (document.getElementById(rowDomId(sel))) open();
+    else requestAnimationFrame(() => requestAnimationFrame(open));
   };
 
   // A hidden element cannot take focus, and the popover is hidden until measured — hence placed.
@@ -1765,6 +1849,9 @@ export function NodeTree({
           // pane after pressing a button reads as a broken button.
           pinnedFilter && nothingPinned(pinnedFilter) ? (
             <p className="muted ntree-empty">{t('tree.pinnedEmpty')}</p>
+          ) : withNodesOnly && groups.length > 0 && !filtering && !loading ? (
+            // Folders exist; the switch is what is hiding them. Say so (ADR-055 R6).
+            <p className="muted ntree-empty">{t('tree.withNodesEmpty')}</p>
           ) : filtering ? null : loading ? (
             <p className="muted ntree-empty">{t('tree.loadingNodes')}</p>
           ) : (

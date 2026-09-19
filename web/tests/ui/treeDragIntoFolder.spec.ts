@@ -153,3 +153,64 @@ test('a node dragged down onto a folder lands IN that folder, not in the row tha
   // The operator was shown the folder outlined as the destination. That is where it must go.
   expect(moves[0].group_id).toBe(F);
 });
+
+test.describe('while a folder is still loading its members', () => {
+  // The same tree, but the OUTER folder's members never arrive — so its "Loading nodes…" row stays
+  // on screen, indented inside it, reading as its interior.
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/node-groups': groups(),
+        '/api/v1/fleet/group-summary': summary(),
+      },
+      // A failed read draws the "could not load" row, which sits in the same place and had the
+      // same defect: no `dragover`, so the browser refused the drop.
+      failures: { '/api/v1/nodes/by-group': 503 },
+    },
+  });
+
+  // ⚠️ This pins that the row ACCEPTS a drag, which was the defect. Where the drop then writes is
+  // `dropAction` for an `inside` target, unit-tested in `nodeTreeDnd.test.ts`.
+  test('the folder placeholder row accepts a drag — a browser allows a drop only where dragover was cancelled', async ({
+    page,
+  }) => {
+    const moves = await captureMoves(page);
+    await page.goto('/nodes');
+    // The settled row. "Loading…" is drawn first and replaced when the read fails, so a locator
+    // matching either one can be holding a row that is about to leave the DOM.
+    const placeholder = page.locator('.ntree-failed').first();
+    await expect(placeholder).toBeVisible();
+
+    // Something to carry: any draggable row will do. The bootstrap has none here (every read of
+    // members fails), so the drag is started on the inner folder — a folder INTO its sibling's
+    // parent is a legal move, and what is under test is only that the placeholder accepts a drop.
+    await page.evaluate((name: string) => {
+      const w = window as unknown as { __dt?: DataTransfer };
+      w.__dt = new DataTransfer();
+      const src = [...document.querySelectorAll('.ntree-row')].find((r) => r.textContent?.includes(name));
+      if (!src) throw new Error('no drag source');
+      src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: w.__dt }));
+    }, F_NAME);
+
+    const box = await placeholder.boundingBox();
+    if (!box) throw new Error('no box for the placeholder');
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+
+    // A drop target is an element whose `dragover` was cancelled. That is the whole defect.
+    const accepted = await page.evaluate(
+      ({ x, y }) => {
+        const w = window as unknown as { __dt?: DataTransfer };
+        const el = document.elementFromPoint(x, y);
+        if (!el) throw new Error('nothing under the pointer');
+        const ev = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: w.__dt, clientX: x, clientY: y });
+        el.dispatchEvent(ev);
+        return ev.defaultPrevented;
+      },
+      { x, y },
+    );
+    expect(accepted).toBe(true);
+    expect(moves).toEqual([]); // hovering writes nothing
+  });
+});
