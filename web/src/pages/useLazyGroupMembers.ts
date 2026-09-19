@@ -122,6 +122,15 @@ export function useLazyGroupMembers(opts: {
    *  comes back without its `answered` echo — see `settle` for why that is the only safe reading. */
   const batchSupported = useRef(true);
 
+  /** Which cache the in-flight requests were asked for. `invalidate()` moves it on.
+   *
+   *  🚨 A request already in flight when the cache is invalidated answers a question about the
+   *  inventory AS IT WAS. Adopted, it marked that folder loaded with its pre-write members — and a
+   *  loaded folder is never asked again, so a node moved out of folder A while A was loading was
+   *  drawn under A and under its new folder, with two rows sharing one key, until a reload. The
+   *  re-queue could not save it either: `enqueue` returns early for a key still in `inflight`. */
+  const generation = useRef(0);
+
   /** Start as many queued fetches as the concurrency budget allows, and again as each settles.
    *
    *  A named function expression so it can call itself from `.finally` without a `useCallback`
@@ -138,6 +147,10 @@ export function useLazyGroupMembers(opts: {
           ? q.waiting.splice(ungroupedAt, 1)
           : q.waiting.splice(0, batchSupported.current ? BY_GROUP_BATCH_MAX : 1);
       for (const k of keys) q.inflight.add(k);
+      const askedIn = generation.current;
+      // Every callback below asks this first. A stale answer touches nothing — not the rows, not
+      // the failure set, and not `inflight`, which by then belongs to the new generation.
+      const stale = () => askedIn !== generation.current;
 
       // One folder goes through the single-group endpoint, which every core has always understood.
       // Only a real batch needs the echo, and only a real batch can be misread without it.
@@ -148,6 +161,7 @@ export function useLazyGroupMembers(opts: {
 
       request
         .then((res) => {
+          if (stale()) return;
           if (keys.length === 1) {
             const key = keys[0];
             setLoadedNodes((prev) => ({ ...prev, [key]: res.nodes }));
@@ -193,6 +207,7 @@ export function useLazyGroupMembers(opts: {
           if (res.truncated) setAnyTruncated(true);
         })
         .catch(() => {
+          if (stale()) return;
           // 🚨 **Recording the failure is what stops an unbounded retry loop, and the loop was
           // real** (ADR-125). This used to be an empty catch whose comment said the group would be
           // "retried when it is next opened/selected". It was not: `.finally` below publishes a
@@ -213,6 +228,7 @@ export function useLazyGroupMembers(opts: {
           });
         })
         .finally(() => {
+          if (stale()) return;
           for (const k of keys) q.inflight.delete(k);
           setLoadingGroups((prev) => {
             const next = new Set(prev);
@@ -303,6 +319,11 @@ export function useLazyGroupMembers(opts: {
   }, [ready, revealedGroups, loadMissing]);
 
   const invalidate = useCallback(() => {
+    // Before the state resets, so the effects they trigger queue against an empty queue: every
+    // request still in flight is disowned (`generation`), and its key is free to be asked again.
+    generation.current += 1;
+    queue.current.waiting = [];
+    queue.current.inflight = new Set();
     setLoadedNodes({});
     setLoadedGroups(new Set());
     setLoadingGroups(new Set());
