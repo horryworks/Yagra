@@ -9,7 +9,7 @@
 // last sync work?" from the same three columns, and two vocabularies for one question is how a
 // settings area starts reading as several products.
 
-import type { MerakiOrg, MerakiSyncFailure } from '../../types/api';
+import { MERAKI_SYNC_FAILURES, type MerakiOrg, type MerakiSyncFailure } from '../../types/api';
 
 /** How an organization's last sync should be summarised. */
 export type OrgSyncSummary =
@@ -55,6 +55,35 @@ export function orgHasInventory(org: Pick<MerakiOrg, 'last_sync_at'>): boolean {
 }
 
 /** The Meraki integration's own page. */
+/** One collect tier the Dashboard API is not answering, as the row words it. */
+export interface CollectFailureLine {
+  tier: string;
+  reason: MerakiSyncFailure;
+  /** Whether this is the tier a device's up/down state rides on. While it fails, the
+   *  organization's nodes keep the last state they had, and after three failures in a row one
+   *  alert is raised about the organization. The other tiers failing costs readings only. */
+  stalesNodes: boolean;
+}
+
+/** Which of an organization's collects are failing, the one that matters first (ADR-164 決定 18).
+ *
+ *  Separate from {@link orgSyncSummary} on purpose: that is the inventory *sync* — this server
+ *  asking what the organization holds. A *collect* is a poller asking how the devices are, by
+ *  another route, and either can fail while the other works. A reason this bundle has never
+ *  heard of reads as `internal`, the way the server reads one — never as "not failing". */
+export function orgCollectFailures(
+  org: Pick<MerakiOrg, 'collect_failures'>,
+): CollectFailureLine[] {
+  const known = new Set<string>(MERAKI_SYNC_FAILURES);
+  return [...(org.collect_failures ?? [])]
+    .map((f) => ({
+      tier: f.tier,
+      reason: (known.has(f.reason) ? f.reason : 'internal') as MerakiSyncFailure,
+      stalesNodes: f.tier === 'availability',
+    }))
+    .sort((a, b) => Number(b.stalesNodes) - Number(a.stalesNodes));
+}
+
 export const MERAKI_PAGE_PATH = '/settings/integrations/meraki';
 
 /** One organization's page: its devices and how new ones are imported (ADR-164 Inc.4/5).

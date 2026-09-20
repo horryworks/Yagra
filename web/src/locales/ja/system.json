@@ -524,6 +524,8 @@
       "new_other": "新規 {{count}} 台",
       "missing_other": "Meraki 側に見つからない {{count}} 台",
       "uncollected_other": "未取得 {{count}} 台",
+      "collectFailing": "収集に失敗: {{reason}}。デバイスの状態は、最後に取得したときのままです。",
+      "tierFailing": "{{tier}}の収集に失敗: {{reason}}",
       "now": "今すぐ同期",
       "running": "同期中…",
       "reason": {
@@ -536,7 +538,8 @@
         "malformed": "Meraki API の応答を読めません",
         "truncated": "デバイスの一覧を最後まで取得できませんでした",
         "timeout": "同期が時間内に終わりませんでした",
-        "internal": "Yagra が自分のデータベースを読み書きできません"
+        "internal": "Yagra が自分のデータベースを読み書きできません",
+        "no_answer": "ポーラーから応答がありません"
       }
     },
     "addOrg": {

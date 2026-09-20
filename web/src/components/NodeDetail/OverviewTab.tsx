@@ -11,6 +11,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
+import { collectionFaultNotice } from './collectionFault';
 import { rootCause, type HasSubject } from '../../lib/alertSubject';
 import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Badge } from '../ui/Badge';
@@ -110,8 +111,10 @@ export function OverviewTab({
   canEdit = false,
   onChanged,
 }: Props) {
-  const { t } = useTranslation('nodes');
+  // 'system' holds the failure reasons the stale-state notice quotes; named here so it is loaded.
+  const { t } = useTranslation(['nodes', 'system']);
   const facts = useFacts(node, groups, nodes, unreachable);
+  const fault = collectionFaultNotice(status);
   return (
     <div className="nd-overview">
       {/* Only an ordinary device is pinged at all — see `overviewShowsIcmp`. For the monitor kinds
@@ -173,6 +176,26 @@ export function OverviewTab({
           );
         })}
       </div>
+
+      {/* The state above is the last one collected, not a current one (ADR-164 決定 18): the
+          Meraki API is not answering this node's organization. There is one alert for that, and
+          it is about the organization — so this node has none of its own, and without this line
+          an `ok` from an hour ago reads exactly like an `ok` from a minute ago. */}
+      {fault && (
+        <p className="nd-fault" role="status">
+          {fault.reasonKey
+            ? t('overview.collectionFault', {
+                org: fault.org,
+                reason: t(fault.reasonKey, { ns: 'system' }),
+                since: formatTimestamp(fault.sinceUnixMs),
+              })
+            : t('overview.collectionFaultNoReason', {
+                org: fault.org,
+                since: formatTimestamp(fault.sinceUnixMs),
+              })}{' '}
+          <Link to={fault.orgPath}>{t('overview.collectionFaultLink')}</Link>
+        </p>
+      )}
 
       {status && status.alerts.length > 0 && (
         <section>

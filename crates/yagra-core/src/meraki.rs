@@ -100,6 +100,9 @@ pub struct MerakiOrg {
     pub max_devices: u32,
     /// How many devices that cap left out on the last sync.
     pub devices_over_cap: u32,
+    /// The collect tiers that are failing right now, as the health loop last wrote them
+    /// (migration 0127, ADR-164 決定 18). Empty means none is *known* to be failing.
+    pub collect_failures: Vec<crate::meraki_health::TierFailure>,
 }
 
 impl MerakiOrg {
@@ -131,6 +134,13 @@ impl MerakiOrg {
             file_by_prefix: row.try_get("file_by_prefix")?,
             max_devices: max_devices.max(0) as u32,
             devices_over_cap: devices_over_cap.max(0) as u32,
+            // Read leniently: an entry a newer core wrote with a tier or a shape this build does
+            // not know costs that entry, never the organization (the row is read by the
+            // scheduler, and failing it here would stop the collects it describes).
+            collect_failures: crate::meraki_health::TierFailure::from_stored(
+                row.try_get::<sqlx::types::Json<serde_json::Value>, _>("collect_failures")?
+                    .0,
+            ),
         })
     }
 
@@ -257,14 +267,43 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
     }
 }
 
-/// Per-org single-flight tracker: at most one collect outstanding per org so the org's shared API
-/// rate budget is never exceeded (the #1 safeguard). Acquired at dispatch and cleared when the
-/// collect's first result returns (all fan-out results share the job's id); a lease deadline is the
-/// backstop if a result never arrives (poller crash), so an org can't wedge forever.
+/// Per-org single-flight tracker: at most one Dashboard API session outstanding per org so the
+/// org's shared API rate budget is never exceeded (the #1 safeguard). Acquired at dispatch and
+/// cleared when the collect's first result returns (all fan-out results share the job's id); a
+/// lease deadline is the backstop if a result never arrives (poller crash), so an org can't wedge
+/// forever. The inventory sync takes the same flight (`meraki_sync.rs`).
+///
+/// Since ADR-164 決定 18 it also knows **which job, and which tier, holds the flight**, for two
+/// reasons:
+///
+/// - 🚨 **A result may only release the flight its own job took.** The earlier version kept a
+///   `job → org` map beside an `org → deadline` one and cleared the org for *any* job it still
+///   remembered — so a straggler from a collect whose lease had already run out released the flight
+///   of whatever had been dispatched since, and a second session started against the same
+///   organization. That was theoretical while the collector was the flight's only user and stopped
+///   being so when the sync joined it. (The old `jobs` map also kept one entry forever for every
+///   collect that was never answered.)
+/// - A collect flight whose lease runs out **unanswered** is evidence: a poller from before the
+///   collect report existed fails silently, a pool with no live poller never picks the job up, a
+///   poller can crash mid-collect. [`Self::take_unanswered`] hands those to
+///   [`crate::meraki_health`], which counts them as failures (`no_answer`).
+///
+/// It carries the [`crate::meraki_health::MerakiCollectHealth`] record for the same reason it
+/// exists at all: it is the one Meraki handle the result-ingest path already holds.
 #[derive(Default)]
 pub struct MerakiInflight {
-    orgs: Mutex<HashMap<Uuid, Instant>>, // org → lease deadline (presence = in flight)
-    jobs: Mutex<HashMap<Uuid, Uuid>>,    // job_id → org, to clear on result
+    flights: Mutex<HashMap<Uuid, Flight>>, // org → who holds it
+    unanswered: Mutex<Vec<(Uuid, MerakiTier)>>,
+    /// How each organization's collects have been ending (決定 18).
+    pub health: crate::meraki_health::MerakiCollectHealth,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Flight {
+    job: Uuid,
+    /// `None` for the inventory sync: its failures are recorded on the row, not counted here.
+    tier: Option<MerakiTier>,
+    deadline: Instant,
 }
 
 impl MerakiInflight {
@@ -273,44 +312,93 @@ impl MerakiInflight {
         Self::default()
     }
 
-    /// Try to mark `org` in flight (dispatching `job_id`) for `lease`. Returns `false` if a collect
+    /// Try to mark `org` in flight for the inventory sync's `job_id`. Returns `false` if a session
     /// is already outstanding (and its lease hasn't expired) — the caller then skips this org.
     pub fn acquire(&self, org: Uuid, job_id: Uuid, lease: Duration, now: Instant) -> bool {
-        let mut orgs = self.orgs.lock().expect("meraki inflight orgs poisoned");
-        if orgs.get(&org).is_some_and(|&deadline| deadline > now) {
-            return false;
+        self.take(org, job_id, None, lease, now)
+    }
+
+    /// [`Self::acquire`] for a collect of `tier`, which is what makes an unanswered lease evidence.
+    pub fn acquire_collect(
+        &self,
+        org: Uuid,
+        job_id: Uuid,
+        tier: MerakiTier,
+        lease: Duration,
+        now: Instant,
+    ) -> bool {
+        self.take(org, job_id, Some(tier), lease, now)
+    }
+
+    fn take(
+        &self,
+        org: Uuid,
+        job: Uuid,
+        tier: Option<MerakiTier>,
+        lease: Duration,
+        now: Instant,
+    ) -> bool {
+        let mut flights = self.flights.lock().expect("meraki inflight poisoned");
+        if let Some(held) = flights.get(&org) {
+            if held.deadline > now {
+                return false;
+            }
+            // The lease ran out with no result: whoever held it was never answered.
+            if let Some(tier) = held.tier {
+                self.unanswered
+                    .lock()
+                    .expect("meraki unanswered poisoned")
+                    .push((org, tier));
+            }
         }
-        orgs.insert(org, now + lease);
-        self.jobs
-            .lock()
-            .expect("meraki inflight jobs poisoned")
-            .insert(job_id, org);
+        flights.insert(
+            org,
+            Flight {
+                job,
+                tier,
+                deadline: now + lease,
+            },
+        );
         true
     }
 
-    /// Clear the org owning `job_id` (called for every poll result; a no-op for non-Meraki jobs).
-    pub fn complete(&self, job_id: Uuid) {
-        if let Some(org) = self
-            .jobs
-            .lock()
-            .expect("meraki inflight jobs poisoned")
-            .remove(&job_id)
-        {
-            self.orgs
-                .lock()
-                .expect("meraki inflight orgs poisoned")
-                .remove(&org);
-        }
+    /// Release `org`'s flight **if `job_id` is the job that holds it** (called for every poll
+    /// result; a no-op for non-Meraki jobs). Returns the organization and the tier that was
+    /// answered, so a result from a poller that sends no collect report still counts as an answer.
+    pub fn complete(&self, job_id: Uuid) -> Option<(Uuid, Option<MerakiTier>)> {
+        let mut flights = self.flights.lock().expect("meraki inflight poisoned");
+        let org = flights
+            .iter()
+            .find_map(|(org, held)| (held.job == job_id).then_some(*org))?;
+        let held = flights.remove(&org)?;
+        Some((org, held.tier))
     }
 
-    /// Whether `org` currently has an unexpired outstanding collect.
+    /// The collect flights whose lease has run out with no result, each handed over once.
+    pub fn take_unanswered(&self, now: Instant) -> Vec<(Uuid, MerakiTier)> {
+        let mut out =
+            std::mem::take(&mut *self.unanswered.lock().expect("meraki unanswered poisoned"));
+        let mut flights = self.flights.lock().expect("meraki inflight poisoned");
+        flights.retain(|org, held| {
+            if held.deadline > now {
+                return true;
+            }
+            if let Some(tier) = held.tier {
+                out.push((*org, tier));
+            }
+            false
+        });
+        out
+    }
+
+    /// Whether `org` currently has an unexpired outstanding session.
     #[must_use]
     pub fn is_inflight(&self, org: Uuid, now: Instant) -> bool {
-        self.orgs
+        self.flights
             .lock()
-            .expect("meraki inflight orgs poisoned")
+            .expect("meraki inflight poisoned")
             .get(&org)
-            .is_some_and(|&deadline| deadline > now)
+            .is_some_and(|held| held.deadline > now)
     }
 }
 
@@ -353,7 +441,7 @@ impl MerakiOrgRepo {
     const COLUMNS: &'static str = "id, org_id, name, base_url, credential_id, availability_secs, \
         uplink_secs, traffic_secs, inventory_secs, enabled_tiers, target_rps, group_id, enabled, \
         last_sync_at, last_sync_ok, last_sync_error, import_devices, file_by_prefix, max_devices, \
-        devices_over_cap";
+        devices_over_cap, collect_failures";
 
     /// Every org (for the Integrations UI).
     pub async fn list(&self) -> anyhow::Result<Vec<MerakiOrg>> {
@@ -665,6 +753,43 @@ impl MerakiOrgRepo {
     }
 
     /// The org's monitored network ids (in-scope), for narrowing collect API calls.
+    /// Write which collect tiers are failing (the health loop, on change only). `false` when the
+    /// organization is gone.
+    pub async fn record_collect_failures(
+        &self,
+        org_uuid: Uuid,
+        failures: &[crate::meraki_health::TierFailure],
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE meraki_orgs SET collect_failures = $2, updated_at = now() \
+             WHERE id = $1 AND collect_failures IS DISTINCT FROM $2",
+        )
+        .bind(org_uuid)
+        .bind(sqlx::types::Json(failures))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// `(organization, its name, its nodes)` for every organization — what the alert engine's
+    /// snapshot of Meraki organizations is built from (ADR-164 決定 18). An organization with no
+    /// imported device is listed with no nodes: its name is still what an alert about it is
+    /// called.
+    pub async fn alert_bindings(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>> {
+        let rows = sqlx::query(
+            "SELECT o.id, o.name, \
+                    COALESCE(array_agg(d.node_id) FILTER (WHERE d.node_id IS NOT NULL), \
+                             '{}'::uuid[]) AS nodes \
+             FROM meraki_orgs o LEFT JOIN meraki_devices d ON d.org_id = o.id \
+             GROUP BY o.id, o.name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| Ok((r.try_get("id")?, r.try_get("name")?, r.try_get("nodes")?)))
+            .collect()
+    }
+
     pub async fn monitored_network_ids(&self, org_uuid: Uuid) -> anyhow::Result<Vec<String>> {
         let rows = sqlx::query(
             "SELECT network_id FROM meraki_org_networks WHERE org_id = $1 AND monitored = true",
@@ -983,6 +1108,7 @@ mod tests {
             file_by_prefix: true,
             max_devices: 1000,
             devices_over_cap: 0,
+            collect_failures: Vec::new(),
         }
     }
 
@@ -1081,6 +1207,73 @@ mod tests {
         let later = now + Duration::from_secs(5);
         assert!(!f.is_inflight(org, later));
         assert!(f.acquire(org, Uuid::from_u128(21), Duration::from_secs(1), later));
+    }
+
+    /// 🚨 The defect (/verify 17-5): any job the tracker still remembered cleared the org's
+    /// *current* flight, so a straggler from an expired collect let a second session start.
+    #[test]
+    fn a_late_result_of_an_expired_job_does_not_release_the_flight_that_followed_it() {
+        let f = MerakiInflight::new();
+        let org = Uuid::from_u128(3);
+        let now = Instant::now();
+        let lease = Duration::from_secs(300);
+        let (old, current) = (Uuid::from_u128(30), Uuid::from_u128(31));
+        assert!(f.acquire_collect(org, old, MerakiTier::Availability, lease, now));
+        let later = now + lease + Duration::from_secs(1);
+        assert!(
+            f.acquire(org, current, lease, later),
+            "the sync takes the expired flight"
+        );
+
+        assert_eq!(
+            f.complete(old),
+            None,
+            "a straggler released a flight it does not hold"
+        );
+        assert!(f.is_inflight(org, later));
+        assert_eq!(f.complete(current), Some((org, None)));
+        assert!(!f.is_inflight(org, later));
+    }
+
+    /// A collect nobody answered is evidence (決定 18) — reported once, whether the next dispatch or
+    /// the health loop is what notices the lease has run out. The sync's flight never is: its
+    /// failures are recorded on the row.
+    #[test]
+    fn a_collect_whose_lease_runs_out_unanswered_is_handed_over_exactly_once() {
+        let f = MerakiInflight::new();
+        let (a, b, c) = (Uuid::from_u128(4), Uuid::from_u128(5), Uuid::from_u128(6));
+        let now = Instant::now();
+        let lease = Duration::from_secs(300);
+        assert!(f.acquire_collect(a, Uuid::from_u128(40), MerakiTier::Availability, lease, now));
+        assert!(f.acquire_collect(b, Uuid::from_u128(50), MerakiTier::Uplink, lease, now));
+        assert!(f.acquire(c, Uuid::from_u128(60), lease, now));
+        assert_eq!(f.take_unanswered(now), vec![], "nothing has run out yet");
+
+        let later = now + lease + Duration::from_secs(1);
+        // `a` is noticed by the next dispatch, `b` and `c` by the sweep.
+        assert!(f.acquire_collect(a, Uuid::from_u128(41), MerakiTier::Uplink, lease, later));
+        let mut got = f.take_unanswered(later);
+        got.sort_by_key(|(org, _)| *org);
+        assert_eq!(
+            got,
+            vec![(a, MerakiTier::Availability), (b, MerakiTier::Uplink)]
+        );
+        assert_eq!(
+            f.take_unanswered(later),
+            vec![],
+            "handed over a second time"
+        );
+        assert!(
+            f.is_inflight(a, later),
+            "the flight that replaced it is untouched"
+        );
+
+        // An answered collect is never reported, however late the sweep comes.
+        assert_eq!(
+            f.complete(Uuid::from_u128(41)),
+            Some((a, Some(MerakiTier::Uplink)))
+        );
+        assert_eq!(f.take_unanswered(later + lease + lease), vec![]);
     }
 
     #[test]
@@ -1709,6 +1902,97 @@ mod tests {
             pgtest::rows(&pool, "node_groups").await,
             3,
             "a network folder was created for devices that were filed elsewhere"
+        );
+    }
+
+    /// What the alert engine's snapshot of Meraki organizations is built from (ADR-164 決定 18): every
+    /// organization with its name and its nodes — including one with no imported device, whose name
+    /// is still what an alert about it is called.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn every_organization_is_listed_with_its_name_and_its_nodes(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let acme = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+        let empty = repo
+            .create("2", "Nothing imported", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+        let org = repo.get(acme).await.expect("get").expect("the org");
+        repo.import_devices(
+            &org,
+            &[device("Q3-1", "N_1", "One"), device("Q3-2", "N_2", "Two")],
+        )
+        .await
+        .expect("import");
+
+        let mut got = repo.alert_bindings().await.expect("bindings");
+        got.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(got.len(), 2);
+        let (id, name, mut nodes) = got[0].clone();
+        nodes.sort_unstable();
+        let mut want = vec![device_node_id("Q3-1"), device_node_id("Q3-2")];
+        want.sort_unstable();
+        assert_eq!((id, name.as_str()), (acme, "Acme"));
+        assert_eq!(nodes, want);
+        assert_eq!(got[1], (empty, "Nothing imported".to_owned(), Vec::new()));
+    }
+
+    /// Which collects are failing is kept on the row (migration 0127) so that a core that has just
+    /// started — or a standby that never heard the reports — can still say so. Written only when it
+    /// changes, and read back by the same `list()` the scheduler uses.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_failing_collects_are_kept_on_the_row_and_written_only_on_change(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::meraki_health::TierFailure;
+        use crate::meraki_sync::MerakiSyncFailure;
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let id = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+        let fresh = repo.get(id).await.expect("get").expect("the org");
+        assert_eq!(
+            fresh.collect_failures,
+            Vec::new(),
+            "a new organization is failing nothing"
+        );
+
+        let failing = vec![TierFailure {
+            tier: MerakiTier::Availability,
+            reason: MerakiSyncFailure::Auth,
+            since_unix_ms: 1_790_000_000_000,
+            failures: 3,
+        }];
+        assert!(repo
+            .record_collect_failures(id, &failing)
+            .await
+            .expect("write"));
+        assert!(
+            !repo
+                .record_collect_failures(id, &failing)
+                .await
+                .expect("write"),
+            "the same value was written a second time — this runs every 15 seconds"
+        );
+        let listed = repo.list().await.expect("list");
+        assert_eq!(listed[0].collect_failures, failing);
+
+        assert!(repo.record_collect_failures(id, &[]).await.expect("clear"));
+        let cleared = repo.get(id).await.expect("get").expect("the org");
+        assert_eq!(cleared.collect_failures, Vec::new());
+        assert!(
+            !repo
+                .record_collect_failures(Uuid::new_v4(), &failing)
+                .await
+                .expect("write"),
+            "an organization that is gone"
         );
     }
 

@@ -504,6 +504,7 @@ impl YagraMcp {
             serial_number,
             profile_locked,
             wireless,
+            collection_fault: crate::api::nodes::collection_fault_of(&self.state, node.id).await,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()

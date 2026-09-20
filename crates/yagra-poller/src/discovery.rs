@@ -1002,8 +1002,8 @@ mod tests {
             &self,
             _spec: &yagra_transport::MerakiCollectSpec,
             _timeout: Duration,
-        ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
-            Ok(Vec::new())
+        ) -> Result<yagra_transport::MerakiCollected, yagra_transport::MerakiFetchError> {
+            Ok(yagra_transport::MerakiCollected::default())
         }
     }
 
@@ -1524,8 +1524,9 @@ mod tests {
                 &self,
                 _spec: &yagra_transport::MerakiCollectSpec,
                 _to: Duration,
-            ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
-                Ok(Vec::new())
+            ) -> Result<yagra_transport::MerakiCollected, yagra_transport::MerakiFetchError>
+            {
+                Ok(yagra_transport::MerakiCollected::default())
             }
         }
 
@@ -1872,7 +1873,7 @@ mod tests {
             &self,
             spec: &yagra_transport::MerakiCollectSpec,
             to: Duration,
-        ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
+        ) -> Result<yagra_transport::MerakiCollected, yagra_transport::MerakiFetchError> {
             self.inner.collect_meraki(spec, to).await
         }
     }

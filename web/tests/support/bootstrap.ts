@@ -252,6 +252,23 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     return body as unknown as Json;
   })(),
 
+  // A nullable object and an array the generator fills (ADR-164 決定 18). Left alone, every node in
+  // the walk would arrive saying "the Meraki API is not answering — this state is the last one
+  // collected", and every Meraki organization would arrive with a collect failing. A walk where
+  // everything is marked says nothing; `collectionFault.spec.ts` brings the ones that are.
+  '/api/v1/nodes/{node_id}/status': (() => {
+    const body = defaultBodyFor('/api/v1/nodes/{node_id}/status') as {
+      collection_fault: unknown;
+    };
+    body.collection_fault = null;
+    return body as unknown as Json;
+  })(),
+  '/api/v1/meraki/orgs': (() => {
+    const body = defaultBodyFor('/api/v1/meraki/orgs') as { collect_failures: unknown[] }[];
+    for (const org of body) org.collect_failures = [];
+    return body as unknown as Json;
+  })(),
+
   // The generator answers a list with **one** item, which is enough for every screen that renders
   // rows and not enough for the one that operates on a *range* of them. Ctrl / Shift assemble a
   // working set across the inventory tree (ADR-124), and a Shift range cannot go wrong without a

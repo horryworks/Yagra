@@ -215,6 +215,7 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
         // Not a poller's result — the controller's is, and it is counted once, there.
         poller_id: None,
         trace_context: controller.trace_context.clone(),
+        meraki_collect: None,
     })
 }
 
@@ -444,6 +445,7 @@ mod tests {
             judge_samples: true,
             poller_id: Some("p1".into()),
             trace_context: Default::default(),
+            meraki_collect: None,
         }
     }
 

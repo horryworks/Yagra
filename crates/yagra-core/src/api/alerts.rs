@@ -228,7 +228,15 @@ async fn list_alerts(
         .into_iter()
         .filter(|a| scope.allows_subject(&st, &a.subject))
         .collect();
-    Json(decorate_alerts(alerts, &acks))
+    let mut views = decorate_alerts(alerts, &acks);
+    // A subject identified by id that is not a node (a Meraki organization) carries no name of its
+    // own, so the pure decorator above has none to give; the engine's snapshot does.
+    for view in &mut views {
+        if view.subject_name.is_none() {
+            view.subject_name = st.alerts.subject_display_name(&view.alert.subject);
+        }
+    }
+    Json(views)
 }
 
 /// A page of alert history: `?limit=`, the keyset cursor, and the filters the History toolbar
@@ -322,7 +330,17 @@ async fn list_alert_history(
     )
     .await?;
     let acks = ack_map(&st).await;
-    Ok(Json(decorate_history(rows, &acks)))
+    let mut views = decorate_history(rows, &acks);
+    // As above: a history row of a Meraki organization stores an id and no name.
+    for view in &mut views {
+        if view.row.subject_name.is_none() {
+            view.row.subject_name = view
+                .row
+                .subject()
+                .and_then(|s| st.alerts.subject_display_name(&s));
+        }
+    }
+    Ok(Json(views))
 }
 
 /// The raw filter fields, as either surface receives them.
@@ -1098,6 +1116,7 @@ mod tests {
             node: Some(node),
             subject_kind: SubjectKind::Node,
             subject_name: None,
+            subject_id: node,
             check,
             severity: Severity::Critical,
             state: NodeState::Critical,
@@ -1117,6 +1136,7 @@ mod tests {
             node: Some(node),
             subject_kind: SubjectKind::Node,
             subject_name: None,
+            subject_id: node,
             check,
             severity: Severity::Critical,
             state: NodeState::Ok,
@@ -1136,6 +1156,7 @@ mod tests {
             node: Some(Uuid::from_u128(7)),
             subject_kind: SubjectKind::Node,
             subject_name: None,
+            subject_id: Uuid::from_u128(7),
             check,
             severity: Severity::Warning,
             state: NodeState::Warning,

@@ -188,6 +188,7 @@ fn make_result(
         judge_samples: false,
         poller_id: Some("firehose".to_owned()),
         trace_context: Default::default(),
+        meraki_collect: None,
     }
 }
 

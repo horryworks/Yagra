@@ -64,6 +64,19 @@ pub(crate) fn seeded_liveness_rule() -> StoredThreshold {
 /// A snapshot of thresholds + node metadata + dependency topology the engine evaluates
 /// against. Rebuilt periodically from the database so threshold/topology edits take effect
 /// without a restart.
+/// What the alert engine knows about one Cisco Meraki organization (see `AlertConfig::meraki_orgs`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MerakiOrgScope {
+    /// The organization's name, as Settings ▸ Integrations shows it.
+    pub name: String,
+    /// Folder groups holding at least one of its nodes. An ungrouped node contributes nothing —
+    /// a scoped caller cannot see it either way, and a `None` bucket would be the fail-open
+    /// reading (the rule `pool_groups` follows).
+    pub groups: BTreeSet<Uuid>,
+    /// Its nodes.
+    pub nodes: BTreeSet<NodeId>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AlertConfig {
     /// Thresholds bucketed by metric name so per-sample resolution scans only the rules for that
@@ -123,6 +136,19 @@ pub struct AlertConfig {
     /// config generation advances (S6/ADR-026). Ungrouped nodes contribute nothing: a scoped caller
     /// cannot see them anyway, so a pool that only holds ungrouped nodes stays admin-only.
     pub(super) pool_groups: HashMap<String, BTreeSet<Uuid>>,
+    /// Every Cisco Meraki organization: what it is called, the folder groups its nodes sit in, and
+    /// which nodes are its own (ADR-164 決定 18).
+    ///
+    /// Three questions about an organization's collect alert are answered from here, for the same
+    /// reason `pool_groups` is precomputed: each is asked per SSE frame per subscriber, or per node
+    /// status read. **Who may see it** — a group-scoped caller sees the alert when at least one of
+    /// the organization's nodes is in a folder they can see. **What it is called** — the subject
+    /// carries an id so a rename cannot split one alert in two, and the name is resolved here.
+    /// **Which nodes it is about** — a node whose organization is not being answered keeps its
+    /// last state, and `node_status` says so.
+    pub(super) meraki_orgs: HashMap<Uuid, MerakiOrgScope>,
+    /// Node → its Meraki organization; the reverse of [`MerakiOrgScope::nodes`].
+    pub(super) meraki_node_orgs: HashMap<NodeId, Uuid>,
     /// Metric names that publish **one series per interface**, so a sample of one needs its own
     /// check per port rather than sharing the node's (ADR-076 decision 1).
     ///
@@ -314,6 +340,8 @@ impl AlertConfig {
             paused_until: None,
             pause_exempt: BTreeSet::new(),
             pool_groups: HashMap::new(),
+            meraki_orgs: HashMap::new(),
+            meraki_node_orgs: HashMap::new(),
             per_interface: BTreeSet::new(),
             row_rule_metrics,
         }
@@ -355,6 +383,18 @@ impl AlertConfig {
         self.paused_until.is_some_and(|until| at_unix_ms < until)
             && !self.pause_exempt.contains(&node)
             && !self.maintenance.contains(&node)
+    }
+
+    /// Attach the Meraki organizations (see the field). The node → organization map is derived
+    /// here so the two can never disagree.
+    #[must_use]
+    pub fn with_meraki_orgs(mut self, orgs: HashMap<Uuid, MerakiOrgScope>) -> Self {
+        self.meraki_node_orgs = orgs
+            .iter()
+            .flat_map(|(org, scope)| scope.nodes.iter().map(move |n| (*n, *org)))
+            .collect();
+        self.meraki_orgs = orgs;
+        self
     }
 
     /// Attach the pool → folder-group map used to scope pool-coverage alerts.

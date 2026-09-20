@@ -17,6 +17,13 @@ use yagra_common::{CheckId, Direction, IfIndex, NodeId, NodeState, Severity};
 /// cannot collide in either direction.
 const POOL_PREFIX: &str = "pool:";
 
+/// Prefix that marks a Meraki-organization subject in its flat string form (ADR-164 決定 18).
+///
+/// Checked **before** the pool prefix is irrelevant — neither is a prefix of the other — but a pool
+/// may be *named* anything, including `meraki_org:…`; that name is still read as a pool because it
+/// arrives behind `pool:`.
+const MERAKI_ORG_PREFIX: &str = "meraki_org:";
+
 /// Namespace for the UUIDv5 identities non-node subjects are stored under.
 ///
 /// A fixed literal rather than a derived value so it is `const` and can never move: every row in
@@ -26,8 +33,9 @@ const POOL_PREFIX: &str = "pool:";
 const SUBJECT_NAMESPACE: uuid::Uuid =
     uuid::Uuid::from_u128(0x5941_4752_415f_5355_424a_4543_545f_4944);
 
-/// Which kind of thing an alert is about: a monitored `node`, or a poller `pool` when Yagra is
-/// reporting on its own polling coverage.
+/// Which kind of thing an alert is about: a monitored `node`; a poller `pool`, when Yagra is
+/// reporting on its own polling coverage; or a `meraki_org`, when the Dashboard API has stopped
+/// answering the collects of a whole Cisco Meraki organization.
 //
 // This doc comment is published verbatim to API clients (ADR-035), so the internal note goes here:
 // the value is both a database column and a JSON field, produced by two different mechanisms, and
@@ -40,11 +48,18 @@ pub enum SubjectKind {
     Node,
     /// A poller pool.
     Pool,
+    /// A Cisco Meraki organization (ADR-164 決定 18).
+    MerakiOrg,
 }
 
 impl SubjectKind {
     /// Every kind, for exhaustive iteration in tests and UI enumerations.
-    pub const ALL: [Self; 2] = [Self::Node, Self::Pool];
+    ///
+    /// 🚨 **The compiler does not check this list**, and leaving a kind out is not cosmetic:
+    /// [`Self::from_token`] walks it, so a kind missing here is a stored row nothing can read
+    /// back. Such an alert is never restored after a restart, which means nothing owns it and
+    /// nothing can close it. `every_subject_kind_is_listed` is what holds the list to the enum.
+    pub const ALL: [Self; 3] = [Self::Node, Self::Pool, Self::MerakiOrg];
 
     /// The stored/serialized token.
     #[must_use]
@@ -52,6 +67,7 @@ impl SubjectKind {
         match self {
             Self::Node => "node",
             Self::Pool => "pool",
+            Self::MerakiOrg => "meraki_org",
         }
     }
 
@@ -79,6 +95,16 @@ pub enum Subject {
     Node(NodeId),
     /// A poller pool, named. Used by coverage alerts about Yagra's own polling.
     Pool(String),
+    /// A Cisco Meraki organization, by the id of its `meraki_orgs` row (ADR-164 決定 18). One alert
+    /// stands for the whole organization when the Dashboard API stops answering its collects:
+    /// the devices did not fail, so no node is what the alert is about.
+    ///
+    /// A specific variant rather than a general "integration" one on purpose — every exhaustive
+    /// match below asks a question (who may see it, what it is called, where it is stored) whose
+    /// answer differs per integration, and a general variant would answer them all once, wrongly
+    /// for the next one. Identified by id rather than by name: a rename must not change the
+    /// dedup key, or a renamed organization would leave one alert open and raise a second.
+    MerakiOrg(uuid::Uuid),
 }
 
 impl Subject {
@@ -87,7 +113,7 @@ impl Subject {
     pub const fn node(&self) -> Option<NodeId> {
         match self {
             Self::Node(n) => Some(*n),
-            Self::Pool(_) => None,
+            Self::Pool(_) | Self::MerakiOrg(_) => None,
         }
     }
 
@@ -102,7 +128,16 @@ impl Subject {
     pub fn pool(&self) -> Option<&str> {
         match self {
             Self::Pool(p) => Some(p.as_str()),
-            Self::Node(_) => None,
+            Self::Node(_) | Self::MerakiOrg(_) => None,
+        }
+    }
+
+    /// The Meraki organization this is about, or `None` for any other subject.
+    #[must_use]
+    pub const fn meraki_org(&self) -> Option<uuid::Uuid> {
+        match self {
+            Self::MerakiOrg(org) => Some(*org),
+            Self::Node(_) | Self::Pool(_) => None,
         }
     }
 
@@ -112,15 +147,17 @@ impl Subject {
         match self {
             Self::Node(_) => SubjectKind::Node,
             Self::Pool(_) => SubjectKind::Pool,
+            Self::MerakiOrg(_) => SubjectKind::MerakiOrg,
         }
     }
 
     /// The subject's **name**, for a subject that is named rather than identified. `None` for a
-    /// node, whose name lives in the inventory and is resolved from its id.
+    /// node and for a Meraki organization: their names live in the inventory and are resolved from
+    /// the id, so a rename reaches an alert that is already open.
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         match self {
-            Self::Node(_) => None,
+            Self::Node(_) | Self::MerakiOrg(_) => None,
             Self::Pool(p) => Some(p.as_str()),
         }
     }
@@ -149,6 +186,12 @@ impl Subject {
             // free-text name — see `Display`. Spelled per variant rather than through a wildcard so
             // a third subject kind has to decide this rather than inheriting it.
             Self::Pool(_) => uuid::Uuid::new_v5(&SUBJECT_NAMESPACE, self.to_string().as_bytes()),
+            // The organization's own row id: it is already a UUID, and it is what
+            // [`Self::from_storage`] needs back — a hash could not be reversed, and this subject
+            // carries no name to rebuild itself from. It cannot be taken for a node: every read
+            // that means "a node" filters on `subject_kind`, the check id is hashed from the flat
+            // form (which is prefixed), and the ack key includes that check id.
+            Self::MerakiOrg(org) => *org,
         }
     }
 
@@ -164,6 +207,7 @@ impl Subject {
             SubjectKind::Pool => name
                 .filter(|n| !n.is_empty())
                 .map(|n| Self::Pool(n.to_owned())),
+            SubjectKind::MerakiOrg => Some(Self::MerakiOrg(id)),
         }
     }
 }
@@ -175,11 +219,12 @@ impl fmt::Display for Subject {
             // wire form, the dedup string and every existing check id unchanged.
             Self::Node(n) => write!(f, "{n}"),
             Self::Pool(p) => write!(f, "{POOL_PREFIX}{p}"),
+            Self::MerakiOrg(org) => write!(f, "{MERAKI_ORG_PREFIX}{org}"),
         }
     }
 }
 
-/// A subject string that is neither a UUID nor a `pool:`-prefixed name.
+/// A subject string that is neither a UUID, a `pool:`-prefixed name nor a `meraki_org:`-prefixed id.
 #[derive(Debug, thiserror::Error)]
 #[error("not a valid alert subject: {0}")]
 pub struct ParseSubjectError(String);
@@ -194,6 +239,13 @@ impl FromStr for Subject {
             } else {
                 Ok(Self::Pool(pool.to_owned()))
             };
+        }
+        // 🚨 Not compiler-demanded: a prefix forgotten here still builds, and then the flat form
+        // this type itself writes cannot be read back — by the ack API, or by a peer core.
+        if let Some(org) = s.strip_prefix(MERAKI_ORG_PREFIX) {
+            return uuid::Uuid::parse_str(org)
+                .map(Self::MerakiOrg)
+                .map_err(|_| ParseSubjectError(s.to_owned()));
         }
         uuid::Uuid::parse_str(s)
             .map(|u| Self::Node(NodeId::from(u)))
@@ -393,6 +445,9 @@ mod tests {
             // Operator-authored, so it may carry anything a pool name may carry.
             Subject::Pool("tokyo-dc 2".to_owned()),
             Subject::Pool("pool:nested".to_owned()),
+            // A pool may be *named* like the third subject's flat form; it arrives behind `pool:`.
+            Subject::Pool("meraki_org:00000000-0000-0000-0000-000000000000".to_owned()),
+            Subject::MerakiOrg(uuid::Uuid::from_u128(0xACE)),
         ] {
             assert_eq!(s.to_string().parse::<Subject>().unwrap(), s, "{s}");
             let json = serde_json::to_string(&s).unwrap();
@@ -459,6 +514,8 @@ mod tests {
             Subject::Node(NodeId::new()),
             Subject::Pool("tokyo".to_owned()),
             Subject::Pool("dc 2/edge".to_owned()),
+            // Identified by id and carrying no name: the stored id is all there is to read back.
+            Subject::MerakiOrg(uuid::Uuid::from_u128(0xACE)),
         ] {
             let restored = Subject::from_storage(s.kind(), s.storage_id(), s.name());
             assert_eq!(restored.as_ref(), Some(&s), "{s}");
@@ -486,6 +543,85 @@ mod tests {
             );
         }
         assert_eq!(SubjectKind::from_token("cluster"), None);
+    }
+
+    /// 🚨 `SubjectKind::ALL` is a hand-written list the compiler never checks, and `from_token` walks
+    /// it. A kind missing from it is a stored row nothing can read back: that alert is never
+    /// restored after a restart, so nothing owns it and nothing can close it. The match has no
+    /// wildcard, so a fourth kind stops compiling *here* until somebody lists it.
+    #[test]
+    fn every_subject_kind_is_listed() {
+        for subject in [
+            Subject::Node(NodeId::new()),
+            Subject::Pool("tokyo".to_owned()),
+            Subject::MerakiOrg(uuid::Uuid::from_u128(0xACE)),
+        ] {
+            let kind = subject.kind();
+            // The exhaustive match is the point: the token each kind is *stored* under, written
+            // out by hand, so a new variant has to be given one here before this compiles.
+            let stored_as = match kind {
+                SubjectKind::Node => "node",
+                SubjectKind::Pool => "pool",
+                SubjectKind::MerakiOrg => "meraki_org",
+            };
+            assert!(
+                SubjectKind::ALL.contains(&kind),
+                "{kind:?} is not in SubjectKind::ALL, so a row stored with it can never be read back"
+            );
+            assert_eq!(kind.as_str(), stored_as);
+            assert_eq!(SubjectKind::from_token(stored_as), Some(kind));
+        }
+        assert_eq!(SubjectKind::ALL.len(), 3);
+    }
+
+    /// The third subject is addressed by the flat form this type itself writes — `FromStr` is an
+    /// if-chain, not a match, so a forgotten prefix still builds and then the ack API cannot name
+    /// the alert it was just shown.
+    #[test]
+    fn a_meraki_organization_is_read_back_from_the_form_it_is_written_in() {
+        let org = uuid::Uuid::from_u128(0xACE);
+        let subject = Subject::MerakiOrg(org);
+        assert_eq!(
+            subject.to_string(),
+            "meraki_org:00000000-0000-0000-0000-000000000ace"
+        );
+        assert_eq!(subject.to_string().parse::<Subject>().unwrap(), subject);
+        assert_eq!(subject.meraki_org(), Some(org));
+        assert_eq!(
+            (subject.node(), subject.pool(), subject.name()),
+            (None, None, None)
+        );
+        assert_eq!(
+            subject.storage_id(),
+            org,
+            "stored under the organization's own row id"
+        );
+        assert!("meraki_org:not-a-uuid".parse::<Subject>().is_err());
+        assert!("meraki_org:".parse::<Subject>().is_err());
+    }
+
+    /// A node and a Meraki organization could hold the same UUID (they are separate tables). They
+    /// must still be two alerts: the dedup key carries the subject, and the flat form the check id
+    /// is hashed from is prefixed.
+    #[test]
+    fn an_organization_cannot_impersonate_a_node_with_the_same_id() {
+        let id = uuid::Uuid::from_u128(0xACE);
+        let node = Subject::Node(NodeId::from(id));
+        let org = Subject::MerakiOrg(id);
+        assert_ne!(node, org);
+        assert_ne!(node.to_string(), org.to_string());
+        assert_ne!(node.kind(), org.kind());
+        // Same storage id, so every read that means "a node" has to ask the kind — which is what
+        // `from_storage` does.
+        assert_eq!(node.storage_id(), org.storage_id());
+        assert_eq!(
+            Subject::from_storage(SubjectKind::Node, id, None),
+            Some(node)
+        );
+        assert_eq!(
+            Subject::from_storage(SubjectKind::MerakiOrg, id, None),
+            Some(org)
+        );
     }
 
     #[test]

@@ -37,6 +37,17 @@ pub struct AlertHistoryRow {
     /// The subject's name, for a subject identified by name rather than by id (a poller pool).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject_name: Option<String>,
+    /// The id the subject is stored under (`Subject::storage_id`). Not serialized: for a node it
+    /// repeats `node`, for a pool it is a hash nobody can use, and for a Meraki organization the
+    /// client reads the name instead.
+    ///
+    /// 🚨 It exists for [`Self::subject`]. That used to rebuild the subject from `node` — which is
+    /// `None` for every non-node row — and the name, which was enough while the only such
+    /// subject was *named* (a pool). A Meraki organization is identified by id and has no name
+    /// of its own, so it came back as the nil organization: invisible to every scoped caller,
+    /// and un-acknowledgeable. Nothing in the compiler asks for this (ADR-164 決定 18).
+    #[serde(skip)]
+    pub subject_id: Uuid,
     pub check: Uuid,
     pub severity: Severity,
     pub state: NodeState,
@@ -100,7 +111,7 @@ impl AlertHistoryRow {
     pub fn subject(&self) -> Option<Subject> {
         Subject::from_storage(
             self.subject_kind,
-            self.node.unwrap_or_else(Uuid::nil),
+            self.subject_id,
             self.subject_name.as_deref(),
         )
     }
@@ -738,6 +749,7 @@ impl AlertHistoryStore {
                 node,
                 subject_kind,
                 subject_name,
+                subject_id: subject.storage_id(),
                 check: row.try_get("check_id")?,
                 // The column has no CHECK, so an unrecognised token means a newer core wrote
                 // the row. Degrading beats failing the whole page of history, and `Info` /
@@ -918,6 +930,9 @@ mod tests {
         for subject in [
             yagra_alert::Subject::Node(NodeId::new()),
             yagra_alert::Subject::Pool("tokyo".to_owned()),
+            // Identified by id and not a node: `node` is `None` and there is no name, so the
+            // stored id is the only thing that can bring it back (ADR-164 決定 18).
+            yagra_alert::Subject::MerakiOrg(Uuid::from_u128(0xACE)),
         ] {
             let (node, subject_kind, subject_name) = AlertHistoryRow::project(&subject);
             let row = AlertHistoryRow {
@@ -925,6 +940,7 @@ mod tests {
                 node,
                 subject_kind,
                 subject_name,
+                subject_id: subject.storage_id(),
                 check: Uuid::new_v4(),
                 severity: Severity::Critical,
                 state: NodeState::Critical,

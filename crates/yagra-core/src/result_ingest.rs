@@ -852,8 +852,18 @@ async fn ingest_result(
         coordinator.record_result(pid);
     }
     // Clear this org's Meraki single-flight on the collect's first returning result (all fan-out
-    // results share the job id; a no-op for non-Meraki jobs).
-    meraki_inflight.complete(result.job_id);
+    // results share the job id; a no-op for non-Meraki jobs) — and record how the collect ended
+    // (ADR-164 決定 18). A report says so outright. A result with no report that released a collect
+    // flight is a poller from before the report existed: a device result means the Dashboard
+    // answered. Memory only — this is the hot path, and deciding belongs to `meraki_health`'s loop.
+    let released = meraki_inflight.complete(result.job_id);
+    match (&result.meraki_collect, released) {
+        (Some(report), _) => meraki_inflight
+            .health
+            .record_report(report, result.at_unix_ms),
+        (None, Some((org, Some(tier)))) => meraki_inflight.health.record_answered(org, tier),
+        (None, _) => {}
+    }
 
     // End-to-end ingest lag (poll timestamp → matcher entry) — the primary scale health signal.
     if result.at_unix_ms > 0 {
@@ -1415,6 +1425,7 @@ mod tests {
             judge_samples: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
+            meraki_collect: None,
         };
         consume_results_backfill(
             futures::stream::iter(vec![result]),
@@ -1811,6 +1822,7 @@ mod tests {
             judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         }
     }
 
@@ -2296,6 +2308,7 @@ mod tests {
             judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         })
     }
 

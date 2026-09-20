@@ -25792,6 +25792,56 @@
           }
         }
       },
+      "CollectionFault": {
+        "type": "object",
+        "description": "Why a node's `state` is the last one collected rather than a current one (ADR-164 決定 18).\n\nA Meraki device is never pinged: what the Dashboard API says about it is all Yagra knows. When\nthe API stops answering for the whole organization, **one** alert is raised about the\norganization and the devices keep their last state — they did not fail. This is what stops\nthat stale `ok` from being read as a current one.",
+        "required": [
+          "cause",
+          "meraki_org",
+          "since_unix_ms"
+        ],
+        "properties": {
+          "cause": {
+            "$ref": "#/components/schemas/CollectionFaultCause",
+            "description": "What stopped answering."
+          },
+          "meraki_org": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to."
+          },
+          "meraki_org_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That organization's name, when it is known."
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiSyncFailure",
+                "description": "Why the most recent availability collect failed, when it is known."
+              }
+            ]
+          },
+          "since_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the organization's alert was raised — three failed collects after the last answer, so\nthe state shown is older than this."
+          }
+        }
+      },
+      "CollectionFaultCause": {
+        "type": "string",
+        "description": "What a node's state is collected through, when that has stopped answering.",
+        "enum": [
+          "meraki_api"
+        ]
+      },
       "CollectionItem": {
         "type": "object",
         "description": "One thing to collect: a stable metric name, the OID to collect it from, how to collect\nit (scalar GET vs table walk), and whether it is a gauge or a raw counter.",
@@ -31533,6 +31583,37 @@
           }
         }
       },
+      "MerakiCollectFailureView": {
+        "type": "object",
+        "description": "One collect tier the Dashboard API is not answering (see `MerakiOrgView.collect_failures`).",
+        "required": [
+          "tier",
+          "reason",
+          "since",
+          "failures"
+        ],
+        "properties": {
+          "failures": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many collects in a row have failed.",
+            "minimum": 0
+          },
+          "reason": {
+            "$ref": "#/components/schemas/MerakiSyncFailure",
+            "description": "Why the most recent collect of this tier failed. The vocabulary of `last_sync_error`, plus\n`no_answer`: the collect was sent and nothing came back."
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this run of failures began."
+          },
+          "tier": {
+            "type": "string",
+            "description": "`availability`, `uplink` or `traffic`."
+          }
+        }
+      },
       "MerakiCreated": {
         "type": "object",
         "description": "What an onboarding batch did.",
@@ -32043,7 +32124,8 @@
           "import_devices",
           "file_by_prefix",
           "max_devices",
-          "devices_over_cap"
+          "devices_over_cap",
+          "collect_failures"
         ],
         "properties": {
           "availability_secs": {
@@ -32053,6 +32135,13 @@
           },
           "base_url": {
             "type": "string"
+          },
+          "collect_failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MerakiCollectFailureView"
+            },
+            "description": "The collect tiers the Dashboard API is **not answering** right now, each with why and since\nwhen. Empty when none is known to be failing.\n\nDistinct from `last_sync_error`, which is the inventory sync — this server asking what the\norganization holds. A collect is a poller asking how the devices are, and it is what a\ndevice's state depends on: while `availability` is listed here the organization's nodes keep\nthe last state they had, and after three failures in a row one alert is raised about the\norganization (`subject_kind: meraki_org`) — never one per device. `uplink` or `traffic`\nlisted alone raises nothing: readings are missing, liveness is not."
           },
           "credential_id": {
             "type": "string",
@@ -32192,7 +32281,8 @@
           "malformed",
           "truncated",
           "timeout",
-          "internal"
+          "internal",
+          "no_answer"
         ]
       },
       "MerakiSyncReport": {
@@ -33684,6 +33774,17 @@
             "items": {
               "$ref": "#/components/schemas/Alert"
             }
+          },
+          "collection_fault": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionFault",
+                "description": "Set when `state` is **not a current reading**: what feeds this node has stopped\nanswering, so `state` is the last one collected. Absent otherwise."
+              }
+            ]
           },
           "node_id": {
             "$ref": "#/components/schemas/NodeId"
@@ -37670,10 +37771,11 @@
       },
       "SubjectKind": {
         "type": "string",
-        "description": "Which kind of thing an alert is about: a monitored `node`, or a poller `pool` when Yagra is\nreporting on its own polling coverage.",
+        "description": "Which kind of thing an alert is about: a monitored `node`; a poller `pool`, when Yagra is\nreporting on its own polling coverage; or a `meraki_org`, when the Dashboard API has stopped\nanswering the collects of a whole Cisco Meraki organization.",
         "enum": [
           "node",
-          "pool"
+          "pool",
+          "meraki_org"
         ]
       },
       "SyncNetboxResult": {

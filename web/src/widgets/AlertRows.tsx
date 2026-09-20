@@ -21,7 +21,7 @@ import { useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
-import { alertSubject, rootCause } from '../lib/alertSubject';
+import { alertSubject, rootCause, subjectText } from '../lib/alertSubject';
 import { alertWhatOf, formatTimestamp, severityColorVar } from '../lib/format';
 import { useViewportMode } from '../lib/viewport';
 import { sortedAlerts, useAlertStore } from '../store';
@@ -153,7 +153,7 @@ function AlertRow({
       <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
       {actions && (
         <span className="alertrow-actions">
-          {actions(a, subject.kind === 'node' ? nodeName(subject.nodeId) : subject.name)}
+          {actions(a, subject.kind === 'node' ? nodeName(subject.nodeId) : subjectText(subject))}
         </span>
       )}
     </div>

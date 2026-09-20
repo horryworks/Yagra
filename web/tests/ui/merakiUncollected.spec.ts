@@ -32,6 +32,8 @@ const orgs = (() => {
     // stays away, so the one notice on the page is the one under test.
     import_devices: false,
     devices_over_cap: 0,
+    // The generator fills this array; this spec is about another notice (see bootstrap.ts).
+    collect_failures: [],
     last_sync_at: '2026-09-20T00:00:00Z',
     last_sync_ok: true,
     last_sync_error: null,

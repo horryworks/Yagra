@@ -711,6 +711,7 @@ mod tests {
             judge_samples: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
+            meraki_collect: None,
         }
     }
 

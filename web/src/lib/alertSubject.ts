@@ -13,19 +13,32 @@
 // Lives in `.ts` rather than beside the components on purpose: `.tsx` tests are never executed by
 // this repo's Vitest config, so the judgement goes where a test can reach it (`testing.md`).
 
+import type { components } from '../api/schema';
+
+/** Which kind of thing an alert is about — generated from the backend's `SubjectKind`, so a kind
+ *  added there stops this file compiling until {@link alertSubject} decides what it is. */
+export type SubjectKind = components['schemas']['SubjectKind'];
+
+/** Prefix of a Meraki organization's flat subject form (`yagra-alert`'s `MERAKI_ORG_PREFIX`). */
+const MERAKI_ORG_PREFIX = 'meraki_org:';
+
 /** The subject fields every alert-bearing response and SSE frame carries. */
 export interface HasSubject {
-  /** Flat subject form: a node UUID, or `pool:<name>`. */
+  /** Flat subject form: a node UUID, `pool:<name>`, or `meraki_org:<id>`. */
   node?: string | null;
-  subject_kind?: 'node' | 'pool';
+  subject_kind?: SubjectKind;
   subject_name?: string | null;
 }
 
-/** A subject resolved into the two shapes a UI can render. */
+/** A subject resolved into the shapes a UI can render. */
 export type AlertSubject =
   | { kind: 'node'; nodeId: string }
   /** `name` is the pool's name — already human-readable, so nothing needs resolving. */
-  | { kind: 'pool'; name: string };
+  | { kind: 'pool'; name: string }
+  /** A Cisco Meraki organization the Dashboard API is not answering (ADR-164 決定 18). `orgId` is
+   *  the organization's row id — what its settings page is addressed by. `name` is `null` for an
+   *  organization the server could not name yet (added since its last config generation). */
+  | { kind: 'meraki_org'; orgId: string; name: string | null };
 
 /**
  * Resolve an alert or history row's subject.
@@ -37,10 +50,46 @@ export type AlertSubject =
  * answer an operator would act on.
  */
 export function alertSubject(a: HasSubject): AlertSubject {
-  if (a.subject_kind === 'pool') {
-    return { kind: 'pool', name: a.subject_name ?? '?' };
+  const kind: SubjectKind = a.subject_kind ?? 'node';
+  // A switch with a `never` default, not an if-chain: the if-chain let a third kind fall through
+  // to "node" without a word from the compiler, and an `EntityName` handed `meraki_org:<id>`
+  // renders it as a node that cannot be found.
+  switch (kind) {
+    case 'node':
+      return { kind: 'node', nodeId: a.node ?? '' };
+    case 'pool':
+      return { kind: 'pool', name: a.subject_name ?? '?' };
+    case 'meraki_org': {
+      const flat = a.node ?? '';
+      return {
+        kind: 'meraki_org',
+        orgId: flat.startsWith(MERAKI_ORG_PREFIX) ? flat.slice(MERAKI_ORG_PREFIX.length) : flat,
+        name: a.subject_name ?? null,
+      };
+    }
+    default: {
+      // A kind a newer core wrote, reaching an older bundle mid-upgrade. It is not a node — but
+      // every such frame so far has been one, and a row that renders is better than none.
+      const unknown: never = kind;
+      void unknown;
+      return { kind: 'node', nodeId: a.node ?? '' };
+    }
   }
-  return { kind: 'node', nodeId: a.node ?? '' };
+}
+
+/** What to call a subject in plain text — a search haystack, a sort key — when it is not a node.
+ *  A node is named through the inventory, which this module cannot see. */
+export function subjectText(subject: Exclude<AlertSubject, { kind: 'node' }>): string {
+  switch (subject.kind) {
+    case 'pool':
+      return subject.name;
+    case 'meraki_org':
+      return subject.name ?? subject.orgId;
+    default: {
+      const unknown: never = subject;
+      return unknown;
+    }
+  }
 }
 
 /**

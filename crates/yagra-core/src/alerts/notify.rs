@@ -926,11 +926,21 @@ impl Notifier {
             .read()
             .expect("notifier facts lock poisoned")
             .clone();
-        let resolved = match source {
+        let resolved = match &source {
             Some(src) => src.facts(&node_ids_for(alert)).await,
             None => HashMap::new(),
         };
-        Some(context_for(alert, event, &resolved))
+        let mut facts = context_for(alert, event, &resolved);
+        // A Meraki organization is identified by id and carries no name, so `context_for` — which
+        // is pure — can only call it by its flat form. The page that wakes someone should say
+        // which organization (ADR-164 決定 18).
+        if let (Some(org), Some(src)) = (alert.subject.meraki_org(), &source) {
+            if let Some(name) = src.meraki_org_name(org).await {
+                facts.subject_name.clone_from(&name);
+                facts.node_name = name;
+            }
+        }
+        Some(facts)
     }
 
     /// Apply one notify action (deliver a fire, or resolve/clear a recovered alert).
@@ -1115,6 +1125,19 @@ pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notific
         // out anyway so a future suppression path cannot silently emit node-shaped wording.
         (Subject::Pool(pool), NotifyEvent::Suppress) => {
             format!("rolled up: poller pool \"{pool}\" suppressed")
+        }
+        // Like a node, an organization is named by id here: the built-in text has only the alert
+        // to go on, and a templated channel gets the name through `notify_facts` (`subject_name`).
+        (Subject::MerakiOrg(org), NotifyEvent::Fire) => format!(
+            "Meraki organization {org}: the Dashboard API is not answering — its devices' states \
+             are the last ones collected"
+        ),
+        (Subject::MerakiOrg(org), NotifyEvent::Resolve) => {
+            format!("resolved: Meraki organization {org} is being collected again")
+        }
+        // Unreachable today, for the reason the pool arm gives. Spelled out for the same one.
+        (Subject::MerakiOrg(org), NotifyEvent::Suppress) => {
+            format!("rolled up: Meraki organization {org} suppressed")
         }
     };
     let payload = serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned());

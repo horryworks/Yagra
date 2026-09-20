@@ -1245,6 +1245,73 @@ pub(crate) struct NodeStatus {
     node_id: NodeId,
     state: NodeState,
     alerts: Vec<yagra_alert::Alert>,
+    /// Set when `state` is **not a current reading**: what feeds this node has stopped
+    /// answering, so `state` is the last one collected. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    collection_fault: Option<CollectionFault>,
+}
+
+/// What a node's state is collected through, when that has stopped answering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CollectionFaultCause {
+    /// The Cisco Meraki Dashboard API is not answering the collects of this node's organization.
+    MerakiApi,
+}
+
+/// Why a node's `state` is the last one collected rather than a current one (ADR-164 決定 18).
+///
+/// A Meraki device is never pinged: what the Dashboard API says about it is all Yagra knows. When
+/// the API stops answering for the whole organization, **one** alert is raised about the
+/// organization and the devices keep their last state — they did not fail. This is what stops
+/// that stale `ok` from being read as a current one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct CollectionFault {
+    /// What stopped answering.
+    pub(crate) cause: CollectionFaultCause,
+    /// The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to.
+    pub(crate) meraki_org: Uuid,
+    /// That organization's name, when it is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) meraki_org_name: Option<String>,
+    /// Why the most recent availability collect failed, when it is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<crate::meraki_sync::MerakiSyncFailure>,
+    /// When the organization's alert was raised — three failed collects after the last answer, so
+    /// the state shown is older than this.
+    pub(crate) since_unix_ms: i64,
+}
+
+/// The collection fault of `node`, if it has one. Shared with the MCP `get_node_status` tool: what
+/// the WebUI can see, `/mcp` can see.
+///
+/// Costs nothing for a node that is not Meraki's or whose organization is being answered — both
+/// are answered from the alert engine's snapshot. The one database read (the reason, off the
+/// organization's row) happens only while that organization's alert is open.
+pub(crate) async fn collection_fault_of(st: &ApiState, node: NodeId) -> Option<CollectionFault> {
+    let (org, alert) = st.alerts.meraki_collect_fault_of(node)?;
+    let reason = match st.admin.as_ref() {
+        Some(admin) => admin
+            .meraki_orgs
+            .get(org)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|o| {
+                o.collect_failures
+                    .into_iter()
+                    .find(|f| f.tier == yagra_common::MerakiTier::Availability)
+            })
+            .map(|f| f.reason),
+        None => None,
+    };
+    Some(CollectionFault {
+        cause: CollectionFaultCause::MerakiApi,
+        meraki_org: org,
+        meraki_org_name: st.alerts.meraki_org_name(org),
+        reason,
+        since_unix_ms: alert.at_unix_ms,
+    })
 }
 
 /// Assemble one node's live status. Shared with the MCP `get_node_status` tool so both surfaces
@@ -1255,6 +1322,7 @@ pub(crate) async fn node_status(st: &ApiState, node_id: Uuid) -> NodeStatus {
         node_id: node,
         state: display_state(st, node).await,
         alerts: st.alerts.alerts_for(node),
+        collection_fault: collection_fault_of(st, node).await,
     }
 }
 
@@ -2875,6 +2943,7 @@ mod tests {
             judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         });
         std::sync::Arc::new(sink)
     }

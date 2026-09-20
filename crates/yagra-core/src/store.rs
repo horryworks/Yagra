@@ -2788,6 +2788,7 @@ mod tests {
             judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         };
         MetricStore::write(&store, &result).await;
         assert_eq!(
@@ -2827,6 +2828,7 @@ mod tests {
                 judge_samples: false,
                 poller_id: None,
                 trace_context: Default::default(),
+                meraki_collect: None,
             };
             MetricStore::write(&store, &result).await;
         }
@@ -2889,6 +2891,7 @@ mod tests {
                 judge_samples: false,
                 poller_id: None,
                 trace_context: Default::default(),
+                meraki_collect: None,
             };
             MetricStore::write(&store, &result).await;
             ids.push(node.as_uuid());

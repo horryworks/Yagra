@@ -58,6 +58,10 @@ pub(crate) struct AlertConfigBase {
     /// Built here because this is the one place that already scans the whole fleet, and rebuilt on
     /// the same config-generation gate so it costs a steady-state refresh nothing.
     pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>>,
+    /// Every Meraki organization: its name, the folder groups its nodes sit in, and its nodes —
+    /// see `AlertConfig::meraki_orgs` (ADR-164 決定 18). Built beside `pool_groups` for the same
+    /// reason: this is the one place that already holds every node's folder.
+    meraki_orgs: HashMap<Uuid, super::MerakiOrgScope>,
     /// The graph the alert engine suppresses with.
     ///
     /// **This is the only topology in the struct, deliberately.** ADR-043 決定 5's shadow mode does
@@ -114,6 +118,9 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     /// Every collection item the deployment knows — what the per-interface names (ADR-076) and the
     /// no-reading placeholders (ADR-156) are both derived from.
     async fn collection_items(&self) -> anyhow::Result<Vec<yagra_common::CollectionItem>>;
+    /// `(organization, name, nodes)` for every Cisco Meraki organization (ADR-164 決定 18): who may
+    /// see an organization's collect alert, what it is called, and which nodes it is about.
+    async fn meraki_orgs(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>>;
     /// Which graph the deployment is configured to suppress with.
     ///
     /// Not a `Result`: it degrades to `Manual` inside the repository, which is the mode that
@@ -153,6 +160,12 @@ impl AlertConfigSources for LiveConfigSources {
         // owns, and this runs only when the config generation advances.
         crate::collection::CollectionRepo::new(self.repo.pool())
             .collected_items()
+            .await
+    }
+    async fn meraki_orgs(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>> {
+        // A handle on the pool `repo` already owns, like `collection_items` above.
+        crate::meraki::MerakiOrgRepo::new(self.repo.pool())
+            .alert_bindings()
             .await
     }
     async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
@@ -281,11 +294,41 @@ pub(crate) async fn load_alert_config_base(
         topology_projection::manual_topology(&nodes)
     };
 
+    // A failed read propagates like every other one here (ADR-080): an empty map would hide an
+    // organization's alert from every scoped operator and un-label every stale node, silently.
+    let folder_of: HashMap<NodeId, Uuid> = nodes
+        .iter()
+        .filter_map(|n| n.group.map(|g| (n.id, g.as_uuid())))
+        .collect();
+    let meraki_orgs = sources
+        .meraki_orgs()
+        .await
+        .map_err(|e| anyhow::anyhow!("load meraki organizations: {e}"))?
+        .into_iter()
+        .map(|(org, name, node_ids)| {
+            let nodes: std::collections::BTreeSet<NodeId> =
+                node_ids.into_iter().map(NodeId::from).collect();
+            let groups = nodes
+                .iter()
+                .filter_map(|n| folder_of.get(n).copied())
+                .collect();
+            (
+                org,
+                super::MerakiOrgScope {
+                    name,
+                    groups,
+                    nodes,
+                },
+            )
+        })
+        .collect();
+
     Ok(AlertConfigBase {
         rules,
         nodes,
         meta,
         pool_groups,
+        meraki_orgs,
         topology,
         per_interface,
         no_reading,
@@ -463,6 +506,7 @@ pub(crate) async fn load_alert_config(
             .with_maintenance(coverage.maintenance)
             .with_pause(coverage.paused_until, coverage.pause_exempt)
             .with_pool_groups(base.pool_groups)
+            .with_meraki_orgs(base.meraki_orgs)
             .with_per_interface(base.per_interface),
         base.no_reading,
     ))
@@ -624,6 +668,7 @@ pub(crate) async fn run_alert_config_refresh(
                 .with_maintenance(coverage.maintenance.clone())
                 .with_pause(coverage.paused_until, coverage.pause_exempt.clone())
                 .with_pool_groups(base.pool_groups.clone())
+                .with_meraki_orgs(base.meraki_orgs.clone())
                 .with_per_interface(base.per_interface.clone());
             alerts.set_config(config);
             last_coverage = Some(coverage);
@@ -667,17 +712,19 @@ mod tests {
         FolderTags,
         GroupEdges,
         CollectionItems,
+        MerakiOrgs,
     }
 
     /// Every fallible read. An eighth added to the trait makes this list wrong in a way the
     /// compiler cannot see, which is why the walk below also counts against the trait's own text.
-    const FALLIBLE: [Fails; 6] = [
+    const FALLIBLE: [Fails; 7] = [
         Fails::Thresholds,
         Fails::Nodes,
         Fails::FolderPools,
         Fails::FolderTags,
         Fails::GroupEdges,
         Fails::CollectionItems,
+        Fails::MerakiOrgs,
     ];
 
     struct FakeSources {
@@ -736,6 +783,10 @@ mod tests {
         async fn collection_items(&self) -> anyhow::Result<Vec<yagra_common::CollectionItem>> {
             self.refuse(Fails::CollectionItems)?;
             Ok(self.items.clone())
+        }
+        async fn meraki_orgs(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>> {
+            self.refuse(Fails::MerakiOrgs)?;
+            Ok(Vec::new())
         }
         async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
             self.mode

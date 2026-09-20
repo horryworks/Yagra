@@ -33,6 +33,8 @@ const orgs = (() => {
     file_by_prefix: true,
     max_devices: 500,
     devices_over_cap: 3,
+    // The generator fills this array; this spec is about the page, not a failing collect.
+    collect_failures: [],
   };
   return body as unknown as Json;
 })();

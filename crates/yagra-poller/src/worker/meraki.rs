@@ -19,8 +19,18 @@
 //! This used to be `Reachable` on every result of every tier. A device the Dashboard reported
 //! offline therefore read as healthy, and would have even with the availability tier fixed alone:
 //! the next uplink result, minutes later, would have answered `Reachable` and cancelled the outage.
+//!
+//! # How a collect ended (ADR-164 決定 18)
+//!
+//! Beside the per-device results, every collect publishes **one report** — a result of its own
+//! that carries [`PollResult::meraki_collect`] and nothing else. A collect that failed used to
+//! publish nothing, so core could not tell "the Dashboard is not answering" from "nothing is due":
+//! every node of the organization kept its last state, nothing alerted, and the single flight
+//! core holds per organization stayed taken for its whole lease. The report is sent on success as
+//! well, because an alert may only be closed on evidence — and "the Dashboard answered" is it.
 
 use super::*;
+use yagra_bus::MerakiCollectReport;
 use yagra_common::{MerakiTier, METRIC_MERAKI_DEVICE_UP};
 
 /// What an availability result says about the device, read from the sample the transport made.
@@ -83,13 +93,21 @@ pub async fn execute_meraki(
         per_page: check.per_page,
         target_rps: check.target_rps,
     };
-    let observations = match transport.collect_meraki(&spec, timeout).await {
-        Ok(obs) => obs,
-        Err(err) => {
-            tracing::warn!(job_id = %job.job_id, org = %check.org_id, error = %err, "meraki collect failed");
-            return Vec::new();
+    // `failure` is the closed reason core is told. A collect that was refused outright has one;
+    // so does one that stopped early with nothing in hand — a Dashboard outage, a 429 storm and
+    // a dropped connection all used to arrive here as an `Ok` with no observations, log nothing,
+    // and leave every node of the organization at its last state. A partial answer is a success:
+    // the Dashboard did answer.
+    let (observations, failure) = match transport.collect_meraki(&spec, timeout).await {
+        Ok(collected) => {
+            let failure = collected.failure();
+            (collected.observations, failure)
         }
+        Err(err) => (Vec::new(), Some(err)),
     };
+    if let Some(why) = failure {
+        tracing::warn!(job_id = %job.job_id, org = %check.org_id, tier = ?check.tier, error = %why, "meraki collect failed");
+    }
 
     let by_serial: HashMap<&str, NodeId> = check
         .devices
@@ -154,9 +172,57 @@ pub async fn execute_meraki(
             judge_samples,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         });
     }
+    results.push(collect_report(job, check, failure, at_unix_ms));
     results
+}
+
+/// The one result that says how this collect ended.
+///
+/// It is addressed to `job.node_id`, which for a collect job is the organization's own uuid
+/// ([`PollJob::meraki_collect`] set it as a sentinel long before this existed) — no node has that
+/// id, so nothing can mistake the report for a reading of a device. `observational` with no
+/// samples is what makes it inert to a core from before 決定 18: that core persists nothing for
+/// it and returns before the alert engine, having released the organization's single flight on
+/// the way, which is the one effect worth having there.
+fn collect_report(
+    job: &PollJob,
+    check: &yagra_bus::MerakiCollectCheck,
+    failure: Option<yagra_transport::MerakiFetchError>,
+    at_unix_ms: i64,
+) -> PollResult {
+    PollResult {
+        job_id: job.job_id,
+        node_id: job.node_id,
+        at_unix_ms,
+        // A placeholder the engine never reads for an observational result.
+        outcome: CheckOutcome::Reachable,
+        samples: Vec::new(),
+        interfaces: Vec::new(),
+        sys_descr: None,
+        os_version: None,
+        os_version_without_patch: None,
+        serial_number: None,
+        sys_object_id: None,
+        dns_chain: None,
+        neighbors: None,
+        l3: None,
+        arp: None,
+        routing: None,
+        wlan: None,
+        row_names: Vec::new(),
+        observational: true,
+        judge_samples: false,
+        poller_id: None,
+        trace_context: Default::default(),
+        meraki_collect: Some(MerakiCollectReport {
+            org: check.meraki_org_uuid,
+            tier: check.tier,
+            failure: failure.map(|why| why.token().to_owned()),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -196,7 +262,153 @@ mod tests {
             timeout_ms: 30_000,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
-        execute_meraki(&job, &transport, 42).await
+        device_results(execute_meraki(&job, &transport, 42).await)
+    }
+
+    /// The per-device results of a collect, without the report that says how it ended.
+    fn device_results(results: Vec<PollResult>) -> Vec<PollResult> {
+        results
+            .into_iter()
+            .filter(|r| r.meraki_collect.is_none())
+            .collect()
+    }
+
+    /// A collect of `tier` for organization `org` against `transport`: every result it published.
+    async fn collect_with(
+        transport: &FakeTransport,
+        org: Uuid,
+        tier: MerakiTier,
+    ) -> Vec<PollResult> {
+        use yagra_bus::{MerakiCollectCheck, MerakiDeviceRef};
+        let check = MerakiCollectCheck {
+            org_id: "1".into(),
+            meraki_org_uuid: org,
+            tier,
+            base_url: "https://api.meraki.com".into(),
+            api_key: "k".into(),
+            devices: vec![MerakiDeviceRef {
+                serial: "Q2-A".into(),
+                node_id: NodeId::new(),
+            }],
+            network_ids: vec!["N_1".into()],
+            per_page: 1000,
+            target_rps: 2.0,
+            timeout_ms: 30_000,
+        };
+        let job = PollJob::meraki_collect(Uuid::from_u128(7), check, 300);
+        execute_meraki(&job, transport, 42).await
+    }
+
+    fn one_device_up() -> Vec<yagra_transport::MerakiObservation> {
+        vec![yagra_transport::MerakiObservation {
+            serial: "Q2-A".into(),
+            samples: vec![yagra_transport::MerakiSample {
+                metric: METRIC_MERAKI_DEVICE_UP.into(),
+                ifindex: None,
+                value: 1.0,
+            }],
+            uplinks: vec![],
+        }]
+    }
+
+    /// The reports among `results` — there must be exactly one per collect.
+    fn reports(results: &[PollResult]) -> Vec<&PollResult> {
+        results
+            .iter()
+            .filter(|r| r.meraki_collect.is_some())
+            .collect()
+    }
+
+    /// 🚨 The defect (ADR-164 決定 18): a refused key published **nothing**, so core heard nothing,
+    /// every node of the organization kept its last state, and no alert was possible.
+    #[tokio::test]
+    async fn a_collect_the_dashboard_refused_says_so_instead_of_saying_nothing() {
+        use yagra_transport::MerakiFetchError;
+        let org = Uuid::from_u128(0xACE);
+        let transport =
+            FakeTransport::reachable(1.0).with_meraki_refused(MerakiFetchError::Auth(401));
+        let results = collect_with(&transport, org, MerakiTier::Availability).await;
+
+        assert_eq!(
+            results.len(),
+            1,
+            "a failed collect still publishes its report"
+        );
+        let report = results[0].meraki_collect.as_ref().expect("the report");
+        assert_eq!(report.org, org);
+        assert_eq!(report.tier, MerakiTier::Availability);
+        assert_eq!(report.failure.as_deref(), Some("auth"));
+    }
+
+    /// The three causes that never reached the `Err` arm at all: an outage, a 429 storm and a
+    /// dropped connection came back as an `Ok` with no observations, and were not even logged.
+    #[tokio::test]
+    async fn a_collect_that_stopped_with_nothing_in_hand_is_reported_as_failed() {
+        use yagra_transport::MerakiFetchError;
+        for (why, token) in [
+            (MerakiFetchError::Network, "unreachable"),
+            (MerakiFetchError::RateLimited, "rate_limited"),
+            (MerakiFetchError::Status(503), "upstream"),
+        ] {
+            let transport = FakeTransport::reachable(1.0).with_meraki_stopped(why);
+            let results = collect_with(&transport, Uuid::nil(), MerakiTier::Availability).await;
+            let reports = reports(&results);
+            assert_eq!(reports.len(), 1, "{why:?}");
+            assert_eq!(
+                reports[0]
+                    .meraki_collect
+                    .as_ref()
+                    .and_then(|r| r.failure.as_deref()),
+                Some(token),
+                "{why:?} read as a collect that simply found no devices"
+            );
+        }
+    }
+
+    /// A success is reported too — an alert may only be closed on evidence, and this is it. A
+    /// partial answer counts: pages did arrive, so the Dashboard is answering.
+    #[tokio::test]
+    async fn a_collect_that_was_answered_reports_no_failure_even_when_it_was_cut_short() {
+        use yagra_transport::MerakiFetchError;
+        let complete = FakeTransport::reachable(1.0).with_meraki(one_device_up());
+        let partial = FakeTransport::reachable(1.0)
+            .with_meraki(one_device_up())
+            .with_meraki_stopped(MerakiFetchError::RateLimited);
+        for transport in [complete, partial] {
+            let results = collect_with(&transport, Uuid::nil(), MerakiTier::Availability).await;
+            assert_eq!(results.len(), 2, "one device, one report");
+            let reports = reports(&results);
+            assert_eq!(reports.len(), 1);
+            assert_eq!(
+                reports[0].meraki_collect.as_ref().expect("report").failure,
+                None
+            );
+        }
+    }
+
+    /// What keeps the report harmless to a core from before it existed: it is about no node (the
+    /// id is the organization's, which the job already used as its sentinel), it is observational
+    /// so the liveness state machine never sees it, and it carries nothing to store or judge.
+    #[tokio::test]
+    async fn the_report_is_inert_to_a_core_that_has_never_heard_of_it() {
+        let transport = FakeTransport::reachable(1.0).with_meraki(one_device_up());
+        let results =
+            collect_with(&transport, Uuid::from_u128(0xACE), MerakiTier::Availability).await;
+        let report = reports(&results)[0];
+        assert_eq!(
+            report.job_id,
+            Uuid::from_u128(7),
+            "it must release the flight its job took"
+        );
+        assert_eq!(report.node_id, NodeId::from(Uuid::from_u128(0xACE)));
+        assert!(report.observational && !report.judge_samples);
+        assert!(report.samples.is_empty() && report.interfaces.is_empty());
+        assert!(
+            results
+                .iter()
+                .all(|r| r.node_id != report.node_id || r.meraki_collect.is_some()),
+            "a device result was addressed to the organization's id"
+        );
     }
 
     /// 🚨 The defect (ADR-164): every result said `Reachable`, so a device the Dashboard reported
@@ -317,7 +529,7 @@ mod tests {
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
 
-        let results = execute_meraki(&job, &transport, 42).await;
+        let results = device_results(execute_meraki(&job, &transport, 42).await);
         assert_eq!(results.len(), 1, "only the imported device is emitted");
         let r = &results[0];
         assert_eq!(r.node_id, node_a);

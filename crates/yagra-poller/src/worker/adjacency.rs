@@ -525,7 +525,8 @@ mod tests {
                 &self,
                 s: &yagra_transport::MerakiCollectSpec,
                 to: Duration,
-            ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
+            ) -> Result<yagra_transport::MerakiCollected, yagra_transport::MerakiFetchError>
+            {
                 self.0.collect_meraki(s, to).await
             }
         }

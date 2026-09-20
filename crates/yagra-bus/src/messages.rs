@@ -2313,6 +2313,37 @@ pub struct PollResult {
     /// omitted from the wire) when tracing export is off; an N-1 poller never sends it (ADR-017).
     #[serde(default, skip_serializing_if = "TraceContext::is_empty")]
     pub trace_context: TraceContext,
+    /// How one Meraki collect ended — sent once per collect job, on a result of its own (ADR-164
+    /// 決定 18). `None` on every other result, including the per-device ones of the same job.
+    ///
+    /// A collect that failed used to publish nothing at all, so core could not tell "the Dashboard
+    /// is not answering" from "nothing is due": every node of the organization kept its last state
+    /// and nothing alerted. This is the signal, and it rides the existing result subject on
+    /// purpose — a new bus message would need a grant in both `yagra-authz` and
+    /// `nats-server.conf`, and either one missed fails silently in one deployment shape only.
+    ///
+    /// Defaulted and omitted when absent: an N-1 poller never sends it, and an N-1 core reads the
+    /// result that carries it as an observational result with no samples — inert, except that it
+    /// releases the organization's single-flight as any result of that job does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meraki_collect: Option<MerakiCollectReport>,
+}
+
+/// How one Meraki collect ended (see [`PollResult::meraki_collect`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MerakiCollectReport {
+    /// The owning `meraki_orgs` row — [`MerakiCollectCheck::meraki_org_uuid`], echoed back.
+    pub org: Uuid,
+    /// The tier that was collected.
+    pub tier: MerakiTier,
+    /// `None` when the Dashboard answered. Otherwise the closed token of why it did not
+    /// (`yagra_transport::MerakiFetchError::token`).
+    ///
+    /// A `String` rather than an enum on purpose: the vocabulary can grow, and a token this core
+    /// has never heard of must cost it the *reason*, not the whole result — a bare enum would fail
+    /// the decode and with it the report that the collect failed at all.
+    #[serde(default)]
+    pub failure: Option<String>,
 }
 
 /// An interface discovered during a table walk: its index and the descriptive metadata
@@ -3703,6 +3734,7 @@ mod tests {
             judge_samples: false,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
+            meraki_collect: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: PollResult = serde_json::from_str(&json).unwrap();
@@ -3890,6 +3922,53 @@ mod tests {
         let back: PollResult =
             serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
         assert!(back.observational && back.judge_samples);
+    }
+
+    /// ADR-164 決定 18's field. An N-1 poller never sends it; an ordinary result's wire form does
+    /// not change; a report keeps what it says; and a report written by a **newer** poller — a
+    /// failure token this build has never heard of, a field inside the report it does not know —
+    /// still decodes, because losing the reason is acceptable and losing "the collect failed" is
+    /// not.
+    #[test]
+    fn a_meraki_collect_report_tolerates_missing_and_unknown_fields() {
+        let mut result: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable",
+                "a_field_from_a_newer_poller":1}"#,
+        )
+        .unwrap();
+        assert_eq!(result.meraki_collect, None);
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("meraki_collect"), "{wire}");
+
+        result.meraki_collect = Some(MerakiCollectReport {
+            org: Uuid::from_u128(7),
+            tier: MerakiTier::Availability,
+            failure: Some("auth".to_owned()),
+        });
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        assert_eq!(back.meraki_collect, result.meraki_collect);
+
+        let newer: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable","observational":true,
+                "meraki_collect":{"org":"00000000-0000-0000-0000-000000000007",
+                  "tier":"availability","failure":"a_token_from_the_future",
+                  "retry_in_secs":30}}"#,
+        )
+        .unwrap();
+        let report = newer.meraki_collect.expect("the report");
+        assert_eq!(report.failure.as_deref(), Some("a_token_from_the_future"));
+
+        // A success names no failure at all.
+        let ok: MerakiCollectReport = serde_json::from_str(
+            r#"{"org":"00000000-0000-0000-0000-000000000007","tier":"uplink"}"#,
+        )
+        .unwrap();
+        assert_eq!(ok.failure, None);
     }
 
     /// ADR-043's result field, N-1 sensitive in exactly the way `neighbors` was.

@@ -256,7 +256,7 @@ impl Transport for SurgePingTransport {
         &self,
         spec: &crate::MerakiCollectSpec,
         timeout: Duration,
-    ) -> Result<Vec<crate::MerakiObservation>, TransportError> {
+    ) -> Result<crate::MerakiCollected, crate::MerakiFetchError> {
         crate::meraki::collect(spec, timeout).await
     }
 }

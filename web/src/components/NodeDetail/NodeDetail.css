@@ -479,6 +479,18 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--status-warning);
 }
 
+/* The node's state is the last one collected, not a current one (ADR-164 決定 18). Words and a
+   rule in the warning status colour — a status colour on purpose, unlike the integrations
+   screens: this *is* a statement about the node's state, which is what that palette is for. */
+.nd-fault {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--status-warning);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}
+
 .nd-alerts {
   display: flex;
   flex-direction: column;

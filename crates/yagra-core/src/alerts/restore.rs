@@ -217,6 +217,7 @@ mod tests {
             node: Some(node.as_uuid()),
             subject_kind: SubjectKind::Node,
             subject_name: None,
+            subject_id: node.as_uuid(),
             check: check_id(node, metric.unwrap_or(LIVENESS)).0,
             severity: Severity::Critical,
             state,

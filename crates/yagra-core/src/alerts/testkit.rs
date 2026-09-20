@@ -72,6 +72,7 @@ pub(crate) fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult
         judge_samples: false,
         poller_id: None,
         trace_context: Default::default(),
+        meraki_collect: None,
     }
 }
 

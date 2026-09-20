@@ -20,7 +20,10 @@
 //! * **Bounded.** Pagination is capped; a transient network/5xx failure returns the partial results
 //!   collected so far rather than hammering.
 
-use crate::{MerakiCollectSpec, MerakiObservation, MerakiSample, MerakiUplink, TransportError};
+use crate::{
+    MerakiCollectSpec, MerakiCollected, MerakiObservation, MerakiSample, MerakiUplink,
+    TransportError,
+};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -170,6 +173,22 @@ impl Session {
         match stop {
             Some(stop) if stop.fails_a_collect() => Err(io(stop.collect_message())),
             _ => Ok(items),
+        }
+    }
+
+    /// [`Self::get_paged`], handing back **why it stopped** beside what it gathered (ADR-164 決定
+    /// 18). The three stops that fail a collect are still an `Err`; the five it survives used to be
+    /// dropped on the floor here, which is how a Dashboard outage came to read as "no devices".
+    async fn get_paged_reported(
+        &mut self,
+        path: &str,
+        query: &[(&str, String)],
+        per_page: u32,
+    ) -> Result<(Vec<Value>, Option<MerakiFetchError>), MerakiFetchError> {
+        let (items, stop) = self.get_paged_traced(path, query, per_page).await;
+        match stop {
+            Some(stop) if stop.fails_a_collect() => Err(stop.into()),
+            stop => Ok((items, stop.map(MerakiFetchError::from))),
         }
     }
 
@@ -386,6 +405,43 @@ pub enum MerakiFetchError {
     Truncated,
 }
 
+impl MerakiFetchError {
+    /// The closed token this failure travels as — on the bus, in a collect report, and on the
+    /// organization's row (ADR-164 決定 18).
+    ///
+    /// 🚨 **Spelled exactly as core's `MerakiSyncFailure` spells the same failure**, because core
+    /// reads it back with that type's `from_token`, and a token it does not know becomes
+    /// `internal` ("Yagra could not read or write its own database") — a wrong sentence on
+    /// screen. This crate cannot see that enum, so
+    /// `meraki_sync.rs::a_collect_failure_token_is_the_one_the_sync_stores` holds the two
+    /// together from the other side.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Auth(_) => "auth",
+            Self::RateLimited => "rate_limited",
+            Self::Status(_) => "upstream",
+            Self::Network => "unreachable",
+            // A next link that left the allow-list is an answer we refuse to follow.
+            Self::Host | Self::Malformed => "malformed",
+            Self::Truncated => "truncated",
+        }
+    }
+
+    /// Every variant, for the test that pins [`Self::token`] to core's vocabulary.
+    pub const ALL: [Self; 8] = [
+        Self::Config,
+        Self::Host,
+        Self::Auth(401),
+        Self::RateLimited,
+        Self::Status(500),
+        Self::Network,
+        Self::Malformed,
+        Self::Truncated,
+    ];
+}
+
 impl From<Stop> for MerakiFetchError {
     fn from(stop: Stop) -> Self {
         match stop {
@@ -494,8 +550,15 @@ struct DeviceDatum {
 pub(crate) async fn collect(
     spec: &MerakiCollectSpec,
     timeout: Duration,
-) -> Result<Vec<MerakiObservation>, TransportError> {
-    let mut session = Session::new(&spec.base_url, &spec.api_key, spec.target_rps, timeout)?;
+) -> Result<MerakiCollected, MerakiFetchError> {
+    let mut session = Session::new(&spec.base_url, &spec.api_key, spec.target_rps, timeout)
+        .map_err(|e| {
+            tracing::debug!(error = %e, "meraki collect session refused");
+            MerakiFetchError::Config
+        })?;
+    // The FIRST reason a listing of this collect stopped early. One is enough: what core asks
+    // of it is "did the Dashboard answer", and a second stop after the first adds nothing.
+    let mut stopped: Option<MerakiFetchError> = None;
     let net_query: Vec<(&str, String)> = spec
         .network_ids
         .iter()
@@ -509,7 +572,10 @@ pub(crate) async fn collect(
                 "{API_PREFIX}/organizations/{}/devices/availabilities",
                 spec.org_id
             );
-            let items = session.get_paged(&path, &net_query, spec.per_page).await?;
+            let (items, stop) = session
+                .get_paged_reported(&path, &net_query, spec.per_page)
+                .await?;
+            stopped = stopped.or(stop);
             data.extend(parse_availability(&items));
         }
         MerakiTier::Uplink => {
@@ -519,16 +585,20 @@ pub(crate) async fn collect(
             );
             let mut q = net_query.clone();
             q.push(("timespan", "300".to_owned()));
-            let items = session.get_paged(&loss_path, &q, spec.per_page).await?;
+            let (items, stop) = session
+                .get_paged_reported(&loss_path, &q, spec.per_page)
+                .await?;
+            stopped = stopped.or(stop);
             data.extend(parse_uplink_loss_latency(&items));
 
             let status_path = format!(
                 "{API_PREFIX}/organizations/{}/appliance/uplink/statuses",
                 spec.org_id
             );
-            let items = session
-                .get_paged(&status_path, &net_query, spec.per_page)
+            let (items, stop) = session
+                .get_paged_reported(&status_path, &net_query, spec.per_page)
                 .await?;
+            stopped = stopped.or(stop);
             data.extend(parse_uplink_statuses(&items));
         }
         MerakiTier::Traffic => {
@@ -538,14 +608,18 @@ pub(crate) async fn collect(
             );
             let mut q = net_query.clone();
             q.push(("timespan", "3600".to_owned()));
-            let items = session.get_paged(&path, &q, spec.per_page).await?;
+            let (items, stop) = session.get_paged_reported(&path, &q, spec.per_page).await?;
+            stopped = stopped.or(stop);
             data.extend(parse_traffic(&items));
         }
         // Inventory reconciliation is operator-initiated (control-plane enumerate), not a recurring
         // metric collect — nothing to gather here.
         MerakiTier::Inventory => {}
     }
-    Ok(fold(data))
+    Ok(MerakiCollected {
+        observations: fold(data),
+        stopped,
+    })
 }
 
 /// Fold per-device data into observations, deduping uplinks by ifindex. `BTreeMap` gives a stable
@@ -1269,5 +1343,90 @@ mod tests {
         assert_eq!(d.lan_ip.as_deref(), Some("10.0.0.1"));
         // A row without a serial is not a usable device.
         assert!(parse_device_info(&json!({"name": "x"})).is_none());
+    }
+
+    // ── What a collect reports (ADR-164 決定 18) ─────────────────────────────────────────────
+
+    fn one_observation() -> MerakiObservation {
+        MerakiObservation {
+            serial: "Q2-A".into(),
+            samples: Vec::new(),
+            uplinks: Vec::new(),
+        }
+    }
+
+    /// A collect has failed when it stopped early **and** brought nothing back. Both halves
+    /// matter: a partial answer means the Dashboard did answer, and a complete answer that lists
+    /// no device is an empty organization, not an outage.
+    #[test]
+    fn a_collect_that_stopped_with_nothing_has_failed_and_a_partial_one_has_not() {
+        let nothing = MerakiCollected {
+            observations: Vec::new(),
+            stopped: Some(MerakiFetchError::Network),
+        };
+        assert_eq!(
+            nothing.failure(),
+            Some(MerakiFetchError::Network),
+            "an outage read as a collect that simply found no devices"
+        );
+
+        let partial = MerakiCollected {
+            observations: vec![one_observation()],
+            stopped: Some(MerakiFetchError::RateLimited),
+        };
+        assert_eq!(
+            partial.failure(),
+            None,
+            "pages 1 and 2 arrived: the Dashboard answered, and that is what the alert asks"
+        );
+
+        let empty_organization = MerakiCollected::default();
+        assert_eq!(empty_organization.failure(), None);
+    }
+
+    /// The five stops the lenient reader survives each become a reason — none is dropped, which is
+    /// what used to happen to all five.
+    #[test]
+    fn every_stop_the_lenient_reader_survives_has_a_reason_to_report() {
+        for stop in [
+            Stop::Network,
+            Stop::RateLimited,
+            Stop::Status(503),
+            Stop::Cycle,
+            Stop::PageCap,
+        ] {
+            assert!(
+                !stop.fails_a_collect(),
+                "{stop:?} is one the reader reports as Err"
+            );
+            let why = MerakiFetchError::from(stop);
+            assert!(!why.token().is_empty(), "{stop:?} has no token");
+        }
+    }
+
+    /// `ALL` is what core's test walks to pin [`MerakiFetchError::token`] to its own vocabulary, so
+    /// a variant missing from it is a variant nothing checks. The match has no wildcard: a ninth
+    /// variant stops compiling here until it is listed.
+    #[test]
+    fn the_list_of_fetch_errors_names_every_variant() {
+        let listed = |e: MerakiFetchError| {
+            MerakiFetchError::ALL
+                .iter()
+                .any(|a| std::mem::discriminant(a) == std::mem::discriminant(&e))
+        };
+        for e in MerakiFetchError::ALL {
+            let covered = match e {
+                MerakiFetchError::Config
+                | MerakiFetchError::Host
+                | MerakiFetchError::Auth(_)
+                | MerakiFetchError::RateLimited
+                | MerakiFetchError::Status(_)
+                | MerakiFetchError::Network
+                | MerakiFetchError::Malformed
+                | MerakiFetchError::Truncated => listed(e),
+            };
+            assert!(covered, "{e:?}");
+        }
+        assert_eq!(MerakiFetchError::ALL.len(), 8);
     }
 }

@@ -23,6 +23,8 @@
     "acked": "ACK 済み",
     "poolSubject": "ポーラープール「{{pool}}」",
     "poolSubjectHint": "デバイスではなく、Yagra 自身の監視範囲についてのアラートです。このプールにはノードが割り当てられたままなのに、実際に監視する稼働中のポーラーがありません。",
+    "merakiOrgSubject": "Meraki 組織「{{org}}」",
+    "merakiOrgSubjectHint": "Cisco Meraki の Dashboard API がこの組織に応答していないため、デバイスの値を取得できていません。各デバイスの状態は、最後に取得したときのままです。このアラート 1 つが、組織のデバイス全部を代表します。",
     "partOfOutage": "このノードの停止に含まれる"
   },
   "acked": {

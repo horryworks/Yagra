@@ -918,6 +918,7 @@ mod tests {
             judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         });
         Arc::new(sink)
     }

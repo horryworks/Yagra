@@ -166,7 +166,13 @@ impl YagraMcp {
             .iter()
             .map(|a| {
                 let name = a.node().and_then(|n| names.get(&n.0).cloned());
-                AlertDto::from_alert(a, name)
+                let mut dto = AlertDto::from_alert(a, name);
+                // A Meraki organization is identified by id and carries no name of its own; the
+                // engine resolves it, exactly as the REST view does (read parity, ADR-042).
+                if dto.subject_name.is_none() {
+                    dto.subject_name = self.state.alerts.subject_display_name(&a.subject);
+                }
+                dto
             })
             .collect();
         ok_json(TOOL, &out)
@@ -234,7 +240,16 @@ impl YagraMcp {
             .await;
         let out: Vec<AlertHistoryDto> = rows
             .iter()
-            .map(|r| AlertHistoryDto::from_row(r, r.node.and_then(|n| names.get(&n).cloned())))
+            .map(|r| {
+                let mut dto =
+                    AlertHistoryDto::from_row(r, r.node.and_then(|n| names.get(&n).cloned()));
+                if dto.subject_name.is_none() {
+                    dto.subject_name = r
+                        .subject()
+                        .and_then(|s| self.state.alerts.subject_display_name(&s));
+                }
+                dto
+            })
             .collect();
         ok_json(TOOL, &out)
     }

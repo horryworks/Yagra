@@ -20,7 +20,7 @@
 // "critical and warning" and "unacked, on either of two states" are sayable for the first time, and
 // the free text gained the NOT and regex modes every other list has.
 
-import { alertSubject, type HasSubject } from '../lib/alertSubject';
+import { alertSubject, subjectText, type HasSubject } from '../lib/alertSubject';
 import {
   normalizeSets,
   readFilterParams,
@@ -125,7 +125,7 @@ export function activeAlertFilters(
         const subject = alertSubject(a);
         return subject.kind === 'node'
           ? [nameOf(subject.nodeId), subject.nodeId, a.metric]
-          : [subject.name, a.metric];
+          : [subjectText(subject), a.metric];
       },
       containsSemantics: 'substring',
       placeholder: t('active.searchPlaceholder'),

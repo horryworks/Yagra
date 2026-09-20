@@ -354,6 +354,42 @@ pub(crate) struct MerakiOrgView {
     max_devices: u32,
     /// How many devices that cap left out on the last sync; zero while automatic import is off.
     devices_over_cap: u32,
+    /// The collect tiers the Dashboard API is **not answering** right now, each with why and since
+    /// when. Empty when none is known to be failing.
+    ///
+    /// Distinct from `last_sync_error`, which is the inventory sync — this server asking what the
+    /// organization holds. A collect is a poller asking how the devices are, and it is what a
+    /// device's state depends on: while `availability` is listed here the organization's nodes keep
+    /// the last state they had, and after three failures in a row one alert is raised about the
+    /// organization (`subject_kind: meraki_org`) — never one per device. `uplink` or `traffic`
+    /// listed alone raises nothing: readings are missing, liveness is not.
+    collect_failures: Vec<MerakiCollectFailureView>,
+}
+
+/// One collect tier the Dashboard API is not answering (see `MerakiOrgView.collect_failures`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct MerakiCollectFailureView {
+    /// `availability`, `uplink` or `traffic`.
+    tier: String,
+    /// Why the most recent collect of this tier failed. The vocabulary of `last_sync_error`, plus
+    /// `no_answer`: the collect was sent and nothing came back.
+    reason: MerakiSyncFailure,
+    /// When this run of failures began.
+    since: chrono::DateTime<chrono::Utc>,
+    /// How many collects in a row have failed.
+    failures: u32,
+}
+
+impl MerakiCollectFailureView {
+    fn of(f: &crate::meraki_health::TierFailure) -> Self {
+        Self {
+            tier: f.tier.as_str().to_owned(),
+            reason: f.reason,
+            // Out of range only for a corrupt row; the epoch then, rather than a failed page.
+            since: chrono::DateTime::from_timestamp_millis(f.since_unix_ms).unwrap_or_default(),
+            failures: f.failures,
+        }
+    }
 }
 
 /// Project a stored org into its API view.
@@ -389,6 +425,11 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
         file_by_prefix: o.file_by_prefix,
         max_devices: o.max_devices,
         devices_over_cap: o.devices_over_cap,
+        collect_failures: o
+            .collect_failures
+            .iter()
+            .map(MerakiCollectFailureView::of)
+            .collect(),
     }
 }
 
@@ -2106,6 +2147,155 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    }
+
+    /// 決定 18, through the router. While the Dashboard API is not answering an organization there is
+    /// **one** alert, about the organization — and its nodes, whose state is now the last one
+    /// collected, say so. Every surface a person reads has to agree: the alert list names the
+    /// organization rather than an id, the node's status carries the fault and its reason, and the
+    /// organization's row says which collect is failing. A caller restricted to the folder that
+    /// holds one of its nodes sees the alert; one restricted elsewhere does not.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_unanswered_organization_is_one_alert_and_its_nodes_say_their_state_is_stale(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        use crate::meraki_health::TierFailure;
+        use std::collections::HashMap;
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let operator = token(&st, yagra_common::Role::Operator);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &operator,
+            Some(serde_json::json!({
+                "org_uuid": org,
+                "devices": [{
+                    "serial": "Q2XX-0001", "name": "edge-tokyo", "model": "MX67",
+                    "product_type": "appliance", "network_id": "N_1", "network_name": "Tokyo",
+                    "lan_ip": "10.1.0.1",
+                }],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let node = crate::meraki::device_node_id("Q2XX-0001");
+        let folder = crate::meraki::network_group_id(org, "N_1");
+
+        // What the config loader builds from `alert_bindings` and the node list.
+        let bindings = admin.meraki_orgs.alert_bindings().await.expect("bindings");
+        assert_eq!(bindings, vec![(org, "Acme".to_owned(), vec![node])]);
+        st.alerts.set_config(
+            crate::alerts::AlertConfig::new(Vec::new(), HashMap::new()).with_meraki_orgs(
+                HashMap::from([(
+                    org,
+                    crate::alerts::MerakiOrgScope {
+                        name: "Acme".to_owned(),
+                        groups: std::collections::BTreeSet::from([folder]),
+                        nodes: std::collections::BTreeSet::from([yagra_common::NodeId::from(node)]),
+                    },
+                )]),
+            ),
+        );
+
+        // Healthy: no fault, nothing failing.
+        let (_, healthy) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{node}/status"),
+            &operator,
+            None,
+        )
+        .await;
+        assert!(healthy.get("collection_fault").is_none(), "{healthy}");
+
+        // Three failed availability collects later: the loop raises the alert and writes the row.
+        assert!(st
+            .alerts
+            .raise_meraki_collect_alert(org, 3, 1_790_000_000_000)
+            .is_some());
+        admin
+            .meraki_orgs
+            .record_collect_failures(
+                org,
+                &[TierFailure {
+                    tier: yagra_common::MerakiTier::Availability,
+                    reason: MerakiSyncFailure::Auth,
+                    since_unix_ms: 1_789_999_100_000,
+                    failures: 3,
+                }],
+            )
+            .await
+            .expect("row");
+
+        let (status, alerts) = send(&st, "GET", "/api/v1/alerts", &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{alerts}");
+        assert_eq!(
+            alerts.as_array().map(Vec::len),
+            Some(1),
+            "one alert, not one per node"
+        );
+        assert_eq!(alerts[0]["subject_kind"], "meraki_org", "{alerts}");
+        assert_eq!(alerts[0]["subject_name"], "Acme", "{alerts}");
+        assert_eq!(alerts[0]["node"], format!("meraki_org:{org}"), "{alerts}");
+        assert_eq!(alerts[0]["severity"], "critical", "{alerts}");
+
+        let (_, stale) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{node}/status"),
+            &operator,
+            None,
+        )
+        .await;
+        let fault = &stale["collection_fault"];
+        assert_eq!(fault["cause"], "meraki_api", "{stale}");
+        assert_eq!(fault["meraki_org"], org.to_string(), "{stale}");
+        assert_eq!(fault["meraki_org_name"], "Acme", "{stale}");
+        assert_eq!(fault["reason"], "auth", "{stale}");
+        assert_eq!(fault["since_unix_ms"], 1_790_000_000_000_i64, "{stale}");
+        assert_eq!(
+            stale["alerts"].as_array().map(Vec::len),
+            Some(0),
+            "the organization's alert was attributed to the node: {stale}"
+        );
+
+        let (_, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
+        let failing = &orgs[0]["collect_failures"];
+        assert_eq!(failing.as_array().map(Vec::len), Some(1), "{orgs}");
+        assert_eq!(failing[0]["tier"], "availability", "{orgs}");
+        assert_eq!(failing[0]["reason"], "auth", "{orgs}");
+        assert_eq!(failing[0]["failures"], 3, "{orgs}");
+
+        // Who sees it: the folder that holds one of its nodes, and nobody else's.
+        let mine = scoped_token(&st, &[folder]);
+        let (_, seen) = send(&st, "GET", "/api/v1/alerts", &mine, None).await;
+        assert_eq!(seen.as_array().map(Vec::len), Some(1), "{seen}");
+        let elsewhere = crate::pgtest::group(&pool, "Osaka").await;
+        let theirs = scoped_token(&st, &[elsewhere]);
+        let (_, hidden) = send(&st, "GET", "/api/v1/alerts", &theirs, None).await;
+        assert_eq!(hidden.as_array().map(Vec::len), Some(0), "{hidden}");
+
+        // Answered again: the alert goes, and so does the label.
+        assert!(st.alerts.resolve_meraki_collect_alert(org).is_some());
+        let (_, again) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{node}/status"),
+            &operator,
+            None,
+        )
+        .await;
+        assert!(again.get("collection_fault").is_none(), "{again}");
     }
 
     /// 決定 17, through the router: a cadence that keeps availability is stored, one that drops it

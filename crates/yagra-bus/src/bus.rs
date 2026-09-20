@@ -576,6 +576,7 @@ mod tests {
             judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         };
         bus.publish_result(result.clone()).await.unwrap();
 
@@ -613,6 +614,7 @@ mod tests {
             judge_samples: false,
             poller_id: None,
             trace_context: Default::default(),
+            meraki_collect: None,
         };
         bus.publish_result_backfill(result.clone()).await.unwrap();
 

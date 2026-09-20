@@ -6,6 +6,7 @@ import {
   MERAKI_PAGE_PATH,
   canSyncNow,
   merakiOrgPath,
+  orgCollectFailures,
   orgHasInventory,
   orgSyncSummary,
 } from './merakiOrgRow';
@@ -85,5 +86,47 @@ describe('merakiOrgPath', () => {
     const under = MERAKI_PAGE_PATH.replace('/settings/', '');
     expect(routes).toContain(`path="${under}"`);
     expect(routes).toContain(`path="${under}/:orgId"`);
+  });
+});
+
+describe('which of an organization’s collects are failing (ADR-164 決定 18)', () => {
+  const failing = (tier: string, reason: string) => ({
+    tier,
+    reason: reason as never,
+    since: '2026-09-20T00:00:00Z',
+    failures: 3,
+  });
+
+  it('says nothing for an organization that is being answered', () => {
+    expect(orgCollectFailures({ collect_failures: [] })).toEqual([]);
+  });
+
+  it('puts the tier a device’s state rides on first, whatever order the server sent', () => {
+    const got = orgCollectFailures({
+      collect_failures: [failing('traffic', 'upstream'), failing('availability', 'auth')],
+    });
+    expect(got).toEqual([
+      { tier: 'availability', reason: 'auth', stalesNodes: true },
+      { tier: 'traffic', reason: 'upstream', stalesNodes: false },
+    ]);
+  });
+
+  it('only availability leaves the nodes at their last state', () => {
+    const got = orgCollectFailures({
+      collect_failures: [failing('uplink', 'auth'), failing('traffic', 'auth')],
+    });
+    expect(got.map((f) => f.stalesNodes)).toEqual([false, false]);
+  });
+
+  it('reads a reason this bundle has never heard of as a failure, never as a raw key', () => {
+    const got = orgCollectFailures({
+      collect_failures: [failing('availability', 'a_reason_from_the_future')],
+    });
+    expect(got).toEqual([{ tier: 'availability', reason: 'internal', stalesNodes: true }]);
+  });
+
+  it('carries `no_answer` through: a collect that was sent and never came back', () => {
+    const got = orgCollectFailures({ collect_failures: [failing('availability', 'no_answer')] });
+    expect(got[0].reason).toBe('no_answer');
   });
 });

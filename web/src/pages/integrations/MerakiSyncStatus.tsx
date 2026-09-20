@@ -10,7 +10,7 @@
 import { useTranslation } from 'react-i18next';
 import type { MerakiOrg } from '../../types/api';
 import { Button } from '../../components/ui/Button';
-import { orgHasInventory, orgSyncSummary } from './merakiOrgRow';
+import { orgCollectFailures, orgHasInventory, orgSyncSummary } from './merakiOrgRow';
 import type { MerakiSync } from './useMerakiSync';
 import './MerakiSyncStatus.css';
 
@@ -65,6 +65,17 @@ export function MerakiSyncStatus({ org, error }: { org: MerakiOrg; error?: strin
           )}
         </>
       )}
+      {/* A collect is not the sync above: it is a poller asking how the devices are, and it is what
+          a device's state depends on. While availability fails the nodes keep their last state
+          (ADR-164 決定 18) — said here because no node says it on the tree. */}
+      {orgCollectFailures(org).map((f) => (
+        <span className="meraki-org-sync-failed" key={f.tier}>
+          {t(f.stalesNodes ? 'meraki.sync.collectFailing' : 'meraki.sync.tierFailing', {
+            tier: t(`meraki.tier.${f.tier}`),
+            reason: t(`meraki.sync.reason.${f.reason}`),
+          })}
+        </span>
+      ))}
       {error && <span className="meraki-org-sync-failed">{error}</span>}
     </div>
   );

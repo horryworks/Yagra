@@ -1422,6 +1422,70 @@ impl AlertManager {
             .and_then(|m| m.folder_group)
     }
 
+    /// Whether any node of Meraki organization `org` sits in one of `visible` — the group-scope
+    /// question for that organization's collect alert (`api/scope.rs::allows_subject`, ADR-164
+    /// 決定 18).
+    ///
+    /// Fail-closed the way [`Self::pool_is_in_any_group`] is: an organization the snapshot has
+    /// never seen, or one whose nodes are all ungrouped, answers `false`.
+    #[must_use]
+    pub fn meraki_org_is_in_any_group(&self, org: Uuid, visible: &[Uuid]) -> bool {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .meraki_orgs
+            .get(&org)
+            .is_some_and(|scope| visible.iter().any(|g| scope.groups.contains(g)))
+    }
+
+    /// What to **call** `subject` on a screen or in a tool result: its own name when it carries one
+    /// (a pool), the inventory's name for one identified by id that is not a node (a Meraki
+    /// organization), and `None` for a node — whose name every surface already resolves from its
+    /// id. One function so the REST views, the SSE frame and the MCP results cannot disagree.
+    #[must_use]
+    pub fn subject_display_name(&self, subject: &Subject) -> Option<String> {
+        subject.name().map(str::to_owned).or_else(|| {
+            subject
+                .meraki_org()
+                .and_then(|org| self.meraki_org_name(org))
+        })
+    }
+
+    /// What Meraki organization `org` is called, as of the last config generation. `None` for one
+    /// the snapshot has not seen — callers fall back to the subject's flat form.
+    #[must_use]
+    pub fn meraki_org_name(&self, org: Uuid) -> Option<String> {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .meraki_orgs
+            .get(&org)
+            .map(|scope| scope.name.clone())
+    }
+
+    /// The open collect alert of the Meraki organization `node` belongs to, if it has one: the
+    /// organization and the alert. What `node_status` reads to say that a node's state is the
+    /// last one collected rather than a current one (決定 18).
+    #[must_use]
+    pub fn meraki_collect_fault_of(&self, node: NodeId) -> Option<(Uuid, Alert)> {
+        let org = *self
+            .config
+            .read()
+            .expect("config rwlock poisoned")
+            .meraki_node_orgs
+            .get(&node)?;
+        let check = subject_check_id(
+            &Subject::MerakiOrg(org),
+            crate::meraki_health::COLLECT_METRIC,
+        );
+        self.active
+            .lock()
+            .expect("alerts mutex poisoned")
+            .get(&check)
+            .cloned()
+            .map(|alert| (org, alert))
+    }
+
     /// Whether any node in `pool` sits in one of `visible` — the group-scope question for a
     /// pool-coverage alert (`api/scope.rs::allows_subject`).
     ///
@@ -2251,6 +2315,51 @@ impl AlertManager {
             .collect()
     }
 
+    /// Raise the collect alert for a Meraki organization the Dashboard API is not answering
+    /// (ADR-164 決定 18): one alert for the organization, never one per node.
+    ///
+    /// `failures` is the run of failed availability collects that raised it, which is what the
+    /// breach carries — there is no measured value, and "3 in a row, threshold 3" is the honest
+    /// reading of what happened. No maintenance window or pause applies, for the reasons
+    /// [`Self::raise_pool_coverage_alert`] gives: a blind spot during an upgrade is the one
+    /// outcome worth hearing about.
+    pub fn raise_meraki_collect_alert(
+        &self,
+        org: Uuid,
+        failures: u32,
+        at_unix_ms: i64,
+    ) -> Option<NotifyAction> {
+        let subject = Subject::MerakiOrg(org);
+        let check = subject_check_id(&subject, crate::meraki_health::COLLECT_METRIC);
+        self.raise_event_alert(Alert {
+            subject,
+            check,
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms,
+            root_cause: None,
+            flapping: false,
+            metric: crate::meraki_health::COLLECT_METRIC.to_owned(),
+            breach: Some(Breach {
+                value: f64::from(failures),
+                threshold: Some(f64::from(crate::meraki_health::RAISE_AFTER_FAILURES)),
+                direction: Direction::Above,
+            }),
+            // An organization is not a port, nor a table row.
+            ifindex: None,
+            row: None,
+            row_name: None,
+        })
+    }
+
+    /// Resolve a Meraki organization's collect alert. `None` if it was not active.
+    pub fn resolve_meraki_collect_alert(&self, org: Uuid) -> Option<NotifyAction> {
+        self.resolve_event_alert(subject_check_id(
+            &Subject::MerakiOrg(org),
+            crate::meraki_health::COLLECT_METRIC,
+        ))
+    }
+
     /// Resolve a pool's coverage alert. `None` if it was not active.
     pub fn resolve_pool_coverage_alert(&self, pool: &str) -> Option<NotifyAction> {
         self.resolve_event_alert(subject_check_id(
@@ -2280,7 +2389,7 @@ impl AlertManager {
         let mut event = serde_json::json!({
             "node": alert.subject,
             "subject_kind": alert.subject.kind(),
-            "subject_name": alert.subject.name(),
+            "subject_name": self.subject_display_name(&alert.subject),
             "check": alert.check,
             "severity": alert.severity,
             "state": alert.state,
@@ -5075,6 +5184,151 @@ mod tests {
         // group at all. Either answering `true` would show one site's outage to another's operator.
         assert!(!mgr.pool_is_in_any_group("osaka", &[mine]));
         assert!(!mgr.pool_is_in_any_group("tokyo", &[]));
+    }
+
+    // ── A Meraki organization's collect alert (ADR-164 決定 18) ────────────────────────────────
+
+    fn meraki_cfg(org: Uuid, name: &str, group: Option<Uuid>, nodes: &[NodeId]) -> AlertConfig {
+        cfg(Vec::new(), HashMap::new()).with_meraki_orgs(HashMap::from([(
+            org,
+            crate::alerts::MerakiOrgScope {
+                name: name.to_owned(),
+                groups: group.into_iter().collect(),
+                nodes: nodes.iter().copied().collect(),
+            },
+        )]))
+    }
+
+    /// One alert about the organization, and **nothing about its nodes**: no node's state moves, no
+    /// node gains an alert. That is the user's decision — the devices did not fail, the API did.
+    #[test]
+    fn an_organizations_collect_alert_touches_no_node_and_is_raised_once() {
+        let mgr = manager();
+        let org = Uuid::from_u128(0xACE);
+        let node = NodeId::from(Uuid::from_u128(7));
+        mgr.set_config(meraki_cfg(org, "Acme", None, &[node]));
+
+        let fired = mgr.raise_meraki_collect_alert(org, 3, 1_000);
+        let Some(NotifyAction::Fire(alert)) = fired else {
+            panic!("the third failed collect raised nothing");
+        };
+        assert_eq!(alert.subject, Subject::MerakiOrg(org));
+        assert_eq!(alert.severity, Severity::Critical);
+        assert_eq!(alert.metric, crate::meraki_health::COLLECT_METRIC);
+
+        assert!(
+            mgr.node_states().is_empty(),
+            "no node's display state moved"
+        );
+        assert!(mgr.node_state(node).is_none());
+        assert!(
+            mgr.alerts_for(node).is_empty(),
+            "the organization's alert was attributed to one of its nodes"
+        );
+        // A fourth failure is the same outage.
+        assert!(mgr.raise_meraki_collect_alert(org, 4, 2_000).is_none());
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        assert!(mgr
+            .resolve_meraki_collect_alert(org)
+            .is_some_and(|a| matches!(a, NotifyAction::Resolve(_))));
+        assert!(mgr.active_alerts().is_empty());
+        assert!(mgr.resolve_meraki_collect_alert(org).is_none());
+    }
+
+    /// What labels a stale node (決定 18): a node whose organization's alert is open has a fault, a
+    /// node of another organization does not, and neither does anything once the alert is closed.
+    #[test]
+    fn a_node_is_said_to_be_stale_only_while_its_own_organizations_alert_is_open() {
+        let mgr = manager();
+        let (acme, other) = (Uuid::from_u128(0xACE), Uuid::from_u128(0xBEE));
+        let (mine, theirs, plain) = (
+            NodeId::from(Uuid::from_u128(1)),
+            NodeId::from(Uuid::from_u128(2)),
+            NodeId::from(Uuid::from_u128(3)),
+        );
+        mgr.set_config(
+            cfg(Vec::new(), HashMap::new()).with_meraki_orgs(HashMap::from([
+                (
+                    acme,
+                    crate::alerts::MerakiOrgScope {
+                        name: "Acme".to_owned(),
+                        groups: BTreeSet::new(),
+                        nodes: BTreeSet::from([mine]),
+                    },
+                ),
+                (
+                    other,
+                    crate::alerts::MerakiOrgScope {
+                        name: "Other".to_owned(),
+                        groups: BTreeSet::new(),
+                        nodes: BTreeSet::from([theirs]),
+                    },
+                ),
+            ])),
+        );
+        assert!(
+            mgr.meraki_collect_fault_of(mine).is_none(),
+            "nothing is open"
+        );
+
+        mgr.raise_meraki_collect_alert(acme, 3, 5_000);
+        let (org, alert) = mgr
+            .meraki_collect_fault_of(mine)
+            .expect("its organization is not being answered");
+        assert_eq!((org, alert.at_unix_ms), (acme, 5_000));
+        assert!(
+            mgr.meraki_collect_fault_of(theirs).is_none(),
+            "another organization's outage labelled this node"
+        );
+        assert!(
+            mgr.meraki_collect_fault_of(plain).is_none(),
+            "not a Meraki node"
+        );
+
+        mgr.resolve_meraki_collect_alert(acme);
+        assert!(mgr.meraki_collect_fault_of(mine).is_none());
+    }
+
+    /// Who may see it: whoever can see at least one of the organization's nodes — the operator
+    /// reading a stale `ok` is the one who needs to be told. Fail-closed on every empty, like a pool.
+    #[test]
+    fn an_organizations_alert_is_visible_to_the_scope_that_holds_one_of_its_nodes() {
+        let mgr = manager();
+        let org = Uuid::from_u128(0xACE);
+        let (mine, theirs) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        mgr.set_config(meraki_cfg(org, "Acme", Some(mine), &[]));
+        assert!(mgr.meraki_org_is_in_any_group(org, &[mine]));
+        assert!(mgr.meraki_org_is_in_any_group(org, &[theirs, mine]));
+        assert!(!mgr.meraki_org_is_in_any_group(org, &[theirs]));
+        assert!(!mgr.meraki_org_is_in_any_group(Uuid::from_u128(0xBEE), &[mine]));
+        assert!(!mgr.meraki_org_is_in_any_group(org, &[]));
+    }
+
+    /// The stream frame names the organization. The subject carries an id on purpose (a rename must
+    /// not split one alert in two), so the name is resolved here — and `node` stays a string, which
+    /// is what `web/src/services/sse.ts` gates a frame's validity on.
+    #[tokio::test]
+    async fn an_organizations_alert_streams_with_its_name_resolved() {
+        let mgr = manager();
+        let org = Uuid::from_u128(0xACE);
+        mgr.set_config(meraki_cfg(org, "Acme", None, &[]));
+        let mut rx = mgr.subscribe();
+        mgr.raise_meraki_collect_alert(org, 3, 1_000);
+        let (who, body) = rx.try_recv().expect("the alert reaches the stream");
+        assert_eq!(who, Subject::MerakiOrg(org));
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["node"], "meraki_org:00000000-0000-0000-0000-000000000ace");
+        assert_eq!(v["subject_kind"], "meraki_org");
+        assert_eq!(v["subject_name"], "Acme");
+
+        // An organization the snapshot has not seen yet still streams — named by nothing, which the
+        // client renders from the flat form.
+        let unknown = Uuid::from_u128(0xBEE);
+        mgr.raise_meraki_collect_alert(unknown, 3, 1_000);
+        let (_, body) = rx.try_recv().expect("it streams");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["subject_name"], serde_json::Value::Null);
     }
 
     #[test]

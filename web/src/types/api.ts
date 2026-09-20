@@ -917,9 +917,11 @@ export const MERAKI_SYNC_FAILURES = [
   'truncated',
   'timeout',
   'internal',
+  // Only a collect produces this one (ADR-164 決定 18): it was sent and nothing came back.
+  'no_answer',
 ] as const;
 
-/** One reason an inventory sync can fail. */
+/** One reason an inventory sync — or, since ADR-164 決定 18, a collect — can fail. */
 export type MerakiSyncFailure = (typeof MERAKI_SYNC_FAILURES)[number];
 
 /** What one successful inventory sync found (`POST /api/v1/meraki/orgs/:id/sync`). */

@@ -539,6 +539,8 @@
       "missing_other": "{{count}} not found in Meraki",
       "uncollected_one": "{{count}} not collected",
       "uncollected_other": "{{count}} not collected",
+      "collectFailing": "Collection failing: {{reason}}. Device states are the last ones collected.",
+      "tierFailing": "{{tier}} collection failing: {{reason}}",
       "now": "Sync now",
       "running": "Syncing…",
       "reason": {
@@ -551,7 +553,8 @@
         "malformed": "the Meraki API answered something unreadable",
         "truncated": "the device list did not arrive complete",
         "timeout": "the sync did not finish in time",
-        "internal": "Yagra could not read or write its own database"
+        "internal": "Yagra could not read or write its own database",
+        "no_answer": "the poller did not answer"
       }
     },
     "addOrg": {

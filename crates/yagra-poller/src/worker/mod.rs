@@ -321,6 +321,7 @@ fn result(
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),
+        meraki_collect: None,
     }
 }
 

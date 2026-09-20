@@ -186,6 +186,12 @@ impl NodeScope {
             NodeScope::Groups(s) => match subject {
                 yagra_alert::Subject::Node(n) => s.allows(alerts.node_folder_group(*n)),
                 yagra_alert::Subject::Pool(p) => alerts.pool_is_in_any_group(p, &s.visible),
+                // An organization's collect alert is shown to whoever can see at least one of its
+                // nodes: those are the nodes whose state has gone stale, and the operator of that
+                // folder is the one reading a stale `ok` (ADR-164 決定 18).
+                yagra_alert::Subject::MerakiOrg(org) => {
+                    alerts.meraki_org_is_in_any_group(*org, &s.visible)
+                }
             },
         }
     }

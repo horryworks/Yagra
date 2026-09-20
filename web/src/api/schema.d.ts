@@ -6019,6 +6019,37 @@ export interface components {
             sso_enabled: boolean;
         };
         /**
+         * @description Why a node's `state` is the last one collected rather than a current one (ADR-164 決定 18).
+         *
+         *     A Meraki device is never pinged: what the Dashboard API says about it is all Yagra knows. When
+         *     the API stops answering for the whole organization, **one** alert is raised about the
+         *     organization and the devices keep their last state — they did not fail. This is what stops
+         *     that stale `ok` from being read as a current one.
+         */
+        CollectionFault: {
+            /** @description What stopped answering. */
+            cause: components["schemas"]["CollectionFaultCause"];
+            /**
+             * Format: uuid
+             * @description The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to.
+             */
+            meraki_org: string;
+            /** @description That organization's name, when it is known. */
+            meraki_org_name?: string | null;
+            reason?: null | components["schemas"]["MerakiSyncFailure"];
+            /**
+             * Format: int64
+             * @description When the organization's alert was raised — three failed collects after the last answer, so
+             *     the state shown is older than this.
+             */
+            since_unix_ms: number;
+        };
+        /**
+         * @description What a node's state is collected through, when that has stopped answering.
+         * @enum {string}
+         */
+        CollectionFaultCause: "meraki_api";
+        /**
          * @description One thing to collect: a stable metric name, the OID to collect it from, how to collect
          *     it (scalar GET vs table walk), and whether it is a gauge or a raw counter.
          */
@@ -8664,6 +8695,26 @@ export interface components {
             /** Format: int32 */
             uplink_secs: number;
         };
+        /** @description One collect tier the Dashboard API is not answering (see `MerakiOrgView.collect_failures`). */
+        MerakiCollectFailureView: {
+            /**
+             * Format: int32
+             * @description How many collects in a row have failed.
+             */
+            failures: number;
+            /**
+             * @description Why the most recent collect of this tier failed. The vocabulary of `last_sync_error`, plus
+             *     `no_answer`: the collect was sent and nothing came back.
+             */
+            reason: components["schemas"]["MerakiSyncFailure"];
+            /**
+             * Format: date-time
+             * @description When this run of failures began.
+             */
+            since: string;
+            /** @description `availability`, `uplink` or `traffic`. */
+            tier: string;
+        };
         /** @description What an onboarding batch did. */
         MerakiCreated: {
             /**
@@ -8907,6 +8958,18 @@ export interface components {
             availability_secs: number;
             base_url: string;
             /**
+             * @description The collect tiers the Dashboard API is **not answering** right now, each with why and since
+             *     when. Empty when none is known to be failing.
+             *
+             *     Distinct from `last_sync_error`, which is the inventory sync — this server asking what the
+             *     organization holds. A collect is a poller asking how the devices are, and it is what a
+             *     device's state depends on: while `availability` is listed here the organization's nodes keep
+             *     the last state they had, and after three failures in a row one alert is raised about the
+             *     organization (`subject_kind: meraki_org`) — never one per device. `uplink` or `traffic`
+             *     listed alone raises nothing: readings are missing, liveness is not.
+             */
+            collect_failures: components["schemas"]["MerakiCollectFailureView"][];
+            /**
              * Format: uuid
              * @description Which stored credential holds this organization's API key. An id, not a secret — the key
              *     stays sealed in `credentials`, and this type has no field that could carry it. Its *name* is
@@ -8967,7 +9030,7 @@ export interface components {
          *     the request, and the request carries the key.
          * @enum {string}
          */
-        MerakiSyncFailure: "credential" | "config" | "auth" | "rate_limited" | "upstream" | "unreachable" | "malformed" | "truncated" | "timeout" | "internal";
+        MerakiSyncFailure: "credential" | "config" | "auth" | "rate_limited" | "upstream" | "unreachable" | "malformed" | "truncated" | "timeout" | "internal" | "no_answer";
         /** @description What one successful sync found and did. */
         MerakiSyncReport: {
             /**
@@ -9851,6 +9914,7 @@ export interface components {
          */
         NodeStatus: {
             alerts: components["schemas"]["Alert"][];
+            collection_fault?: null | components["schemas"]["CollectionFault"];
             node_id: components["schemas"]["NodeId"];
             state: components["schemas"]["NodeState"];
         };
@@ -11720,11 +11784,12 @@ export interface components {
             starts_at: string;
         };
         /**
-         * @description Which kind of thing an alert is about: a monitored `node`, or a poller `pool` when Yagra is
-         *     reporting on its own polling coverage.
+         * @description Which kind of thing an alert is about: a monitored `node`; a poller `pool`, when Yagra is
+         *     reporting on its own polling coverage; or a `meraki_org`, when the Dashboard API has stopped
+         *     answering the collects of a whole Cisco Meraki organization.
          * @enum {string}
          */
-        SubjectKind: "node" | "pool";
+        SubjectKind: "node" | "pool" | "meraki_org";
         SyncNetboxResult: {
             /**
              * @description Folders this server owns that NetBox no longer lists (ADR-100 decision 5 — marked, not

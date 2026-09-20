@@ -88,11 +88,16 @@ pub enum MerakiSyncFailure {
     Timeout,
     /// Yagra could not read or write its own database.
     Internal,
+    /// A **collect** was sent and nothing came back before its lease ran out (ADR-164 決定 18): a
+    /// poller from before the collect report existed failed silently, the Meraki pool has no live
+    /// poller, or a poller died mid-collect. The inventory sync never produces this one — it runs
+    /// in this process and always has an answer of its own.
+    NoAnswer,
 }
 
 impl MerakiSyncFailure {
     /// Every reason, for the tests that pin the token, the serde tag and the locale keys together.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Credential,
         Self::Config,
         Self::Auth,
@@ -103,6 +108,7 @@ impl MerakiSyncFailure {
         Self::Truncated,
         Self::Timeout,
         Self::Internal,
+        Self::NoAnswer,
     ];
 
     /// The stored token (matches the serde tag — pinned by a test).
@@ -119,6 +125,7 @@ impl MerakiSyncFailure {
             Self::Truncated => "truncated",
             Self::Timeout => "timeout",
             Self::Internal => "internal",
+            Self::NoAnswer => "no_answer",
         }
     }
 
@@ -591,6 +598,7 @@ mod tests {
             file_by_prefix: true,
             max_devices: 1000,
             devices_over_cap: 0,
+            collect_failures: Vec::new(),
         }
     }
 
@@ -606,6 +614,24 @@ mod tests {
             MerakiSyncFailure::from_token("quota_exhausted"),
             MerakiSyncFailure::Internal
         );
+    }
+
+    /// A poller reports a failed collect as `MerakiFetchError::token()` and core reads it back with
+    /// `from_token` (ADR-164 決定 18). The transport crate cannot see this enum, so its spelling is a
+    /// second copy — and a token core does not know reads as `internal`, which would put "Yagra
+    /// could not read or write its own database" on screen for a revoked key. This is what holds
+    /// the two together: for every fetch error, the token IS the token of the failure it maps to.
+    #[test]
+    fn a_collect_failure_token_is_the_one_the_sync_stores() {
+        for e in MerakiFetchError::ALL {
+            let mapped = MerakiSyncFailure::from(e);
+            assert_eq!(
+                e.token(),
+                mapped.as_str(),
+                "{e:?} travels as a token core reads back as something else"
+            );
+            assert_eq!(MerakiSyncFailure::from_token(e.token()), mapped, "{e:?}");
+        }
     }
 
     #[test]

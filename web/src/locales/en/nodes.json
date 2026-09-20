@@ -354,6 +354,9 @@
     "body": "Delete node <b>{{name}}</b>? This removes its inventory entry and its discovered interfaces. Collected metrics age out of the TSDB. If this node is a parent in a dependency chain, its dependents will no longer be suppressed by it. This cannot be undone."
   },
   "overview": {
+    "collectionFault": "The Meraki API is not answering for {{org}} ({{reason}}). The state shown here is the last one collected — an alert was raised for the organization at {{since}}.",
+    "collectionFaultNoReason": "The Meraki API is not answering for {{org}}. The state shown here is the last one collected — an alert was raised for the organization at {{since}}.",
+    "collectionFaultLink": "Open the organization",
     "icmpRtt": "Round-trip time",
     "icmpLoss": "Packet loss",
     "noRttHistory": "No RTT history yet…",

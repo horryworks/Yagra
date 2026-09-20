@@ -230,6 +230,7 @@ pub(super) async fn execute_optical(
         judge_samples: true,
         poller_id: None,
         trace_context: Default::default(),
+        meraki_collect: None,
     }
 }
 
@@ -662,6 +663,7 @@ fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterfac
         // Hourly, and it carries no samples anyway.
         judge_samples: false,
         trace_context: Default::default(),
+        meraki_collect: None,
     }
 }
 

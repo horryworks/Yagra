@@ -293,6 +293,34 @@ pub struct MerakiObservation {
     pub uplinks: Vec<MerakiUplink>,
 }
 
+/// What one Meraki collect brought back, and why it ended early if it did (ADR-164 決定 18).
+///
+/// A collect is best-effort: a listing that stops on page 3 still hands over pages 1 and 2, because
+/// a device missing from one round is a gap in a chart. What that contract used to hide is the
+/// round that brought back **nothing** — a Dashboard outage, a 429 storm and a dropped connection
+/// all read as an `Ok` with no observations, the poller published no result, and every node of the
+/// organization kept its last state with nothing saying why. `stopped` is the reason that was
+/// being thrown away.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MerakiCollected {
+    /// Per-device observations, possibly partial.
+    pub observations: Vec<MerakiObservation>,
+    /// Why a listing ended before the server said it was finished. `None` is a complete answer.
+    pub stopped: Option<MerakiFetchError>,
+}
+
+impl MerakiCollected {
+    /// Why this collect counts as **failed**: it stopped early *and* brought nothing back.
+    ///
+    /// A partial answer is not a failure — the Dashboard did answer, which is the question an
+    /// "API is not answering" alert asks. A complete answer that lists no device is not one
+    /// either.
+    #[must_use]
+    pub fn failure(&self) -> Option<MerakiFetchError> {
+        self.stopped.filter(|_| self.observations.is_empty())
+    }
+}
+
 /// One Meraki metric sample: a bounded metric name, an optional synthetic uplink ifindex, and a
 /// gauge value.
 #[derive(Debug, Clone, PartialEq)]
@@ -509,13 +537,17 @@ pub trait Transport: Send + Sync {
     /// Run one Cisco Meraki org-scoped collect: page the given tier's Dashboard org-bulk endpoints
     /// (**GET only**, host-allow-listed, paced to `spec.target_rps`, honouring 429/`Retry-After`)
     /// and return raw per-device observations. A transient network/5xx failure yields the partial
-    /// results collected so far (best-effort, like the ICMP arm); `Err` is reserved for un-runnable
-    /// configs (bad/blocked base URL) or an auth failure (401/403).
+    /// results collected so far (best-effort, like the ICMP arm) **together with why it stopped**
+    /// ([`MerakiCollected::stopped`]); `Err` is reserved for un-runnable configs (bad/blocked base
+    /// URL), an auth failure (401/403) and an unreadable answer.
+    ///
+    /// The error is [`MerakiFetchError`] rather than [`TransportError`] because the caller reports
+    /// it to core as a closed reason (ADR-164 決定 18), and a string would have to be hidden.
     async fn collect_meraki(
         &self,
         spec: &MerakiCollectSpec,
         timeout: Duration,
-    ) -> Result<Vec<MerakiObservation>, TransportError>;
+    ) -> Result<MerakiCollected, MerakiFetchError>;
 }
 
 /// A canned [`Transport`] for tests and the single-process walking skeleton.
@@ -547,6 +579,10 @@ pub struct FakeTransport {
     pub http: HttpProbe,
     /// The observations every Meraki collect returns.
     pub meraki: Vec<MerakiObservation>,
+    /// Why every Meraki collect stopped early, if it did — handed back beside [`Self::meraki`].
+    pub meraki_stopped: Option<MerakiFetchError>,
+    /// When set, every Meraki collect is refused outright with this error.
+    pub meraki_refused: Option<MerakiFetchError>,
     /// The chain every DNS resolution returns.
     pub dns: DnsChain,
     /// Every SNMP call's requested OID list, in the order the calls were made.
@@ -854,6 +890,8 @@ impl FakeTransport {
                 body: None,
             },
             meraki: Vec::new(),
+            meraki_stopped: None,
+            meraki_refused: None,
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             snmp_gets_silent: false,
@@ -893,6 +931,8 @@ impl FakeTransport {
                 body: None,
             },
             meraki: Vec::new(),
+            meraki_stopped: None,
+            meraki_refused: None,
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             snmp_gets_silent: false,
@@ -1016,6 +1056,20 @@ impl FakeTransport {
     #[must_use]
     pub fn with_meraki(mut self, observations: Vec<MerakiObservation>) -> Self {
         self.meraki = observations;
+        self
+    }
+
+    /// Make every Meraki collect stop early for `why`, still handing over [`Self::meraki`].
+    #[must_use]
+    pub fn with_meraki_stopped(mut self, why: MerakiFetchError) -> Self {
+        self.meraki_stopped = Some(why);
+        self
+    }
+
+    /// Make every Meraki collect be refused outright (a rejected key, an unusable base URL).
+    #[must_use]
+    pub fn with_meraki_refused(mut self, why: MerakiFetchError) -> Self {
+        self.meraki_refused = Some(why);
         self
     }
 }
@@ -1202,8 +1256,14 @@ impl Transport for FakeTransport {
         &self,
         _spec: &MerakiCollectSpec,
         _timeout: Duration,
-    ) -> Result<Vec<MerakiObservation>, TransportError> {
-        Ok(self.meraki.clone())
+    ) -> Result<MerakiCollected, MerakiFetchError> {
+        if let Some(why) = self.meraki_refused {
+            return Err(why);
+        }
+        Ok(MerakiCollected {
+            observations: self.meraki.clone(),
+            stopped: self.meraki_stopped,
+        })
     }
 }
 

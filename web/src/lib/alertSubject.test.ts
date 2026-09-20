@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { alertRowKey, alertSubject, rootCause, subjectNodeId } from './alertSubject';
+import { alertRowKey, alertSubject, rootCause, subjectNodeId, subjectText } from './alertSubject';
 
 const NODE = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 
@@ -40,6 +40,38 @@ describe('alertSubject', () => {
     expect(
       subjectNodeId({ node: 'pool:tokyo', subject_kind: 'pool', subject_name: 'tokyo' }),
     ).toBeNull();
+  });
+});
+
+describe('a Meraki organization as an alert’s subject (ADR-164 決定 18)', () => {
+  const ORG = '00000000-0000-0000-0000-000000000ace';
+  const alert = {
+    node: `meraki_org:${ORG}`,
+    subject_kind: 'meraki_org' as const,
+    subject_name: 'Acme',
+  };
+
+  it('is read as the organization, by the id its settings page is addressed by', () => {
+    expect(alertSubject(alert)).toEqual({ kind: 'meraki_org', orgId: ORG, name: 'Acme' });
+  });
+
+  it('is never taken for a node — the if-chain this replaced let a third kind fall through to one', () => {
+    // Falling through put `meraki_org:<id>` into `EntityName` as a node that cannot be found, and
+    // offered Mute and Explain on it: both take a node id and could only have been refused.
+    expect(subjectNodeId(alert)).toBeNull();
+    expect(rootCause({ ...alert, root_cause: null })).toEqual({ kind: 'none' });
+  });
+
+  it('keeps an organization the server could not name, by its id', () => {
+    const unnamed = alertSubject({ ...alert, subject_name: null });
+    expect(unnamed).toEqual({ kind: 'meraki_org', orgId: ORG, name: null });
+    if (unnamed.kind !== 'meraki_org') throw new Error('unreachable');
+    expect(subjectText(unnamed)).toBe(ORG);
+  });
+
+  it('is searchable by the name an operator reads, like a pool is', () => {
+    expect(subjectText({ kind: 'meraki_org', orgId: ORG, name: 'Acme' })).toBe('Acme');
+    expect(subjectText({ kind: 'pool', name: 'tokyo' })).toBe('tokyo');
   });
 });
 

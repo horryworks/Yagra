@@ -23,6 +23,8 @@
     "acked": "acked",
     "poolSubject": "Poller pool “{{pool}}”",
     "poolSubjectHint": "This alert is about Yagra's own monitoring coverage, not a device: the pool still has nodes assigned to it but no live poller to poll them.",
+    "merakiOrgSubject": "Meraki organization “{{org}}”",
+    "merakiOrgSubjectHint": "The Cisco Meraki Dashboard API is not answering this organization, so nothing is being collected for its devices. Each device keeps the last state that was collected; this one alert stands for all of them.",
     "partOfOutage": "part of this node’s outage"
   },
   "acked": {

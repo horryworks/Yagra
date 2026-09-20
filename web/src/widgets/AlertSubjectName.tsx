@@ -13,7 +13,9 @@
 import type { HasSubject } from '../lib/alertSubject';
 import { alertSubject } from '../lib/alertSubject';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { EntityName } from '../components/ui/EntityName';
+import { merakiOrgPath } from '../pages/integrations/merakiOrgRow';
 
 /** Renders the alert's subject: a node's resolved name (UUID on hover), or the poller pool the
  *  alert is about. `nodeName` is the caller's `useEntityNames()` resolver, threaded in so the
@@ -27,13 +29,30 @@ export function AlertSubjectName({
 }) {
   const { t } = useTranslation('alerts');
   const subject = alertSubject(alert);
-  if (subject.kind === 'node') {
-    return <EntityName name={nodeName(subject.nodeId)} id={subject.nodeId} />;
+  // A switch with a `never` default: the two-way `if` this replaced labelled every non-node
+  // subject "Poller pool", and a third kind would have compiled straight into that sentence.
+  switch (subject.kind) {
+    case 'node':
+      return <EntityName name={nodeName(subject.nodeId)} id={subject.nodeId} />;
+    case 'pool':
+      // A pool name is already the human-readable thing — there is no inventory row to resolve
+      // it through, and the label is what tells an operator this row is about Yagra's own polling
+      // rather than about a device.
+      return (
+        <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: subject.name })}</span>
+      );
+    case 'meraki_org':
+      // One alert for the whole organization (ADR-164 決定 18): its devices did not fail, the API
+      // that reports on them did. The link goes to the page that says which collect is failing
+      // and why — the organization is identified by id, and an id is not what anyone reads.
+      return (
+        <Link to={merakiOrgPath(subject.orgId)} title={t('row.merakiOrgSubjectHint')}>
+          {t('row.merakiOrgSubject', { org: subject.name ?? subject.orgId })}
+        </Link>
+      );
+    default: {
+      const unknown: never = subject;
+      return unknown;
+    }
   }
-  // A pool name is already the human-readable thing — there is no inventory row to resolve it
-  // through, and the label is what tells an operator this row is about Yagra's own polling rather
-  // than about a device.
-  return (
-    <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: subject.name })}</span>
-  );
 }

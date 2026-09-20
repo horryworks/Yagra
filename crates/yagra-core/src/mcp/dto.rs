@@ -402,6 +402,14 @@ impl InterfaceDto {
 pub struct NodeStatusDto {
     pub node: NodeSummaryDto,
     pub alerts: Vec<AlertDto>,
+    /// Set when `node.state` is **not a current reading** — what feeds this node has stopped
+    /// answering, so the state is the last one collected (ADR-164 決定 18). Today that is one case:
+    /// the Cisco Meraki Dashboard API is not answering the node's organization. `null` otherwise.
+    ///
+    /// Mirrors `NodeStatus.collection_fault` on `GET /api/v1/nodes/{node_id}/status`, from the same
+    /// function. ⚠️ Read it before concluding a Meraki node is healthy: such a node raises no alert
+    /// of its own — the alert is about the organization — and its `state` stays `ok`.
+    pub collection_fault: Option<crate::api::nodes::CollectionFault>,
     pub interfaces: Vec<InterfaceDto>,
     /// Whether SNMP polling is **configured** for this node — not whether it is answering.
     ///
@@ -1021,6 +1029,14 @@ mod tests {
         let status = NodeStatusDto {
             node: summary.clone(),
             alerts: vec![],
+            // Populated, so the canary below sees every key the type can put on the wire.
+            collection_fault: Some(crate::api::nodes::CollectionFault {
+                cause: crate::api::nodes::CollectionFaultCause::MerakiApi,
+                meraki_org: Uuid::new_v4(),
+                meraki_org_name: Some("Acme".to_owned()),
+                reason: Some(crate::meraki_sync::MerakiSyncFailure::Auth),
+                since_unix_ms: 1,
+            }),
             snmp_configured: true,
             notes: Some("reachable only from the jump host".to_owned()),
             os_version: Some("15.0(2a)EX5".to_owned()),
@@ -1302,6 +1318,7 @@ mod tests {
                 node: Some(node.id.0),
                 subject_kind: yagra_alert::SubjectKind::Node,
                 subject_name: None,
+                subject_id: node.id.0,
                 check: uuid::Uuid::new_v4(),
                 severity: yagra_common::Severity::Critical,
                 state: NodeState::Unreachable,

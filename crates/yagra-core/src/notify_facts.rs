@@ -35,6 +35,13 @@ const FACTS_CAPACITY: usize = 4096;
 pub trait AlertFactsSource: Send + Sync {
     /// Facts for each requested node. Ids that cannot be resolved are simply absent.
     async fn facts(&self, ids: &[Uuid]) -> HashMap<Uuid, NodeFacts>;
+
+    /// What a Cisco Meraki organization is called, for a notification about one (ADR-164 決定 18).
+    /// Defaulted to "unknown", which leaves the subject named by its flat form — the same
+    /// degradation an unresolvable node has.
+    async fn meraki_org_name(&self, _org: Uuid) -> Option<String> {
+        None
+    }
 }
 
 /// [`NodeRepo`]-backed source with a short TTL cache.
@@ -114,6 +121,17 @@ impl CachedNodeFacts {
 
 #[async_trait]
 impl AlertFactsSource for CachedNodeFacts {
+    // Not cached: an organization's collect alert fires a handful of times a year, and a failed
+    // read degrades to the id like every other fact here — the notification goes out regardless.
+    async fn meraki_org_name(&self, org: Uuid) -> Option<String> {
+        crate::meraki::MerakiOrgRepo::new(self.repo.pool())
+            .get(org)
+            .await
+            .ok()
+            .flatten()
+            .map(|o| o.name)
+    }
+
     async fn facts(&self, ids: &[Uuid]) -> HashMap<Uuid, NodeFacts> {
         let now = Instant::now();
         let mut out = HashMap::with_capacity(ids.len());

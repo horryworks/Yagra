@@ -70,6 +70,7 @@ mod mcp;
 // the first, so the constraint is gone and this line has come home to prove it.
 mod meraki;
 mod meraki_filing;
+mod meraki_health;
 mod meraki_import;
 mod meraki_inventory;
 mod meraki_sync;
@@ -1606,6 +1607,19 @@ impl LeaderTasks {
                 self.alert_sink("a pool-coverage transition"),
             ),
         );
+        // Whether the Dashboard API is answering each Meraki organization (ADR-164 決定 18). Leader-
+        // only because it raises alerts and reads a record only the leader's result stream feeds;
+        // it shares `meraki_inflight` with the collect scheduler and the sync above.
+        spawn_cancellable(
+            &self.shutdown,
+            meraki_health::run_meraki_collect_watch(
+                self.meraki_orgs.clone(),
+                self.repo.clone(),
+                self.meraki_inflight.clone(),
+                self.alerts.clone(),
+                self.alert_sink("a meraki collect transition"),
+            ),
+        );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
         spawn_cancellable(
             &self.shutdown,
@@ -1673,6 +1687,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         judge_samples: false,
         poller_id: None,
         trace_context: Default::default(),
+        meraki_collect: None,
     });
     let state = ApiState {
         store: sink,
@@ -2082,6 +2097,10 @@ async fn run_meraki_scheduler(
     const TICK: Duration = Duration::from_secs(15);
     const LEASE: Duration = Duration::from_secs(300);
     let mut last: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
+    // When a tier was last counted as failed because its key could not be opened. The tier stays
+    // due and is retried every tick — so a repaired key is picked up within one — but it is
+    // *counted* once per cadence, or three ticks (45 s) would read as three failed collects.
+    let mut key_failures: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
 
     loop {
         tokio::time::sleep(TICK).await;
@@ -2144,11 +2163,27 @@ async fn run_meraki_scheduler(
             };
             let Some(api_key) = meraki::resolve_meraki_key(&creds, org.credential_id).await else {
                 tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
+                // No job is sent, so no poller can report this: it is core that knows the
+                // organization's devices are not being asked about (ADR-164 決定 18).
+                let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
+                let counted = key_failures
+                    .get(&(org.id, tier))
+                    .is_some_and(|&at| now.duration_since(at) < cadence);
+                if !counted {
+                    key_failures.insert((org.id, tier), now);
+                    inflight.health.record_failed(
+                        org.id,
+                        tier,
+                        meraki_sync::MerakiSyncFailure::Credential,
+                        pool_coverage::now_unix_ms(),
+                    );
+                }
                 continue;
             };
+            key_failures.remove(&(org.id, tier));
 
             let job_id = Uuid::new_v4();
-            if !inflight.acquire(org.id, job_id, LEASE, now) {
+            if !inflight.acquire_collect(org.id, job_id, tier, LEASE, now) {
                 continue; // lost an acquire race
             }
             let check = meraki::build_collect_check(&org, tier, api_key, device_refs, network_ids);
