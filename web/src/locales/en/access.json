@@ -89,7 +89,8 @@
       "title": "Edit credential",
       "replaceSecret": "Replace secret",
       "replaceHint": "the stored secret stays unless you re-enter it.",
-      "newSecret": "New secret"
+      "newSecret": "New secret",
+      "fixedKindHint": "This key belongs to an integration, so its type cannot be changed."
     },
     "delete": {
       "title": "Delete credential",

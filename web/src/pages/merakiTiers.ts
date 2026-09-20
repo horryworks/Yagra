@@ -27,9 +27,9 @@ export type MerakiTier = (typeof MERAKI_TIERS)[number];
 /**
  * The tiers the cadence dialog offers as checkboxes.
  *
- * A **subset**, deliberately: inventory is reconciliation rather than a recurring collect — core's
- * `MerakiOrg::active_tiers()` filters it out and the operator triggers it from "Import devices" —
- * so a checkbox for it would promise polling that never happens. It still needs a label, because
+ * A **subset**, deliberately: inventory is not a collect tier — core's `MerakiOrg::active_tiers()`
+ * filters it out, and the inventory is read by the periodic sync on its own interval whether or not
+ * the token is stored — so a checkbox for it would switch nothing. It still needs a label, because
  * the API accepts it and the org list prints what is stored. When `MerakiTier` grows, the test next
  * door fails and "is this one operator-selectable?" gets answered on purpose rather than by
  * omission.

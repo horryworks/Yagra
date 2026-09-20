@@ -999,7 +999,7 @@ async fn set_meraki_import_settings(
     }
 }
 
-/// Refuse a folder-scoped caller the device list (ADR-164 決定 11).
+/// Refuse a folder-scoped caller the device list (ADR-164 決定 9).
 ///
 /// A read, and refused all the same. The list names every device in the organization with its
 /// address, and most of those are not in anybody's folders yet — an unimported device has no folder
@@ -1026,8 +1026,9 @@ fn meraki_devices_are_deployment_wide(scope: &super::scope::NodeScope) -> Result
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
-        (status = 409, description = "Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), or a collect or another sync is running for it (`meraki_sync_busy`)", body = super::error::ErrorBody),
-        (status = 502, description = "The sync ran and failed (`meraki_sync_failed`); the reason is recorded on the organization as `last_sync_error`", body = super::error::ErrorBody),
+        (status = 409, description = "Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), a collect or another sync is running for it (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`)", body = super::error::ErrorBody),
+        (status = 500, description = "The sync ran and Yagra could not read or write its own database (`meraki_sync_failed`, reason `internal`)", body = super::error::ErrorBody),
+        (status = 502, description = "The sync ran and the Dashboard API did not give a complete answer (`meraki_sync_failed`). Whatever the status, the reason is recorded on the organization as `last_sync_error`", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode), or this core is a standby (`not_leader`)", body = super::error::ErrorBody),
     ),
 )]
@@ -1073,12 +1074,36 @@ async fn sync_meraki_org(
             "meraki_sync_busy",
             "a collect or another sync is running for this organization; try again in a moment",
         )),
-        // The reason is a closed vocabulary (`MerakiSyncFailure`), so naming it is safe — unlike
-        // `meraki_upstream_error`, which has only an upstream string and must stay generic.
-        Err(SyncError::Failed(reason)) => Err(ApiError::bad_gateway(
-            "meraki_sync_failed",
-            format!("the sync failed ({})", reason.as_str()),
-        )),
+        Err(SyncError::Failed(reason)) => Err(sync_failure_error(reason)),
+    }
+}
+
+/// The answer to a sync that ran and failed: one code, and a status that says **where** the fault
+/// is (ADR-164 決定 20). All eleven reasons used to answer 502, so a failure of Yagra's own
+/// database, and a stored key nobody can open, both told a client to go and check Meraki.
+///
+/// The reason is a closed vocabulary (`MerakiSyncFailure`), so naming it is safe — unlike
+/// `meraki_upstream_error`, which has only an upstream string and must stay generic.
+fn sync_failure_error(reason: MerakiSyncFailure) -> ApiError {
+    const CODE: &str = "meraki_sync_failed";
+    let message = format!("the sync failed ({})", reason.as_str());
+    match reason {
+        // What this deployment stores cannot be used: fix the organization, then sync again.
+        MerakiSyncFailure::Credential | MerakiSyncFailure::Config => {
+            ApiError::conflict(CODE, message)
+        }
+        // Yagra's own fault. `NoAnswer` is a collect's reason and no sync produces it; should one
+        // ever arrive here, it is not the Dashboard's doing either.
+        MerakiSyncFailure::Internal | MerakiSyncFailure::NoAnswer => {
+            ApiError::internal_with_code(CODE, message)
+        }
+        MerakiSyncFailure::Auth
+        | MerakiSyncFailure::RateLimited
+        | MerakiSyncFailure::Upstream
+        | MerakiSyncFailure::Unreachable
+        | MerakiSyncFailure::Malformed
+        | MerakiSyncFailure::Truncated
+        | MerakiSyncFailure::Timeout => ApiError::bad_gateway(CODE, message),
     }
 }
 
@@ -1286,7 +1311,8 @@ pub(crate) struct MerakiImported {
     /// Devices that became nodes. A serial that already was one is not counted.
     imported: u32,
     /// How those devices were filed. The four add up to `imported`, except that all four are zero
-    /// when the request switched filing by IP range off.
+    /// when filing by IP range was off for this import: the request's `file_by_prefix`, or the
+    /// organization's own setting when the request leaves it out.
     filed: MerakiFiled,
     /// Whether any folder carries an IP range at all. False means `filed.unmatched` says nothing
     /// about the devices: there was nothing for an address to match.
@@ -1678,26 +1704,120 @@ mod tests {
             "/../../web/src/pages/integrations/merakiDevices.ts"
         );
         let text = std::fs::read_to_string(path).expect("the organization page's judgement module");
-        let bound = |name: &str| -> i32 {
-            let declared = format!("export const {name} = ");
-            let rest = text
-                .split_once(declared.as_str())
-                .unwrap_or_else(|| panic!("{name} is not declared in {path}"))
-                .1;
-            let digits: String = rest
-                .chars()
-                .take_while(|c| *c != ';')
-                .filter(char::is_ascii_digit)
-                .collect();
-            digits
-                .parse()
-                .unwrap_or_else(|_| panic!("{name} in {path} is not a plain number"))
-        };
-        assert_eq!(bound("MAX_DEVICES_MIN"), 1);
+        assert_eq!(declared_number(&text, path, "MAX_DEVICES_MIN"), 1);
         assert_eq!(
-            bound("MAX_DEVICES_MAX"),
+            declared_number(&text, path, "MAX_DEVICES_MAX"),
             crate::config::MERAKI_MAX_DEVICES_HARD
         );
+    }
+
+    /// The number a TypeScript module declares as `export const NAME = <digits>;`. Panics naming the
+    /// constant when it is not there or not a plain number: a reader that stopped finding what it
+    /// reads must not pass for one that found nothing wrong.
+    fn declared_number(text: &str, path: &str, name: &str) -> i32 {
+        let declared = format!("export const {name} = ");
+        let rest = text
+            .split_once(declared.as_str())
+            .unwrap_or_else(|| panic!("{name} is not declared in {path}"))
+            .1;
+        let digits: String = rest
+            .chars()
+            .take_while(|c| *c != ';')
+            .filter(char::is_ascii_digit)
+            .collect();
+        digits
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} in {path} is not a plain number"))
+    }
+
+    /// The cadence dialog's ranges are the third copy of these bounds (after `config.rs` and the
+    /// CHECKs in migrations 0038 and 0124), and they were four string literals in a `.tsx` until
+    /// ADR-164 Inc.11 — one of them already moved by hand when the inventory floor went from 900
+    /// to 60. A hint that disagrees sends the operator into `400 invalid_cadence`.
+    #[test]
+    fn the_cadence_bounds_the_webui_shows_are_the_ones_this_api_accepts() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/src/pages/integrations/merakiCadence.ts"
+        );
+        let text = std::fs::read_to_string(path).expect("the cadence dialog's bounds");
+        for (name, accepted) in [
+            ("CADENCE_FAST_MIN_SECS", crate::config::MERAKI_FAST_MIN_SECS),
+            ("CADENCE_FAST_MAX_SECS", crate::config::MERAKI_FAST_MAX_SECS),
+            (
+                "CADENCE_TRAFFIC_MIN_SECS",
+                crate::config::MERAKI_TRAFFIC_MIN_SECS,
+            ),
+            (
+                "CADENCE_TRAFFIC_MAX_SECS",
+                crate::config::MERAKI_TRAFFIC_MAX_SECS,
+            ),
+            (
+                "CADENCE_INVENTORY_MIN_SECS",
+                crate::config::MERAKI_INVENTORY_MIN_SECS,
+            ),
+            (
+                "CADENCE_INVENTORY_MAX_SECS",
+                crate::config::MERAKI_INVENTORY_MAX_SECS,
+            ),
+        ] {
+            assert_eq!(
+                declared_number(&text, path, name),
+                accepted,
+                "{name} in {path} is not what `check_cadence` accepts"
+            );
+        }
+        // The edge really is held to those constants: one second outside each band is refused.
+        let at = |availability: i32, traffic: i32, inventory: i32| MerakiCadenceReq {
+            availability_secs: availability,
+            uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
+            traffic_secs: traffic,
+            inventory_secs: inventory,
+            enabled_tiers: vec!["availability".to_owned()],
+            target_rps: 1.0,
+        };
+        let (fast, traffic, inventory) = (
+            crate::config::MERAKI_FAST_MAX_SECS,
+            crate::config::MERAKI_TRAFFIC_MAX_SECS,
+            crate::config::MERAKI_INVENTORY_MAX_SECS,
+        );
+        assert!(check_cadence(&at(fast, traffic, inventory)).is_ok());
+        for outside in [
+            at(fast + 1, traffic, inventory),
+            at(fast, traffic + 1, inventory),
+            at(fast, traffic, inventory + 1),
+        ] {
+            assert_eq!(
+                check_cadence(&outside).unwrap_err().code(),
+                "invalid_cadence"
+            );
+        }
+    }
+
+    /// 決定 20. Every reason used to answer 502, which tells a client the fault is upstream — also
+    /// for Yagra's own database and for a stored key nobody can open. The code does not move: a
+    /// client that branches on `meraki_sync_failed` keeps working.
+    #[test]
+    fn a_failed_sync_says_where_the_fault_is() {
+        use axum::http::StatusCode;
+        for reason in MerakiSyncFailure::ALL {
+            let error = sync_failure_error(reason);
+            assert_eq!(error.code(), "meraki_sync_failed", "{reason:?}");
+            let expected = match reason {
+                MerakiSyncFailure::Credential | MerakiSyncFailure::Config => StatusCode::CONFLICT,
+                MerakiSyncFailure::Internal | MerakiSyncFailure::NoAnswer => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+                MerakiSyncFailure::Auth
+                | MerakiSyncFailure::RateLimited
+                | MerakiSyncFailure::Upstream
+                | MerakiSyncFailure::Unreachable
+                | MerakiSyncFailure::Malformed
+                | MerakiSyncFailure::Truncated
+                | MerakiSyncFailure::Timeout => StatusCode::BAD_GATEWAY,
+            };
+            assert_eq!(error.status(), expected, "{reason:?}");
+        }
     }
 
     // ── A folder-scoped caller (ADR-164) ─────────────────────────────────────────────

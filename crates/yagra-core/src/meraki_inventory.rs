@@ -112,6 +112,32 @@ pub struct DeviceWrite {
     pub imported_at: Option<DateTime<Utc>>,
 }
 
+/// How many rows one inventory statement carries. The rows travel as eight arrays, so the bind
+/// count does not grow with it; the chunk only bounds how much one statement holds in memory for
+/// an organization at the 50,000-device cap.
+const WRITE_CHUNK: usize = 5_000;
+
+/// The writes of a plan with one entry per serial — the first, which is the rule
+/// [`seen_devices`] already applies to a listing.
+///
+/// 🚨 Not tidiness: the writes go out as one `INSERT … ON CONFLICT DO UPDATE` per chunk, and
+/// PostgreSQL refuses a statement that would touch the same row twice. [`plan_sync`] is handed a
+/// de-duplicated listing by the sync, but it is a `pub fn` over a slice, and a plan built any other
+/// way must cost a repeated row rather than the whole sync.
+#[must_use]
+pub fn unique_writes(writes: &[DeviceWrite]) -> Vec<&DeviceWrite> {
+    let mut taken: HashSet<&str> = HashSet::new();
+    writes
+        .iter()
+        .filter(|w| taken.insert(w.device.serial.as_str()))
+        .collect()
+}
+
+/// One column of a chunk of writes, as the array the statement unnests.
+fn column<'a, T>(rows: &[&'a DeviceWrite], of: impl Fn(&'a DeviceWrite) -> T) -> Vec<T> {
+    rows.iter().copied().map(of).collect()
+}
+
 /// The name a device's node is given: Meraki's, or the serial when Meraki has none.
 ///
 /// One function for the importer and for [`plan_follow`], and that is the point. A rename is
@@ -274,7 +300,8 @@ pub fn plan_sync(
     plan
 }
 
-/// What a device's row is shown as (ADR-164 決定 9). Serialized as the snake_case token.
+/// What a device's row is shown as: read from the facts the inventory keeps about it (ADR-164
+/// 決定 3), never stored. Serialized as the snake_case token.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
@@ -487,13 +514,24 @@ impl MerakiInventoryRepo {
         }
         let mut touched = 0u64;
         let mut tx = self.pool.begin().await?;
-        for w in &plan.writes {
-            let d = &w.device;
+        // One statement per chunk, not one per row: an organization's first sync writes every
+        // device it holds, and a row at a time that was thousands of round trips inside this
+        // transaction (the shape `record_networks` already has).
+        for rows in unique_writes(&plan.writes).chunks(WRITE_CHUNK) {
+            let lan_ips: Vec<Option<String>> = rows
+                .iter()
+                .map(|w| w.device.lan_ip.map(|a| a.to_string()))
+                .collect();
             touched += sqlx::query(
                 "INSERT INTO meraki_inventory \
                    (org_id, serial, name, model, product_type, network_id, lan_ip, \
                     first_online_at, imported_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 THEN now() END, $9) \
+                 SELECT $1, w.serial, w.name, w.model, w.product_type, w.network_id, w.lan_ip, \
+                        CASE WHEN w.first_online THEN now() END, w.imported_at \
+                 FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], \
+                             $7::text[], $8::bool[], $9::timestamptz[]) \
+                   AS w(serial, name, model, product_type, network_id, lan_ip, \
+                        first_online, imported_at) \
                  ON CONFLICT (org_id, serial) DO UPDATE SET \
                    name = EXCLUDED.name, model = EXCLUDED.model, \
                    product_type = EXCLUDED.product_type, network_id = EXCLUDED.network_id, \
@@ -504,14 +542,14 @@ impl MerakiInventoryRepo {
                    missing_since = NULL",
             )
             .bind(org)
-            .bind(&d.serial)
-            .bind(&d.name)
-            .bind(&d.model)
-            .bind(&d.product_type)
-            .bind(&d.network_id)
-            .bind(d.lan_ip.map(|a| a.to_string()))
-            .bind(w.first_online)
-            .bind(w.imported_at)
+            .bind(column(rows, |w| w.device.serial.as_str()))
+            .bind(column(rows, |w| w.device.name.as_str()))
+            .bind(column(rows, |w| w.device.model.as_deref()))
+            .bind(column(rows, |w| w.device.product_type.as_str()))
+            .bind(column(rows, |w| w.device.network_id.as_str()))
+            .bind(lan_ips)
+            .bind(column(rows, |w| w.first_online))
+            .bind(column(rows, |w| w.imported_at))
             .execute(&mut *tx)
             .await?
             .rows_affected();
@@ -700,6 +738,34 @@ mod tests {
             lan_ip: Some("10.0.0.1".parse().expect("ip")),
             online,
         }
+    }
+
+    /// ADR-164 Inc.11. The writes go out as one upsert per chunk, and PostgreSQL refuses an upsert
+    /// that names a row twice — so a repeated serial keeps its first entry, in the order given.
+    #[test]
+    fn a_serial_planned_twice_is_written_once_and_the_first_entry_wins() {
+        let write = |serial: &str, name: &str| DeviceWrite {
+            device: SeenDevice {
+                name: name.into(),
+                ..seen(serial, true)
+            },
+            first_online: false,
+            imported_at: None,
+        };
+        let writes = [
+            write("Q2-A", "first"),
+            write("Q2-B", "only"),
+            write("Q2-A", "second"),
+        ];
+        let unique: Vec<(&str, &str)> = unique_writes(&writes)
+            .into_iter()
+            .map(|w| (w.device.serial.as_str(), w.device.name.as_str()))
+            .collect();
+        assert_eq!(unique, [("Q2-A", "first"), ("Q2-B", "only")]);
+
+        // One column of those rows is the values in row order — what the statement unnests.
+        let rows = unique_writes(&writes);
+        assert_eq!(column(&rows, |w| w.device.name.as_str()), ["first", "only"]);
     }
 
     /// The row a sync of `d` leaves behind.

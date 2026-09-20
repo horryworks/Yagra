@@ -145,7 +145,8 @@ impl MerakiOrg {
     }
 
     /// The enabled tiers parsed to [`MerakiTier`] (unknown tokens skipped). Inventory is never a
-    /// recurring collect tier (reconciliation is operator-initiated), so it is filtered out here.
+    /// collect tier — it is read by the periodic sync (`meraki_sync.rs`), on `inventory_secs` — so
+    /// it is filtered out here.
     #[must_use]
     pub fn active_tiers(&self) -> Vec<MerakiTier> {
         self.enabled_tiers

@@ -49,6 +49,7 @@ import {
   devicesToImport,
   importableSerials,
   isImportable,
+  merakiDeviceFilterColumns,
   merakiDeviceFilters,
   networkLabel,
   networksToWatchOnImport,
@@ -65,7 +66,12 @@ import './MerakiOrgPage.css';
  *  and how many at most.
  *
  *  ⚠️ The form follows the server until the operator touches it (the shape `ApSettings` uses): a
- *  reload after "Sync now" would otherwise put the stored cap back under a half-typed one. */
+ *  reload after "Sync now" would otherwise put the stored cap back under a half-typed one.
+ *
+ *  ⚠️ And it starts following again only once the reload a save asked for **has arrived**
+ *  (`onSaved` resolves then). Lowering `edited` at the moment of the save handed the form back to
+ *  an `org` that was still the old one, so what had just been saved flicked back to its previous
+ *  value until the list came in — two round trips and the whole device list later. */
 function ImportSettingsCard({
   org,
   canConfig,
@@ -73,7 +79,8 @@ function ImportSettingsCard({
 }: {
   org: MerakiOrg;
   canConfig: boolean;
-  onSaved: () => void;
+  /** Reload the page's data; resolves when the new values are in. */
+  onSaved: () => Promise<void>;
 }) {
   const { t } = useTranslation('system');
   const [edited, setEdited] = useState(false);
@@ -102,10 +109,9 @@ function ImportSettingsCard({
         file_by_prefix: fileByPrefix,
         max_devices: max,
       })
-      .then(() => {
-        setEdited(false);
-        onSaved();
-      })
+      // Still `busy` while the reload runs, so nothing can be typed into a form about to follow it.
+      .then(() => onSaved())
+      .then(() => setEdited(false))
       .catch((e: unknown) => setError(errMsg(e, t('meraki.err.saveImportSettings'))))
       .finally(() => setBusy(false));
   };
@@ -247,8 +253,10 @@ export function MerakiOrgPage() {
   const [note, setNote] = useState<string | null>(null);
   const [sheet, setSheet] = useState(false);
 
-  const load = useCallback(() => {
-    Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()])
+  // Returns its promise — it never rejects — so a caller can wait for the new values to be in
+  // (`ImportSettingsCard` does, before it lets the form follow the server again).
+  const load = useCallback((): Promise<void> => {
+    return Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()])
       .then(([list, polling]) => {
         const found = list.find((o) => o.id === orgId) ?? null;
         setOrg(found);
@@ -275,7 +283,7 @@ export function MerakiOrgPage() {
   }, [orgId, t]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   const sync = useMerakiSync(orgId, t('meraki.err.sync'), load);
@@ -290,8 +298,11 @@ export function MerakiOrgPage() {
   }, []);
 
   const orgName = org?.name ?? '';
+  // What the list is filtered BY is held apart from what the table draws: the drawn columns change
+  // identity on every tick (the checkbox cell reads `selected`), and a filter hook holding them
+  // would re-filter and re-count every device per tick (`merakiDeviceFilterColumns`).
+  const filterColumns = useMemo(() => merakiDeviceFilterColumns(merakiDeviceFilters(t)), [t]);
   const columns = useMemo(() => {
-    const specs = merakiDeviceFilters(t);
     const cols: Column<MerakiDevice>[] = [];
     if (canConfig) {
       cols.push({
@@ -404,12 +415,16 @@ export function MerakiOrgPage() {
         render: (d) => <DestinationCell device={d} orgName={orgName} groupName={groupName} />,
       },
     );
-    for (const c of cols) c.filter = specs[c.key];
+    // The same spec objects the hook filters by, hung on the columns the table draws them under.
+    for (const { key, filter } of filterColumns) {
+      const drawn = cols.find((c) => c.key === key);
+      if (drawn) drawn.filter = filter;
+    }
     return cols;
-  }, [t, canConfig, selected, busy, toggle, orgName, groupName]);
+  }, [t, canConfig, selected, busy, toggle, orgName, groupName, filterColumns]);
 
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
+    filterColumns,
     devices,
   );
 
@@ -442,7 +457,8 @@ export function MerakiOrgPage() {
       .finally(() => setBusy(false));
   };
 
-  const unwatched = org ? unwatchedNotice(org, networks) : [];
+  // The three below each walk the whole list, so none of them is recomputed by a tick.
+  const unwatched = useMemo(() => (org ? unwatchedNotice(org, networks) : []), [org, networks]);
   const watchAll = () => {
     if (!org || unwatched.length === 0) return;
     setBusy(true);
@@ -457,7 +473,7 @@ export function MerakiOrgPage() {
   // Nodes nothing is collected for (ADR-164 決定 15). Read from the device list rather than from
   // `org.devices.monitored_unwatched`: the button has to name the networks, and only the list has
   // them. The two are pinned to each other on the server (`meraki_sync.rs`).
-  const uncollected = uncollectedDevices(devices);
+  const uncollected = useMemo(() => uncollectedDevices(devices), [devices]);
   const watchThese = () => {
     if (!org || uncollected.networkIds.length === 0) return;
     setBusy(true);
@@ -469,7 +485,7 @@ export function MerakiOrgPage() {
       .finally(() => setBusy(false));
   };
 
-  const selectable = importableSerials(shown);
+  const selectable = useMemo(() => importableSerials(shown), [shown]);
 
   return (
     <div className="meraki-orgpage">

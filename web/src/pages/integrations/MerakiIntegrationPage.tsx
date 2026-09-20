@@ -31,12 +31,17 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../../components/ui/Field';
-import { OPTIONAL_MERAKI_TIERS, tiersToSave } from '../merakiTiers';
+import { OPTIONAL_MERAKI_TIERS, tierList, tiersToSave } from '../merakiTiers';
 import './MerakiIntegrationPage.css';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
-import { tierList } from '../merakiTiers';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS } from './merakiRegions';
+import {
+  MERAKI_CADENCE_BOUNDS,
+  cadenceRange,
+  type CadenceBounds,
+  type MerakiCadenceField,
+} from './merakiCadence';
 import {
   allAlreadyAdded,
   keyFields,
@@ -409,17 +414,33 @@ function CadenceModal({
       });
   };
 
-  const numField = (label: string, value: number, set: (n: number) => void, hint: string) => (
+  const numField = (
+    label: string,
+    value: number,
+    set: (n: number) => void,
+    hint: string,
+    bounds?: CadenceBounds,
+  ) => (
     <div className="modal-field">
       <label className="modal-field-label">{label}</label>
       <TextInput
         type="number"
+        min={bounds?.min}
+        max={bounds?.max}
         value={value}
         onChange={(e) => set(Number(e.target.value))}
       />
       <span className="modal-hint">{hint}</span>
     </div>
   );
+  // The range each interval accepts comes from `merakiCadence.ts`, which a Rust test holds to the
+  // server's own bounds — the hint and the input's min/max are the same two numbers.
+  const intervalField = (
+    field: MerakiCadenceField,
+    label: string,
+    value: number,
+    set: (n: number) => void,
+  ) => numField(label, value, set, cadenceRange(field), MERAKI_CADENCE_BOUNDS[field]);
 
   return (
     <Modal
@@ -450,10 +471,15 @@ function CadenceModal({
             the server refuses a cadence without it (決定 17). The sentence is why it is missing. */}
         <span className="modal-hint">{t('meraki.cadence.availabilityAlways')}</span>
       </div>
-      {numField(t('meraki.cadence.availabilityInterval'), availability, setAvailability, '60–3600')}
-      {numField(t('meraki.cadence.uplinkInterval'), uplink, setUplink, '60–3600')}
-      {numField(t('meraki.cadence.trafficInterval'), traffic, setTraffic, '300–86400')}
-      {numField(t('meraki.cadence.inventoryInterval'), inventory, setInventory, '60–604800')}
+      {intervalField(
+        'availability',
+        t('meraki.cadence.availabilityInterval'),
+        availability,
+        setAvailability,
+      )}
+      {intervalField('uplink', t('meraki.cadence.uplinkInterval'), uplink, setUplink)}
+      {intervalField('traffic', t('meraki.cadence.trafficInterval'), traffic, setTraffic)}
+      {intervalField('inventory', t('meraki.cadence.inventoryInterval'), inventory, setInventory)}
       {numField(
         t('meraki.cadence.rateBudget'),
         targetRps,

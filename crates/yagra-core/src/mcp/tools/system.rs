@@ -829,9 +829,10 @@ impl YagraMcp {
                        **Meraki** — meraki_orgs (each with its last inventory sync result and \
                        how many of its devices are monitored, new, or no longer listed by \
                        Meraki), meraki_networks (needs `org_id`), meraki_devices (needs \
-                       `org_id`; every device the last successful sync found in that \
-                       organization, monitored or not, with its state — refused for a token \
-                       restricted to folders), meraki_polling; **NetBox** — netbox_servers (the configured NetBox \
+                       `org_id`; that organization's devices as the last successful sync \
+                       recorded them, monitored or not, each with its state — including \
+                       `missing`, a monitored node whose device that sync no longer found; \
+                       refused for a token restricted to folders), meraki_polling; **NetBox** — netbox_servers (the configured NetBox \
                        deployments the folder tree is pulled from, with each one's last sync \
                        result and how many of its folders NetBox no longer lists; the API token \
                        is never included); **forwarding** — forward_destinations; **reports** — \

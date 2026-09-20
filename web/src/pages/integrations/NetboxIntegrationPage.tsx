@@ -27,6 +27,7 @@ import { Modal } from '../../components/ui/Modal';
 import { TextInput, TextArea, Select } from '../../components/ui/Field';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
+import { formatTimestamp } from '../../lib/format';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { syncSummary } from './netboxStatus';
 import {
@@ -371,7 +372,7 @@ function ServerRow({
         {summary.kind === 'never' && <span className="muted">{t('netbox.sync.never')}</span>}
         {summary.kind === 'ok' && (
           <>
-            <span>{t('netbox.sync.ok', { at: new Date(summary.at).toLocaleString() })}</span>
+            <span>{t('netbox.sync.ok', { at: formatTimestamp(Date.parse(summary.at)) })}</span>
             {/* Marked, never auto-deleted — ADR-100 decision 5. The operator decides. */}
             {summary.missing > 0 && (
               <span className="netbox-missing">

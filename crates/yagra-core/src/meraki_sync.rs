@@ -1394,6 +1394,172 @@ mod tests {
         );
     }
 
+    /// ADR-164 Inc.11. The inventory rows go out as one statement per chunk, eight arrays side by
+    /// side. Against real SQL: every row lands with **its own** columns (NULLs included — an array
+    /// that slipped by one would still insert the right number of rows), a second write keeps the
+    /// two timestamps the first one stamped and clears `missing_since`, and a serial planned twice
+    /// costs that row rather than the statement.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_plan_of_many_rows_lands_whole_and_a_second_write_keeps_what_the_first_stamped(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::meraki_inventory::{DeviceWrite, SeenDevice, SyncPlan};
+        let r = rig(&pool, Ok(MerakiInventory::default())).await;
+        let device =
+            |serial: &str, name: &str, model: Option<&str>, lan_ip: Option<&str>| SeenDevice {
+                serial: serial.into(),
+                name: name.into(),
+                model: model.map(str::to_owned),
+                product_type: format!("type-of-{serial}"),
+                network_id: format!("N_{serial}"),
+                lan_ip: lan_ip.map(|ip| ip.parse().expect("ip")),
+                online: true,
+            };
+        let bound_at = chrono::DateTime::from_timestamp(1_800_000_000, 0).expect("in range");
+        let first = SyncPlan {
+            writes: vec![
+                DeviceWrite {
+                    device: device("Q2-A", "alpha", Some("MX67"), Some("10.0.0.1")),
+                    first_online: true,
+                    imported_at: None,
+                },
+                DeviceWrite {
+                    device: device("Q2-B", "", None, None),
+                    first_online: false,
+                    imported_at: Some(bound_at),
+                },
+                DeviceWrite {
+                    device: device("Q2-C", "gamma", Some("MR46"), Some("2001:db8::7")),
+                    first_online: false,
+                    imported_at: None,
+                },
+                // The same serial again: PostgreSQL refuses an upsert naming a row twice.
+                DeviceWrite {
+                    device: device("Q2-A", "a second alpha", None, None),
+                    first_online: false,
+                    imported_at: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let applied = r.inventory.apply(r.org, &first).await.expect("first write");
+        assert_eq!(applied.rows, 3, "one row per serial: {applied:?}");
+
+        let stored = |rows: Vec<crate::meraki_inventory::StoredDevice>| {
+            let mut rows = rows;
+            rows.sort_by(|a, b| a.serial.cmp(&b.serial));
+            rows
+        };
+        let rows = stored(r.inventory.stored(r.org).await.expect("stored"));
+        let described: Vec<_> = rows
+            .iter()
+            .map(|d| {
+                (
+                    d.serial.as_str(),
+                    d.name.as_str(),
+                    d.model.as_deref(),
+                    d.product_type.as_str(),
+                    d.network_id.as_str(),
+                    d.lan_ip.map(|ip| ip.to_string()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            described,
+            [
+                (
+                    "Q2-A",
+                    "alpha",
+                    Some("MX67"),
+                    "type-of-Q2-A",
+                    "N_Q2-A",
+                    Some("10.0.0.1".to_owned())
+                ),
+                ("Q2-B", "", None, "type-of-Q2-B", "N_Q2-B", None),
+                (
+                    "Q2-C",
+                    "gamma",
+                    Some("MR46"),
+                    "type-of-Q2-C",
+                    "N_Q2-C",
+                    Some("2001:db8::7".to_owned())
+                ),
+            ]
+        );
+        // The two transitions landed on the rows that asked for them, and on no other.
+        let stamps: Vec<_> = rows
+            .iter()
+            .map(|d| (d.first_online_at.is_some(), d.imported_at))
+            .collect();
+        assert_eq!(
+            stamps,
+            [(true, None), (false, Some(bound_at)), (false, None)]
+        );
+        let first_online_at = rows[0].first_online_at;
+
+        // A later sync describes A anew, asks for both stamps again, and finds it back from missing.
+        sqlx::query("UPDATE meraki_inventory SET missing_since = now() WHERE serial = 'Q2-A'")
+            .execute(&pool)
+            .await
+            .expect("mark missing");
+        let later = chrono::DateTime::from_timestamp(1_900_000_000, 0).expect("in range");
+        let second = SyncPlan {
+            writes: vec![
+                DeviceWrite {
+                    device: device("Q2-A", "alpha renamed", Some("MX68"), None),
+                    first_online: true,
+                    imported_at: Some(later),
+                },
+                DeviceWrite {
+                    device: device("Q2-B", "beta", None, None),
+                    first_online: true,
+                    imported_at: Some(later),
+                },
+            ],
+            ..Default::default()
+        };
+        let applied = r
+            .inventory
+            .apply(r.org, &second)
+            .await
+            .expect("second write");
+        assert_eq!(applied.rows, 2);
+        let rows = stored(r.inventory.stored(r.org).await.expect("stored"));
+        assert_eq!(
+            (
+                rows[0].name.as_str(),
+                rows[0].model.as_deref(),
+                rows[0].lan_ip
+            ),
+            ("alpha renamed", Some("MX68"), None),
+            "the description follows Meraki, an address it stopped reporting included"
+        );
+        assert_eq!(
+            rows[0].first_online_at, first_online_at,
+            "a second write moved the moment the device was first seen online"
+        );
+        assert_eq!(
+            rows[0].imported_at,
+            Some(later),
+            "A had none, so it takes one"
+        );
+        assert_eq!(rows[0].missing_since, None, "a listed device is back");
+        assert!(
+            rows[1].first_online_at.is_some(),
+            "B is online for the first time"
+        );
+        assert_eq!(
+            rows[1].imported_at,
+            Some(bound_at),
+            "a second write moved the moment B's node was bound"
+        );
+        assert_eq!(
+            rows[2].name, "gamma",
+            "C was not in the plan and was written"
+        );
+    }
+
     /// A node imported while Meraki reported no address stands at `0.0.0.0`, and nothing but this
     /// could ever change that — no screen edits a node's address. It gets one from the first sync
     /// that has one, and a later sync that has none again leaves it alone.

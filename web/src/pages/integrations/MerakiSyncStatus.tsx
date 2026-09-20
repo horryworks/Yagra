@@ -10,6 +10,7 @@
 import { useTranslation } from 'react-i18next';
 import type { MerakiOrg } from '../../types/api';
 import { Button } from '../../components/ui/Button';
+import { formatTimestamp } from '../../lib/format';
 import { orgCollectFailures, orgHasInventory, orgSyncSummary } from './merakiOrgRow';
 import type { MerakiSync } from './useMerakiSync';
 import './MerakiSyncStatus.css';
@@ -18,7 +19,9 @@ import './MerakiSyncStatus.css';
 export function MerakiSyncStatus({ org, error }: { org: MerakiOrg; error?: string | null }) {
   const { t } = useTranslation('system');
   const summary = orgSyncSummary(org);
-  const when = (iso: string) => new Date(iso).toLocaleString();
+  // In the interface's language, not the browser's: a bare `toLocaleString()` put
+  // `9/20/2026, 12:00:00 AM` inside a Japanese sentence on an en-US browser.
+  const when = (iso: string) => formatTimestamp(Date.parse(iso));
 
   return (
     <div className="meraki-org-sync">

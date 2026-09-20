@@ -24,8 +24,6 @@ export const MERAKI_REGIONS = [
   { key: 'usGov', base_url: 'https://api.gov-meraki.com' },
 ] as const;
 
-export type MerakiRegionKey = (typeof MERAKI_REGIONS)[number]['key'];
-
 /** The keys alone, for the coverage test that demands a label for each in both locales. */
 export const MERAKI_REGION_KEYS = MERAKI_REGIONS.map((r) => r.key);
 

@@ -5,9 +5,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CREDENTIAL_KINDS,
   HTTP_CREDENTIAL_KINDS,
+  INTEGRATION_CREDENTIAL_KINDS,
   SNMP_CREDENTIAL_KINDS,
+  integrationSecret,
   isHttpCredentialKind,
   isSnmpCredentialKind,
+  secretReplacementFor,
 } from './credentialKinds';
 
 describe('credential kind allow-lists', () => {
@@ -48,5 +51,42 @@ describe('credential kind allow-lists', () => {
     for (const k of CREDENTIAL_KINDS) {
       expect(isSnmpCredentialKind(k) || isHttpCredentialKind(k), k).toBe(true);
     }
+  });
+});
+
+describe('replacing a stored secret', () => {
+  it('lets a kind created here change, starting on its own', () => {
+    for (const kind of CREDENTIAL_KINDS) {
+      expect(secretReplacementFor(kind), kind).toEqual({ mode: 'choose', initial: kind });
+    }
+  });
+
+  it("replaces an integration's key without ever offering another kind", () => {
+    // The regression: the dialog drew the four-kind select over a Meraki key. Untouched, the raw
+    // key was stored where a JSON document belongs; touched, the key became an SNMP community.
+    // Both broke every collect and sync of the organization with `credential`.
+    expect(secretReplacementFor('meraki_api')).toEqual({ mode: 'fixed', kind: 'meraki_api' });
+    expect(secretReplacementFor('netbox_token')).toEqual({ mode: 'fixed', kind: 'netbox_token' });
+    // Neither list may hold the other's kinds, or one credential would get two answers.
+    const both = INTEGRATION_CREDENTIAL_KINDS.filter((k) =>
+      (CREDENTIAL_KINDS as readonly string[]).includes(k),
+    );
+    expect(both).toEqual([]);
+  });
+
+  it('offers no replacement for a kind this build has never heard of', () => {
+    // A newer core can store one. This build cannot know the shape its secret is sealed in.
+    for (const kind of ['snmp_v4', '', 'MERAKI_API', 'meraki']) {
+      expect(secretReplacementFor(kind), kind).toEqual({ mode: 'rename_only' });
+    }
+  });
+
+  it("seals an integration's key as the document the server parses", () => {
+    expect(JSON.parse(integrationSecret('meraki_api', 'abc123'))).toEqual({ api_key: 'abc123' });
+    expect(JSON.parse(integrationSecret('netbox_token', 'tok'))).toEqual({ token: 'tok' });
+    // Pasted with the line break the Dashboard's copy button leaves behind.
+    expect(JSON.parse(integrationSecret('meraki_api', '  abc123\n'))).toEqual({ api_key: 'abc123' });
+    // A key is quoted, never spliced: one holding a quote is still one JSON string.
+    expect(JSON.parse(integrationSecret('meraki_api', 'a"b\\c'))).toEqual({ api_key: 'a"b\\c' });
   });
 });

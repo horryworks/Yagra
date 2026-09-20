@@ -13,11 +13,13 @@ import {
   MAX_DEVICES_MAX,
   MAX_DEVICES_MIN,
   MAX_DEVICES_RANGE,
+  MERAKI_DEVICE_FILTER_KEYS,
   deviceDestination,
   deviceSearchText,
   devicesToImport,
   importableSerials,
   isImportable,
+  merakiDeviceFilterColumns,
   merakiDeviceFilters,
   networkLabel,
   networksToWatchOnImport,
@@ -353,5 +355,18 @@ describe('merakiDeviceFilters', () => {
     ];
     const keep = buildPredicate(columns, { name: '', network: 'osaka', state: '' }, 0);
     expect(rows.filter(keep).map((d) => d.serial)).toEqual(['B']);
+  });
+
+  // ADR-164 Inc.11. The page hands the filter hook THIS list, not the columns it draws: those are
+  // rebuilt on every tick of a checkbox, and the hook re-filters every device when its list moves.
+  it('hands the filter hook every spec, in the order the table draws them', () => {
+    const specs = merakiDeviceFilters(t);
+    const handed = merakiDeviceFilterColumns(specs);
+    expect(handed.map((c) => c.key)).toEqual(['name', 'network', 'state']);
+    // Every spec is handed over, and each is the very object the drawn column carries — a filter
+    // drawn under a header the hook does not know would narrow nothing.
+    expect(handed.map((c) => c.key).sort()).toEqual(Object.keys(specs).sort());
+    for (const { key, filter } of handed) expect(filter, key).toBe(specs[key]);
+    expect([...MERAKI_DEVICE_FILTER_KEYS]).toEqual(handed.map((c) => c.key));
   });
 });

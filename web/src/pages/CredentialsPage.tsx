@@ -55,7 +55,12 @@ import {
   CREDENTIAL_SORT_KEYS,
   DEFAULT_CREDENTIAL_SORT,
 } from './credentialList';
-import { CREDENTIAL_KINDS, type CredentialKind } from '../lib/credentialKinds';
+import {
+  CREDENTIAL_KINDS,
+  integrationSecret,
+  secretReplacementFor,
+  type CredentialKind,
+} from '../lib/credentialKinds';
 import './CredentialsPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
@@ -372,24 +377,33 @@ function EditCredentialModal({
   onSaved: () => void;
 }) {
   const { t } = useTranslation('access');
+  // Whether the kind may change, is fixed, or the secret cannot be replaced from this build at all
+  // — decided in `credentialKinds.ts`, where a test reaches it. An integration's key keeps its kind.
+  const replacement = secretReplacementFor(cred.kind);
   const [name, setName] = useState(cred.name);
   const [replace, setReplace] = useState(false);
-  const [kind, setKind] = useState<Kind>((cred.kind as Kind) ?? 'snmp_v2c');
+  const [kind, setKind] = useState<Kind>(
+    replacement.mode === 'choose' ? replacement.initial : 'snmp_v2c',
+  );
   const [secret, setSecret] = useState('');
   const [v3, setV3] = useState<V3State>(emptyV3);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const isV3 = kind === 'snmp_v3';
-  const secretReady = !replace || (isV3 ? v3Ready(v3) : secret !== '');
+  const fixedKind = replacement.mode === 'fixed' ? replacement.kind : null;
+  const isV3 = fixedKind === null && kind === 'snmp_v3';
+  const typed = fixedKind ? secret.trim() : secret;
+  const secretReady = !replace || (isV3 ? v3Ready(v3) : typed !== '');
   const ready = name.trim() !== '' && secretReady;
 
   const save = () => {
     setError(null);
     setBusy(true);
-    const body = replace
-      ? { name: name.trim(), kind, secret: isV3 ? buildV3Secret(v3) : secret }
-      : { name: name.trim() };
+    const body = !replace
+      ? { name: name.trim() }
+      : fixedKind
+        ? { name: name.trim(), kind: fixedKind, secret: integrationSecret(fixedKind, secret) }
+        : { name: name.trim(), kind, secret: isV3 ? buildV3Secret(v3) : secret };
     api
       .updateCredential(cred.id, body)
       .then(() => {
@@ -421,22 +435,35 @@ function EditCredentialModal({
         <label className="modal-field-label">{t('cred.field.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
-      <label className="cred-replace">
-        <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
-        <span>{t('cred.edit.replaceSecret')}</span>
-        <span className="muted">— {t('cred.edit.replaceHint')}</span>
-      </label>
+      {/* A kind this build does not know gets no replacement at all: it cannot know the shape the
+          secret is sealed in, and a control that can only do harm is not drawn. */}
+      {replacement.mode !== 'rename_only' && (
+        <label className="cred-replace">
+          <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
+          <span>{t('cred.edit.replaceSecret')}</span>
+          <span className="muted">— {t('cred.edit.replaceHint')}</span>
+        </label>
+      )}
       {replace && (
         <>
           <div className="modal-field">
             <label className="modal-field-label">{t('cred.field.type')}</label>
-            <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
-              {KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {kindLabel(k, t)}
-                </option>
-              ))}
-            </Select>
+            {fixedKind ? (
+              // An integration's key keeps its kind: the select never held it, so it showed
+              // another one over it and saved that.
+              <>
+                <span>{kindLabel(fixedKind, t)}</span>
+                <span className="modal-hint">{t('cred.edit.fixedKindHint')}</span>
+              </>
+            ) : (
+              <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
+                {KINDS.map((k) => (
+                  <option key={k} value={k}>
+                    {kindLabel(k, t)}
+                  </option>
+                ))}
+              </Select>
+            )}
           </div>
           {isV3 ? (
             <V3Fields value={v3} onChange={setV3} />

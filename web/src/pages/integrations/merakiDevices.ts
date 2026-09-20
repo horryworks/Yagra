@@ -272,6 +272,26 @@ export function deviceSearchText(device: Pick<MerakiDevice, 'name' | 'serial'>):
   return [device.name, device.serial];
 }
 
+/** The columns that carry a filter, in the order the table draws them. */
+export const MERAKI_DEVICE_FILTER_KEYS = ['name', 'network', 'state'] as const;
+
+export type MerakiDeviceFilterKey = (typeof MERAKI_DEVICE_FILTER_KEYS)[number];
+
+/**
+ * The filterable columns as `useClientFilters` wants them: key and spec, nothing drawn.
+ *
+ * Apart from the table's own column list on purpose. The checkbox cell reads the selection, so
+ * every tick gives the table a new list — and `useClientFilters` re-filters and re-counts **every
+ * device** whenever the list IT holds changes identity. On an organization of thousands that made
+ * one tick a pass over all of them, three times. This list changes with the language and nothing
+ * else.
+ */
+export function merakiDeviceFilterColumns(
+  specs: Record<MerakiDeviceFilterKey, ColumnFilterSpec<MerakiDevice>>,
+): { key: MerakiDeviceFilterKey; filter: ColumnFilterSpec<MerakiDevice> }[] {
+  return MERAKI_DEVICE_FILTER_KEYS.map((key) => ({ key, filter: specs[key] }));
+}
+
 /**
  * The device list's filter row, keyed by `Column.key` (ADR-053).
  *
@@ -279,7 +299,9 @@ export function deviceSearchText(device: Pick<MerakiDevice, 'name' | 'serial'>):
  * page is opened with. Name and Network are here because an organization's list runs to thousands
  * of rows, and a list that long with no way to find one device is a list nobody reads.
  */
-export function merakiDeviceFilters(t: TFunction): Record<string, ColumnFilterSpec<MerakiDevice>> {
+export function merakiDeviceFilters(
+  t: TFunction,
+): Record<MerakiDeviceFilterKey, ColumnFilterSpec<MerakiDevice>> {
   return {
     name: {
       kind: 'text',

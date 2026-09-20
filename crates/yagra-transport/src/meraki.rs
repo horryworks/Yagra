@@ -46,7 +46,7 @@ fn io(msg: impl Into<String>) -> TransportError {
     TransportError::Io(msg.into())
 }
 
-// ── Control-plane result types (used by core's import wizard) ───────────────────────────────
+// ── Control-plane result types (core: adding an organization, and the inventory sync) ───────
 
 /// A Meraki organization the API key can see (`GET /organizations`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +81,8 @@ pub struct MerakiDeviceInfo {
     pub product_type: String,
     /// networkId the device belongs to.
     pub network_id: String,
-    /// LAN IP if the device reports one (display only — never pinged).
+    /// LAN IP if the device reports one. Never pinged, and not only shown: core matches it against
+    /// the folders' IP ranges, and an imported node takes it as its address (ADR-164 決定 14).
     pub lan_ip: Option<String>,
 }
 
@@ -297,14 +298,7 @@ impl Session {
                 tracing::debug!(error = %e, "meraki response read failed");
                 Stop::Malformed
             })?;
-            match serde_json::from_str::<Value>(&body) {
-                Ok(Value::Array(arr)) => items.extend(arr),
-                Ok(other) => items.push(other),
-                Err(e) => {
-                    tracing::debug!(error = %e, "meraki json parse failed");
-                    return Err(Stop::Malformed);
-                }
-            }
+            items.extend(page_items(&body)?);
             visited.push(url);
 
             match next_page(&visited, next.as_deref()) {
@@ -452,6 +446,28 @@ impl From<Stop> for MerakiFetchError {
             Stop::RateLimited => Self::RateLimited,
             Stop::Status(code) => Self::Status(code),
             Stop::Cycle | Stop::PageCap => Self::Truncated,
+        }
+    }
+}
+
+/// The items of one page. Pure, so the rule is tested without a server.
+///
+/// 🚨 **A 200 whose body is not a JSON array is not a page** (ADR-164 決定 19). Every listing this
+/// module pages answers an array, and every parser below reads array elements only. Such a body
+/// used to be taken as one item, which no parser can read a `serial` out of — so it read as a
+/// listing that was **complete and empty**: the inventory sync marked every stored device missing,
+/// and a collect counted as answered by the Dashboard, which is what closes an organization's
+/// collection alert (決定 18). An empty array is still an answer; an organization may hold nothing.
+fn page_items(body: &str) -> Result<Vec<Value>, Stop> {
+    match serde_json::from_str::<Value>(body) {
+        Ok(Value::Array(items)) => Ok(items),
+        Ok(_) => {
+            tracing::debug!("meraki listing answered something other than an array");
+            Err(Stop::Malformed)
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "meraki json parse failed");
+            Err(Stop::Malformed)
         }
     }
 }
@@ -612,8 +628,8 @@ pub(crate) async fn collect(
             stopped = stopped.or(stop);
             data.extend(parse_traffic(&items));
         }
-        // Inventory reconciliation is operator-initiated (control-plane enumerate), not a recurring
-        // metric collect — nothing to gather here.
+        // The inventory is read by core's periodic sync (`fetch_inventory`), not by a collect —
+        // nothing to gather here.
         MerakiTier::Inventory => {}
     }
     Ok(MerakiCollected {
@@ -1106,6 +1122,35 @@ mod tests {
             assert_ne!(abandoned, PageStep::Done);
             assert!(matches!(abandoned, PageStep::Stop(_)), "{abandoned:?}");
         }
+    }
+
+    /// ADR-164 決定 19. A 200 that is not an array used to become one item no parser can read, so
+    /// it read as a listing that was complete and empty — every stored device marked missing by the
+    /// sync, and a collect counted as answered. It is the stop both readers already refuse.
+    #[test]
+    fn a_body_that_is_not_an_array_is_not_a_page() {
+        for body in [
+            r#"{"errors":["something went wrong"]}"#,
+            r#"{"items":[{"serial":"Q2-A"}],"meta":{}}"#,
+            r#""ok""#,
+            "null",
+            "42",
+            "",
+            "<html>maintenance</html>",
+        ] {
+            assert_eq!(page_items(body), Err(Stop::Malformed), "{body}");
+        }
+        assert!(Stop::Malformed.fails_a_collect());
+    }
+
+    /// The accept side: an array is its items, and an empty one is an answer — an organization
+    /// may hold no devices, and that must not become a failure.
+    #[test]
+    fn an_array_body_is_its_items_and_an_empty_one_is_still_an_answer() {
+        let items = page_items(r#"[{"serial":"Q2-A"},{"serial":"Q2-B"}]"#).expect("two items");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1]["serial"], "Q2-B");
+        assert_eq!(page_items("[]"), Ok(Vec::new()));
     }
 
     /// Both directions of the split between the two readers. The lenient one keeps its old

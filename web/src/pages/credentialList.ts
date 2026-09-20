@@ -103,9 +103,6 @@ export function credentialFilters(
   };
 }
 
-/** A credential kind's display label, falling back to the raw token for a kind this build does not
- *  know. A newer core can store a kind this WebUI has never heard of; showing `snmp_v4` is honest,
- *  and showing nothing would make the row look broken. */
 /** The i18n key per credential kind. ⚠️ The **label** half of what used to be one `KIND_META`
  *  map in the page; the icon half stays there, because an icon is a component and this file is
  *  loaded by a test in a node environment. Both halves are keyed by the same strings. */
@@ -118,6 +115,9 @@ export const CREDENTIAL_KIND_LABEL_KEYS: Record<string, string> = {
   netbox_token: 'cred.kind.netbox_token',
 };
 
+/** A credential kind's display label, falling back to the raw token for a kind this build does not
+ *  know. A newer core can store a kind this WebUI has never heard of; showing `snmp_v4` is honest,
+ *  and showing nothing would make the row look broken. */
 export const kindLabel = (kind: string, t: TFunction) => {
   const key = CREDENTIAL_KIND_LABEL_KEYS[kind];
   return key ? t(key) : kind;

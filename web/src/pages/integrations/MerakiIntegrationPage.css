@@ -93,12 +93,15 @@
   letter-spacing: 0.04em;
 }
 
+/* Words, never a status colour: a green "enabled" on this row read as a node that is up, and the
+   organization's own page says the same fact in plain text (`MerakiOrgPage.css`). The status
+   palette belongs to the alert state machine (`tokens.css`); paused is only quieter. */
 .meraki-org-state.on {
-  color: var(--status-ok);
+  color: var(--text-secondary);
 }
 
 .meraki-org-state.off {
-  color: var(--status-unknown, var(--text-tertiary));
+  color: var(--text-tertiary);
 }
 
 /* The row's two muted facts: which tiers are collected, and which stored key it is polled with. */

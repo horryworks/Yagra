@@ -951,11 +951,9 @@ export const MERAKI_DEVICE_STATES = [
 /** One state a device's row can be in. */
 export type MerakiDeviceState = (typeof MERAKI_DEVICE_STATES)[number];
 
-/** Where an import would file a device that is not a node yet (`MerakiDevice.filing`). `null` on a
- *  device that already is one — its `folder_id` is then where it *is*, not where it would go. */
-export type MerakiDeviceFiling = components['schemas']['MerakiFilingView'];
-
-/** Why an import would file a device where it would (`MerakiDeviceFiling.reason`).
+/** Why an import would file a device where it would (`MerakiDevice.filing.reason`). `filing` is
+ *  `null` on a device that already is a node — its `folder_id` is then where it *is*, not where it
+ *  would go.
  *
  *  `as const` for the same reason as the states above: the Destination cell builds
  *  `` t(`meraki.devices.filing.${reason}`) `` from the token. Pinned by `schemaEnumPins` to the

@@ -141,10 +141,30 @@ pub(crate) async fn credential_decrypt_health(
 
 /// Reject a structurally invalid secret for its kind, at the edge.
 ///
-/// Only SNMPv3 has a parseable shape today. Checking it here means a malformed USM document is a
-/// 400 the operator can act on, rather than a stored credential that fails every poll with an error
-/// only the poller logs. **The reason is the parser's static text and never any field content.**
+/// Four kinds have a parseable shape: SNMPv3, HTTP auth, and — since ADR-164 Inc.11 — the two an
+/// integration owns. Checking here means a malformed document is a 400 the operator can act on,
+/// rather than a stored credential that fails every poll with an error only a log holds. For a
+/// Meraki key that was not hypothetical: `PUT /credentials/{id}` is the only way a rotated key gets
+/// in, the WebUI sent it as the bare key, and every collect and sync of the organization then
+/// failed with `credential`. **The reason is the parser's static text and never any field
+/// content.**
 fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
+    if kind == crate::secrets::KIND_MERAKI_API {
+        if let Err(reason) = crate::secrets::MerakiApiSecret::parse(secret) {
+            return Err(ApiError::bad_request(
+                "invalid_credential",
+                format!("invalid Meraki API credential: {reason}"),
+            ));
+        }
+    }
+    if kind == crate::secrets::KIND_NETBOX_TOKEN {
+        if let Err(reason) = crate::secrets::NetboxTokenSecret::parse(secret) {
+            return Err(ApiError::bad_request(
+                "invalid_credential",
+                format!("invalid NetBox token credential: {reason}"),
+            ));
+        }
+    }
     if kind == crate::secrets::KIND_SNMP_V3 {
         if let Err(reason) = crate::secrets::SnmpV3Secret::parse(secret) {
             return Err(ApiError::bad_request(
@@ -461,6 +481,145 @@ mod tests {
 
         // A community string has no parseable shape, so anything non-empty is accepted here.
         assert!(check_secret_shape("snmp_v2c", b"public").is_ok());
+    }
+
+    /// ADR-164 Inc.11. An integration's key is a JSON document, and the bare key is what an
+    /// operator pastes — stored as typed, it made every collect and sync of the organization fail
+    /// with `credential`, with nothing on the dialog that had taken it.
+    #[test]
+    fn an_integration_key_that_is_not_its_document_is_rejected_before_it_is_sealed() {
+        use crate::secrets::{KIND_MERAKI_API, KIND_NETBOX_TOKEN};
+        for (kind, bare, document) in [
+            (
+                KIND_MERAKI_API,
+                "0123deadbeef",
+                r#"{"api_key":"0123deadbeef"}"#,
+            ),
+            (KIND_NETBOX_TOKEN, "nbt-secret", r#"{"token":"nbt-secret"}"#),
+        ] {
+            let err = check_secret_shape(kind, bare.as_bytes()).unwrap_err();
+            assert_eq!(err.code(), "invalid_credential", "{kind}");
+            assert!(
+                !err.message().contains(bare),
+                "{kind}: the refusal quoted the key"
+            );
+            assert!(
+                check_secret_shape(kind, document.as_bytes()).is_ok(),
+                "{kind}"
+            );
+        }
+        // Each kind's document is its own: the other's is refused.
+        assert!(check_secret_shape(KIND_MERAKI_API, br#"{"token":"x"}"#).is_err());
+        assert!(check_secret_shape(KIND_NETBOX_TOKEN, br#"{"api_key":"x"}"#).is_err());
+    }
+
+    /// The edit dialog builds those two documents in the browser (`integrationSecret`), so their
+    /// field names exist twice. A drifted copy is a 400 rather than a broken organization — the
+    /// check above sees to that — but a 400 on every key rotation is still a dialog that does not
+    /// work, and nothing in the WebUI's own tests knows what this side parses.
+    ///
+    /// ⚠️ It finds each document as a `JSON.stringify({ <field>: value })` line.
+    #[test]
+    fn the_webui_seals_an_integration_key_in_the_shape_this_api_parses() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/src/lib/credentialKinds.ts"
+        );
+        let text = std::fs::read_to_string(path).expect("the WebUI's credential kinds");
+        let fields: Vec<&str> = text
+            .split("JSON.stringify({ ")
+            .skip(1)
+            .filter_map(|rest| rest.split_once(": value })").map(|(field, _)| field))
+            .collect();
+        assert_eq!(
+            fields,
+            ["api_key", "token"],
+            "the documents {path} builds are not the ones this API parses — or its shape changed \
+             and this reader stopped finding them"
+        );
+        for (kind, field) in [
+            (crate::secrets::KIND_MERAKI_API, fields[0]),
+            (crate::secrets::KIND_NETBOX_TOKEN, fields[1]),
+        ] {
+            let document = serde_json::json!({ field: "k" }).to_string();
+            assert!(
+                check_secret_shape(kind, document.as_bytes()).is_ok(),
+                "{kind} refuses {document}"
+            );
+        }
+    }
+
+    /// The rotation itself, through the router: the document is accepted and resealed, and the
+    /// bare key is refused with the stored secret left as it was.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_meraki_key_is_replaced_by_its_document_and_never_by_the_bare_key(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let admin = st.admin.as_ref().expect("live state has an admin side");
+        let id = admin
+            .creds
+            .create(
+                "Meraki API — Acme",
+                crate::secrets::KIND_MERAKI_API,
+                br#"{"api_key":"old-key"}"#,
+            )
+            .await
+            .expect("seal the first key");
+        let path = format!("/api/v1/credentials/{id}");
+        let stored_key = || async {
+            let (kind, secret) = admin
+                .creds
+                .open(id)
+                .await
+                .expect("open")
+                .expect("the credential");
+            (
+                kind,
+                crate::secrets::MerakiApiSecret::parse(&secret).map(|s| s.api_key),
+            )
+        };
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({
+                "name": "Meraki API — Acme",
+                "kind": "meraki_api",
+                "secret": "new-key",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_credential");
+        assert_eq!(
+            stored_key().await,
+            ("meraki_api".to_owned(), Ok("old-key".to_owned())),
+            "a refused replacement changed the stored key"
+        );
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({
+                "name": "Meraki API — Acme",
+                "kind": "meraki_api",
+                "secret": r#"{"api_key":"new-key"}"#,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            stored_key().await,
+            ("meraki_api".to_owned(), Ok("new-key".to_owned()))
+        );
     }
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 

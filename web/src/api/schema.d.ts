@@ -8783,7 +8783,8 @@ export interface components {
             seen: number;
         };
         /**
-         * @description What a device's row is shown as (ADR-164 決定 9). Serialized as the snake_case token.
+         * @description What a device's row is shown as: read from the facts the inventory keeps about it (ADR-164
+         *     決定 3), never stored. Serialized as the snake_case token.
          * @enum {string}
          */
         MerakiDeviceState: "monitored" | "new" | "never_online" | "deleted" | "missing";
@@ -8921,7 +8922,8 @@ export interface components {
         MerakiImported: {
             /**
              * @description How those devices were filed. The four add up to `imported`, except that all four are zero
-             *     when the request switched filing by IP range off.
+             *     when filing by IP range was off for this import: the request's `file_by_prefix`, or the
+             *     organization's own setting when the request leaves it out.
              */
             filed: components["schemas"]["MerakiFiled"];
             /**
@@ -19388,7 +19390,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), or a collect or another sync is running for it (`meraki_sync_busy`) */
+            /** @description Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), a collect or another sync is running for it (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -19397,7 +19399,16 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The sync ran and failed (`meraki_sync_failed`); the reason is recorded on the organization as `last_sync_error` */
+            /** @description The sync ran and Yagra could not read or write its own database (`meraki_sync_failed`, reason `internal`) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The sync ran and the Dashboard API did not give a complete answer (`meraki_sync_failed`). Whatever the status, the reason is recorded on the organization as `last_sync_error` */
             502: {
                 headers: {
                     [name: string]: unknown;
