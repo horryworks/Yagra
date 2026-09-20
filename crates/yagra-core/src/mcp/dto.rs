@@ -569,6 +569,12 @@ pub struct NodeGroupDto {
     /// answered. Not a new exposure either — the same labels already arrive on every `list_nodes`
     /// row once inheritance resolves.
     pub effective_tags: Vec<String>,
+    /// `meraki` | `netbox` when an integration made this folder and still keeps it, else absent
+    /// (ADR-164 Inc.7). Worth knowing before advising anyone to tidy the tree: a Meraki
+    /// organization's folders are deleted with the organization, and a NetBox folder is renamed
+    /// back by the next sync.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::groups::GroupOrigin>,
 }
 
 impl NodeGroupDto {
@@ -590,6 +596,7 @@ impl NodeGroupDto {
             prefixes: g.prefixes.clone(),
             tags: g.tags.clone(),
             effective_tags: g.effective_tags.clone(),
+            origin: g.origin,
             state_counts: None,
         }
     }
@@ -1272,6 +1279,7 @@ mod tests {
                 description: "Tokyo LAN".to_owned(),
                 source: crate::groups::PrefixSource::Manual,
             }],
+            origin: Some(crate::groups::GroupOrigin::Meraki),
         };
         let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();
         assert!(
@@ -1281,6 +1289,10 @@ mod tests {
         assert_eq!(
             group_json["geo_source"], "own",
             "the enum keeps its serde tag"
+        );
+        assert_eq!(
+            group_json["origin"], "meraki",
+            "the folder's origin is carried"
         );
         assert_inventory_dto_is_clean(&group_json, "NodeGroup");
 

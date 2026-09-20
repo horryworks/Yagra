@@ -69,6 +69,7 @@ import type {
   MaintenanceScopeLevel,
   MaintenanceWindow,
   MatchingThreshold,
+  MerakiCreated,
   MerakiDevice,
   MerakiImported,
   MerakiNetwork,
@@ -1008,19 +1009,30 @@ export const api = {
     apiPost('/api/v1/discovered-endpoints/{id}/import', { path: { id }, body }),
 
   // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
-  /** List the orgs an API key can access (nothing is persisted). Read-only. */
-  merakiDiscover: (body: { api_key: string; base_url?: string }): Promise<MerakiOrgOption[]> =>
-    apiPost('/api/v1/meraki/orgs/discover', { body }),
+  /** List the orgs an API key can access (nothing is persisted). Read-only.
+   *
+   *  The key is either typed (`api_key`) or one already stored (`credential_id`) — exactly one. The
+   *  server refuses both (`400 invalid_request`) and neither (`400 invalid_api_key`); the dialog
+   *  builds the body through `merakiAddOrg.ts::keyFields`, which cannot produce either. */
+  merakiDiscover: (body: {
+    api_key?: string;
+    credential_id?: string;
+    base_url?: string;
+  }): Promise<MerakiOrgOption[]> => apiPost('/api/v1/meraki/orgs/discover', { body }),
 
   /** The configured Meraki organizations. */
   listMerakiOrgs: (): Promise<MerakiOrg[]> => apiGet('/api/v1/meraki/orgs'),
 
-  /** Onboard one or more orgs under a shared read-only key. */
+  /** Onboard one or more orgs under a shared read-only key — the same exactly-one rule as
+   *  `merakiDiscover`. With `credential_id` no new credential is sealed: the new organizations
+   *  share the stored one. An organization monitored already is skipped and counted in
+   *  `already_added` rather than refused. */
   createMerakiOrgs: (body: {
-    api_key: string;
+    api_key?: string;
+    credential_id?: string;
     base_url?: string;
     org_ids: string[];
-  }): Promise<{ created: number }> => apiPost('/api/v1/meraki/orgs', { body }),
+  }): Promise<MerakiCreated> => apiPost('/api/v1/meraki/orgs', { body }),
 
   /** Delete an org (removes its device nodes, config, and groups). */
   deleteMerakiOrg: (id: string): Promise<void> =>
@@ -1960,7 +1972,9 @@ export const api = {
     body: { name: string; kind?: string; secret?: string },
   ): Promise<void> => apiPut('/api/v1/credentials/{id}', { path: { id }, body }),
 
-  /** Delete a credential. */
+  /** Delete a credential. Node bindings are cleared with it; a Meraki organization or a NetBox
+   *  server that uses it refuses the delete instead (`409 credential_in_use`), which is why the
+   *  Credentials page does not offer one for such a row. */
   deleteCredential: (id: string): Promise<void> =>
     apiDelete('/api/v1/credentials/{id}', { path: { id } }),
 

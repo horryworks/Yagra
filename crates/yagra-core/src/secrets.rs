@@ -28,9 +28,31 @@ pub struct CredentialSummary {
     pub id: Uuid,
     pub name: String,
     pub kind: String,
-    /// How many nodes reference this credential — answers "is it safe to delete?". Counted at
-    /// list time from `nodes.credential_id`; `0` means the credential is unused.
+    /// How many **nodes** reference this credential. Counted at list time from
+    /// `nodes.credential_id`. Deleting the credential clears those bindings (`ON DELETE SET NULL`).
+    ///
+    /// ⚠️ Nodes only, and the name predates the two fields below: `0` here used to read as
+    /// "unused" for a Meraki key that three organizations were being polled with.
     pub used_by: i64,
+    /// How many Meraki organizations are polled with it (ADR-164 Inc.6).
+    ///
+    /// 🚨 Not a binding that can be cleared: `meraki_orgs.credential_id` is `NOT NULL … ON DELETE
+    /// RESTRICT`, so while this is above zero the delete is refused with `409 credential_in_use`.
+    pub used_by_meraki_orgs: i64,
+    /// How many NetBox servers are read with it. Refuses the delete exactly as the field above
+    /// does (`netbox_servers.credential_id`, the same constraint).
+    pub used_by_netbox_servers: i64,
+}
+
+/// What [`CredentialStore::delete`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialDelete {
+    Deleted,
+    NotFound,
+    /// A Meraki organization or a NetBox server still holds it. Those references are
+    /// `ON DELETE RESTRICT` — an integration with no key is not a state either table can express —
+    /// so PostgreSQL refused, and nothing was removed.
+    InUse,
 }
 
 /// Credential kind for SNMP v3 USM parameters (the secret is a [`SnmpV3Secret`] JSON doc).
@@ -356,12 +378,16 @@ impl CredentialStore {
 
     /// Credential metadata (no secret values).
     pub async fn list(&self) -> anyhow::Result<Vec<CredentialSummary>> {
-        // LEFT JOIN so unused credentials still appear (used_by = 0). Grouping by the credential
-        // PK lets us order by its created_at (functionally dependent on the PK in PostgreSQL).
+        // One scalar subquery per referencing table rather than three LEFT JOINs under one GROUP
+        // BY: joined together they multiply (3 nodes × 2 organizations counts 6 of each).
         let rows = sqlx::query(
-            "SELECT c.id, c.name, c.kind, count(n.id) AS used_by \
-             FROM credentials c LEFT JOIN nodes n ON n.credential_id = c.id \
-             GROUP BY c.id ORDER BY c.created_at",
+            "SELECT c.id, c.name, c.kind, \
+               (SELECT count(*) FROM nodes n WHERE n.credential_id = c.id) AS used_by, \
+               (SELECT count(*) FROM meraki_orgs m WHERE m.credential_id = c.id) \
+                 AS used_by_meraki_orgs, \
+               (SELECT count(*) FROM netbox_servers s WHERE s.credential_id = c.id) \
+                 AS used_by_netbox_servers \
+             FROM credentials c ORDER BY c.created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -372,6 +398,8 @@ impl CredentialStore {
                     name: row.try_get("name")?,
                     kind: row.try_get("kind")?,
                     used_by: row.try_get("used_by")?,
+                    used_by_meraki_orgs: row.try_get("used_by_meraki_orgs")?,
+                    used_by_netbox_servers: row.try_get("used_by_netbox_servers")?,
                 })
             })
             .collect()
@@ -421,13 +449,24 @@ impl CredentialStore {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Delete a credential. Returns whether a row was removed.
-    pub async fn delete(&self, id: Uuid) -> anyhow::Result<bool> {
+    /// Delete a credential.
+    ///
+    /// The foreign-key refusal is read here rather than pre-checked with a count: a count and a
+    /// delete are two statements, and an organization added between them would turn the answer
+    /// back into the 500 this replaced (ADR-164 Inc.6).
+    pub async fn delete(&self, id: Uuid) -> anyhow::Result<CredentialDelete> {
         let res = sqlx::query("DELETE FROM credentials WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected() > 0)
+            .await;
+        match res {
+            Ok(done) if done.rows_affected() > 0 => Ok(CredentialDelete::Deleted),
+            Ok(_) => Ok(CredentialDelete::NotFound),
+            Err(sqlx::Error::Database(db)) if db.is_foreign_key_violation() => {
+                Ok(CredentialDelete::InUse)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Decrypt a credential's secret in memory along with its `kind`, so the caller can

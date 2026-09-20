@@ -165,6 +165,37 @@ pub struct GroupSummary {
     /// listed so the tree has a spine, and handing over the subnet layout of a site whose
     /// membership the caller cannot see would be a leak the folder's *name* does not constitute.
     pub prefixes: Vec<GroupPrefix>,
+    /// The integration that made this folder and still keeps it, or `null` for one a person made
+    /// (ADR-164 Inc.7). See [`GroupOrigin`] for what "still keeps" means.
+    pub origin: Option<GroupOrigin>,
+}
+
+/// Which integration a folder belongs to (ADR-164 Inc.7).
+///
+/// Not decoration. An integration's folder behaves differently from one an operator made: a
+/// Meraki organization's tree is **deleted with the organization**, and a NetBox folder is renamed
+/// and re-parented by the next sync whatever was typed over it. A tree that draws both kinds the
+/// same leaves that to be found out.
+///
+/// It says who keeps the folder **now**. Forgetting a NetBox server leaves its folders behind as
+/// ordinary ones (ADR-100 decision 5), and they lose the mark with the server — nothing will
+/// rename them again.
+///
+/// No `as_str()`: the serde tag is the only spelling, and the WebUI's `GROUP_ORIGINS` mirrors it
+/// (pinned by a test below and by `i18nEnumKeys.test.ts` on the other side).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupOrigin {
+    /// A Meraki organization's own folder, or one of its network folders.
+    Meraki,
+    /// A Region or Site folder a NetBox sync created.
+    Netbox,
+}
+
+impl GroupOrigin {
+    /// Every origin, so the token test iterates rather than naming them.
+    #[cfg(test)]
+    pub const ALL: [GroupOrigin; 2] = [GroupOrigin::Meraki, GroupOrigin::Netbox];
 }
 
 /// Who put a prefix row on a folder (ADR-131 決定 9).
@@ -744,6 +775,28 @@ pub fn resolve_group_tags(groups: &mut [GroupSummary]) {
     }
 }
 
+/// Mark each folder an integration keeps (ADR-164 Inc.7). `meraki` and `netbox` are the ids of the
+/// folders each one owns; every other row is left `None`.
+///
+/// 🚨 **By id, never by ancestry.** "Anything under a Meraki organization's folder" is the obvious
+/// rule and it is wrong: an operator can make a folder of their own in there, and it would be
+/// marked as something the integration made — and, by implication, will look after.
+pub fn resolve_group_origin(
+    groups: &mut [GroupSummary],
+    meraki: &std::collections::HashSet<Uuid>,
+    netbox: &std::collections::HashSet<Uuid>,
+) {
+    for g in groups.iter_mut() {
+        g.origin = if meraki.contains(&g.id) {
+            Some(GroupOrigin::Meraki)
+        } else if netbox.contains(&g.id) {
+            Some(GroupOrigin::Netbox)
+        } else {
+            None
+        };
+    }
+}
+
 /// A placement is both coordinates or neither — a row with only one is unplaced, not half-placed.
 /// The write path (`PUT /node-groups/{id}/geo`) sets and clears them together, so a lone value is
 /// legacy or hand-edited data; treating it as placed would put a pin on the prime meridian.
@@ -806,13 +859,67 @@ impl GroupRepo {
                     // rather than a lateral join, because most deployments have no rows here at
                     // all and the empty answer is then a single index-less scan of nothing.
                     prefixes: Vec::new(),
+                    // Filled by `attach_origin` below.
+                    origin: None,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         resolve_group_geo(&mut groups);
         resolve_group_tags(&mut groups);
         self.attach_prefixes(&mut groups).await?;
+        self.attach_origin(&mut groups).await?;
         Ok(groups)
+    }
+
+    /// Fold "which integration keeps this folder" into an already-built group list (ADR-164 Inc.7).
+    ///
+    /// NetBox records its folders (`netbox_groups.group_id`). Meraki does not and does not need
+    /// to: its folder ids are **derived** — [`crate::meraki::org_group_id`] from the organization,
+    /// [`crate::meraki::network_group_id`] from the organization and the network — so the set is
+    /// computed from the two tables that already exist rather than stored in a third that an
+    /// import would have to keep in step. A network whose folder was never made (every device in
+    /// it was filed by IP range) yields an id no row has, which marks nothing.
+    ///
+    /// One statement for all three sources: this runs on every read of the folder tree, and a
+    /// deployment with neither integration — most of them — pays one scan of three empty tables.
+    async fn attach_origin(&self, groups: &mut [GroupSummary]) -> anyhow::Result<()> {
+        let rows = sqlx::query(
+            "SELECT 'netbox' AS source, group_id, NULL::uuid AS org, NULL::text AS network \
+               FROM netbox_groups \
+             UNION ALL \
+             SELECT 'meraki_org', group_id, id, NULL::text FROM meraki_orgs \
+             UNION ALL \
+             SELECT 'meraki_network', NULL::uuid, org_id, network_id FROM meraki_org_networks",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut meraki = std::collections::HashSet::new();
+        let mut netbox = std::collections::HashSet::new();
+        for row in rows {
+            let source: String = row.try_get("source")?;
+            let group: Option<Uuid> = row.try_get("group_id")?;
+            let org: Option<Uuid> = row.try_get("org")?;
+            let network: Option<String> = row.try_get("network")?;
+            match (source.as_str(), org, network) {
+                ("netbox", _, _) => netbox.extend(group),
+                // The stored pointer and the derived id are the same folder by construction. Both,
+                // because the pointer goes NULL when the folder is deleted (`ON DELETE SET NULL`)
+                // and the import that re-creates it at the derived id re-points it a moment later.
+                ("meraki_org", Some(org), _) => {
+                    meraki.extend(group);
+                    meraki.insert(crate::meraki::org_group_id(org));
+                }
+                ("meraki_network", Some(org), Some(network)) => {
+                    meraki.insert(crate::meraki::network_group_id(org, &network));
+                }
+                _ => {}
+            }
+        }
+        resolve_group_origin(groups, &meraki, &netbox);
+        Ok(())
     }
 
     /// Fold `node_group_prefixes` into an already-built group list.
@@ -1619,7 +1726,163 @@ mod tests {
             tags_excluded: Vec::new(),
             effective_tags: Vec::new(),
             prefixes: Vec::new(),
+            origin: None,
         }
+    }
+
+    // ── which integration keeps a folder (ADR-164 Inc.7) ─────────────────────────────────────
+
+    #[test]
+    fn a_folder_is_marked_by_its_own_id_and_never_by_where_it_sits() {
+        // 1 = a Meraki organization's folder, 2 = one of its networks, 3 = a folder an operator
+        // made inside it, 4 = a NetBox site, 5 = nobody's.
+        let mut groups = vec![
+            geo_row(1, None, None),
+            geo_row(2, Some(1), None),
+            geo_row(3, Some(1), None),
+            geo_row(4, None, None),
+            geo_row(5, None, None),
+        ];
+        let meraki = [1, 2].map(Uuid::from_u128).into_iter().collect();
+        let netbox = [4].map(Uuid::from_u128).into_iter().collect();
+        resolve_group_origin(&mut groups, &meraki, &netbox);
+        let origins: Vec<_> = groups.iter().map(|g| g.origin).collect();
+        assert_eq!(
+            origins,
+            vec![
+                Some(GroupOrigin::Meraki),
+                Some(GroupOrigin::Meraki),
+                // The one the ancestry rule gets wrong: inside the organization's folder, and an
+                // operator's own. The integration neither made it nor will look after it.
+                None,
+                Some(GroupOrigin::Netbox),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn resolving_origins_again_clears_a_mark_that_no_longer_holds() {
+        let mut groups = vec![geo_row(1, None, None)];
+        let one = [1].map(Uuid::from_u128).into_iter().collect();
+        let none = std::collections::HashSet::new();
+        resolve_group_origin(&mut groups, &none, &one);
+        assert_eq!(groups[0].origin, Some(GroupOrigin::Netbox));
+        // The NetBox server was forgotten: the folder stays, the mark does not.
+        resolve_group_origin(&mut groups, &none, &none);
+        assert_eq!(groups[0].origin, None);
+    }
+
+    /// The serde tag is the only spelling there is, and `web/src/types/api.ts::GROUP_ORIGINS` is a
+    /// copy of it. Read from that file so the two cannot drift silently — the WebUI builds a
+    /// translation key out of this token.
+    #[test]
+    fn every_origin_token_is_one_the_webui_lists() {
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/types/api.ts"),
+        )
+        .expect("web/src/types/api.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const GROUP_ORIGINS"))
+            .expect("GROUP_ORIGINS is declared in types/api.ts");
+        let listed: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+        let ours: Vec<String> = GroupOrigin::ALL
+            .iter()
+            .map(|o| {
+                serde_json::to_value(o)
+                    .expect("serializes")
+                    .as_str()
+                    .expect("a string tag")
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(ours, vec!["meraki", "netbox"], "the published tokens");
+        assert_eq!(
+            listed, ours,
+            "types/api.ts lists exactly these, in this order"
+        );
+    }
+
+    /// The marks, read back from a real tree: a Meraki organization with one network folder and
+    /// an operator's folder inside it, and a NetBox site.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_folder_list_marks_what_each_integration_keeps(pool: sqlx::PgPool) {
+        let groups = GroupRepo::new(pool.clone());
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let cred = crate::pgtest::credential(&pool, "meraki", "meraki_api").await;
+        let org = orgs
+            .create("123", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("org");
+        let org_folder = crate::meraki::org_group_id(org);
+        orgs.record_networks(org, &[("N_1".to_owned(), "HQ".to_owned())], false)
+            .await
+            .expect("networks");
+
+        // Before any device is filed there, the network has no folder: nothing to mark, and the
+        // derived id must not invent one.
+        let before = groups.list().await.expect("list");
+        assert_eq!(before.len(), 1, "only the organization's folder exists yet");
+        assert_eq!(before[0].origin, Some(GroupOrigin::Meraki));
+
+        let network_folder = crate::meraki::network_group_id(org, "N_1");
+        sqlx::query(
+            "INSERT INTO node_groups (id, name, group_type, parent_id) VALUES ($1, 'HQ', 'site', $2)",
+        )
+        .bind(network_folder)
+        .bind(org_folder)
+        .execute(&pool)
+        .await
+        .expect("network folder");
+        let own = groups
+            .create("Spares", GroupType::Generic, Some(org_folder), None)
+            .await
+            .expect("an operator's folder inside the organization's");
+
+        let server = crate::pgtest::netbox_server(&pool, "lab").await;
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        sqlx::query(
+            "INSERT INTO netbox_groups (server_id, object_kind, object_id, group_id) \
+             VALUES ($1, 'site', 7, $2)",
+        )
+        .bind(server)
+        .bind(site)
+        .execute(&pool)
+        .await
+        .expect("netbox mapping");
+        let plain = crate::pgtest::group(&pool, "Osaka").await;
+
+        let list = groups.list().await.expect("list");
+        let origin_of = |id: Uuid| {
+            list.iter()
+                .find(|g| g.id == id)
+                .unwrap_or_else(|| panic!("folder {id} is listed"))
+                .origin
+        };
+        assert_eq!(origin_of(org_folder), Some(GroupOrigin::Meraki));
+        assert_eq!(origin_of(network_folder), Some(GroupOrigin::Meraki));
+        assert_eq!(
+            origin_of(own),
+            None,
+            "an operator's folder, wherever it sits"
+        );
+        assert_eq!(origin_of(site), Some(GroupOrigin::Netbox));
+        assert_eq!(origin_of(plain), None);
+
+        // Forgetting the NetBox server leaves the folder and takes the mark.
+        sqlx::query("DELETE FROM netbox_servers WHERE id = $1")
+            .bind(server)
+            .execute(&pool)
+            .await
+            .expect("forget the server");
+        let after = groups.list().await.expect("list");
+        let site_row = after
+            .iter()
+            .find(|g| g.id == site)
+            .expect("the folder stays");
+        assert_eq!(site_row.origin, None);
     }
 
     /// `(effective lat, effective lon, source, supplying group)` for one row, for terse asserts.

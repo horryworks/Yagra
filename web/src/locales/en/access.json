@@ -50,7 +50,11 @@
     "usage": {
       "unused": "Unused",
       "count_one": "{{count}} node",
-      "count_other": "{{count}} nodes"
+      "count_other": "{{count}} nodes",
+      "merakiOrgs_one": "{{count}} Meraki organization",
+      "merakiOrgs_other": "{{count}} Meraki organizations",
+      "netboxServers_one": "{{count}} NetBox server",
+      "netboxServers_other": "{{count}} NetBox servers"
     },
     "empty": {
       "none": "No credentials yet",
@@ -91,6 +95,7 @@
       "title": "Delete credential",
       "confirm": "Delete credential <strong>{{name}}</strong>?",
       "inUse": "{{usage}} reference it — they will lose this binding.",
+      "held": "Still used by {{usage}}, so it cannot be deleted. Remove it there first, under Settings ▸ Integrations.",
       "unused": "It is unused.",
       "irreversible": "This cannot be undone."
     },

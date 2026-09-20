@@ -100,6 +100,10 @@ const schemaEnumPins: {
   // compiling here before it can reach an operator as a raw key (ADR-164 Inc.4/5).
   MerakiDeviceState: AssertEqual<MerakiDeviceState, components['schemas']['MerakiDeviceState']>;
   MerakiFilingReason: AssertEqual<MerakiFilingReason, components['schemas']['FilingReason']>;
+  // The tree draws a folder's badge and builds `tree.origin.<token>` from it. `groups.rs` compares
+  // the array's tokens with the Rust enum as text; this is the half the compiler holds, so a third
+  // integration that starts keeping folders stops compiling here (ADR-164 Inc.7).
+  GroupOrigin: AssertEqual<GroupOrigin, components['schemas']['GroupOrigin']>;
 } = {
   Severity: true,
   Role: true,
@@ -138,6 +142,7 @@ const schemaEnumPins: {
   MerakiSyncFailure: true,
   MerakiDeviceState: true,
   MerakiFilingReason: true,
+  GroupOrigin: true,
   DuplicateEvidenceKind: true,
   DuplicateConfidence: true,
   DuplicateContradiction: true,
@@ -280,6 +285,17 @@ export type GroupType = (typeof GROUP_TYPES)[number];
 
 /** One node group (folder) in the hierarchical inventory tree (`GET /api/v1/node-groups`). */
 export type NodeGroup = components['schemas']['GroupSummary'];
+
+/** The integration that made a folder and still keeps it (`NodeGroup.origin`, ADR-164 Inc.7).
+ *
+ *  `as const` because the tree builds `` t(`tree.origin.${origin}`) `` from the token, which EN/JA
+ *  parity cannot cover. ⚠️ **Keep the array on one line**: `yagra-core`'s
+ *  `groups.rs::every_origin_token_is_one_the_webui_lists` reads this file and compares the quoted
+ *  tokens on that line with the Rust enum's serde tags. */
+export const GROUP_ORIGINS = ['meraki', 'netbox'] as const;
+
+/** One folder origin. */
+export type GroupOrigin = (typeof GROUP_ORIGINS)[number];
 
 /** One IP range attached to a folder (ADR-100 decision 10 / ADR-131). */
 export type GroupPrefix = components['schemas']['GroupPrefix'];
@@ -953,8 +969,13 @@ export const MERAKI_FILING_REASONS = [
 /** One reason a device is filed where it is. */
 export type MerakiFilingReason = (typeof MERAKI_FILING_REASONS)[number];
 
-/** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`). */
+/** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`).
+ *  `already_added` marks one this deployment monitors already, under this key or another. */
 export type MerakiOrgOption = components['schemas']['MerakiOrgOption'];
+
+/** What adding organizations did (`POST /api/v1/meraki/orgs`): how many were added, and how many
+ *  of the ones named were monitored already and left as they are (ADR-164 Inc.6). */
+export type MerakiCreated = components['schemas']['MerakiCreated'];
 
 /** A configured NetBox deployment (`GET /api/v1/netbox/servers`), ADR-100.
  *

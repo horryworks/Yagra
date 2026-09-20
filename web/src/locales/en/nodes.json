@@ -728,7 +728,11 @@
     "pollNow": "Poll now",
     "pollNodeNamed": "Poll \"{{name}}\" now",
     "pollSelected": "Poll {{count}} selected now",
-    "pollDispatched": "{{dispatched}} of {{requested}} nodes queued for polling."
+    "pollDispatched": "{{dispatched}} of {{requested}} nodes queued for polling.",
+    "origin": {
+      "meraki": "Created by the Cisco Meraki integration",
+      "netbox": "Created by the NetBox integration"
+    }
   },
   "moveNode": {
     "title": "Move {{name}}",

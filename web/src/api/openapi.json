@@ -3320,6 +3320,16 @@
               }
             }
           },
+          "409": {
+            "description": "A Meraki organization or a NetBox server still uses it (`credential_in_use`); nothing was deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Skeleton mode has no write side",
             "content": {
@@ -7523,7 +7533,7 @@
         "operationId": "list_meraki_orgs",
         "responses": {
           "200": {
-            "description": "Every onboarded organization; the credential reference is not included",
+            "description": "Every onboarded organization, each with the id of the credential holding its key — never the key",
             "content": {
               "application/json": {
                 "schema": {
@@ -7572,7 +7582,7 @@
           "meraki"
         ],
         "summary": "Onboard one or more organizations under a single read-only API key.",
-        "description": "The key is validated by listing orgs, then sealed **once** as a shared credential — each org row\nholds a reference plus its own org id. Onboarding twenty orgs therefore stores one secret, not\ntwenty copies of the same one.\n\nA per-org create failure is logged and skipped rather than failing the batch: the count says how\nmany landed, and retrying is harmless.",
+        "description": "The key is validated by listing orgs. A **typed** key is then sealed **once** as a shared\ncredential — each org row holds a reference plus its own org id, so onboarding twenty orgs\nstores one secret, not twenty copies of the same one. A **saved** key (`credential_id`,\nADR-164 Inc.6) seals nothing: the new rows point at the credential that is already there, which\nis how an organization is added later under a key nobody has to find and paste again.\n\nAn organization that is already monitored here is skipped and counted. A per-org create failure\nis logged and skipped rather than failing the batch: the counts say what landed, and retrying is\nharmless.",
         "operationId": "create_meraki_orgs",
         "requestBody": {
           "content": {
@@ -7586,7 +7596,7 @@
         },
         "responses": {
           "201": {
-            "description": "How many organizations the batch created; a per-org failure is skipped, not fatal",
+            "description": "How many organizations the batch created, and how many it named were here already; a per-org failure is skipped, not fatal",
             "content": {
               "application/json": {
                 "schema": {
@@ -7596,7 +7606,7 @@
             }
           },
           "400": {
-            "description": "The key or org list is empty, or base_url is not an https allow-listed Meraki host",
+            "description": "The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host",
             "content": {
               "application/json": {
                 "schema": {
@@ -7667,7 +7677,7 @@
         },
         "responses": {
           "200": {
-            "description": "The organizations the key can access",
+            "description": "The organizations the key can access, each marked `already_added` when it is monitored here already",
             "content": {
               "application/json": {
                 "schema": {
@@ -7680,7 +7690,7 @@
             }
           },
           "400": {
-            "description": "The key is empty, or base_url is not an https allow-listed Meraki host",
+            "description": "No key was named (`invalid_api_key`), both `api_key` and `credential_id` were sent (`invalid_request`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host",
             "content": {
               "application/json": {
                 "schema": {
@@ -26535,18 +26545,29 @@
       "CreateMerakiOrgsReq": {
         "type": "object",
         "required": [
-          "api_key",
           "org_ids"
         ],
         "properties": {
           "api_key": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key typed by the operator; sealed as a new credential. Send this **or** `credential_id`."
           },
           "base_url": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A `meraki_api` credential already stored here. The new organizations share it, and no new\ncredential is created."
           },
           "org_ids": {
             "type": "array",
@@ -27000,7 +27021,9 @@
           "id",
           "name",
           "kind",
-          "used_by"
+          "used_by",
+          "used_by_meraki_orgs",
+          "used_by_netbox_servers"
         ],
         "properties": {
           "id": {
@@ -27016,7 +27039,17 @@
           "used_by": {
             "type": "integer",
             "format": "int64",
-            "description": "How many nodes reference this credential — answers \"is it safe to delete?\". Counted at\nlist time from `nodes.credential_id`; `0` means the credential is unused."
+            "description": "How many **nodes** reference this credential. Counted at list time from\n`nodes.credential_id`. Deleting the credential clears those bindings (`ON DELETE SET NULL`).\n\n⚠️ Nodes only, and the name predates the two fields below: `0` here used to read as\n\"unused\" for a Meraki key that three organizations were being polled with."
+          },
+          "used_by_meraki_orgs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many Meraki organizations are polled with it (ADR-164 Inc.6).\n\n🚨 Not a binding that can be cleared: `meraki_orgs.credential_id` is `NOT NULL … ON DELETE\nRESTRICT`, so while this is above zero the delete is refused with `409 credential_in_use`."
+          },
+          "used_by_netbox_servers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many NetBox servers are read with it. Refuses the delete exactly as the field above\ndoes (`netbox_servers.credential_id`, the same constraint)."
           }
         }
       },
@@ -29503,6 +29536,14 @@
           }
         }
       },
+      "GroupOrigin": {
+        "type": "string",
+        "description": "Which integration a folder belongs to (ADR-164 Inc.7).\n\nNot decoration. An integration's folder behaves differently from one an operator made: a\nMeraki organization's tree is **deleted with the organization**, and a NetBox folder is renamed\nand re-parented by the next sync whatever was typed over it. A tree that draws both kinds the\nsame leaves that to be found out.\n\nIt says who keeps the folder **now**. Forgetting a NetBox server leaves its folders behind as\nordinary ones (ADR-100 decision 5), and they lose the mark with the server — nothing will\nrename them again.\n\nNo `as_str()`: the serde tag is the only spelling, and the WebUI's `GROUP_ORIGINS` mirrors it\n(pinned by a test below and by `i18nEnumKeys.test.ts` on the other side).",
+        "enum": [
+          "meraki",
+          "netbox"
+        ]
+      },
       "GroupPlacement": {
         "type": "object",
         "description": "Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) and position it\nrelative to a sibling. `before`/`after` name the sibling; both omitted ⇒ append.\n\n⚠️ **A sibling is a folder OR a node** (ADR-162). Under one parent the two are one ordered\nlist, so `before`/`after` may carry a node id and the folder lands at that row's edge. An id\nthat names neither appends, as it always has.",
@@ -29696,6 +29737,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GroupOrigin",
+                "description": "The integration that made this folder and still keeps it, or `null` for one a person made\n(ADR-164 Inc.7). See [`GroupOrigin`] for what \"still keeps\" means."
+              }
+            ]
           },
           "parent_id": {
             "type": [
@@ -31482,14 +31534,22 @@
       },
       "MerakiCreated": {
         "type": "object",
-        "description": "How many organizations an onboarding batch created.",
+        "description": "What an onboarding batch did.",
         "required": [
-          "created"
+          "created",
+          "already_added"
         ],
         "properties": {
+          "already_added": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Organizations it named that were monitored here already, and were left as they are.",
+            "minimum": 0
+          },
           "created": {
             "type": "integer",
             "format": "int32",
+            "description": "Organizations this request added.",
             "minimum": 0
           }
         }
@@ -31677,18 +31737,27 @@
       },
       "MerakiDiscoverReq": {
         "type": "object",
-        "required": [
-          "api_key"
-        ],
         "properties": {
           "api_key": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key typed by the operator. Send this **or** `credential_id`, never both."
           },
           "base_url": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A `meraki_api` credential already stored here, used instead of typing the key again."
           }
         }
       },
@@ -31930,9 +31999,14 @@
         "type": "object",
         "required": [
           "id",
-          "name"
+          "name",
+          "already_added"
         ],
         "properties": {
+          "already_added": {
+            "type": "boolean",
+            "description": "This organization is already monitored here, under this key or another one. It cannot be\nadded a second time: `POST /meraki/orgs` skips it."
+          },
           "id": {
             "type": "string"
           },
@@ -31955,6 +32029,7 @@
           "inventory_secs",
           "enabled_tiers",
           "target_rps",
+          "credential_id",
           "devices",
           "import_devices",
           "file_by_prefix",
@@ -31969,6 +32044,11 @@
           },
           "base_url": {
             "type": "string"
+          },
+          "credential_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Which stored credential holds this organization's API key. An id, not a secret — the key\nstays sealed in `credentials`, and this type has no field that could carry it. Its *name* is\n`GET /credentials`'s to give, to a caller holding `ManageCredentials`."
           },
           "devices": {
             "$ref": "#/components/schemas/MerakiDeviceCounts",

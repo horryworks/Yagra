@@ -181,20 +181,50 @@ pub fn build_collect_check(
     }
 }
 
-/// Resolve an org's read-only Meraki API key: open the bound credential and, only if it is a
-/// `meraki_api` kind, parse out the key. Returns `None` on any failure (missing/ wrong-kind /
-/// unparsable) — the caller then skips dispatch. The key is never logged.
-pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) -> Option<String> {
+/// Why a stored credential did not yield a Meraki API key. Carries no secret and no upstream text.
+#[derive(Debug)]
+pub enum SavedKeyError {
+    /// No credential has that id.
+    NotFound,
+    /// The credential exists and is some other kind — an SNMP community, a NetBox token.
+    WrongKind,
+    /// It could not be read or unsealed, or what it unsealed to is not a key document.
+    Unreadable(anyhow::Error),
+}
+
+/// Open a stored credential as a Meraki API key, saying *why* when it is not one.
+///
+/// 🚨 **The kind is checked before the secret is looked at, and that is the security property.**
+/// Whoever calls this goes on to send the result to the Dashboard API as a bearer key. A caller
+/// naming some other credential's id must get `WrongKind` back, never that credential's secret on
+/// its way to a server (ADR-164 Inc.6, where onboarding began to accept a credential by id).
+/// The key is never logged.
+pub async fn open_saved_meraki_key(
+    creds: &CredentialStore,
+    credential_id: Uuid,
+) -> Result<String, SavedKeyError> {
     match creds.open(credential_id).await {
-        Ok(Some((kind, secret))) if kind == KIND_MERAKI_API => {
-            MerakiApiSecret::parse(&secret).ok().map(|s| s.api_key)
-        }
-        Ok(Some(_)) => {
+        Ok(Some((kind, secret))) if kind == KIND_MERAKI_API => MerakiApiSecret::parse(&secret)
+            .map(|s| s.api_key)
+            .map_err(|e| SavedKeyError::Unreadable(anyhow::anyhow!("parse meraki key: {e}"))),
+        Ok(Some(_)) => Err(SavedKeyError::WrongKind),
+        Ok(None) => Err(SavedKeyError::NotFound),
+        Err(e) => Err(SavedKeyError::Unreadable(e)),
+    }
+}
+
+/// Resolve an org's read-only Meraki API key, or `None` on any failure (missing / wrong-kind /
+/// unparsable) — the caller then skips dispatch. [`open_saved_meraki_key`] with the reason logged
+/// instead of returned, for the two background callers that have nobody to return it to.
+pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) -> Option<String> {
+    match open_saved_meraki_key(creds, credential_id).await {
+        Ok(key) => Some(key),
+        Err(SavedKeyError::WrongKind) => {
             tracing::warn!("meraki org credential is not a meraki_api kind");
             None
         }
-        Ok(None) => None,
-        Err(e) => {
+        Err(SavedKeyError::NotFound) => None,
+        Err(SavedKeyError::Unreadable(e)) => {
             tracing::warn!(error = %e, "failed to open meraki credential");
             None
         }

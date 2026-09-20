@@ -137,7 +137,7 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 /// | Redis | `VolatileStore::disabled` | the liveness mirror is a no-op; PostgreSQL still holds the durable copy |
 /// | the KEK | `StaticKeyProvider::single` | a sealed value round-trips inside this test and nowhere else |
 /// | the notifier | `Notifier::with_default(None)` | nothing is delivered — see below |
-/// | the Meraki Dashboard | [`EmptyDashboard`] | every organization holds no devices; what a sync *finds* is `meraki_sync.rs`'s to test |
+/// | the Meraki Dashboard | [`EmptyDashboard`] | a key sees no organizations and every organization holds no devices; what a sync *finds* is `meraki_sync.rs`'s to test, and onboarding brings its own through [`live_state_with_dashboard`] |
 ///
 /// 🚨 **The notifier is never `Notifier::from_env()`.** That reader takes `YAGRA_WEBHOOK_URL` and
 /// `YAGRA_SMTP_*` from the process environment, so a developer who happens to have one exported
@@ -159,7 +159,19 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 /// sweeps — are still asynchronous: assert the accepted `202` and the row that records it, not the
 /// outcome.
 pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
-    live_state_with(pool, None, None).await
+    live_state_with(pool, None, None, None).await
+}
+
+/// [`live_state`], talking to a Meraki Dashboard the test supplies instead of [`EmptyDashboard`].
+///
+/// For the onboarding endpoints, whose subject *is* what the Dashboard answers: which
+/// organizations a key can see, and which key it was handed (ADR-164 Inc.6). An empty Dashboard
+/// can show that a request was accepted, never that a saved key was the one that was used.
+pub(crate) async fn live_state_with_dashboard(
+    pool: sqlx::PgPool,
+    dashboard: Arc<dyn crate::meraki_sync::MerakiDirectory>,
+) -> ApiState {
+    live_state_with(pool, None, None, Some(dashboard)).await
 }
 
 /// The Meraki Dashboard the live fixture talks to: reachable, and empty.
@@ -172,6 +184,15 @@ pub(crate) struct EmptyDashboard;
 
 #[async_trait::async_trait]
 impl crate::meraki_sync::MerakiDirectory for EmptyDashboard {
+    /// No organizations either: a key this Dashboard accepts, that can see nothing.
+    async fn organizations(
+        &self,
+        _base_url: &str,
+        _api_key: &str,
+    ) -> Result<Vec<yagra_transport::MerakiOrgInfo>, yagra_transport::TransportError> {
+        Ok(Vec::new())
+    }
+
     async fn inventory(
         &self,
         _org: &crate::meraki::MerakiOrg,
@@ -192,7 +213,7 @@ pub(crate) async fn live_state_with_upgrade_dir(
     pool: sqlx::PgPool,
     dir: std::path::PathBuf,
 ) -> ApiState {
-    live_state_with(pool, None, Some(dir)).await
+    live_state_with(pool, None, Some(dir), None).await
 }
 
 /// [`live_state`], with the deployment-wide SNMP community the scheduler falls back to.
@@ -208,17 +229,19 @@ pub(crate) async fn live_state_with_env_community(
     pool: sqlx::PgPool,
     env_community: Option<String>,
 ) -> ApiState {
-    live_state_with(pool, env_community, None).await
+    live_state_with(pool, env_community, None, None).await
 }
 
 /// The one live-mode builder the three entry points above are shells over.
 ///
-/// Each of the two options exists because production reads it from the **process** environment,
-/// which a test cannot set for itself alone — see the two doc comments above.
+/// The first two options exist because production reads them from the **process** environment,
+/// which a test cannot set for itself alone — see the doc comments above. The third replaces a
+/// stand-in with the test's own; `None` is [`EmptyDashboard`], never the real API.
 async fn live_state_with(
     pool: sqlx::PgPool,
     env_community: Option<String>,
     upgrade_dir: Option<std::path::PathBuf>,
+    dashboard: Option<Arc<dyn crate::meraki_sync::MerakiDirectory>>,
 ) -> ApiState {
     use crate::alerts::Notifier;
     use crate::secrets::CredentialStore;
@@ -271,7 +294,7 @@ async fn live_state_with(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
-        Arc::new(EmptyDashboard),
+        dashboard.unwrap_or_else(|| Arc::new(EmptyDashboard)),
         Arc::new(crate::meraki::MerakiInflight::new()),
         meraki_import.clone(),
     ));

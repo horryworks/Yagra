@@ -22,6 +22,7 @@ import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
 import { poolChoices, sharedOwnPool } from '../../lib/pool';
 import { targetNodeCount, type ActionTarget } from '../../lib/actionTarget';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
+import { GROUP_ORIGIN_BADGES, groupOriginOf } from '../../lib/groupOrigin';
 import {
   asGroupType,
   buildNodeTree,
@@ -1038,6 +1039,8 @@ export function NodeTree({
     const { group, depth, isOpen, hasChildren, tally } = row;
     const isSel = shown?.kind === 'group' && shown.id === group.id;
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id ?? null };
+    // Null for a folder a person made — and for an origin this build does not know (see the lib).
+    const origin = groupOriginOf(group);
     return (
       <div
         id={rowDomId({ kind: 'group', id: group.id })}
@@ -1092,6 +1095,22 @@ export function NodeTree({
         >
           {group.name}
         </button>
+        {/* An integration made this folder and still keeps it (ADR-164 Inc.7): the organization's
+            tree goes when the organization does, and a NetBox sync renames and re-parents its
+            folders over whatever was typed. The badge's own text is the fact — the `title` only
+            elaborates, so nothing here is hover-only (ADR-055 R4). `.ntree-badge` does not shrink,
+            so it is the name that gives way in the row, never the mark. `role="img"` as on the pin
+            mark below: an `aria-label` on a span with no role is not reliably read out. */}
+        {origin && (
+          <span
+            className="ntree-badge"
+            role="img"
+            title={t(`tree.origin.${origin}`)}
+            aria-label={t(`tree.origin.${origin}`)}
+          >
+            {GROUP_ORIGIN_BADGES[origin]}
+          </span>
+        )}
         {/* A mark, not a control: pinning is in the row's menu and the detail pane. */}
         {pins?.groups.has(group.id) && (
           <span className="ntree-pin" role="img" title={t('tree.pinnedMark')} aria-label={t('tree.pinnedMark')}>

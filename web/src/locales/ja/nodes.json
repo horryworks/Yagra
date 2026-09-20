@@ -727,7 +727,11 @@
     "pollNow": "今すぐポーリング",
     "pollNodeNamed": "「{{name}}」を今すぐポーリング",
     "pollSelected": "選択した {{count}} 件を今すぐポーリング",
-    "pollDispatched": "{{requested}} 台のうち {{dispatched}} 台をポーリング待ちに入れました。"
+    "pollDispatched": "{{requested}} 台のうち {{dispatched}} 台をポーリング待ちに入れました。",
+    "origin": {
+      "meraki": "Cisco Meraki 連携が作ったフォルダ",
+      "netbox": "NetBox 連携が作ったフォルダ"
+    }
   },
   "moveNode": {
     "title": "{{name}} を移動",

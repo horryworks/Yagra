@@ -59,7 +59,13 @@ import { CREDENTIAL_KINDS, type CredentialKind } from '../lib/credentialKinds';
 import './CredentialsPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
-import { kindLabel, usageLabel } from './credentialList';
+import {
+  integrationUsageLabel,
+  isHeldByIntegration,
+  kindLabel,
+  totalUsage,
+  usageLabel,
+} from './credentialList';
 
 /** The creatable kinds and their type come from `lib/credentialKinds.ts`, which is also what the
  *  node-binding, URL-monitor and discovery pickers filter on — one list, so a kind added here
@@ -453,7 +459,13 @@ function EditCredentialModal({
   );
 }
 
-/** Confirm + delete a credential (destructive-consent modal). */
+/** Confirm + delete a credential (destructive-consent modal) — or, for one an integration still
+ *  uses, say that it cannot be deleted and where it has to be released first.
+ *
+ *  The two kinds of "in use" end differently. Nodes lose their binding when the credential goes,
+ *  so that delete is offered with a warning. A Meraki organization or a NetBox server cannot lose
+ *  theirs (`409 credential_in_use`), and a Delete button that can only be refused is a control the
+ *  operator cannot use (ADR-056) — so that dialog has no Delete, only the reason. */
 function DeleteCredentialModal({
   cred,
   onClose,
@@ -464,6 +476,23 @@ function DeleteCredentialModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('access');
+  if (isHeldByIntegration(cred)) {
+    return (
+      <Modal
+        title={t('cred.delete.title')}
+        onClose={onClose}
+        footer={
+          <Button variant="outline" onClick={onClose}>
+            {t('common:actions.close')}
+          </Button>
+        }
+      >
+        <p className="modal-confirm-text">
+          {t('cred.delete.held', { usage: integrationUsageLabel(cred, t) })}
+        </p>
+      </Modal>
+    );
+  }
   return (
     <ConfirmDeleteModal
       title={t('cred.delete.title')}
@@ -478,8 +507,10 @@ function DeleteCredentialModal({
         values={{ name: cred.name }}
         components={{ strong: <strong /> }}
       />{' '}
+      {/* The node count on its own, not `usageLabel`: this sentence is about the bindings the
+          delete clears, and by this point nothing else uses the credential. */}
       {cred.used_by > 0
-        ? t('cred.delete.inUse', { usage: usageLabel(cred.used_by, t) })
+        ? t('cred.delete.inUse', { usage: t('cred.usage.count', { count: cred.used_by }) })
         : t('cred.delete.unused')}{' '}
       {t('cred.delete.irreversible')}
     </ConfirmDeleteModal>
@@ -560,13 +591,19 @@ export function CredentialsPage() {
       {
         key: 'used_by',
         header: t('cred.cols.usedBy'),
-        width: '110px',
+        // Sized for an integration's phrase ("3 Meraki organizations"), which is about twice the
+        // "184 nodes" the old 110px was cut for. The `title` carries the whole label for a row
+        // that still does not fit.
+        width: '180px',
         sortable: true,
-        render: (c) => (
-          <span className={c.used_by === 0 ? 'yt-usage zero' : 'yt-usage'}>
-            {usageLabel(c.used_by, t)}
-          </span>
-        ),
+        render: (c) => {
+          const label = usageLabel(c, t);
+          return (
+            <span className={totalUsage(c) === 0 ? 'yt-usage zero' : 'yt-usage'} title={label}>
+              {label}
+            </span>
+          );
+        },
       },
       { key: 'id', header: t('cred.cols.credentialId'), width: '1fr', render: (c) => <CopyableId id={c.id} /> },
       {

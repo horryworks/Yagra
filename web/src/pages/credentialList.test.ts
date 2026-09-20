@@ -17,7 +17,10 @@ import {
   DEFAULT_CREDENTIAL_SORT,
   credentialFilters,
   credentialSortValues,
+  integrationUsageLabel,
+  isHeldByIntegration,
   kindLabel,
+  totalUsage,
   usageLabel,
 } from './credentialList';
 import { readFileSync } from 'node:fs';
@@ -28,13 +31,22 @@ import { buildPredicate } from '../lib/filterPredicate';
 import { encodeCondition } from '../lib/filterCondition';
 import { nextSort, sortRows } from '../lib/tableSort';
 
-const cred = (id: string, name: string, kind: string, used_by = 0) =>
-  ({ id, name, kind, used_by }) as CredentialSummary;
+const cred = (
+  id: string,
+  name: string,
+  kind: string,
+  used_by = 0,
+  used_by_meraki_orgs = 0,
+  used_by_netbox_servers = 0,
+): CredentialSummary => ({ id, name, kind, used_by, used_by_meraki_orgs, used_by_netbox_servers });
 
+// The Meraki key is the row that matters: no NODE references one (`used_by` is 0), and three
+// organizations are polled with it. Read through `used_by` alone it is indistinguishable from
+// `Edge v3`, which really is unused.
 const rows = [
   cred('11111111-aaaa-0000-0000-000000000001', 'core-ro', 'snmp_v2c', 12),
   cred('22222222-bbbb-0000-0000-000000000002', 'Edge v3', 'snmp_v3', 0),
-  cred('33333333-cccc-0000-0000-000000000003', 'meraki-org', 'meraki_api', 3),
+  cred('33333333-cccc-0000-0000-000000000003', 'meraki-org', 'meraki_api', 0, 3),
 ];
 
 const t = ((k: string) => k) as unknown as Parameters<typeof credentialFilters>[0];
@@ -96,9 +108,24 @@ describe('the sort', () => {
   });
 
   it('orders by usage numerically, not as text', () => {
-    // A string sort puts 12 before 3. `used_by` is a count, so the accessor must return a number.
-    const desc = sortRows(rows, { by: 'used_by', dir: 'desc' }, values).map((c) => c.used_by);
+    // A string sort puts 12 before 3. The usage is a count, so the accessor must return a number.
+    const desc = sortRows(rows, { by: 'used_by', dir: 'desc' }, values).map((c) => totalUsage(c));
     expect(desc).toEqual([12, 3, 0]);
+  });
+
+  it('orders by everything that uses a credential, not by nodes alone', () => {
+    // 🚨 `used_by` counts nodes. Sorted on that field, the Meraki key (0 nodes, 3 organizations)
+    // ties with the unused row and lands beside it — in the corner of the table an operator sorts
+    // this column to reach when looking for something safe to delete.
+    const asc = sortRows(rows, { by: 'used_by', dir: 'asc' }, values).map((c) => c.name);
+    expect(asc).toEqual(['Edge v3', 'meraki-org', 'core-ro']);
+    expect(totalUsage(cred('x', 'x', 'netbox_token', 1, 2, 4))).toBe(7);
+  });
+
+  it('counts a field an older core does not send as zero, not as NaN', () => {
+    const old = { id: 'x', name: 'x', kind: 'snmp_v2c', used_by: 4 } as CredentialSummary;
+    expect(totalUsage(old)).toBe(4);
+    expect(isHeldByIntegration(old)).toBe(false);
   });
 
   it('starts a new column ascending rather than inheriting the previous direction', () => {
@@ -124,11 +151,45 @@ describe('credential kind and usage labels', () => {
     expect(kindLabel('', t)).toBe('');
   });
 
+  const usage = (nodes: number, orgs = 0, servers = 0) => cred('x', 'x', 'x', nodes, orgs, servers);
+
   it('gives "unused" its own phrase rather than counting to zero', () => {
     // Unused is the state an operator looks for when deciding what may be deleted.
-    expect(usageLabel(0, t)).toBe('cred.usage.unused');
-    expect(usageLabel(1, t)).toBe('cred.usage.count=1');
-    expect(usageLabel(12, t)).toBe('cred.usage.count=12');
+    expect(usageLabel(usage(0), t)).toBe('cred.usage.unused');
+    expect(usageLabel(usage(1), t)).toBe('cred.usage.count=1');
+    expect(usageLabel(usage(12), t)).toBe('cred.usage.count=12');
+  });
+
+  it('does not call a credential unused while an integration uses it', () => {
+    // 🚨 The defect this replaced: the cell was handed `used_by`, which counts nodes, so a Meraki
+    // key three organizations were polled with read "Unused" — the word that means "safe to
+    // delete" — on a row whose delete the server refuses.
+    expect(usageLabel(usage(0, 3), t)).toBe('cred.usage.merakiOrgs=3');
+    expect(usageLabel(usage(0, 0, 1), t)).toBe('cred.usage.netboxServers=1');
+  });
+
+  it('names every non-zero count, nodes first, and leaves the zero ones out', () => {
+    expect(usageLabel(usage(2, 3, 1), t)).toBe(
+      'cred.usage.count=2 · cred.usage.merakiOrgs=3 · cred.usage.netboxServers=1',
+    );
+    expect(usageLabel(usage(2, 0, 1), t)).toBe('cred.usage.count=2 · cred.usage.netboxServers=1');
+  });
+
+  it('is held by an integration only when an organization or a server uses it', () => {
+    expect(isHeldByIntegration(usage(0, 1))).toBe(true);
+    expect(isHeldByIntegration(usage(0, 0, 1))).toBe(true);
+    // Nodes do not hold a credential: deleting it clears their binding, and that delete is offered.
+    expect(isHeldByIntegration(usage(40))).toBe(false);
+    expect(isHeldByIntegration(usage(0))).toBe(false);
+  });
+
+  it('names only the integrations in the sentence that says why a delete is refused', () => {
+    // The nodes are not the obstacle, so naming them there would send the operator to unbind them.
+    expect(integrationUsageLabel(usage(5, 3), t)).toBe('cred.usage.merakiOrgs=3');
+    expect(integrationUsageLabel(usage(5, 3, 2), t)).toBe(
+      'cred.usage.merakiOrgs=3 · cred.usage.netboxServers=2',
+    );
+    expect(integrationUsageLabel(usage(5), t)).toBe('');
   });
 });
 

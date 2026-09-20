@@ -1603,16 +1603,56 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toEqual({ api_key: 'k', base_url: 'https://api.meraki.com' });
   });
 
-  it('creates Meraki orgs from a shared key + selected org ids', async () => {
-    const spy = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ created: 2 }) } as Response);
+  it('discovers Meraki orgs under a saved key by sending its id, and no key', async () => {
+    // The server refuses a body carrying both (`400 invalid_request`), so the client must add
+    // nothing of its own: what the caller passes is exactly what is sent.
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ id: '7', name: 'Acme', already_added: true }],
+    } as Response);
     globalThis.fetch = spy;
-    await api.createMerakiOrgs({ api_key: 'k', org_ids: ['1', '2'] });
+    const found = await api.merakiDiscover({
+      credential_id: 'cred-1',
+      base_url: 'https://api.meraki.cn',
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/meraki/orgs/discover');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      credential_id: 'cred-1',
+      base_url: 'https://api.meraki.cn',
+    });
+    // The flag the dialog disables a row on reaches the caller.
+    expect(found).toEqual([{ id: '7', name: 'Acme', already_added: true }]);
+  });
+
+  it('creates Meraki orgs from a shared key + selected org ids', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ created: 2, already_added: 0 }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.createMerakiOrgs({ api_key: 'k', org_ids: ['1', '2'] });
     const [url, init] = spy.mock.calls[0];
     expect(url).toBe('/api/v1/meraki/orgs');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({ api_key: 'k', org_ids: ['1', '2'] });
+    expect(res).toEqual({ created: 2, already_added: 0 });
+  });
+
+  it('creates Meraki orgs under a saved key, and reports the ones that were there already', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ created: 1, already_added: 1 }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.createMerakiOrgs({ credential_id: 'cred-1', org_ids: ['1', '2'] });
+    const [, init] = spy.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ credential_id: 'cred-1', org_ids: ['1', '2'] });
+    expect(res).toEqual({ created: 1, already_added: 1 });
   });
 
   it('sets the network scope via PUT with the ids + monitored flag', async () => {

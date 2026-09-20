@@ -505,7 +505,8 @@
       "empty": "Meraki 組織がまだありません。監視を開始するには 1 つ追加してください。",
       "orgId": "組織 {{id}}",
       "stateEnabled": "有効",
-      "statePaused": "停止中"
+      "statePaused": "停止中",
+      "key": "API キー: {{name}}"
     },
     "org": {
       "devices": "デバイス",
@@ -546,7 +547,13 @@
       "apiKeyPlaceholder": "Meraki Dashboard API キー",
       "apiKeyHint": "<b>読み取り専用</b> の Dashboard API キーを使用してください。保存時に暗号化され、以後表示されません。Yagra は Meraki に対して読み取り専用の GET 呼び出ししか行いません。",
       "selectHint": "監視する組織を選択してください。すべてこの API キーを共有します。",
-      "noOrgs": "このキーではどの組織にもアクセスできません。"
+      "noOrgs": "このキーではどの組織にもアクセスできません。",
+      "sourceTyped": "新しいキーを入力",
+      "sourceSaved": "保存済みのキーを使う",
+      "savedKeyLabel": "保存済みのキー",
+      "savedKeyHint": "追加する組織はこのキーを共有します。新しい認証情報は保存されません。",
+      "alreadyAdded": "追加済み",
+      "allAdded": "このキーで見える組織はすべて追加済みです。"
     },
     "networks": {
       "title": "ネットワーク範囲 — {{name}}",

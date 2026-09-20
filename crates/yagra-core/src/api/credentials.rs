@@ -313,6 +313,7 @@ async fn update_credential(
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
         (status = 404, description = "No such credential", body = super::error::ErrorBody),
+        (status = 409, description = "A Meraki organization or a NetBox server still uses it (`credential_in_use`); nothing was deleted", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -321,11 +322,20 @@ async fn delete_credential(
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    use crate::secrets::CredentialDelete;
     match admin.creds.delete(id).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(ApiError::not_found(
+        Ok(CredentialDelete::Deleted) => Ok(StatusCode::NO_CONTENT),
+        Ok(CredentialDelete::NotFound) => Err(ApiError::not_found(
             "credential_not_found",
             format!("no credential {id}"),
+        )),
+        // A node's binding is cleared by the delete; an integration's cannot be, because a Meraki
+        // organization or a NetBox server with no key is not a row either table can hold. This
+        // used to reach the client as a 500 that named nothing (ADR-164 Inc.6).
+        Ok(CredentialDelete::InUse) => Err(ApiError::conflict(
+            "credential_in_use",
+            "a Meraki organization or a NetBox server still uses this credential; remove it \
+             there first",
         )),
         Err(e) => Err(ApiError::from_internal(
             e.as_ref(),
@@ -451,5 +461,88 @@ mod tests {
             !list.to_string().contains("s3cr3t-community"),
             "the list returned the secret"
         );
+    }
+
+    /// A credential a Meraki organization is polled with says so in the list, and deleting it is
+    /// refused with a reason — it used to read "unused" and answer 500 (ADR-164 Inc.6). Once the
+    /// organization is gone the same delete is accepted.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_credential_an_integration_uses_is_counted_and_cannot_be_deleted(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let tok = token(&st, yagra_common::Role::Operator);
+
+        let key = crate::pgtest::credential(&pool, "meraki key", "meraki_api").await;
+        let mut orgs = Vec::new();
+        for (org_id, name) in [("100", "Acme"), ("200", "Globex")] {
+            orgs.push(
+                admin
+                    .meraki_orgs
+                    .create(org_id, name, "https://api.meraki.com", key)
+                    .await
+                    .expect("org"),
+            );
+        }
+        // Three nodes bound to the same credential as well. Nothing would do this to a Meraki key;
+        // it is here because the three counts come from three tables, and joined under one GROUP BY
+        // they would multiply (3 × 2 = 6 of each).
+        for n in 1..=3u8 {
+            let node = crate::pgtest::node(&pool, &format!("n{n}"), n, None).await;
+            sqlx::query("UPDATE nodes SET credential_id = $1 WHERE id = $2")
+                .bind(key)
+                .bind(node)
+                .execute(&pool)
+                .await
+                .expect("bind");
+        }
+        // The NetBox fixture seals a token of its own.
+        crate::pgtest::netbox_server(&pool, "lab").await;
+
+        let (status, list) = send(&st, "GET", "/api/v1/credentials", &tok, None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        let row = |name: &str| -> serde_json::Value {
+            list.as_array()
+                .expect("an array")
+                .iter()
+                .find(|c| c["name"] == name)
+                .unwrap_or_else(|| panic!("{name} is listed: {list}"))
+                .clone()
+        };
+        let meraki = row("meraki key");
+        assert_eq!(
+            (
+                meraki["used_by"].as_i64(),
+                meraki["used_by_meraki_orgs"].as_i64(),
+                meraki["used_by_netbox_servers"].as_i64(),
+            ),
+            (Some(3), Some(2), Some(0)),
+            "{meraki}"
+        );
+        let netbox = row("lab-token");
+        assert_eq!(netbox["used_by_netbox_servers"], 1, "{netbox}");
+        assert_eq!(netbox["used_by_meraki_orgs"], 0, "{netbox}");
+
+        let path = format!("/api/v1/credentials/{key}");
+        let (status, body) = send(&st, "DELETE", &path, &tok, None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["code"], "credential_in_use", "{body}");
+        assert_eq!(
+            crate::pgtest::rows(&pool, "credentials").await,
+            2,
+            "a refused delete removed nothing"
+        );
+
+        for org in orgs {
+            assert!(admin.meraki_orgs.purge(org).await.expect("purge"));
+        }
+        let (status, body) = send(&st, "DELETE", &path, &tok, None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+
+        // And one that was never there is still a 404, not a conflict.
+        let (status, body) = send(&st, "DELETE", &path, &tok, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     }
 }

@@ -517,7 +517,8 @@
       "empty": "No Meraki organizations yet. Add one to start monitoring.",
       "orgId": "org {{id}}",
       "stateEnabled": "enabled",
-      "statePaused": "paused"
+      "statePaused": "paused",
+      "key": "API key: {{name}}"
     },
     "org": {
       "devices": "Devices",
@@ -561,7 +562,13 @@
       "apiKeyPlaceholder": "Meraki Dashboard API key",
       "apiKeyHint": "Use a <b>read-only</b> Dashboard API key. It is sealed (encrypted at rest) and never shown again. Yagra only ever issues read-only GET calls to Meraki.",
       "selectHint": "Select the organizations to monitor. All share this one API key.",
-      "noOrgs": "This key can't access any organizations."
+      "noOrgs": "This key can't access any organizations.",
+      "sourceTyped": "Enter a new key",
+      "sourceSaved": "Use a saved key",
+      "savedKeyLabel": "Saved key",
+      "savedKeyHint": "The organizations you add will share this key. No new credential is stored.",
+      "alreadyAdded": "Already added",
+      "allAdded": "Every organization this key can see is already added."
     },
     "networks": {
       "title": "Network scope — {{name}}",

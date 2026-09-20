@@ -101,7 +101,9 @@
   color: var(--status-unknown, var(--text-tertiary));
 }
 
-.meraki-org-tiers {
+/* The row's two muted facts: which tiers are collected, and which stored key it is polled with. */
+.meraki-org-tiers,
+.meraki-org-key {
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -143,13 +145,46 @@
   font-size: var(--font-xs);
 }
 
-.meraki-tier-row {
+/* An organization that is monitored already: its box cannot be ticked, so the row stops inviting
+   a click. The row is not faded as a whole — the tag at its end is the explanation, and fading it
+   along with the rest would dim the one thing that says why. */
+.meraki-check-row.added {
+  cursor: not-allowed;
+}
+
+.meraki-check-row.added:hover {
+  background: none;
+}
+
+.meraki-check-row.added .meraki-check-name {
+  color: var(--text-tertiary);
+}
+
+.meraki-check-tag {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+
+/* The cadence dialog's tier boxes and the add dialog's key-source choice are the same shape: a
+   short row of labelled native controls. */
+.meraki-tier-row,
+.meraki-source-row {
   display: flex;
   gap: 14px;
   align-items: center;
 }
 
-.meraki-chip-check {
+/* Not a `.modal-field` (it has no label of its own), so it brings its own gap to the field below —
+   smaller than a field's, because the choice and the field it switches read as one question. */
+.meraki-source-row {
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.meraki-chip-check,
+.meraki-source-choice {
   display: flex;
   align-items: center;
   gap: 6px;

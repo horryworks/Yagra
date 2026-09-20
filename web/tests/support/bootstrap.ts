@@ -235,9 +235,20 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     },
   ],
 
+  // Two nullable fields the generator fills. `parent_id` is explained above the MIB catalog entry:
+  // the one folder would hang under a parent that does not exist and be unreachable. `origin` is
+  // the same rule meeting a nullable enum (ADR-164 Inc.7) — it takes the first member, so every
+  // folder arrives made by the Meraki integration and every tree in the walk is badged. A tree
+  // where everything is marked says nothing; `groupOrigin.spec.ts` brings the marked ones.
   '/api/v1/node-groups': (() => {
-    const body = defaultBodyFor('/api/v1/node-groups') as { parent_id: string | null }[];
-    for (const g of body) g.parent_id = null;
+    const body = defaultBodyFor('/api/v1/node-groups') as {
+      parent_id: string | null;
+      origin: Schemas['GroupOrigin'] | null;
+    }[];
+    for (const g of body) {
+      g.parent_id = null;
+      g.origin = null;
+    }
     return body as unknown as Json;
   })(),
 

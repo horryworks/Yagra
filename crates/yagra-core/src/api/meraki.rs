@@ -51,8 +51,6 @@ use crate::meraki_inventory::{
 };
 use crate::meraki_sync::{MerakiSyncFailure, MerakiSyncReport, SyncError};
 
-/// Timeout for a control-plane Meraki API call (discover, and validating a key) from core.
-const MERAKI_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Default Dashboard API base URL (the global shard).
 const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
 
@@ -178,17 +176,114 @@ fn meraki_upstream_error(context: &str, e: &yagra_transport::TransportError) -> 
     )
 }
 
+/// Where an onboarding request's API key comes from (ADR-164 Inc.6).
+#[derive(Debug, PartialEq, Eq)]
+enum KeySource {
+    /// Typed into the dialog. Sealed as a new credential if an organization is added with it.
+    Typed(String),
+    /// A `meraki_api` credential already in the store, named by id. Nothing new is sealed.
+    Saved(Uuid),
+}
+
+/// Read the key's source out of a request body: **exactly one** of the two fields.
+///
+/// Both is refused rather than resolved by a precedence rule. A client that sends both has a bug,
+/// and whichever one quietly won would be the wrong one half the time — with the loser being a key
+/// somebody typed and believes is in use.
+fn key_source(api_key: Option<&str>, credential_id: Option<Uuid>) -> Result<KeySource, ApiError> {
+    let typed = api_key.map(str::trim).filter(|k| !k.is_empty());
+    match (typed, credential_id) {
+        (Some(_), Some(_)) => Err(ApiError::bad_request(
+            "invalid_request",
+            "send api_key or credential_id, not both",
+        )),
+        (Some(key), None) => Ok(KeySource::Typed(key.to_owned())),
+        (None, Some(id)) => Ok(KeySource::Saved(id)),
+        (None, None) => Err(ApiError::bad_request(
+            "invalid_api_key",
+            "api_key or credential_id is required",
+        )),
+    }
+}
+
+/// The key itself, from wherever the request said it is.
+///
+/// 🚨 For a saved key, [`crate::meraki::open_saved_meraki_key`] refuses any credential that is not
+/// a `meraki_api` one **before** its secret is read, so naming an SNMP community's id here cannot
+/// get that community sent to the Dashboard API. Both refusals are 400 `invalid_credential` — the
+/// id came in the body, so it is the request that is wrong (the shape `invalid_group` has).
+async fn resolve_key(admin: &super::AdminState, source: &KeySource) -> Result<String, ApiError> {
+    use crate::meraki::SavedKeyError;
+    let id = match source {
+        KeySource::Typed(key) => return Ok(key.clone()),
+        KeySource::Saved(id) => *id,
+    };
+    match crate::meraki::open_saved_meraki_key(&admin.creds, id).await {
+        Ok(key) => Ok(key),
+        Err(SavedKeyError::NotFound) => Err(ApiError::bad_request(
+            "invalid_credential",
+            format!("no credential {id}"),
+        )),
+        Err(SavedKeyError::WrongKind) => Err(ApiError::bad_request(
+            "invalid_credential",
+            format!("credential {id} is not a Meraki API key"),
+        )),
+        Err(SavedKeyError::Unreadable(e)) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "open saved meraki key",
+            "failed to read the saved Meraki API key",
+        )),
+    }
+}
+
+/// The `org_id` of every organization already onboarded. `meraki_orgs.org_id` is `UNIQUE` across
+/// the deployment, whichever key an organization was added under.
+async fn onboarded_org_ids(
+    admin: &super::AdminState,
+) -> Result<std::collections::HashSet<String>, ApiError> {
+    let orgs = admin.meraki_orgs.list().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list meraki orgs",
+            "failed to list meraki organizations",
+        )
+    })?;
+    Ok(orgs.into_iter().map(|o| o.org_id).collect())
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct MerakiDiscoverReq {
-    api_key: String,
+    /// A key typed by the operator. Send this **or** `credential_id`, never both.
+    #[serde(default)]
+    api_key: Option<String>,
+    /// A `meraki_api` credential already stored here, used instead of typing the key again.
+    #[serde(default)]
+    credential_id: Option<Uuid>,
     #[serde(default)]
     base_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiOrgOption {
     id: String,
     name: String,
+    /// This organization is already monitored here, under this key or another one. It cannot be
+    /// added a second time: `POST /meraki/orgs` skips it.
+    already_added: bool,
+}
+
+/// What the key can see, each marked with whether it is already here.
+fn org_options(
+    seen: Vec<yagra_transport::MerakiOrgInfo>,
+    onboarded: &std::collections::HashSet<String>,
+) -> Vec<MerakiOrgOption> {
+    seen.into_iter()
+        .map(|o| MerakiOrgOption {
+            already_added: onboarded.contains(&o.id),
+            id: o.id,
+            name: o.name,
+        })
+        .collect()
 }
 
 /// List the organizations an API key can access, so the operator can multi-select which to monitor.
@@ -197,8 +292,8 @@ pub(crate) struct MerakiOrgOption {
     post, path = "/api/v1/meraki/orgs/discover", tag = "meraki",
     request_body = MerakiDiscoverReq,
     responses(
-        (status = 200, description = "The organizations the key can access", body = Vec<MerakiOrgOption>),
-        (status = 400, description = "The key is empty, or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
+        (status = 200, description = "The organizations the key can access, each marked `already_added` when it is monitored here already", body = Vec<MerakiOrgOption>),
+        (status = 400, description = "No key was named (`invalid_api_key`), both `api_key` and `credential_id` were sent (`invalid_request`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 502, description = "The Dashboard API call failed; the detail is logged, never returned", body = super::error::ErrorBody),
@@ -208,28 +303,21 @@ pub(crate) struct MerakiOrgOption {
 async fn meraki_discover(
     _guard: RequireManageConfig,
     Scoped(scope): Scoped,
-    _admin: Admin,
+    admin: Admin,
     Json(body): Json<MerakiDiscoverReq>,
 ) -> ApiResult<Json<Vec<MerakiOrgOption>>> {
     meraki_is_deployment_wide(&scope)?;
-    if body.api_key.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "invalid_api_key",
-            "api_key must not be empty",
-        ));
-    }
+    let source = key_source(body.api_key.as_deref(), body.credential_id)?;
+    // The allow-list runs before the key is resolved, and long before it is sent anywhere.
     let base = meraki_base_url(body.base_url)?;
-    let orgs = yagra_transport::list_organizations(&base, &body.api_key, MERAKI_API_TIMEOUT)
+    let key = resolve_key(&admin, &source).await?;
+    let seen = admin
+        .meraki_sync
+        .directory()
+        .organizations(&base, &key)
         .await
         .map_err(|e| meraki_upstream_error("discover organizations", &e))?;
-    Ok(Json(
-        orgs.into_iter()
-            .map(|o| MerakiOrgOption {
-                id: o.id,
-                name: o.name,
-            })
-            .collect(),
-    ))
+    Ok(Json(org_options(seen, &onboarded_org_ids(&admin).await?)))
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -246,6 +334,10 @@ pub(crate) struct MerakiOrgView {
     enabled_tiers: Vec<String>,
     target_rps: f64,
     group_id: Option<Uuid>,
+    /// Which stored credential holds this organization's API key. An id, not a secret — the key
+    /// stays sealed in `credentials`, and this type has no field that could carry it. Its *name* is
+    /// `GET /credentials`'s to give, to a caller holding `ManageCredentials`.
+    credential_id: Uuid,
     /// When the last **successful** inventory sync ran. A failed sync does not move it.
     last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     /// `null` until a sync has run — "has not synced yet" is not "failed".
@@ -264,8 +356,12 @@ pub(crate) struct MerakiOrgView {
     devices_over_cap: u32,
 }
 
-/// Project a stored org into its API view. **The credential reference is not in it** — the view
-/// exists partly so an org row cannot accidentally serialize the field that points at the key.
+/// Project a stored org into its API view.
+///
+/// It carries the credential's **id** since ADR-164 Inc.6, as `NetboxServerView` always has: two
+/// organizations under one key have to be tellable from two under two, and "use a saved key" has to
+/// be able to say which organizations a key already serves. (This doc used to say the view existed
+/// to keep that reference off the wire. The reference was never the secret.)
 fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) -> MerakiOrgView {
     MerakiOrgView {
         id: o.id,
@@ -280,6 +376,7 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
         enabled_tiers: o.enabled_tiers.clone(),
         target_rps: o.target_rps,
         group_id: o.group_id,
+        credential_id: o.credential_id,
         last_sync_at: o.last_sync_at,
         last_sync_ok: o.last_sync_ok,
         // Only a failed sync has a reason. A row written by a newer core may carry a token this
@@ -298,7 +395,7 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
 #[utoipa::path(
     get, path = "/api/v1/meraki/orgs", tag = "meraki",
     responses(
-        (status = 200, description = "Every onboarded organization; the credential reference is not included", body = Vec<MerakiOrgView>),
+        (status = 200, description = "Every onboarded organization, each with the id of the credential holding its key — never the key", body = Vec<MerakiOrgView>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
@@ -313,8 +410,8 @@ async fn list_meraki_orgs(
 
 /// The onboarded organizations as the API exposes them — the seam both edges call.
 ///
-/// `meraki_org_view` is what keeps the credential reference off the wire; going through it rather
-/// than the stored row is the whole point of having a seam here.
+/// Both edges go through `meraki_org_view` rather than the stored row, so what an organization
+/// says about itself is decided once: REST and `get_config kind=meraki_orgs` cannot disagree.
 pub(crate) async fn org_views(admin: &super::AdminState) -> ApiResult<Vec<MerakiOrgView>> {
     let orgs = admin.meraki_orgs.list().await.map_err(|e| {
         ApiError::from_internal(
@@ -339,32 +436,61 @@ pub(crate) async fn org_views(admin: &super::AdminState) -> ApiResult<Vec<Meraki
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateMerakiOrgsReq {
-    api_key: String,
+    /// A key typed by the operator; sealed as a new credential. Send this **or** `credential_id`.
+    #[serde(default)]
+    api_key: Option<String>,
+    /// A `meraki_api` credential already stored here. The new organizations share it, and no new
+    /// credential is created.
+    #[serde(default)]
+    credential_id: Option<Uuid>,
     #[serde(default)]
     base_url: Option<String>,
     org_ids: Vec<String>,
 }
 
-/// How many organizations an onboarding batch created.
+/// What an onboarding batch did.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiCreated {
+    /// Organizations this request added.
     created: u32,
+    /// Organizations it named that were monitored here already, and were left as they are.
+    already_added: u32,
+}
+
+/// The requested organization ids that are not here yet, in the order asked, each once.
+///
+/// `meraki_orgs.org_id` is `UNIQUE`, so an id that is already onboarded could only ever fail its
+/// insert. Taking those out *first* is what lets a request made only of them finish without sealing
+/// a credential for nothing — which is what used to happen: adding the same organization twice left
+/// a second `Meraki API — <name>` on the Credentials page, used by nobody.
+fn not_yet_onboarded<'a>(
+    requested: &'a [String],
+    onboarded: &std::collections::HashSet<String>,
+) -> Vec<&'a String> {
+    let mut seen = std::collections::HashSet::new();
+    requested
+        .iter()
+        .filter(|id| !onboarded.contains(*id) && seen.insert(id.as_str()))
+        .collect()
 }
 
 /// Onboard one or more organizations under a single read-only API key.
 ///
-/// The key is validated by listing orgs, then sealed **once** as a shared credential — each org row
-/// holds a reference plus its own org id. Onboarding twenty orgs therefore stores one secret, not
-/// twenty copies of the same one.
+/// The key is validated by listing orgs. A **typed** key is then sealed **once** as a shared
+/// credential — each org row holds a reference plus its own org id, so onboarding twenty orgs
+/// stores one secret, not twenty copies of the same one. A **saved** key (`credential_id`,
+/// ADR-164 Inc.6) seals nothing: the new rows point at the credential that is already there, which
+/// is how an organization is added later under a key nobody has to find and paste again.
 ///
-/// A per-org create failure is logged and skipped rather than failing the batch: the count says how
-/// many landed, and retrying is harmless.
+/// An organization that is already monitored here is skipped and counted. A per-org create failure
+/// is logged and skipped rather than failing the batch: the counts say what landed, and retrying is
+/// harmless.
 #[utoipa::path(
     post, path = "/api/v1/meraki/orgs", tag = "meraki",
     request_body = CreateMerakiOrgsReq,
     responses(
-        (status = 201, description = "How many organizations the batch created; a per-org failure is skipped, not fatal", body = MerakiCreated),
-        (status = 400, description = "The key or org list is empty, or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
+        (status = 201, description = "How many organizations the batch created, and how many it named were here already; a per-org failure is skipped, not fatal", body = MerakiCreated),
+        (status = 400, description = "The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 502, description = "The Dashboard API rejected the key or was unreachable", body = super::error::ErrorBody),
@@ -378,49 +504,95 @@ async fn create_meraki_orgs(
     Json(body): Json<CreateMerakiOrgsReq>,
 ) -> ApiResult<(StatusCode, Json<MerakiCreated>)> {
     meraki_is_deployment_wide(&scope)?;
-    if body.api_key.trim().is_empty() || body.org_ids.is_empty() {
+    if body.org_ids.is_empty() {
         return Err(ApiError::bad_request(
             "invalid_request",
-            "api_key and at least one org_id are required",
+            "at least one org_id is required",
         ));
     }
+    let source = key_source(body.api_key.as_deref(), body.credential_id)?;
     let base = meraki_base_url(body.base_url)?;
+    let key = resolve_key(&admin, &source).await?;
     // Proves the key works before anything is stored, and supplies the org names.
-    let orgs = yagra_transport::list_organizations(&base, &body.api_key, MERAKI_API_TIMEOUT)
+    let orgs = admin
+        .meraki_sync
+        .directory()
+        .organizations(&base, &key)
         .await
         .map_err(|e| meraki_upstream_error("validate key / list organizations", &e))?;
-    let secret = serde_json::json!({ "api_key": body.api_key }).to_string();
+
+    let onboarded = onboarded_org_ids(&admin).await?;
+    let fresh = not_yet_onboarded(&body.org_ids, &onboarded);
+    let already_added = u32::try_from(
+        body.org_ids
+            .iter()
+            .filter(|id| onboarded.contains(*id))
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    if fresh.is_empty() {
+        return Ok((
+            StatusCode::CREATED,
+            Json(MerakiCreated {
+                created: 0,
+                already_added,
+            }),
+        ));
+    }
+
     // The name each requested org goes by, falling back to its id exactly as the row below does.
     let org_name = |oid: &String| -> String {
         orgs.iter()
             .find(|o| &o.id == oid)
             .map_or_else(|| oid.clone(), |o| o.name.clone())
     };
-    let names: Vec<String> = body.org_ids.iter().map(org_name).collect();
-    let cred_name = meraki_credential_name(&names.iter().map(String::as_str).collect::<Vec<_>>());
-    let cred_id = admin
-        .creds
-        .create(
-            &cred_name,
-            crate::secrets::KIND_MERAKI_API,
-            secret.as_bytes(),
-        )
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "seal meraki credential",
-                "failed to store meraki credential",
-            )
-        })?;
+    let names: Vec<String> = fresh.iter().map(|oid| org_name(oid)).collect();
+    let (cred_id, sealed_here) = match source {
+        KeySource::Saved(id) => (id, false),
+        KeySource::Typed(_) => {
+            let secret = serde_json::json!({ "api_key": key }).to_string();
+            let cred_name =
+                meraki_credential_name(&names.iter().map(String::as_str).collect::<Vec<_>>());
+            let id = admin
+                .creds
+                .create(
+                    &cred_name,
+                    crate::secrets::KIND_MERAKI_API,
+                    secret.as_bytes(),
+                )
+                .await
+                .map_err(|e| {
+                    ApiError::from_internal(
+                        e.as_ref(),
+                        "seal meraki credential",
+                        "failed to store meraki credential",
+                    )
+                })?;
+            (id, true)
+        }
+    };
     let mut created = 0u32;
-    for (oid, name) in body.org_ids.iter().zip(&names) {
+    for (oid, name) in fresh.iter().zip(&names) {
         match admin.meraki_orgs.create(oid, name, &base, cred_id).await {
             Ok(_) => created += 1,
             Err(e) => tracing::warn!(org = %oid, error = %e, "create meraki org failed (skipped)"),
         }
     }
-    Ok((StatusCode::CREATED, Json(MerakiCreated { created })))
+    // A credential sealed a moment ago that ended up backing nothing is taken back out, so a
+    // batch that failed whole does not leave a key on the Credentials page named after
+    // organizations that are not here. Never a saved one: that was there before this request.
+    if created == 0 && sealed_here {
+        if let Err(e) = admin.creds.delete(cred_id).await {
+            tracing::warn!(error = %e, "removing an unused meraki credential failed");
+        }
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(MerakiCreated {
+            created,
+            already_added,
+        }),
+    ))
 }
 
 /// The not-found error every org-scoped endpoint answers with.
@@ -1625,9 +1797,15 @@ mod tests {
             orgs[0]["devices"],
             serde_json::json!({ "seen": 0, "monitored": 0, "new": 0, "missing": 0 })
         );
+        // The id of the credential since Inc.6 — and nothing of what that credential seals.
+        assert_eq!(
+            orgs[0]["credential_id"],
+            serde_json::json!(credential),
+            "{orgs}"
+        );
         assert!(
-            orgs[0].get("credential_id").is_none(),
-            "the view must not carry the reference to the key"
+            !orgs.to_string().contains("not-a-real-key"),
+            "the view carried the key itself: {orgs}"
         );
 
         let (status, list) = send(&st, "GET", &devices, &operator, None).await;
@@ -1985,5 +2163,288 @@ mod tests {
         let (_, list) = send(&st, "GET", &path, &caller, None).await;
         assert_eq!(row(&list, "Q3-C")["filing"]["reason"], "not_asked");
         assert_eq!(row(&list, "Q3-B")["filing"]["reason"], "not_asked");
+    }
+
+    // ── adding an organization under a saved key (ADR-164 Inc.6) ───────────────────────────────
+
+    #[test]
+    fn an_onboarding_request_names_exactly_one_source_for_its_key() {
+        let id = Uuid::from_u128(7);
+        assert_eq!(
+            key_source(Some(" typed "), None).expect("typed"),
+            KeySource::Typed("typed".to_owned())
+        );
+        assert_eq!(
+            key_source(None, Some(id)).expect("saved"),
+            KeySource::Saved(id)
+        );
+        // A blank box beside a chosen credential is the dialog's resting state, not a second key.
+        assert_eq!(
+            key_source(Some("   "), Some(id)).expect("blank is absent"),
+            KeySource::Saved(id)
+        );
+        assert_eq!(
+            key_source(Some("typed"), Some(id)).unwrap_err().code(),
+            "invalid_request",
+            "both is refused, not resolved by precedence"
+        );
+        assert_eq!(
+            key_source(None, None).unwrap_err().code(),
+            "invalid_api_key"
+        );
+        assert_eq!(
+            key_source(Some(""), None).unwrap_err().code(),
+            "invalid_api_key"
+        );
+    }
+
+    fn org_info(id: &str, name: &str) -> yagra_transport::MerakiOrgInfo {
+        yagra_transport::MerakiOrgInfo {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            url: None,
+        }
+    }
+
+    #[test]
+    fn what_a_key_can_see_is_marked_with_what_is_already_here() {
+        let onboarded = ["100".to_owned()].into_iter().collect();
+        let options = org_options(
+            vec![org_info("100", "Acme"), org_info("200", "Globex")],
+            &onboarded,
+        );
+        assert_eq!(
+            options,
+            vec![
+                MerakiOrgOption {
+                    id: "100".to_owned(),
+                    name: "Acme".to_owned(),
+                    already_added: true,
+                },
+                MerakiOrgOption {
+                    id: "200".to_owned(),
+                    name: "Globex".to_owned(),
+                    already_added: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn only_an_organization_that_is_not_here_yet_is_created_and_only_once() {
+        let onboarded = ["100".to_owned()].into_iter().collect();
+        let requested: Vec<String> = ["300", "100", "200", "300"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let fresh: Vec<&str> = not_yet_onboarded(&requested, &onboarded)
+            .into_iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            fresh,
+            vec!["300", "200"],
+            "asked order, each once, 100 left out"
+        );
+    }
+
+    /// A Dashboard with two organizations that remembers every key it was handed.
+    struct TwoOrgDashboard {
+        keys: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl TwoOrgDashboard {
+        fn keys(&self) -> Vec<String> {
+            self.keys.lock().expect("keys").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::meraki_sync::MerakiDirectory for TwoOrgDashboard {
+        async fn organizations(
+            &self,
+            _base_url: &str,
+            api_key: &str,
+        ) -> Result<Vec<yagra_transport::MerakiOrgInfo>, yagra_transport::TransportError> {
+            self.keys.lock().expect("keys").push(api_key.to_owned());
+            Ok(vec![org_info("100", "Acme"), org_info("200", "Globex")])
+        }
+
+        async fn inventory(
+            &self,
+            _org: &crate::meraki::MerakiOrg,
+            _api_key: &str,
+        ) -> Result<yagra_transport::MerakiInventory, yagra_transport::MerakiFetchError> {
+            Ok(yagra_transport::MerakiInventory::default())
+        }
+    }
+
+    /// The whole saved-key path, accepted (ADR-115): a typed key is sealed once, the organization
+    /// says which credential holds it, and a second organization is added under that credential —
+    /// with the saved key being what the Dashboard is handed, and no second credential sealed.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_organization_is_added_under_a_saved_key_without_sealing_another(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state_with_dashboard, send, token};
+        use serde_json::json;
+        let dashboard = std::sync::Arc::new(TwoOrgDashboard {
+            keys: std::sync::Mutex::new(Vec::new()),
+        });
+        let st = live_state_with_dashboard(pool.clone(), dashboard.clone()).await;
+        let operator = token(&st, yagra_common::Role::Operator);
+        let orgs_path = "/api/v1/meraki/orgs";
+        let discover = "/api/v1/meraki/orgs/discover";
+
+        // A typed key: sealed once.
+        let (status, body) = send(
+            &st,
+            "POST",
+            orgs_path,
+            &operator,
+            Some(json!({ "api_key": "typed-key", "org_ids": ["100"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body, json!({ "created": 1, "already_added": 0 }));
+        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+
+        // The organization says which credential holds its key — the id, and nothing of the key.
+        let (_, list) = send(&st, "GET", orgs_path, &operator, None).await;
+        let credential = list[0]["credential_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("credential_id on the view: {list}"))
+            .to_owned();
+        assert!(!list.to_string().contains("typed-key"), "{list}");
+
+        // Discover by that id: the saved key is what the Dashboard is handed.
+        let (status, options) = send(
+            &st,
+            "POST",
+            discover,
+            &operator,
+            Some(json!({ "credential_id": credential })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{options}");
+        assert_eq!(
+            options,
+            json!([
+                { "id": "100", "name": "Acme", "already_added": true },
+                { "id": "200", "name": "Globex", "already_added": false },
+            ])
+        );
+        assert_eq!(
+            dashboard.keys(),
+            vec!["typed-key", "typed-key"],
+            "the second call carried the key that was unsealed, not one from the request"
+        );
+
+        // Add under the saved key: one new organization, one skipped, no second credential.
+        let (status, body) = send(
+            &st,
+            "POST",
+            orgs_path,
+            &operator,
+            Some(json!({ "credential_id": credential, "org_ids": ["100", "200"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body, json!({ "created": 1, "already_added": 1 }));
+        assert_eq!(crate::pgtest::rows(&pool, "meraki_orgs").await, 2);
+        assert_eq!(
+            crate::pgtest::rows(&pool, "credentials").await,
+            1,
+            "a saved key seals nothing"
+        );
+        let (_, list) = send(&st, "GET", orgs_path, &operator, None).await;
+        assert_eq!(list[0]["credential_id"], list[1]["credential_id"], "{list}");
+        assert_eq!(
+            list[1]["name"], "Globex",
+            "named from the Dashboard's answer"
+        );
+
+        // A request made only of organizations that are here: nothing is sealed for nothing.
+        let (status, body) = send(
+            &st,
+            "POST",
+            orgs_path,
+            &operator,
+            Some(json!({ "api_key": "another-key", "org_ids": ["100"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body, json!({ "created": 0, "already_added": 1 }));
+        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+    }
+
+    /// 🚨 The security half: a credential that is not a Meraki key is refused **before the Dashboard
+    /// is asked anything**. Otherwise naming an SNMP community's id here would send that community
+    /// to a server as a bearer key.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_credential_that_is_not_a_meraki_key_never_reaches_the_dashboard(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state_with_dashboard, send, token};
+        use serde_json::json;
+        let dashboard = std::sync::Arc::new(TwoOrgDashboard {
+            keys: std::sync::Mutex::new(Vec::new()),
+        });
+        let st = live_state_with_dashboard(pool.clone(), dashboard.clone()).await;
+        let operator = token(&st, yagra_common::Role::Operator);
+        // A community that happens to be spelled like a key document. An ordinary one would stop at
+        // the key parser even with the kind check gone, and answer 500 — red for the wrong reason,
+        // with the dangerous case never run. This one parses, so the kind check is the only thing
+        // between it and the Dashboard.
+        let community = st
+            .admin
+            .clone()
+            .expect("live state")
+            .creds
+            .create(
+                "lab community",
+                "snmp_v2c",
+                br#"{"api_key":"the-snmp-community"}"#,
+            )
+            .await
+            .expect("seal");
+
+        for (path, extra) in [
+            ("/api/v1/meraki/orgs/discover", json!({})),
+            ("/api/v1/meraki/orgs", json!({ "org_ids": ["100"] })),
+        ] {
+            for (what, id) in [("another kind", community), ("no such id", Uuid::new_v4())] {
+                let mut body = extra.clone();
+                body["credential_id"] = json!(id);
+                let (status, answer) = send(&st, "POST", path, &operator, Some(body)).await;
+                // First, because it is the point: whatever the status says, nothing left.
+                assert_eq!(
+                    dashboard.keys(),
+                    Vec::<String>::new(),
+                    "{what} {path}: a secret that is not a Meraki key was sent to the Dashboard"
+                );
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{what} {path}: {answer}");
+                assert_eq!(
+                    answer["error"]["code"], "invalid_credential",
+                    "{what} {path}: {answer}"
+                );
+            }
+            // Both sources at once is the request's own contradiction.
+            let mut both = extra.clone();
+            both["credential_id"] = json!(community);
+            both["api_key"] = json!("typed");
+            let (status, answer) = send(&st, "POST", path, &operator, Some(both)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {answer}");
+            assert_eq!(
+                answer["error"]["code"], "invalid_request",
+                "{path}: {answer}"
+            );
+        }
+        assert_eq!(
+            dashboard.keys(),
+            Vec::<String>::new(),
+            "nothing was sent to the Dashboard on any of the six refusals"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "meraki_orgs").await, 0);
     }
 }

@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use yagra_transport::{MerakiFetchError, MerakiInventory};
+use yagra_transport::{MerakiFetchError, MerakiInventory, MerakiOrgInfo, TransportError};
 
 use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiOrg, MerakiOrgRepo};
 use crate::meraki_import::{pick_automatic, ImportResolver};
@@ -148,13 +148,26 @@ impl From<MerakiFetchError> for MerakiSyncFailure {
     }
 }
 
-/// Where a sync gets an organization's inventory. The seam a test replaces; production is
+/// Everything core asks the Dashboard API itself. The seam a test replaces; production is
 /// [`DashboardApi`].
 ///
-/// 🚨 The contract is the transport's: **a complete listing or an error.** A fake that returns a
-/// short `Ok` is modelling a bug the real one cannot have.
+/// 🚨 [`inventory`](Self::inventory)'s contract is the transport's: **a complete listing or an
+/// error.** A fake that returns a short `Ok` is modelling a bug the real one cannot have.
+///
+/// ⚠️ [`organizations`](Self::organizations) joined it in ADR-164 Inc.6. Until then the onboarding
+/// endpoints called the transport directly, so a test that sent either one a well-formed body made
+/// a request to `api.meraki.com` from whatever machine ran the suite — which is why neither had a
+/// test in which it was accepted.
 #[async_trait]
 pub trait MerakiDirectory: Send + Sync {
+    /// The organizations `api_key` can see at `base_url`. The caller has already run `base_url`
+    /// through the host allow-list; the transport checks it again.
+    async fn organizations(
+        &self,
+        base_url: &str,
+        api_key: &str,
+    ) -> Result<Vec<MerakiOrgInfo>, TransportError>;
+
     /// Read `org`'s networks, devices and availabilities, to the end.
     async fn inventory(
         &self,
@@ -168,6 +181,14 @@ pub struct DashboardApi;
 
 #[async_trait]
 impl MerakiDirectory for DashboardApi {
+    async fn organizations(
+        &self,
+        base_url: &str,
+        api_key: &str,
+    ) -> Result<Vec<MerakiOrgInfo>, TransportError> {
+        yagra_transport::list_organizations(base_url, api_key, REQUEST_TIMEOUT).await
+    }
+
     async fn inventory(
         &self,
         org: &MerakiOrg,
@@ -253,6 +274,15 @@ impl MerakiSync {
             inflight,
             resolver,
         }
+    }
+
+    /// This process's one handle to the Dashboard API.
+    ///
+    /// The onboarding endpoints read it from here rather than holding their own, so a fixture that
+    /// replaces the directory replaces it for everything that would otherwise leave the machine.
+    #[must_use]
+    pub fn directory(&self) -> &dyn MerakiDirectory {
+        self.directory.as_ref()
     }
 
     /// Sync one organization now, and record how it went on its row.
@@ -629,6 +659,15 @@ mod tests {
 
     #[async_trait]
     impl MerakiDirectory for FakeDirectory {
+        /// A sync never lists organizations; onboarding does, and `api/meraki.rs` tests that.
+        async fn organizations(
+            &self,
+            _base_url: &str,
+            _api_key: &str,
+        ) -> Result<Vec<MerakiOrgInfo>, TransportError> {
+            Ok(Vec::new())
+        }
+
         async fn inventory(
             &self,
             _org: &MerakiOrg,

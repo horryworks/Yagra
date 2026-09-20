@@ -97,6 +97,7 @@ import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
 import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
 import { DESTINATION_KINDS } from './pages/importFiling';
 import {
+  GROUP_ORIGINS,
   MERAKI_DEVICE_STATES,
   MERAKI_FILING_REASONS,
   MERAKI_SYNC_FAILURES,
@@ -955,6 +956,15 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'meraki.devices.filing.',
       MERAKI_FILING_REASONS,
     );
+  });
+
+  it('every folder origin has its sentence (nodes:tree.origin.*)', () => {
+    // The inventory tree titles a folder's badge with `t(`tree.origin.${origin}`)`. The badge text
+    // itself is a brand name and is not translated (`lib/groupOrigin.ts`); this is the sentence
+    // that says what the badge means. `GroupOrigin` is closed on the backend and pinned by
+    // `schemaEnumPins`, so a third integration that starts keeping folders stops compiling there
+    // and is demanded here (ADR-164 Inc.7).
+    expectKeys('group origin', { en: enNodes, ja: jaNodes }, 'tree.origin.', GROUP_ORIGINS);
   });
 
   it('every built-in Site ID field has a label (system:netbox.siteIdField.*)', () => {

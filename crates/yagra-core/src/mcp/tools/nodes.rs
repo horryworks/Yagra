@@ -589,6 +589,8 @@ impl YagraMcp {
                        into a place. Set `include_state` to also get each folder's direct-member \
                        health tally (ok/warning/critical/unknown/unreachable/maintenance) — that \
                        is the per-site rollup, where get_fleet_summary tallies the whole fleet. \
+                       A folder carrying `origin` (`meraki` or `netbox`) was made by that \
+                       integration and is still kept by it, not by a person. \
                        Requires live mode."
     )]
     async fn list_node_groups(

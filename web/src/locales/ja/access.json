@@ -49,7 +49,9 @@
     },
     "usage": {
       "unused": "未使用",
-      "count_other": "ノード {{count}} 台"
+      "count_other": "ノード {{count}} 台",
+      "merakiOrgs_other": "Meraki 組織 {{count}} 件",
+      "netboxServers_other": "NetBox サーバー {{count}} 台"
     },
     "empty": {
       "none": "認証情報はまだありません",
@@ -90,6 +92,7 @@
       "title": "認証情報を削除",
       "confirm": "認証情報 <strong>{{name}}</strong> を削除しますか？",
       "inUse": "{{usage}} が参照しています — この紐付けが失われます。",
+      "held": "{{usage}} が使用中のため削除できません。先に「設定 ▸ 連携」の側で削除してください。",
       "unused": "未使用です。",
       "irreversible": "この操作は取り消せません。"
     },

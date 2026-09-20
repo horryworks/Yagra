@@ -30,9 +30,16 @@ import type { ColumnFilterSpec } from '../lib/columnFilter';
 import type { SortState, SortValues } from '../lib/tableSort';
 import type { CredentialSummary } from '../types/api';
 
+/** The three counts of what uses a credential. `used_by` is **nodes only** — the name predates the
+ *  other two (ADR-164 Inc.6), and for a Meraki key it is always zero. */
+type CredentialUsage = Pick<
+  CredentialSummary,
+  'used_by' | 'used_by_meraki_orgs' | 'used_by_netbox_servers'
+>;
+
 /** The fields this module reads. Generic over the row so the page passes real `CredentialSummary`
  *  values and gets them back unchanged, rather than a re-declared copy of the API shape. */
-type CredentialRow = Pick<CredentialSummary, 'id' | 'name' | 'kind' | 'used_by'>;
+type CredentialRow = Pick<CredentialSummary, 'id' | 'name' | 'kind'> & CredentialUsage;
 
 /** The name column sorts ascending by default — the order an operator scanning a list expects. */
 export const DEFAULT_CREDENTIAL_SORT: SortState = { by: 'name', dir: 'asc' };
@@ -40,12 +47,17 @@ export const DEFAULT_CREDENTIAL_SORT: SortState = { by: 'name', dir: 'asc' };
 /** The columns the credentials table sorts on, derived from the sort values rather than listed again. */
 export const CREDENTIAL_SORT_KEYS: readonly string[] = Object.keys(credentialSortValues());
 
-/** Per-column sort accessors. `used_by` is a number, so it sorts numerically rather than as text —
- *  a string sort would put 10 before 9. */
+/** Per-column sort accessors. The usage is a number, so it sorts numerically rather than as text —
+ *  a string sort would put 10 before 9.
+ *
+ *  ⚠️ The "Used by" column sorts on everything that uses the credential, not on `used_by` alone:
+ *  that field counts nodes, so a Meraki key polling three organizations would sort as unused —
+ *  next to the rows an operator sorts this column to find and delete. The key stays `used_by`
+ *  because it is the column's key, and with it the `?sort=` value already in people's URLs. */
 export function credentialSortValues<T extends CredentialRow>(): SortValues<T> {
   return {
     name: (c) => c.name,
-    used_by: (c) => c.used_by,
+    used_by: (c) => totalUsage(c),
   };
 }
 
@@ -111,7 +123,61 @@ export const kindLabel = (kind: string, t: TFunction) => {
   return key ? t(key) : kind;
 };
 
-/** How many nodes reference a credential — "unused" is its own phrase rather than "0 nodes",
- *  because unused is the state an operator is looking for when deciding what may be deleted. */
-export const usageLabel = (n: number, t: TFunction) =>
-  n === 0 ? t('cred.usage.unused') : t('cred.usage.count', { count: n });
+/** A count as the server sent it, or zero from a core that predates the field. The WebUI and the
+ *  core are separate containers and are not always the same version for the length of an upgrade;
+ *  `undefined` here would sort a row as `NaN` and total it as "in use". */
+function countOf(n: number | undefined): number {
+  return n ?? 0;
+}
+
+/** Everything that uses a credential: nodes, Meraki organizations and NetBox servers together.
+ *  What the "Used by" column sorts on, and what decides whether a row reads as unused. */
+export function totalUsage(c: CredentialUsage): number {
+  return countOf(c.used_by) + countOf(c.used_by_meraki_orgs) + countOf(c.used_by_netbox_servers);
+}
+
+/** Whether an integration still uses this credential — a Meraki organization is polled with it, or
+ *  a NetBox server is read with it.
+ *
+ *  🚨 Not the same kind of "in use" as a node's. A node's binding is cleared by the delete
+ *  (`ON DELETE SET NULL`), so that delete is offered with a warning. These two are `ON DELETE
+ *  RESTRICT`: the server answers `409 credential_in_use`, so the page does not offer a delete it
+ *  knows will be refused (ADR-056) and says where the credential has to be released instead. */
+export function isHeldByIntegration(c: CredentialUsage): boolean {
+  return countOf(c.used_by_meraki_orgs) + countOf(c.used_by_netbox_servers) > 0;
+}
+
+/** The non-zero integration counts, each as its own phrase. */
+function integrationUsageParts(c: CredentialUsage, t: TFunction): string[] {
+  const parts: string[] = [];
+  const orgs = countOf(c.used_by_meraki_orgs);
+  const servers = countOf(c.used_by_netbox_servers);
+  if (orgs > 0) parts.push(t('cred.usage.merakiOrgs', { count: orgs }));
+  if (servers > 0) parts.push(t('cred.usage.netboxServers', { count: servers }));
+  return parts;
+}
+
+/** What separates the parts of a usage label. Not translated: it is punctuation between phrases
+ *  that are, and the same mark the health bar's tooltip joins its per-state counts with. */
+const USAGE_SEPARATOR = ' · ';
+
+/** Only the integrations that hold a credential — the `{{usage}}` of the sentence explaining why
+ *  it cannot be deleted. The node count is left out on purpose: nodes do not block a delete, and
+ *  naming them there would send the operator to unbind nodes that were never the obstacle. */
+export function integrationUsageLabel(c: CredentialUsage, t: TFunction): string {
+  return integrationUsageParts(c, t).join(USAGE_SEPARATOR);
+}
+
+/** What uses a credential, as the "Used by" cell says it: each non-zero count as its own phrase.
+ *  "Unused" is its own phrase rather than "0 nodes", because unused is the state an operator is
+ *  looking for when deciding what may be deleted — which is why it has to mean *nothing* uses it,
+ *  not merely no node. It takes the row rather than a number so no caller can hand it `used_by`
+ *  alone again: that read "Unused" for a Meraki key three organizations were being polled with. */
+export function usageLabel(c: CredentialUsage, t: TFunction): string {
+  const nodes = countOf(c.used_by);
+  const parts = [
+    ...(nodes > 0 ? [t('cred.usage.count', { count: nodes })] : []),
+    ...integrationUsageParts(c, t),
+  ];
+  return parts.length === 0 ? t('cred.usage.unused') : parts.join(USAGE_SEPARATOR);
+}

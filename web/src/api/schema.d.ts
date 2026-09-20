@@ -1489,12 +1489,15 @@ export interface paths {
         put?: never;
         /**
          * Onboard one or more organizations under a single read-only API key.
-         * @description The key is validated by listing orgs, then sealed **once** as a shared credential — each org row
-         *     holds a reference plus its own org id. Onboarding twenty orgs therefore stores one secret, not
-         *     twenty copies of the same one.
+         * @description The key is validated by listing orgs. A **typed** key is then sealed **once** as a shared
+         *     credential — each org row holds a reference plus its own org id, so onboarding twenty orgs
+         *     stores one secret, not twenty copies of the same one. A **saved** key (`credential_id`,
+         *     ADR-164 Inc.6) seals nothing: the new rows point at the credential that is already there, which
+         *     is how an organization is added later under a key nobody has to find and paste again.
          *
-         *     A per-org create failure is logged and skipped rather than failing the batch: the count says how
-         *     many landed, and retrying is harmless.
+         *     An organization that is already monitored here is skipped and counted. A per-org create failure
+         *     is logged and skipped rather than failing the batch: the counts say what landed, and retrying is
+         *     harmless.
          */
         post: operations["create_meraki_orgs"];
         delete?: never;
@@ -6349,8 +6352,15 @@ export interface components {
             node_id?: string | null;
         };
         CreateMerakiOrgsReq: {
-            api_key: string;
+            /** @description A key typed by the operator; sealed as a new credential. Send this **or** `credential_id`. */
+            api_key?: string | null;
             base_url?: string | null;
+            /**
+             * Format: uuid
+             * @description A `meraki_api` credential already stored here. The new organizations share it, and no new
+             *     credential is created.
+             */
+            credential_id?: string | null;
             org_ids: string[];
         };
         /** @description Create-entry body for the catalog. */
@@ -6532,10 +6542,27 @@ export interface components {
             name: string;
             /**
              * Format: int64
-             * @description How many nodes reference this credential — answers "is it safe to delete?". Counted at
-             *     list time from `nodes.credential_id`; `0` means the credential is unused.
+             * @description How many **nodes** reference this credential. Counted at list time from
+             *     `nodes.credential_id`. Deleting the credential clears those bindings (`ON DELETE SET NULL`).
+             *
+             *     ⚠️ Nodes only, and the name predates the two fields below: `0` here used to read as
+             *     "unused" for a Meraki key that three organizations were being polled with.
              */
             used_by: number;
+            /**
+             * Format: int64
+             * @description How many Meraki organizations are polled with it (ADR-164 Inc.6).
+             *
+             *     🚨 Not a binding that can be cleared: `meraki_orgs.credential_id` is `NOT NULL … ON DELETE
+             *     RESTRICT`, so while this is above zero the delete is refused with `409 credential_in_use`.
+             */
+            used_by_meraki_orgs: number;
+            /**
+             * Format: int64
+             * @description How many NetBox servers are read with it. Refuses the delete exactly as the field above
+             *     does (`netbox_servers.credential_id`, the same constraint).
+             */
+            used_by_netbox_servers: number;
         };
         /** @description A node's current adjacency and how long it has held. */
         CurrentNeighbors: {
@@ -7630,6 +7657,23 @@ export interface components {
             truncated: boolean;
         };
         /**
+         * @description Which integration a folder belongs to (ADR-164 Inc.7).
+         *
+         *     Not decoration. An integration's folder behaves differently from one an operator made: a
+         *     Meraki organization's tree is **deleted with the organization**, and a NetBox folder is renamed
+         *     and re-parented by the next sync whatever was typed over it. A tree that draws both kinds the
+         *     same leaves that to be found out.
+         *
+         *     It says who keeps the folder **now**. Forgetting a NetBox server leaves its folders behind as
+         *     ordinary ones (ADR-100 decision 5), and they lose the mark with the server — nothing will
+         *     rename them again.
+         *
+         *     No `as_str()`: the serde tag is the only spelling, and the WebUI's `GROUP_ORIGINS` mirrors it
+         *     (pinned by a test below and by `i18nEnumKeys.test.ts` on the other side).
+         * @enum {string}
+         */
+        GroupOrigin: "meraki" | "netbox";
+        /**
          * @description Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) and position it
          *     relative to a sibling. `before`/`after` name the sibling; both omitted ⇒ append.
          *
@@ -7757,6 +7801,7 @@ export interface components {
             /** Format: double */
             longitude?: number | null;
             name: string;
+            origin?: null | components["schemas"]["GroupOrigin"];
             /** Format: uuid */
             parent_id?: string | null;
             /**
@@ -8614,9 +8659,17 @@ export interface components {
             /** Format: int32 */
             uplink_secs: number;
         };
-        /** @description How many organizations an onboarding batch created. */
+        /** @description What an onboarding batch did. */
         MerakiCreated: {
-            /** Format: int32 */
+            /**
+             * Format: int32
+             * @description Organizations it named that were monitored here already, and were left as they are.
+             */
+            already_added: number;
+            /**
+             * Format: int32
+             * @description Organizations this request added.
+             */
             created: number;
         };
         /**
@@ -8705,8 +8758,14 @@ export interface components {
             state: components["schemas"]["MerakiDeviceState"];
         };
         MerakiDiscoverReq: {
-            api_key: string;
+            /** @description A key typed by the operator. Send this **or** `credential_id`, never both. */
+            api_key?: string | null;
             base_url?: string | null;
+            /**
+             * Format: uuid
+             * @description A `meraki_api` credential already stored here, used instead of typing the key again.
+             */
+            credential_id?: string | null;
         };
         MerakiEnabledReq: {
             enabled: boolean;
@@ -8813,6 +8872,11 @@ export interface components {
             network_id: string;
         };
         MerakiOrgOption: {
+            /**
+             * @description This organization is already monitored here, under this key or another one. It cannot be
+             *     added a second time: `POST /meraki/orgs` skips it.
+             */
+            already_added: boolean;
             id: string;
             name: string;
         };
@@ -8820,6 +8884,13 @@ export interface components {
             /** Format: int32 */
             availability_secs: number;
             base_url: string;
+            /**
+             * Format: uuid
+             * @description Which stored credential holds this organization's API key. An id, not a secret — the key
+             *     stays sealed in `credentials`, and this type has no field that could carry it. Its *name* is
+             *     `GET /credentials`'s to give, to a caller holding `ManageCredentials`.
+             */
+            credential_id: string;
             /** @description What the last successful sync found, read against which devices are nodes here. */
             devices: components["schemas"]["MerakiDeviceCounts"];
             /**
@@ -15407,6 +15478,15 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
+            /** @description A Meraki organization or a NetBox server still uses it (`credential_in_use`); nothing was deleted */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
             /** @description Skeleton mode has no write side */
             503: {
                 headers: {
@@ -18571,7 +18651,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every onboarded organization; the credential reference is not included */
+            /** @description Every onboarded organization, each with the id of the credential holding its key — never the key */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -18622,7 +18702,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description How many organizations the batch created; a per-org failure is skipped, not fatal */
+            /** @description How many organizations the batch created, and how many it named were here already; a per-org failure is skipped, not fatal */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -18631,7 +18711,7 @@ export interface operations {
                     "application/json": components["schemas"]["MerakiCreated"];
                 };
             };
-            /** @description The key or org list is empty, or base_url is not an https allow-listed Meraki host */
+            /** @description The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -18691,7 +18771,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The organizations the key can access */
+            /** @description The organizations the key can access, each marked `already_added` when it is monitored here already */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -18700,7 +18780,7 @@ export interface operations {
                     "application/json": components["schemas"]["MerakiOrgOption"][];
                 };
             };
-            /** @description The key is empty, or base_url is not an https allow-listed Meraki host */
+            /** @description No key was named (`invalid_api_key`), both `api_key` and `credential_id` were sent (`invalid_request`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host */
             400: {
                 headers: {
                     [name: string]: unknown;
