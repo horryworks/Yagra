@@ -3111,7 +3111,7 @@
             }
           },
           "403": {
-            "description": "Role does not hold ManageCredentials",
+            "description": "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3238,7 +3238,7 @@
             }
           },
           "403": {
-            "description": "Role does not hold ManageCredentials",
+            "description": "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3301,7 +3301,7 @@
             }
           },
           "403": {
-            "description": "Role does not hold ManageCredentials",
+            "description": "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)",
             "content": {
               "application/json": {
                 "schema": {

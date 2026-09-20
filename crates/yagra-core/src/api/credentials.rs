@@ -14,7 +14,7 @@
 //! a v3 document as a community string would produce a credential that silently fails every poll.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageCredentials};
+use super::extract::{Admin, RequireManageCredentials, Scoped};
 use super::util::CreatedId;
 use super::ApiState;
 use axum::{
@@ -192,6 +192,31 @@ pub(super) struct CreateCredential {
     secret: String,
 }
 
+/// Refuse a folder-scoped caller a credential **write** (ADR-158 A8, the three it missed).
+///
+/// `ManageCredentials` is held by Operators, and an Operator can be restricted to folders. The
+/// shelf of credentials is not in any folder: one community string or one Meraki key is what the
+/// devices of every site are polled with. So an account limited to Tokyo could re-seal or delete
+/// the credential Osaka runs on — and for a Meraki key that makes a whole organization go quiet
+/// rather than alert, because those nodes are outside the freshness sweep. The ledger called these
+/// routes "admin-only" while the guard let an Operator through: the hole ADR-158 closed on eleven
+/// node writes and ADR-164 on the Meraki ones.
+///
+/// 🚨 **Only the writes.** `GET /credentials` stays open to a scoped caller on purpose: the add-node
+/// and edit-node dialogs, the collection tab, the check fields and Discovery all read it to offer
+/// the picker, and it answers names and kinds, never a secret. Refusing it would stop a scoped
+/// Operator from binding a credential to their own node. Letting one through for a credential that
+/// only their own nodes use is a possible later loosening, and would be purely additive.
+///
+/// The reason string is repeated by the route ledger's `CREDENTIAL_WRITE` line.
+fn credentials_are_deployment_wide(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
+    super::scope::require_fleet_wide(
+        scope,
+        "monitoring credentials are shared by every folder, so an account restricted to folders \
+         cannot create, change or delete one",
+    )
+}
+
 #[utoipa::path(
     post, path = "/api/v1/credentials", tag = "credentials",
     request_body = CreateCredential,
@@ -199,15 +224,17 @@ pub(super) struct CreateCredential {
         (status = 201, description = "Credential sealed and stored", body = CreatedId),
         (status = 400, description = "A missing field, or a secret that does not parse for its kind", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
 async fn create_credential(
     _guard: RequireManageCredentials,
+    Scoped(scope): Scoped,
     admin: Admin,
     Json(body): Json<CreateCredential>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    credentials_are_deployment_wide(&scope)?;
     let (name, kind) = (body.name.trim(), body.kind.trim());
     if name.is_empty() || kind.is_empty() || body.secret.is_empty() {
         return Err(ApiError::bad_request(
@@ -249,17 +276,19 @@ pub(super) struct UpdateCredential {
         (status = 204, description = "Credential updated; an omitted secret is a rename, not a clear"),
         (status = 400, description = "An empty name, a secret without its kind, or a secret that does not parse for its kind", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such credential", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
 async fn update_credential(
     _guard: RequireManageCredentials,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateCredential>,
 ) -> ApiResult<StatusCode> {
+    credentials_are_deployment_wide(&scope)?;
     let name = body.name.trim();
     if name.is_empty() {
         return Err(ApiError::bad_request(
@@ -311,7 +340,7 @@ async fn update_credential(
     responses(
         (status = 204, description = "Credential deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such credential", body = super::error::ErrorBody),
         (status = 409, description = "A Meraki organization or a NetBox server still uses it (`credential_in_use`); nothing was deleted", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -319,10 +348,12 @@ async fn update_credential(
 )]
 async fn delete_credential(
     _guard: RequireManageCredentials,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     use crate::secrets::CredentialDelete;
+    credentials_are_deployment_wide(&scope)?;
     match admin.creds.delete(id).await {
         Ok(CredentialDelete::Deleted) => Ok(StatusCode::NO_CONTENT),
         Ok(CredentialDelete::NotFound) => Err(ApiError::not_found(
@@ -461,6 +492,80 @@ mod tests {
             !list.to_string().contains("s3cr3t-community"),
             "the list returned the secret"
         );
+    }
+
+    /// **An account restricted to folders may read the shelf and change nothing on it** (ADR-158 A8,
+    /// the three writes it missed).
+    ///
+    /// The credentials belong to no folder — one community string is what every site is polled
+    /// with — so an Operator limited to one site could re-seal or delete what another site runs
+    /// on. The list stays open on purpose: the add-node and edit-node dialogs fill their picker
+    /// from it, and it answers names, never a secret.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folder_scoped_caller_reads_the_credentials_and_changes_none(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let existing = crate::pgtest::credential(&pool, "osaka core v3", "snmp_v2c").await;
+        let folder = crate::pgtest::group(&pool, "Tokyo").await;
+        let scoped = scoped_token(&st, &[folder]);
+        // Assembled rather than written out: `scope.rs::no_handler_spells_the_scope_refusal_by_hand`
+        // counts the quoted code across this directory, tests included.
+        let refusal = format!("{}_unsupported", "scope");
+
+        let writes = [
+            (
+                "POST",
+                "/api/v1/credentials".to_owned(),
+                Some(serde_json::json!({
+                    "name": "tokyo community", "kind": "snmp_v2c", "secret": "s3cr3t",
+                })),
+            ),
+            (
+                "PUT",
+                format!("/api/v1/credentials/{existing}"),
+                Some(serde_json::json!({
+                    "name": "renamed", "kind": "snmp_v2c", "secret": "replaced",
+                })),
+            ),
+            ("DELETE", format!("/api/v1/credentials/{existing}"), None),
+        ];
+        for (method, path, body) in writes.clone() {
+            let (status, answer) = send(&st, method, &path, &scoped, body).await;
+            assert_eq!(
+                status,
+                axum::http::StatusCode::FORBIDDEN,
+                "{method} {path}: {answer}"
+            );
+            assert_eq!(
+                answer["error"]["code"].as_str(),
+                Some(refusal.as_str()),
+                "{method} {path}"
+            );
+        }
+        // Refused means refused: nothing was added, renamed or removed.
+        let stored = admin.creds.list().await.expect("list");
+        assert_eq!(stored.len(), 1, "a refused write changed the shelf");
+        assert_eq!(stored[0].name, "osaka core v3");
+
+        // The read the pickers depend on still answers — with the name, which is all it holds.
+        let (status, list) = send(&st, "GET", "/api/v1/credentials", &scoped, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        assert_eq!(list[0]["name"], "osaka core v3", "{list}");
+
+        // And it is the *scope* that was refused, not the role: the same three from an Operator
+        // with no folder restriction are accepted.
+        let unscoped = token(&st, yagra_common::Role::Operator);
+        let expected = [
+            axum::http::StatusCode::CREATED,
+            axum::http::StatusCode::NO_CONTENT,
+            axum::http::StatusCode::NO_CONTENT,
+        ];
+        for ((method, path, body), want) in writes.into_iter().zip(expected) {
+            let (status, answer) = send(&st, method, &path, &unscoped, body).await;
+            assert_eq!(status, want, "{method} {path}: {answer}");
+        }
     }
 
     /// A credential a Meraki organization is polled with says so in the list, and deleting it is

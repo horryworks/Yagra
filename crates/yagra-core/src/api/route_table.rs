@@ -173,8 +173,9 @@ const PRE_AGGREGATED: Scoping = Refused(
 );
 
 /// The **Meraki device list**. A read, and refused to a group-scoped caller all the same (ADR-164) —
-/// see `api/meraki.rs::meraki_devices_are_deployment_wide`. The other Meraki reads stay
-/// `ADMIN_CFG`: an organization's name and cadence are configuration, but this one is inventory.
+/// see `api/meraki.rs::meraki_devices_are_deployment_wide`. The other Meraki reads are
+/// `MERAKI_CONFIG_READ`: an organization's name and cadence are configuration, but this one is
+/// inventory.
 const MERAKI_DEVICES: Scoping = Refused(
     "the list names every device in a Meraki organization with its address, and an unimported \
      device is in no folder to be inside or outside of, so there is nothing to narrow it by",
@@ -185,11 +186,45 @@ const MERAKI_DEVICES: Scoping = Refused(
 ///
 /// The nine lines older than ADR-164 read `ADMIN_CFG` until then, and that reason was false: the
 /// handlers take `RequireManageConfig`, which an Operator holds, and an Operator can be scoped.
-/// (`…/sync` arrived with the ADR and was never anything else.) The configuration reads stay
-/// `ADMIN_CFG` — an organization's name and cadence are configuration, not monitored-node data.
+/// (`…/sync` arrived with the ADR and was never anything else.) The configuration reads are
+/// `MERAKI_CONFIG_READ` — an organization's name and cadence are configuration, not monitored-node
+/// data.
 const MERAKI_WRITE: Scoping = Refused(
     "a Meraki organization is monitored as a whole, across every folder — importing files nodes \
      wherever they belong and deleting purges all of them — so a scoped caller is refused",
+);
+
+/// A **Meraki configuration read** — the organizations, one organization's networks, the polling
+/// switch. Served whole to a group-scoped caller by decision (ADR-164 決定 9): an organization's
+/// name, cadence, sync state and org-wide counts are the same for everyone, and the device list —
+/// the one read that names equipment — is refused separately (`MERAKI_DEVICES`).
+///
+/// These three read `ADMIN_CFG` until /verify (2026-09-20), and that reason was false: the
+/// handlers take `RequireView`, so every signed-in account reaches them, scoped or not.
+const MERAKI_CONFIG_READ: Scoping = Global(
+    "organization configuration and org-wide counts, identical for every caller; the device list \
+     is the read that names equipment, and it is refused to a scoped caller on its own line",
+);
+
+/// A **credential write**. Refused to a group-scoped caller — see
+/// `api/credentials.rs::credentials_are_deployment_wide`.
+///
+/// The three read `ADMIN_CFG` until /verify (2026-09-20), and that reason was false in the way
+/// `MERAKI_WRITE`'s had been: the handlers take `RequireManageCredentials`, which an Operator
+/// holds, and an Operator can be restricted to folders. The credentials are not in any folder, so
+/// an account limited to one site could re-seal or delete what another site is polled with.
+const CREDENTIAL_WRITE: Scoping = Refused(
+    "monitoring credentials are shared by every folder — one key is what the devices of every \
+     site are polled with — so a scoped caller may not create, change or delete one",
+);
+
+/// A **credential read**: the list the pickers are filled from, and the decrypt health. Served
+/// whole to a group-scoped caller on purpose — the add-node and edit-node dialogs, the collection
+/// tab and Discovery read the list to offer a credential for the caller's *own* nodes, and it
+/// answers names and kinds, never a secret (ADR-018).
+const CREDENTIAL_READ: Scoping = Global(
+    "names and kinds of the shared credentials, never a secret; a scoped caller needs the list \
+     to bind one to their own node, and there is no per-folder slice of it to narrow to",
 );
 
 /// The write routes. MCP is read-only and the write surface is frozen (ADR-042 decision 6).
@@ -485,21 +520,31 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "GET",
         "/api/v1/credentials",
-        ADMIN_CFG,
+        CREDENTIAL_READ,
         Exempt(
             "the monitoring-credential inventory; ADR-018 keeps secret material out of every tool \
              result, and the operational question (is a credential failing) is credentials/health",
         ),
     ),
-    ("POST", "/api/v1/credentials", ADMIN_CFG, NO_MCP_WRITE),
+    ("POST", "/api/v1/credentials", CREDENTIAL_WRITE, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/credentials/health",
-        ADMIN_CFG,
+        CREDENTIAL_READ,
         Tool("get_system_health"),
     ),
-    ("DELETE", "/api/v1/credentials/:id", ADMIN_CFG, NO_MCP_WRITE),
-    ("PUT", "/api/v1/credentials/:id", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "DELETE",
+        "/api/v1/credentials/:id",
+        CREDENTIAL_WRITE,
+        NO_MCP_WRITE,
+    ),
+    (
+        "PUT",
+        "/api/v1/credentials/:id",
+        CREDENTIAL_WRITE,
+        NO_MCP_WRITE,
+    ),
     (
         "GET",
         "/api/v1/dashboard",
@@ -785,7 +830,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     ("POST", "/api/v1/meraki/import", MERAKI_WRITE, NO_MCP_WRITE),
-    ("GET", "/api/v1/meraki/orgs", ADMIN_CFG, Tool("get_config")),
+    (
+        "GET",
+        "/api/v1/meraki/orgs",
+        MERAKI_CONFIG_READ,
+        Tool("get_config"),
+    ),
     ("POST", "/api/v1/meraki/orgs", MERAKI_WRITE, NO_MCP_WRITE),
     (
         "DELETE",
@@ -820,7 +870,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "GET",
         "/api/v1/meraki/orgs/:id/networks",
-        ADMIN_CFG,
+        MERAKI_CONFIG_READ,
         Tool("get_config"),
     ),
     (
@@ -844,7 +894,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "GET",
         "/api/v1/meraki/polling",
-        ADMIN_CFG,
+        MERAKI_CONFIG_READ,
         Tool("get_config"),
     ),
     ("PUT", "/api/v1/meraki/polling", MERAKI_WRITE, NO_MCP_WRITE),

@@ -15324,7 +15324,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role does not hold ManageCredentials */
+            /** @description Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15432,7 +15432,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role does not hold ManageCredentials */
+            /** @description Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15489,7 +15489,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role does not hold ManageCredentials */
+            /** @description Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
