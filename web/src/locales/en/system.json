@@ -537,6 +537,8 @@
       "new_other": "{{count}} new",
       "missing_one": "{{count}} not found in Meraki",
       "missing_other": "{{count}} not found in Meraki",
+      "uncollected_one": "{{count}} not collected",
+      "uncollected_other": "{{count}} not collected",
       "now": "Sync now",
       "running": "Syncing…",
       "reason": {
@@ -605,6 +607,9 @@
       "unwatched_one": "{{count}} network is not watched, so its devices are not imported.",
       "unwatched_other": "{{count}} networks are not watched, so their devices are not imported.",
       "watchAll": "Watch all",
+      "uncollected_one": "{{count}} monitored device is in a network that is not watched, so nothing is collected for it. The state shown for it is the last one seen.",
+      "uncollected_other": "{{count}} monitored devices are in networks that are not watched, so nothing is collected for them. The state shown for them is the last one seen.",
+      "watchThese": "Watch these networks",
       "overCap_one": "{{count}} device was not imported because the limit was reached.",
       "overCap_other": "{{count}} devices were not imported because the limit was reached."
     },

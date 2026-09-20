@@ -172,12 +172,10 @@ impl ImportResolver {
                     found
                 }
             };
-            // A device with no name is identified by its serial, which is always present.
-            let name = if c.name.trim().is_empty() {
-                c.serial.clone()
-            } else {
-                c.name
-            };
+            // A device with no name is identified by its serial, which is always present. The rule is
+            // `node_name_for`'s and not written here: the sync recognises a later rename by
+            // comparing a node's name with what this produced (ADR-164 決定 14).
+            let name = crate::meraki_inventory::node_name_for(&c.name, &c.serial);
             let network_name = c
                 .network_name
                 .filter(|n| !n.trim().is_empty())

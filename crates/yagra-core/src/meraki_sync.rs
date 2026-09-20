@@ -221,6 +221,10 @@ pub struct MerakiSyncReport {
     pub imported: u32,
     /// Devices that qualified for import and were left out by the organization's `max_devices`.
     pub over_cap: u32,
+    /// Nodes that took a new address, a new name or a new network from the Dashboard in this sync
+    /// (ADR-164 決定 14). A node is renamed only while it still carries the name Meraki gave it,
+    /// and is never moved to another folder. Zero is the ordinary answer.
+    pub followed: u32,
 }
 
 /// Why a sync did not produce a report.
@@ -323,6 +327,23 @@ impl MerakiSync {
                     );
                     metrics::counter!("yagra_meraki_devices_imported_total")
                         .increment(u64::from(report.imported));
+                }
+                if report.followed > 0 {
+                    // No audit row either, for the same reason: nobody did this.
+                    tracing::info!(
+                        org = %org.org_id,
+                        followed = report.followed,
+                        "imported meraki nodes followed the dashboard"
+                    );
+                    metrics::counter!("yagra_meraki_nodes_followed_total")
+                        .increment(u64::from(report.followed));
+                }
+                // One bump for the sync, and only when a node row really changed. It is the address
+                // that needs it: the connectivity graph is re-derived when the generation or an
+                // observation watermark moves (`run_topology_derivation`), and a re-addressed node
+                // moves neither watermark. A rename alone would not need one — a notification reads
+                // names on a 60-second TTL — but it is rare enough not to be worth telling apart.
+                if report.imported > 0 || report.followed > 0 {
                     crate::config_gen::bump();
                 }
                 Ok(report)
@@ -383,7 +404,8 @@ impl MerakiSync {
             .record_networks(org.id, &networks, org.import_devices)
             .await
             .map_err(internal("recording the networks failed"))?;
-        let device_rows = self
+        // The inventory rows and what imported nodes follow, in one transaction (決定 14).
+        let applied = self
             .inventory
             .apply(org.id, &plan)
             .await
@@ -393,10 +415,11 @@ impl MerakiSync {
         Ok(MerakiSyncReport {
             devices: count(seen.len()),
             networks: count(listing.networks.len()),
-            written: u32::try_from(network_rows + device_rows).unwrap_or(u32::MAX),
+            written: u32::try_from(network_rows + applied.rows).unwrap_or(u32::MAX),
             newly_missing: count(plan.newly_missing.len()),
             imported,
             over_cap,
+            followed: applied.followed,
         })
     }
 
@@ -540,6 +563,7 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
 mod tests {
     use super::*;
     use crate::pgtest;
+    use sqlx::Row;
     use std::sync::Mutex;
     use yagra_transport::{
         MerakiAvailability, MerakiDeviceInfo, MerakiInventoryDevice, MerakiNetworkInfo,
@@ -1196,5 +1220,237 @@ mod tests {
         };
         assert!(set(60).await.expect("one minute is allowed"));
         assert!(set(59).await.is_err(), "the CHECK let 59 seconds through");
+    }
+
+    // ── what an imported node follows (ADR-164 Inc.8, 決定 14) ───────────────────────────────
+
+    /// One device, described freely. Both networks are always listed, so a move between them is a
+    /// move and not a disappearance.
+    fn listing_of(
+        serial: &str,
+        name: &str,
+        network: &str,
+        lan_ip: Option<&str>,
+    ) -> MerakiInventory {
+        MerakiInventory {
+            networks: ["N_1", "N_2"]
+                .iter()
+                .map(|id| MerakiNetworkInfo {
+                    id: (*id).into(),
+                    name: format!("net {id}"),
+                })
+                .collect(),
+            devices: vec![MerakiInventoryDevice {
+                info: MerakiDeviceInfo {
+                    serial: serial.into(),
+                    name: name.into(),
+                    model: Some("MR46".into()),
+                    product_type: "wireless".into(),
+                    network_id: network.into(),
+                    lan_ip: lan_ip.map(str::to_owned),
+                },
+                availability: UP,
+            }],
+        }
+    }
+
+    /// A device's node as it stands: `(name, address, the binding's network)`.
+    async fn node_as_it_stands(pool: &sqlx::PgPool, serial: &str) -> (String, String, String) {
+        let row = sqlx::query(
+            "SELECT n.name, host(n.address) AS address, d.network_id \
+             FROM nodes n JOIN meraki_devices d ON d.node_id = n.id WHERE d.serial = $1",
+        )
+        .bind(serial)
+        .fetch_one(pool)
+        .await
+        .expect("the device's node");
+        (
+            row.try_get("name").expect("name"),
+            row.try_get("address").expect("address"),
+            row.try_get("network_id").expect("network"),
+        )
+    }
+
+    /// The three things a node takes from the Dashboard, against real SQL — and the one it never
+    /// does: it stays in the folder it was filed in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_imported_node_follows_the_dashboard_and_stays_where_it_was_filed(
+        pool: sqlx::PgPool,
+    ) {
+        let r = rig(
+            &pool,
+            Ok(listing_of("Q2-A", "ap-1", "N_1", Some("10.0.0.1"))),
+        )
+        .await;
+        let first = r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!((first.imported, first.followed), (1, 0));
+        let filed = folder_of(&pool, "Q2-A").await;
+        let generation = crate::config_gen::current();
+
+        r.directory
+            .now_answers(Ok(listing_of("Q2-A", "lobby-ap", "N_2", Some("10.0.0.7"))));
+        let second = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(second.followed, 1, "one node, counted once: {second:?}");
+        assert_eq!(
+            node_as_it_stands(&pool, "Q2-A").await,
+            ("lobby-ap".into(), "10.0.0.7".into(), "N_2".into())
+        );
+        // Same transaction: the row that made the rename visible carries the new name too.
+        let stored = r.inventory.stored(r.org).await.expect("stored");
+        assert_eq!(stored[0].name, "lobby-ap");
+        assert_eq!(
+            folder_of(&pool, "Q2-A").await,
+            filed,
+            "a device that changed network was moved to another folder (決定 6)"
+        );
+        assert!(
+            crate::config_gen::current() > generation,
+            "a re-addressed node is not re-derived into the map until the generation moves"
+        );
+
+        // The ordinary sync again: everything agrees, nothing is written, nobody follows.
+        let third = r.sync.sync_org(&r.org().await).await.expect("third sync");
+        assert_eq!((third.written, third.followed), (0, 0), "{third:?}");
+    }
+
+    /// A name an operator chose survives Meraki's rename — decided by the plan when the sync reads
+    /// the node after the rename, and by the statement when the rename lands in between.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_name_an_operator_chose_survives_a_rename_in_meraki(pool: sqlx::PgPool) {
+        let r = rig(
+            &pool,
+            Ok(listing_of("Q2-A", "ap-1", "N_1", Some("10.0.0.1"))),
+        )
+        .await;
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        sqlx::query("UPDATE nodes SET name = 'Reception (do not touch)' WHERE id = $1")
+            .bind(crate::meraki::device_node_id("Q2-A"))
+            .execute(&pool)
+            .await
+            .expect("the operator renames the node");
+
+        // The statement's own guard, alone: a plan made before the operator's rename still names
+        // the old name, which is what a sync that read a moment earlier would hold.
+        let stale_plan = crate::meraki_inventory::SyncPlan {
+            follows: vec![crate::meraki_inventory::NodeFollow {
+                serial: "Q2-A".into(),
+                rename: Some(("ap-1".into(), "lobby-ap".into())),
+                address: None,
+                network_id: None,
+            }],
+            ..Default::default()
+        };
+        let applied = r
+            .inventory
+            .apply(r.org, &stale_plan)
+            .await
+            .expect("apply the stale plan");
+        assert_eq!(
+            applied.followed, 0,
+            "the rename overwrote an operator's name"
+        );
+        assert_eq!(
+            node_as_it_stands(&pool, "Q2-A").await.0,
+            "Reception (do not touch)"
+        );
+
+        // And through the sync: the inventory takes Meraki's new name, the node keeps its own.
+        r.directory
+            .now_answers(Ok(listing_of("Q2-A", "lobby-ap", "N_1", Some("10.0.0.1"))));
+        let second = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(second.followed, 0, "{second:?}");
+        assert_eq!(second.written, 1, "the inventory row still follows Meraki");
+        assert_eq!(
+            node_as_it_stands(&pool, "Q2-A").await.0,
+            "Reception (do not touch)"
+        );
+    }
+
+    /// A node imported while Meraki reported no address stands at `0.0.0.0`, and nothing but this
+    /// could ever change that — no screen edits a node's address. It gets one from the first sync
+    /// that has one, and a later sync that has none again leaves it alone.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_node_imported_without_an_address_gets_one_and_never_loses_it(pool: sqlx::PgPool) {
+        let r = rig(&pool, Ok(listing_of("Q2-A", "ap-1", "N_1", None))).await;
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "0.0.0.0");
+
+        r.directory
+            .now_answers(Ok(listing_of("Q2-A", "ap-1", "N_1", Some("10.0.0.9"))));
+        let second = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(second.followed, 1);
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.0.0.9");
+
+        r.directory
+            .now_answers(Ok(listing_of("Q2-A", "ap-1", "N_1", None)));
+        let third = r.sync.sync_org(&r.org().await).await.expect("third sync");
+        assert_eq!(third.followed, 0, "{third:?}");
+        assert_eq!(
+            node_as_it_stands(&pool, "Q2-A").await.1,
+            "10.0.0.9",
+            "a listing with no address turned a good address into none"
+        );
+    }
+
+    /// ADR-164 決定 15. Collection asks about watched networks only, so a node whose network is not
+    /// watched goes quiet. The count on the organization's row has to be the number of rows the
+    /// device list marks — they are two queries, and one number on two screens.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_count_of_nodes_nothing_is_collected_for_is_what_the_device_list_marks(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::meraki_inventory::MerakiDeviceState;
+        // Two become nodes; the dormant one never does, and must not be counted wherever it sits.
+        let r = rig(
+            &pool,
+            Ok(listing(&[("Q2-A", UP), ("Q2-B", UP), ("Q2-C", DOWN)])),
+        )
+        .await;
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(nodes_of(&pool, r.org).await, ["Q2-A", "Q2-B"]);
+
+        let counted = |r: &Rig| {
+            let inventory = r.inventory.clone();
+            let org = r.org;
+            async move {
+                let counts = inventory.counts().await.expect("counts");
+                let marked = inventory
+                    .devices(org)
+                    .await
+                    .expect("devices")
+                    .iter()
+                    .filter(|d| d.state == MerakiDeviceState::Monitored && !d.network_monitored)
+                    .count();
+                (
+                    counts
+                        .get(&org)
+                        .copied()
+                        .unwrap_or_default()
+                        .monitored_unwatched,
+                    marked,
+                )
+            }
+        };
+        assert_eq!(counted(&r).await, (0, 0), "the network is watched");
+
+        r.orgs
+            .set_networks_monitored(r.org, &["N_1".to_owned()], false)
+            .await
+            .expect("stop watching the network");
+        assert_eq!(
+            counted(&r).await,
+            (2, 2),
+            "both nodes went quiet; the device that was never a node is not one of them"
+        );
+
+        r.orgs
+            .set_networks_monitored(r.org, &["N_1".to_owned()], true)
+            .await
+            .expect("watch it again");
+        assert_eq!(counted(&r).await, (0, 0));
     }
 }

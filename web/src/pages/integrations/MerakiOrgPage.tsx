@@ -49,6 +49,7 @@ import {
   networkLabel,
   parseMaxDevices,
   pruneSelection,
+  uncollectedDevices,
   unwatchedNotice,
 } from './merakiDevices';
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
@@ -441,6 +442,21 @@ export function MerakiOrgPage() {
       .finally(() => setBusy(false));
   };
 
+  // Nodes nothing is collected for (ADR-164 決定 15). Read from the device list rather than from
+  // `org.devices.monitored_unwatched`: the button has to name the networks, and only the list has
+  // them. The two are pinned to each other on the server (`meraki_sync.rs`).
+  const uncollected = uncollectedDevices(devices);
+  const watchThese = () => {
+    if (!org || uncollected.networkIds.length === 0) return;
+    setBusy(true);
+    setActionError(null);
+    api
+      .setMerakiNetworksMonitored(org.id, uncollected.networkIds, true)
+      .then(load)
+      .catch((e: unknown) => setActionError(errMsg(e, t('meraki.err.watchAll'))))
+      .finally(() => setBusy(false));
+  };
+
   const selectable = importableSerials(shown);
 
   return (
@@ -491,6 +507,18 @@ export function MerakiOrgPage() {
 
           <ImportSettingsCard org={org} canConfig={canConfig} onSaved={load} />
 
+          {/* First, because it is the one about devices already being watched: they have gone
+              quiet. Shown whether or not automatic import is on. */}
+          {uncollected.count > 0 && (
+            <div className="meraki-orgpage-notice meraki-orgpage-uncollected">
+              <span>{t('meraki.settings.uncollected', { count: uncollected.count })}</span>
+              {canConfig && (
+                <Button variant="outline" onClick={watchThese} disabled={busy}>
+                  {t('meraki.settings.watchThese')}
+                </Button>
+              )}
+            </div>
+          )}
           {unwatched.length > 0 && (
             <div className="meraki-orgpage-notice">
               <span>{t('meraki.settings.unwatched', { count: unwatched.length })}</span>

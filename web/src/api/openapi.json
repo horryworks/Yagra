@@ -31602,7 +31602,8 @@
           "seen",
           "monitored",
           "new",
-          "missing"
+          "missing",
+          "monitored_unwatched"
         ],
         "properties": {
           "missing": {
@@ -31615,6 +31616,12 @@
             "type": "integer",
             "format": "int32",
             "description": "Of those, the ones that are nodes.",
+            "minimum": 0
+          },
+          "monitored_unwatched": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection\nasks the Dashboard about watched networks only, so **nothing is collected for these**: the\nnode keeps the last state it was seen in and raises nothing. It happens when a device is\nmoved into an unwatched network, and when a network holding nodes is un-watched.",
             "minimum": 0
           },
           "new": {
@@ -32195,13 +32202,20 @@
           "written",
           "newly_missing",
           "imported",
-          "over_cap"
+          "over_cap",
+          "followed"
         ],
         "properties": {
           "devices": {
             "type": "integer",
             "format": "int32",
             "description": "Devices the Dashboard lists.",
+            "minimum": 0
+          },
+          "followed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Nodes that took a new address, a new name or a new network from the Dashboard in this sync\n(ADR-164 決定 14). A node is renamed only while it still carries the name Meraki gave it,\nand is never moved to another folder. Zero is the ordinary answer.",
             "minimum": 0
           },
           "imported": {

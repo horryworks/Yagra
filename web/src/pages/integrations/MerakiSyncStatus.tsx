@@ -55,6 +55,14 @@ export function MerakiSyncStatus({ org, error }: { org: MerakiOrg; error?: strin
               {t('meraki.sync.missing', { count: org.devices.missing })}
             </span>
           )}
+          {/* Nodes in a network the organization does not watch receive nothing, and nothing else
+              on any screen says so — they keep their last state (ADR-164 決定 15). Short here; the
+              organization's page has the sentence and the button. */}
+          {org.devices.monitored_unwatched > 0 && (
+            <span className="meraki-org-sync-failed">
+              {t('meraki.sync.uncollected', { count: org.devices.monitored_unwatched })}
+            </span>
+          )}
         </>
       )}
       {error && <span className="meraki-org-sync-failed">{error}</span>}

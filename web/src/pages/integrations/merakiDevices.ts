@@ -137,6 +137,29 @@ export function unwatchedNotice(
   return org.import_devices ? unwatchedNetworkIds(networks) : [];
 }
 
+/** The monitored devices nothing is collected for, and the networks that would have to be watched
+ *  to fix that (ADR-164 決定 15).
+ *
+ *  Collection asks the Dashboard about watched networks only, so a node whose network is not
+ *  watched receives nothing: it keeps the last state it was seen in and raises no alert. That
+ *  happens when a device is moved into an unwatched network, and when a network that holds nodes
+ *  is un-watched.
+ *
+ *  ⚠️ `networkIds` is **only the networks these devices are in** — deliberately not
+ *  [`unwatchedNetworkIds`]. That list answers a different question (what automatic import cannot
+ *  reach), and watching every network to bring two nodes back would start importing from all of
+ *  them. Only `monitored` counts: a device with no node has nothing that could go quiet, and one
+ *  Meraki no longer lists (`missing`) is already reported as such. */
+export function uncollectedDevices(
+  devices: readonly Pick<MerakiDevice, 'state' | 'network_id' | 'network_monitored'>[],
+): { count: number; networkIds: string[] } {
+  const quiet = devices.filter((d) => d.state === 'monitored' && !d.network_monitored);
+  return {
+    count: quiet.length,
+    networkIds: [...new Set(quiet.map((d) => d.network_id))].sort(),
+  };
+}
+
 // ───────────────────────────────────────────────────────────────────── import
 
 /** One device as `POST /meraki/import` wants it. */

@@ -523,6 +523,7 @@
       "devices": "デバイス {{seen}} 台中 {{monitored}} 台を監視中",
       "new_other": "新規 {{count}} 台",
       "missing_other": "Meraki 側に見つからない {{count}} 台",
+      "uncollected_other": "未取得 {{count}} 台",
       "now": "今すぐ同期",
       "running": "同期中…",
       "reason": {
@@ -589,6 +590,8 @@
       "maxDevicesInvalid": "{{min}} から {{max}} までの整数を入力してください。",
       "unwatched_other": "{{count}} 個のネットワークが監視対象外のため、そのデバイスはインポートされません。",
       "watchAll": "すべて監視対象にする",
+      "uncollected_other": "監視中のデバイス {{count}} 台が監視対象外のネットワークにあります。このデバイスの値は取得されていません。表示中の状態は、最後に取得したときのものです。",
+      "watchThese": "このネットワークを監視対象にする",
       "overCap_other": "上限に達したため {{count}} 台をインポートしていません。"
     },
     "devices": {

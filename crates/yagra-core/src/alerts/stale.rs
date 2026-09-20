@@ -87,10 +87,17 @@ const SCOPE_CHUNK: usize = 200;
 /// # 🚨 Why Meraki is excluded at all
 ///
 /// `MERAKI_TRAFFIC_MAX_SECS` is 86_400 and `MERAKI_INVENTORY_MAX_SECS` is **604_800 — seven days**
-/// (`config::…`). A Meraki node still gets an ICMP check from `assemble_node_jobs`, so its liveness
-/// arrives every poll interval while a traffic or inventory metric can legitimately be a week apart.
+/// (`config::…`). A Meraki node's liveness arrives on the organization collector's availability
+/// tier (ADR-164 Inc.3) — no pool poller polls it, `scheduler/sweep.rs::group_by_pool` drops it
+/// from every pool — while a traffic or inventory metric can legitimately be a week apart.
 /// A window that covered that would be longer than the strandings this sweep exists to catch
 /// (4.33 days, measured), so the whole node kind is out of scope instead.
+///
+/// ⚠️ This used to say a Meraki node "still gets an ICMP check from `assemble_node_jobs`". It does
+/// not, and the difference matters: a Meraki node whose network the organization does not watch
+/// receives **nothing at all**, and being out of this sweep's scope, it goes quiet rather than
+/// stale. Nothing here will notice. What says so is the organization's row
+/// (`MerakiDeviceCounts::monitored_unwatched`, ADR-164 決定 15).
 ///
 /// Excluded **structurally, never by a `meraki_` name prefix** — a string rule silently misses rows
 /// where a set membership cannot.

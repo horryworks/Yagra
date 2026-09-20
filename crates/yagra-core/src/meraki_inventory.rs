@@ -16,6 +16,12 @@
 //! - **`missing_since` is only ever derived from a complete listing.** This module cannot check
 //!   that — it is `yagra_transport::fetch_inventory`'s contract, which returns an error rather than
 //!   a short answer — so [`plan_sync`] takes the listing as given and says so here.
+//!
+//! Since ADR-164 Inc.8 the same plan also says what an **imported node follows** (決定 14): its
+//! address, its name while nobody has renamed it, and the network its binding names. That makes
+//! [`MerakiInventoryRepo::apply`] a writer of `nodes` and `meraki_devices` as well, and it is here
+//! rather than beside the importer for one reason — a rename is only visible at the moment the
+//! stored name changes, so it has to commit with the row that changes it.
 
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -106,6 +112,85 @@ pub struct DeviceWrite {
     pub imported_at: Option<DateTime<Utc>>,
 }
 
+/// The name a device's node is given: Meraki's, or the serial when Meraki has none.
+///
+/// One function for the importer and for [`plan_follow`], and that is the point. A rename is
+/// recognised by comparing the node's name with the name the *previous* Meraki name produced; two
+/// spellings of "a blank name becomes the serial" would make every unnamed device look renamed by
+/// an operator, permanently, and nothing would say so.
+#[must_use]
+pub fn node_name_for(meraki_name: &str, serial: &str) -> String {
+    if meraki_name.trim().is_empty() {
+        serial.to_owned()
+    } else {
+        meraki_name.to_owned()
+    }
+}
+
+/// A device's node, as the planner needs it (ADR-164 決定 14): when it was bound, and what the node
+/// and its binding say **now**.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundNode {
+    pub bound_at: DateTime<Utc>,
+    /// The node's current name. An operator can change it, which is what a rename must respect.
+    pub name: String,
+    /// The node's current address — `0.0.0.0` on a node imported while Meraki reported none.
+    /// Nothing but this sync can change it: no screen edits a node's address.
+    pub address: IpAddr,
+    /// The network the binding names. Written once at import, so it goes stale when a device moves.
+    pub network_id: String,
+}
+
+/// What one imported node takes from Meraki in this sync. At least one field is set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeFollow {
+    pub serial: String,
+    /// `(from, to)`: rename the node to `to`, **only while it is still called `from`**. The
+    /// statement repeats that condition, because an operator can rename the node between the read
+    /// this plan was made from and the write.
+    pub rename: Option<(String, String)>,
+    /// The address to give the node.
+    pub address: Option<IpAddr>,
+    /// The network to record on the binding.
+    pub network_id: Option<String>,
+}
+
+/// Decide what a node follows, from the stored row, what this listing says, and the node as it
+/// stands. Pure.
+///
+/// The three are decided differently on purpose:
+/// - **The address** is compared with the node's *current* one, so a node that drifted before this
+///   existed — or was imported at `0.0.0.0` — is put right by the first sync. An address Meraki
+///   does not report moves nothing: a device that is down must not turn a good address into none.
+/// - **The name** follows a *change* on Meraki's side, and only while the node still carries the
+///   name the previous Meraki name gave it. A node whose name differs for any other reason was
+///   renamed by a person, or drifted before this existed; the two cannot be told apart, so neither
+///   is touched.
+/// - **The binding's network** is a copy with no other writer, so it is simply kept current.
+///
+/// The folder is never part of it (決定 6).
+#[must_use]
+pub fn plan_follow(
+    row: Option<&StoredDevice>,
+    device: &SeenDevice,
+    node: &BoundNode,
+) -> Option<NodeFollow> {
+    let rename = row.and_then(|r| {
+        let from = node_name_for(&r.name, &device.serial);
+        let to = node_name_for(&device.name, &device.serial);
+        (from != to && node.name == from).then_some((from, to))
+    });
+    let address = device.lan_ip.filter(|ip| *ip != node.address);
+    let network_id = (!device.network_id.is_empty() && device.network_id != node.network_id)
+        .then(|| device.network_id.clone());
+    (rename.is_some() || address.is_some() || network_id.is_some()).then(|| NodeFollow {
+        serial: device.serial.clone(),
+        rename,
+        address,
+        network_id,
+    })
+}
+
 /// What one sync writes. Empty when nothing changed, which is the ordinary case.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SyncPlan {
@@ -113,28 +198,41 @@ pub struct SyncPlan {
     pub writes: Vec<DeviceWrite>,
     /// Stored serials the listing no longer contains and that are not already marked.
     pub newly_missing: Vec<String>,
+    /// What imported nodes take from this listing (決定 14).
+    pub follows: Vec<NodeFollow>,
 }
 
 impl SyncPlan {
     /// Whether the sync has anything to write.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.writes.is_empty() && self.newly_missing.is_empty()
+        self.writes.is_empty() && self.newly_missing.is_empty() && self.follows.is_empty()
     }
 }
 
+/// What [`MerakiInventoryRepo::apply`] changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Applied {
+    /// Inventory rows touched.
+    pub rows: u64,
+    /// Nodes that took something from Meraki — counted once each, and only when a statement
+    /// actually changed a row. Zero is what keeps the configuration generation still.
+    pub followed: u32,
+}
+
 /// Decide what a sync writes, from what is stored, what a **complete** listing contained, and which
-/// serials have a node (`bound`: serial → when it was bound).
+/// serials have a node (`bound`: serial → the node as it stands).
 ///
 /// Pure. A device is written when it is new, when anything Meraki says about it changed, when it is
 /// online for the first time, when it has come back from missing, or when it has a node and no
 /// `imported_at` yet. Everything else is left alone — including a device that is merely *offline
-/// again*: `online` is a fact about this listing, not a column.
+/// again*: `online` is a fact about this listing, not a column. A device with a node also gets a
+/// [`NodeFollow`] when [`plan_follow`] finds one.
 #[must_use]
 pub fn plan_sync(
     stored: &[StoredDevice],
     seen: &[SeenDevice],
-    bound: &HashMap<String, DateTime<Utc>>,
+    bound: &HashMap<String, BoundNode>,
 ) -> SyncPlan {
     let by_serial: HashMap<&str, &StoredDevice> =
         stored.iter().map(|r| (r.serial.as_str(), r)).collect();
@@ -142,11 +240,14 @@ pub fn plan_sync(
 
     for device in seen {
         let row = by_serial.get(device.serial.as_str()).copied();
+        let node = bound.get(&device.serial);
         let first_online = device.online && row.is_none_or(|r| r.first_online_at.is_none());
         let imported_at = match row {
             Some(r) if r.imported_at.is_some() => None,
-            _ => bound.get(&device.serial).copied(),
+            _ => node.map(|n| n.bound_at),
         };
+        plan.follows
+            .extend(node.and_then(|n| plan_follow(row, device, n)));
         let described_the_same = row.is_some_and(|r| {
             r.name == device.name
                 && r.model == device.model
@@ -244,15 +345,24 @@ pub struct MerakiDeviceCounts {
     pub new: u32,
     /// Nodes whose device Meraki no longer lists.
     pub missing: u32,
+    /// Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection
+    /// asks the Dashboard about watched networks only, so **nothing is collected for these**: the
+    /// node keeps the last state it was seen in and raises nothing. It happens when a device is
+    /// moved into an unwatched network, and when a network holding nodes is un-watched.
+    pub monitored_unwatched: u32,
 }
 
 impl MerakiDeviceCounts {
-    /// Fold one device in.
-    fn add(&mut self, state: MerakiDeviceState) {
+    /// Fold one device in. `network_watched` is whether the device's network is one the
+    /// organization watches — `false` for a network the sync has not recorded.
+    fn add(&mut self, state: MerakiDeviceState, network_watched: bool) {
         match state {
             MerakiDeviceState::Monitored => {
                 self.seen += 1;
                 self.monitored += 1;
+                if !network_watched {
+                    self.monitored_unwatched += 1;
+                }
             }
             MerakiDeviceState::New => {
                 self.seen += 1;
@@ -326,26 +436,52 @@ impl MerakiInventoryRepo {
             .collect()
     }
 
-    /// Which of an organization's serials have a node, and when each was bound.
-    pub async fn bound(&self, org: Uuid) -> anyhow::Result<HashMap<String, DateTime<Utc>>> {
-        let rows = sqlx::query("SELECT serial, created_at FROM meraki_devices WHERE org_id = $1")
-            .bind(org)
-            .fetch_all(&self.pool)
-            .await?;
+    /// Which of an organization's serials have a node: when each was bound, and what the node and
+    /// the binding say now — what [`plan_follow`] compares Meraki's answer with.
+    ///
+    /// `host(address)`, not `address::TEXT`: the cast appends the netmask (`10.0.0.1/32`), which
+    /// does not parse as an address.
+    pub async fn bound(&self, org: Uuid) -> anyhow::Result<HashMap<String, BoundNode>> {
+        let rows = sqlx::query(
+            "SELECT d.serial, d.created_at, d.network_id, n.name, host(n.address) AS address \
+             FROM meraki_devices d JOIN nodes n ON n.id = d.node_id \
+             WHERE d.org_id = $1",
+        )
+        .bind(org)
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter()
-            .map(|r| Ok((r.try_get("serial")?, r.try_get("created_at")?)))
+            .map(|r| {
+                let address: String = r.try_get("address")?;
+                Ok((
+                    r.try_get("serial")?,
+                    BoundNode {
+                        bound_at: r.try_get("created_at")?,
+                        name: r.try_get("name")?,
+                        address: address.parse()?,
+                        network_id: r.try_get("network_id")?,
+                    },
+                ))
+            })
             .collect()
     }
 
-    /// Write one sync's plan, atomically. Returns how many rows were touched.
+    /// Write one sync's plan, atomically.
     ///
     /// 🚨 The `COALESCE`s are not decoration. The planner only asks for `first_online_at` or
     /// `imported_at` on a row that has none, but two syncs of one organization can plan from the
     /// same snapshot (a manual one beside the periodic one on another core) — and the later write
     /// must not move a timestamp the earlier one set.
-    pub async fn apply(&self, org: Uuid, plan: &SyncPlan) -> anyhow::Result<u64> {
+    ///
+    /// 🚨 **The follows commit with the rows, in this transaction, and that is load-bearing.** A
+    /// rename is planned from the difference between the stored name and the listed one. Once the
+    /// row carries the new name that difference is gone — so a node update written separately, and
+    /// lost, would never be planned again. Each statement also repeats its own condition (the
+    /// rename is a compare-and-swap on the old name, the other two are `IS DISTINCT FROM`), which
+    /// is what makes two syncs from one snapshot, or an operator's rename in between, harmless.
+    pub async fn apply(&self, org: Uuid, plan: &SyncPlan) -> anyhow::Result<Applied> {
         if plan.is_empty() {
-            return Ok(0);
+            return Ok(Applied::default());
         }
         let mut touched = 0u64;
         let mut tx = self.pool.begin().await?;
@@ -389,8 +525,61 @@ impl MerakiInventoryRepo {
             .await?
             .rows_affected();
         }
+
+        let mut followed = 0u32;
+        for f in &plan.follows {
+            let mut changed = false;
+            if let Some((from, to)) = &f.rename {
+                changed |= sqlx::query(
+                    "UPDATE nodes SET name = $3, updated_at = now() \
+                     FROM meraki_devices d \
+                     WHERE d.org_id = $1 AND d.serial = $2 AND nodes.id = d.node_id \
+                       AND nodes.name = $4",
+                )
+                .bind(org)
+                .bind(&f.serial)
+                .bind(to)
+                .bind(from)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
+            }
+            if let Some(address) = f.address {
+                changed |= sqlx::query(
+                    "UPDATE nodes SET address = $3::inet, updated_at = now() \
+                     FROM meraki_devices d \
+                     WHERE d.org_id = $1 AND d.serial = $2 AND nodes.id = d.node_id \
+                       AND nodes.address IS DISTINCT FROM $3::inet",
+                )
+                .bind(org)
+                .bind(&f.serial)
+                .bind(address.to_string())
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
+            }
+            if let Some(network_id) = &f.network_id {
+                changed |= sqlx::query(
+                    "UPDATE meraki_devices SET network_id = $3, updated_at = now() \
+                     WHERE org_id = $1 AND serial = $2 AND network_id IS DISTINCT FROM $3",
+                )
+                .bind(org)
+                .bind(&f.serial)
+                .bind(network_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
+            }
+            followed += u32::from(changed);
+        }
         tx.commit().await?;
-        Ok(touched)
+        Ok(Applied {
+            rows: touched,
+            followed,
+        })
     }
 
     /// An organization's devices, as the API lists them. Rows [`classify`] declines are left out.
@@ -446,10 +635,15 @@ impl MerakiInventoryRepo {
     /// would be a second spelling of the same five-way rule, and the list and its own counts
     /// disagreeing is exactly what two spellings produce.
     pub async fn counts(&self) -> anyhow::Result<HashMap<Uuid, MerakiDeviceCounts>> {
+        // The network join is the one [`Self::devices`] makes, spelled the same way on purpose:
+        // `monitored_unwatched` has to be the number of rows that list marks "not watched".
         let rows = sqlx::query(
-            "SELECT i.org_id, i.first_online_at, i.missing_since, i.imported_at, d.node_id \
+            "SELECT i.org_id, i.first_online_at, i.missing_since, i.imported_at, d.node_id, \
+                    COALESCE(n.monitored, false) AS monitored \
              FROM meraki_inventory i \
-             LEFT JOIN meraki_devices d ON d.org_id = i.org_id AND d.serial = i.serial",
+             LEFT JOIN meraki_devices d ON d.org_id = i.org_id AND d.serial = i.serial \
+             LEFT JOIN meraki_org_networks n \
+                    ON n.org_id = i.org_id AND n.network_id = i.network_id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -459,7 +653,9 @@ impl MerakiInventoryRepo {
             let missing_since: Option<DateTime<Utc>> = r.try_get("missing_since")?;
             if let Some(state) = classify(facts_of(r, node_id.is_some(), missing_since.is_some())?)
             {
-                out.entry(r.try_get("org_id")?).or_default().add(state);
+                out.entry(r.try_get("org_id")?)
+                    .or_default()
+                    .add(state, r.try_get("monitored")?);
             }
         }
         Ok(out)
@@ -519,8 +715,32 @@ mod tests {
         }
     }
 
-    fn nobody() -> HashMap<String, DateTime<Utc>> {
+    fn nobody() -> HashMap<String, BoundNode> {
         HashMap::new()
+    }
+
+    /// The node an import of `d` leaves behind: named, addressed and bound as the importer does it.
+    fn node_of(d: &SeenDevice) -> BoundNode {
+        BoundNode {
+            bound_at: at(-3600),
+            name: node_name_for(&d.name, &d.serial),
+            address: d
+                .lan_ip
+                .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+            network_id: d.network_id.clone(),
+        }
+    }
+
+    /// `d`'s row after the sync that recorded its node.
+    fn imported_as(d: &SeenDevice) -> StoredDevice {
+        StoredDevice {
+            imported_at: Some(at(-3600)),
+            ..stored_as(d)
+        }
+    }
+
+    fn bound_as(d: &SeenDevice, node: BoundNode) -> HashMap<String, BoundNode> {
+        HashMap::from([(d.serial.clone(), node)])
     }
 
     /// ADR-164 決定 4. The sync runs every five minutes; the ordinary sync finds what it found last
@@ -623,15 +843,216 @@ mod tests {
     #[test]
     fn a_device_that_already_has_a_node_is_backfilled_as_imported() {
         let a = seen("Q2-A", true);
-        let bound = HashMap::from([("Q2-A".to_owned(), at(-3600))]);
+        let bound = bound_as(&a, node_of(&a));
 
         let first = plan_sync(&[], std::slice::from_ref(&a), &bound);
         assert_eq!(first.writes[0].imported_at, Some(at(-3600)));
 
         // Already recorded: not a reason to write, and never a reason to move it.
-        let mut row = stored_as(&a);
-        row.imported_at = Some(at(-3600));
-        assert!(plan_sync(&[row], &[a], &bound).is_empty());
+        assert!(plan_sync(&[imported_as(&a)], &[a], &bound).is_empty());
+    }
+
+    /// ADR-164 決定 14, the rename. Meraki's name changed and the node still carries the name the
+    /// old one gave it, so nobody has renamed it and it follows.
+    #[test]
+    fn a_rename_in_meraki_reaches_a_node_that_still_carries_the_old_name() {
+        let was = seen("Q2-A", true);
+        let now = SeenDevice {
+            name: "lobby-ap".into(),
+            ..was.clone()
+        };
+        let plan = plan_sync(&[imported_as(&was)], &[now], &bound_as(&was, node_of(&was)));
+        assert_eq!(
+            plan.follows,
+            [NodeFollow {
+                serial: "Q2-A".into(),
+                rename: Some(("dev-Q2-A".into(), "lobby-ap".into())),
+                address: None,
+                network_id: None,
+            }]
+        );
+        assert_eq!(plan.writes.len(), 1, "the row takes the new name too");
+    }
+
+    /// …and the other direction: a person renamed the node, so Meraki's rename stays in the
+    /// inventory and goes no further. The row is still written — only the node is left alone.
+    #[test]
+    fn a_rename_in_meraki_never_overwrites_a_name_an_operator_chose() {
+        let was = seen("Q2-A", true);
+        let now = SeenDevice {
+            name: "lobby-ap".into(),
+            ..was.clone()
+        };
+        let renamed_here = BoundNode {
+            name: "Reception AP (do not touch)".into(),
+            ..node_of(&was)
+        };
+        let plan = plan_sync(&[imported_as(&was)], &[now], &bound_as(&was, renamed_here));
+        assert!(plan.follows.is_empty(), "{:?}", plan.follows);
+        assert_eq!(plan.writes.len(), 1);
+    }
+
+    /// A name that differs with **no change on Meraki's side** is not a rename to follow: it is an
+    /// operator's rename, or a drift from before this existed, and the two look the same.
+    #[test]
+    fn a_name_that_already_differed_is_left_alone() {
+        let a = seen("Q2-A", true);
+        let drifted = BoundNode {
+            name: "an older name".into(),
+            ..node_of(&a)
+        };
+        assert!(plan_sync(
+            &[imported_as(&a)],
+            std::slice::from_ref(&a),
+            &bound_as(&a, drifted)
+        )
+        .is_empty());
+    }
+
+    /// A device with no name in Meraki is imported under its serial, so the rename is recognised
+    /// through [`node_name_for`] in both directions. Comparing the raw names would never match the
+    /// node called `Q2-A` against a stored name of `""`.
+    #[test]
+    fn an_unnamed_device_follows_through_its_serial_in_both_directions() {
+        let unnamed = SeenDevice {
+            name: "  ".into(),
+            ..seen("Q2-A", true)
+        };
+        let named = SeenDevice {
+            name: "edge-fw".into(),
+            ..unnamed.clone()
+        };
+        assert_eq!(node_name_for(&unnamed.name, &unnamed.serial), "Q2-A");
+        // The renames a plan holds, as a list: a plan with none must fail by saying so, not by
+        // indexing past the end of an empty one.
+        let renames = |plan: &SyncPlan| -> Vec<(String, String)> {
+            plan.follows
+                .iter()
+                .filter_map(|f| f.rename.clone())
+                .collect()
+        };
+
+        let gains = plan_sync(
+            &[imported_as(&unnamed)],
+            std::slice::from_ref(&named),
+            &bound_as(&unnamed, node_of(&unnamed)),
+        );
+        assert_eq!(
+            renames(&gains),
+            [("Q2-A".to_owned(), "edge-fw".to_owned())],
+            "a device imported under its serial did not take the name Meraki gave it later"
+        );
+
+        let loses = plan_sync(
+            &[imported_as(&named)],
+            std::slice::from_ref(&unnamed),
+            &bound_as(&named, node_of(&named)),
+        );
+        assert_eq!(
+            renames(&loses),
+            [("edge-fw".to_owned(), "Q2-A".to_owned())],
+            "a device whose name was removed in Meraki did not go back to its serial"
+        );
+    }
+
+    /// The address is compared with the node's **current** one, not with the stored row — so a node
+    /// that drifted before this existed is put right although nothing changed in the inventory.
+    #[test]
+    fn a_node_at_another_address_is_readdressed_even_when_the_row_did_not_change() {
+        let a = seen("Q2-A", true);
+        let stale = BoundNode {
+            address: "10.9.9.9".parse().expect("ip"),
+            ..node_of(&a)
+        };
+        let plan = plan_sync(
+            &[imported_as(&a)],
+            std::slice::from_ref(&a),
+            &bound_as(&a, stale),
+        );
+        assert!(plan.writes.is_empty(), "the inventory row is unchanged");
+        assert_eq!(plan.follows.len(), 1);
+        assert_eq!(plan.follows[0].address, "10.0.0.1".parse().ok());
+        assert_eq!(plan.follows[0].rename, None);
+    }
+
+    /// Both directions of "no address". A node imported at `0.0.0.0` gets its address the first
+    /// time Meraki reports one; a listing that reports none moves nothing — a device that is down
+    /// must not turn a good address into `0.0.0.0`.
+    #[test]
+    fn a_missing_address_never_replaces_a_good_one_and_a_good_one_replaces_none() {
+        let addressed = seen("Q2-A", true);
+        let bare = SeenDevice {
+            lan_ip: None,
+            ..addressed.clone()
+        };
+
+        let gains = plan_sync(
+            &[imported_as(&bare)],
+            std::slice::from_ref(&addressed),
+            &bound_as(&bare, node_of(&bare)),
+        );
+        assert_eq!(gains.follows[0].address, "10.0.0.1".parse().ok());
+
+        let loses = plan_sync(
+            &[imported_as(&addressed)],
+            std::slice::from_ref(&bare),
+            &bound_as(&addressed, node_of(&addressed)),
+        );
+        assert!(loses.follows.is_empty(), "{:?}", loses.follows);
+        assert_eq!(
+            loses.writes.len(),
+            1,
+            "the row records that Meraki reports none"
+        );
+    }
+
+    /// The binding's network is kept current. Nothing in the plan names a folder: a device that
+    /// moves network stays where it was filed (決定 6).
+    #[test]
+    fn a_device_that_moved_network_has_its_binding_corrected() {
+        let was = seen("Q2-A", true);
+        let now = SeenDevice {
+            network_id: "N_2".into(),
+            ..was.clone()
+        };
+        let plan = plan_sync(&[imported_as(&was)], &[now], &bound_as(&was, node_of(&was)));
+        assert_eq!(
+            plan.follows,
+            [NodeFollow {
+                serial: "Q2-A".into(),
+                rename: None,
+                address: None,
+                network_id: Some("N_2".into()),
+            }]
+        );
+    }
+
+    /// The ordinary sync, with nodes this time: everything agrees, so the plan is empty and the
+    /// configuration generation stays where it is.
+    #[test]
+    fn a_node_that_already_agrees_with_meraki_follows_nothing() {
+        let a = seen("Q2-A", true);
+        let plan = plan_sync(
+            &[imported_as(&a)],
+            std::slice::from_ref(&a),
+            &bound_as(&a, node_of(&a)),
+        );
+        assert!(plan.is_empty(), "{plan:?}");
+    }
+
+    /// A device with no node has nothing to follow, whatever changed about it.
+    #[test]
+    fn a_device_without_a_node_follows_nothing() {
+        let was = seen("Q2-A", true);
+        let now = SeenDevice {
+            name: "renamed".into(),
+            network_id: "N_2".into(),
+            lan_ip: "10.0.0.2".parse().ok(),
+            ..was.clone()
+        };
+        let plan = plan_sync(&[stored_as(&was)], &[now], &nobody());
+        assert!(plan.follows.is_empty());
+        assert_eq!(plan.writes.len(), 1);
     }
 
     #[test]
@@ -662,7 +1083,7 @@ mod tests {
     fn counts_are_the_same_reading_as_the_list() {
         let mut c = MerakiDeviceCounts::default();
         for s in MerakiDeviceState::ALL {
-            c.add(s);
+            c.add(s, true);
         }
         // One of each: four are listed by Meraki, one (Missing) is not.
         assert_eq!(
@@ -671,8 +1092,26 @@ mod tests {
                 seen: 4,
                 monitored: 1,
                 new: 1,
-                missing: 1
+                missing: 1,
+                monitored_unwatched: 0,
             }
+        );
+    }
+
+    /// ADR-164 決定 15. Only a **monitored** device in an unwatched network is the silent case: a
+    /// device with no node has nothing that could go quiet, and one Meraki no longer lists is
+    /// already reported as missing.
+    #[test]
+    fn only_a_monitored_device_in_an_unwatched_network_is_counted_as_not_collected() {
+        let mut c = MerakiDeviceCounts::default();
+        for s in MerakiDeviceState::ALL {
+            c.add(s, false);
+        }
+        assert_eq!(c.monitored_unwatched, 1);
+        assert_eq!(
+            (c.seen, c.monitored, c.new, c.missing),
+            (4, 1, 1, 1),
+            "the watch flag moves no other count"
         );
     }
 

@@ -23,6 +23,7 @@ import {
   parseMaxDevices,
   pruneSelection,
   toImportDevice,
+  uncollectedDevices,
   unwatchedNetworkIds,
   unwatchedNotice,
 } from './merakiDevices';
@@ -148,6 +149,45 @@ describe('unwatched networks', () => {
     // would blame the network scope for what the switch above it is doing.
     expect(unwatchedNotice({ import_devices: true }, networks)).toEqual(['N_2', 'N_3']);
     expect(unwatchedNotice({ import_devices: false }, networks)).toEqual([]);
+  });
+});
+
+describe('monitored devices nothing is collected for (ADR-164 決定 15)', () => {
+  const at = (
+    state: 'monitored' | 'new' | 'never_online' | 'deleted' | 'missing',
+    network_id: string,
+    network_monitored: boolean,
+  ) => ({ state, network_id, network_monitored });
+
+  it('counts only a monitored device whose network is not watched', () => {
+    const got = uncollectedDevices([
+      at('monitored', 'N_1', true),
+      at('monitored', 'N_2', false),
+      // No node, so nothing that could go quiet — wherever it sits.
+      at('new', 'N_2', false),
+      at('never_online', 'N_3', false),
+      at('deleted', 'N_3', false),
+      // Already reported as not found in Meraki; its network is moot.
+      at('missing', 'N_4', false),
+    ]);
+    expect(got).toEqual({ count: 1, networkIds: ['N_2'] });
+  });
+
+  it('names only the networks those devices are in, each once', () => {
+    // N_9 is unwatched too, and holds no node: watching it would start importing from it, which
+    // is not what "bring these devices back" asked for.
+    const got = uncollectedDevices([
+      at('monitored', 'N_3', false),
+      at('monitored', 'N_2', false),
+      at('monitored', 'N_3', false),
+      at('new', 'N_9', false),
+    ]);
+    expect(got).toEqual({ count: 3, networkIds: ['N_2', 'N_3'] });
+  });
+
+  it('is silent when every node is in a watched network', () => {
+    expect(uncollectedDevices([at('monitored', 'N_1', true)])).toEqual({ count: 0, networkIds: [] });
+    expect(uncollectedDevices([])).toEqual({ count: 0, networkIds: [] });
   });
 });
 

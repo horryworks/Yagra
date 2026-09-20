@@ -8707,6 +8707,14 @@ export interface components {
             monitored: number;
             /**
              * Format: int32
+             * @description Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection
+             *     asks the Dashboard about watched networks only, so **nothing is collected for these**: the
+             *     node keeps the last state it was seen in and raises nothing. It happens when a device is
+             *     moved into an unwatched network, and when a network holding nodes is un-watched.
+             */
+            monitored_unwatched: number;
+            /**
+             * Format: int32
              * @description Listed, online at least once, never a node here.
              */
             new: number;
@@ -8953,6 +8961,13 @@ export interface components {
              * @description Devices the Dashboard lists.
              */
             devices: number;
+            /**
+             * Format: int32
+             * @description Nodes that took a new address, a new name or a new network from the Dashboard in this sync
+             *     (ADR-164 決定 14). A node is renamed only while it still carries the name Meraki gave it,
+             *     and is never moved to another folder. Zero is the ordinary answer.
+             */
+            followed: number;
             /**
              * Format: int32
              * @description Devices this sync turned into nodes. Always zero for an organization whose automatic import

@@ -1788,14 +1788,18 @@ mod tests {
         let (status, report) = send(&st, "POST", &sync, &operator, None).await;
         assert_eq!(status, StatusCode::OK, "{report}");
         assert_eq!(report["devices"], 0, "{report}");
+        assert_eq!(report["followed"], 0, "{report}");
 
         let (_, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
         assert_eq!(orgs[0]["last_sync_ok"], true, "{orgs}");
         assert!(orgs[0]["last_sync_at"].is_string(), "{orgs}");
         assert!(orgs[0]["last_sync_error"].is_null(), "{orgs}");
+        // The whole object, so a count added later has to be decided about here too.
         assert_eq!(
             orgs[0]["devices"],
-            serde_json::json!({ "seen": 0, "monitored": 0, "new": 0, "missing": 0 })
+            serde_json::json!({
+                "seen": 0, "monitored": 0, "new": 0, "missing": 0, "monitored_unwatched": 0
+            })
         );
         // The id of the credential since Inc.6 — and nothing of what that credential seals.
         assert_eq!(
@@ -2095,6 +2099,7 @@ mod tests {
                         seen("Q3-C", Some("192.168.9.9")),
                     ],
                     newly_missing: Vec::new(),
+                    follows: Vec::new(),
                 },
             )
             .await
