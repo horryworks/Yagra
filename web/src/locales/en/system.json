@@ -580,6 +580,7 @@
     "cadence": {
       "title": "Cadence — {{name}}",
       "enabledTiers": "Enabled tiers",
+      "availabilityAlways": "Availability is always collected: it is what tells whether a device is up.",
       "availabilityInterval": "Availability interval (s)",
       "uplinkInterval": "Uplink interval (s)",
       "trafficInterval": "Traffic interval (s)",

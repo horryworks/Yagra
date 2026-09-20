@@ -42,6 +42,31 @@ export const SELECTABLE_MERAKI_TIERS = [
 
 export type SelectableMerakiTier = (typeof SELECTABLE_MERAKI_TIERS)[number];
 
+/**
+ * The tier an organization cannot go without (ADR-164 決定 17).
+ *
+ * Availability is the only tier that says whether a device is up — uplink and traffic record
+ * readings and decide nothing. An organization saved without it gave its nodes no liveness at all:
+ * they sat in `unknown` and node-down could never fire. `PUT …/cadence` answers
+ * `400 availability_required` for that shape, so the dialog does not offer it.
+ */
+export const REQUIRED_MERAKI_TIER = 'availability' satisfies SelectableMerakiTier;
+
+/** The tiers the cadence dialog draws a checkbox for: the selectable ones that may be switched off.
+ *  A checkbox that can only be refused is a control the operator cannot use, so the required tier
+ *  gets a sentence instead (`meraki.cadence.availabilityAlways`). */
+export const OPTIONAL_MERAKI_TIERS = SELECTABLE_MERAKI_TIERS.filter(
+  (tier) => tier !== REQUIRED_MERAKI_TIER,
+);
+
+/** What a save sends as `enabled_tiers`: the ticked tiers, with the required one always in and
+ *  first — where the column's own default has it. Anything already stored that the dialog does not
+ *  draw (`inventory`) rides along untouched, as it did before. */
+export function tiersToSave(ticked: Iterable<string>): string[] {
+  const rest = [...new Set(ticked)].filter((tier) => tier !== REQUIRED_MERAKI_TIER);
+  return [REQUIRED_MERAKI_TIER, ...rest];
+}
+
 /** The tiers a Meraki organization is collecting, as one localized list — or the "none" phrase.
  *  An empty list is a real state (an org added but not yet configured), so it gets a sentence
  *  rather than an empty cell. */

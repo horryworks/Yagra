@@ -1551,7 +1551,12 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Update an org's per-tier cadence, enabled tiers, and rate budget. */
+        /**
+         * Update an org's per-tier cadence, enabled tiers, and rate budget.
+         * @description `enabled_tiers` must include `availability`. It is the one tier that decides whether a device
+         *     is up; the others only record readings, so an organization without it could raise no node-down
+         *     alert at all.
+         */
         put: operations["set_meraki_org_cadence"];
         post?: never;
         delete?: never;
@@ -8710,7 +8715,9 @@ export interface components {
              * @description Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection
              *     asks the Dashboard about watched networks only, so **nothing is collected for these**: the
              *     node keeps the last state it was seen in and raises nothing. It happens when a device is
-             *     moved into an unwatched network, and when a network holding nodes is un-watched.
+             *     moved into an unwatched network, and when a network holding nodes is un-watched. An
+             *     organization that watches no network at all is sent no collect, so there it is every
+             *     monitored device (決定 16).
              */
             monitored_unwatched: number;
             /**
@@ -8837,6 +8844,13 @@ export interface components {
              *     organization's own `file_by_prefix` setting — what its page shows and the sync uses.
              */
             file_by_prefix?: boolean | null;
+            /**
+             * @description Networks to start watching along with the import — normally the ones `devices` are in.
+             *     Collection asks the Dashboard about watched networks only, so a device imported from a
+             *     network that stays unwatched becomes a node nothing is collected for. Absent or empty
+             *     changes no network. ⚠️ With automatic import on, watching a network also makes the next
+             *     sync import every other device in it.
+             */
             monitored_network_ids?: string[];
             /** Format: uuid */
             org_uuid: string;
@@ -18922,7 +18936,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A cadence value is outside its band, target_rps is outside the cap, or a tier is unknown */
+            /** @description A cadence value is outside its band, target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;

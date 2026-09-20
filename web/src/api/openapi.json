@@ -7814,6 +7814,7 @@
           "meraki"
         ],
         "summary": "Update an org's per-tier cadence, enabled tiers, and rate budget.",
+        "description": "`enabled_tiers` must include `availability`. It is the one tier that decides whether a device\nis up; the others only record readings, so an organization without it could raise no node-down\nalert at all.",
         "operationId": "set_meraki_org_cadence",
         "parameters": [
           {
@@ -7842,7 +7843,7 @@
             "description": "Cadence, enabled tiers and rate budget updated"
           },
           "400": {
-            "description": "A cadence value is outside its band, target_rps is outside the cap, or a tier is unknown",
+            "description": "A cadence value is outside its band, target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -31621,7 +31622,7 @@
           "monitored_unwatched": {
             "type": "integer",
             "format": "int32",
-            "description": "Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection\nasks the Dashboard about watched networks only, so **nothing is collected for these**: the\nnode keeps the last state it was seen in and raises nothing. It happens when a device is\nmoved into an unwatched network, and when a network holding nodes is un-watched.",
+            "description": "Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection\nasks the Dashboard about watched networks only, so **nothing is collected for these**: the\nnode keeps the last state it was seen in and raises nothing. It happens when a device is\nmoved into an unwatched network, and when a network holding nodes is un-watched. An\norganization that watches no network at all is sent no collect, so there it is every\nmonitored device (決定 16).",
             "minimum": 0
           },
           "new": {
@@ -31907,7 +31908,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Networks to start watching along with the import — normally the ones `devices` are in.\nCollection asks the Dashboard about watched networks only, so a device imported from a\nnetwork that stays unwatched becomes a node nothing is collected for. Absent or empty\nchanges no network. ⚠️ With automatic import on, watching a network also makes the next\nsync import every other device in it."
           },
           "org_uuid": {
             "type": "string",

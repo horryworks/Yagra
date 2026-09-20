@@ -348,7 +348,9 @@ pub struct MerakiDeviceCounts {
     /// Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection
     /// asks the Dashboard about watched networks only, so **nothing is collected for these**: the
     /// node keeps the last state it was seen in and raises nothing. It happens when a device is
-    /// moved into an unwatched network, and when a network holding nodes is un-watched.
+    /// moved into an unwatched network, and when a network holding nodes is un-watched. An
+    /// organization that watches no network at all is sent no collect, so there it is every
+    /// monitored device (決定 16).
     pub monitored_unwatched: u32,
 }
 

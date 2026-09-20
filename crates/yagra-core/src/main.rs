@@ -2128,14 +2128,24 @@ async fn run_meraki_scheduler(
                     continue;
                 }
             };
+            // Before the key is opened: an organization that watches nothing gets no collect, and
+            // neither does a tick on which that could not be read (ADR-164 決定 16). An empty list
+            // on the bus means "every network", so it must not be what either case sends.
+            let watched = orgs_repo.monitored_network_ids(org.id).await;
+            if let Err(e) = &watched {
+                tracing::warn!(org = %org.org_id, error = %e, "meraki watched networks load failed");
+            }
+            let network_ids = match meraki::networks_to_collect(watched) {
+                Ok(ids) => ids,
+                Err(why) => {
+                    tracing::debug!(org = %org.org_id, ?why, "no meraki collect this tick");
+                    continue;
+                }
+            };
             let Some(api_key) = meraki::resolve_meraki_key(&creds, org.credential_id).await else {
                 tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
                 continue;
             };
-            let network_ids = orgs_repo
-                .monitored_network_ids(org.id)
-                .await
-                .unwrap_or_default();
 
             let job_id = Uuid::new_v4();
             if !inflight.acquire(org.id, job_id, LEASE, now) {

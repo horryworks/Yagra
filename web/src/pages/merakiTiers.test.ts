@@ -2,7 +2,14 @@
 // The cadence dialog's tier checkboxes, pinned to the backend's full tier list.
 
 import { describe, expect, it } from 'vitest';
-import { MERAKI_TIERS, SELECTABLE_MERAKI_TIERS, tierList } from './merakiTiers';
+import {
+  MERAKI_TIERS,
+  OPTIONAL_MERAKI_TIERS,
+  REQUIRED_MERAKI_TIER,
+  SELECTABLE_MERAKI_TIERS,
+  tierList,
+  tiersToSave,
+} from './merakiTiers';
 import type { TFunction } from 'i18next';
 
 describe('MERAKI_TIERS', () => {
@@ -27,6 +34,30 @@ describe('SELECTABLE_MERAKI_TIERS', () => {
       (tier) => !(SELECTABLE_MERAKI_TIERS as readonly string[]).includes(tier),
     );
     expect(omitted).toEqual(['inventory']);
+  });
+});
+
+describe('the tier an organization cannot go without (ADR-164 決定 17)', () => {
+  it('is availability, and the dialog draws a checkbox for every other selectable tier', () => {
+    // Availability is the only tier that says whether a device is up. Equality on the rest: a new
+    // selectable tier has to land on one side or the other on purpose.
+    expect(REQUIRED_MERAKI_TIER).toBe('availability');
+    expect([...OPTIONAL_MERAKI_TIERS]).toEqual(['uplink', 'traffic']);
+    expect([REQUIRED_MERAKI_TIER, ...OPTIONAL_MERAKI_TIERS]).toEqual([...SELECTABLE_MERAKI_TIERS]);
+  });
+
+  it('is in every save, whatever was ticked — the server refuses a cadence without it', () => {
+    expect(tiersToSave([])).toEqual(['availability']);
+    expect(tiersToSave(['traffic'])).toEqual(['availability', 'traffic']);
+    expect(tiersToSave(new Set(['uplink', 'availability']))).toEqual(['availability', 'uplink']);
+  });
+
+  it('carries a stored tier the dialog does not draw, and sends none twice', () => {
+    expect(tiersToSave(['inventory', 'uplink', 'inventory'])).toEqual([
+      'availability',
+      'inventory',
+      'uplink',
+    ]);
   });
 });
 

@@ -13,6 +13,10 @@
 // is also what the Destination column was computed under. Sending a value would let the press
 // disagree with the column the operator just read.
 //
+// What it does say is which networks to start watching: the ones the chosen devices are in, unless
+// the organization imports on its own (`networksToWatchOnImport`, 決定 16). A node in a network that
+// is not watched is collected nothing for.
+//
 // All judgement is in `merakiDevices.ts` and `merakiOrgRow.ts`; Vitest never runs a `.tsx`
 // (testing.md), so what is left here is layout, state and the calls.
 
@@ -47,6 +51,7 @@ import {
   isImportable,
   merakiDeviceFilters,
   networkLabel,
+  networksToWatchOnImport,
   parseMaxDevices,
   pruneSelection,
   uncollectedDevices,
@@ -415,9 +420,16 @@ export function MerakiOrgPage() {
     setBusy(true);
     setActionError(null);
     setNote(null);
+    // The chosen devices' networks start being watched with them — a node in an unwatched network
+    // is collected nothing for. Not while the organization imports on its own (決定 16).
+    const watch = networksToWatchOnImport(chosen, devices, org.import_devices);
     api
       // No `file_by_prefix`: absent means the organization's own setting (see the file header).
-      .importMerakiDevices({ org_uuid: org.id, devices: chosen })
+      .importMerakiDevices({
+        org_uuid: org.id,
+        devices: chosen,
+        ...(watch.length > 0 ? { monitored_network_ids: watch } : {}),
+      })
       .then((result) => {
         // Everything not filed by IP range went under the organization's own folder, which is
         // named after it.

@@ -197,6 +197,29 @@ export function devicesToImport(
   return devices.filter((d) => selected.has(d.serial) && isImportable(d)).map(toImportDevice);
 }
 
+/** The networks an import press asks the server to start watching: the ones the chosen devices are
+ *  in — and none at all while the organization imports on its own (ADR-164 決定 16).
+ *
+ *  A node in a network that is not watched receives nothing, so importing a device without watching
+ *  its network creates a node that is quiet from its first minute. The import wizard sent exactly
+ *  this list; the page that replaced it (Inc.5) did not, and nothing else noticed because the
+ *  collector read "no watched network" as "every network" until 決定 16.
+ *
+ *  🚨 **Automatic import turns the same act into a different one.** There, watching a network makes
+ *  the next sync import every other device in it — picking two devices by hand would end in two
+ *  hundred nodes. So nothing is sent, the nodes start out not collected, and the page's own notice
+ *  ("N monitored devices are in networks that are not watched") offers the choice with its
+ *  consequence in view. A network already watched is left out: sending it would change nothing. */
+export function networksToWatchOnImport(
+  chosen: readonly Pick<MerakiImportDevice, 'serial' | 'network_id'>[],
+  devices: readonly Pick<MerakiDevice, 'serial' | 'network_monitored'>[],
+  importsAutomatically: boolean,
+): string[] {
+  if (importsAutomatically) return [];
+  const watched = new Set(devices.filter((d) => d.network_monitored).map((d) => d.serial));
+  return [...new Set(chosen.filter((c) => !watched.has(c.serial)).map((c) => c.network_id))].sort();
+}
+
 /** Every serial in `devices` that can be imported — what "Select all importable" ticks.
  *
  *  The page hands it the rows the filter row is *showing*, not the whole list, so "State: New" +

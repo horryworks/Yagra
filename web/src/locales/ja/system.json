@@ -564,6 +564,7 @@
     "cadence": {
       "title": "取得間隔 — {{name}}",
       "enabledTiers": "有効なティア",
+      "availabilityAlways": "可用性は常に取得します。デバイスが動いているかどうかは、この値で判断します。",
       "availabilityInterval": "可用性の取得間隔（秒）",
       "uplinkInterval": "アップリンクの取得間隔（秒）",
       "trafficInterval": "トラフィックの取得間隔（秒）",

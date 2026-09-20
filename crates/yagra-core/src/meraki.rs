@@ -181,6 +181,32 @@ pub fn build_collect_check(
     }
 }
 
+/// Why the scheduler sends an organization no collect this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoCollect {
+    /// The organization watches no network, so there is nothing a collect may ask about.
+    NothingWatched,
+    /// Which networks it watches could not be read.
+    Unreadable,
+}
+
+/// The networks a collect for one organization may ask about — or why none is sent (ADR-164 決定 16).
+///
+/// 🚨 **An empty list must never reach the poller.** On the bus an empty `network_ids` means
+/// "every network" (`yagra_bus::MerakiCollectCheck`), and a poller from before this change still
+/// reads it that way. An organization watching nothing was therefore collected whole, while
+/// `MerakiDeviceCounts.monitored_unwatched` and the automatic import both read the same state as
+/// "nothing is collected" — the page said "N not collected" about nodes that were being collected.
+/// A failed read widened the collect the same way, through `unwrap_or_default()`. Both are now a
+/// tick with no collect. Pure — the scheduler loop itself has no test.
+pub fn networks_to_collect<E>(watched: Result<Vec<String>, E>) -> Result<Vec<String>, NoCollect> {
+    match watched {
+        Ok(ids) if ids.is_empty() => Err(NoCollect::NothingWatched),
+        Ok(ids) => Ok(ids),
+        Err(_) => Err(NoCollect::Unreadable),
+    }
+}
+
 /// Why a stored credential did not yield a Meraki API key. Carries no secret and no upstream text.
 #[derive(Debug)]
 pub enum SavedKeyError {
@@ -996,6 +1022,37 @@ mod tests {
         assert_eq!(check.target_rps, 2.0);
         assert_eq!(check.devices.len(), 1);
         assert_eq!(check.network_ids, vec!["N_1".to_string()]);
+    }
+
+    /// 決定 16. The poller reads an empty list as "every network", so the two states that used to
+    /// produce one — nothing watched, and a read that failed — must produce no collect instead.
+    #[test]
+    fn an_organization_that_watches_nothing_is_sent_no_collect() {
+        let nothing: Result<Vec<String>, anyhow::Error> = Ok(Vec::new());
+        assert_eq!(
+            networks_to_collect(nothing),
+            Err(NoCollect::NothingWatched),
+            "an empty list reached the poller, which collects the whole organization for it"
+        );
+    }
+
+    #[test]
+    fn a_failed_read_of_the_watched_networks_is_not_widened_to_every_network() {
+        let failed: Result<Vec<String>, anyhow::Error> = Err(anyhow::anyhow!("pool timed out"));
+        assert_eq!(
+            networks_to_collect(failed),
+            Err(NoCollect::Unreadable),
+            "a read that failed became a collect of every network"
+        );
+    }
+
+    #[test]
+    fn the_watched_networks_are_what_a_collect_asks_about() {
+        let watched: Result<Vec<String>, anyhow::Error> = Ok(vec!["N_1".into(), "N_2".into()]);
+        assert_eq!(
+            networks_to_collect(watched),
+            Ok(vec!["N_1".to_string(), "N_2".to_string()])
+        );
     }
 
     #[test]

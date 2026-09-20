@@ -779,6 +779,79 @@ mod tests {
         }
     }
 
+    /// **Migration 0126 gives availability back to an organization saved without it, and touches no
+    /// other row** (ADR-164 決定 17).
+    ///
+    /// Since Inc.3 that tier is the only one that says whether a Meraki device is up, so such an
+    /// organization's nodes could never be reported down. The API refuses the shape from here on,
+    /// but a stored value never fixes itself — and no lab box holds an organization to see this on,
+    /// so the history is applied in two steps with the rows written in between.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0126_gives_the_availability_tier_back_and_touches_no_other_row(
+        pool: sqlx::PgPool,
+    ) {
+        const AVAILABILITY_ALWAYS_ON: i64 = 126;
+        let embedded = embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) = embedded
+            .iter()
+            .partition(|m| m.version < AVAILABILITY_ALWAYS_ON);
+        assert!(
+            from.iter().any(|m| m.version == AVAILABILITY_ALWAYS_ON),
+            "migration 0126 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let mut made = Vec::new();
+        for (org_id, tiers) in [
+            ("1", vec!["uplink", "traffic"]),
+            ("2", vec![]),
+            ("3", vec!["traffic", "availability"]),
+        ] {
+            let id = orgs
+                .create(org_id, org_id, "https://api.meraki.com", credential)
+                .await
+                .expect("an organization from before 0126");
+            sqlx::query("UPDATE meraki_orgs SET enabled_tiers = $2 WHERE id = $1")
+                .bind(id)
+                .bind(&tiers)
+                .execute(&pool)
+                .await
+                .expect("store the tiers an older release accepted");
+            made.push(id);
+        }
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+
+        let mut after = Vec::new();
+        for id in made {
+            after.push(orgs.get(id).await.expect("get").expect("org").enabled_tiers);
+        }
+        assert_eq!(
+            after[0],
+            vec!["availability", "uplink", "traffic"],
+            "an organization saved without availability still has nothing that says a device is down"
+        );
+        assert_eq!(after[1], vec!["availability"], "the empty set");
+        assert_eq!(
+            after[2],
+            vec!["traffic", "availability"],
+            "a row that already carried the tier was rewritten"
+        );
+    }
+
     /// **Migrating twice does nothing the second time**, which is what every restart does.
     #[sqlx::test(migrations = false)]
     #[ignore = "needs DATABASE_URL"]

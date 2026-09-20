@@ -20,6 +20,7 @@ import {
   isImportable,
   merakiDeviceFilters,
   networkLabel,
+  networksToWatchOnImport,
   parseMaxDevices,
   pruneSelection,
   toImportDevice,
@@ -231,6 +232,37 @@ describe('the import request', () => {
     ];
     const sent = devicesToImport(devices, new Set(['A', 'C', 'D', 'gone']));
     expect(sent.map((d) => d.serial)).toEqual(['A', 'D']);
+  });
+});
+
+describe('the networks an import starts watching (ADR-164 決定 16)', () => {
+  const list = [
+    device({ serial: 'A', network_id: 'N_osaka', network_monitored: false }),
+    device({ serial: 'B', network_id: 'N_osaka', network_monitored: false }),
+    device({ serial: 'C', network_id: 'N_tokyo', network_monitored: true }),
+    device({ serial: 'D', network_id: 'N_kyoto', network_monitored: false }),
+  ];
+  const chosen = (...serials: string[]) =>
+    list.filter((d) => serials.includes(d.serial)).map(toImportDevice);
+
+  it('is the networks the chosen devices are in, each once', () => {
+    // A node in a network that is not watched is collected nothing for, so importing a device
+    // without its network makes a node that is quiet from its first minute.
+    expect(networksToWatchOnImport(chosen('A', 'B', 'D'), list, false)).toEqual([
+      'N_kyoto',
+      'N_osaka',
+    ]);
+  });
+
+  it('leaves out a network that is watched already, and one nobody chose a device from', () => {
+    expect(networksToWatchOnImport(chosen('A', 'C'), list, false)).toEqual(['N_osaka']);
+    expect(networksToWatchOnImport(chosen('C'), list, false)).toEqual([]);
+  });
+
+  it('sends none while the organization imports on its own', () => {
+    // There, watching a network makes the next sync import every other device in it: two devices
+    // picked by hand would end as the whole site. The page's notice offers that choice instead.
+    expect(networksToWatchOnImport(chosen('A', 'B', 'D'), list, true)).toEqual([]);
   });
 });
 

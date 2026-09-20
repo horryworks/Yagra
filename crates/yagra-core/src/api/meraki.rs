@@ -723,17 +723,37 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
             "enabled_tiers contains an unknown tier",
         ));
     }
+    // The availability tier is the only one that speaks for whether a device is up (ADR-164
+    // Inc.3): uplink and traffic are observational. Without it every node of the organization
+    // sits in `unknown` and node-down can never fire, with nothing on any screen saying why — so
+    // leaving it out is refused rather than stored (決定 17).
+    let availability = yagra_common::MerakiTier::Availability;
+    if !body
+        .enabled_tiers
+        .iter()
+        .any(|t| yagra_common::MerakiTier::from_token(t) == Some(availability))
+    {
+        return Err(ApiError::bad_request(
+            "availability_required",
+            "enabled_tiers must include availability: it is the only tier that says whether a \
+             device is up",
+        ));
+    }
     Ok(())
 }
 
 /// Update an org's per-tier cadence, enabled tiers, and rate budget.
+///
+/// `enabled_tiers` must include `availability`. It is the one tier that decides whether a device
+/// is up; the others only record readings, so an organization without it could raise no node-down
+/// alert at all.
 #[utoipa::path(
     put, path = "/api/v1/meraki/orgs/{id}/cadence", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
     request_body = MerakiCadenceReq,
     responses(
         (status = 204, description = "Cadence, enabled tiers and rate budget updated"),
-        (status = 400, description = "A cadence value is outside its band, target_rps is outside the cap, or a tier is unknown", body = super::error::ErrorBody),
+        (status = 400, description = "A cadence value is outside its band, target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
@@ -1189,6 +1209,11 @@ pub(crate) async fn device_views(
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct MerakiImportReq {
     org_uuid: Uuid,
+    /// Networks to start watching along with the import — normally the ones `devices` are in.
+    /// Collection asks the Dashboard about watched networks only, so a device imported from a
+    /// network that stays unwatched becomes a node nothing is collected for. Absent or empty
+    /// changes no network. ⚠️ With automatic import on, watching a network also makes the next
+    /// sync import every other device in it.
     #[serde(default)]
     monitored_network_ids: Vec<String>,
     devices: Vec<MerakiImportDeviceReq>,
@@ -1498,7 +1523,7 @@ mod tests {
             uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
             traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
             inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
-            enabled_tiers: Vec::new(),
+            enabled_tiers: vec!["availability".to_owned()],
             target_rps: 1.0,
         };
         assert!(check_cadence(&ok()).is_ok());
@@ -1520,8 +1545,35 @@ mod tests {
         );
 
         let mut tier = ok();
-        tier.enabled_tiers = vec!["not-a-tier".to_owned()];
+        tier.enabled_tiers = vec!["availability".to_owned(), "not-a-tier".to_owned()];
         assert_eq!(check_cadence(&tier).unwrap_err().code(), "invalid_tier");
+    }
+
+    /// 決定 17. Availability is the only tier that decides whether a device is up, so a request
+    /// that leaves it out would store an organization whose nodes can never be reported down.
+    #[test]
+    fn a_cadence_that_leaves_out_the_availability_tier_is_refused() {
+        let with = |tiers: &[&str]| MerakiCadenceReq {
+            availability_secs: crate::config::MERAKI_FAST_MIN_SECS,
+            uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
+            traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
+            inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
+            enabled_tiers: tiers.iter().map(|t| (*t).to_owned()).collect(),
+            target_rps: 1.0,
+        };
+        for without in [&[][..], &["uplink"][..], &["uplink", "traffic"][..]] {
+            assert_eq!(
+                check_cadence(&with(without)).unwrap_err().code(),
+                "availability_required",
+                "{without:?} was accepted, and nothing in it says whether a device is up"
+            );
+        }
+        for kept in [&["availability"][..], &["traffic", "availability"][..]] {
+            assert!(
+                check_cadence(&with(kept)).is_ok(),
+                "{kept:?} carries availability and was refused"
+            );
+        }
     }
 
     #[test]
@@ -1635,7 +1687,7 @@ mod tests {
                 format!("/api/v1/meraki/orgs/{ID}/cadence"),
                 Some(json!({
                     "availability_secs": 300, "uplink_secs": 300, "traffic_secs": 1800,
-                    "inventory_secs": 21600, "enabled_tiers": [], "target_rps": 1.0,
+                    "inventory_secs": 21600, "enabled_tiers": ["availability"], "target_rps": 1.0,
                 })),
             ),
             (
@@ -2054,6 +2106,61 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    }
+
+    /// 決定 17, through the router: a cadence that keeps availability is stored, one that drops it
+    /// is answered `400 availability_required` — and the refusal leaves the row as it was, so the
+    /// organization does not end up with nothing that says whether its devices are up.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_cadence_is_stored_and_one_without_availability_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let operator = token(&st, yagra_common::Role::Operator);
+        let path = format!("/api/v1/meraki/orgs/{org}/cadence");
+        let cadence = |tiers: &[&str]| {
+            serde_json::json!({
+                "availability_secs": 120, "uplink_secs": 300, "traffic_secs": 1800,
+                "inventory_secs": 600, "enabled_tiers": tiers, "target_rps": 1.0,
+            })
+        };
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &operator,
+            Some(cadence(&["availability", "traffic"])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        assert_eq!(stored.availability_secs, 120);
+        assert_eq!(stored.enabled_tiers, vec!["availability", "traffic"]);
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &operator,
+            Some(cadence(&["uplink", "traffic"])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "availability_required", "{body}");
+        let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        assert_eq!(
+            stored.enabled_tiers,
+            vec!["availability", "traffic"],
+            "a refused cadence was stored anyway"
+        );
     }
 
     /// The device list says where each device is, or would go — from the same resolver an import

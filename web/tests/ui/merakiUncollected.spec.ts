@@ -113,3 +113,28 @@ test('the page says why, and the button watches only the network the quiet node 
   expect(body.network_ids).not.toContain(OTHER_UNWATCHED);
   expect(errors.uncaught).toEqual([]);
 });
+
+// 決定 16. `networksToWatchOnImport` is unit-tested; that the press *sends* what it returns is
+// wiring in the `.tsx`. The import wizard sent this list and the page that replaced it did not, so
+// a device imported by hand became a node nothing was collected for — with every test green,
+// because no test looked at this request. Automatic import is off in this fixture, which is the
+// case where the list is sent.
+test('importing a device by hand starts watching the network it is in', async ({ page, errors }) => {
+  await page.goto(MERAKI_ORG_SCREEN);
+  await page.getByRole('checkbox', { name: 'Select ymock-serial-new' }).check();
+
+  const asked = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/meraki/import'),
+  );
+  await page.getByRole('button', { name: 'Import 1 device' }).click();
+  const body = (await asked).postDataJSON() as {
+    monitored_network_ids?: string[];
+    devices: { serial: string }[];
+    file_by_prefix?: boolean;
+  };
+  expect(body.devices.map((d) => d.serial)).toEqual(['ymock-serial-new']);
+  expect(body.monitored_network_ids).toEqual([OTHER_UNWATCHED]);
+  // Still never says how to file: absent means the organization's own setting.
+  expect(body).not.toHaveProperty('file_by_prefix');
+  expect(errors.uncaught).toEqual([]);
+});

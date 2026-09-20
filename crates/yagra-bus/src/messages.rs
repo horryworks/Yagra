@@ -2092,6 +2092,10 @@ pub struct MerakiCollectCheck {
     #[serde(default)]
     pub devices: Vec<MerakiDeviceRef>,
     /// Meraki networkIds in scope (narrows API calls where supported; empty ⇒ all).
+    ///
+    /// ⚠️ Core no longer sends an empty list (ADR-164 決定 16): an organization that watches no
+    /// network gets no collect at all. The "empty ⇒ all" reading stays, because a poller from
+    /// before that change still has it and a message that omits the field still decodes to it.
     #[serde(default)]
     pub network_ids: Vec<String>,
     /// Page size cap for paginated endpoints.

@@ -31,7 +31,7 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../../components/ui/Field';
-import { SELECTABLE_MERAKI_TIERS } from '../merakiTiers';
+import { OPTIONAL_MERAKI_TIERS, tiersToSave } from '../merakiTiers';
 import './MerakiIntegrationPage.css';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
@@ -396,7 +396,7 @@ function CadenceModal({
         uplink_secs: uplink,
         traffic_secs: traffic,
         inventory_secs: inventory,
-        enabled_tiers: [...tiers],
+        enabled_tiers: tiersToSave(tiers),
         target_rps: targetRps,
       })
       .then(() => {
@@ -439,13 +439,16 @@ function CadenceModal({
       <div className="modal-field">
         <label className="modal-field-label">{t('meraki.cadence.enabledTiers')}</label>
         <div className="meraki-tier-row">
-          {SELECTABLE_MERAKI_TIERS.map((tier) => (
+          {OPTIONAL_MERAKI_TIERS.map((tier) => (
             <label className="meraki-chip-check" key={tier}>
               <input type="checkbox" checked={tiers.has(tier)} onChange={() => toggleTier(tier)} />
               <span>{t(`meraki.tier.${tier}`)}</span>
             </label>
           ))}
         </div>
+        {/* Availability has no checkbox: it is the one tier that says whether a device is up, and
+            the server refuses a cadence without it (決定 17). The sentence is why it is missing. */}
+        <span className="modal-hint">{t('meraki.cadence.availabilityAlways')}</span>
       </div>
       {numField(t('meraki.cadence.availabilityInterval'), availability, setAvailability, '60–3600')}
       {numField(t('meraki.cadence.uplinkInterval'), uplink, setUplink, '60–3600')}
@@ -704,7 +707,9 @@ export function MerakiIntegrationPage() {
         <NetworksModal
           org={scoping}
           onClose={() => setScoping(null)}
-          onSaved={() => setScoping(null)}
+          // Reload, not only close: the row's "N not collected" is counted from which networks are
+          // watched, so un-watching one that holds nodes is exactly when it has to change (決定 15).
+          onSaved={load}
         />
       )}
       {editing && (
