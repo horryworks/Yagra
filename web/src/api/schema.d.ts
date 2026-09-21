@@ -6019,28 +6019,36 @@ export interface components {
             sso_enabled: boolean;
         };
         /**
-         * @description Why a node's `state` is the last one collected rather than a current one (ADR-164 決定 18).
+         * @description Why a node's `state` is not a current reading (ADR-164 決定 18, ADR-064 増分 G).
          *
-         *     A Meraki device is never pinged: what the Dashboard API says about it is all Yagra knows. When
-         *     the API stops answering for the whole organization, **one** alert is raised about the
-         *     organization and the devices keep their last state — they did not fail. This is what stops
-         *     that stale `ok` from being read as a current one.
+         *     Two kinds of node are never polled themselves, and this is what each says when the thing that
+         *     tells it about them stops:
+         *
+         *     * **A Meraki device**: what the Dashboard API says about it is all Yagra knows. When the API
+         *       stops answering for the whole organization, **one** alert is raised about the organization and
+         *       the devices keep their last state — they did not fail. This is what stops that stale `ok` from
+         *       being read as a current one.
+         *     * **A wireless access point**: its controller's AP walk is what reports it. When the controller
+         *       stops reporting it, the AP reads `unknown` rather than its last `ok`, and nothing is raised
+         *       about the AP itself — the controller's own alert is the one alert. This says since when.
          */
         CollectionFault: {
             /** @description What stopped answering. */
             cause: components["schemas"]["CollectionFaultCause"];
             /**
              * Format: uuid
-             * @description The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to.
+             * @description The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to. Present only when
+             *     `cause` is `meraki_api`.
              */
-            meraki_org: string;
-            /** @description That organization's name, when it is known. */
+            meraki_org?: string | null;
+            /** @description That organization's name, when it is known. Only with `meraki_api`. */
             meraki_org_name?: string | null;
             reason?: null | components["schemas"]["MerakiSyncFailure"];
             /**
              * Format: int64
-             * @description When the organization's alert was raised — three failed collects after the last answer, so
-             *     the state shown is older than this.
+             * @description `meraki_api`: when the organization's alert was raised — three failed collects after the
+             *     last answer, so the state shown is older than this. `wireless_controller`: when a controller
+             *     last reported the access point — nothing has been heard about it since.
              */
             since_unix_ms: number;
         };
@@ -6048,7 +6056,7 @@ export interface components {
          * @description What a node's state is collected through, when that has stopped answering.
          * @enum {string}
          */
-        CollectionFaultCause: "meraki_api";
+        CollectionFaultCause: "meraki_api" | "wireless_controller";
         /**
          * @description One thing to collect: a stable metric name, the OID to collect it from, how to collect
          *     it (scalar GET vs table walk), and whether it is a gauge or a raw counter.

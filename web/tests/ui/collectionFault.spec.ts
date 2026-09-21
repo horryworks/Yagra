@@ -125,6 +125,56 @@ test('the organization’s row says which collect is failing, the one that stale
   expect(readings).toBeGreaterThan(stale);
 });
 
+// ADR-064 増分 G: an access point no wireless controller has reported lately. The same field, a
+// second cause — and a different sentence: the AP reads `unknown`, there is no organization to open,
+// and the controller is named by the facts row above the line, so the line itself links nowhere.
+test.describe('an access point its controller stopped reporting', () => {
+  const AP_ID = '00000000-0000-4000-8000-0000000000ab';
+  const apNode = () => {
+    const body = deviceNode(AP_ID) as unknown as { kind: string; snmp_configured: boolean };
+    body.kind = 'wireless_ap';
+    body.snmp_configured = false;
+    return body as unknown as Json;
+  };
+  const apStatus = (() => {
+    const body = defaultBodyFor('/api/v1/nodes/{node_id}/status') as unknown as Schemas['NodeStatus'];
+    return {
+      ...body,
+      node_id: AP_ID,
+      state: 'unknown',
+      alerts: [],
+      collection_fault: { cause: 'wireless_controller', since_unix_ms: 1_790_000_000_000 },
+    } as unknown as Json;
+  })();
+
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/nodes/{node_id}': apNode,
+        '/api/v1/nodes/{node_id}/status': apStatus,
+      },
+    },
+  });
+
+  test('says no controller has reported it since when, and that its state is not known', async ({
+    page,
+    errors,
+  }) => {
+    await page.goto(`/nodes/${AP_ID}?tab=overview`);
+    const notice = page.locator('.nd-fault');
+    await expect(notice).toBeVisible({ timeout: 15_000 });
+    await expect(notice).toContainText(
+      'No report on this access point from its wireless controller since',
+    );
+    await expect(notice).toContainText('Until one arrives, its current state is not known.');
+    // Nothing about Meraki, and no link of its own.
+    await expect(notice).not.toContainText('Meraki');
+    await expect(notice.getByRole('link')).toHaveCount(0);
+    expect(errors.uncaught).toEqual([]);
+  });
+});
+
 test('the alert is about the organization, by name, and links to it', async ({ page, errors }) => {
   await page.goto('/alerts');
   const subject = page.getByRole('link', { name: `Meraki organization “${ORG_NAME}”` });

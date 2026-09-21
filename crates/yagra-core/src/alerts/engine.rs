@@ -24,6 +24,7 @@ use yagra_common::{
 use crate::poll_interval::{self, PollIntervals};
 use crate::thresholds::StoredThreshold;
 
+use super::reported::{is_current, Report, ReportLedger};
 use super::rules::*;
 use super::{NotifyAction, StreamFrame};
 
@@ -138,6 +139,10 @@ pub struct AlertManager {
     /// How far apart each node's polls are, as the scheduler last published it (ADR-144). Read once
     /// per observation to size the flap window and, for a check read once a tick, the dwell.
     intervals: PollIntervals,
+    /// When each node some controller reports — a wireless AP — was last reported, and by whom
+    /// (ADR-064 増分 G, [`super::reported`]). What turns a committed `ok` nobody is confirming any
+    /// more into `unknown` on every display surface. Never read by the state machine.
+    reports: Mutex<ReportLedger>,
 }
 
 /// One open alert a store can still be asked about, and the series that would answer.
@@ -185,6 +190,7 @@ impl AlertManager {
             row_states: Mutex::new(HashMap::new()),
             legacy_node_checks: Mutex::new(HashSet::new()),
             intervals,
+            reports: Mutex::new(ReportLedger::default()),
         }
     }
 
@@ -450,9 +456,14 @@ impl AlertManager {
     ///
     /// Alerts whose subject is not a node (pool-coverage alerts) are skipped: they belong to no
     /// node's display state.
+    ///
+    /// ⚠️ A node some controller reports whose last report is stale reads `unknown` rather than a
+    /// committed `ok` (ADR-064 増分 G) — see [`Self::unconfirmed_ok_is_unknown`]. That holds for all
+    /// three accessors, which is what keeps the list, the tree, the tallies and MCP in agreement.
     #[must_use]
     pub fn node_states(&self) -> HashMap<NodeId, NodeState> {
         let mut out = self.live.lock().expect("live mutex poisoned").clone();
+        self.unconfirmed_ok_is_unknown(&mut out, crate::pool_coverage::now_unix_ms());
         for alert in self.active.lock().expect("alerts mutex poisoned").values() {
             let Some(node) = alert.node() else { continue };
             out.entry(node)
@@ -491,6 +502,7 @@ impl AlertManager {
                 .filter_map(|n| live.get(n).map(|s| (*n, *s)))
                 .collect()
         };
+        self.unconfirmed_ok_is_unknown(&mut out, crate::pool_coverage::now_unix_ms());
         // Same rollup as `node_states`: the worst of the committed liveness and any active alert on
         // the node, and alerts whose subject is not a node belong to no node's display state.
         let wanted: BTreeSet<NodeId> = nodes.iter().copied().collect();
@@ -516,12 +528,21 @@ impl AlertManager {
     /// calls this per request, so at fleet scale the clone was pure waste.
     #[must_use]
     pub fn node_state(&self, node: NodeId) -> Option<NodeState> {
-        let base = self
+        self.node_state_at(node, crate::pool_coverage::now_unix_ms())
+    }
+
+    /// [`Self::node_state`] as of `now_ms` — the clock the report watch ticks on, so the frame it
+    /// broadcasts says what the report is at that tick (ADR-064 増分 G).
+    fn node_state_at(&self, node: NodeId, now_ms: i64) -> Option<NodeState> {
+        let mut base = self
             .live
             .lock()
             .expect("live mutex poisoned")
             .get(&node)
             .copied();
+        if base == Some(NodeState::Ok) && self.report_is_stale(node, now_ms) {
+            base = Some(NodeState::Unknown);
+        }
         self.active
             .lock()
             .expect("alerts mutex poisoned")
@@ -544,6 +565,128 @@ impl AlertManager {
             *counts.entry(*state).or_insert(0) += 1;
         }
         counts
+    }
+
+    /// ADR-064 増分 G (G3): a committed `ok` that nobody is confirming any more reads `unknown`.
+    ///
+    /// Only for a node some controller reports ([`super::reported`]) whose last report is past its
+    /// window. `unreachable` and `maintenance` are left as committed — the first is the last thing
+    /// anyone knew and its alert is still open, the second is an operator's word. It runs on the
+    /// committed map **before** the active alerts are rolled up, so an open alert colours the node
+    /// exactly as it would over `ok`.
+    ///
+    /// Walks whichever side is smaller: a page of the inventory against the ledger, or the ledger
+    /// against the whole fleet — `node_states_for` is the hottest read in the product (ADR-125).
+    /// `states` is a copy; `live`, `reports` and `active` are each taken on their own, never nested.
+    fn unconfirmed_ok_is_unknown(&self, states: &mut HashMap<NodeId, NodeState>, now_ms: i64) {
+        let ledger = self.reports.lock().expect("reports mutex poisoned");
+        if ledger.is_empty() {
+            return;
+        }
+        let stale = |report: &Report| {
+            !is_current(
+                report.at_unix_ms,
+                self.intervals.for_node(report.by.as_uuid()),
+                now_ms,
+            )
+        };
+        if states.len() <= ledger.len() {
+            for (node, state) in states.iter_mut() {
+                if *state == NodeState::Ok && ledger.get(node).is_some_and(&stale) {
+                    *state = NodeState::Unknown;
+                }
+            }
+        } else {
+            for (node, report) in ledger.iter() {
+                if let Some(state) = states.get_mut(node) {
+                    if *state == NodeState::Ok && stale(report) {
+                        *state = NodeState::Unknown;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether `node` is a reported node whose last report is past its window at `now_ms`.
+    fn report_is_stale(&self, node: NodeId, now_ms: i64) -> bool {
+        let report = self
+            .reports
+            .lock()
+            .expect("reports mutex poisoned")
+            .get(&node)
+            .copied();
+        report.is_some_and(|r| {
+            !is_current(
+                r.at_unix_ms,
+                self.intervals.for_node(r.by.as_uuid()),
+                now_ms,
+            )
+        })
+    }
+
+    /// `by` — a wireless controller — just reported `node`, one of its APs (ADR-064 増分 G).
+    ///
+    /// Called by the live consumer for every result the AP fan-out produced, and by nothing else:
+    /// a replayed result is hours old and says nothing about now. Touches no check state.
+    pub fn note_report(&self, node: NodeId, by: NodeId, at_unix_ms: i64) {
+        self.reports
+            .lock()
+            .expect("reports mutex poisoned")
+            .note(node, by, at_unix_ms);
+    }
+
+    /// Seed the ledger with what PostgreSQL last recorded — `(AP node, controller node, when it was
+    /// last served)` — for nodes this process has not heard about yet (G7).
+    ///
+    /// Right after a restart the engine has no opinion about any AP, so its display comes from the
+    /// fallback; this is what lets [`Self::unreported_since`] still explain an AP whose controller
+    /// was already silent when core came up. Never overrides a live report.
+    pub fn seed_reports(&self, seeds: impl IntoIterator<Item = (NodeId, NodeId, i64)>) {
+        let mut ledger = self.reports.lock().expect("reports mutex poisoned");
+        for (node, by, at) in seeds {
+            ledger.seed(node, by, at);
+        }
+    }
+
+    /// When `node` was last reported, if it is a reported node whose report is no longer current —
+    /// what `NodeStatus.collection_fault` says for an AP (ADR-064 増分 G, G8). `None` for every
+    /// node nobody reports, and for one whose report is current.
+    #[must_use]
+    pub fn unreported_since(&self, node: NodeId) -> Option<i64> {
+        let report = *self
+            .reports
+            .lock()
+            .expect("reports mutex poisoned")
+            .get(&node)?;
+        let now_ms = crate::pool_coverage::now_unix_ms();
+        (!is_current(
+            report.at_unix_ms,
+            self.intervals.for_node(report.by.as_uuid()),
+            now_ms,
+        ))
+        .then_some(report.at_unix_ms)
+    }
+
+    /// Tell the node-state stream about every reported node whose report went stale, or came back,
+    /// since it was last told (G6). Returns the number of frames sent. Called by
+    /// [`super::reported::run_report_watch`].
+    ///
+    /// A node the engine has no opinion about (only a seed) gets no frame: what a browser shows for
+    /// it comes from the fallback, which already reads `unknown`.
+    pub fn announce_report_staleness(&self, now_ms: i64) -> usize {
+        let flipped = self
+            .reports
+            .lock()
+            .expect("reports mutex poisoned")
+            .flips(now_ms, |by| self.intervals.for_node(by.as_uuid()));
+        let mut sent = 0;
+        for node in flipped {
+            if let Some(state) = self.node_state_at(node, now_ms) {
+                self.broadcast_node_state(node, state, now_ms);
+                sent += 1;
+            }
+        }
+        sent
     }
 
     /// The active alerts currently attributed to one node (its own problems plus any
@@ -2240,6 +2383,12 @@ impl AlertManager {
                     .copied()
                     .collect()
             };
+            // A deleted AP's last report (ADR-064 増分 G). Not derived from `gone`: an AP only seeded
+            // at startup was never observed, so it is in the ledger without being in `live`.
+            self.reports
+                .lock()
+                .expect("reports mutex poisoned")
+                .retain(|n| config.node_meta.contains_key(n));
             (orphans, gone)
         };
         if !gone.is_empty() {

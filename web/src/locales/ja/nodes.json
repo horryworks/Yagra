@@ -356,6 +356,7 @@
     "collectionFault": "{{org}} の Meraki API が応答していません（{{reason}}）。ここに表示している状態は、最後に取得したときのものです。{{since}} に、この組織についてのアラートが出ています。",
     "collectionFaultNoReason": "{{org}} の Meraki API が応答していません。ここに表示している状態は、最後に取得したときのものです。{{since}} に、この組織についてのアラートが出ています。",
     "collectionFaultLink": "組織の設定を開く",
+    "collectionFaultWireless": "{{since}} 以降、無線コントローラからこの AP の報告が届いていません。報告が届くまで、今の状態は分かりません。",
     "icmpRtt": "応答時間",
     "icmpLoss": "パケット損失",
     "noRttHistory": "RTT の履歴はまだありません…",

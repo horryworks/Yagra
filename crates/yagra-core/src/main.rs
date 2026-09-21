@@ -1280,7 +1280,21 @@ impl LeaderTasks {
         // and the upkeep loop retries it — the cost is APs publishing nothing until it succeeds.
         let ap_fanout = Arc::new(wireless_fanout::ApFanout::new());
         match self.wireless.ap_bindings().await {
-            Ok(bindings) => ap_fanout.install(&bindings),
+            Ok(bindings) => {
+                ap_fanout.install(&bindings);
+                // When each AP was last served, and by which controller (ADR-064 増分 G, G7): what
+                // lets an AP whose controller was already silent when this core came up still say
+                // why it reads `unknown`. The same rows, read once — no query of its own.
+                self.alerts.seed_reports(bindings.iter().filter_map(|b| {
+                    b.owner.map(|o| {
+                        (
+                            yagra_common::NodeId::from(b.node_id),
+                            yagra_common::NodeId::from(o.controller),
+                            o.last_associated_at.timestamp_millis(),
+                        )
+                    })
+                }));
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "could not restore wireless AP bindings; retrying in the background");
             }
@@ -1582,6 +1596,13 @@ impl LeaderTasks {
                 self.alerts.clone(),
                 self.alert_sink("a deleted-node resolution"),
             ),
+        );
+        // APs whose controller stopped reporting them, and ones it reported again (ADR-064 増分 G):
+        // told to the node-state stream, since going stale is not a transition anything observes.
+        // Leader-only because the ledger it reads is filled by the leader's ingest.
+        spawn_cancellable(
+            &self.shutdown,
+            alerts::reported::run_report_watch(self.alerts.clone()),
         );
         // Checks nothing is evaluating any more (ADR-097 Increment 6). Two shapes with one owner:
         // a collected metric whose threshold rule was deleted — which the poll path was believed to

@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`collection_fault` on a node's status has a second cause, and `meraki_org` is no longer always there** (`GET /api/v1/nodes/{node_id}/status`, MCP `get_node_status`). The new cause is `wireless_controller`: an access point no controller has reported lately (see Bug Fixes). It carries only `cause` and `since_unix_ms` — `meraki_org`, `meraki_org_name` and `reason` are present only when `cause` is `meraki_api`. A client that read `meraki_org` without looking at `cause` must check it now.
+
 ### New Features
 
 - **Cisco wireless LAN controllers list and import their access points, as Huawei ACs already do** (ADR-064 increment F). AireOS controllers and the Catalyst 9800 answer the same AIRESPACE-WIRELESS-MIB tables, so one dialect reads both: each AP's name, model, serial, software version, address, state, AP group, CPU and memory, its radios (clients, channel, channel utilization, on slots 2.4 GHz = 1 / 5 GHz = 2 / 6 GHz = 3) and the controller's SSIDs with their clients. APs that have ever been joined are imported as nodes automatically. The built-in "Cisco wireless controller" profile carries the three new templates, so an existing controller node starts on its next poll after the upgrade — no Reclassify needed. The controller also gains `wlan_controller_aps_joined` and `wlan_controller_clients`, counted from its own tables. ⚠️ API clients: `wireless.controller.flavor` (and the `WlanFlavor` schema) gains the value `cisco_airespace`. ⚠️ The 9800 has been checked against a recording only, not against a real controller.
@@ -19,6 +23,10 @@
 ### Improvements
 
 - **The "AP table was not read to its end" default rule also watches Cisco wireless controllers.** Migration 0128 adds the Cisco profile to the rule a deployment already has, unless that rule was edited.
+
+### Bug Fixes
+
+- **An access point no longer stays `ok` when its wireless controller stops reporting it** (ADR-064 increment G). Before, an AP kept the last state it was given for as long as its controller was silent — five hours of green on a real site — and then read `unknown`, with no reason given, as soon as core restarted. Now an AP that no controller has reported for ten minutes (or three of the controller's poll intervals, if that is longer) reads `unknown` in the tree, the lists, the dashboards, the reports and over MCP, the same before and after a restart, and its overview says since when. An AP that was down when last reported stays down, and an open alert still shows. Nothing new is raised: the controller's own alert is the one alert, as before.
 
 
 ## v0.3.28 — Cisco Meraki organizations are monitored end to end (devices import themselves, are filed by IP range, and follow what the Dashboard reports), one alert says when the Meraki API stops answering an organization, a device the Dashboard reports offline is down rather than OK, access points behind a wireless controller are imported without switching it on, folder-restricted accounts can no longer change credentials or Meraki organizations

@@ -181,7 +181,7 @@ export function OverviewTab({
           Meraki API is not answering this node's organization. There is one alert for that, and
           it is about the organization — so this node has none of its own, and without this line
           an `ok` from an hour ago reads exactly like an `ok` from a minute ago. */}
-      {fault && (
+      {fault?.kind === 'meraki_api' && (
         <p className="nd-fault" role="status">
           {fault.reasonKey
             ? t('overview.collectionFault', {
@@ -192,8 +192,23 @@ export function OverviewTab({
             : t('overview.collectionFaultNoReason', {
                 org: fault.org,
                 since: formatTimestamp(fault.sinceUnixMs),
-              })}{' '}
-          <Link to={fault.orgPath}>{t('overview.collectionFaultLink')}</Link>
+              })}
+          {fault.orgPath && (
+            <>
+              {' '}
+              <Link to={fault.orgPath}>{t('overview.collectionFaultLink')}</Link>
+            </>
+          )}
+        </p>
+      )}
+
+      {/* No wireless controller has reported this access point lately (ADR-064 増分 G), so the
+          state above reads `unknown` — or stays down, if it was down when last heard of. Nothing is
+          raised about the AP itself; this is what says why, and since when. No link: the "Wireless
+          controller" row in the facts above already is one, narrowed to what this caller may see. */}
+      {fault?.kind === 'wireless_controller' && (
+        <p className="nd-fault" role="status">
+          {t('overview.collectionFaultWireless', { since: formatTimestamp(fault.sinceUnixMs) })}
         </p>
       )}
 

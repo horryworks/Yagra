@@ -357,6 +357,7 @@
     "collectionFault": "The Meraki API is not answering for {{org}} ({{reason}}). The state shown here is the last one collected — an alert was raised for the organization at {{since}}.",
     "collectionFaultNoReason": "The Meraki API is not answering for {{org}}. The state shown here is the last one collected — an alert was raised for the organization at {{since}}.",
     "collectionFaultLink": "Open the organization",
+    "collectionFaultWireless": "No report on this access point from its wireless controller since {{since}}. Until one arrives, its current state is not known.",
     "icmpRtt": "Round-trip time",
     "icmpLoss": "Packet loss",
     "noRttHistory": "No RTT history yet…",

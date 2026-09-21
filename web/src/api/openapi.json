@@ -25804,10 +25804,9 @@
       },
       "CollectionFault": {
         "type": "object",
-        "description": "Why a node's `state` is the last one collected rather than a current one (ADR-164 決定 18).\n\nA Meraki device is never pinged: what the Dashboard API says about it is all Yagra knows. When\nthe API stops answering for the whole organization, **one** alert is raised about the\norganization and the devices keep their last state — they did not fail. This is what stops\nthat stale `ok` from being read as a current one.",
+        "description": "Why a node's `state` is not a current reading (ADR-164 決定 18, ADR-064 増分 G).\n\nTwo kinds of node are never polled themselves, and this is what each says when the thing that\ntells it about them stops:\n\n* **A Meraki device**: what the Dashboard API says about it is all Yagra knows. When the API\n  stops answering for the whole organization, **one** alert is raised about the organization and\n  the devices keep their last state — they did not fail. This is what stops that stale `ok` from\n  being read as a current one.\n* **A wireless access point**: its controller's AP walk is what reports it. When the controller\n  stops reporting it, the AP reads `unknown` rather than its last `ok`, and nothing is raised\n  about the AP itself — the controller's own alert is the one alert. This says since when.",
         "required": [
           "cause",
-          "meraki_org",
           "since_unix_ms"
         ],
         "properties": {
@@ -25816,16 +25815,19 @@
             "description": "What stopped answering."
           },
           "meraki_org": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid",
-            "description": "The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to."
+            "description": "The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to. Present only when\n`cause` is `meraki_api`."
           },
           "meraki_org_name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "That organization's name, when it is known."
+            "description": "That organization's name, when it is known. Only with `meraki_api`."
           },
           "reason": {
             "oneOf": [
@@ -25834,14 +25836,14 @@
               },
               {
                 "$ref": "#/components/schemas/MerakiSyncFailure",
-                "description": "Why the most recent availability collect failed, when it is known."
+                "description": "Why the most recent availability collect failed, when it is known. Only with `meraki_api`."
               }
             ]
           },
           "since_unix_ms": {
             "type": "integer",
             "format": "int64",
-            "description": "When the organization's alert was raised — three failed collects after the last answer, so\nthe state shown is older than this."
+            "description": "`meraki_api`: when the organization's alert was raised — three failed collects after the\nlast answer, so the state shown is older than this. `wireless_controller`: when a controller\nlast reported the access point — nothing has been heard about it since."
           }
         }
       },
@@ -25849,7 +25851,8 @@
         "type": "string",
         "description": "What a node's state is collected through, when that has stopped answering.",
         "enum": [
-          "meraki_api"
+          "meraki_api",
+          "wireless_controller"
         ]
       },
       "CollectionItem": {

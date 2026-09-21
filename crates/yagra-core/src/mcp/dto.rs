@@ -403,12 +403,15 @@ pub struct NodeStatusDto {
     pub node: NodeSummaryDto,
     pub alerts: Vec<AlertDto>,
     /// Set when `node.state` is **not a current reading** — what feeds this node has stopped
-    /// answering, so the state is the last one collected (ADR-164 決定 18). Today that is one case:
-    /// the Cisco Meraki Dashboard API is not answering the node's organization. `null` otherwise.
+    /// answering. Two cases, by `cause`. `meraki_api`: the Cisco Meraki Dashboard API is not
+    /// answering the node's organization, and the state is the last one collected (ADR-164
+    /// 決定 18). `wireless_controller`: the node is a wireless access point no controller has
+    /// reported lately, so its state reads `unknown` — or `unreachable` if it was down when last
+    /// reported (ADR-064 増分 G); `since_unix_ms` is the last report. `null` otherwise.
     ///
     /// Mirrors `NodeStatus.collection_fault` on `GET /api/v1/nodes/{node_id}/status`, from the same
-    /// function. ⚠️ Read it before concluding a Meraki node is healthy: such a node raises no alert
-    /// of its own — the alert is about the organization — and its `state` stays `ok`.
+    /// function. ⚠️ Read it before concluding such a node is healthy or broken: neither kind raises
+    /// an alert of its own for this — the alert is about the organization, or the controller.
     pub collection_fault: Option<crate::api::nodes::CollectionFault>,
     pub interfaces: Vec<InterfaceDto>,
     /// Whether SNMP polling is **configured** for this node — not whether it is answering.
@@ -1032,7 +1035,7 @@ mod tests {
             // Populated, so the canary below sees every key the type can put on the wire.
             collection_fault: Some(crate::api::nodes::CollectionFault {
                 cause: crate::api::nodes::CollectionFaultCause::MerakiApi,
-                meraki_org: Uuid::new_v4(),
+                meraki_org: Some(Uuid::new_v4()),
                 meraki_org_name: Some("Acme".to_owned()),
                 reason: Some(crate::meraki_sync::MerakiSyncFailure::Auth),
                 since_unix_ms: 1,

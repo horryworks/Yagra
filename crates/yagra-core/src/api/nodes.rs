@@ -100,7 +100,12 @@ pub(crate) fn routes() -> Router<ApiState> {
 
 /// Freshness window for the coarse fallback probe: a node with a liveness sample within this
 /// window is treated as `ok`, else `unknown` (matches the fleet-coverage staleness horizon).
-const FALLBACK_FRESH_SECS: u64 = 600;
+///
+/// ⚠️ **One number with the floor of an AP's report window** (ADR-064 増分 G): the engine shows an
+/// AP whose controller has not reported it within that window as `unknown`, and after a restart
+/// this fallback is what decides the same AP. Two numbers would make one outage read differently
+/// depending on whether core had restarted.
+const FALLBACK_FRESH_SECS: u64 = crate::alerts::reported::FRESH_FLOOR_SECS;
 
 /// The metrics the fallback probe asks about: **every node kind's liveness series**, because a URL
 /// monitor, a DNS monitor and a Meraki device are never pinged and so have no `icmp_rtt_ms` at all.
@@ -113,6 +118,10 @@ const FALLBACK_METRICS: [&str; NodeKind::ALL.len()] = NodeKind::LIVENESS_METRICS
 
 /// **The display rule itself**: the engine's opinion when it has one, otherwise a recent liveness
 /// sample means `ok` and silence means `unknown`.
+///
+/// "The engine's opinion" already accounts for a wireless AP its controller has stopped reporting:
+/// the engine hands back `unknown` for its stale `ok` (ADR-064 増分 G), so no caller here needs to
+/// know which nodes are APs.
 ///
 /// Pure — every caller brings its own already-batched inputs, and nothing here does I/O. It is a
 /// function rather than three lines because it *was* three lines, four times over: the topology
@@ -1256,40 +1265,69 @@ pub(crate) struct NodeStatus {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CollectionFaultCause {
     /// The Cisco Meraki Dashboard API is not answering the collects of this node's organization.
+    /// The node keeps the last state collected (ADR-164 決定 18).
     MerakiApi,
+    /// This node is a wireless access point, and no wireless controller has reported it within its
+    /// window — ten minutes, or three of the controller's poll intervals when that is longer. The
+    /// node reads `unknown` unless it was down when last reported (ADR-064 増分 G).
+    WirelessController,
 }
 
-/// Why a node's `state` is the last one collected rather than a current one (ADR-164 決定 18).
+/// Why a node's `state` is not a current reading (ADR-164 決定 18, ADR-064 増分 G).
 ///
-/// A Meraki device is never pinged: what the Dashboard API says about it is all Yagra knows. When
-/// the API stops answering for the whole organization, **one** alert is raised about the
-/// organization and the devices keep their last state — they did not fail. This is what stops
-/// that stale `ok` from being read as a current one.
+/// Two kinds of node are never polled themselves, and this is what each says when the thing that
+/// tells it about them stops:
+///
+/// * **A Meraki device**: what the Dashboard API says about it is all Yagra knows. When the API
+///   stops answering for the whole organization, **one** alert is raised about the organization and
+///   the devices keep their last state — they did not fail. This is what stops that stale `ok` from
+///   being read as a current one.
+/// * **A wireless access point**: its controller's AP walk is what reports it. When the controller
+///   stops reporting it, the AP reads `unknown` rather than its last `ok`, and nothing is raised
+///   about the AP itself — the controller's own alert is the one alert. This says since when.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct CollectionFault {
     /// What stopped answering.
     pub(crate) cause: CollectionFaultCause,
-    /// The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to.
-    pub(crate) meraki_org: Uuid,
-    /// That organization's name, when it is known.
+    /// The Meraki organization (`GET /api/v1/meraki/orgs`) the node belongs to. Present only when
+    /// `cause` is `meraki_api`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) meraki_org: Option<Uuid>,
+    /// That organization's name, when it is known. Only with `meraki_api`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) meraki_org_name: Option<String>,
-    /// Why the most recent availability collect failed, when it is known.
+    /// Why the most recent availability collect failed, when it is known. Only with `meraki_api`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<crate::meraki_sync::MerakiSyncFailure>,
-    /// When the organization's alert was raised — three failed collects after the last answer, so
-    /// the state shown is older than this.
+    /// `meraki_api`: when the organization's alert was raised — three failed collects after the
+    /// last answer, so the state shown is older than this. `wireless_controller`: when a controller
+    /// last reported the access point — nothing has been heard about it since.
     pub(crate) since_unix_ms: i64,
 }
 
 /// The collection fault of `node`, if it has one. Shared with the MCP `get_node_status` tool: what
 /// the WebUI can see, `/mcp` can see.
 ///
-/// Costs nothing for a node that is not Meraki's or whose organization is being answered — both
-/// are answered from the alert engine's snapshot. The one database read (the reason, off the
-/// organization's row) happens only while that organization's alert is open.
+/// Costs nothing for a node that is neither Meraki's nor an access point, or whose source is
+/// answering — all of that is answered from the alert engine's memory. The one database read (the
+/// reason, off the organization's row) happens only while a Meraki organization's alert is open.
+///
+/// ⚠️ An access point's fault names no controller. Which controller serves it is on the node
+/// detail (`wireless.controller_node_id`), already narrowed to what the caller may see; naming the
+/// reporter here would hand a group-scoped caller a controller outside its folders.
 pub(crate) async fn collection_fault_of(st: &ApiState, node: NodeId) -> Option<CollectionFault> {
-    let (org, alert) = st.alerts.meraki_collect_fault_of(node)?;
+    let Some((org, alert)) = st.alerts.meraki_collect_fault_of(node) else {
+        return st
+            .alerts
+            .unreported_since(node)
+            .map(|since_unix_ms| CollectionFault {
+                cause: CollectionFaultCause::WirelessController,
+                meraki_org: None,
+                meraki_org_name: None,
+                reason: None,
+                since_unix_ms,
+            });
+    };
     let reason = match st.admin.as_ref() {
         Some(admin) => admin
             .meraki_orgs
@@ -1307,7 +1345,7 @@ pub(crate) async fn collection_fault_of(st: &ApiState, node: NodeId) -> Option<C
     };
     Some(CollectionFault {
         cause: CollectionFaultCause::MerakiApi,
-        meraki_org: org,
+        meraki_org: Some(org),
         meraki_org_name: st.alerts.meraki_org_name(org),
         reason,
         since_unix_ms: alert.at_unix_ms,
@@ -2984,6 +3022,73 @@ mod tests {
                 .copied(),
             Some(NodeState::Unknown)
         );
+    }
+
+    /// ADR-064 増分 G on the status both surfaces serve: an access point no controller has reported
+    /// for twenty minutes reads `unknown` and says since when — with no organization on the wire,
+    /// and no controller either (a scoped caller may not be allowed to see it). One reported a
+    /// minute ago says nothing.
+    #[tokio::test]
+    async fn an_access_point_its_controller_stopped_reporting_reads_unknown_and_says_since_when() {
+        let st = private_state();
+        let (ap, fresh, controller) = (Uuid::new_v4(), Uuid::new_v4(), NodeId::new());
+        let now = crate::pool_coverage::now_unix_ms();
+        let last = now - 20 * 60_000;
+        for i in 0..3 {
+            for (node, at) in [(ap, last + i), (fresh, now - 60_000 + i)] {
+                st.alerts.note_report(NodeId::from(node), controller, at);
+                st.alerts.observe(&yagra_bus::PollResult {
+                    job_id: Uuid::nil(),
+                    node_id: NodeId::from(node),
+                    at_unix_ms: at,
+                    outcome: yagra_bus::CheckOutcome::Reachable,
+                    samples: Vec::new(),
+                    interfaces: Vec::new(),
+                    sys_descr: None,
+                    os_version: None,
+                    os_version_without_patch: None,
+                    serial_number: None,
+                    hardware_model: None,
+                    sys_object_id: None,
+                    dns_chain: None,
+                    neighbors: None,
+                    l3: None,
+                    arp: None,
+                    routing: None,
+                    wlan: None,
+                    row_names: Vec::new(),
+                    observational: false,
+                    judge_samples: false,
+                    poller_id: None,
+                    trace_context: Default::default(),
+                    meraki_collect: None,
+                });
+            }
+        }
+        let status = node_status(&st, ap).await;
+        assert_eq!(status.state, NodeState::Unknown);
+        let json = serde_json::to_value(&status).unwrap();
+        let fault = &json["collection_fault"];
+        assert_eq!(fault["cause"], "wireless_controller", "{json}");
+        assert_eq!(fault["since_unix_ms"], last + 2);
+        for absent in ["meraki_org", "meraki_org_name", "reason"] {
+            assert!(
+                fault.get(absent).is_none(),
+                "{absent} on an AP's fault: {fault}"
+            );
+        }
+        assert_eq!(
+            display_states(&st, &[NodeId::from(ap)])
+                .await
+                .get(&NodeId::from(ap))
+                .copied(),
+            Some(NodeState::Unknown),
+            "the list must agree with the detail"
+        );
+
+        let status = node_status(&st, fresh).await;
+        assert_eq!(status.state, NodeState::Ok);
+        assert!(status.collection_fault.is_none());
     }
 
     async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {

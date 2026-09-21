@@ -575,6 +575,13 @@ pub(crate) async fn consume_results<S>(
         let fanned = ap_fanout.fan_out(&result, Replay::Live);
         result.samples.extend(fanned.controller);
         let aps = fanned.aps;
+        // Each AP this inventory spoke about has just been reported, by this controller (ADR-064
+        // 増分 G). Noted before the AP's result is judged, so the engine reads it as current when it
+        // decides the colour to broadcast. The backfill consumer never notes: an old inventory says
+        // nothing about whether anyone is reporting the AP now.
+        for ap in &aps {
+            alerts.note_report(ap.node_id, result.node_id, ap.at_unix_ms);
+        }
         let admitted = no_reading.admit(result);
         // Result-ingest span: child of the poller's poll span (via the result's carried trace
         // context), completing the poll's end-to-end distributed trace. Secret-free fields only.
@@ -2048,6 +2055,65 @@ mod tests {
             ap_samples[1..].iter().all(|v| *v == 0.0),
             "the standby's view published a reading: {ap_samples:?}"
         );
+    }
+
+    /// ADR-064 増分 G through the real consumer loop: every AP result the fan-out makes is noted as
+    /// a report by the controller that made it. An AP its controller served twenty minutes ago and
+    /// has not reported since reads `unknown`; one served now reads `ok`; the controller is not a
+    /// reported node, so its own old `ok` is left alone.
+    #[tokio::test]
+    async fn the_consumer_notes_each_ap_report_so_a_silent_controllers_aps_read_unknown() {
+        use yagra_common::{NodeState, WlanApState};
+        let now = crate::pool_coverage::now_unix_ms();
+        let (silent, answering) = (NodeId::new(), NodeId::new());
+        let (mac_a, mac_b) = (
+            [0x60, 0x10, 0x9e, 0x0a, 0x03, 0xa1],
+            [0x60, 0x10, 0x9e, 0x0a, 0x03, 0xa2],
+        );
+        let (ap_a, ap_b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let fanout = Arc::new(ApFanout::new());
+        fanout.install(&[
+            crate::wireless::ApBinding {
+                ap_id: yagra_common::ap_id(yagra_common::ApMac::new(mac_a)),
+                node_id: ap_a,
+                owner: None,
+            },
+            crate::wireless::ApBinding {
+                ap_id: yagra_common::ap_id(yagra_common::ApMac::new(mac_b)),
+                node_id: ap_b,
+                owner: None,
+            },
+        ]);
+        let long_ago = now - 20 * 60_000;
+        let mut stream = Vec::new();
+        for i in 0..3 {
+            let mut ctl = wlan_result(silent, mac_a, WlanApState::Associated, long_ago + i);
+            ctl.observational = false;
+            stream.push(ctl);
+            stream.push(wlan_result(
+                answering,
+                mac_b,
+                WlanApState::Associated,
+                now + i,
+            ));
+        }
+        let alerts = Arc::new(AlertManager::new());
+        alerts.set_config(crate::alerts::AlertConfig::new(
+            vec![crate::alerts::seeded_liveness_rule()],
+            std::collections::HashMap::new(),
+        ));
+        let out = drive_ingest_with(&alerts, &NoReadingHandle::default(), fanout, stream).await;
+        assert!(out.actions.is_empty(), "nothing fires: {:?}", out.actions);
+        let (a, b) = (NodeId::from(ap_a), NodeId::from(ap_b));
+        assert_eq!(alerts.node_liveness(a), Some(NodeState::Ok));
+        assert_eq!(alerts.node_state(a), Some(NodeState::Unknown));
+        assert_eq!(alerts.unreported_since(a), Some(long_ago + 2));
+        assert_eq!(alerts.node_state(b), Some(NodeState::Ok));
+        assert_eq!(alerts.unreported_since(b), None);
+        // The silent controller's own result was a liveness result twenty minutes old; nobody
+        // reports a controller, so its committed `ok` stands.
+        assert_eq!(alerts.node_state(silent), Some(NodeState::Ok));
+        assert_eq!(alerts.unreported_since(silent), None);
     }
 
     /// A band rule on the receive light level (warning at or below -20 dBm), for `node`, dwell 2 —
