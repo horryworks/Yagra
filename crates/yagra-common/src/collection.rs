@@ -21,11 +21,13 @@ use crate::metric::MetricKind;
 use crate::profile::ProfileCategory;
 use crate::thresholds::ScopeLevel;
 use crate::wlan::{
-    WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, METRIC_WLAN_CONTROLLER_SSID_COUNT,
-    METRIC_WLAN_SSID_AP_COUNT, METRIC_WLAN_SSID_CLIENTS, METRIC_WLAN_SSID_CLIENTS_2G4,
-    METRIC_WLAN_SSID_CLIENTS_5G, METRIC_WLAN_SSID_CLIENTS_6G, METRIC_WLAN_SSID_IN_OCTETS,
-    METRIC_WLAN_SSID_OUT_OCTETS, METRIC_WLAN_SSID_WALK_COMPLETE, WIRELESS_AP_PROFILE,
-    WLAN_RADIO_METRICS,
+    WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, METRIC_WLAN_CONTROLLER_APS_JOINED,
+    METRIC_WLAN_CONTROLLER_APS_MISSING, METRIC_WLAN_CONTROLLER_CLIENTS,
+    METRIC_WLAN_CONTROLLER_SSID_COUNT, METRIC_WLAN_RADIO_CHANNEL,
+    METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT, METRIC_WLAN_RADIO_CLIENT_COUNT, METRIC_WLAN_SSID_AP_COUNT,
+    METRIC_WLAN_SSID_CLIENTS, METRIC_WLAN_SSID_CLIENTS_2G4, METRIC_WLAN_SSID_CLIENTS_5G,
+    METRIC_WLAN_SSID_CLIENTS_6G, METRIC_WLAN_SSID_IN_OCTETS, METRIC_WLAN_SSID_OUT_OCTETS,
+    METRIC_WLAN_SSID_WALK_COMPLETE, WIRELESS_AP_PROFILE, WLAN_RADIO_METRICS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -1057,7 +1059,7 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                     "1.3.6.1.4.1.2011.6.139.12.1.5.7.0",
                 ),
                 vendor_scalar(
-                    "wlan_controller_aps_joined",
+                    METRIC_WLAN_CONTROLLER_APS_JOINED,
                     "1.3.6.1.4.1.2011.6.139.12.1.2.1.0",
                 ),
                 vendor_scalar(
@@ -1069,7 +1071,7 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                     "1.3.6.1.4.1.2011.6.139.12.1.5.1.0",
                 ),
                 vendor_scalar(
-                    "wlan_controller_clients",
+                    METRIC_WLAN_CONTROLLER_CLIENTS,
                     "1.3.6.1.4.1.2011.6.139.12.1.2.3.0",
                 ),
                 vendor_scalar(
@@ -1098,31 +1100,56 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         wlan_ssid_template(WlanFlavor::Huawei),
         // ADR-064 increment C (2026-09-18). Appended at the end: seed ids are array positions.
         wlan_radio_template(WlanFlavor::Huawei),
+        // ADR-064 increment F (2026-09-21): the Cisco dialect, AireOS and the 9800 alike. Appended
+        // at the end: seed ids are array positions.
+        wlan_ap_template(WlanFlavor::CiscoAirespace),
+        wlan_ssid_template(WlanFlavor::CiscoAirespace),
+        wlan_radio_template(WlanFlavor::CiscoAirespace),
     ]
 }
 
 /// The built-in AP-table template for one wireless controller dialect (ADR-064).
 ///
-/// One item: its OID selects the dialect, and its metric is the controller's walk-complete sample.
-/// The per-AP inventory the walk produces is not a collection item — it is relational data for
-/// PostgreSQL (the AP list), never a series per row (ADR-011).
+/// Its OID selects the dialect, and its first metric is the controller's walk-complete sample. A
+/// Cisco controller also counts its joined APs out of the same walk (ADR-064 増分 F, F8) — a Huawei
+/// AC answers that from a scalar of its own template instead. The per-AP inventory the walk
+/// produces is not a collection item — it is relational data for PostgreSQL (the AP list), never a
+/// series per row (ADR-011).
 fn wlan_ap_template(flavor: WlanFlavor) -> BuiltinTemplate {
+    let item = |metric: &str| CollectionItem {
+        metric_name: metric.to_owned(),
+        oid: flavor.root_oid().to_owned(),
+        kind: CollectionKind::Wlan,
+        metric_kind: MetricKind::Gauge,
+    };
+    let (description, items) = match flavor {
+        WlanFlavor::Huawei => (
+            "The access points a Huawei wireless controller manages (HUAWEI-WLAN-AP-MIB): each \
+             AP's name, model, software version, address, state and client count, for the \
+             controller's AP list. Adds one sample to the controller, whether the AP table was \
+             read to its end.",
+            vec![item(METRIC_WLAN_AP_WALK_COMPLETE)],
+        ),
+        WlanFlavor::CiscoAirespace => (
+            "The access points a Cisco wireless controller manages (AIRESPACE-WIRELESS-MIB, which \
+             AireOS and the Catalyst 9800 both answer): each AP's name, model, serial, software \
+             version, address, state, AP group, CPU and memory, for the controller's AP list. \
+             Adds three samples to the controller: whether the AP table was read to its end, how \
+             many APs are joined — counted from that table, because the two OS families keep that \
+             total in different objects — and how many of the APs it serves are missing from it. \
+             A Cisco controller drops an AP it has lost from the table, so an imported AP missing \
+             from a complete read is recorded as down.",
+            vec![
+                item(METRIC_WLAN_AP_WALK_COMPLETE),
+                item(METRIC_WLAN_CONTROLLER_APS_JOINED),
+                item(METRIC_WLAN_CONTROLLER_APS_MISSING),
+            ],
+        ),
+    };
     BuiltinTemplate {
         name: flavor.template_name(),
-        description: match flavor {
-            WlanFlavor::Huawei => {
-                "The access points a Huawei wireless controller manages (HUAWEI-WLAN-AP-MIB): each \
-                 AP's name, model, software version, address, state and client count, for the \
-                 controller's AP list. Adds one sample to the controller, whether the AP table was \
-                 read to its end."
-            }
-        },
-        items: vec![CollectionItem {
-            metric_name: METRIC_WLAN_AP_WALK_COMPLETE.to_owned(),
-            oid: flavor.root_oid().to_owned(),
-            kind: CollectionKind::Wlan,
-            metric_kind: MetricKind::Gauge,
-        }],
+        description,
+        items,
     }
 }
 
@@ -1147,28 +1174,45 @@ fn wlan_ssid_template(flavor: WlanFlavor) -> BuiltinTemplate {
         kind: CollectionKind::Wlan,
         metric_kind,
     };
+    let (description, items) = match flavor {
+        WlanFlavor::Huawei => (
+            "The SSIDs a Huawei wireless controller is broadcasting, and what each one \
+             carries (HUAWEI-WLAN-VAP-MIB): clients on 2.4, 5 and 6 GHz, how many access \
+             points broadcast it, and bytes in and out. One row per SSID, named by the SSID \
+             itself. An HA standby reports the active controller's client counts, so do not \
+             add the two together.",
+            vec![
+                item(METRIC_WLAN_SSID_WALK_COMPLETE, MetricKind::Gauge),
+                item(METRIC_WLAN_CONTROLLER_SSID_COUNT, MetricKind::Gauge),
+                item(METRIC_WLAN_SSID_CLIENTS, MetricKind::Gauge),
+                item(METRIC_WLAN_SSID_CLIENTS_2G4, MetricKind::Gauge),
+                item(METRIC_WLAN_SSID_CLIENTS_5G, MetricKind::Gauge),
+                item(METRIC_WLAN_SSID_CLIENTS_6G, MetricKind::Gauge),
+                item(METRIC_WLAN_SSID_AP_COUNT, MetricKind::Gauge),
+                item(METRIC_WLAN_SSID_IN_OCTETS, MetricKind::Counter),
+                item(METRIC_WLAN_SSID_OUT_OCTETS, MetricKind::Counter),
+            ],
+        ),
+        // Only what the table has: `bsnDot11EssTable` counts clients per SSID with no band split,
+        // no AP count and no bytes, and a declared metric that never arrives reads `no_data`
+        // forever. The controller's client total is the sum over SSIDs (F8), published only when
+        // this walk heard every column out.
+        WlanFlavor::CiscoAirespace => (
+            "The SSIDs a Cisco wireless controller is broadcasting (AIRESPACE-WIRELESS-MIB): the \
+             clients on each, one row per SSID named by the SSID itself, and their total as the \
+             controller's client count.",
+            vec![
+                item(METRIC_WLAN_SSID_WALK_COMPLETE, MetricKind::Gauge),
+                item(METRIC_WLAN_CONTROLLER_SSID_COUNT, MetricKind::Gauge),
+                item(METRIC_WLAN_CONTROLLER_CLIENTS, MetricKind::Gauge),
+                item(METRIC_WLAN_SSID_CLIENTS, MetricKind::Gauge),
+            ],
+        ),
+    };
     BuiltinTemplate {
         name: flavor.ssid_template_name(),
-        description: match flavor {
-            WlanFlavor::Huawei => {
-                "The SSIDs a Huawei wireless controller is broadcasting, and what each one \
-                 carries (HUAWEI-WLAN-VAP-MIB): clients on 2.4, 5 and 6 GHz, how many access \
-                 points broadcast it, and bytes in and out. One row per SSID, named by the SSID \
-                 itself. An HA standby reports the active controller's client counts, so do not \
-                 add the two together."
-            }
-        },
-        items: vec![
-            item(METRIC_WLAN_SSID_WALK_COMPLETE, MetricKind::Gauge),
-            item(METRIC_WLAN_CONTROLLER_SSID_COUNT, MetricKind::Gauge),
-            item(METRIC_WLAN_SSID_CLIENTS, MetricKind::Gauge),
-            item(METRIC_WLAN_SSID_CLIENTS_2G4, MetricKind::Gauge),
-            item(METRIC_WLAN_SSID_CLIENTS_5G, MetricKind::Gauge),
-            item(METRIC_WLAN_SSID_CLIENTS_6G, MetricKind::Gauge),
-            item(METRIC_WLAN_SSID_AP_COUNT, MetricKind::Gauge),
-            item(METRIC_WLAN_SSID_IN_OCTETS, MetricKind::Counter),
-            item(METRIC_WLAN_SSID_OUT_OCTETS, MetricKind::Counter),
-        ],
+        description,
+        items,
     }
 }
 
@@ -1182,18 +1226,33 @@ fn wlan_ssid_template(flavor: WlanFlavor) -> BuiltinTemplate {
 /// AP. Left out of the catalogue they would be judged as table rows instead, where an interface
 /// rule never reaches them, and nothing would have said so.
 fn wlan_radio_template(flavor: WlanFlavor) -> BuiltinTemplate {
+    let (description, metrics): (&'static str, &[&str]) = match flavor {
+        WlanFlavor::Huawei => (
+            "Each radio of each access point a Huawei wireless controller manages \
+             (HUAWEI-WLAN-AP-RADIO-MIB): clients, channel and how busy it is, interference, \
+             the noise floor, the average client signal and the transmit power. Published on \
+             the access point as a slot, so a radio reads like a port: 2.4 GHz is 1, 5 GHz \
+             is 2, 6 GHz is 3. Needs the access points to have been imported as nodes.",
+            &WLAN_RADIO_METRICS,
+        ),
+        // The three the Cisco tables carry. `bsnAPIfPhyTxPowerLevel` is a step number, not dBm,
+        // and there is no noise, interference or signal column to read (ADR-064 増分 F, F5).
+        WlanFlavor::CiscoAirespace => (
+            "Each radio of each access point a Cisco wireless controller manages \
+             (AIRESPACE-WIRELESS-MIB): clients, channel and how busy it is. Published on the \
+             access point as a slot, so a radio reads like a port: 2.4 GHz is 1, 5 GHz is 2, \
+             6 GHz is 3. Needs the access points to have been imported as nodes.",
+            &[
+                METRIC_WLAN_RADIO_CLIENT_COUNT,
+                METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT,
+                METRIC_WLAN_RADIO_CHANNEL,
+            ],
+        ),
+    };
     BuiltinTemplate {
         name: flavor.radio_template_name(),
-        description: match flavor {
-            WlanFlavor::Huawei => {
-                "Each radio of each access point a Huawei wireless controller manages \
-                 (HUAWEI-WLAN-AP-RADIO-MIB): clients, channel and how busy it is, interference, \
-                 the noise floor, the average client signal and the transmit power. Published on \
-                 the access point as a slot, so a radio reads like a port: 2.4 GHz is 1, 5 GHz \
-                 is 2, 6 GHz is 3. Needs the access points to have been imported as nodes."
-            }
-        },
-        items: WLAN_RADIO_METRICS
+        description,
+        items: metrics
             .iter()
             .map(|metric| CollectionItem {
                 metric_name: (*metric).to_owned(),
@@ -1573,11 +1632,19 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES, T_ENTITY_SENSORS],
         ),
         // ── Wireless ──
+        // ADR-064 増分 F: AireOS and the 9800 are both classified here, and both answer the
+        // AIRESPACE tables, so the one dialect goes on the one profile. A deployment gets the new
+        // links on its next start: the seeder inserts each (profile, template) pair it lacks.
         prof(
             "Cisco wireless controller",
             C::WirelessController,
             Some("Cisco"),
-            vec![TEMPLATE_STANDARD_SNMP],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                WlanFlavor::CiscoAirespace.template_name(),
+                WlanFlavor::CiscoAirespace.ssid_template_name(),
+                WlanFlavor::CiscoAirespace.radio_template_name(),
+            ],
         ),
         prof(
             "Aruba wireless controller",
@@ -2113,6 +2180,10 @@ mod tests {
             WlanFlavor::Huawei.template_name(),
             WlanFlavor::Huawei.ssid_template_name(),
             WlanFlavor::Huawei.radio_template_name(),
+            // ── ADR-064 増分 F appended from here ──
+            WlanFlavor::CiscoAirespace.template_name(),
+            WlanFlavor::CiscoAirespace.ssid_template_name(),
+            WlanFlavor::CiscoAirespace.radio_template_name(),
         ];
         let actual: Vec<&str> = builtin_templates().iter().map(|t| t.name).collect();
         assert_eq!(
@@ -2302,6 +2373,38 @@ mod tests {
         assert_eq!(usg.len(), gauges.len() + 1, "no unaccounted USG item");
     }
 
+    /// Every WLAN dialect ships its three templates, each pointed at the dialect's own table — the
+    /// optical check's shape for a second family (ADR-064 増分 F). A dialect added to
+    /// [`WlanFlavor::ALL`] without them has an AP table nothing ever walks; one whose items name
+    /// another dialect's root would walk that dialect's table on this dialect's controllers.
+    #[test]
+    fn every_wlan_dialect_has_its_three_templates_on_its_own_tables() {
+        let templates = builtin_templates();
+        for flavor in WlanFlavor::ALL {
+            for (name, root) in [
+                (flavor.template_name(), flavor.root_oid()),
+                (flavor.ssid_template_name(), flavor.ssid_root_oid()),
+                (flavor.radio_template_name(), flavor.radio_root_oid()),
+            ] {
+                let t = templates
+                    .iter()
+                    .find(|t| t.name == name)
+                    .unwrap_or_else(|| panic!("{flavor:?} has no template {name}"));
+                assert!(!t.items.is_empty(), "{name}");
+                for item in &t.items {
+                    assert_eq!(
+                        item.kind,
+                        CollectionKind::Wlan,
+                        "{name}: {}",
+                        item.metric_name
+                    );
+                    assert_eq!(item.oid, root, "{name}: {}", item.metric_name);
+                    assert_eq!(WlanFlavor::from_root(&item.oid), Some(flavor), "{name}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn builtin_profiles_reference_existing_templates() {
         let profiles = builtin_profiles();
@@ -2352,6 +2455,20 @@ mod tests {
         assert!(
             wac.templates.contains(&WlanFlavor::Huawei.template_name()),
             "WAC walks its AP table (ADR-064 increment B1)"
+        );
+
+        // ADR-064 増分 F: the Cisco profile walks the AIRESPACE tables, and only those — a
+        // Huawei template on it would be a per-poll walk of a table no Cisco has.
+        let wlc = by_name("Cisco wireless controller").expect("Cisco WLC profile present");
+        assert_eq!(wlc.category, ProfileCategory::WirelessController);
+        assert_eq!(
+            wlc.templates,
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                WlanFlavor::CiscoAirespace.template_name(),
+                WlanFlavor::CiscoAirespace.ssid_template_name(),
+                WlanFlavor::CiscoAirespace.radio_template_name(),
+            ]
         );
 
         let a10 = by_name("A10 Thunder ADC").expect("A10 load-balancer profile present");

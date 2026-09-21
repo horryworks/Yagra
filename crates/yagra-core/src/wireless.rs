@@ -33,6 +33,13 @@ use yagra_common::{ap_id, WlanApObservation, WlanApState, WlanFlavor, WlanInvent
 /// down by the one that is still answering, rather than frozen at its last good state.
 pub const OWNER_STALE_AFTER_SECS: i64 = 15 * 60;
 
+/// The word the AP list shows for an AP its controller's table no longer lists (ADR-064 増分 F, F9).
+///
+/// Not a vendor word — the controller said nothing, which is the point — so it is spelled so an
+/// operator reading the list sees why the state changed. The AP tab shows `run_state` untranslated
+/// (ADR-064 決定 14), and this is the one value Yagra writes there itself.
+pub const ABSENT_RUN_STATE: &str = "not_listed";
+
 /// The controller that last reported an AP associated, and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ownership {
@@ -280,6 +287,37 @@ impl WirelessRepo {
                 return Ok(());
             }
             Err(e) => return Err(e.into()),
+        }
+        // A Cisco controller drops an AP it has lost from its table (ADR-064 増分 F, F9): an AP this
+        // controller last served and no longer lists reads as not associated — here, in the AP list,
+        // and in the fan-out, on the AP's node, both asking `absence_is_evidence`. Its `last_seen`
+        // does not move, because nothing reported it, and its owner does not either: whoever serves
+        // it now takes it by saying so. Before the empty-list return, since an empty table is the
+        // case where every one of them is gone.
+        if inventory.absence_is_evidence() {
+            let listed: Vec<Uuid> = aps.iter().map(|a| ap_id(a.mac)).collect();
+            sqlx::query(
+                "UPDATE wireless_aps SET state = $3, run_state = $4, clients = NULL \
+                 WHERE owner_controller_id = $1 AND NOT (ap_id = ANY($2)) \
+                   AND (state <> $3 OR run_state <> $4)",
+            )
+            .bind(controller_node)
+            .bind(&listed)
+            .bind(WlanApState::NotAssociated.as_str())
+            .bind(ABSENT_RUN_STATE)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE wireless_ap_sightings SET state = $3, run_state = $4, clients = NULL \
+                 WHERE controller_id = $1 AND NOT (ap_id = ANY($2)) \
+                   AND (state <> $3 OR run_state <> $4)",
+            )
+            .bind(controller_node)
+            .bind(&listed)
+            .bind(WlanApState::NotAssociated.as_str())
+            .bind(ABSENT_RUN_STATE)
+            .execute(&mut *tx)
+            .await?;
         }
         if aps.is_empty() {
             tx.commit().await?;
@@ -1176,6 +1214,127 @@ mod tests {
 
     fn inventory(aps: Vec<WlanApObservation>) -> WlanInventory {
         WlanInventory::bounded(WlanFlavor::Huawei, aps, 1024)
+    }
+
+    fn cisco_inventory(aps: Vec<WlanApObservation>, uptime: Option<u64>) -> WlanInventory {
+        let mut inv = WlanInventory::bounded(WlanFlavor::CiscoAirespace, aps, 1024);
+        inv.controller_uptime_secs = uptime;
+        inv
+    }
+
+    /// ADR-064 増分 F, F9, through the database: an AP a Cisco controller served and no longer
+    /// lists reads as not associated in the list — without its `last_seen` moving, since nothing
+    /// reported it — while an AP another controller serves, and every AP of a table read inside the
+    /// grace after a boot, is left exactly as it was. The first assertion is the accepting one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_ap_a_cisco_controller_stops_listing_reads_as_not_associated(pool: sqlx::PgPool) {
+        let wlc = pgtest::node(&pool, "wlc01", 1, None).await;
+        let other = pgtest::node(&pool, "wlc02", 2, None).await;
+        let repo = WirelessRepo::new(pool.clone());
+        let grace = yagra_common::WLAN_ABSENCE_GRACE_AFTER_BOOT_SECS;
+        let (stays, leaves, moves) = (
+            [0, 0x5d, 0x73, 0, 0, 1],
+            [0, 0x5d, 0x73, 0, 0, 2],
+            [0, 0x5d, 0x73, 0, 0, 3],
+        );
+        let assoc = |mac, name| observation(mac, name, "associated", WlanApState::Associated, 2);
+        repo.record_inventory(
+            wlc,
+            &cisco_inventory(
+                vec![
+                    assoc(stays, "ap01"),
+                    assoc(leaves, "ap02"),
+                    assoc(moves, "ap03"),
+                ],
+                Some(grace),
+            ),
+            at(0),
+        )
+        .await
+        .expect("first inventory");
+        // The third AP moves to the other controller, which says it serves it.
+        repo.record_inventory(
+            other,
+            &cisco_inventory(vec![assoc(moves, "ap03")], Some(grace)),
+            at(5),
+        )
+        .await
+        .expect("the other controller takes the third AP");
+
+        let state_of = |name: &'static str| {
+            let repo = &repo;
+            async move {
+                repo.list_page(None, &ApFilter::default(), None, 10)
+                    .await
+                    .expect("list")
+                    .into_iter()
+                    .find(|a| a.name.as_deref() == Some(name))
+                    .expect(name)
+            }
+        };
+
+        // Inside the grace after a boot, a short table changes nothing.
+        repo.record_inventory(
+            wlc,
+            &cisco_inventory(vec![assoc(stays, "ap01")], Some(grace - 1)),
+            at(10),
+        )
+        .await
+        .expect("just after boot");
+        assert_eq!(state_of("ap02").await.state, Some(WlanApState::Associated));
+
+        repo.record_inventory(
+            wlc,
+            &cisco_inventory(vec![assoc(stays, "ap01")], Some(grace + 300)),
+            at(20),
+        )
+        .await
+        .expect("past the grace");
+        let gone = state_of("ap02").await;
+        assert_eq!(gone.state, Some(WlanApState::NotAssociated));
+        assert_eq!(gone.run_state, ABSENT_RUN_STATE);
+        assert_eq!(gone.clients, None);
+        assert_eq!(
+            gone.last_seen,
+            at(0),
+            "nothing reported it, so it was last seen when it was"
+        );
+        assert_eq!(
+            gone.owner_node_id,
+            Some(wlc),
+            "the owner does not move on absence"
+        );
+        let sighting = gone
+            .sightings
+            .iter()
+            .find(|s| s.controller_node_id == Some(wlc))
+            .expect("this controller's sighting");
+        assert_eq!(sighting.state, Some(WlanApState::NotAssociated));
+
+        assert_eq!(state_of("ap01").await.state, Some(WlanApState::Associated));
+        assert_eq!(
+            state_of("ap03").await.state,
+            Some(WlanApState::Associated),
+            "the other controller serves it; this one's table has no say"
+        );
+
+        // Listed again: the controller's own word stands, as always.
+        repo.record_inventory(
+            wlc,
+            &cisco_inventory(
+                vec![assoc(stays, "ap01"), assoc(leaves, "ap02")],
+                Some(grace + 600),
+            ),
+            at(30),
+        )
+        .await
+        .expect("back");
+        let back = state_of("ap02").await;
+        assert_eq!(
+            (back.state, back.run_state.as_str()),
+            (Some(WlanApState::Associated), "associated")
+        );
     }
 
     /// The pair, end to end through the database: both members report the same two APs, and the list

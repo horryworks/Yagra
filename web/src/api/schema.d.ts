@@ -12940,11 +12940,10 @@ export interface components {
          * @description Which vendor dialect a controller speaks, selected by the collection item's OID
          *     (the [`crate::OpticalFlavor`] shape, ADR-064 決定 3).
          *
-         *     Only dialects measured on a real controller are here. Cisco (AireOS and IOS-XE are two MIBs)
-         *     and Aruba are later increments.
+         *     Only dialects measured on a real controller are here. Aruba is a later increment.
          * @enum {string}
          */
-        WlanFlavor: "huawei";
+        WlanFlavor: "huawei" | "cisco_airespace";
     };
     responses: never;
     parameters: never;

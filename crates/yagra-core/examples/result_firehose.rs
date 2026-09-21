@@ -175,6 +175,7 @@ fn make_result(
         os_version: None,
         os_version_without_patch: None,
         serial_number: None,
+        hardware_model: None,
         // None for the same reason: identity rides the hourly probe (ADR-140).
         sys_object_id: None,
         dns_chain: None,

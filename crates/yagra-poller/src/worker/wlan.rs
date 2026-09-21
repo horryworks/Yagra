@@ -17,7 +17,8 @@
 
 use super::*;
 use yagra_common::{
-    WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, METRIC_WLAN_CONTROLLER_SSID_COUNT,
+    WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, METRIC_WLAN_CONTROLLER_APS_JOINED,
+    METRIC_WLAN_CONTROLLER_CLIENTS, METRIC_WLAN_CONTROLLER_SSID_COUNT,
     METRIC_WLAN_SSID_WALK_COMPLETE,
 };
 
@@ -50,6 +51,10 @@ pub(super) async fn execute_wlan(
         timeout,
     } = plan;
     let columns = crate::wlan::columns(flavor);
+    // A Cisco controller's joined count comes out of this walk (ADR-064 増分 F, F8), counted before
+    // the inventory is cut to its cap. `None` for a dialect whose own scalars say it, and for a walk
+    // that did not finish — the same rule as the inventory.
+    let mut joined: Option<usize> = None;
     let (outcome, inventory) = match walker
         .walk_instance_columns(
             transport,
@@ -61,6 +66,9 @@ pub(super) async fn execute_wlan(
         .await
     {
         Ok(walk) if walk.every_column_answered => {
+            if crate::wlan::counts_controller_totals(flavor) {
+                joined = Some(crate::wlan::joined_count(flavor, &walk.rows));
+            }
             let no_aps = walk.rows.is_empty();
             let optional = extra_rows(
                 job,
@@ -109,6 +117,16 @@ pub(super) async fn execute_wlan(
             (CheckOutcome::Error, None)
         }
     };
+    // A dialect whose table lists only the APs joined to it also says how long the controller has
+    // been up, because an AP missing from the table is taken as down only past the grace after a
+    // boot (ADR-064 増分 F, F11). Read after the walk, and only when there is an inventory to go on.
+    let mut inventory = inventory;
+    if let Some(inv) = inventory.as_mut() {
+        if flavor.lists_only_joined_aps() {
+            inv.controller_uptime_secs =
+                controller_uptime_secs(job, transport, walker, timeout).await;
+        }
+    }
     if let Some(inv) = &inventory {
         if let Some(reported) = inv.truncated_at {
             metrics::counter!("yagra_wlan_ap_rows_truncated_total")
@@ -123,6 +141,13 @@ pub(super) async fn execute_wlan(
     }
     let complete = f64::from(u8::from(inventory.is_some()));
     let mut samples = vec![Sample::gauge(METRIC_WLAN_AP_WALK_COMPLETE, complete)];
+    if let Some(joined) = joined {
+        #[allow(clippy::cast_precision_loss)]
+        samples.push(Sample::gauge(
+            METRIC_WLAN_CONTROLLER_APS_JOINED,
+            joined as f64,
+        ));
+    }
     let mut row_names = Vec::new();
     if walk_ssids && outcome != CheckOutcome::Unreachable {
         let (ssid_samples, names, ssid_complete) =
@@ -133,14 +158,23 @@ pub(super) async fn execute_wlan(
             METRIC_WLAN_SSID_WALK_COMPLETE,
             f64::from(u8::from(ssid_complete.is_some())),
         ));
-        // Only a complete walk may say how many SSIDs there are: a partial one would publish a
-        // smaller number, which reads as SSIDs having been removed rather than as a failed read.
-        if let Some(count) = ssid_complete {
+        // Only a complete walk may say how many SSIDs there are, or how many clients they carry
+        // together: a partial one would publish a smaller number, which reads as SSIDs (or
+        // clients) having gone rather than as a failed read.
+        if let Some(complete) = ssid_complete {
             #[allow(clippy::cast_precision_loss)]
             samples.push(Sample::gauge(
                 METRIC_WLAN_CONTROLLER_SSID_COUNT,
-                count as f64,
+                complete.count as f64,
             ));
+            if crate::wlan::counts_controller_totals(flavor) {
+                if let Some(clients) = complete.clients {
+                    samples.push(Sample::gauge(
+                        METRIC_WLAN_CONTROLLER_CLIENTS,
+                        f64::from(clients),
+                    ));
+                }
+            }
         }
     }
     let mut r = result(job, at_unix_ms, outcome, samples);
@@ -150,6 +184,34 @@ pub(super) async fn execute_wlan(
     r.observational = true;
     r.judge_samples = true;
     r
+}
+
+/// `sysUpTime.0` in whole seconds, or `None` when the controller did not answer it — which core
+/// reads as "not up long enough", never as "up for ever" (ADR-064 増分 F, F11).
+async fn controller_uptime_secs(
+    job: &PollJob,
+    transport: &dyn Transport,
+    walker: &SnmpWalker,
+    timeout: Duration,
+) -> Option<u64> {
+    const SYS_UPTIME: &str = "1.3.6.1.2.1.1.3.0";
+    let asked = [SYS_UPTIME.to_owned()];
+    match walker.get(transport, job.target, &asked, timeout).await {
+        // TimeTicks, hundredths of a second, widened to `f64` by the transport.
+        Ok(samples) => samples
+            .iter()
+            .find(|s| s.oid.trim_start_matches('.') == SYS_UPTIME)
+            .filter(|s| s.value.is_finite() && s.value >= 0.0)
+            .map(|s| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let secs = (s.value / 100.0) as u64;
+                secs
+            }),
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "wireless controller uptime unread");
+            None
+        }
+    }
 }
 
 /// Which secondary walk of a controller this is.
@@ -231,7 +293,15 @@ async fn extra_rows(
         }
     }
 }
-/// The SSID table's samples and row names, and how many SSIDs a **complete** walk found.
+/// What only a **complete** SSID walk may say: how many SSIDs there are, and — when any of them
+/// answered a client count — how many clients they carry together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SsidTotals {
+    count: usize,
+    clients: Option<u32>,
+}
+
+/// The SSID table's samples and row names, and the totals a **complete** walk found.
 ///
 /// Unlike the AP table there is no all-or-nothing rule here (決定 9b): each SSID is an independent
 /// series rather than a member of a list that replaces a stored one, so a column that did not
@@ -243,7 +313,7 @@ async fn ssid_readings(
     flavor: WlanFlavor,
     timeout: Duration,
     walker: &SnmpWalker,
-) -> (Vec<Sample>, Vec<yagra_bus::RowName>, Option<usize>) {
+) -> (Vec<Sample>, Vec<yagra_bus::RowName>, Option<SsidTotals>) {
     let columns = crate::wlan::ssid_columns(flavor);
     match walker
         .walk_instance_columns(
@@ -258,11 +328,14 @@ async fn ssid_readings(
         Ok(walk) => {
             let readings = crate::wlan::ssids(flavor, &walk.rows);
             let (samples, names) = crate::wlan::ssid_samples(&readings);
-            (
-                samples,
-                names,
-                walk.every_column_answered.then_some(readings.len()),
-            )
+            let totals = SsidTotals {
+                count: readings.len(),
+                clients: readings
+                    .iter()
+                    .filter_map(crate::wlan::WlanSsidReading::clients)
+                    .reduce(u32::saturating_add),
+            };
+            (samples, names, walk.every_column_answered.then_some(totals))
         }
         Err(err) => {
             tracing::warn!(
@@ -554,5 +627,160 @@ mod tests {
         let asked: Vec<String> = t.asked().concat();
         assert!(asked.contains(&format!("{ROOT}.6")), "{asked:?}");
         assert!(asked.contains(&format!("{ROOT}.44")), "{asked:?}");
+    }
+
+    // ─── Cisco (ADR-064 増分 F) ─────────────────────────────────────────────────────────
+
+    const CISCO_AP: &str = "1.3.6.1.4.1.14179.2.2.1.1";
+    const CISCO_RADIO: &str = "1.3.6.1.4.1.14179.2.2.2.1";
+    const CISCO_SSID: &str = "1.3.6.1.4.1.14179.2.1.1.1";
+
+    fn cisco_job() -> PollJob {
+        PollJob::for_spec(
+            uuid::Uuid::nil(),
+            NodeId::from(uuid::Uuid::nil()),
+            "192.0.2.1".parse().unwrap(),
+            CheckSpec::SnmpWlanAp(yagra_bus::SnmpWlanApCheck {
+                community: "public".into(),
+                flavor: WlanFlavor::CiscoAirespace,
+                max_aps: 1024,
+                walk_ssids: true,
+                walk_radios: true,
+                timeout_ms: 1000,
+            }),
+            300,
+        )
+    }
+
+    fn cell(table: &str, column: u32, instance: &[u32], value: SnmpValue) -> SnmpInstanceRow {
+        SnmpInstanceRow {
+            oid_base: format!("{table}.{column}"),
+            instance: instance.to_vec(),
+            value,
+        }
+    }
+
+    /// A controller shaped like the lab's 9800 recording: the required columns and nothing of the
+    /// optional walk — no `.30`, no cLApTable. One AP serving with two radios, one downloading, and
+    /// two SSIDs. Names and addresses are made up.
+    fn cisco_controller() -> FakeTransport {
+        let serving = [0, 60, 16, 104, 153, 160];
+        let upgrading = [0, 60, 16, 104, 153, 176];
+        let mut rows = Vec::new();
+        for (mac, state) in [(serving, 1), (upgrading, 3)] {
+            rows.push(cell(CISCO_AP, 6, &mac, SnmpValue::Int(state)));
+            for column in [3, 8, 16, 17] {
+                rows.push(cell(
+                    CISCO_AP,
+                    column,
+                    &mac,
+                    SnmpValue::Bytes(b"x".to_vec()),
+                ));
+            }
+            rows.push(cell(
+                CISCO_AP,
+                19,
+                &mac,
+                SnmpValue::Bytes(vec![192, 0, 2, 9]),
+            ));
+        }
+        for (slot, kind, channel, clients) in [(0, 1, 11, 2), (1, 2, 36, 5)] {
+            let mut index = serving.to_vec();
+            index.push(slot);
+            rows.push(cell(CISCO_RADIO, 2, &index, SnmpValue::Int(kind)));
+            rows.push(cell(CISCO_RADIO, 4, &index, SnmpValue::Int(channel)));
+            rows.push(cell(CISCO_RADIO, 15, &index, SnmpValue::Int(clients)));
+        }
+        for (wlan, name, clients) in [(1, "corp", 6), (2, "guest", 1)] {
+            rows.push(cell(
+                CISCO_SSID,
+                2,
+                &[wlan],
+                SnmpValue::Bytes(name.as_bytes().to_vec()),
+            ));
+            rows.push(cell(CISCO_SSID, 38, &[wlan], SnmpValue::Int(clients)));
+        }
+        FakeTransport {
+            snmp_instances: rows,
+            ..FakeTransport::reachable(1.0)
+        }
+    }
+
+    /// The whole Cisco path on the poller: an inventory with no optional column answered at all —
+    /// the 9800's shape — and the controller's two totals counted out of the walks (F3, F8).
+    #[tokio::test]
+    async fn a_cisco_controller_publishes_its_aps_and_counts_its_own_totals() {
+        let r = execute(&cisco_job(), &cisco_controller(), 1).await;
+        let inv = r
+            .wlan
+            .as_ref()
+            .expect("an inventory, with no optional column answered");
+        assert_eq!(inv.flavor, WlanFlavor::CiscoAirespace);
+        assert_eq!(inv.aps.len(), 2);
+        assert_eq!(inv.aps[0].clients, Some(7), "its two radios' clients");
+        assert_eq!(value(&r, "wlan_ap_walk_complete"), Some(1.0));
+        assert_eq!(
+            value(&r, "wlan_controller_aps_joined"),
+            Some(1.0),
+            "the downloading AP is not joined"
+        );
+        assert_eq!(value(&r, "wlan_controller_ssid_count"), Some(2.0));
+        assert_eq!(
+            value(&r, "wlan_controller_clients"),
+            Some(7.0),
+            "6 on corp + 1 on guest"
+        );
+        assert!(r.observational && r.judge_samples);
+    }
+
+    /// A Cisco inventory says how long its controller has been up — what core waits on before an AP
+    /// missing from the table counts (F11) — and a controller that does not answer `sysUpTime` sends
+    /// none, which core reads as "not long enough". A Huawei is never asked.
+    #[tokio::test]
+    async fn a_cisco_inventory_carries_its_controllers_uptime() {
+        use yagra_transport::SnmpSample;
+        // 162 days, the PoC controller's own uptime when it was walked.
+        let t = cisco_controller().with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.2.1.1.3.0".into(),
+            value: 1_406_883_500.0,
+        }]);
+        let r = execute(&cisco_job(), &t, 1).await;
+        assert_eq!(r.wlan.unwrap().controller_uptime_secs, Some(14_068_835));
+
+        let silent = FakeTransport {
+            snmp: Vec::new(),
+            ..cisco_controller()
+        };
+        let r = execute(&cisco_job(), &silent, 1).await;
+        assert_eq!(r.wlan.unwrap().controller_uptime_secs, None);
+
+        let t = with_ssids().with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.2.1.1.3.0".into(),
+            value: 1_406_883_500.0,
+        }]);
+        let r = execute(&ssid_job(false), &t, 1).await;
+        assert_eq!(
+            r.wlan.unwrap().controller_uptime_secs,
+            None,
+            "a Huawei is not asked"
+        );
+    }
+
+    /// 🚨 A walk that did not finish counts nothing: no inventory, and no joined count — a smaller
+    /// number would read as APs having left (決定 9b's rule, applied to the total). And a Huawei
+    /// never publishes the two totals from its walk: its scalars do, and two sources would draw two
+    /// lines under one name.
+    #[tokio::test]
+    async fn an_unfinished_walk_counts_nothing_and_a_huawei_counts_from_its_scalars() {
+        let t = cisco_controller().with_unanswered_instance_column(format!("{CISCO_AP}.17"));
+        let r = execute(&cisco_job(), &t, 1).await;
+        assert!(r.wlan.is_none());
+        assert_eq!(value(&r, "wlan_ap_walk_complete"), Some(0.0));
+        assert_eq!(value(&r, "wlan_controller_aps_joined"), None);
+
+        let r = execute(&ssid_job(true), &with_ssids(), 1).await;
+        assert!(r.wlan.is_some(), "the Huawei walk itself worked");
+        assert_eq!(value(&r, "wlan_controller_aps_joined"), None);
+        assert_eq!(value(&r, "wlan_controller_clients"), None);
     }
 }

@@ -39934,9 +39934,10 @@
       },
       "WlanFlavor": {
         "type": "string",
-        "description": "Which vendor dialect a controller speaks, selected by the collection item's OID\n(the [`crate::OpticalFlavor`] shape, ADR-064 決定 3).\n\nOnly dialects measured on a real controller are here. Cisco (AireOS and IOS-XE are two MIBs)\nand Aruba are later increments.",
+        "description": "Which vendor dialect a controller speaks, selected by the collection item's OID\n(the [`crate::OpticalFlavor`] shape, ADR-064 決定 3).\n\nOnly dialects measured on a real controller are here. Aruba is a later increment.",
         "enum": [
-          "huawei"
+          "huawei",
+          "cisco_airespace"
         ]
       }
     },

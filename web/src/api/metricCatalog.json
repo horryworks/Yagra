@@ -833,6 +833,13 @@
     "source": "collected"
   },
   {
+    "family": "Cisco WLAN access points (WLC)",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_controller_aps_missing",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
     "family": "Huawei WLAN controller (AC)",
     "metric_kind": "gauge",
     "metric_name": "wlan_controller_clients",

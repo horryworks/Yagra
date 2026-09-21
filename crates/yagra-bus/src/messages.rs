@@ -2199,6 +2199,16 @@ pub struct PollResult {
     /// wire form is unchanged (ADR-017).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial_number: Option<String>,
+    /// The device's own model name, read by the same identity probe at the OID its OS-version row
+    /// names — today only Cisco AireOS, whose `sysDescr` (`Cisco Controller`) names no model
+    /// (ADR-147 Increment 6). `None` means "not probed, or the row names no such OID", never "the
+    /// device has none". Core writes it into a node whose model is still empty, and nowhere else.
+    /// Descriptive device text — never a TSDB label.
+    ///
+    /// Defaulted so an N-1 poller stays compatible, and skipped when absent so every other result's
+    /// wire form is unchanged (ADR-017).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware_model: Option<String>,
     /// The DNS resolution chain observed on this poll (DNS checks only, ADR-033). Structured
     /// metadata core persists into PostgreSQL — **never a TSDB label** (ADR-011), the same tier as
     /// `interfaces` and `sys_descr`. Defaulted so an older poller that doesn't send it stays N-1
@@ -3722,6 +3732,7 @@ mod tests {
             os_version: None,
             os_version_without_patch: None,
             serial_number: None,
+            hardware_model: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,
@@ -3878,6 +3889,29 @@ mod tests {
             back.serial_number.as_deref(),
             Some("FCW1929B68S, FCW1931A06Z")
         );
+    }
+
+    /// ADR-147 Increment 6's field, the same three ways: absent from an N-1 poller, absent from the
+    /// wire when unset, and a probed model survives the round trip.
+    #[test]
+    fn poll_result_hardware_model_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "sys_descr": "Cisco Controller",
+            "some_future_field": 42
+        }"#;
+        let mut result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.hardware_model.is_none());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("hardware_model"), "{wire}");
+
+        result.hardware_model = Some("AIR-CT3504-K9".to_owned());
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        assert_eq!(back.hardware_model.as_deref(), Some("AIR-CT3504-K9"));
     }
 
     /// `None` (no set observed) and `Some(empty)` (this device has no neighbours) must survive the

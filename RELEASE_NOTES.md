@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### New Features
+
+- **Cisco wireless LAN controllers list and import their access points, as Huawei ACs already do** (ADR-064 increment F). AireOS controllers and the Catalyst 9800 answer the same AIRESPACE-WIRELESS-MIB tables, so one dialect reads both: each AP's name, model, serial, software version, address, state, AP group, CPU and memory, its radios (clients, channel, channel utilization, on slots 2.4 GHz = 1 / 5 GHz = 2 / 6 GHz = 3) and the controller's SSIDs with their clients. APs that have ever been joined are imported as nodes automatically. The built-in "Cisco wireless controller" profile carries the three new templates, so an existing controller node starts on its next poll after the upgrade — no Reclassify needed. The controller also gains `wlan_controller_aps_joined` and `wlan_controller_clients`, counted from its own tables. ⚠️ API clients: `wireless.controller.flavor` (and the `WlanFlavor` schema) gains the value `cisco_airespace`. ⚠️ The 9800 has been checked against a recording only, not against a real controller.
+- **An access point a Cisco controller stops listing is recorded as down, and the controller says how many it is missing** (ADR-064 increment F). A Cisco controller has no "down" state for an AP — it removes an AP it has lost from its table — so an imported AP that controller last served, missing from a complete, uncut read of the table, gets `wlan_ap_up = 0` and raises its liveness alert; it recovers when the controller lists it as joined again. Absence does not count in the first 15 minutes after the controller starts, while its APs rejoin. The new `wlan_controller_aps_missing` counts the APs it serves that are not joined, with a new default rule (warning at 1 or more, three polls in a row) on the Cisco profile only. Huawei controllers are unchanged. ⚠️ An AP that moves to a controller Yagra does not monitor reads as down.
+- **A Cisco AireOS controller shows its model and serial number.** Its ENTITY-MIB has no class column and lists its access points beside itself, so the chassis rule found no serial; the model was never read at all. Both now come from ENTITY-MIB row 1, as LibreNMS reads them (`AIR-CT3504-K9` on the controller this was built against). The model fills a node whose model is still empty and never replaces one an operator set; the serial is used only when the chassis rule finds none.
+
+### Improvements
+
+- **The "AP table was not read to its end" default rule also watches Cisco wireless controllers.** Migration 0128 adds the Cisco profile to the rule a deployment already has, unless that rule was edited.
+
+
 ## v0.3.28 — Cisco Meraki organizations are monitored end to end (devices import themselves, are filed by IP range, and follow what the Dashboard reports), one alert says when the Meraki API stops answering an organization, a device the Dashboard reports offline is down rather than OK, access points behind a wireless controller are imported without switching it on, folder-restricted accounts can no longer change credentials or Meraki organizations
 
 ### Breaking changes

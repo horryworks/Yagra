@@ -112,11 +112,34 @@ pub const WLAN_SSID_ROW_METRICS: [&str; 7] = [
 /// and SSID templates both carry that kind, and one publishes a node-level flag while the other
 /// publishes a row per SSID. This list is what tells them apart, and it is read by the API edge and
 /// by the catalogue generator so the screen and `/mcp` cannot disagree about which it is.
-pub const WLAN_NODE_LEVEL_METRICS: [&str; 3] = [
+pub const WLAN_NODE_LEVEL_METRICS: [&str; 6] = [
     METRIC_WLAN_AP_WALK_COMPLETE,
     METRIC_WLAN_SSID_WALK_COMPLETE,
     METRIC_WLAN_CONTROLLER_SSID_COUNT,
+    METRIC_WLAN_CONTROLLER_APS_JOINED,
+    METRIC_WLAN_CONTROLLER_CLIENTS,
+    METRIC_WLAN_CONTROLLER_APS_MISSING,
 ];
+
+/// How many of the APs this controller is responsible for are not associated to it right now
+/// (ADR-064 増分 F, F10 — the user's "閾値は WLC に紐づく最大 AP 数から減ったらアラート").
+///
+/// "Responsible for" is: imported as a node, and this controller the last to say it served the AP.
+/// Not a high-water mark — that would keep counting an AP moved to another controller or retired —
+/// and not "every AP it ever listed": an operator retires an AP by deleting its node.
+///
+/// Computed by core, which alone knows which APs are imported and who serves each, and published
+/// only for a table read whose absences count ([`WlanInventory::absence_is_evidence`]), so it and the
+/// per-AP liveness always say the same thing.
+pub const METRIC_WLAN_CONTROLLER_APS_MISSING: &str = "wlan_controller_aps_missing";
+
+/// Access points joined to the controller right now. A Huawei AC answers it from a scalar of its
+/// own; a Cisco controller has no scalar both AireOS and the 9800 answer, so its walk counts the
+/// associated rows of its AP table instead (ADR-064 増分 F, F8). Either way one number per controller.
+pub const METRIC_WLAN_CONTROLLER_APS_JOINED: &str = "wlan_controller_aps_joined";
+/// Wireless clients online through the controller. Huawei: a scalar. Cisco: the sum of its SSID
+/// table's client counts, published only when that walk heard every column out (ADR-064 増分 F, F8).
+pub const METRIC_WLAN_CONTROLLER_CLIENTS: &str = "wlan_controller_clients";
 
 /// One radio of an access point, as a slot on that AP node (ADR-064 R6/R9).
 ///
@@ -200,6 +223,33 @@ impl WlanBand {
             2 => Some(Self::Band5G),
             3 => Some(Self::Band6G),
             _ => None,
+        }
+    }
+
+    /// The band of a Cisco radio, from `bsnAPIfType` and, when the type does not settle it, the
+    /// working channel (`bsnAPIfPhyChannelNumber`) — ADR-064 増分 F, F5.
+    ///
+    /// The type decides when it names one band: dot11b(1) — "also implies 802.11b/g" — is 2.4 GHz,
+    /// dot11a(2) is 5 GHz, dot116ghz(6) is 6 GHz. Any other value falls to the channel: 1–14 is
+    /// 2.4 GHz and 32–177 is 5 GHz. Measured on the PoC's AIR-AP2802I: slot 0 answers type `3`, a
+    /// value the MIB does not list, on channel 6.
+    ///
+    /// 🚨 **dot11xor56ghz(7) is refused, channel or not.** A radio that switches between 5 and 6 GHz
+    /// can sit on a 6 GHz channel whose number is also a 2.4 or 5 GHz channel number, so the channel
+    /// cannot tell them apart — and a radio filed under the wrong band is a series attributed to the
+    /// wrong slot, which reads as a working measurement rather than a missing one.
+    #[must_use]
+    pub fn from_cisco_airespace(if_type: Option<i64>, channel: Option<u32>) -> Option<Self> {
+        match if_type {
+            Some(1) => Some(Self::Band2G4),
+            Some(2) => Some(Self::Band5G),
+            Some(6) => Some(Self::Band6G),
+            Some(7) => None,
+            _ => match channel? {
+                1..=14 => Some(Self::Band2G4),
+                32..=177 => Some(Self::Band5G),
+                _ => None,
+            },
         }
     }
 }
@@ -430,24 +480,29 @@ pub fn ap_id(mac: ApMac) -> Uuid {
 /// Which vendor dialect a controller speaks, selected by the collection item's OID
 /// (the [`crate::OpticalFlavor`] shape, ADR-064 決定 3).
 ///
-/// Only dialects measured on a real controller are here. Cisco (AireOS and IOS-XE are two MIBs)
-/// and Aruba are later increments.
+/// Only dialects measured on a real controller are here. Aruba is a later increment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WlanFlavor {
     /// Huawei AC (HUAWEI-WLAN-AP-MIB) — measured on the AC6508, V200R024C00SPC100.
     Huawei,
+    /// Cisco wireless LAN controller (AIRESPACE-WIRELESS-MIB) — measured on the PoC's AIR-CT3504
+    /// (AireOS 8.5.140.0), and matched against the lab's Catalyst 9800 recording (IOS-XE 17.9.4),
+    /// which answers the same tables with the same columns (ADR-064 増分 F, F1). One dialect for
+    /// both, named for the MIB rather than the OS.
+    CiscoAirespace,
 }
 
 impl WlanFlavor {
     /// Every dialect.
-    pub const ALL: [Self; 1] = [Self::Huawei];
+    pub const ALL: [Self; 2] = [Self::Huawei, Self::CiscoAirespace];
 
     /// The stored and serialized token.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Huawei => "huawei",
+            Self::CiscoAirespace => "cisco_airespace",
         }
     }
 
@@ -463,10 +518,17 @@ impl WlanFlavor {
     /// `hwWlanIDIndexedApTable`, because its index *is* the identity and the radio table's index
     /// starts with the same six sub-identifiers (verified on the PoC), so one key runs end to end
     /// and nothing depends on AP ids being stable across an HA pair.
+    ///
+    /// Cisco: `bsnAPEntry`, `INDEX { bsnAPDot3MacAddress }`. Despite the name, the index is the
+    /// AP's **base radio MAC** on both the AireOS controller and the 9800 recording — the same value
+    /// as CISCO-LWAPP-AP-MIB's `cLApSysMacAddress`, while the Ethernet MAC is column `.33`. That
+    /// index is the AP's id (F2, the user's choice): it keys every table this dialect reads, so it
+    /// cannot go missing the way a column can.
     #[must_use]
     pub const fn root_oid(self) -> &'static str {
         match self {
             Self::Huawei => "1.3.6.1.4.1.2011.6.139.13.3.3.1",
+            Self::CiscoAirespace => "1.3.6.1.4.1.14179.2.2.1.1",
         }
     }
 
@@ -476,10 +538,14 @@ impl WlanFlavor {
     /// as a length-prefixed octet string. ⚠️ The name has no readable column: `.1` is
     /// not-accessible and answered nothing on the measured AC6508, which is why the poller decodes
     /// it out of the index rather than walking for it.
+    ///
+    /// Cisco: `bsnDot11EssEntry`, `INDEX { bsnDot11EssIndex }` — a WLAN number, with the SSID name in
+    /// column `.2`.
     #[must_use]
     pub const fn ssid_root_oid(self) -> &'static str {
         match self {
             Self::Huawei => "1.3.6.1.4.1.2011.6.139.17.1.2.1",
+            Self::CiscoAirespace => "1.3.6.1.4.1.14179.2.1.1.1",
         }
     }
 
@@ -488,10 +554,14 @@ impl WlanFlavor {
     /// Huawei: `hwWlanRadioInfoTable`, `INDEX { hwWlanRadioInfoApMac, hwWlanRadioID }`. The first
     /// six sub-identifiers are the AP table's index, which is what lets a radio row be attached to
     /// an AP without a second lookup — verified on the PoC, where all 60 rows matched.
+    ///
+    /// Cisco: `bsnAPIfEntry`, `INDEX { bsnAPDot3MacAddress, bsnAPIfSlotId }` — the AP table's
+    /// index, then the radio's slot, the same shape.
     #[must_use]
     pub const fn radio_root_oid(self) -> &'static str {
         match self {
             Self::Huawei => "1.3.6.1.4.1.2011.6.139.16.1.2.1",
+            Self::CiscoAirespace => "1.3.6.1.4.1.14179.2.2.2.1",
         }
     }
 
@@ -500,6 +570,7 @@ impl WlanFlavor {
     pub const fn radio_template_name(self) -> &'static str {
         match self {
             Self::Huawei => "Huawei WLAN radios (AC)",
+            Self::CiscoAirespace => "Cisco WLAN radios (WLC)",
         }
     }
 
@@ -508,6 +579,7 @@ impl WlanFlavor {
     pub const fn ssid_template_name(self) -> &'static str {
         match self {
             Self::Huawei => "Huawei WLAN SSIDs (AC)",
+            Self::CiscoAirespace => "Cisco WLAN SSIDs (WLC)",
         }
     }
 
@@ -538,6 +610,7 @@ impl WlanFlavor {
     pub const fn template_name(self) -> &'static str {
         match self {
             Self::Huawei => "Huawei WLAN access points (AC)",
+            Self::CiscoAirespace => "Cisco WLAN access points (WLC)",
         }
     }
 
@@ -547,9 +620,33 @@ impl WlanFlavor {
     pub const fn vendor(self) -> &'static str {
         match self {
             Self::Huawei => "Huawei",
+            Self::CiscoAirespace => "Cisco",
+        }
+    }
+
+    /// Whether this dialect's controller **drops an AP it has lost from its table**, rather than
+    /// listing it in a state that says so (ADR-064 増分 F, F9).
+    ///
+    /// A Huawei AC keeps a down AP as a `fault` row, so its table always speaks for every AP it
+    /// manages and absence is never needed. A Cisco controller has no such state and lists only the
+    /// APs joined to it — so on this dialect, and only on it, an AP gone from a complete table read
+    /// may be taken as not associated ([`WlanInventory::absence_is_evidence`]).
+    #[must_use]
+    pub const fn lists_only_joined_aps(self) -> bool {
+        match self {
+            Self::Huawei => false,
+            Self::CiscoAirespace => true,
         }
     }
 }
+
+/// How long after a controller starts an AP missing from its table is not yet taken as down
+/// (ADR-064 増分 F, F11): the APs rejoin one by one after a controller reboot, and until they have,
+/// the table is short for a reason that is not theirs.
+///
+/// ⚠️ **A guess, not a measurement.** How long a real controller's APs take to rejoin is only known
+/// from a real reboot.
+pub const WLAN_ABSENCE_GRACE_AFTER_BOOT_SECS: u64 = 15 * 60;
 
 /// What one controller says about one AP, reduced to the three answers the system acts on
 /// (ADR-064 改訂 R5).
@@ -617,6 +714,33 @@ pub const HUAWEI_AP_RUN_STATES: [(i64, &str, WlanApState); 15] = [
 #[must_use]
 pub fn huawei_run_state(value: i64) -> (String, WlanApState) {
     HUAWEI_AP_RUN_STATES
+        .iter()
+        .find(|(v, _, _)| *v == value)
+        .map_or_else(
+            || (format!("unknown_{value}"), WlanApState::NotAssociated),
+            |(_, token, state)| ((*token).to_owned(), *state),
+        )
+}
+
+/// Cisco `bsnAPOperationStatus` (AIRESPACE-WIRELESS-MIB), as `(value, token, state)`.
+///
+/// 🚨 **There is no "down" value.** The MIB lists only associated(1), disassociating(2) and
+/// downloading(3), and a controller drops an AP it has lost from the table altogether rather than
+/// reporting it in some fault state (LibreNMS deletes an AP that stops being listed). So on this
+/// dialect `NotAssociated` is transient — an AP on its way out, or downloading an image — and an AP
+/// that is simply gone is the case ADR-064 増分 F's F9 exists for. Measured on the PoC: all seven APs
+/// answer associated(1). An AP in a `downloading` state is not serving clients.
+pub const CISCO_AIRESPACE_AP_STATES: [(i64, &str, WlanApState); 3] = [
+    (1, "associated", WlanApState::Associated),
+    (2, "disassociating", WlanApState::NotAssociated),
+    (3, "downloading", WlanApState::NotAssociated),
+];
+
+/// A state value a Cisco controller answered, as `(token, state)`. A value outside the MIB is
+/// reported as `unknown_<n>` and treated as not associated — never as serving.
+#[must_use]
+pub fn cisco_airespace_run_state(value: i64) -> (String, WlanApState) {
+    CISCO_AIRESPACE_AP_STATES
         .iter()
         .find(|(v, _, _)| *v == value)
         .map_or_else(
@@ -722,6 +846,12 @@ pub struct WlanInventory {
     /// holds the first `cap` by MAC. A controller over its cap is shown as such, never silently cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated_at: Option<u32>,
+    /// How long the controller had been up when its table was read, in seconds (`sysUpTime.0`) —
+    /// read only for a dialect that [lists only joined APs](WlanFlavor::lists_only_joined_aps),
+    /// because it is what [`Self::absence_is_evidence`] waits on. `None` from an N-1 poller, or when
+    /// the controller did not answer it: then absence is not evidence (ADR-064 増分 F, F11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_uptime_secs: Option<u64>,
 }
 
 impl WlanInventory {
@@ -754,7 +884,30 @@ impl WlanInventory {
             flavor,
             aps,
             truncated_at: (kept < reported).then(|| u32::try_from(reported).unwrap_or(u32::MAX)),
+            controller_uptime_secs: None,
         }
+    }
+
+    /// Whether an AP **missing** from this inventory may be taken as not associated (ADR-064 増分 F,
+    /// F9 — the user's decision of 2026-09-21, for Cisco only). All three must hold:
+    ///
+    /// * the dialect lists only joined APs — on any other, absence stays what ADR-156 decision 3
+    ///   says it is, no evidence of anything;
+    /// * the list was not cut at a cap — an AP past the cut is missing because of the cap;
+    /// * the controller has been up for [`WLAN_ABSENCE_GRACE_AFTER_BOOT_SECS`] — and a controller
+    ///   that did not say how long is not believed to have been.
+    ///
+    /// The inventory itself exists only for a walk that heard every required column out (決定 9b),
+    /// which is the fourth condition, and the reason it is not repeated here. **The one question both
+    /// sites ask** — core's fan-out, which makes the AP's node down, and the inventory writer, which
+    /// makes its row say so — so the two cannot come to disagree about when absence counts.
+    #[must_use]
+    pub fn absence_is_evidence(&self) -> bool {
+        self.flavor.lists_only_joined_aps()
+            && self.truncated_at.is_none()
+            && self
+                .controller_uptime_secs
+                .is_some_and(|up| up >= WLAN_ABSENCE_GRACE_AFTER_BOOT_SECS)
     }
 }
 
@@ -857,6 +1010,135 @@ mod tests {
 
     /// The measured states land where the arbitration needs them: the active answers `normal`, the
     /// standby `standby`, and a broken AP `fault` on both.
+    #[test]
+    fn the_cisco_airespace_states_classify_as_the_mib_lists_them() {
+        assert_eq!(
+            cisco_airespace_run_state(1),
+            ("associated".into(), WlanApState::Associated)
+        );
+        assert_eq!(
+            cisco_airespace_run_state(2),
+            ("disassociating".into(), WlanApState::NotAssociated)
+        );
+        assert_eq!(
+            cisco_airespace_run_state(3),
+            ("downloading".into(), WlanApState::NotAssociated)
+        );
+        assert_eq!(
+            cisco_airespace_run_state(0),
+            ("unknown_0".into(), WlanApState::NotAssociated)
+        );
+        // The MIB's whole enumeration, and no standby among it: a Cisco controller never reports
+        // an AP as Backup, so nothing it says is dropped as a standby's zeros.
+        let values: Vec<i64> = CISCO_AIRESPACE_AP_STATES
+            .iter()
+            .map(|(v, _, _)| *v)
+            .collect();
+        assert_eq!(values, vec![1, 2, 3]);
+        assert!(CISCO_AIRESPACE_AP_STATES
+            .iter()
+            .all(|(_, _, s)| *s != WlanApState::Backup));
+    }
+
+    /// ADR-064 増分 F, F9/F11: absence counts on a Cisco table that is uncut and read past the
+    /// grace — and on nothing else. The accepting row is first, so a gate that refused everything
+    /// could not pass this.
+    #[test]
+    fn absence_is_evidence_only_on_an_uncut_cisco_table_read_past_the_grace() {
+        let inventory = |flavor, truncated_at, uptime| WlanInventory {
+            flavor,
+            aps: Vec::new(),
+            truncated_at,
+            controller_uptime_secs: uptime,
+        };
+        let grace = WLAN_ABSENCE_GRACE_AFTER_BOOT_SECS;
+        let cisco = WlanFlavor::CiscoAirespace;
+        assert!(inventory(cisco, None, Some(grace)).absence_is_evidence());
+        assert!(inventory(cisco, None, Some(grace * 100)).absence_is_evidence());
+        assert!(
+            !inventory(cisco, None, Some(grace - 1)).absence_is_evidence(),
+            "just booted"
+        );
+        assert!(
+            !inventory(cisco, None, None).absence_is_evidence(),
+            "uptime unknown"
+        );
+        assert!(
+            !inventory(cisco, Some(3000), Some(grace)).absence_is_evidence(),
+            "cut at a cap"
+        );
+        assert!(
+            !inventory(WlanFlavor::Huawei, None, Some(grace)).absence_is_evidence(),
+            "a Huawei keeps its down APs in the table"
+        );
+        assert!(cisco.lists_only_joined_aps());
+        assert!(!WlanFlavor::Huawei.lists_only_joined_aps());
+    }
+
+    /// An N-1 poller sends no uptime, and an inventory without one keeps its old wire form.
+    #[test]
+    fn an_inventory_without_an_uptime_reads_and_writes_as_before() {
+        let old: WlanInventory =
+            serde_json::from_str(r#"{"flavor":"cisco_airespace","aps":[],"future":1}"#).unwrap();
+        assert_eq!(old.controller_uptime_secs, None);
+        assert!(!old.absence_is_evidence());
+        let wire = serde_json::to_string(&old).unwrap();
+        assert!(!wire.contains("controller_uptime_secs"), "{wire}");
+        let mut new = old;
+        new.controller_uptime_secs = Some(1_406_883);
+        let back: WlanInventory =
+            serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert_eq!(back.controller_uptime_secs, Some(1_406_883));
+    }
+
+    /// The PoC's AIR-AP2802I answers slot 0 as type `3` — not in the MIB's list — on channel 6, and
+    /// slot 1 as dot11a(2) on channel 132 (ADR-064 増分 F, F5).
+    #[test]
+    fn a_cisco_radio_band_comes_from_its_type_then_its_channel() {
+        use WlanBand::{Band2G4, Band5G, Band6G};
+        assert_eq!(
+            WlanBand::from_cisco_airespace(Some(3), Some(6)),
+            Some(Band2G4)
+        );
+        assert_eq!(
+            WlanBand::from_cisco_airespace(Some(2), Some(132)),
+            Some(Band5G)
+        );
+        // The type wins when it names a band, whatever the channel says.
+        assert_eq!(
+            WlanBand::from_cisco_airespace(Some(1), Some(149)),
+            Some(Band2G4)
+        );
+        assert_eq!(
+            WlanBand::from_cisco_airespace(Some(6), Some(5)),
+            Some(Band6G)
+        );
+        // The channel's two ranges, and their edges.
+        for (channel, band) in [
+            (1, Some(Band2G4)),
+            (14, Some(Band2G4)),
+            (15, None),
+            (31, None),
+            (32, Some(Band5G)),
+            (177, Some(Band5G)),
+            (178, None),
+        ] {
+            assert_eq!(
+                WlanBand::from_cisco_airespace(Some(3), Some(channel)),
+                band,
+                "channel {channel}"
+            );
+        }
+        // A 5/6 GHz switching radio is never guessed, and neither is a radio with no channel.
+        assert_eq!(WlanBand::from_cisco_airespace(Some(7), Some(36)), None);
+        assert_eq!(WlanBand::from_cisco_airespace(Some(7), Some(5)), None);
+        assert_eq!(WlanBand::from_cisco_airespace(Some(3), None), None);
+        assert_eq!(
+            WlanBand::from_cisco_airespace(None, Some(11)),
+            Some(Band2G4)
+        );
+    }
+
     #[test]
     fn the_huawei_run_states_classify_as_measured_on_the_poc_pair() {
         assert_eq!(

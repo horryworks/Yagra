@@ -30,6 +30,7 @@
     "wlan_controller_ap_license": "access points",
     "wlan_controller_aps_configured": "access points",
     "wlan_controller_aps_joined": "access points",
+    "wlan_controller_aps_missing": "access points",
     "wlan_controller_clients": "clients",
     "wlan_controller_clients_2g4": "clients",
     "wlan_controller_clients_5g": "clients",

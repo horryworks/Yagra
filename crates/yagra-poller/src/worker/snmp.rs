@@ -31,7 +31,9 @@ const IDENTITY_COLUMN_ROWS: usize = 256;
 /// carried one), `none` (every walk finished and nothing did: no ENTITY-MIB, or an empty serial) or
 /// `unread` (a walk failed or did not finish, so nothing was sent) — and by `source`, the read that
 /// decided it: a vendor's own MIB (`juniper`, Increment 2), a Huawei's main boards (`huawei`,
-/// Increment 4, counted only when the boards decided) or `entity`. The first result against the
+/// Increment 4, counted only when the boards decided), `entity`, or `os_row` — the serial the
+/// device's OS-version row names, taken when the chassis rule found none (Increment 6, only
+/// `serial`: when it too has none the count stays `entity`/`none`). The first result against the
 /// second, per source, is how much of a fleet each rule actually covers.
 pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
 
@@ -81,6 +83,9 @@ pub(super) struct IdentityProbe {
     /// `, `. `None` when `sysDescr` did not answer, the walk that decided did not finish, or nothing
     /// carries one.
     pub(super) serial_number: Option<String>,
+    /// The device's own model name, at the OID its OS-version row names (ADR-147 Increment 6) —
+    /// only Cisco AireOS today. `None` for every other device.
+    pub(super) hardware_model: Option<String>,
     /// A column the version's row walks did not answer, so the full version was withheld
     /// (ADR-138 Increment 3) and only [`os_version_without_patch`](Self::os_version_without_patch)
     /// can carry one (Increment 4).
@@ -109,7 +114,7 @@ pub(super) enum SnmpWalker {
 
 impl SnmpWalker {
     /// GET scalar OIDs via the appropriate protocol.
-    async fn get(
+    pub(super) async fn get(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
@@ -200,6 +205,8 @@ impl SnmpWalker {
                 "identity probe sent the OS version without its patch: the patch table did not answer"
             );
         }
+        // Read in the same round trips as the version, so a row naming them costs no extra walk.
+        let chassis = os_version::resolve_chassis(sys_object_id, sys_descr.as_deref(), &answers);
         // Only a device that answered `sysDescr` is walked for a serial: one that did not is not
         // going to answer a table, and the walk would spend the probe's time waiting on silence.
         let serial_number = if sys_descr.is_some() {
@@ -207,6 +214,7 @@ impl SnmpWalker {
                 transport,
                 target,
                 sys_object_id,
+                chassis.serial,
                 identity_column_timeout(timeout),
             )
             .await
@@ -219,6 +227,7 @@ impl SnmpWalker {
             sys_object_id: sys_object_id.and_then(yagra_discovery::normalize_sys_object_id),
             sys_descr,
             serial_number,
+            hardware_model: chassis.model,
             unread,
         }
     }
@@ -236,11 +245,18 @@ impl SnmpWalker {
     /// A Huawei is walked for `entPhysicalName` and `entPhysicalContainedIn` as well, and its members'
     /// main boards are tried before the chassis rows (Increments 4 and 5) — out of the same walk, so an
     /// unfinished one still sends nothing.
+    ///
+    /// `row_serial` is what the device's OS-version row names as its serial
+    /// ([`os_version::resolve_chassis`]), and it is the last resort (Increment 6): taken only when the
+    /// ENTITY-MIB walk was heard out and its chassis rule found nothing. A Cisco AireOS controller is
+    /// that case — no class column, and its access points' serials beside its own. A walk that did
+    /// not finish still sends nothing, so the fallback cannot overwrite a stack's list either.
     async fn read_serial_number(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         sys_object_id: Option<&str>,
+        row_serial: Option<String>,
         timeout: Duration,
     ) -> Option<String> {
         // One count per probe, under the read that decided it.
@@ -345,9 +361,16 @@ impl SnmpWalker {
             count("huawei", "serial");
             return Some(found);
         }
-        let resolved = serial::resolve(&classes, &serials);
-        count("entity", if resolved.is_some() { "serial" } else { "none" });
-        resolved
+        if let Some(found) = serial::resolve(&classes, &serials) {
+            count("entity", "serial");
+            return Some(found);
+        }
+        if let Some(found) = row_serial {
+            count("os_row", "serial");
+            return Some(found);
+        }
+        count("entity", "none");
+        None
     }
 
     /// Read integer-valued instance OIDs, keyed by the instance OID — the scalar GET, which both
@@ -635,6 +658,7 @@ pub(super) async fn execute_scalar_get(
                 r.os_version_without_patch = probe.os_version_without_patch;
                 r.sys_object_id = probe.sys_object_id;
                 r.serial_number = probe.serial_number;
+                r.hardware_model = probe.hardware_model;
             }
             r
         }
@@ -1352,6 +1376,91 @@ mod tests {
         assert_eq!(r.outcome, CheckOutcome::Unreachable, "no scalar answered");
         assert_eq!(r.serial_number.as_deref(), Some("CAT0912N0CU"));
         assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// The PoC's Cisco AireOS controller as the identity probe meets it (ADR-147 Increment 6): the
+    /// shape walked from it on 2026-09-21, with its serials replaced by made-up ones of the same
+    /// form. Row 1 is the controller and rows 8 and 16 two of its
+    /// access points, all listed with no `entPhysicalClass` column: the string reads answer the OS
+    /// row's instances, and the instance walk answers the serial column alone — which the fake, like
+    /// the real walker, treats as heard out.
+    fn aireos_controller() -> FakeTransport {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        let entity = "1.3.6.1.2.1.47.1.1.1.1";
+        let mut t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row("1.3.6.1.2.1.1.1", 0, "Cisco Controller"),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.9.1.2427"),
+                string_row(&format!("{entity}.10"), 1, "8.5.140.0"),
+                string_row(&format!("{entity}.10"), 8, "8.5.140.0"),
+                string_row(&format!("{entity}.13"), 1, "AIR-CT3504-K9"),
+                string_row(&format!("{entity}.13"), 8, "AIR-AP2802I-Q-K9"),
+                string_row(&format!("{entity}.11"), 1, "FCW0000A0AA"),
+                string_row(&format!("{entity}.11"), 8, "FGL0000A0AB"),
+            ]);
+        for (index, serial_number) in [(1, "FCW0000A0AA"), (8, "FGL0000A0AB"), (16, "FGL0000A0AC")]
+        {
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_SERIAL_NUM.to_owned(),
+                instance: vec![index],
+                value: SnmpValue::Bytes(serial_number.as_bytes().to_vec()),
+            });
+        }
+        t
+    }
+
+    /// The chassis rule finds nothing here — three distinct serials and no class column, so
+    /// decision 16 declines — and the OS row's `entPhysicalSerialNum.1` is what the node gets. The
+    /// model rides in the same probe.
+    #[tokio::test]
+    async fn an_aireos_controller_gets_the_model_and_serial_its_os_row_names() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = aireos_controller();
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.os_version.as_deref(), Some("8.5.140.0"));
+        assert_eq!(r.hardware_model.as_deref(), Some("AIR-CT3504-K9"));
+        assert_eq!(r.serial_number.as_deref(), Some("FCW0000A0AA"));
+        assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// 🚨 The fallback is a fallback. A serial walk that did not finish sends nothing, row serial or
+    /// not (decision 4) — the model still goes, since it never depended on that walk — and a chassis
+    /// row the rule can pick wins over the OS row's instance.
+    #[tokio::test]
+    async fn the_os_rows_serial_never_overrides_the_chassis_rule() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let r = execute(
+            &job,
+            &aireos_controller().with_unanswered_instance_columns(),
+            1_000,
+        )
+        .await;
+        assert_eq!(r.serial_number, None);
+        assert_eq!(r.hardware_model.as_deref(), Some("AIR-CT3504-K9"));
+
+        // The same controller, had it a class column naming a chassis row with a serial of its own.
+        let t = with_entity_rows(aireos_controller(), &[(2, 3, "CHASSIS-RULE-SN")]);
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.serial_number.as_deref(), Some("CHASSIS-RULE-SN"));
+
+        // And a device whose OS row names nothing gets no model from row 1, whatever row 1 says.
+        // Added to the stack's own answers (the builder would replace them, and a probe with no
+        // `sysDescr` proves nothing about the row).
+        let mut t = catalyst_stack();
+        t.snmp_table_strings.push(string_row(
+            "1.3.6.1.2.1.47.1.1.1.1.13",
+            1,
+            "WS-C2960X-48FPD-L",
+        ));
+        let r = execute(&job, &t, 1_000).await;
+        assert!(r.sys_descr.is_some(), "the probe ran");
+        assert_eq!(r.hardware_model, None);
     }
 
     /// A Huawei S6730 as the identity probe meets it (ADR-147 Increment 4): `sysDescr` and

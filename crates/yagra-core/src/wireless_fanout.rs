@@ -28,6 +28,15 @@
 //! result at all. The AP's liveness is then simply not refreshed; nothing concludes it went down.
 //! The controller's own `wlan_ap_walk_complete` is what says the walk failed.
 //!
+//! 🚨 **One exception, by the user's decision (ADR-064 増分 F, F9): a Cisco controller.** Its table
+//! has no "down" state — it drops an AP it has lost — so on that dialect an imported AP this
+//! controller last served, missing from a complete, uncut table read past the grace after a boot,
+//! is given the `NotAssociated` result the controller would have sent if it could
+//! ([`yagra_common::WlanInventory::absence_is_evidence`] decides when). An inventory that did not
+//! arrive still says nothing, and the alert still **closes** only on evidence — the AP listed
+//! associated again. ⚠️ The cost is accepted, not solved: an AP that moved to a controller Yagra
+//! does not monitor reads as down.
+//!
 //! ## Where the state lives
 //!
 //! Who serves each AP is kept **in memory**, updated by every live inventory, because the rule has
@@ -49,7 +58,8 @@ use yagra_common::{
     METRIC_IF_HC_IN_OCTETS, METRIC_IF_HC_OUT_OCTETS, METRIC_IF_OPER_STATUS,
     METRIC_WLAN_AP_CLIENT_COUNT, METRIC_WLAN_AP_CPU_PCT, METRIC_WLAN_AP_CPU_TEMP_C,
     METRIC_WLAN_AP_MEM_PCT, METRIC_WLAN_AP_POWER_STATE, METRIC_WLAN_AP_TEMP_C, METRIC_WLAN_AP_UP,
-    METRIC_WLAN_RADIO_CHANNEL, METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT, METRIC_WLAN_RADIO_CLIENT_COUNT,
+    METRIC_WLAN_CONTROLLER_APS_MISSING, METRIC_WLAN_RADIO_CHANNEL,
+    METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT, METRIC_WLAN_RADIO_CLIENT_COUNT,
     METRIC_WLAN_RADIO_CLIENT_SIGNAL_DBM, METRIC_WLAN_RADIO_INTERFERENCE_PCT,
     METRIC_WLAN_RADIO_NOISE_DBM, METRIC_WLAN_RADIO_TX_POWER_DBM,
 };
@@ -113,15 +123,33 @@ impl ApFanout {
     }
 
     /// The results `result`'s AP inventory stands for, one per imported AP whose controller's word
-    /// stands and says something. Empty for a result that carries no inventory.
+    /// stands and says something. Empty for a result that carries no inventory. See [`Self::fan_out`]
+    /// for the samples the controller's own result gains.
     pub(crate) fn results_for(&self, result: &PollResult, replay: Replay) -> Vec<PollResult> {
+        self.fan_out(result, replay).aps
+    }
+
+    /// Everything `result`'s AP inventory stands for: a result per imported AP, and the samples the
+    /// controller's own result gains (ADR-064 増分 F, F10).
+    ///
+    /// On a live inventory whose absences count ([`WlanInventory::absence_is_evidence`] — a Cisco
+    /// controller's complete, uncut table, read past the grace after its boot), an imported AP that
+    /// **this** controller was the last to serve and that the table no longer lists gets a
+    /// `NotAssociated` result, exactly as if the controller had said so (F9). Its owner does not
+    /// change: a controller that serves it now takes it by saying so. The controller gains
+    /// `wlan_controller_aps_missing` from the same view, so the two can never disagree.
+    ///
+    /// A backfilled inventory is judged for what it lists and nothing more: it is hours old, and an
+    /// AP missing from an old table says nothing about the AP now.
+    pub(crate) fn fan_out(&self, result: &PollResult, replay: Replay) -> FanOut {
         let Some(inventory) = &result.wlan else {
-            return Vec::new();
+            return FanOut::default();
         };
         let controller = result.node_id.as_uuid();
         let at = DateTime::<Utc>::from_timestamp_millis(result.at_unix_ms).unwrap_or_else(Utc::now);
         let stale_after = ChronoDuration::seconds(OWNER_STALE_AFTER_SECS);
         let mut out = Vec::new();
+        let mut controller_samples = Vec::new();
         let mut decide = |entry: ApEntry, ap: &WlanApObservation| {
             let verdict = ownership(entry.owner, controller, ap.state, at, stale_after);
             if let (Some(node), true) = (entry.node, verdict.take_state) {
@@ -138,6 +166,32 @@ impl ApFanout {
                     let entry = aps.entry(ap_id(ap.mac)).or_default();
                     entry.owner = decide(*entry, ap);
                 }
+                if inventory.absence_is_evidence() {
+                    let listed: HashMap<Uuid, WlanApState> = inventory
+                        .aps
+                        .iter()
+                        .map(|ap| (ap_id(ap.mac), ap.state))
+                        .collect();
+                    let mut missing = 0u32;
+                    for (id, entry) in aps.iter() {
+                        let Some(node) = entry.node else { continue };
+                        if entry.owner.map(|o| o.controller) != Some(controller) {
+                            continue;
+                        }
+                        match listed.get(id) {
+                            Some(WlanApState::Associated) => {}
+                            Some(WlanApState::NotAssociated | WlanApState::Backup) => missing += 1,
+                            None => {
+                                missing += 1;
+                                out.push(absent_result(result, node));
+                            }
+                        }
+                    }
+                    controller_samples.push(Sample::gauge(
+                        METRIC_WLAN_CONTROLLER_APS_MISSING,
+                        f64::from(missing),
+                    ));
+                }
             }
             Replay::Backfill => {
                 let aps = self.aps.read().unwrap_or_else(PoisonError::into_inner);
@@ -150,8 +204,33 @@ impl ApFanout {
         if !out.is_empty() {
             metrics::counter!("yagra_wlan_ap_results_total").increment(out.len() as u64);
         }
-        out
+        FanOut {
+            aps: out,
+            controller: controller_samples,
+        }
     }
+}
+
+/// What one controller inventory stands for (see [`ApFanout::fan_out`]).
+#[derive(Debug, Default)]
+pub(crate) struct FanOut {
+    /// One result per imported AP the inventory says something about.
+    pub(crate) aps: Vec<PollResult>,
+    /// Samples for the controller's own result — `wlan_controller_aps_missing`, when it is known.
+    pub(crate) controller: Vec<Sample>,
+}
+
+/// The result of an AP its controller's table no longer lists, on a dialect that drops a lost AP
+/// from the table (ADR-064 増分 F, F9): what `NotAssociated` produces, and nothing more, since the
+/// controller said nothing else about it.
+fn absent_result(controller: &PollResult, node: NodeId) -> PollResult {
+    ap_poll_result(
+        controller,
+        node,
+        CheckOutcome::Unreachable,
+        vec![Sample::gauge(METRIC_WLAN_AP_UP, 0.0)],
+        Vec::new(),
+    )
 }
 
 /// One AP's result, or `None` for a standby's view, which says nothing about the AP.
@@ -186,21 +265,39 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
         ),
         WlanApState::Backup => return None,
     };
-    Some(PollResult {
+    // The AP node has no ifTable walk of its own, so its radios are the only rows it ever gets.
+    // They exist for three independent reasons: the Interfaces tab and `get_interface_series` read
+    // this table, `dimension_of` falls back to it for a node with no collection items of its own,
+    // and the threshold editor picks a port out of it.
+    Some(ap_poll_result(
+        controller,
+        node,
+        outcome,
+        samples,
+        radio_interfaces(ap),
+    ))
+}
+
+/// One AP node's result, stamped with its controller's job and time.
+fn ap_poll_result(
+    controller: &PollResult,
+    node: NodeId,
+    outcome: CheckOutcome,
+    samples: Vec<Sample>,
+    interfaces: Vec<DiscoveredInterface>,
+) -> PollResult {
+    PollResult {
         job_id: controller.job_id,
         node_id: node,
         at_unix_ms: controller.at_unix_ms,
         outcome,
         samples,
-        // The AP node has no ifTable walk of its own, so its radios are the only rows it ever
-        // gets. They exist for three independent reasons: the Interfaces tab and
-        // `get_interface_series` read this table, `dimension_of` falls back to it for a node with
-        // no collection items of its own, and the threshold editor picks a port out of it.
-        interfaces: radio_interfaces(ap),
+        interfaces,
         sys_descr: None,
         os_version: None,
         os_version_without_patch: None,
         serial_number: None,
+        hardware_model: None,
         sys_object_id: None,
         dns_chain: None,
         neighbors: None,
@@ -216,7 +313,7 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
         poller_id: None,
         trace_context: controller.trace_context.clone(),
         meraki_collect: None,
-    })
+    }
 }
 
 /// One radio's samples, keyed by its slot so the AP node reads it as a port (ADR-064 R6/R9).
@@ -433,6 +530,7 @@ mod tests {
             os_version: None,
             os_version_without_patch: None,
             serial_number: None,
+            hardware_model: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,
@@ -709,5 +807,223 @@ mod tests {
             out.is_empty(),
             "a standby's view produces no result at all, radios included"
         );
+    }
+
+    // ─── A Cisco controller's absent APs (ADR-064 増分 F, F9–F11) ─────────────────────────
+
+    const UP_LONG_ENOUGH: u64 = yagra_common::WLAN_ABSENCE_GRACE_AFTER_BOOT_SECS;
+
+    /// A Cisco controller's inventory, read `uptime` seconds after it started.
+    fn cisco_result(
+        controller: u128,
+        at_secs: i64,
+        aps: Vec<WlanApObservation>,
+        uptime: Option<u64>,
+    ) -> PollResult {
+        let mut r = inventory_result(controller, at_secs, Vec::new());
+        let mut inv = WlanInventory::bounded(WlanFlavor::CiscoAirespace, aps, 1024);
+        inv.controller_uptime_secs = uptime;
+        r.wlan = Some(inv);
+        r
+    }
+
+    fn down_nodes(out: &[PollResult]) -> Vec<Uuid> {
+        let mut nodes: Vec<Uuid> = out
+            .iter()
+            .filter(|r| {
+                r.outcome == CheckOutcome::Unreachable && sample(r, METRIC_WLAN_AP_UP) == Some(0.0)
+            })
+            .map(|r| r.node_id.as_uuid())
+            .collect();
+        nodes.sort();
+        nodes
+    }
+
+    /// The accepting case first: an AP this controller served, missing from its complete table
+    /// read long enough after boot, is recorded as down — once — and the controller counts it.
+    #[test]
+    fn an_ap_a_cisco_controller_stops_listing_is_recorded_down_and_counted_missing() {
+        let fanout = imported(&[1, 2, 3]);
+        let all = vec![
+            ap(1, WlanApState::Associated, 5),
+            ap(2, WlanApState::Associated, 5),
+            ap(3, WlanApState::Associated, 5),
+        ];
+        let first = fanout.fan_out(
+            &cisco_result(ACTIVE, 1_000, all, Some(UP_LONG_ENOUGH)),
+            Replay::Live,
+        );
+        assert!(down_nodes(&first.aps).is_empty());
+        assert_eq!(
+            first
+                .controller
+                .iter()
+                .map(|s| (s.metric.as_str(), s.value))
+                .collect::<Vec<_>>(),
+            vec![(METRIC_WLAN_CONTROLLER_APS_MISSING, 0.0)],
+            "nothing missing is a reading of 0, not an absent sample"
+        );
+
+        // AP 2 drops off the table; AP 3 is listed but on its way out.
+        let later = vec![
+            ap(1, WlanApState::Associated, 5),
+            ap(3, WlanApState::NotAssociated, 5),
+        ];
+        let next = fanout.fan_out(
+            &cisco_result(ACTIVE, 1_300, later, Some(UP_LONG_ENOUGH + 300)),
+            Replay::Live,
+        );
+        assert_eq!(down_nodes(&next.aps), vec![node_of(2), node_of(3)]);
+        assert_eq!(
+            next.aps
+                .iter()
+                .filter(|r| r.node_id.as_uuid() == node_of(2))
+                .count(),
+            1,
+            "one result for the absent AP"
+        );
+        let absent = next
+            .aps
+            .iter()
+            .find(|r| r.node_id.as_uuid() == node_of(2))
+            .unwrap();
+        assert!(!absent.observational, "it is the AP's liveness statement");
+        assert_eq!(
+            absent.samples.len(),
+            1,
+            "wlan_ap_up and nothing the controller did not say"
+        );
+        assert!(absent.interfaces.is_empty());
+        assert_eq!(
+            next.controller
+                .iter()
+                .map(|s| (s.metric.as_str(), s.value))
+                .collect::<Vec<_>>(),
+            vec![(METRIC_WLAN_CONTROLLER_APS_MISSING, 2.0)]
+        );
+    }
+
+    /// 🚨 Each gate, alone, keeps absence from counting — and then the controller gets no count
+    /// either, rather than a 0 that would read as "nothing missing".
+    #[test]
+    fn absence_counts_only_on_a_complete_uncut_cisco_table_past_the_grace() {
+        let served = || {
+            vec![
+                ap(1, WlanApState::Associated, 5),
+                ap(2, WlanApState::Associated, 5),
+            ]
+        };
+        let gone = || vec![ap(1, WlanApState::Associated, 5)];
+        let huawei = {
+            let mut r = cisco_result(ACTIVE, 1_300, gone(), Some(UP_LONG_ENOUGH));
+            r.wlan.as_mut().unwrap().flavor = WlanFlavor::Huawei;
+            r
+        };
+        let cut = {
+            let mut r = cisco_result(ACTIVE, 1_300, gone(), Some(UP_LONG_ENOUGH));
+            r.wlan.as_mut().unwrap().truncated_at = Some(2);
+            r
+        };
+        let cases = [
+            (
+                "just after boot",
+                cisco_result(ACTIVE, 1_300, gone(), Some(UP_LONG_ENOUGH - 1)),
+            ),
+            ("uptime unread", cisco_result(ACTIVE, 1_300, gone(), None)),
+            ("a Huawei table", huawei),
+            ("a list cut at its cap", cut),
+        ];
+        for (why, later) in cases {
+            let fanout = imported(&[1, 2]);
+            fanout.fan_out(
+                &cisco_result(ACTIVE, 1_000, served(), Some(UP_LONG_ENOUGH)),
+                Replay::Live,
+            );
+            let out = fanout.fan_out(&later, Replay::Live);
+            assert!(down_nodes(&out.aps).is_empty(), "{why}");
+            assert!(out.controller.is_empty(), "{why}");
+        }
+    }
+
+    /// Absence speaks only about the APs **this** controller was the last to serve: one another
+    /// controller took over is not this one's to call down, and one never imported has no node.
+    /// A backfilled inventory, hours old, calls nothing down at all.
+    #[test]
+    fn only_the_last_controller_to_serve_an_ap_may_call_it_absent_and_never_on_backfill() {
+        let fanout = imported(&[1, 2]);
+        let both = || {
+            vec![
+                ap(1, WlanApState::Associated, 5),
+                ap(2, WlanApState::Associated, 5),
+            ]
+        };
+        fanout.fan_out(
+            &cisco_result(ACTIVE, 1_000, both(), Some(UP_LONG_ENOUGH)),
+            Replay::Live,
+        );
+        // AP 2 moves to the other controller, which says it serves it.
+        fanout.fan_out(
+            &cisco_result(
+                STANDBY,
+                1_100,
+                vec![ap(2, WlanApState::Associated, 5)],
+                Some(UP_LONG_ENOUGH),
+            ),
+            Replay::Live,
+        );
+        let out = fanout.fan_out(
+            &cisco_result(
+                ACTIVE,
+                1_300,
+                vec![ap(1, WlanApState::Associated, 5)],
+                Some(UP_LONG_ENOUGH),
+            ),
+            Replay::Live,
+        );
+        assert!(
+            down_nodes(&out.aps).is_empty(),
+            "AP 2 is the other controller's now"
+        );
+        assert_eq!(sample_of(&out.controller), Some(0.0));
+
+        let backfill = fanout.fan_out(
+            &cisco_result(STANDBY, 1_400, Vec::new(), Some(UP_LONG_ENOUGH)),
+            Replay::Backfill,
+        );
+        assert!(backfill.aps.is_empty() && backfill.controller.is_empty());
+    }
+
+    fn sample_of(samples: &[Sample]) -> Option<f64> {
+        samples
+            .iter()
+            .find(|s| s.metric == METRIC_WLAN_CONTROLLER_APS_MISSING)
+            .map(|s| s.value)
+    }
+
+    /// Recovery is evidence, as ADR-156 decision 3 asks: the AP listed associated again gets its
+    /// `wlan_ap_up = 1`, and the count goes back down.
+    #[test]
+    fn an_absent_ap_listed_again_is_up_again() {
+        let fanout = imported(&[1]);
+        let listed = || vec![ap(1, WlanApState::Associated, 5)];
+        fanout.fan_out(
+            &cisco_result(ACTIVE, 1_000, listed(), Some(UP_LONG_ENOUGH)),
+            Replay::Live,
+        );
+        let gone = fanout.fan_out(
+            &cisco_result(ACTIVE, 1_300, Vec::new(), Some(UP_LONG_ENOUGH)),
+            Replay::Live,
+        );
+        assert_eq!(
+            down_nodes(&gone.aps),
+            vec![node_of(1)],
+            "an empty table is every AP gone"
+        );
+        let back = fanout.fan_out(
+            &cisco_result(ACTIVE, 1_600, listed(), Some(UP_LONG_ENOUGH)),
+            Replay::Live,
+        );
+        assert_eq!(sample(&back.aps[0], METRIC_WLAN_AP_UP), Some(1.0));
+        assert_eq!(sample_of(&back.controller), Some(0.0));
     }
 }

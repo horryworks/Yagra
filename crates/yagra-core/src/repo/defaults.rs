@@ -63,8 +63,13 @@ const HUAWEI: &[&str] = &[
     "Huawei wireless controller",
 ];
 
-// The profiles that walk a wireless controller's AP table (ADR-064).
-const WLAN_CONTROLLERS: &[&str] = &["Huawei wireless controller"];
+// The profiles that walk a wireless controller's AP table (ADR-064). The Cisco one since 増分 F;
+// migration 0128 adds it to the row an existing deployment already holds.
+const WLAN_CONTROLLERS: &[&str] = &["Huawei wireless controller", "Cisco wireless controller"];
+
+// The profiles whose AP table lists only joined APs, and so publish how many are missing (ADR-064
+// 増分 F, F10).
+const CISCO_WLAN_CONTROLLERS: &[&str] = &["Cisco wireless controller"];
 
 const FORTINET: &[&str] = &["Fortinet FortiGate"];
 
@@ -105,7 +110,7 @@ type DefaultThreshold = (
     i32,
 );
 
-pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 34] = [
+pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
     // ── Fleet-wide (ADR-075 + `icmp_rtt_ms`) ───────────────────────────────────
     // These four really do apply to every node, which is why the ADR-075 argument for
     // `global` holds for them and not for the vendor rows below.
@@ -479,6 +484,19 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 34] = [
         None,
         3,
     ),
+    // ADR-064 増分 F, F10 (the user's decision of 2026-09-21): a Cisco controller missing one of
+    // the APs it serves. 1 or more is a warning — the comparison is inclusive — after three polls
+    // in a row. Only the Cisco profile publishes the count; a Huawei AC keeps its down APs in its
+    // table, where each one's own liveness says so (and R11 keeps AC-wide defaults off Huawei).
+    (
+        34,
+        CISCO_WLAN_CONTROLLERS,
+        yagra_common::METRIC_WLAN_CONTROLLER_APS_MISSING,
+        "above",
+        Some(1.0),
+        None,
+        3,
+    ),
 ];
 
 /// The row-name pattern each seeded default carries, by offset (ADR-143). Absent means every row.
@@ -565,10 +583,7 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
         // Load-bearing: without it, a loop that stopped matching would skip every assertion above
         // and report success about nothing.
-        assert_eq!(
-            checked, 29,
-            "twenty-nine of the defaults are profile-scoped"
-        );
+        assert_eq!(checked, 30, "thirty of the defaults are profile-scoped");
     }
 
     /// Exactly four seeded defaults are fleet-wide, and they are the four that really are.

@@ -9,6 +9,10 @@
 //!  - [`resolve`] — given those values, the version string, or `None`;
 //!  - [`sanitize`] — the one cap every version passes, applied on **both** sides of the bus.
 //!
+//! And one more, for the few rows whose LibreNMS file also says where the device keeps its own model
+//! name and serial number: [`resolve_chassis`] (ADR-147 Increment 6). Those OIDs ride in the same
+//! [`oids_to_read`], so the probe asks nothing extra of a device whose row names none.
+//!
 //! ## 🚨 The table is copied from LibreNMS, not written from memory
 //!
 //! LibreNMS keeps, per OS, where its version is (`resources/definitions/os_discovery/*.yaml` and
@@ -171,7 +175,28 @@ struct Row {
     /// …and none of these do (LibreNMS's `_except`).
     unless: &'static [Match],
     sources: &'static [Source],
+    /// Where the device keeps its own model name and serial number, when the LibreNMS file this
+    /// row was copied from names them (`hardware:` / `serial:`). `None` on most rows, and written
+    /// out on every one so a new row has to answer the question (ADR-147 Increment 6).
+    chassis: Option<Chassis>,
 }
+
+/// Two string instance OIDs: the device's model name and its serial number (ADR-147 Increment 6).
+///
+/// For a device whose ENTITY-MIB cannot say which row is the chassis — Cisco AireOS lists its access
+/// points beside itself and has no `entPhysicalClass` column — so the vendor's own recipe names the
+/// row instead. The serial is a fallback only: the poller uses it when the chassis rule found
+/// nothing ([`resolve_chassis`]).
+#[derive(Debug, Clone, Copy)]
+struct Chassis {
+    model: &'static str,
+    serial: &'static str,
+}
+
+/// `entPhysicalModelName.1` — the part number of ENTITY-MIB row 1.
+const ENT_PHYSICAL_MODEL_NAME_1: &str = "1.3.6.1.2.1.47.1.1.1.1.13.1";
+/// `entPhysicalSerialNum.1` — the serial number of ENTITY-MIB row 1.
+const ENT_PHYSICAL_SERIAL_NUM_1: &str = "1.3.6.1.2.1.47.1.1.1.1.11.1";
 
 /// Enterprise-prefix shorthand, so a row reads as the part that differs.
 macro_rules! ent {
@@ -215,6 +240,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent_software_rev!("22")),
             Source::Str(ent_software_rev!("24")),
         ],
+        chassis: None,
     },
     Row {
         os: &["asa"],
@@ -229,6 +255,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent_software_rev!("4")),
             Source::Descr(r"Version (?<version>.*)", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["ftd"],
@@ -271,6 +298,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent_software_rev!("10")),
             Source::Descr(r"Version (?<version>[^,]+)", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["iosxr"],
@@ -288,6 +316,7 @@ static ROWS: &[Row] = &[
                 "${2}",
             ),
         ],
+        chassis: None,
     },
     Row {
         os: &["ciscowlc"],
@@ -298,6 +327,12 @@ static ROWS: &[Row] = &[
         ],
         unless: &[],
         sources: &[Source::Str(ent_software_rev!("1"))],
+        // The same file's `hardware` and `serial`. Not its `entPhysicalName.1` fallback for the
+        // model: on AireOS that row is named `Chassis`, which is not a model (ADR-147 decision 25).
+        chassis: Some(Chassis {
+            model: ENT_PHYSICAL_MODEL_NAME_1,
+            serial: ENT_PHYSICAL_SERIAL_NUM_1,
+        }),
     },
     Row {
         os: &["ios", "iosxe"],
@@ -334,6 +369,7 @@ static ROWS: &[Row] = &[
             Source::Descr(CISCO_IOS_3, "${2} ${3}"),
             Source::DescrFirstLine(CISCO_IOS_4, "${4}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["junos"],
@@ -355,6 +391,7 @@ static ROWS: &[Row] = &[
                 "${version}",
             ),
         ],
+        chassis: None,
     },
     Row {
         os: &["vrp"],
@@ -367,6 +404,7 @@ static ROWS: &[Row] = &[
         ],
         unless: &[],
         sources: &[Source::PlusRunningPatch(&Source::HuaweiVrp)],
+        chassis: None,
     },
     Row {
         os: &["yunshan"],
@@ -384,6 +422,7 @@ static ROWS: &[Row] = &[
             VRP_RELEASE,
             "${version}",
         ))],
+        chassis: None,
     },
     Row {
         os: &["fortigate"],
@@ -394,6 +433,7 @@ static ROWS: &[Row] = &[
         ],
         unless: &[],
         sources: &[Source::Str(ent!("12356.101.4.1.1.0"))],
+        chassis: None,
     },
     Row {
         os: &["arista_eos"],
@@ -404,6 +444,7 @@ static ROWS: &[Row] = &[
             r" version (?<version>.+) running on .+ (?<hardware>\S+)$",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["routeros"],
@@ -411,6 +452,7 @@ static ROWS: &[Row] = &[
         when: &[Match::ObjectId(ent!("14988.1"))],
         unless: &[],
         sources: &[Source::Str(ent!("14988.1.1.4.4.0"))],
+        chassis: None,
     },
     Row {
         os: &["panos"],
@@ -418,6 +460,7 @@ static ROWS: &[Row] = &[
         when: &[Match::Descr("Palo Alto Networks")],
         unless: &[],
         sources: &[Source::Str(ent!("25461.2.1.2.1.1.0"))],
+        chassis: None,
     },
     Row {
         os: &["gaia"],
@@ -430,6 +473,7 @@ static ROWS: &[Row] = &[
         ],
         unless: &[],
         sources: &[Source::Str(ent!("2620.1.6.4.1.0"))],
+        chassis: None,
     },
     Row {
         os: &["f5"],
@@ -437,6 +481,7 @@ static ROWS: &[Row] = &[
         when: &[Match::ObjectId(ent!("3375.2.1"))],
         unless: &[],
         sources: &[Source::Str(ent!("3375.2.1.4.2.0"))],
+        chassis: None,
     },
     Row {
         os: &["netscaler"],
@@ -451,6 +496,7 @@ static ROWS: &[Row] = &[
             r"NetScaler (?<version>[^:]+): (?<features>[^,]+),",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["acos"],
@@ -462,6 +508,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent!("22610.2.4.1.1.1.0")),
             Source::Descr(r"(?<hardware>\S+( TPS)?), ACOS (?<version>[^,]+)", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["arubaos-cx"],
@@ -483,6 +530,7 @@ static ROWS: &[Row] = &[
                 "${version}",
             ),
         ],
+        chassis: None,
     },
     Row {
         os: &["arubaos"],
@@ -502,6 +550,7 @@ static ROWS: &[Row] = &[
             r"(\(MODEL: (?<hardware>.+)\),)? Version (?<version>\S+)",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["comware"],
@@ -512,6 +561,7 @@ static ROWS: &[Row] = &[
             r"Version (?<version>[0-9.]+).*(Release|ESS) (?<features>[R0-9P]+).*[\n ](HPE |HPE FF |HP |H3C )(?<hardware>.*)[\r ][\n ]",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["dnos"],
@@ -526,6 +576,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent!("6027.3.26.1.3.4.1.10.1")),
             Source::Descr(r"Software Version: (?<version>\S+)", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["powerconnect"],
@@ -539,6 +590,7 @@ static ROWS: &[Row] = &[
                 "${version}",
             ),
         ],
+        chassis: None,
     },
     Row {
         os: &["xos"],
@@ -549,6 +601,7 @@ static ROWS: &[Row] = &[
             r"(\((?<hardware>[^)]+)\))? version (?<version>[\d.]+) (?<features>\S+)",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["ironware"],
@@ -559,6 +612,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent!("1991.1.1.2.1.11.0")),
             Source::Descr(r"IronWare Version V(?<version>.*) Compiled on", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["ruckuswireless", "ruckuswireless-unleashed"],
@@ -588,6 +642,7 @@ static ROWS: &[Row] = &[
                 "{0} ({1})",
             ),
         ],
+        chassis: None,
     },
     Row {
         os: &["timos"],
@@ -603,6 +658,7 @@ static ROWS: &[Row] = &[
             ],
             "{0}.{1}.{2}",
         )],
+        chassis: None,
     },
     Row {
         os: &["aos6"],
@@ -613,6 +669,7 @@ static ROWS: &[Row] = &[
             r"(?<hardware>OS\S*)? ?(?<version>\d+\.\d+\.\S*)",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["aos7"],
@@ -623,6 +680,7 @@ static ROWS: &[Row] = &[
             r"(?<hardware>OS\S+)? ?(?<version>\d+\.\d+\.\S+)",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["edgeos"],
@@ -633,6 +691,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent!("41112.1.5.1.3.0")),
             Source::Descr(r"v(?<version>\d+\.\d+\.\d+)", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["zynos"],
@@ -644,6 +703,7 @@ static ROWS: &[Row] = &[
             r"^(?<version>.*?)(?: \| |$)",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["netgear"],
@@ -658,6 +718,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent_software_rev!("1")),
             Source::Descr(r"^(?<hardware>\S+) .*, (?<version>[\d.]+),", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["dlink"],
@@ -670,6 +731,7 @@ static ROWS: &[Row] = &[
             Source::Str(ent!("171.12.11.1.9.4.1.11.1")),
             Source::Descr(r"(D-Link )?(?<hardware>\S+) (?<version>[0-9.]+)?", "${version}"),
         ],
+        chassis: None,
     },
     Row {
         os: &["jetstream"],
@@ -678,6 +740,7 @@ static ROWS: &[Row] = &[
         when: &[Match::ObjectId(ent!("11863.5.")), Match::Descr("JetStream")],
         unless: &[],
         sources: &[Source::Str(ent!("11863.6.1.1.6.0"))],
+        chassis: None,
     },
     Row {
         os: &["tplink"],
@@ -688,6 +751,7 @@ static ROWS: &[Row] = &[
         ],
         unless: &[],
         sources: &[Source::Str("1.3.6.1.2.1.16.19.2.0")],
+        chassis: None,
     },
     Row {
         os: &["vmware-esxi"],
@@ -695,6 +759,7 @@ static ROWS: &[Row] = &[
         when: &[Match::ObjectId(ent!("6876.4.1"))],
         unless: &[],
         sources: &[Source::Str(ent!("6876.1.2.0"))],
+        chassis: None,
     },
     Row {
         os: &["netapp"],
@@ -706,6 +771,7 @@ static ROWS: &[Row] = &[
             r"NetApp Release (?<version>.*?):",
             "${version}",
         )],
+        chassis: None,
     },
     Row {
         os: &["gaia", "dsm"],
@@ -728,6 +794,7 @@ static ROWS: &[Row] = &[
                 "${version}",
             ),
         ],
+        chassis: None,
     },
 ];
 
@@ -819,7 +886,48 @@ pub fn oids_to_read(sys_object_id: Option<&str>, sys_descr: Option<&str>) -> Rea
     for source in row.sources {
         add_reads(*source, &mut reads);
     }
+    if let Some(chassis) = row.chassis {
+        for oid in [chassis.model, chassis.serial] {
+            add_reads(Source::Str(oid), &mut reads);
+        }
+    }
     reads
+}
+
+/// What the device says about itself at the OIDs its row's [`Chassis`] names: its model name and its
+/// serial number (ADR-147 Increment 6). Both `None` for a row without one, which is most of them.
+///
+/// Each value is cleaned the way its own kind is — the model by [`sanitize`], the serial by
+/// [`crate::serial::sanitize`] — and PHP-empty values (`""`, `"0"`) are absent, as everywhere in this
+/// table. The serial is not the node's serial by itself: the poller takes it only when ENTITY-MIB's
+/// chassis rule, heard out, found none.
+#[must_use]
+pub fn resolve_chassis(
+    sys_object_id: Option<&str>,
+    sys_descr: Option<&str>,
+    answers: &Answers,
+) -> ChassisIdentity {
+    let Some(chassis) = row_for(sys_object_id, sys_descr).and_then(|row| row.chassis) else {
+        return ChassisIdentity::default();
+    };
+    let string = |oid: &str| {
+        answers
+            .strings
+            .get(oid)
+            .map(String::as_str)
+            .filter(|v| !php_empty(v))
+    };
+    ChassisIdentity {
+        model: string(chassis.model).and_then(sanitize),
+        serial: string(chassis.serial).and_then(crate::serial::sanitize),
+    }
+}
+
+/// What [`resolve_chassis`] found.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ChassisIdentity {
+    pub model: Option<String>,
+    pub serial: Option<String>,
 }
 
 /// What one source needs read, added to `reads` without naming anything twice.
@@ -1295,6 +1403,106 @@ mod tests {
             resolve(fortigate, Some("FGT_1500D"), &forti).as_deref(),
             Some("v7.2.6,build1575,230926 (GA.F)"),
             "a row that walks no column ignores the flag"
+        );
+    }
+
+    /// The PoC's AireOS controller (ADR-147 Increment 6): the shape walked from it on 2026-09-21,
+    /// with made-up serials of the same form. Its ENTITY-MIB row 1 is the chassis — named `Chassis`, which is why the model does
+    /// not fall back to `entPhysicalName.1` — and rows 8..56 are its seven access points, which is why
+    /// the chassis rule alone cannot pick a serial.
+    #[test]
+    fn an_aireos_controller_names_its_model_and_serial_on_entity_row_1() {
+        let wlc = Some("1.3.6.1.4.1.9.1.2427");
+        let descr = Some("Cisco Controller");
+        let reads = oids_to_read(wlc, descr);
+        assert_eq!(
+            reads.strings,
+            vec![
+                "1.3.6.1.2.1.47.1.1.1.1.10.1",
+                ENT_PHYSICAL_MODEL_NAME_1,
+                ENT_PHYSICAL_SERIAL_NUM_1,
+            ],
+            "the version, then the model and the serial, all from row 1"
+        );
+        let mut answers = Answers::default();
+        for (oid, value) in [
+            ("1.3.6.1.2.1.47.1.1.1.1.10.1", "8.5.140.0"),
+            ("1.3.6.1.2.1.47.1.1.1.1.7.1", "Chassis"),
+            (ENT_PHYSICAL_MODEL_NAME_1, "AIR-CT3504-K9"),
+            (ENT_PHYSICAL_SERIAL_NUM_1, "FCW0000A0AA"),
+            ("1.3.6.1.2.1.47.1.1.1.1.13.8", "AIR-AP2802I-Q-K9"),
+            ("1.3.6.1.2.1.47.1.1.1.1.11.8", "FGL0000A0AB"),
+        ] {
+            answers.strings.insert(oid.to_owned(), value.to_owned());
+        }
+        assert_eq!(resolve(wlc, descr, &answers).as_deref(), Some("8.5.140.0"));
+        assert_eq!(
+            resolve_chassis(wlc, descr, &answers),
+            ChassisIdentity {
+                model: Some("AIR-CT3504-K9".to_owned()),
+                serial: Some("FCW0000A0AA".to_owned()),
+            }
+        );
+        // The same device spelled with the Airespace enterprise lands on the same row.
+        assert_eq!(
+            resolve_chassis(Some("1.3.6.1.4.1.14179.1.1.4.3"), descr, &answers).model,
+            Some("AIR-CT3504-K9".to_owned())
+        );
+        // What the device did not answer, or answered PHP-empty, is absent — never a placeholder.
+        let mut blank = answers.clone();
+        blank
+            .strings
+            .insert(ENT_PHYSICAL_MODEL_NAME_1.to_owned(), "0".to_owned());
+        blank.strings.remove(ENT_PHYSICAL_SERIAL_NUM_1);
+        assert_eq!(
+            resolve_chassis(wlc, descr, &blank),
+            ChassisIdentity::default()
+        );
+        // Device strings are cleaned the way their own kind is.
+        let mut padded = answers.clone();
+        padded.strings.insert(
+            ENT_PHYSICAL_SERIAL_NUM_1.to_owned(),
+            " FCW0000A0AA\r\n".to_owned(),
+        );
+        assert_eq!(
+            resolve_chassis(wlc, descr, &padded).serial.as_deref(),
+            Some("FCW0000A0AA")
+        );
+    }
+
+    /// A row with no [`Chassis`] asks for nothing more and resolves to nothing, whatever the device
+    /// happens to answer at row 1 — the 9800, which is not an AireOS controller, among them.
+    #[test]
+    fn a_row_without_a_chassis_reads_and_resolves_nothing_more() {
+        let c9800 = Some("1.3.6.1.4.1.9.1.2861");
+        let descr = Some(
+            "Cisco IOS Software [Cupertino], C9800 Software (C9800_IOSXE-K9), Version 17.9.4, RELEASE SOFTWARE (fc5)",
+        );
+        let reads = oids_to_read(c9800, descr);
+        assert!(!reads.strings.contains(&ENT_PHYSICAL_MODEL_NAME_1));
+        assert!(!reads.strings.contains(&ENT_PHYSICAL_SERIAL_NUM_1));
+        let mut answers = Answers::default();
+        answers.strings.insert(
+            ENT_PHYSICAL_MODEL_NAME_1.to_owned(),
+            "C9800-L-C-K9".to_owned(),
+        );
+        answers.strings.insert(
+            ENT_PHYSICAL_SERIAL_NUM_1.to_owned(),
+            "FOC1234X0YZ".to_owned(),
+        );
+        assert_eq!(
+            resolve_chassis(c9800, descr, &answers),
+            ChassisIdentity::default()
+        );
+        assert_eq!(
+            resolve_chassis(None, None, &answers),
+            ChassisIdentity::default()
+        );
+        // Only the rows that name one carry a chassis — today the one AireOS row.
+        assert_eq!(
+            ROWS.iter().filter(|row| row.chassis.is_some()).count(),
+            1,
+            "a new row naming a chassis is a decision; update this count with it"
         );
     }
 

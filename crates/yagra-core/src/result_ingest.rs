@@ -566,11 +566,15 @@ pub(crate) async fn consume_results<S>(
     S: Stream<Item = PollResult> + Unpin,
 {
     use tracing::Instrument as _;
-    while let Some(result) = results.next().await {
+    while let Some(mut result) = results.next().await {
         // A wireless controller's AP inventory stands for one result per imported AP (ADR-064 B2).
         // Decided here, in arrival order, so the two members of an HA pair are judged one after
-        // the other against the same record of who serves each AP.
-        let aps = ap_fanout.results_for(&result, Replay::Live);
+        // the other against the same record of who serves each AP. The controller's own result
+        // gains what that decision counted — `wlan_controller_aps_missing` (増分 F, F10) — before
+        // it is stored and judged, so a rule on it sees the same view the AP nodes were given.
+        let fanned = ap_fanout.fan_out(&result, Replay::Live);
+        result.samples.extend(fanned.controller);
+        let aps = fanned.aps;
         let admitted = no_reading.admit(result);
         // Result-ingest span: child of the poller's poll span (via the result's carried trace
         // context), completing the poll's end-to-end distributed trace. Secret-free fields only.
@@ -700,9 +704,17 @@ fn persist_metrics_and_meta(
             tx_power_high_dbm: iface.tx_power_high_dbm,
         })
         .collect();
+    // The model the device named at its OS row's OID beats one read out of `sysDescr` — an AireOS
+    // controller's `sysDescr` is only `Cisco Controller` (ADR-147 Increment 6). Either way the PG
+    // fill writes a model only into a node that has none, so an operator's own value stays.
+    let hardware_model = result
+        .hardware_model
+        .as_deref()
+        .and_then(yagra_discovery::os_version::sanitize);
     let identity = result.sys_descr.as_deref().and_then(|descr| {
         let id = yagra_discovery::identify(descr);
-        (id.vendor.is_some() || id.model.is_some()).then_some((id.vendor, id.model))
+        let model = hardware_model.or(id.model);
+        (id.vendor.is_some() || model.is_some()).then_some((id.vendor, model))
     });
     let os_version = result
         .os_version
@@ -1413,6 +1425,7 @@ mod tests {
             os_version: None,
             os_version_without_patch: None,
             serial_number: None,
+            hardware_model: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,
@@ -1538,6 +1551,47 @@ mod tests {
         assert_eq!(
             serial_number.chars().count(),
             yagra_discovery::serial::SERIAL_MAX_CHARS
+        );
+    }
+
+    /// ADR-147 Increment 6: the model a device named at its OS row's OID reaches the PG writer in
+    /// the identity pair, cleaned on this edge too, and beats the model `sysDescr` would give. Without
+    /// one, `sysDescr` still decides — which for an AireOS controller is no model at all.
+    #[test]
+    fn a_hardware_model_reaches_the_pg_writer_ahead_of_the_sysdescr_guess() {
+        let record = |sys_descr: &str, hardware_model: Option<&str>| {
+            let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+            let vm = VmWriters::from_senders(vec![metrics_tx]);
+            let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+            let mut result: PollResult = serde_json::from_str(
+                r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                    "node_id":"00000000-0000-0000-0000-000000000000",
+                    "at_unix_ms":0,"outcome":"reachable"}"#,
+            )
+            .expect("a result");
+            result.sys_descr = Some(sys_descr.to_owned());
+            result.hardware_model = hardware_model.map(str::to_owned);
+            persist_metrics_and_meta(&NoReadingHandle::default().admit(result), &vm, &meta_tx);
+            meta_rx
+                .try_recv()
+                .expect("the record reaches the PG writer")
+                .identity
+        };
+        assert_eq!(
+            record("Cisco Controller", Some(" AIR-CT3504-K9\r\n")),
+            Some((Some("Cisco".to_owned()), Some("AIR-CT3504-K9".to_owned())))
+        );
+        assert_eq!(
+            record("Cisco Controller", None),
+            Some((Some("Cisco".to_owned()), None)),
+            "the probe named no model, and sysDescr has none to give"
+        );
+        let ios = "Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.0(2a)EX5";
+        let guessed = record(ios, None).and_then(|(_, model)| model);
+        assert!(guessed.is_some(), "sysDescr still decides without one");
+        assert_eq!(
+            record(ios, Some("WS-C2960X-48FPD-L")).and_then(|(_, model)| model),
+            Some("WS-C2960X-48FPD-L".to_owned())
         );
     }
 
@@ -1810,6 +1864,7 @@ mod tests {
             os_version: None,
             os_version_without_patch: None,
             serial_number: None,
+            hardware_model: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
@@ -2296,6 +2351,7 @@ mod tests {
             os_version: None,
             os_version_without_patch: None,
             serial_number: None,
+            hardware_model: None,
             sys_object_id: None,
             dns_chain: None,
             neighbors: None,

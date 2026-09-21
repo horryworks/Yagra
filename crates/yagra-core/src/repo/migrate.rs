@@ -532,6 +532,94 @@ mod tests {
         );
     }
 
+    /// **Migration 0128 adds the Cisco controller profile to the seeded AP-walk rule — and only to
+    /// the row as it shipped** (ADR-064 増分 F).
+    ///
+    /// The harness has applied 0128 to an empty table and the seeder has since written the new,
+    /// two-profile row, so the fixture first puts the row back to what v0.3.27/28 shipped — the
+    /// Huawei profile alone — and applies the file's own statement. A second copy of the row with an
+    /// operator's bound on it must come out exactly as it went in.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_wlan_walk_rule_migration_adds_the_cisco_profile_to_the_shipped_row_only(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::seed_ids::SeedRange;
+        crate::pgtest::repo(pool.clone())
+            .seed_builtin_profiles()
+            .await
+            .expect("seed");
+        let profiles = yagra_common::builtin_profiles();
+        let id_of = |name: &str| {
+            SeedRange::Profiles
+                .id(profiles.iter().position(|p| p.name == name).expect(name))
+                .to_string()
+        };
+        let huawei = id_of("Huawei wireless controller");
+        let cisco = id_of("Cisco wireless controller");
+        let rule = SeedRange::DefaultThresholds.id(33);
+        let targets = |id: uuid::Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Vec<String>>(
+                    "SELECT scope_ids FROM thresholds WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("the rule exists")
+            }
+        };
+        assert_eq!(
+            targets(rule).await,
+            vec![huawei.clone(), cisco.clone()],
+            "a fresh database is seeded with both"
+        );
+
+        // Back to the shipped shape, plus an edited copy that must be left alone.
+        sqlx::query("UPDATE thresholds SET scope_ids = ARRAY[$2] WHERE id = $1")
+            .bind(rule)
+            .bind(&huawei)
+            .execute(&pool)
+            .await
+            .expect("restore the pre-0128 shape");
+        let edited = uuid::Uuid::from_u128(0x0128_0000_0000_0000_0000_0000_0000_0001);
+        sqlx::query(
+            "INSERT INTO thresholds (id, scope_level, scope_id, scope_ids, metric, direction, \
+             warning, critical, dwell_samples, row_match, warning_below) \
+             SELECT $1, scope_level, scope_id, scope_ids, metric, direction, 0.9, critical, \
+                    dwell_samples, row_match, 0.9 \
+               FROM thresholds WHERE id = $2",
+        )
+        .bind(edited)
+        .bind(rule)
+        .execute(&pool)
+        .await
+        .expect("an operator's edited copy");
+
+        let sql = include_str!("../../../../migrations/0128_wlan_walk_rule_covers_cisco.sql");
+        let code = sql
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut applied = 0u64;
+        for stmt in code.split(';').filter(|s| !s.trim().is_empty()) {
+            applied += sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .expect("the migration's statement applies")
+                .rows_affected();
+        }
+        assert_eq!(applied, 1, "exactly the shipped row changes");
+        assert_eq!(targets(rule).await, vec![huawei.clone(), cisco]);
+        assert_eq!(
+            targets(edited).await,
+            vec![huawei],
+            "an edited rule keeps its targets"
+        );
+    }
+
     /// Foreign-key columns deliberately left without an index, and why each one is safe.
     ///
     /// PostgreSQL runs one referential action per deleted row against every table whose foreign

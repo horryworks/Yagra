@@ -331,6 +331,39 @@ mod tests {
             );
         }
     }
+    /// Migration `0128` names the WLAN walk rule and the two controller profiles as literals, for
+    /// the reason `0097` does. A profile id one position off would add some other profile to the
+    /// rule, or leave the Huawei-only row alone forever — and neither fails anything.
+    #[test]
+    fn the_ids_migration_0128_names_are_the_wlan_rule_and_both_controller_profiles() {
+        let sql = include_str!("../../../migrations/0128_wlan_walk_rule_covers_cisco.sql");
+        let profiles = yagra_common::builtin_profiles();
+        let position = |name: &str| {
+            profiles
+                .iter()
+                .position(|p| p.name == name)
+                .unwrap_or_else(|| panic!("{name} is still in the catalog"))
+        };
+        for (what, id) in [
+            (
+                "the Cisco profile",
+                SeedRange::Profiles.id(position("Cisco wireless controller")),
+            ),
+            (
+                "the Huawei profile",
+                SeedRange::Profiles.id(position("Huawei wireless controller")),
+            ),
+            ("the walk rule", SeedRange::DefaultThresholds.id(33)),
+        ] {
+            assert!(
+                sql.contains(&id.to_string()),
+                "0128 does not name {what} ({id})"
+            );
+        }
+        // That the seeder targets the same two profiles is
+        // `repo::defaults::the_seeded_vendor_defaults_target_exactly_the_profiles_that_collect_them`.
+    }
+
     /// The same pairing for the seeded trap rules, which migration `0047` writes as literals.
     #[test]
     fn the_builtin_event_rule_ids_are_the_ones_migration_0047_inserts() {
