@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.28 — Cisco Meraki organizations are monitored end to end (devices import themselves, are filed by IP range, and follow what the Dashboard reports), one alert says when the Meraki API stops answering an organization, a device the Dashboard reports offline is down rather than OK, access points behind a wireless controller are imported without switching it on, folder-restricted accounts can no longer change credentials or Meraki organizations**
+> Status: **v0.3.29 — Cisco wireless controllers (AireOS and the 9800) list and import their access points, an access point a Cisco controller stops listing is down and the controller counts the missing ones, AireOS controllers show their model and serial number, an access point its controller stops reporting reads unknown rather than its last OK**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
