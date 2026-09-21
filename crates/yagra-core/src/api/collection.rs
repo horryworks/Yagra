@@ -28,8 +28,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_common::{
-    resolve_collection_set, OpticalFlavor, METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM,
-    METRIC_IF_TX_POWER_DBM,
+    resolve_collection_set, OpticalFlavor, ScopedCollectionItem, METRIC_CISCO_TEMP_C,
+    METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
 };
 
 // The staleness window lives with the column it describes (`repo::interfaces`), because it is one
@@ -252,6 +252,20 @@ pub(crate) async fn node_collection(
             })?;
         return Ok(NodeCollection::Stored(list));
     }
+    let scoped = resolved_node_items(admin, node_id).await?;
+    Ok(NodeCollection::Resolved(resolve_collection_set(&scoped)))
+}
+
+/// Every enabled item that applies to a node — its profile's sets plus its own overrides — each
+/// tagged with its scope and the set it came from, **before** resolution. 404s an unknown node.
+///
+/// The metric inventory reads this rather than `node_collection(.., true)` because it needs the
+/// set each winner came from (ADR-046 Inc.9), which the resolved `CollectionItem`s do not carry.
+/// Both then resolve with the one rule, `yagra_common::resolve_scoped`.
+pub(crate) async fn resolved_node_items(
+    admin: &super::AdminState,
+    node_id: Uuid,
+) -> ApiResult<Vec<ScopedCollectionItem>> {
     let node = admin
         .repo
         .get_node(node_id)
@@ -261,7 +275,7 @@ pub(crate) async fn node_collection(
         .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?
         .profile
         .map(|p| p.0);
-    let scoped = admin
+    admin
         .collection
         .list_items_for_node(node_id, profile)
         .await
@@ -271,8 +285,7 @@ pub(crate) async fn node_collection(
                 "resolve collection",
                 "failed to resolve collection set",
             )
-        })?;
-    Ok(NodeCollection::Resolved(resolve_collection_set(&scoped)))
+        })
 }
 
 #[utoipa::path(

@@ -22,7 +22,9 @@ use crate::profile::ProfileCategory;
 use crate::thresholds::ScopeLevel;
 use crate::wlan::{
     WlanFlavor, METRIC_WLAN_AP_WALK_COMPLETE, METRIC_WLAN_CONTROLLER_APS_JOINED,
-    METRIC_WLAN_CONTROLLER_APS_MISSING, METRIC_WLAN_CONTROLLER_CLIENTS,
+    METRIC_WLAN_CONTROLLER_APS_MISSING, METRIC_WLAN_CONTROLLER_AP_CAPACITY,
+    METRIC_WLAN_CONTROLLER_CLIENTS, METRIC_WLAN_CONTROLLER_CLIENTS_2G4,
+    METRIC_WLAN_CONTROLLER_CLIENTS_5G, METRIC_WLAN_CONTROLLER_CLIENTS_6G,
     METRIC_WLAN_CONTROLLER_SSID_COUNT, METRIC_WLAN_RADIO_CHANNEL,
     METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT, METRIC_WLAN_RADIO_CLIENT_COUNT, METRIC_WLAN_SSID_AP_COUNT,
     METRIC_WLAN_SSID_CLIENTS, METRIC_WLAN_SSID_CLIENTS_2G4, METRIC_WLAN_SSID_CLIENTS_5G,
@@ -264,13 +266,34 @@ pub struct ScopedCollectionItem {
     pub level: ScopeLevel,
     /// The item itself.
     pub item: CollectionItem,
+    /// The display name of the metric set (collection template) the item came from, when it came
+    /// from one — `None` for a node's own ad-hoc items. It is what the node Overview files the
+    /// metric under (ADR-046 Inc.9): the generated catalog can only name the *first* built-in set
+    /// that declares a metric, and a name Huawei and Cisco share went under Huawei's heading on a
+    /// Cisco controller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 impl ScopedCollectionItem {
-    /// Convenience constructor.
+    /// An item with no metric set behind it (a node's own override).
     #[must_use]
     pub fn new(level: ScopeLevel, item: CollectionItem) -> Self {
-        Self { level, item }
+        Self {
+            level,
+            item,
+            template: None,
+        }
+    }
+
+    /// An item that came from the named metric set.
+    #[must_use]
+    pub fn from_template(level: ScopeLevel, item: CollectionItem, template: String) -> Self {
+        Self {
+            level,
+            item,
+            template: Some(template),
+        }
     }
 }
 
@@ -301,21 +324,36 @@ pub enum InterfaceField {
 /// flagged disabled are filtered out *before* calling this (callers pass only enabled rows).
 #[must_use]
 pub fn resolve_collection_set(items: &[ScopedCollectionItem]) -> Vec<CollectionItem> {
-    // metric_name -> (winning level so far, item). A strictly more-specific level replaces.
-    let mut winners: BTreeMap<&str, (ScopeLevel, &CollectionItem)> = BTreeMap::new();
+    resolve_scoped(items)
+        .into_iter()
+        .map(|s| s.item.clone())
+        .collect()
+}
+
+/// The winning scoped item per `metric_name` — the rule [`resolve_collection_set`] applies, and
+/// the only copy of it.
+///
+/// Returned whole rather than as the bare item because a reader sometimes needs to know *where*
+/// the winner came from: the node Overview files a metric under the set its winner came from
+/// (ADR-046 Inc.9). Deciding that with a second precedence walk would be a second rule, and the
+/// two could disagree about which set's OID is actually polled.
+///
+/// Among items at the **same** level the first one wins, so the answer depends on the order of
+/// `items` — the repository query orders its rows for exactly this reason.
+#[must_use]
+pub fn resolve_scoped(items: &[ScopedCollectionItem]) -> Vec<&ScopedCollectionItem> {
+    // metric_name -> the winner so far. A strictly more-specific level replaces.
+    let mut winners: BTreeMap<&str, &ScopedCollectionItem> = BTreeMap::new();
     for sci in items {
         let key = sci.item.metric_name.as_str();
         match winners.get(key) {
-            Some((level, _)) if *level >= sci.level => {}
+            Some(won) if won.level >= sci.level => {}
             _ => {
-                winners.insert(key, (sci.level, &sci.item));
+                winners.insert(key, sci);
             }
         }
     }
-    winners
-        .into_values()
-        .map(|(_, item)| item.clone())
-        .collect()
+    winners.into_values().collect()
 }
 
 // --- Built-in standard catalog ------------------------------------------------------
@@ -1075,15 +1113,15 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                     "1.3.6.1.4.1.2011.6.139.12.1.2.3.0",
                 ),
                 vendor_scalar(
-                    "wlan_controller_clients_2g4",
+                    METRIC_WLAN_CONTROLLER_CLIENTS_2G4,
                     "1.3.6.1.4.1.2011.6.139.12.1.2.5.0",
                 ),
                 vendor_scalar(
-                    "wlan_controller_clients_5g",
+                    METRIC_WLAN_CONTROLLER_CLIENTS_5G,
                     "1.3.6.1.4.1.2011.6.139.12.1.2.6.0",
                 ),
                 vendor_scalar(
-                    "wlan_controller_clients_6g",
+                    METRIC_WLAN_CONTROLLER_CLIENTS_6G,
                     "1.3.6.1.4.1.2011.6.139.12.1.2.13.0",
                 ),
                 // Integer32 in the MIB but a since-boot total, so a counter: `rate()` turns it into
@@ -1134,15 +1172,19 @@ fn wlan_ap_template(flavor: WlanFlavor) -> BuiltinTemplate {
             "The access points a Cisco wireless controller manages (AIRESPACE-WIRELESS-MIB, which \
              AireOS and the Catalyst 9800 both answer): each AP's name, model, serial, software \
              version, address, state, AP group, CPU and memory, for the controller's AP list. \
-             Adds three samples to the controller: whether the AP table was read to its end, how \
-             many APs are joined — counted from that table, because the two OS families keep that \
-             total in different objects — and how many of the APs it serves are missing from it. \
-             A Cisco controller drops an AP it has lost from the table, so an imported AP missing \
-             from a complete read is recorded as down.",
+             Adds to the controller whether the AP table was read to its end, how many APs are \
+             joined — counted from that table, because the two OS families keep that total in \
+             different objects — how many of the APs it serves are missing from it, and the most \
+             APs the platform supports (not the licence count). A Cisco controller drops an AP it \
+             has lost from the table, so an imported AP missing from a complete read is recorded \
+             as down.",
             vec![
                 item(METRIC_WLAN_AP_WALK_COMPLETE),
                 item(METRIC_WLAN_CONTROLLER_APS_JOINED),
                 item(METRIC_WLAN_CONTROLLER_APS_MISSING),
+                // Read by one GET that asks AireOS's and the 9800's object together, whichever
+                // answers (ADR-064 増分 H, H5) — one template item cannot hold two OIDs.
+                item(METRIC_WLAN_CONTROLLER_AP_CAPACITY),
             ],
         ),
     };
@@ -1237,15 +1279,21 @@ fn wlan_radio_template(flavor: WlanFlavor) -> BuiltinTemplate {
         ),
         // The three the Cisco tables carry. `bsnAPIfPhyTxPowerLevel` is a step number, not dBm,
         // and there is no noise, interference or signal column to read (ADR-064 増分 F, F5).
+        // Plus the controller's clients per band, summed over these same rows (増分 H, H4): a Cisco
+        // controller has no per-band total of its own, and a Huawei AC answers them from scalars.
         WlanFlavor::CiscoAirespace => (
             "Each radio of each access point a Cisco wireless controller manages \
              (AIRESPACE-WIRELESS-MIB): clients, channel and how busy it is. Published on the \
              access point as a slot, so a radio reads like a port: 2.4 GHz is 1, 5 GHz is 2, \
-             6 GHz is 3. Needs the access points to have been imported as nodes.",
+             6 GHz is 3. Needs the access points to have been imported as nodes. Also adds the \
+             controller's clients on each band, summed over every radio.",
             &[
                 METRIC_WLAN_RADIO_CLIENT_COUNT,
                 METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT,
                 METRIC_WLAN_RADIO_CHANNEL,
+                METRIC_WLAN_CONTROLLER_CLIENTS_2G4,
+                METRIC_WLAN_CONTROLLER_CLIENTS_5G,
+                METRIC_WLAN_CONTROLLER_CLIENTS_6G,
             ],
         ),
     };
@@ -1952,6 +2000,86 @@ mod tests {
         assert!(resolve_collection_set(&[]).is_empty());
     }
 
+    /// The winner carries the set it came from, and it is the same winner `resolve_collection_set`
+    /// picks — the Overview heading and the polled OID come from one decision (ADR-046 Inc.9).
+    #[test]
+    fn the_winner_carries_the_set_it_came_from() {
+        let items = [
+            ScopedCollectionItem::from_template(
+                ScopeLevel::Profile,
+                item("clients", "1.1"),
+                "Cisco WLAN SSIDs (WLC)".to_owned(),
+            ),
+            ScopedCollectionItem::from_template(
+                ScopeLevel::Profile,
+                item("clients", "2.2"),
+                "Huawei WLAN controller (AC)".to_owned(),
+            ),
+            ScopedCollectionItem::new(ScopeLevel::Node, item("mine", "3.3")),
+        ];
+        let won = resolve_scoped(&items);
+        let names: Vec<(&str, Option<&str>)> = won
+            .iter()
+            .map(|s| (s.item.metric_name.as_str(), s.template.as_deref()))
+            .collect();
+        // Same level: the first row wins. A node's own item has no set.
+        assert_eq!(
+            names,
+            vec![("clients", Some("Cisco WLAN SSIDs (WLC)")), ("mine", None)]
+        );
+        let polled: Vec<String> = resolve_collection_set(&items)
+            .into_iter()
+            .map(|i| i.oid)
+            .collect();
+        assert_eq!(polled, vec!["1.1", "3.3"]);
+    }
+
+    #[test]
+    fn a_node_override_wins_and_drops_the_set_name() {
+        let items = [
+            ScopedCollectionItem::from_template(
+                ScopeLevel::Profile,
+                item("cpu", "1"),
+                "Huawei VRP health".to_owned(),
+            ),
+            ScopedCollectionItem::new(ScopeLevel::Node, item("cpu", "2")),
+        ];
+        let won = resolve_scoped(&items);
+        assert_eq!(won.len(), 1);
+        assert_eq!(won[0].item.oid, "2");
+        assert_eq!(won[0].template, None);
+    }
+
+    /// Among items at one level the first wins, so a profile that attaches two sets declaring the
+    /// same name would make the winner — its OID and its Overview heading — depend on row order.
+    /// The repository orders the rows so that is deterministic (ADR-046 Inc.9 決定 9-D); this pins
+    /// that no built-in profile relies on it at all.
+    #[test]
+    fn no_builtin_profile_attaches_two_sets_that_declare_one_name() {
+        let templates = builtin_templates();
+        let by_name: BTreeMap<&str, &BuiltinTemplate> =
+            templates.iter().map(|t| (t.name, t)).collect();
+        let mut checked = 0;
+        for profile in builtin_profiles() {
+            let mut owner: BTreeMap<&str, &str> = BTreeMap::new();
+            for set in &profile.templates {
+                let tpl = by_name
+                    .get(set)
+                    .unwrap_or_else(|| panic!("{} names unknown set {set}", profile.name));
+                for i in &tpl.items {
+                    if let Some(first) = owner.insert(i.metric_name.as_str(), set) {
+                        panic!(
+                            "profile {} attaches {first} and {set}, which both declare {}",
+                            profile.name, i.metric_name
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 200, "inspected only {checked} items");
+    }
+
     /// The two IF-MIB tables answer yes and every other table in the catalog answers no.
     ///
     /// The negatives are not invented: each one is a table that was actually being reported as
@@ -2403,6 +2531,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A WLAN item's dimension is decided by which of three lists names it — node-level, a row per
+    /// SSID, or a slot per radio — and a name in none of them is silently reported as `entity`
+    /// (ADR-064 増分 H: the per-band totals and the AP capacity are the first controller-wide names
+    /// on the radio and AP templates). Exactly one, so the answer cannot depend on which list a
+    /// reader happens to consult first.
+    #[test]
+    fn every_wlan_item_is_in_exactly_one_dimension_list() {
+        let mut checked = 0;
+        for t in builtin_templates() {
+            for i in t.items.iter().filter(|i| i.kind == CollectionKind::Wlan) {
+                let name = i.metric_name.as_str();
+                let lists = [
+                    crate::wlan::WLAN_NODE_LEVEL_METRICS.contains(&name),
+                    crate::wlan::WLAN_SSID_ROW_METRICS.contains(&name),
+                    WLAN_RADIO_METRICS.contains(&name),
+                ];
+                assert_eq!(
+                    lists.iter().filter(|b| **b).count(),
+                    1,
+                    "{} declares {name}, which is in {lists:?}",
+                    t.name
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 30, "inspected only {checked} WLAN items");
     }
 
     #[test]

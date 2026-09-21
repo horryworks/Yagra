@@ -33539,6 +33539,13 @@
           },
           "status": {
             "$ref": "#/components/schemas/MetricStatus"
+          },
+          "template": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The metric set (collection template) this node collects the metric through, by its display\nname — what the node Overview files it under. Absent for the node's own collection items\nand for metrics no collection item produces."
           }
         }
       },

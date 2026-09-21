@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { metricUnitSuffix } from '../../lib/format';
+import { builtinMetric, STANDARD_SNMP_TEMPLATE } from '../../lib/metricMeaning';
 import {
   cardUnit,
   claimedMetrics,
@@ -19,6 +20,7 @@ import {
   resolveCard,
   resolveHealth,
   resolveMem,
+  sectionOf,
   uncuratedCardScale,
   type OverviewSection,
 } from './metricCards';
@@ -338,6 +340,44 @@ describe('overviewSections', () => {
       { metric: 'snmp_up', read: { kind: 'latest' }, chart: { kind: 'range' } },
       { metric: 'huawei_temp', read: { kind: 'aggregate' }, chart: { kind: 'aggregate' } },
     ]);
+  });
+
+  // ── ADR-046 Inc.9: the set this node collects a metric through, not the catalog's first ──
+
+  it('files a metric under the set the node collects it through, not the first set that names it', () => {
+    // The Cisco controller that prompted Inc.9: these names are declared by the Huawei sets first,
+    // so the catalog alone files them under "Huawei …". The assertion on the catalog is what makes
+    // this test mean something — without it, a catalog that had been fixed some other way would
+    // pass the second half for free.
+    expect(builtinMetric('wlan_controller_ssid_count')?.family).toBe('Huawei WLAN SSIDs (AC)');
+    expect(builtinMetric('wlan_controller_aps_missing')?.family).toBe('Cisco WLAN access points (WLC)');
+    const items = [
+      entry('wlan_controller_ssid_count', { template: 'Cisco WLAN SSIDs (WLC)' }),
+      entry('wlan_ap_walk_complete', { template: 'Cisco WLAN access points (WLC)' }),
+      entry('wlan_controller_aps_missing', { template: 'Cisco WLAN access points (WLC)' }),
+    ];
+    expect(overviewSections(items, none).map(shape)).toEqual([
+      ['set:Cisco WLAN access points (WLC)', ['wlan_ap_walk_complete', 'wlan_controller_aps_missing']],
+      ['set:Cisco WLAN SSIDs (WLC)', ['wlan_controller_ssid_count']],
+    ]);
+  });
+
+  it("still folds the standard set into SNMP when the node names it", () => {
+    const items = [entry('snmp_sys_uptime_ticks', { template: STANDARD_SNMP_TEMPLATE }), scalar('snmp_up')];
+    expect(overviewSections(items, none).map(shape)).toEqual([
+      ['family:snmp', ['snmp_sys_uptime_ticks', 'snmp_up']],
+    ]);
+  });
+
+  it("gives an operator's own set its own heading, where the catalog alone could only say Other", () => {
+    const items = [entry('ymock_room_temp_c', { template: 'Server room sensors' })];
+    expect(overviewSections(items, none).map(shape)).toEqual([['set:Server room sensors', ['ymock_room_temp_c']]]);
+  });
+
+  it('falls back to the catalog with no set name — a check, a node item, or a core older than Inc.9', () => {
+    expect(sectionOf(scalar('wlan_controller_ssid_count'))).toEqual({ kind: 'set', name: 'Huawei WLAN SSIDs (AC)' });
+    expect(sectionOf(entry('icmp_rtt_ms', { template: null }))).toEqual({ kind: 'family', family: 'icmp' });
+    expect(sectionOf(scalar('ymock_room_temp_c'))).toEqual({ kind: 'other' });
   });
 
   it('drops counters and per-interface metrics, as the Overview always has', () => {

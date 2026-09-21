@@ -209,6 +209,9 @@ test.describe('node Overview metric cards', () => {
     await expect.poll(() => spans().filter((s) => s === SEVEN_DAYS).length).toBeGreaterThan(0);
   });
 
+  // ADR-046 Inc.9, the other direction: this inventory carries no `template` (as an older core's
+  // does), and the headings above still come from the catalog. The Cisco suite below carries one.
+
   // ADR-117 決定 6. The RTT chart was a fixed 30-minute sparkline that ignored the buttons, and on
   // an ICMP-only node it is the *only* chart — Device health and the SNMP strip both self-hide —
   // so that node's Overview carried no range control at all.
@@ -220,5 +223,71 @@ test.describe('node Overview metric cards', () => {
     await expect(icmp.locator('.nd-health-metric')).toHaveCount(1);
     await expect(icmp.locator('canvas')).toHaveCount(1);
     await expect(icmp.getByRole('group', { name: 'Time range' })).toHaveCount(1);
+  });
+});
+
+// ── ADR-046 Inc.9 — a Cisco wireless controller files its readings under Cisco's sets ─────────────
+//
+// The screen that prompted it: a Cisco WLC whose Overview said "Huawei WLAN SSIDs (AC)", because
+// the catalog files a name under the first built-in set that declares it and the Huawei sets come
+// first. The inventory now names the set each metric is collected through, and that is what the
+// heading shows. Every name below is one the Huawei sets also declare, except the two only Cisco
+// publishes — so a regression to the catalog's filing turns these headings Huawei, not empty.
+
+const CISCO_AP_SET = 'Cisco WLAN access points (WLC)';
+const CISCO_SSID_SET = 'Cisco WLAN SSIDs (WLC)';
+const CISCO_RADIO_SET = 'Cisco WLAN radios (WLC)';
+
+function ciscoControllerInventory(): Json {
+  const m = (metric: string, template: string, dimension = 'none') => ({
+    metric,
+    metric_kind: 'gauge',
+    dimension,
+    status: 'ok',
+    series_count: 1,
+    template,
+  });
+  return [
+    // Claimed by Device health's two wireless cards.
+    m('wlan_controller_aps_joined', CISCO_AP_SET),
+    m('wlan_controller_clients', CISCO_SSID_SET),
+    m('wlan_ap_walk_complete', CISCO_AP_SET),
+    m('wlan_controller_aps_missing', CISCO_AP_SET),
+    m('wlan_controller_ap_capacity', CISCO_AP_SET),
+    m('wlan_ssid_walk_complete', CISCO_SSID_SET),
+    m('wlan_controller_ssid_count', CISCO_SSID_SET),
+    m('wlan_ssid_clients', CISCO_SSID_SET, 'entity'),
+    m('wlan_controller_clients_2g4', CISCO_RADIO_SET),
+    m('wlan_controller_clients_5g', CISCO_RADIO_SET),
+    m('wlan_controller_clients_6g', CISCO_RADIO_SET),
+  ] as unknown as Json;
+}
+
+test.describe('node Overview on a Cisco wireless controller', () => {
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/nodes/{node_id}': () => deviceNode(NODE_ID),
+        '/api/v1/nodes/{node_id}/metrics': () => ciscoControllerInventory(),
+        '/api/v1/nodes/{node_id}/metrics/{metric}': () => readingBody(),
+        '/api/v1/nodes/{node_id}/metrics/{metric}/range': (url: URL) => rangeBody(url),
+      },
+    },
+  });
+
+  test('files every reading under the Cisco set it came from, and none under Huawei', async ({ page, errors }) => {
+    await openOverview(page);
+    const set = (name: string) => page.locator(`section[data-set="${name}"]`);
+    await expect(set(CISCO_AP_SET).locator('.nd-health-metric')).toHaveCount(3);
+    await expect(set(CISCO_SSID_SET).locator('.nd-health-metric')).toHaveCount(3);
+    await expect(set(CISCO_RADIO_SET).locator('.nd-health-metric')).toHaveCount(3);
+    await expect(set(CISCO_SSID_SET).getByText('wlan_controller_ssid_count', { exact: true })).toBeVisible();
+    await expect(page.locator('section[data-set^="Huawei"]')).toHaveCount(0);
+    // The joined count and the client total are Device health's, drawn once, above.
+    await expect(genericSections(page).getByText('wlan_controller_aps_joined', { exact: true })).toHaveCount(0);
+    await expect(genericSections(page).getByText('wlan_controller_clients', { exact: true })).toHaveCount(0);
+    expect(errors.uncaught).toEqual([]);
+    expect(errors.logged).toEqual([]);
   });
 });

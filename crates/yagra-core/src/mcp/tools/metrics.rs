@@ -697,6 +697,7 @@ mod tests {
             dimension: MetricDimension::Interface,
             status: crate::api::metrics::MetricStatus::Ok,
             series_count: 16,
+            template: None,
         };
         let msg = no_node_level_answer("if_hc_in_octets", &iface);
         assert!(msg.contains("get_interface_series"), "{msg}");
@@ -726,6 +727,7 @@ mod tests {
             dimension: MetricDimension::Entity,
             status: crate::api::metrics::MetricStatus::Ok,
             series_count: 4,
+            template: None,
         };
         assert_eq!(read_for_row(None, Some(&counter)), NodeRead::Refuse);
         assert_eq!(read_for_row(Some(7), Some(&counter)), NodeRead::Direct);

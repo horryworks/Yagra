@@ -112,13 +112,22 @@ pub const WLAN_SSID_ROW_METRICS: [&str; 7] = [
 /// and SSID templates both carry that kind, and one publishes a node-level flag while the other
 /// publishes a row per SSID. This list is what tells them apart, and it is read by the API edge and
 /// by the catalogue generator so the screen and `/mcp` cannot disagree about which it is.
-pub const WLAN_NODE_LEVEL_METRICS: [&str; 6] = [
+///
+/// ⚠️ **A new controller-wide name on a WLAN template belongs here, and nothing else says so.** Left
+/// out, it is reported as `entity` — "read the node-wide max across table rows" — for a value that
+/// has no rows. A test in `collection.rs` checks every WLAN item is in exactly one of this list,
+/// [`WLAN_SSID_ROW_METRICS`] and [`WLAN_RADIO_METRICS`].
+pub const WLAN_NODE_LEVEL_METRICS: [&str; 10] = [
     METRIC_WLAN_AP_WALK_COMPLETE,
     METRIC_WLAN_SSID_WALK_COMPLETE,
     METRIC_WLAN_CONTROLLER_SSID_COUNT,
     METRIC_WLAN_CONTROLLER_APS_JOINED,
     METRIC_WLAN_CONTROLLER_CLIENTS,
     METRIC_WLAN_CONTROLLER_APS_MISSING,
+    METRIC_WLAN_CONTROLLER_CLIENTS_2G4,
+    METRIC_WLAN_CONTROLLER_CLIENTS_5G,
+    METRIC_WLAN_CONTROLLER_CLIENTS_6G,
+    METRIC_WLAN_CONTROLLER_AP_CAPACITY,
 ];
 
 /// How many of the APs this controller is responsible for are not associated to it right now
@@ -138,8 +147,28 @@ pub const METRIC_WLAN_CONTROLLER_APS_MISSING: &str = "wlan_controller_aps_missin
 /// associated rows of its AP table instead (ADR-064 増分 F, F8). Either way one number per controller.
 pub const METRIC_WLAN_CONTROLLER_APS_JOINED: &str = "wlan_controller_aps_joined";
 /// Wireless clients online through the controller. Huawei: a scalar. Cisco: the sum of its SSID
-/// table's client counts, published only when that walk heard every column out (ADR-064 増分 F, F8).
+/// table's client counts **over every WLAN row, named or not**, published only when that walk heard
+/// every column out (ADR-064 増分 F, F8, and 増分 H, H2).
 pub const METRIC_WLAN_CONTROLLER_CLIENTS: &str = "wlan_controller_clients";
+/// Wireless clients online through the controller over 2.4 GHz. Huawei: a scalar of its own. Cisco:
+/// the sum of every radio's client count in that band, from the radio walk (ADR-064 増分 H, H4) —
+/// radios whose band could not be decided are left out, so the three bands need not add up to
+/// [`METRIC_WLAN_CONTROLLER_CLIENTS`].
+pub const METRIC_WLAN_CONTROLLER_CLIENTS_2G4: &str = "wlan_controller_clients_2g4";
+/// Wireless clients online through the controller over 5 GHz. See
+/// [`METRIC_WLAN_CONTROLLER_CLIENTS_2G4`].
+pub const METRIC_WLAN_CONTROLLER_CLIENTS_5G: &str = "wlan_controller_clients_5g";
+/// Wireless clients online through the controller over 6 GHz. See
+/// [`METRIC_WLAN_CONTROLLER_CLIENTS_2G4`].
+pub const METRIC_WLAN_CONTROLLER_CLIENTS_6G: &str = "wlan_controller_clients_6g";
+/// The most access points the controller's **platform** supports (ADR-064 増分 H, H5) — a Cisco
+/// AireOS `agentInventoryMaxNumberOfAPsSupported` or a 9800 `cLApGlobalMaxApsSupported`.
+///
+/// 🚨 **Not Huawei's `wlan_controller_ap_license`, and deliberately not that name** (user decision,
+/// 2026-09-22): a licence is what was bought, this is what the model can hold. An AIR-CT3504 says
+/// 150 whatever licences it carries. One name for both would put two different numbers in one
+/// column across a fleet and let a comparison between them look meaningful.
+pub const METRIC_WLAN_CONTROLLER_AP_CAPACITY: &str = "wlan_controller_ap_capacity";
 
 /// One radio of an access point, as a slot on that AP node (ADR-064 R6/R9).
 ///
@@ -202,6 +231,16 @@ impl WlanBand {
             Self::Band2G4 => 1,
             Self::Band5G => 2,
             Self::Band6G => 3,
+        }
+    }
+
+    /// The controller-wide client total for this band (ADR-064 増分 H, H4).
+    #[must_use]
+    pub const fn controller_clients_metric(self) -> &'static str {
+        match self {
+            Self::Band2G4 => METRIC_WLAN_CONTROLLER_CLIENTS_2G4,
+            Self::Band5G => METRIC_WLAN_CONTROLLER_CLIENTS_5G,
+            Self::Band6G => METRIC_WLAN_CONTROLLER_CLIENTS_6G,
         }
     }
 
@@ -540,7 +579,8 @@ impl WlanFlavor {
     /// it out of the index rather than walking for it.
     ///
     /// Cisco: `bsnDot11EssEntry`, `INDEX { bsnDot11EssIndex }` — a WLAN number, with the SSID name in
-    /// column `.2`.
+    /// column `.2`, or — on a controller that does not answer `.2`, like the lab's 9800 recording —
+    /// in CISCO-LWAPP-WLAN-MIB's `cLWlanSsid`, indexed by the same WLAN number (ADR-064 増分 H, H1).
     #[must_use]
     pub const fn ssid_root_oid(self) -> &'static str {
         match self {

@@ -10,6 +10,16 @@
 
 ## Unreleased
 
+### New Features
+
+- **Cisco wireless controllers show clients per band and how many access points the platform supports** (ADR-064 increment H). A Cisco controller now publishes `wlan_controller_clients_2g4`, `wlan_controller_clients_5g` and `wlan_controller_clients_6g` — the clients on every radio in each band, added up — beside the totals it already had, and `wlan_controller_ap_capacity`, the most access points the model supports (150 on an AIR-CT3504). The capacity is the platform's ceiling, not the licence count, and has its own name for that reason; AireOS and the Catalyst 9800 keep it in different objects and Yagra reads whichever answers. A radio whose band cannot be told is left out, so the three bands need not add up to the overall client count. Other Huawei controller readings — configured APs, the share of APs working normally, per-SSID AP counts and traffic — have no Cisco equivalent and are not shown.
+- **`GET /api/v1/nodes/{node_id}/metrics` and MCP `list_node_metrics` name the metric set each metric comes from** in a new optional `template` field. It is absent for a node's own collection items and for metrics no collection item produces.
+
+### Bug Fixes
+
+- **A Cisco wireless controller's Overview no longer files its readings under Huawei headings** (ADR-046 increment 9). Headings came from a catalogue that names a metric by the first built-in set declaring it, and the Huawei sets come first, so a Cisco controller showed "Huawei WLAN SSIDs (AC)" and similar. Each heading is now the set the node actually collects the metric through, and a metric from a set an operator made appears under that set's name rather than under Other. When two sets on one profile declare the same metric, the one whose name sorts first is now always the one collected — it used to depend on row order.
+- **A Catalyst 9800 shows its SSIDs and its client count** (ADR-064 increment H). The 9800 does not answer the SSID table's name column, so it had no SSIDs, an SSID count of 0 and no controller client count. The name is now read from the WLAN table (CISCO-LWAPP-WLAN-MIB) when the SSID table has none, and the controller's client count includes a WLAN whose name could not be read. While such a WLAN exists, the SSID count is not published rather than published short.
+
 ## v0.3.29 — Cisco wireless controllers (AireOS and the 9800) list and import their access points, an access point a Cisco controller stops listing is down and the controller counts the missing ones, AireOS controllers show their model and serial number, an access point its controller stops reporting reads unknown rather than its last OK
 
 ### Breaking changes

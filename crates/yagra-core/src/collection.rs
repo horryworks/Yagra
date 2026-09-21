@@ -109,27 +109,37 @@ impl CollectionRepo {
 
         let mut out: Vec<ScopedCollectionItem> = Vec::new();
 
-        // Profile scope: metrics from every template attached to the node's profile.
+        // Profile scope: metrics from every template attached to the node's profile, each tagged
+        // with its template's name — the heading the node Overview files it under (ADR-046 Inc.9).
+        //
+        // ⚠️ The ORDER BY is load-bearing. Two templates on one profile may declare the same metric
+        // name, and among items at one level the first row wins (`resolve_scoped`). Unordered, the
+        // winner — the OID that is polled, and the heading — was whatever order the planner chose,
+        // and the scheduler and the inventory read in different requests could disagree.
         if let Some(profile) = profile_id {
             let rows = sqlx::query(
-                "SELECT cti.metric_name, cti.oid, cti.collection, cti.metric_kind \
+                "SELECT cti.metric_name, cti.oid, cti.collection, cti.metric_kind, \
+                        ct.name AS template_name \
                  FROM profile_collection_templates pct \
+                 JOIN collection_templates ct ON ct.id = pct.template_id \
                  JOIN collection_template_items cti ON cti.template_id = pct.template_id \
-                 WHERE pct.profile_id = $1 AND cti.enabled = true",
+                 WHERE pct.profile_id = $1 AND cti.enabled = true \
+                 ORDER BY ct.name, cti.metric_name",
             )
             .bind(profile)
             .fetch_all(&self.pool)
             .await?;
             for row in rows {
-                out.push(ScopedCollectionItem {
-                    level: ScopeLevel::Profile,
-                    item: to_item(
+                out.push(ScopedCollectionItem::from_template(
+                    ScopeLevel::Profile,
+                    to_item(
                         row.try_get("metric_name")?,
                         row.try_get("oid")?,
                         row.try_get("collection")?,
                         row.try_get("metric_kind")?,
                     ),
-                });
+                    row.try_get("template_name")?,
+                ));
             }
         }
 
@@ -142,15 +152,15 @@ impl CollectionRepo {
         .fetch_all(&self.pool)
         .await?;
         for row in rows {
-            out.push(ScopedCollectionItem {
-                level: ScopeLevel::Node,
-                item: to_item(
+            out.push(ScopedCollectionItem::new(
+                ScopeLevel::Node,
+                to_item(
                     row.try_get("metric_name")?,
                     row.try_get("oid")?,
                     row.try_get("collection")?,
                     row.try_get("metric_kind")?,
                 ),
-            });
+            ));
         }
         Ok(out)
     }
@@ -757,6 +767,10 @@ mod tests {
         // so a read that returned the right metrics under the wrong level would resolve backwards.
         assert_eq!(got[1].item.kind, CollectionKind::Table);
         assert_eq!(got[1].item.metric_kind, MetricKind::Counter);
+        // A profile item names the set it came from — the node Overview's heading for it — and a
+        // node's own item names none (ADR-046 Inc.9).
+        assert_eq!(got[0].template, None);
+        assert_eq!(got[1].template.as_deref(), Some("Interfaces"));
 
         // With no profile the template half is not queried at all — a node with no profile
         // collects only what was put on it.
@@ -785,6 +799,50 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(ScopeLevel::Profile, "if_in_octets")]
         );
+    }
+
+    /// Two sets on one profile that declare the same name: the winner is decided by the rows'
+    /// order, so the read must order them — by set name, never by insertion or by the planner.
+    /// Created and attached Zeta-first so that an unordered read has a real chance to disagree.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn two_sets_declaring_one_name_resolve_the_same_way_every_time(pool: sqlx::PgPool) {
+        let repo = CollectionRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "wlc-01", 21, None).await;
+        let profile = crate::pgtest::profile(&pool, "Wireless controller").await;
+        let mut ids = Vec::new();
+        for (name, oid) in [
+            ("Zeta set", "1.3.6.1.4.1.9.9"),
+            ("Alpha set", "1.3.6.1.4.1.9.1"),
+        ] {
+            let id = match repo.create_template(name, None).await.expect("template") {
+                CreateTemplateOutcome::Created(id) => id,
+                CreateTemplateOutcome::NameTaken => panic!("fresh database"),
+            };
+            repo.create_template_item(id, "shared_total", oid, "scalar", "gauge", true)
+                .await
+                .expect("item");
+            ids.push(id);
+        }
+        repo.set_profile_templates(profile, &ids)
+            .await
+            .expect("attach");
+
+        let rows = repo
+            .list_items_for_node(node, Some(profile))
+            .await
+            .expect("for node");
+        assert_eq!(
+            rows.iter()
+                .map(|s| s.template.as_deref().unwrap_or("-"))
+                .collect::<Vec<_>>(),
+            ["Alpha set", "Zeta set"],
+            "rows are ordered by set name"
+        );
+        let won = yagra_common::resolve_scoped(&rows);
+        assert_eq!(won.len(), 1);
+        assert_eq!(won[0].template.as_deref(), Some("Alpha set"));
+        assert_eq!(won[0].item.oid, "1.3.6.1.4.1.9.1");
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

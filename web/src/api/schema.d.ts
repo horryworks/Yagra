@@ -9796,6 +9796,12 @@ export interface components {
              */
             series_count: number;
             status: components["schemas"]["MetricStatus"];
+            /**
+             * @description The metric set (collection template) this node collects the metric through, by its display
+             *     name — what the node Overview files it under. Absent for the node's own collection items
+             *     and for metrics no collection item produces.
+             */
+            template?: string | null;
         };
         /** @description One resolved node id → display name (unresolved ids are omitted; the caller keeps the raw id). */
         NodeNameEntry: {

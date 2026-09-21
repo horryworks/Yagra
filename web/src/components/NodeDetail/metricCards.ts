@@ -315,21 +315,33 @@ export interface OverviewSection {
 }
 
 /**
- * Where one metric is filed, from the generated catalog and nothing else.
+ * Where one metric is filed.
  *
- * A check goes under its probe; a collected metric under its set — except the vendor-less
- * standard set, which is folded into the SNMP section beside the `snmp_*` checks, because
- * sysUpTime and "did the agent answer" are one story to an operator. A name the catalog has never
- * heard of is an operator's own collection item, and says so. Never from the name's prefix (Inc.6
- * 決定 J), and never from `GET /api/v1/mib-catalog`, which needs ManageConfig and would make the
- * sectioning vanish for a viewer — the hole Device health fell into in Inc.1.
+ * A collected metric goes under the set **this node** collects it through — the entry's
+ * `template`, which the server resolves with the same rule that decides which OID is polled
+ * (ADR-046 Inc.9). The generated catalog can only name the *first* built-in set that declares a
+ * name, and a name Huawei and Cisco share went under "Huawei WLAN SSIDs (AC)" on a Cisco
+ * controller. The vendor-less standard set is folded into the SNMP section beside the `snmp_*`
+ * checks, because sysUpTime and "did the agent answer" are one story to an operator.
+ *
+ * With no `template` — a check, a node's own item, a series nothing collects any more, or a core
+ * older than Inc.9 — it is filed from the generated catalog as before: a check under its probe, a
+ * collected name under its set, and a name the catalog has never heard of under Other. Never from
+ * the name's prefix (Inc.6 決定 J), and never from `GET /api/v1/mib-catalog`, which needs
+ * ManageConfig and would make the sectioning vanish for a viewer — the hole Device health fell into
+ * in Inc.1.
  */
-function sectionOf(metric: string): OverviewSectionKey {
-  const row = builtinMetric(metric);
+export function sectionOf(entry: NodeMetricEntry): OverviewSectionKey {
+  if (entry.template) return setSection(entry.template);
+  const row = builtinMetric(entry.metric);
   if (!row) return { kind: 'other' };
   if (row.source === 'check') return { kind: 'family', family: row.family };
-  if (row.family === STANDARD_SNMP_TEMPLATE) return { kind: 'family', family: 'snmp' };
-  return { kind: 'set', name: row.family };
+  return setSection(row.family);
+}
+
+/** A metric set's heading — the standard set's being the SNMP section's. */
+function setSection(name: string): OverviewSectionKey {
+  return name === STANDARD_SNMP_TEMPLATE ? { kind: 'family', family: 'snmp' } : { kind: 'set', name };
 }
 
 function sectionId(key: OverviewSectionKey): string {
@@ -381,7 +393,7 @@ export function overviewSections(
     // and per-interface metrics — kept so that widening *that* predicate cannot silently produce a
     // card with no query behind it, which is the failure this file's whole shape exists to prevent.
     if (card.chart.kind === 'none' || card.chart.kind === 'interfaces') continue;
-    const key = sectionOf(e.metric);
+    const key = sectionOf(e);
     const id = sectionId(key);
     const section = groups.get(id) ?? { key, cards: [] };
     section.cards.push(card);

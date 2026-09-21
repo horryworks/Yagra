@@ -540,8 +540,11 @@ impl YagraMcp {
                        mode=latest lists every row with its name), and `status` (ok = configured and \
                        flowing; no_data = configured but nothing has arrived; unconfigured = data \
                        exists with no collection item, which is normal for reachability, URL/DNS \
-                       monitors and neighbour counts). `within_secs` sets how far back a metric \
-                       may have last been seen and still count as having data (default 6 hours)."
+                       monitors and neighbour counts). A configured metric that comes from a \
+                       metric set also names it in `template` (e.g. `Cisco WLAN SSIDs (WLC)`), \
+                       which says which device family's reading it is. `within_secs` sets how far \
+                       back a metric may have last been seen and still count as having data \
+                       (default 6 hours)."
     )]
     async fn list_node_metrics(
         &self,

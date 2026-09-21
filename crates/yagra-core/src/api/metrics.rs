@@ -32,8 +32,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_common::{
-    CollectionItem, IfIndex, MetricKind, NodeId, SeriesKey, METRIC_IF_RX_POWER_DBM,
-    METRIC_IF_TX_POWER_DBM,
+    CollectionItem, IfIndex, MetricKind, NodeId, ScopedCollectionItem, SeriesKey,
+    METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
 };
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
@@ -127,6 +127,11 @@ pub(crate) struct NodeMetricEntry {
     pub status: MetricStatus,
     /// How many series share this name on this node — the fan-out behind one entry.
     pub series_count: u32,
+    /// The metric set (collection template) this node collects the metric through, by its display
+    /// name — what the node Overview files it under. Absent for the node's own collection items
+    /// and for metrics no collection item produces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 /// Fallback window for the inventory: how far back a metric may have last been seen and still count
@@ -154,11 +159,11 @@ pub(super) struct InventoryQuery {
 /// reach the TSDB only by way of a collection item's `metric_kind` — so a metric with no collection
 /// item is a gauge. [`tests::counters_only_ever_arrive_through_a_collection_item`] fails if that
 /// stops being true, because the fallback would then silently start plotting raw counters.
-fn resolve_metric_kind(metric: &str, configured: &[CollectionItem]) -> MetricKind {
+fn resolve_metric_kind(metric: &str, configured: &[ScopedCollectionItem]) -> MetricKind {
     configured
         .iter()
-        .find(|i| i.metric_name == metric)
-        .map(|i| i.metric_kind)
+        .find(|s| s.item.metric_name == metric)
+        .map(|s| s.item.metric_kind)
         .or_else(|| yagra_common::builtin_metric_kind(metric))
         .unwrap_or(MetricKind::Gauge)
 }
@@ -172,8 +177,12 @@ fn resolve_metric_kind(metric: &str, configured: &[CollectionItem]) -> MetricKin
 /// A **configured** metric's dimension comes from its collection item (`dimension_of_item`), never
 /// from the row keys its series happen to carry. `interfaces` — the node's known ifindexes — is
 /// therefore only consulted for the `Unconfigured` rows, where there is no item to ask.
+///
+/// `configured` is the node's **resolved** set — one winner per metric name, as
+/// `yagra_common::resolve_scoped` returns it — so the set each entry names is the set whose OID is
+/// actually polled (ADR-046 Inc.9).
 fn join_inventory(
-    configured: &[CollectionItem],
+    configured: &[ScopedCollectionItem],
     series: &[NodeSeries],
     interfaces: &[i32],
 ) -> Vec<NodeMetricEntry> {
@@ -184,7 +193,8 @@ fn join_inventory(
     // BTreeMap so the two sources merge without a second pass and the result is name-ordered.
     let mut out: std::collections::BTreeMap<&str, NodeMetricEntry> =
         std::collections::BTreeMap::new();
-    for item in configured {
+    for scoped in configured {
+        let item = &scoped.item;
         let name = item.metric_name.as_str();
         let found = by_name.get(name);
         out.insert(
@@ -202,6 +212,7 @@ fn join_inventory(
                     MetricStatus::NoData
                 },
                 series_count: found.map_or(0, |s| s.series_count),
+                template: scoped.template.clone(),
             },
         );
     }
@@ -213,6 +224,8 @@ fn join_inventory(
                 dimension: dimension_of(s, &known),
                 status: MetricStatus::Unconfigured,
                 series_count: s.series_count,
+                // Nothing collects it, so no set does either.
+                template: None,
             });
     }
     out.into_values().collect()
@@ -277,6 +290,10 @@ fn dimension_of(s: &NodeSeries, known: &std::collections::BTreeSet<i32>) -> Metr
 // kinds and status, never an OID, an item id or a scope — and withholding the names would protect
 // nothing anyway, since `GET /nodes/:node_id/metrics/:metric` already serves any name a viewer asks
 // for. What `collection.rs`'s ManageConfig guard protects is the OIDs and the ability to edit them.
+// Since ADR-046 Inc.9 it also carries the *name* of the metric set each metric comes from, which is
+// what the Overview files it under. That is a label an operator chose, not an OID or a scope, and a
+// viewer is shown it as a heading either way; the built-in names were already public in the bundled
+// catalog. Withholding it is what made a Cisco controller's sections read "Huawei …".
 /// Every metric this node is configured to collect or has data for, with the status of each.
 ///
 /// Answers what there is to look at for a node, including metrics that come from its checks rather
@@ -321,13 +338,13 @@ pub(crate) async fn node_metric_inventory(
         .unwrap_or(DEFAULT_INVENTORY_WINDOW_SECS)
         .clamp(60, MAX_INVENTORY_WINDOW_SECS);
     // The resolved view, not the node's own overrides: what the poller actually collects is what
-    // the operator is asking about. This is also what 404s an unknown node id.
-    let configured = match super::collection::node_collection(admin, node_id, true).await? {
-        super::collection::NodeCollection::Resolved(items) => items,
-        // Unreachable — `node_collection(_, _, true)` always takes the resolved arm — but the union
-        // is a type, so the impossible branch is stated rather than unwrapped.
-        super::collection::NodeCollection::Stored(_) => Vec::new(),
-    };
+    // the operator is asking about. This is also what 404s an unknown node id. Resolved here with
+    // the scheduler's one rule, keeping each winner's set name for the Overview (ADR-046 Inc.9).
+    let scoped = super::collection::resolved_node_items(admin, node_id).await?;
+    let configured: Vec<ScopedCollectionItem> = yagra_common::resolve_scoped(&scoped)
+        .into_iter()
+        .cloned()
+        .collect();
     let interfaces = admin
         .repo
         .list_interfaces(node_id)
@@ -1495,6 +1512,45 @@ mod tests {
             .unwrap_or_else(|| panic!("{metric} missing from {rows:?}"))
     }
 
+    /// Items as a node's own overrides — no metric set behind them.
+    fn scoped(items: &[CollectionItem]) -> Vec<ScopedCollectionItem> {
+        items
+            .iter()
+            .map(|i| ScopedCollectionItem::new(yagra_common::ScopeLevel::Node, i.clone()))
+            .collect()
+    }
+
+    /// The set an entry names is the set its winner came from; a node's own item and an
+    /// unconfigured series name none (ADR-046 Inc.9). The Overview files the entry under that name,
+    /// which is what stops a metric Huawei and Cisco share reading "Huawei …" on a Cisco node.
+    #[test]
+    fn each_configured_entry_names_the_set_it_is_collected_through() {
+        let configured = [
+            ScopedCollectionItem::from_template(
+                yagra_common::ScopeLevel::Profile,
+                scalar_item("wlan_controller_clients"),
+                "Cisco WLAN SSIDs (WLC)".to_owned(),
+            ),
+            ScopedCollectionItem::new(yagra_common::ScopeLevel::Node, scalar_item("mine")),
+        ];
+        let series = [
+            have("wlan_controller_clients", &[], 1),
+            have("icmp_rtt_ms", &[], 1),
+        ];
+        let rows = join_inventory(&configured, &series, &[]);
+        assert_eq!(
+            by_name(&rows, "wlan_controller_clients")
+                .template
+                .as_deref(),
+            Some("Cisco WLAN SSIDs (WLC)")
+        );
+        assert_eq!(by_name(&rows, "mine").template, None);
+        assert_eq!(by_name(&rows, "icmp_rtt_ms").template, None);
+        // Absent rather than null on the wire, so an older WebUI sees exactly what it used to.
+        let json = serde_json::to_value(by_name(&rows, "mine")).expect("serialize");
+        assert!(json.get("template").is_none(), "{json}");
+    }
+
     #[test]
     fn the_inventory_separates_configured_no_data_from_data_with_no_config() {
         // The whole point of the join. Before it, "no metrics" meant three different things and the
@@ -1504,7 +1560,7 @@ mod tests {
             have("configured_and_flowing", &[], 1),
             have("snmp_neighbor_count", &[], 1),
         ];
-        let rows = join_inventory(&configured, &series, &[]);
+        let rows = join_inventory(&scoped(&configured), &series, &[]);
         assert_eq!(rows.len(), 3);
         assert_eq!(
             by_name(&rows, "configured_and_flowing").status,
@@ -1589,7 +1645,7 @@ mod tests {
             have("cisco_cpu_5min", &known, 2),
             have("if_hc_in_octets", &known, 2),
         ];
-        let rows = join_inventory(&[cpu, octets], &series, &known);
+        let rows = join_inventory(&scoped(&[cpu, octets]), &series, &known);
         assert_eq!(
             by_name(&rows, "cisco_cpu_5min").dimension,
             MetricDimension::Entity,
@@ -1682,7 +1738,7 @@ mod tests {
                 MetricKind::Gauge,
             ),
         ];
-        let rows = join_inventory(&configured, &[], &[]);
+        let rows = join_inventory(&scoped(&configured), &[], &[]);
         assert_eq!(
             by_name(&rows, "scalar_pending").dimension,
             MetricDimension::None
@@ -1716,7 +1772,11 @@ mod tests {
             yagra_common::CollectionKind::Scalar,
             MetricKind::Gauge,
         )];
-        let rows = join_inventory(&configured, &[have("if_hc_in_octets", &[], 1)], &[]);
+        let rows = join_inventory(
+            &scoped(&configured),
+            &[have("if_hc_in_octets", &[], 1)],
+            &[],
+        );
         assert_eq!(rows[0].metric_kind, MetricKind::Gauge);
     }
 

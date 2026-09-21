@@ -18,8 +18,9 @@
 //! Two dialects: Huawei's HUAWEI-WLAN MIBs, and Cisco's AIRESPACE-WIRELESS-MIB, which AireOS and
 //! the Catalyst 9800 both answer (ADR-064 増分 F). They share the MAC-indexed shape and the helpers;
 //! what differs is decoded per dialect — the run-state words, which way round a radio's up/down
-//! numbers run, where an SSID's name is (Huawei's index, Cisco's column), and where an AP's
-//! clients come from (Huawei's AP table, Cisco's radios).
+//! numbers run, where an SSID's name is (Huawei's index, Cisco's column — or, on a 9800, a second
+//! table's), where an AP's clients come from (Huawei's AP table, Cisco's radios), and where the
+//! controller's own totals come from (Huawei's scalars, Cisco's walks).
 //!
 //! ⚠️ **What a standby controller answers is not filtered here.** Its APs read `standby` with CPU,
 //! memory and radio values of 0 — measured — and the inventory reports that faithfully as
@@ -207,6 +208,44 @@ pub fn counts_controller_totals(flavor: WlanFlavor) -> bool {
         WlanFlavor::Huawei => false,
         WlanFlavor::CiscoAirespace => true,
     }
+}
+
+/// The scalars that say how many APs the controller's **platform** supports (ADR-064 増分 H, H5),
+/// in the order they are preferred. Empty for a dialect that says it elsewhere.
+///
+/// Cisco keeps it in two places and each platform answers only one: AireOS the AIRESPACE-SWITCHING
+/// `agentInventoryMaxNumberOfAPsSupported` (150 on the PoC's AIR-CT3504), the 9800 CISCO-LWAPP-AP's
+/// `cLApGlobalMaxApsSupported` (250 on the lab's recording). One template item cannot hold two OIDs,
+/// so both are asked in one GET and whichever answers is the reading. A Huawei AC's licence is a
+/// different number with a different name, read by its own template.
+#[must_use]
+pub fn capacity_oids(flavor: WlanFlavor) -> &'static [&'static str] {
+    match flavor {
+        WlanFlavor::Huawei => &[],
+        WlanFlavor::CiscoAirespace => &[
+            "1.3.6.1.4.1.14179.1.1.1.18.0",
+            "1.3.6.1.4.1.9.9.513.1.3.28.0",
+        ],
+    }
+}
+
+/// The platform's AP capacity among a GET's answers: the first of [`capacity_oids`] that answered
+/// a real number. 0 is refused — a controller that supports no APs is not a controller, so a 0 is
+/// an unimplemented object answering its default, and it would draw a capacity every AP exceeds.
+#[must_use]
+pub fn ap_capacity(flavor: WlanFlavor, answered: &[yagra_transport::SnmpSample]) -> Option<u32> {
+    capacity_oids(flavor).iter().find_map(|oid| {
+        answered
+            .iter()
+            .find(|s| s.oid.trim_start_matches('.') == *oid)
+            .map(|s| s.value)
+            .filter(|v| v.is_finite() && *v >= 1.0 && *v <= f64::from(u32::MAX))
+            .map(|v| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let n = v as u32;
+                n
+            })
+    })
 }
 
 /// How many APs the required walk's rows say are associated — the controller's joined count, taken
@@ -493,6 +532,35 @@ pub fn radios(
     }
 }
 
+/// The controller's clients on each band, summed over every radio the radio walk returned
+/// (ADR-064 増分 H, H4) — all of them, before the inventory is cut to its cap, as [`joined_count`]
+/// counts.
+///
+/// Every band is present, 0 where no radio of that band carried a client, so a controller with no
+/// 6 GHz radio reads 0 on 6 GHz rather than a gap — the same statement a Huawei AC's own scalar
+/// makes. `None` when radios were read and **not one** answered a client count: a column the
+/// controller does not implement is no reading, never "nobody is connected".
+///
+/// ⚠️ A radio whose band could not be decided is left out (as [`radios`] drops it), and so are an
+/// AP's radios past [`RADIOS_PER_AP_MAX`], so the three need not add up to the SSID table's total.
+/// On the lab's 9800 recording they do not: 18 + 20 + 0 against 41.
+#[must_use]
+pub fn clients_per_band(
+    flavor: WlanFlavor,
+    radio_rows: &[SnmpInstanceRow],
+) -> Option<BTreeMap<WlanBand, u32>> {
+    let mut per_band: BTreeMap<WlanBand, u32> = WlanBand::ALL.iter().map(|b| (*b, 0)).collect();
+    let mut answered = false;
+    for radio in radios(flavor, radio_rows).values().flatten() {
+        if let Some(n) = radio.clients {
+            answered = true;
+            let total = per_band.entry(radio.band).or_insert(0);
+            *total = total.saturating_add(n);
+        }
+    }
+    answered.then_some(per_band)
+}
+
 fn cisco_radios(rows: &[SnmpInstanceRow]) -> BTreeMap<ApMac, Vec<WlanRadioObservation>> {
     let field_of: BTreeMap<&str, CiscoRadioField> = CISCO_RADIO_COLUMNS.iter().copied().collect();
     let mut cells: BTreeMap<(ApMac, u32), Vec<(CiscoRadioField, &SnmpValue)>> = BTreeMap::new();
@@ -729,18 +797,31 @@ impl WlanSsidReading {
     }
 }
 
-/// Cisco `bsnDot11EssEntry` columns read (ADR-064 増分 F, F7): the SSID's name, which this table
-/// carries as a column — its index is a WLAN number — and the clients on it. The table has no band
-/// split, AP count or bytes.
-const CISCO_SSID_COLUMNS: [(u32, CiscoSsidField); 2] =
-    [(2, CiscoSsidField::Name), (38, CiscoSsidField::Clients)];
+/// Cisco SSID columns read, as `(full column OID, field)` (ADR-064 増分 F, F7, and 増分 H, H1): the
+/// SSID's name and the clients on it from `bsnDot11EssEntry` — its index is a WLAN number — and a
+/// second name from CISCO-LWAPP-WLAN-MIB's `cLWlanSsid`, indexed by the same WLAN number. The
+/// table has no band split, AP count or bytes.
+///
+/// 🚨 **The second name is what the 9800 has.** The lab's 9800 recording answers `.38` for all eight
+/// of its WLANs and `.2` for none, so with `.2` alone it had no SSIDs, an SSID count of 0 and no
+/// controller client count — and the check that shipped 増分 F looked only at the AP list. AireOS
+/// answers both, identically (the PoC's `office24` / `office5`). A column a controller does not
+/// implement is still an answered column, so asking for both never costs a complete walk.
+const CISCO_SSID_COLUMNS: [(&str, CiscoSsidField); 3] = [
+    ("1.3.6.1.4.1.14179.2.1.1.1.2", CiscoSsidField::Name),
+    ("1.3.6.1.4.1.14179.2.1.1.1.38", CiscoSsidField::Clients),
+    ("1.3.6.1.4.1.9.9.512.1.1.1.1.4", CiscoSsidField::WlanName),
+];
 
 /// What a Cisco SSID column contributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CiscoSsidField {
+    /// `bsnDot11EssSsid`, preferred when it answers.
     Name,
     /// `bsnDot11EssNumberOfMobileStations` — `Counter32` in the MIB, a current count in practice.
     Clients,
+    /// `cLWlanSsid` — the name when `.2` does not answer.
+    WlanName,
 }
 
 /// The SSID column OIDs to walk for a dialect.
@@ -753,7 +834,7 @@ pub fn ssid_columns(flavor: WlanFlavor) -> Vec<String> {
             .collect(),
         WlanFlavor::CiscoAirespace => CISCO_SSID_COLUMNS
             .iter()
-            .map(|(n, _)| format!("{}.{n}", flavor.ssid_root_oid()))
+            .map(|(oid, _)| (*oid).to_owned())
             .collect(),
     }
 }
@@ -764,53 +845,114 @@ pub fn ssid_walk_row_budget(flavor: WlanFlavor) -> usize {
     ssid_columns(flavor).len() * WLAN_SSID_MAX * 2
 }
 
-/// The SSIDs in a dialect's rows, in row-key order and bounded to [`WLAN_SSID_MAX`].
+/// One controller's SSID table: the SSIDs, and what only the whole table can say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsidTable {
+    /// The SSIDs, in row-key order and bounded to [`WLAN_SSID_MAX`].
+    pub readings: Vec<WlanSsidReading>,
+    /// The clients the table carries altogether, or `None` when no row answered a count.
+    ///
+    /// Cisco: the sum over **every WLAN row**, named or not (ADR-064 増分 H, H2) — a client on a
+    /// WLAN whose name could not be read is still a client of this controller. Huawei: the sum over
+    /// the SSIDs, whose names are their index and so never missing.
+    pub clients_total: Option<u32>,
+    /// WLAN rows that answered with no name from either column. Their clients are in
+    /// [`Self::clients_total`], but they are no SSID anyone can find — and while there is one, how
+    /// many SSIDs there are is not known (H3).
+    pub unnamed_rows: usize,
+}
+
+/// The SSID table in a dialect's rows.
 ///
 /// 🚨 **A row key collision drops the row rather than merging it.** Two SSIDs whose names hash the
 /// same would otherwise share one series, and the result would look like one SSID with somebody
 /// else's client count — a wrong number, where a missing one is only a gap.
 #[must_use]
-pub fn ssids(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<WlanSsidReading> {
+pub fn ssid_table(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> SsidTable {
     match flavor {
-        WlanFlavor::Huawei => huawei_ssids(flavor, rows),
-        WlanFlavor::CiscoAirespace => cisco_ssids(flavor, rows),
+        WlanFlavor::Huawei => {
+            let readings = huawei_ssids(flavor, rows);
+            let clients_total = readings
+                .iter()
+                .filter_map(WlanSsidReading::clients)
+                .reduce(u32::saturating_add);
+            SsidTable {
+                readings,
+                clients_total,
+                unnamed_rows: 0,
+            }
+        }
+        WlanFlavor::CiscoAirespace => cisco_ssid_table(rows),
     }
 }
 
-/// A Cisco controller's SSIDs. The name comes from column `.2` joined to its WLAN number, and two
-/// WLANs broadcasting the **same** SSID are one SSID here, their clients added: an operator asks how
-/// many are on `guest`, not on WLAN 3. Two **different** names whose row keys collide are still
-/// dropped, as [`ssids`] says.
-fn cisco_ssids(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<WlanSsidReading> {
-    let field_of: BTreeMap<String, CiscoSsidField> = CISCO_SSID_COLUMNS
-        .iter()
-        .map(|(n, f)| (format!("{}.{n}", flavor.ssid_root_oid()), *f))
-        .collect();
+/// A Cisco controller's SSIDs. The name comes from column `.2`, or from `cLWlanSsid` when `.2` did
+/// not answer, joined to its WLAN number (H1); two WLANs broadcasting the **same** SSID are one SSID
+/// here, their clients added: an operator asks how many are on `guest`, not on WLAN 3. Two
+/// **different** names whose row keys collide are still dropped, as [`ssid_table`] says.
+///
+/// ⚠️ The WLAN set is the one the SSID table names — rows seen in `.2` or `.38`. A `cLWlanSsid` row
+/// for a WLAN number the table does not have is ignored: the two tables are assumed to number
+/// WLANs alike (measured on 2 AireOS WLANs and the 9800 recording's 8, never on a real 9800), and a
+/// row that fits nothing is the first sign that assumption does not hold. So is a WLAN whose two
+/// names differ, which keeps `.2` and is counted in `yagra_wlan_ssid_name_mismatch_total`.
+fn cisco_ssid_table(rows: &[SnmpInstanceRow]) -> SsidTable {
+    let field_of: BTreeMap<&str, CiscoSsidField> = CISCO_SSID_COLUMNS.iter().copied().collect();
     let mut names: BTreeMap<Vec<u32>, String> = BTreeMap::new();
+    let mut wlan_names: BTreeMap<Vec<u32>, String> = BTreeMap::new();
     let mut clients: BTreeMap<Vec<u32>, u32> = BTreeMap::new();
+    let mut wlans: std::collections::BTreeSet<Vec<u32>> = std::collections::BTreeSet::new();
     for row in rows {
-        match (
-            field_of.get(row.oid_base.trim_start_matches('.')),
-            &row.value,
-        ) {
-            (Some(CiscoSsidField::Name), value) => {
-                if let Some(name) = text(value) {
+        match field_of.get(row.oid_base.trim_start_matches('.')) {
+            Some(CiscoSsidField::Name) => {
+                wlans.insert(row.instance.clone());
+                if let Some(name) = text(&row.value) {
                     names.insert(row.instance.clone(), name);
                 }
             }
-            (Some(CiscoSsidField::Clients), value) => {
-                if let Some(n) = non_negative(value) {
+            Some(CiscoSsidField::Clients) => {
+                wlans.insert(row.instance.clone());
+                if let Some(n) = non_negative(&row.value) {
                     clients.insert(row.instance.clone(), n);
                 }
             }
-            (None, _) => {}
+            Some(CiscoSsidField::WlanName) => {
+                if let Some(name) = text(&row.value) {
+                    wlan_names.insert(row.instance.clone(), name);
+                }
+            }
+            None => {}
         }
     }
-    // A WLAN with no name is not an SSID anyone can find; its count is not attributed anywhere.
+    let clients_total = wlans
+        .iter()
+        .filter_map(|w| clients.get(w).copied())
+        .reduce(u32::saturating_add);
+    let mut unnamed_rows = 0;
     let mut by_name: BTreeMap<String, Option<u32>> = BTreeMap::new();
-    for (index, name) in names {
-        let entry = by_name.entry(name).or_insert(None);
-        if let Some(n) = clients.get(&index) {
+    for wlan in &wlans {
+        let name = match (names.get(wlan), wlan_names.get(wlan)) {
+            (Some(ess), Some(other)) => {
+                if ess != other {
+                    tracing::debug!(
+                        ssid = %ess,
+                        wlan_ssid = %other,
+                        "the two Cisco SSID tables name one WLAN differently; keeping the first"
+                    );
+                    metrics::counter!("yagra_wlan_ssid_name_mismatch_total").increment(1);
+                }
+                ess
+            }
+            (Some(ess), None) => ess,
+            (None, Some(other)) => other,
+            // No SSID anyone can find; its clients are in the total and nowhere else.
+            (None, None) => {
+                unnamed_rows += 1;
+                continue;
+            }
+        };
+        let entry = by_name.entry(name.clone()).or_insert(None);
+        if let Some(n) = clients.get(wlan) {
             *entry = Some(entry.unwrap_or(0).saturating_add(*n));
         }
     }
@@ -842,7 +984,11 @@ fn cisco_ssids(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<WlanSsidRead
     }
     out.sort_by_key(|r| r.row);
     out.truncate(WLAN_SSID_MAX);
-    out
+    SsidTable {
+        readings: out,
+        clients_total,
+        unnamed_rows,
+    }
 }
 
 fn huawei_ssids(flavor: WlanFlavor, rows: &[SnmpInstanceRow]) -> Vec<WlanSsidReading> {
@@ -1213,7 +1359,7 @@ mod tests {
 
     #[test]
     fn the_ssid_table_reads_into_one_reading_per_ssid_with_its_name() {
-        let ssids = ssids(WlanFlavor::Huawei, &ssid_rows());
+        let ssids = ssid_table(WlanFlavor::Huawei, &ssid_rows()).readings;
         let names: Vec<&str> = ssids.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names.len(), 4, "{names:?}");
         let find = |n: &str| {
@@ -1238,7 +1384,7 @@ mod tests {
     /// onto this path would delete an empty guest network from the list.
     #[test]
     fn an_ssid_with_no_clients_keeps_its_row_and_its_name() {
-        let ssids = ssids(WlanFlavor::Huawei, &ssid_rows());
+        let ssids = ssid_table(WlanFlavor::Huawei, &ssid_rows()).readings;
         let (samples, names) = ssid_samples(&ssids);
         let empty = ssids
             .iter()
@@ -1277,7 +1423,7 @@ mod tests {
             instance: vec![9, 97, 98, 99],
             value: SnmpValue::Int(1),
         };
-        assert!(ssids(WlanFlavor::Huawei, &[row]).is_empty());
+        assert!(ssid_table(WlanFlavor::Huawei, &[row]).readings.is_empty());
     }
 
     /// The row key is a fact stored in the TSDB and joined to a name in PostgreSQL: changing it
@@ -1650,10 +1796,11 @@ mod tests {
             at(CISCO_SSID, 38, &[2], SnmpValue::Int(0)),
             at(CISCO_SSID, 2, &[3], bytes("corp")),
             at(CISCO_SSID, 38, &[3], SnmpValue::Int(4)),
-            // A WLAN with no name is nobody's SSID.
+            // A WLAN with no name is nobody's SSID — but its clients are the controller's (H2).
             at(CISCO_SSID, 38, &[4], SnmpValue::Int(9)),
         ];
-        let readings = ssids(WlanFlavor::CiscoAirespace, &rows);
+        let table = ssid_table(WlanFlavor::CiscoAirespace, &rows);
+        let readings = &table.readings;
         let by_name: Vec<(&str, Option<u32>, u32)> = readings
             .iter()
             .map(|r| (r.name.as_str(), r.clients(), r.row))
@@ -1667,14 +1814,184 @@ mod tests {
         assert!(readings
             .iter()
             .all(|r| r.clients_2g4.is_none() && r.ap_count.is_none()));
+        assert_eq!(
+            table.clients_total,
+            Some(16),
+            "3 + 0 + 4, and 9 on the unnamed WLAN"
+        );
+        assert_eq!(table.unnamed_rows, 1);
         // An empty SSID still gets its series and its name.
-        let (samples, names) = ssid_samples(&readings);
+        let (samples, names) = ssid_samples(readings);
         assert_eq!(samples.len(), 2);
         assert_eq!(names.len(), 2);
         assert_eq!(
             ssid_columns(WlanFlavor::CiscoAirespace),
-            vec![format!("{CISCO_SSID}.2"), format!("{CISCO_SSID}.38")]
+            vec![
+                format!("{CISCO_SSID}.2"),
+                format!("{CISCO_SSID}.38"),
+                CLW_SSID.to_owned(),
+            ]
         );
+    }
+
+    /// The column `cLWlanSsid` lives at, per WLAN number (CISCO-LWAPP-WLAN-MIB).
+    const CLW_SSID: &str = "1.3.6.1.4.1.9.9.512.1.1.1.1.4";
+
+    fn clw(wlan: u32, name: &str) -> SnmpInstanceRow {
+        SnmpInstanceRow {
+            oid_base: CLW_SSID.to_owned(),
+            instance: vec![wlan],
+            value: bytes(name),
+        }
+    }
+
+    /// 🚨 The 9800 bug (ADR-064 増分 H, H1): the lab's recording answers `.38` for its eight WLANs
+    /// and `.2` for none. Named from `cLWlanSsid`, it has its SSIDs; with `.2` alone it had none, an
+    /// SSID count of 0 and no controller client count. Values are the recording's own.
+    #[test]
+    fn a_9800_that_does_not_answer_the_ssid_column_is_named_from_the_wlan_table() {
+        let recording = [
+            (1, "<private>", 5),
+            (2, "NAI-Mobile", 7),
+            (3, "NAI-IT", 0),
+            (4, "NA Guest", 0),
+            (5, "SAP", 7),
+            (6, "TIME", 9),
+            (7, "OTN", 12),
+            (8, "NAI-TPE", 1),
+        ];
+        let mut rows = Vec::new();
+        for (wlan, name, clients) in recording {
+            rows.push(at(CISCO_SSID, 38, &[wlan], SnmpValue::Int(clients)));
+            rows.push(clw(wlan, name));
+        }
+        let table = ssid_table(WlanFlavor::CiscoAirespace, &rows);
+        assert_eq!(table.readings.len(), 8);
+        assert_eq!(table.unnamed_rows, 0);
+        assert_eq!(table.clients_total, Some(41));
+        let otn = table
+            .readings
+            .iter()
+            .find(|r| r.name == "OTN")
+            .expect("named from cLWlanSsid");
+        assert_eq!(otn.clients(), Some(12));
+    }
+
+    /// AireOS answers both names, identically: one SSID each, never two. Where they differ the
+    /// SSID table's own column wins; a `cLWlanSsid` row for a WLAN the SSID table does not have is
+    /// ignored, because the two tables' numbering agreeing is the assumption being relied on.
+    #[test]
+    fn the_ssid_column_outranks_the_wlan_table_and_a_stray_wlan_row_is_ignored() {
+        let rows = vec![
+            at(CISCO_SSID, 2, &[1], bytes("office24")),
+            at(CISCO_SSID, 38, &[1], SnmpValue::Int(0)),
+            clw(1, "office24"),
+            at(CISCO_SSID, 2, &[2], bytes("office5")),
+            at(CISCO_SSID, 38, &[2], SnmpValue::Int(2)),
+            clw(2, "renamed-elsewhere"),
+            clw(9, "not-in-the-ssid-table"),
+        ];
+        let table = ssid_table(WlanFlavor::CiscoAirespace, &rows);
+        let mut names: Vec<&str> = table.readings.iter().map(|r| r.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["office24", "office5"]);
+        assert_eq!(table.clients_total, Some(2));
+        assert_eq!(table.unnamed_rows, 0);
+    }
+
+    /// A table with no client count anywhere says nothing about clients, rather than 0.
+    #[test]
+    fn a_cisco_ssid_table_with_no_client_column_has_no_total() {
+        let table = ssid_table(WlanFlavor::CiscoAirespace, &[clw(1, "corp")]);
+        assert!(table.readings.is_empty(), "no WLAN the SSID table names");
+        assert_eq!(table.clients_total, None);
+        let table = ssid_table(
+            WlanFlavor::CiscoAirespace,
+            &[at(CISCO_SSID, 2, &[1], bytes("corp"))],
+        );
+        assert_eq!(table.readings.len(), 1);
+        assert_eq!(table.clients_total, None);
+    }
+
+    /// The controller's clients per band are its radios' clients, summed by the band each radio was
+    /// filed under (H4): a type the MIB names decides, anything else falls to the channel, and a
+    /// radio neither settles is left out — as it is from the AP's slots.
+    #[test]
+    fn the_controllers_clients_per_band_are_its_radios_summed_by_band() {
+        let ap1 = [0, 60, 16, 104, 153, 160];
+        let ap2 = [0, 60, 16, 104, 153, 176];
+        let mut rows = Vec::new();
+        for (mac, slot, kind, channel, clients) in [
+            (ap1, 0, 1, 11, 2),  // dot11b ⇒ 2.4 GHz
+            (ap1, 1, 2, 36, 5),  // dot11a ⇒ 5 GHz
+            (ap2, 0, 3, 6, 4),   // unlisted type, channel 6 ⇒ 2.4 GHz
+            (ap2, 1, 3, 132, 1), // unlisted type, channel 132 ⇒ 5 GHz
+            (ap2, 2, 5, 0, 7),   // unlisted type on channel 0 — no band, left out
+            (ap2, 3, 7, 36, 3),  // 5/6 GHz switching radio — refused, left out
+        ] {
+            let index = with_slot(mac, slot);
+            rows.push(at(CISCO_RADIO, 2, &index, SnmpValue::Int(kind)));
+            rows.push(at(CISCO_RADIO, 4, &index, SnmpValue::Int(channel)));
+            rows.push(at(CISCO_RADIO, 15, &index, SnmpValue::Int(clients)));
+        }
+        let per_band = clients_per_band(WlanFlavor::CiscoAirespace, &rows).expect("answered");
+        assert_eq!(
+            per_band.into_iter().collect::<Vec<_>>(),
+            vec![
+                (WlanBand::Band2G4, 6),
+                (WlanBand::Band5G, 6),
+                (WlanBand::Band6G, 0),
+            ],
+            "every band present, 0 where nobody is"
+        );
+    }
+
+    /// Radios read, not one client count answered: no reading, never "nobody is connected".
+    #[test]
+    fn radios_that_answered_no_client_count_give_no_per_band_total() {
+        let index = with_slot([0, 60, 16, 104, 153, 160], 0);
+        let rows = vec![
+            at(CISCO_RADIO, 2, &index, SnmpValue::Int(1)),
+            at(CISCO_RADIO, 4, &index, SnmpValue::Int(6)),
+        ];
+        assert_eq!(clients_per_band(WlanFlavor::CiscoAirespace, &rows), None);
+        assert_eq!(clients_per_band(WlanFlavor::CiscoAirespace, &[]), None);
+    }
+
+    /// AireOS's object first, then the 9800's; each platform answers only one. A 0 is an object
+    /// answering its default, not a controller that holds no APs, and a Huawei AC is never asked.
+    #[test]
+    fn the_ap_capacity_is_whichever_platform_object_answered() {
+        use yagra_transport::SnmpSample;
+        let s = |oid: &str, value: f64| SnmpSample {
+            oid: oid.to_owned(),
+            value,
+        };
+        let aireos = [
+            s("1.3.6.1.2.1.1.3.0", 5.0),
+            s("1.3.6.1.4.1.14179.1.1.1.18.0", 150.0),
+        ];
+        assert_eq!(ap_capacity(WlanFlavor::CiscoAirespace, &aireos), Some(150));
+        let c9800 = [s(".1.3.6.1.4.1.9.9.513.1.3.28.0", 250.0)];
+        assert_eq!(ap_capacity(WlanFlavor::CiscoAirespace, &c9800), Some(250));
+        let zero = [
+            s("1.3.6.1.4.1.14179.1.1.1.18.0", 0.0),
+            s("1.3.6.1.4.1.9.9.513.1.3.28.0", 250.0),
+        ];
+        assert_eq!(
+            ap_capacity(WlanFlavor::CiscoAirespace, &zero),
+            Some(250),
+            "a 0 is not a reading, so the next object speaks"
+        );
+        assert_eq!(
+            ap_capacity(
+                WlanFlavor::CiscoAirespace,
+                &[s("1.3.6.1.4.1.14179.1.1.1.18.0", f64::NAN)]
+            ),
+            None
+        );
+        assert!(capacity_oids(WlanFlavor::Huawei).is_empty());
+        assert_eq!(ap_capacity(WlanFlavor::Huawei, &aireos), None);
     }
 
     /// The controller's joined count is the associated rows of the required walk — counted before
