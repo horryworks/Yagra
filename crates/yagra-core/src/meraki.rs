@@ -144,15 +144,27 @@ impl MerakiOrg {
         })
     }
 
-    /// The enabled tiers parsed to [`MerakiTier`] (unknown tokens skipped). Inventory is never a
+    /// The enabled tiers parsed to [`MerakiTier`], in [`MerakiTier::ALL`]'s cadence order rather
+    /// than the stored one (unknown tokens skipped, duplicates collapsed). Inventory is never a
     /// collect tier — it is read by the periodic sync (`meraki_sync.rs`), on `inventory_secs` — so
     /// it is filtered out here.
+    ///
+    /// 🚨 **The order is load-bearing, and the stored column must not decide it.** Until a tier has
+    /// been dispatched once in this process every tier is equally overdue (`Duration::MAX`), and the
+    /// scheduler's strictly-greater tie-break therefore keeps the **first** tier it is handed. So
+    /// while something stops every collect before a job is sent — a key that cannot be opened, a
+    /// read of this core's own database that failed — the failure is counted against that first
+    /// tier and no other, and availability is the only tier that raises (ADR-164 決定 18).
+    /// `PUT …/cadence` stores `enabled_tiers` in the caller's order verbatim and validates only
+    /// membership, so an external client sending `["uplink", "availability"]` used to silence the
+    /// one alert that says the organization is not being collected at all. Sorting here is what
+    /// makes migration 0126's "the order carries no meaning to the scheduler" true.
     #[must_use]
     pub fn active_tiers(&self) -> Vec<MerakiTier> {
-        self.enabled_tiers
-            .iter()
-            .filter_map(|t| MerakiTier::from_token(t))
+        MerakiTier::ALL
+            .into_iter()
             .filter(|t| *t != MerakiTier::Inventory)
+            .filter(|t| self.enabled_tiers.iter().any(|s| s == t.as_str()))
             .collect()
     }
 
@@ -1120,6 +1132,42 @@ mod tests {
         assert!(tiers.contains(&MerakiTier::Uplink));
         // Inventory is reconciliation-only, never a recurring collect.
         assert!(!tiers.contains(&MerakiTier::Inventory));
+    }
+
+    /// Whatever order the column holds, availability comes out first — because the scheduler keeps
+    /// the **first** tier it is handed for as long as none has been dispatched (every tier is
+    /// `Duration::MAX` overdue and the tie-break is strictly greater), and availability is the only
+    /// tier whose failures raise an alert. `PUT …/cadence` writes `enabled_tiers` in the caller's
+    /// order and checks membership only, so `["uplink", "availability"]` is a stored state an
+    /// external client can produce — and it used to mean a key that cannot be opened raised
+    /// nothing at all (ADR-164 決定 18).
+    ///
+    /// ⚠️ This pins the only place the scheduler's tier order comes from, not the scheduler's own
+    /// tie-break, which lives in a loop in `main.rs` that no test drives.
+    #[test]
+    fn active_tiers_are_in_cadence_order_whatever_order_they_were_stored_in() {
+        let mut o = org();
+        o.enabled_tiers = ["traffic", "uplink", "inventory", "availability"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(
+            o.active_tiers(),
+            vec![
+                MerakiTier::Availability,
+                MerakiTier::Uplink,
+                MerakiTier::Traffic
+            ],
+            "the stored order reached the scheduler, so the tier it pins on is not availability"
+        );
+
+        // A token stored twice is one tier, not two.
+        o.enabled_tiers = ["uplink", "availability", "uplink"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(
+            o.active_tiers(),
+            vec![MerakiTier::Availability, MerakiTier::Uplink]
+        );
     }
 
     #[test]
