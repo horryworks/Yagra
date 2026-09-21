@@ -21,7 +21,9 @@ import { defaultBodyFor, type Json } from '../support/openapi';
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 const IFINDEX = 1;
 
-/** Only a `device` shows the Interfaces tab, and the dock only exists once a port is selected. */
+// Only a `device` shows the Interfaces tab, and the dock only exists once a port is selected — a
+// precondition of this whole spec, so a `//` rather than a doc block, which would attach to the
+// fixture below and displace its own.
 /** One rule on this port and one inherited from the node, both built from the generated shape so a
  *  change to the Rust type reaches this fixture. The inherited one is deliberately a *different*
  *  metric: two rules on one metric would make "in force" ambiguous, and the property under test is

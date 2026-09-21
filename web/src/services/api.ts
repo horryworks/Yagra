@@ -1603,7 +1603,9 @@ export const api = {
   /** Delete a profile. */
   deleteProfile: (id: string): Promise<void> => apiDelete('/api/v1/profiles/{id}', { path: { id } }),
 
-  /** Threshold rules (hierarchical overrides; most-specific scope wins). */
+  // Threshold rules (hierarchical overrides; most-specific scope wins). A `//` and not a doc
+  // block: it describes the group below rather than any one method, and a doc block here would
+  // attach itself to `listThresholds` and displace that method's own.
   /** A capped page of threshold rules, narrowed server-side.
    *
    *  ⚠️ Takes the whole query object rather than naming fields: hand-listing them is how
@@ -2486,8 +2488,8 @@ export const api = {
   /** User accounts (metadata only; never the password hash). Requires admin (ManageUsers). */
   listUsers: (): Promise<UserSummary[]> => apiGet('/api/v1/users'),
 
-  /** Create a user account. The password is hashed server-side and never returned. */
-  /** Create an account. `password` is required for a local account and refused for a service one
+  /** Create an account. The password is hashed server-side and never returned. `password` is
+   *  required for a local account and refused for a service one
    *  (a machine account cannot sign in), so it is optional here and validated by the caller. */
   createUser: (body: {
     username: string;

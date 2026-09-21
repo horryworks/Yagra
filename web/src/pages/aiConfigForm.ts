@@ -57,7 +57,6 @@ export function keyIsRequired(
   return choice != null && !choice.credential_optional && !hasUsableStoredKey(stored, provider);
 }
 
-/** Validation-problem codes; the caller turns these into localized text. */
 /** Every reason the AI settings form refuses to save. `as const` so the i18n coverage test can walk
  *  it: the page renders `t(`err.${problem}`)` with no fallback. */
 export const AI_FORM_PROBLEMS = [

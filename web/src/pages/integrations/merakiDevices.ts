@@ -209,15 +209,21 @@ export function devicesToImport(
  *  the next sync import every other device in it — picking two devices by hand would end in two
  *  hundred nodes. So nothing is sent, the nodes start out not collected, and the page's own notice
  *  ("N monitored devices are in networks that are not watched") offers the choice with its
- *  consequence in view. A network already watched is left out: sending it would change nothing. */
+ *  consequence in view. A network already watched is left out: sending it would change nothing.
+ *
+ *  ⚠️ Watched-ness is a property of the **network**, so it is gathered by `network_id`. Keying it by
+ *  serial gives the same answer today only because every device in one network carries the same
+ *  flag — an invariant nothing here states, and one a per-device override would end. */
 export function networksToWatchOnImport(
-  chosen: readonly Pick<MerakiImportDevice, 'serial' | 'network_id'>[],
-  devices: readonly Pick<MerakiDevice, 'serial' | 'network_monitored'>[],
+  chosen: readonly Pick<MerakiImportDevice, 'network_id'>[],
+  devices: readonly Pick<MerakiDevice, 'network_id' | 'network_monitored'>[],
   importsAutomatically: boolean,
 ): string[] {
   if (importsAutomatically) return [];
-  const watched = new Set(devices.filter((d) => d.network_monitored).map((d) => d.serial));
-  return [...new Set(chosen.filter((c) => !watched.has(c.serial)).map((c) => c.network_id))].sort();
+  const watched = new Set(devices.filter((d) => d.network_monitored).map((d) => d.network_id));
+  return [
+    ...new Set(chosen.map((c) => c.network_id).filter((id) => !watched.has(id))),
+  ].sort();
 }
 
 /** Every serial in `devices` that can be imported — what "Select all importable" ticks.

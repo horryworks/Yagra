@@ -261,6 +261,14 @@ describe('the networks an import starts watching (ADR-164 決定 16)', () => {
     expect(networksToWatchOnImport(chosen('C'), list, false)).toEqual([]);
   });
 
+  it('asks the network, not the device: watched-ness is the network’s', () => {
+    // C is the only row that says N_tokyo is watched. Reading the flag off the *chosen* device
+    // instead — which is what a set keyed by serial does — would ask about a device that is not in
+    // the list and send N_tokyo anyway.
+    expect(networksToWatchOnImport([{ network_id: 'N_tokyo' }], list, false)).toEqual([]);
+    expect(networksToWatchOnImport([{ network_id: 'N_osaka' }], list, false)).toEqual(['N_osaka']);
+  });
+
   it('sends none while the organization imports on its own', () => {
     // There, watching a network makes the next sync import every other device in it: two devices
     // picked by hand would end as the whole site. The page's notice offers that choice instead.

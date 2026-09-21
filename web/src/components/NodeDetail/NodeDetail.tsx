@@ -65,11 +65,12 @@ interface Props {
    *  the page wrapper fetches groups, and parent name falls back to a targeted fetch). */
   groups: NodeGroup[];
   nodes?: NodeSummary[];
-  /** Inline only: open the move-to-group picker / jump to the full-page detail. */
-  /** Handed the node this pane has loaded. 🚨 The host used to look the node up among its own
-   *  loaded rows instead, and the button did nothing whenever it was not there — a deep link into
-   *  a folder below the fold, or a selection the active filter no longer matches. */
+  /** Inline only: open the move-to-group picker. Handed the node this pane has loaded. 🚨 The host
+   *  used to look the node up among its own loaded rows instead, and the button did nothing
+   *  whenever it was not there — a deep link into a folder below the fold, or a selection the
+   *  active filter no longer matches. */
   onMove?: (node: MoveTarget) => void;
+  /** Inline only: jump to the full-page detail. */
   onOpenDetail?: () => void;
   /** Open a folder from the eyebrow breadcrumb (ADR-142) — a pane in the split, All nodes on the
    *  route. Absent ⇒ the breadcrumb stays plain text. */

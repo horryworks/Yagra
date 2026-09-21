@@ -32,6 +32,14 @@
 //! | an ordinary result of a collect job, with no report | answered — a poller from before 決定 18 |
 //! | a collect flight whose lease ran out unanswered | `no_answer`: old poller + failed collect, no live poller in the pool, a crash |
 //! | the scheduler could not open the key | `credential` |
+//! | the scheduler could not read the organization's devices, or which networks it watches | `internal` |
+//!
+//! The last two rows are the ones **no poller can report**, because no job was sent: core stopped
+//! before publishing one, and the organization's devices go unasked-about exactly as they do when
+//! the Dashboard refuses. They are counted at the collect's own rate rather than the scheduler's —
+//! see [`count_once_per_cadence`], without which a 15-second tick would reach three failures in
+//! forty-five seconds. An organization that watches **nothing** is not among them: 決定 16 sends it
+//! no collect on purpose, so there is nothing failing to report.
 //!
 //! # Closing
 //!
@@ -196,6 +204,37 @@ impl MerakiCollectHealth {
             .expect("meraki collect health poisoned")
             .retain(|(org, _), _| keep.contains(org));
     }
+}
+
+/// Whether a failure **core itself** knows about should be counted for `(org, tier)` now, and
+/// remember that it was.
+///
+/// Three things stop the scheduler before a job is sent, and no poller can report any of them: the
+/// stored key cannot be opened, the organization's imported devices cannot be read, and which
+/// networks it watches cannot be read. Each leaves the organization's devices unasked-about, which
+/// is exactly what [`MerakiCollectHealth`] is for — but the scheduler ticks every 15 seconds while
+/// a collect is due every `tier_cadence`, so counting one per tick would turn 45 seconds into the
+/// three failures that raise the alert. Counting one per cadence makes a core-side failure cost the
+/// same evidence as a collect that was sent and failed.
+///
+/// The tier stays due either way, so a repaired key or a healthy database is picked up on the next
+/// tick rather than at the next cadence. Clear the entry with `counted.remove(&(org, tier))` when
+/// the tier gets past all three.
+pub fn count_once_per_cadence(
+    counted: &mut HashMap<(Uuid, MerakiTier), std::time::Instant>,
+    org: Uuid,
+    tier: MerakiTier,
+    cadence: std::time::Duration,
+    now: std::time::Instant,
+) -> bool {
+    if counted
+        .get(&(org, tier))
+        .is_some_and(|&at| now.duration_since(at) < cadence)
+    {
+        return false;
+    }
+    counted.insert((org, tier), now);
+    true
 }
 
 /// What the watch needs to know about one organization's configuration.
@@ -488,6 +527,72 @@ mod tests {
         for i in 0..times {
             health.record_failed(org, tier, MerakiSyncFailure::Auth, 1_000 + i64::from(i));
         }
+    }
+
+    /// The scheduler ticks four times per minute and a collect is due once a cadence, so a failure
+    /// core itself knows about has to be counted at the collect's rate — or a key that cannot be
+    /// opened would reach the three-in-a-row threshold in 45 seconds instead of three cadences.
+    #[test]
+    fn a_failure_core_knows_about_is_counted_once_per_cadence_and_per_tier() {
+        use std::time::{Duration, Instant};
+        let mut counted = HashMap::new();
+        let cadence = Duration::from_secs(300);
+        let tick = Duration::from_secs(15);
+        let start = Instant::now();
+
+        assert!(
+            count_once_per_cadence(&mut counted, ORG, MerakiTier::Availability, cadence, start),
+            "the first one is evidence"
+        );
+        for n in 1..20 {
+            assert!(
+                !count_once_per_cadence(
+                    &mut counted,
+                    ORG,
+                    MerakiTier::Availability,
+                    cadence,
+                    start + tick * n
+                ),
+                "tick {n} inside the cadence counted a second failure"
+            );
+        }
+        assert!(
+            count_once_per_cadence(
+                &mut counted,
+                ORG,
+                MerakiTier::Availability,
+                cadence,
+                start + cadence
+            ),
+            "a whole cadence of failing is one more collect that did not happen"
+        );
+
+        // Each (organization, tier) is counted on its own — one organization's broken key says
+        // nothing about another's, and uplink failing is not availability failing.
+        assert!(count_once_per_cadence(
+            &mut counted,
+            ORG,
+            MerakiTier::Uplink,
+            cadence,
+            start
+        ));
+        assert!(count_once_per_cadence(
+            &mut counted,
+            OTHER,
+            MerakiTier::Availability,
+            cadence,
+            start
+        ));
+
+        // Cleared when the tier gets past the failure: the next one is evidence again at once.
+        counted.remove(&(ORG, MerakiTier::Availability));
+        assert!(count_once_per_cadence(
+            &mut counted,
+            ORG,
+            MerakiTier::Availability,
+            cadence,
+            start + tick
+        ));
     }
 
     #[test]

@@ -61,9 +61,6 @@ pub(crate) fn seeded_liveness_rule() -> StoredThreshold {
     )
 }
 
-/// A snapshot of thresholds + node metadata + dependency topology the engine evaluates
-/// against. Rebuilt periodically from the database so threshold/topology edits take effect
-/// without a restart.
 /// What the alert engine knows about one Cisco Meraki organization (see `AlertConfig::meraki_orgs`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MerakiOrgScope {
@@ -77,6 +74,9 @@ pub struct MerakiOrgScope {
     pub nodes: BTreeSet<NodeId>,
 }
 
+/// A snapshot of thresholds + node metadata + dependency topology the engine evaluates
+/// against. Rebuilt periodically from the database so threshold/topology edits take effect
+/// without a restart.
 #[derive(Debug, Clone, Default)]
 pub struct AlertConfig {
     /// Thresholds bucketed by metric name so per-sample resolution scans only the rules for that

@@ -97,7 +97,6 @@ const KIND_ICONS: Record<string, ComponentType> = {
 
 
 
-/** The SNMPv3 (USM) sub-form. Controlled — the same fields back the add and edit modals. */
 /** The HTTP-auth sub-form. Only the selected scheme's fields render, but every field stays in
  *  state, so switching scheme and back does not discard what was typed. */
 function HttpAuthFields({
@@ -183,6 +182,7 @@ function HttpAuthFields({
   );
 }
 
+/** The SNMPv3 (USM) sub-form. Controlled — the same fields back the add and edit modals. */
 function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) => void }) {
   const { t } = useTranslation('access');
   const needsAuth = value.level !== 'noauth';
@@ -450,9 +450,10 @@ function EditCredentialModal({
             <label className="modal-field-label">{t('cred.field.type')}</label>
             {fixedKind ? (
               // An integration's key keeps its kind: the select never held it, so it showed
-              // another one over it and saved that.
+              // another one over it and saved that. `.modal-field-value` is what a field holds
+              // where a control cannot go — it keeps the row the height every other field is.
               <>
-                <span>{kindLabel(fixedKind, t)}</span>
+                <span className="modal-field-value">{kindLabel(fixedKind, t)}</span>
                 <span className="modal-hint">{t('cred.edit.fixedKindHint')}</span>
               </>
             ) : (

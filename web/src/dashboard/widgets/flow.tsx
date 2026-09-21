@@ -44,7 +44,6 @@ export function FlowTopTalkersWidget() {
   return <RankedBars rows={rows} empty={t('widgets.flow.empty')} />;
 }
 
-/** Read the src/dst AS direction from instance settings (default destination). */
 /** View-mode header action for the top-AS widget: source ↔ destination AS.
  *
  *  Same ranking seen from the other end — a lens, not a subject (ADR-072 decision 1). */

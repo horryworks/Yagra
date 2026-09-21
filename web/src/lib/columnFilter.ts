@@ -244,7 +244,6 @@ export function filterableColumns<T>(
   return columns.flatMap((c) => (c.filter ? [{ key: c.key, filter: c.filter }] : []));
 }
 
-/** The value a column has when nothing is set. */
 /**
  * Turn a screen's `Record<columnKey, spec>` into filterable columns.
  *
@@ -259,6 +258,7 @@ export function specColumns<T>(
   return Object.entries(specs).map(([key, filter]) => ({ key, filter }));
 }
 
+/** The value a column has when nothing is set. */
 export function defaultValue<T>(spec: ColumnFilterSpec<T>): string {
   if (spec.kind === 'range') return spec.defaultPreset;
   // An enum may start at a subset of its options — see `EnumFilterSpec.defaultSelection`.

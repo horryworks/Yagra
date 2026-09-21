@@ -1356,10 +1356,27 @@ async fn import_meraki_devices(
         })?
         .ok_or_else(|| no_org(body.org_uuid))?;
     if !body.monitored_network_ids.is_empty() {
-        let _ = admin
+        // 🚨 Not fatal, and not silent either. Collection asks the Dashboard about watched networks
+        // only, so a network that fails to be watched here is a node that is collected nothing for
+        // — the state `MerakiDeviceCounts.monitored_unwatched` and the page's own "N monitored
+        // devices are in networks that are not watched" notice both exist to name (決定 15). That
+        // notice is the recovery, which is why this does not fail the import: the devices really
+        // were imported, and unwinding them would be worse than a request the operator repeats.
+        // What it must not do is say nothing — `let _ =` left a whole organization uncollected
+        // with not one line anywhere saying a write had failed.
+        if let Err(e) = admin
             .meraki_orgs
             .set_networks_monitored(org.id, &body.monitored_network_ids, true)
-            .await;
+            .await
+        {
+            tracing::warn!(
+                org = %org.org_id,
+                networks = body.monitored_network_ids.len(),
+                error = %e,
+                "meraki import: the networks to watch could not be stored; the imported devices are \
+                 nodes nothing is collected for until they are watched"
+            );
+        }
     }
     // Where each device goes is decided by the resolver the sync also uses, and written by
     // `import_devices`; which serials are already nodes is decided *there*, under its lock. Reading

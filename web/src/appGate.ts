@@ -28,6 +28,21 @@ export const LOGIN_PATH = '/login';
 export const PUBLIC_PATH = '/dashboard/public';
 
 /**
+ * Where a successful sign-in should go, or `null` to stay on the address already in the bar.
+ *
+ * The sign-in form is swapped in ABOVE the router, without a redirect — so when an anonymous
+ * visitor opens a deep link, the location is still that link, query string and all. Navigating
+ * to the dashboard unconditionally threw it away: a link pasted into chat during an incident
+ * (`/alerts/history?severity=critical`) became the shared dashboard for everyone who had to sign
+ * in first. Staying put is all it takes to keep it.
+ *
+ * Only the two addresses that mean "nowhere in particular" still go to the dashboard.
+ */
+export function postLoginTarget(pathname: string): string | null {
+  return pathname === LOGIN_PATH || pathname === '/' ? '/dashboard' : null;
+}
+
+/**
  * Decide the view from the deployment's config, the path asked for, and whether a token is held.
  *
  * **An anonymous visitor lands on the sign-in form, always.** The public board is somewhere they
@@ -53,21 +68,6 @@ export const PUBLIC_PATH = '/dashboard/public';
  * every screen shows its own error, and locking them out would remove the pages that say *why* the
  * deployment is unwell.
  */
-/**
- * Where a successful sign-in should go, or `null` to stay on the address already in the bar.
- *
- * The sign-in form is swapped in ABOVE the router, without a redirect — so when an anonymous
- * visitor opens a deep link, the location is still that link, query string and all. Navigating
- * to the dashboard unconditionally threw it away: a link pasted into chat during an incident
- * (`/alerts/history?severity=critical`) became the shared dashboard for everyone who had to sign
- * in first. Staying put is all it takes to keep it.
- *
- * Only the two addresses that mean "nowhere in particular" still go to the dashboard.
- */
-export function postLoginTarget(pathname: string): string | null {
-  return pathname === LOGIN_PATH || pathname === '/' ? '/dashboard' : null;
-}
-
 export function appView(
   status: ConfigStatus,
   publicDashboard: boolean,

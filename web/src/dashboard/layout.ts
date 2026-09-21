@@ -303,7 +303,6 @@ export function removeBoard(boards: Board[], id: string): Board[] {
   return next.length === boards.length ? boards : next;
 }
 
-/** Rename one board (no-op if `id` is absent). */
 /** Rename one placed widget (no-op if `instanceId` is absent). A blank name clears it, so the card
  *  falls back to the definition's title — see {@link normalizeWidgetTitle}. */
 export function renameWidgetById(
@@ -316,6 +315,7 @@ export function renameWidgetById(
   );
 }
 
+/** Rename one board (no-op if `id` is absent). */
 export function renameBoard(boards: Board[], id: string, name: string): Board[] {
   return boards.map((b) => (b.id === id ? { ...b, name } : b));
 }

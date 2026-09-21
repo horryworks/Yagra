@@ -30,13 +30,6 @@ export function coverageOf(summary: DiscoveredEndpointPage['summary']): Endpoint
   return 'complete';
 }
 
-/** One port's worth of unmonitored endpoints — the "42 behind Gi0/3" rollup.
- *
- *  Computed from the page in hand rather than read from the API's per-interface counts on purpose:
- *  those counts are *every* endpoint the router resolved, monitored ones included, and the question
- *  this card answers is how many are **not** monitored. Two different numbers; naming them the same
- *  would be the drift trap this repo keeps paying for.
- */
 /** Whether a row is still an unmonitored endpoint, or has since become a node.
  *
  *  The list asks the server for unpromoted rows by default, so this is what keeps the *rendered*

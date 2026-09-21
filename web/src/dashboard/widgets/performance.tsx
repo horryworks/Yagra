@@ -107,7 +107,6 @@ export function TopMemoryWidget({ instance }: WidgetProps) {
   );
 }
 
-/** A friendly `node · interface` label for an interface Top-N row. */
 /** A fleet interface Top-N widget over `/metrics/interface-top`. */
 function InterfaceTopN({
   agg,

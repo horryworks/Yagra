@@ -267,7 +267,6 @@ export function ClassificationRulesPage() {
   );
 }
 
-/** Normalize a rule (or edited copy) into the create/update request body. */
 /** Add or edit a classification rule (focused-editing modal). */
 function RuleModal({
   mode,

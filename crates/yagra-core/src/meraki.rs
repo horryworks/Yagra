@@ -753,7 +753,6 @@ impl MerakiOrgRepo {
             .collect()
     }
 
-    /// The org's monitored network ids (in-scope), for narrowing collect API calls.
     /// Write which collect tiers are failing (the health loop, on change only). `false` when the
     /// organization is gone.
     pub async fn record_collect_failures(
@@ -791,6 +790,7 @@ impl MerakiOrgRepo {
             .collect()
     }
 
+    /// The org's monitored network ids (in-scope), for narrowing collect API calls.
     pub async fn monitored_network_ids(&self, org_uuid: Uuid) -> anyhow::Result<Vec<String>> {
         let rows = sqlx::query(
             "SELECT network_id FROM meraki_org_networks WHERE org_id = $1 AND monitored = true",

@@ -20,7 +20,9 @@ import { DOCK_MIN_PX } from '../../src/components/NodeDetail/interfaceDockHeight
 
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 
-/** The dock only exists on a node that has interfaces, and only a `device` shows the tab. */
+// The dock only exists on a node that has interfaces, and only a `device` shows the tab. A `//`
+// and not a doc block: it is a precondition of this whole spec, not a description of the fixture
+// below — as a doc block it displaced that fixture's own.
 /** A series covering the window the client actually asked for.
  *
  *  ⚠️ The generated mock gives every array exactly one element, and numbers come out as `1` — so

@@ -43,7 +43,6 @@ export interface ScanPlotModel {
   plot: { x: number; y: number; w: number; h: number };
 }
 
-/** log10 with a floor, so a zero/one count maps to the axis origin instead of -Infinity. */
 /** Log10 with a floor at 1, so a source that touched a single host plots at the origin instead
  *  of at −∞. Exported for its test. */
 export function lg(v: number): number {

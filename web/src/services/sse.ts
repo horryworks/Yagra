@@ -95,11 +95,6 @@ export function parseReportRun(data: string): ReportRun | null {
 }
 
 /**
- * Extract the joined `data:` payload from one SSE event block (its fields separated by newlines),
- * or null when the block carries no data — a keep-alive comment (`:`...) or a control event such
- * as the streams' lagged-subscriber `resync` hint, which our parsers reject anyway.
- */
-/**
  * Whether an event block is the streams' `resync` hint — `event: resync`, sent when this
  * subscriber fell behind and frames were dropped for it (`sse_with_resync` in `api/alerts.rs`).
  *
@@ -111,6 +106,11 @@ export function isResyncBlock(block: string): boolean {
   return block.split(/\r?\n/).some((line) => /^event:\s*resync\s*$/.test(line));
 }
 
+/**
+ * Extract the joined `data:` payload from one SSE event block (its fields separated by newlines),
+ * or null when the block carries no data — a keep-alive comment (`:`...) or a control event such
+ * as the streams' lagged-subscriber `resync` hint, which our parsers reject anyway.
+ */
 export function dataFromEventBlock(block: string): string | null {
   const dataLines: string[] = [];
   for (const line of block.split(/\r?\n/)) {

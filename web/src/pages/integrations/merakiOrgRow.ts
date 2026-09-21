@@ -54,7 +54,6 @@ export function orgHasInventory(org: Pick<MerakiOrg, 'last_sync_at'>): boolean {
   return Boolean(org.last_sync_at);
 }
 
-/** The Meraki integration's own page. */
 /** One collect tier the Dashboard API is not answering, as the row words it. */
 export interface CollectFailureLine {
   tier: string;
@@ -84,6 +83,7 @@ export function orgCollectFailures(
     .sort((a, b) => Number(b.stalesNodes) - Number(a.stalesNodes));
 }
 
+/** The Meraki integration's own page. */
 export const MERAKI_PAGE_PATH = '/settings/integrations/meraki';
 
 /** One organization's page: its devices and how new ones are imported (ADR-164 Inc.4/5).

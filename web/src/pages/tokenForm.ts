@@ -108,13 +108,6 @@ export function ownerChoices(users: readonly UserSummary[], selfUsername: string
   return [...services, ...self];
 }
 
-/**
- * Whether a listed token is usable right now, and if not, why.
- *
- * The listing shows several independent reasons a token can be dead, and an operator staring at one
- * that "looks fine" needs the actual one. Checked in the order the server checks them, so the
- * answer here matches the 401 they got.
- */
 /** Every state a listed token can be in, in the order the server checks them. An `as const` array
  *  rather than a bare union because the listing's state filter iterates it, and because
  *  `i18nEnumKeys.test.ts` can then demand the `stateHint.*` strings in both locales
@@ -123,6 +116,13 @@ export const TOKEN_STATES = ['revoked', 'expired', 'no-owner', 'owner-disabled',
 
 export type TokenState = (typeof TOKEN_STATES)[number];
 
+/**
+ * Whether a listed token is usable right now, and if not, why.
+ *
+ * The listing shows several independent reasons a token can be dead, and an operator staring at one
+ * that "looks fine" needs the actual one. Checked in the order the server checks them, so the
+ * answer here matches the 401 they got.
+ */
 export function tokenState(
   token: {
     revoked_at?: string | null;

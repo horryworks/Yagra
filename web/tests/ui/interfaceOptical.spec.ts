@@ -22,7 +22,8 @@ const OPTICAL_IF = 1;
 /** ifIndex of the copper port beside it — same shape, no optical arrays at all. */
 const COPPER_IF = 2;
 
-/** Only a `device` node shows the Interfaces tab at all. */
+// Only a `device` node shows the Interfaces tab at all — a precondition of this whole spec, so a
+// `//` rather than a doc block, which would attach to the fixture below and displace its own.
 /** Two interfaces, so the presence *and* the absence of the chart are both observable in one run.
  *
  *  The generator emits a single row with placeholder values; a one-port fixture could only ever

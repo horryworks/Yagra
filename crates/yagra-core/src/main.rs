@@ -2097,10 +2097,14 @@ async fn run_meraki_scheduler(
     const TICK: Duration = Duration::from_secs(15);
     const LEASE: Duration = Duration::from_secs(300);
     let mut last: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
-    // When a tier was last counted as failed because its key could not be opened. The tier stays
-    // due and is retried every tick — so a repaired key is picked up within one — but it is
-    // *counted* once per cadence, or three ticks (45 s) would read as three failed collects.
-    let mut key_failures: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
+    // When a tier was last counted as failed for a reason **core itself** knows about — its key
+    // could not be opened, its imported devices could not be read, or which networks it watches
+    // could not be read. No job is sent for any of the three, so no poller can report them, and
+    // without this the organization's devices go unasked-about with nothing alerting (ADR-164
+    // 決定 18). The tier stays due and is retried every tick — so a repair is picked up within one
+    // — but it is *counted* once per cadence (`meraki_health::count_once_per_cadence`), or three
+    // ticks of 15 s would read as three failed collects.
+    let mut core_failures: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
 
     loop {
         tokio::time::sleep(TICK).await;
@@ -2139,11 +2143,36 @@ async fn run_meraki_scheduler(
                 continue; // nothing due
             };
 
+            // Three things below stop this collect before a job is sent, and no poller can report
+            // any of them — so core counts them itself (ADR-164 決定 18), at the collect's own rate
+            // rather than this loop's 15-second one.
+            let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
+            let mut count_core_failure = |reason: meraki_sync::MerakiSyncFailure| {
+                if meraki_health::count_once_per_cadence(
+                    &mut core_failures,
+                    org.id,
+                    tier,
+                    cadence,
+                    now,
+                ) {
+                    inflight.health.record_failed(
+                        org.id,
+                        tier,
+                        reason,
+                        pool_coverage::now_unix_ms(),
+                    );
+                }
+            };
             let device_refs = match devices.device_refs(org.id).await {
                 Ok(d) if !d.is_empty() => d,
-                Ok(_) => continue, // no imported devices → nothing to fan out to; save budget
+                // No imported device is not a failure — there is nothing to ask about, and this
+                // organization is what "save the budget" was always for.
+                Ok(_) => continue,
+                // A read of this core's own database that failed *is* a collect that did not
+                // happen, and nothing downstream will ever say so.
                 Err(e) => {
                     tracing::warn!(org = %org.org_id, error = %e, "meraki device refs load failed");
+                    count_core_failure(meraki_sync::MerakiSyncFailure::Internal);
                     continue;
                 }
             };
@@ -2158,6 +2187,12 @@ async fn run_meraki_scheduler(
                 Ok(ids) => ids,
                 Err(why) => {
                     tracing::debug!(org = %org.org_id, ?why, "no meraki collect this tick");
+                    // Watching nothing is a configuration, not a fault — 決定 16 says such an
+                    // organization is sent no collect, so there is nothing failing to report. A
+                    // read that *failed* is the other thing entirely, and is counted.
+                    if why == meraki::NoCollect::Unreadable {
+                        count_core_failure(meraki_sync::MerakiSyncFailure::Internal);
+                    }
                     continue;
                 }
             };
@@ -2165,22 +2200,10 @@ async fn run_meraki_scheduler(
                 tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
                 // No job is sent, so no poller can report this: it is core that knows the
                 // organization's devices are not being asked about (ADR-164 決定 18).
-                let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
-                let counted = key_failures
-                    .get(&(org.id, tier))
-                    .is_some_and(|&at| now.duration_since(at) < cadence);
-                if !counted {
-                    key_failures.insert((org.id, tier), now);
-                    inflight.health.record_failed(
-                        org.id,
-                        tier,
-                        meraki_sync::MerakiSyncFailure::Credential,
-                        pool_coverage::now_unix_ms(),
-                    );
-                }
+                count_core_failure(meraki_sync::MerakiSyncFailure::Credential);
                 continue;
             };
-            key_failures.remove(&(org.id, tier));
+            core_failures.remove(&(org.id, tier));
 
             let job_id = Uuid::new_v4();
             if !inflight.acquire_collect(org.id, job_id, tier, LEASE, now) {

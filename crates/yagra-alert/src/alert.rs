@@ -19,9 +19,9 @@ const POOL_PREFIX: &str = "pool:";
 
 /// Prefix that marks a Meraki-organization subject in its flat string form (ADR-164 決定 18).
 ///
-/// Checked **before** the pool prefix is irrelevant — neither is a prefix of the other — but a pool
-/// may be *named* anything, including `meraki_org:…`; that name is still read as a pool because it
-/// arrives behind `pool:`.
+/// Whether it is checked before or after the pool prefix is irrelevant — neither is a prefix of the
+/// other — but a pool may be *named* anything, including `meraki_org:…`; that name is still read as
+/// a pool because it arrives behind `pool:`.
 const MERAKI_ORG_PREFIX: &str = "meraki_org:";
 
 /// Namespace for the UUIDv5 identities non-node subjects are stored under.
