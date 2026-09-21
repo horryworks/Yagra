@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.28 — Cisco Meraki organizations are monitored end to end (devices import themselves, are filed by IP range, and follow what the Dashboard reports), one alert says when the Meraki API stops answering an organization, a device the Dashboard reports offline is down rather than OK, access points behind a wireless controller are imported without switching it on, folder-restricted accounts can no longer change credentials or Meraki organizations
+
 ### Breaking changes
 
 - **An account restricted to folders can no longer create, change or delete a monitoring credential.** `POST /api/v1/credentials`, `PUT /api/v1/credentials/{id}` and `DELETE /api/v1/credentials/{id}` answer `403 scope_unsupported` to it. Reading stays as it was: `GET /api/v1/credentials` still answers, because the add-node and edit-node dialogs, the collection tab and Discovery fill their credential picker from it — a restricted Operator can still bind an existing credential to their own nodes, and asks an unrestricted account for a new one. Accounts with no folder restriction are unaffected. See Security below. (ADR-158)

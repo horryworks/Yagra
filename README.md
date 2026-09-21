@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.27 — Access points behind a Huawei wireless controller become monitored nodes (radios as ports, SSIDs as the controller's own rows), the inventory tree narrows to what needs attention and lets a folder sit between nodes, an upgrade no longer re-fires the alerts of devices that are still down, discovery tries every selected credential**
+> Status: **v0.3.28 — Cisco Meraki organizations are monitored end to end (devices import themselves, are filed by IP range, and follow what the Dashboard reports), one alert says when the Meraki API stops answering an organization, a device the Dashboard reports offline is down rather than OK, access points behind a wireless controller are imported without switching it on, folder-restricted accounts can no longer change credentials or Meraki organizations**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
