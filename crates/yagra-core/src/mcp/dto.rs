@@ -406,8 +406,9 @@ pub struct NodeStatusDto {
     /// answering. Two cases, by `cause`. `meraki_api`: the Cisco Meraki Dashboard API is not
     /// answering the node's organization, and the state is the last one collected (ADR-164
     /// 決定 18). `wireless_controller`: the node is a wireless access point no controller has
-    /// reported lately, so its state reads `unknown` — or `unreachable` if it was down when last
-    /// reported (ADR-064 増分 G); `since_unix_ms` is the last report. `null` otherwise.
+    /// reported lately, so an `ok` it last had reads `unknown`, while any other state is kept —
+    /// `unreachable` if it was down when last reported, `maintenance`, or the colour of an alert
+    /// still open on it (ADR-064 増分 G); `since_unix_ms` is the last report. `null` otherwise.
     ///
     /// Mirrors `NodeStatus.collection_fault` on `GET /api/v1/nodes/{node_id}/status`, from the same
     /// function. ⚠️ Read it before concluding such a node is healthy or broken: neither kind raises

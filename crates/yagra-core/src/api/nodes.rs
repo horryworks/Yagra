@@ -1268,8 +1268,9 @@ pub(crate) enum CollectionFaultCause {
     /// The node keeps the last state collected (ADR-164 決定 18).
     MerakiApi,
     /// This node is a wireless access point, and no wireless controller has reported it within its
-    /// window — ten minutes, or three of the controller's poll intervals when that is longer. The
-    /// node reads `unknown` unless it was down when last reported (ADR-064 増分 G).
+    /// window — ten minutes, or three of the controller's poll intervals when that is longer. An
+    /// `ok` it last had reads `unknown`; any other state is kept — `unreachable` if it was down
+    /// when last reported, `maintenance`, or the colour of an alert still open on it (ADR-064 増分 G).
     WirelessController,
 }
 
