@@ -119,6 +119,16 @@ const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
     },
     name: 'a Meraki switch',
   },
+  // ADR-168: an access point's radios are rows, so it shows Interfaces too.
+  {
+    subject: {
+      kind: 'meraki',
+      snmpConfigured: false,
+      isWlanController: false,
+      merakiProductType: 'wireless',
+    },
+    name: 'a Meraki access point',
+  },
   {
     subject: {
       kind: 'meraki',

@@ -278,9 +278,10 @@ fn dimension_of(s: &NodeSeries, known: &std::collections::BTreeSet<i32>) -> Metr
     if !s.has_ifindex {
         return MetricDimension::None;
     }
-    // A Meraki switch port's traffic has no collection item behind it and never will (ADR-167
-    // 決定 8) — but it is declared, so it is not guessed at, even before the port's row exists.
-    if yagra_common::MERAKI_PORT_METRICS.contains(&s.metric.as_str()) {
+    // A Meraki switch port's traffic and an access point's non-Wi-Fi utilization have no collection
+    // item behind them and never will (ADR-167 決定 8, ADR-168 決定 2) — but they are declared, so
+    // they are not guessed at, even before the port's or the radio's row exists.
+    if yagra_common::meraki_interface_metrics().any(|m| m == s.metric) {
         return MetricDimension::Interface;
     }
     // Every ifindex naming a real interface ⇒ per-interface. A metric with an unparseable ifindex

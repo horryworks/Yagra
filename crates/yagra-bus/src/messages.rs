@@ -205,6 +205,14 @@ pub const CAP_POOL_FOLLOW: &str = "pool-follow";
 /// failing.
 pub const CAP_MERAKI_SWITCH_PORTS: &str = "meraki-switch-ports";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can run the Meraki
+/// **wireless** collect tier (`MerakiTier::Wireless`, ADR-168 決定 7).
+///
+/// 🚨 Asked of the whole pool for the reason [`CAP_MERAKI_SWITCH_PORTS`] gives: a poller from before
+/// the tier drops the job, and the organization's single collect flight — availability collects
+/// included — then waits out the whole lease behind a job nobody will answer.
+pub const CAP_MERAKI_WIRELESS: &str = "meraki-wireless";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -2135,6 +2143,15 @@ pub struct MerakiCollectCheck {
     /// ([`crate::CAP_MERAKI_SWITCH_PORTS`]).
     #[serde(default)]
     pub port_names: bool,
+    /// The wireless tier only (ADR-168 決定 1): also read every access point's SSIDs and radio
+    /// settings (`wireless/ssids/statuses/byDevice`) this time. That listing took 78 s for 1,710
+    /// access points on a real organization, and what it answers barely changes (8 of 1,710 in five
+    /// minutes), so core asks for it every twenty minutes per organization — inside the thirty
+    /// minutes a latest reading is looked back for — and on its first collect after starting. Every
+    /// other tier ignores it, and so does a poller from before it, which never runs the wireless tier
+    /// at all ([`crate::CAP_MERAKI_WIRELESS`]).
+    #[serde(default)]
+    pub ssid_statuses: bool,
 }
 
 const fn default_meraki_per_page() -> u32 {
@@ -3275,6 +3292,7 @@ mod tests {
                 target_rps: 2.0,
                 timeout_ms: 30_000,
                 port_names: false,
+                ssid_statuses: false,
             },
             300,
         );
@@ -3329,6 +3347,36 @@ mod tests {
         let back: MerakiCollectCheck =
             serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back, c);
+    }
+
+    /// ADR-168. The wireless tier travels as its token and the SSID-read flag with it; a producer
+    /// that never heard of the flag asks for no SSID read, and an unknown field costs nothing.
+    #[test]
+    fn a_wireless_collect_round_trips_and_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "org_id":"123456",
+            "meraki_org_uuid":"00000000-0000-0000-0000-000000000000",
+            "tier":"wireless",
+            "base_url":"https://api.meraki.com",
+            "api_key":"x",
+            "ssid_statuses":true,
+            "a_field_from_a_newer_core":{"x":1}
+        }"#;
+        let c: MerakiCollectCheck = serde_json::from_str(json).unwrap();
+        assert_eq!(c.tier, MerakiTier::Wireless);
+        assert!(c.ssid_statuses);
+        assert!(!c.port_names);
+        let back: MerakiCollectCheck =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
+
+        let older = r#"{"org_id":"1","meraki_org_uuid":"00000000-0000-0000-0000-000000000000",
+            "tier":"wireless","base_url":"https://api.meraki.com","api_key":"x"}"#;
+        let c: MerakiCollectCheck = serde_json::from_str(older).unwrap();
+        assert!(
+            !c.ssid_statuses,
+            "a producer that never heard of it asks for none"
+        );
     }
 
     #[test]

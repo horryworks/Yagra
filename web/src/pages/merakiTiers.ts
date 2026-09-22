@@ -23,6 +23,7 @@ import type { TFunction } from 'i18next';
 export const MERAKI_TIERS = [
   'availability',
   'uplink',
+  'wireless',
   'switch_ports',
   'traffic',
   'inventory',
@@ -43,6 +44,7 @@ export type MerakiTier = (typeof MERAKI_TIERS)[number];
 export const SELECTABLE_MERAKI_TIERS = [
   'availability',
   'uplink',
+  'wireless',
   'switch_ports',
   'traffic',
 ] as const satisfies readonly MerakiTier[];

@@ -216,3 +216,42 @@ export function merakiTrafficSeries(
   });
   return { timestamps, series };
 }
+
+/** One radio of a Meraki access point on the card (ADR-168): its band, and the last five minutes'
+ *  channel utilization with the part of it that was not Wi-Fi. */
+export interface MerakiRadioLine {
+  row: number;
+  /** What the radio is called — its `interfaces` row's name ("2.4 GHz"), or its row key when the
+   *  row has not been written yet. */
+  band: string;
+  utilPct: number | null;
+  nonWifiPct: number | null;
+}
+
+/**
+ * One line per radio that has either reading, in slot order (2.4 GHz, 5 GHz, 6 GHz, then a band's
+ * second radio).
+ *
+ * The band is the radio's own `interfaces` row name, which the collect writes with the reading —
+ * never worked out here from the slot number, which would be a second copy of the numbering in
+ * `yagra_common::WlanBand::slot_base`. The two readings are joined by row, as the uplinks are, so
+ * a radio missing one does not shift the other onto its neighbour.
+ */
+export function merakiRadioLines(
+  util: readonly RowReading[],
+  nonWifi: readonly RowReading[],
+  names: ReadonlyMap<number, string>,
+): MerakiRadioLine[] {
+  const byRow = new Map<number, MerakiRadioLine>();
+  const line = (row: number): MerakiRadioLine => {
+    let l = byRow.get(row);
+    if (!l) {
+      l = { row, band: names.get(row) ?? `#${row}`, utilPct: null, nonWifiPct: null };
+      byRow.set(row, l);
+    }
+    return l;
+  };
+  for (const r of util) line(r.row).utilPct = r.value;
+  for (const r of nonWifi) line(r.row).nonWifiPct = r.value;
+  return [...byRow.values()].sort((a, b) => a.row - b.row);
+}

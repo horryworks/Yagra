@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import type { MovePreview, NodeGroup, NodeSummary } from '../../types/api';
 import { groupOptions } from '../../lib/nodeTree';
-import { NODE_KIND_SPEC } from '../../lib/nodeKind';
+import { nodeBadges } from '../../lib/nodeKind';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import {
@@ -100,16 +100,15 @@ export function MoveByPrefixModal({
   const nodeLine = (id: string) => {
     const n = byId.get(id);
     if (!n) return <li key={id}>{id}</li>;
-    const spec = NODE_KIND_SPEC[n.kind];
     return (
       <li key={id}>
         <span className="mbp-name">{n.name}</span>
         <span className="mbp-addr mono">{n.address}</span>
-        {spec.badge && (
-          <span className="mbp-badge" title={t(spec.labelKey)}>
-            {spec.badge}
+        {nodeBadges({ kind: n.kind, merakiProductType: n.meraki_product_type }).map((badge) => (
+          <span key={badge.text} className="mbp-badge" title={t(badge.labelKey)}>
+            {badge.text}
           </span>
-        )}
+        ))}
       </li>
     );
   };

@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
 import { poolChoices, sharedOwnPool } from '../../lib/pool';
 import { targetNodeCount, type ActionTarget } from '../../lib/actionTarget';
-import { NODE_KIND_SPEC } from '../../lib/nodeKind';
+import { nodeBadges } from '../../lib/nodeKind';
 import { brandBadgeClass } from '../../lib/brandBadge';
 import { GROUP_ORIGIN_BADGE_BRANDS, GROUP_ORIGIN_BADGES, groupOriginOf } from '../../lib/groupOrigin';
 import {
@@ -1264,13 +1264,16 @@ export function NodeTree({
         {/* What kind of node this is, when it is not an ordinary ICMP/SNMP device — a URL monitor,
             a DNS monitor or a Meraki device. Unmarked is the default: the tree is overwhelmingly
             ordinary devices, so a badge on every one of 50k rows would say nothing. */}
-        {NODE_KIND_SPEC[node.kind].badge && (
-          <span
-            className={`ntree-badge${brandBadgeClass(NODE_KIND_SPEC[node.kind].badgeBrand)}`}
-            title={t(NODE_KIND_SPEC[node.kind].labelKey)}
-          >
-            {NODE_KIND_SPEC[node.kind].badge}
-          </span>
+        {nodeBadges({ kind: node.kind, merakiProductType: node.meraki_product_type }).map(
+          (badge) => (
+            <span
+              key={badge.text}
+              className={`ntree-badge${brandBadgeClass(badge.brand)}`}
+              title={t(badge.labelKey)}
+            >
+              {badge.text}
+            </span>
+          ),
         )}
         {/* Before the markers — see `.ntree-actions` in the stylesheet. The ↗ acts on whatever the
             menu's move items act on: this row, or the working set it belongs to (`nodeMoveItems`,

@@ -47,7 +47,7 @@ import { SetParentModal } from '../SetParentModal/SetParentModal';
 import { PinButton } from './PinButton';
 import { nodeSubLineParts } from './nodeIdentity';
 import { brandBadgeClass } from '../../lib/brandBadge';
-import { NODE_KIND_SPEC } from '../../lib/nodeKind';
+import { NODE_KIND_SPEC, nodeBadges } from '../../lib/nodeKind';
 import type { MoveTarget } from '../MoveNodeModal/MoveNodeModal';
 import './NodeDetail.css';
 
@@ -372,14 +372,18 @@ export function NodeDetail({
             <span className="nd-name">{node.name}</span>
             {/* What this node is, when it is not an ordinary device. Unmarked is the default so a
                 normal device's name is not decorated — the badge means "read this differently". */}
-            {NODE_KIND_SPEC[node.kind].badge && (
+            {nodeBadges({
+              kind: node.kind,
+              merakiProductType: node.meraki_device?.product_type,
+            }).map((badge) => (
               <span
-                className={`nd-kind${brandBadgeClass(NODE_KIND_SPEC[node.kind].badgeBrand)}`}
-                title={t(NODE_KIND_SPEC[node.kind].labelKey)}
+                key={badge.text}
+                className={`nd-kind${brandBadgeClass(badge.brand)}`}
+                title={t(badge.labelKey)}
               >
-                {NODE_KIND_SPEC[node.kind].badge}
+                {badge.text}
               </span>
-            )}
+            ))}
             {status && <StatePill state={state} />}
           </div>
           <div className="nd-actions">

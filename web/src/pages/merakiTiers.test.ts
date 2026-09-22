@@ -19,6 +19,7 @@ describe('MERAKI_TIERS', () => {
     expect([...MERAKI_TIERS]).toEqual([
       'availability',
       'uplink',
+      'wireless',
       'switch_ports',
       'traffic',
       'inventory',
@@ -48,7 +49,7 @@ describe('the tier an organization cannot go without (ADR-164 決定 17)', () =>
     // Availability is the only tier that says whether a device is up. Equality on the rest: a new
     // selectable tier has to land on one side or the other on purpose.
     expect(REQUIRED_MERAKI_TIER).toBe('availability');
-    expect([...OPTIONAL_MERAKI_TIERS]).toEqual(['uplink', 'switch_ports', 'traffic']);
+    expect([...OPTIONAL_MERAKI_TIERS]).toEqual(['uplink', 'wireless', 'switch_ports', 'traffic']);
     expect([REQUIRED_MERAKI_TIER, ...OPTIONAL_MERAKI_TIERS]).toEqual([...SELECTABLE_MERAKI_TIERS]);
   });
 

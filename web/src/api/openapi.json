@@ -7814,7 +7814,7 @@
           "meraki"
         ],
         "summary": "Update an org's per-tier cadence, enabled tiers, and rate budget.",
-        "description": "`enabled_tiers` must include `availability`. It is the one tier that decides whether a device\nis up; the others only record readings, so an organization without it could raise no node-down\nalert at all. `switch_ports_secs` may be left out, and the stored interval then stays.",
+        "description": "`enabled_tiers` must include `availability`. It is the one tier that decides whether a device\nis up; the others only record readings, so an organization without it could raise no node-down\nalert at all. `switch_ports_secs` and `wireless_secs` may be left out, and the stored interval\nthen stays.",
         "operationId": "set_meraki_org_cadence",
         "parameters": [
           {
@@ -7843,7 +7843,7 @@
             "description": "Cadence, enabled tiers and rate budget updated"
           },
           "400": {
-            "description": "A cadence value is outside its band (`switch_ports_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)",
+            "description": "A cadence value is outside its band (`switch_ports_secs` and `wireless_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -31601,6 +31601,14 @@
           "uplink_secs": {
             "type": "integer",
             "format": "int32"
+          },
+          "wireless_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The wireless tier's interval, 300–600 seconds. Optional, for the same reason."
           }
         }
       },
@@ -31625,7 +31633,7 @@
               "string",
               "null"
             ],
-            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,\n`switch_port_usage`, `switch_port_config`). Absent when the whole collect failed, or a\npoller from before this reported it."
+            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,\n`switch_port_usage`, `switch_port_config`), the wireless tier up to three\n(`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when\nthe whole collect failed, or a poller from before this reported it."
           },
           "reason": {
             "$ref": "#/components/schemas/MerakiSyncFailure",
@@ -31638,7 +31646,7 @@
           },
           "tier": {
             "type": "string",
-            "description": "`availability`, `uplink`, `switch_ports` or `traffic`."
+            "description": "`availability`, `uplink`, `wireless`, `switch_ports` or `traffic`."
           }
         }
       },
@@ -32165,6 +32173,7 @@
           "traffic_secs",
           "inventory_secs",
           "switch_ports_secs",
+          "wireless_secs",
           "enabled_tiers",
           "target_rps",
           "credential_id",
@@ -32189,7 +32198,7 @@
             "items": {
               "$ref": "#/components/schemas/MerakiCollectFailureView"
             },
-            "description": "The collect tiers the Dashboard API is **not answering** right now, each with why and since\nwhen. Empty when none is known to be failing.\n\nDistinct from `last_sync_error`, which is the inventory sync — this server asking what the\norganization holds. A collect is a poller asking how the devices are, and it is what a\ndevice's state depends on: while `availability` is listed here the organization's nodes keep\nthe last state they had, and after three failures in a row one alert is raised about the\norganization (`subject_kind: meraki_org`) — never one per device. `uplink`, `switch_ports`\nor `traffic` listed alone raises nothing: readings are missing, liveness is not."
+            "description": "The collect tiers the Dashboard API is **not answering** right now, each with why and since\nwhen. Empty when none is known to be failing.\n\nDistinct from `last_sync_error`, which is the inventory sync — this server asking what the\norganization holds. A collect is a poller asking how the devices are, and it is what a\ndevice's state depends on: while `availability` is listed here the organization's nodes keep\nthe last state they had, and after three failures in a row one alert is raised about the\norganization (`subject_kind: meraki_org`) — never one per device. `uplink`, `wireless`,\n`switch_ports` or `traffic` listed alone raises nothing: readings are missing, liveness is not."
           },
           "credential_id": {
             "type": "string",
@@ -32295,6 +32304,12 @@
           "uplink_secs": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "wireless_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The wireless tier's interval (seconds) — every access point's clients and each radio's\nchannel utilization (ADR-168). The SSIDs and radio settings are read every twenty minutes\nwhatever this says.",
             "minimum": 0
           }
         }
@@ -33978,6 +33993,13 @@
           "kind": {
             "$ref": "#/components/schemas/NodeKind",
             "description": "**What this node is**, and therefore how it is polled — the value that distinguishes a URL\nor DNS monitor from an ordinary ICMP/SNMP device in the inventory.\n\nResolved by `NodeKind::resolve`, the same function `GET /nodes/{id}` and the scheduler ask,\nso a list row can never disagree with the detail page it opens."
+          },
+          "meraki_product_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A Meraki node's product type as the Dashboard names it — `wireless` (an MR access point),\n`switch`, `appliance`, … — and absent on every other node. What the list's \"AP\" badge is\nread from (ADR-168 決定 11): an MR stays `kind: meraki`, so the kind alone cannot say it is\nan access point. The detail page reads the same value from `meraki_device.product_type`."
           },
           "model": {
             "type": [

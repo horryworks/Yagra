@@ -24,7 +24,7 @@ import {
 } from '../../lib/nodeTree';
 import { stateLabel } from '../../lib/format';
 import { brandBadgeClass } from '../../lib/brandBadge';
-import { NODE_KIND_SPEC } from '../../lib/nodeKind';
+import { nodeBadges } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
 import { PinButton } from './PinButton';
@@ -254,13 +254,16 @@ export function GroupDetail({
                   <>
                     <StatusDot state={n.state} withLabel={false} />
                     <span className="nd-member-name">{n.name}</span>
-                    {NODE_KIND_SPEC[n.kind].badge && (
-                      <span
-                        className={`nd-kind${brandBadgeClass(NODE_KIND_SPEC[n.kind].badgeBrand)}`}
-                        title={t(NODE_KIND_SPEC[n.kind].labelKey)}
-                      >
-                        {NODE_KIND_SPEC[n.kind].badge}
-                      </span>
+                    {nodeBadges({ kind: n.kind, merakiProductType: n.meraki_product_type }).map(
+                      (badge) => (
+                        <span
+                          key={badge.text}
+                          className={`nd-kind${brandBadgeClass(badge.brand)}`}
+                          title={t(badge.labelKey)}
+                        >
+                          {badge.text}
+                        </span>
+                      ),
                     )}
                     <span className="nd-member-addr mono">{n.address}</span>
                   </>

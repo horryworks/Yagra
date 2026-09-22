@@ -336,3 +336,134 @@ test.describe('a primary that is down while its spare carries the site', () => {
     expect(errors.uncaught).toEqual([]);
   });
 });
+
+// ── A Meraki access point (ADR-168) ───────────────────────────────────────────────────────────
+
+test.describe('a Meraki access point', () => {
+  const apNode = (): Json => {
+    const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as unknown as Schemas['NodeDetail'];
+    return {
+      ...body,
+      id: NODE_ID,
+      kind: 'meraki',
+      snmp_configured: false,
+      meraki_device: {
+        serial: 'Q2XX-TEST-0002',
+        product_type: 'wireless',
+        model: 'MR46',
+        network_id: 'N_1',
+        org_id: '1',
+        org_uuid: '00000000-0000-4000-8000-000000000ace',
+      },
+      meraki_pair: null,
+    } as unknown as Json;
+  };
+  /** Its readings: the clients and SSIDs as one number each, the radios by slot (`rows=true`). */
+  const values: Record<string, number> = {
+    meraki_device_up: 1,
+    wlan_ap_client_count: 12,
+    wlan_ap_ssid_count: 3,
+  };
+  const radioRows: Record<string, { row: number; value: number }[]> = {
+    wlan_radio_channel_util_pct: [
+      { row: 2, value: 3.08 },
+      { row: 1, value: 37.25 },
+    ],
+    wlan_radio_non_wifi_util_pct: [
+      { row: 1, value: 0.5 },
+      { row: 2, value: 0 },
+    ],
+  };
+  // An access point has no WAN uplink and no Auto VPN: the server answers 404 for a metric with no
+  // reading.
+  const none = [
+    'meraki_uplink_sent_bps',
+    'meraki_uplink_recv_bps',
+    'meraki_uplink_status',
+    'meraki_vpn_hubs_reachable',
+    'meraki_vpn_hubs_unreachable',
+    'meraki_vpn_spokes_unreachable',
+  ];
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/nodes/{node_id}': apNode(),
+        '/api/v1/nodes/{node_id}/metrics/{metric}': (url) => {
+          const name = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+          const body = defaultBodyFor(url.pathname) as unknown as Schemas['MetricReading'];
+          const rows = radioRows[name];
+          if (rows) {
+            return {
+              ...body,
+              metric: name,
+              node_id: NODE_ID,
+              value: Math.max(...rows.map((r) => r.value)),
+              rows,
+            } as unknown as Json;
+          }
+          return { ...body, metric: name, node_id: NODE_ID, value: values[name] ?? 0 } as unknown as Json;
+        },
+        // The radios' rows, which the collect names by band — the card reads the band from here.
+        '/api/v1/nodes/{node_id}/interfaces': () => {
+          const [row] = defaultBodyFor(`/api/v1/nodes/${NODE_ID}/interfaces`) as unknown as Schemas['InterfaceRow'][];
+          return [
+            { ...row, ifindex: 1, if_name: '2.4 GHz', if_type: 71 },
+            { ...row, ifindex: 2, if_name: '5 GHz', if_type: 71 },
+          ] as unknown as Json;
+        },
+      },
+      failures: Object.fromEntries(none.map((m) => [`/api/v1/nodes/${NODE_ID}/metrics/${m}`, 404])),
+    },
+  });
+
+  test('wears both badges, and its card shows clients, SSIDs and each radio’s utilization', async ({
+    page,
+    mock,
+    errors,
+  }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=overview`);
+    const card = cardOf(page);
+    await expect(card).toBeVisible({ timeout: 15_000 });
+
+    // ADR-168 決定 11 (the user's decision): Meraki, and AP beside it — the AP in Yagra's accent.
+    const badges = page.locator('.nd-namewrap .nd-kind');
+    await expect(badges).toHaveText(['Meraki', 'AP']);
+    await expect(badges.nth(1)).toHaveAttribute('title', 'Access point');
+    await expect(badges.nth(1)).not.toHaveClass(/is-meraki/);
+
+    await expect(card.locator('.nd-mk-tiles .nd-mk-tile-label')).toHaveText([
+      'Availability',
+      'Connected clients',
+      'SSIDs broadcast',
+      'Channel utilization (2.4 GHz)',
+      'Channel utilization (5 GHz)',
+    ]);
+    const tile = (label: string) =>
+      card.locator('.nd-mk-tile', {
+        has: page.locator('.nd-mk-tile-label', { hasText: label }),
+      });
+    await expect(tile('Connected clients').locator('.nd-mk-tile-value')).toHaveText('12');
+    await expect(tile('SSIDs broadcast').locator('.nd-mk-tile-value')).toHaveText('3');
+    await expect(tile('(2.4 GHz)').locator('.nd-mk-tile-value')).toHaveText('37%');
+    await expect(tile('(2.4 GHz)').locator('.nd-mk-tile-sub')).toHaveText('of which non-Wi-Fi 0.5%');
+    await expect(tile('(5 GHz)').locator('.nd-mk-tile-value')).toHaveText('3.1%');
+    await expect(tile('(5 GHz)').locator('.nd-mk-tile-sub')).toHaveText('of which non-Wi-Fi 0%');
+    // No WAN rows on an access point, and no chart of them.
+    await expect(card.locator('.nd-mk-uplinks')).toHaveCount(0);
+    await expect(card.locator('.nd-mk-chart')).toHaveCount(0);
+
+    // The radios were asked for with their rows — without `rows=true` there is one number, not two.
+    const asked = mock.requests
+      .filter((r) => r.pathname.startsWith(`/api/v1/nodes/${NODE_ID}/metrics/wlan_radio_`))
+      .map((r) => `${r.pathname.split('/').pop()}${r.search}`);
+    for (const m of Object.keys(radioRows)) {
+      expect(asked.some((a) => a.startsWith(m) && a.includes('rows=true')), m).toBe(true);
+    }
+
+    const { inspected, problems } = await layoutProblems(page);
+    expect(inspected).toBeGreaterThanOrEqual(5);
+    expect(problems).toEqual([]);
+    expect(errors.uncaught).toEqual([]);
+  });
+});

@@ -115,6 +115,7 @@
     "wlan_radio_client_signal_dbm": "dBm",
     "wlan_radio_interference_pct": "%",
     "wlan_radio_noise_dbm": "dBm",
+    "wlan_radio_non_wifi_util_pct": "%",
     "wlan_radio_tx_power_dbm": "dBm"
   }
 }

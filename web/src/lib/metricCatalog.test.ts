@@ -151,10 +151,16 @@ describe('filterMetricOptions', () => {
     expect(filterMetricOptions(opts, 'oper').map((o) => o.name)).toEqual(['if_oper_status']);
     // The derived metrics are searchable by name too, and by the direction in it — which is the
     // whole reason they are two names rather than one (ADR-076).
-    expect(filterMetricOptions(opts, 'util_pct').map((o) => o.name)).toEqual([
-      'if_in_util_pct',
-      'if_out_util_pct',
-    ]);
+    // The two port ones, whatever else shares the suffix — a Meraki radio's non-Wi-Fi share
+    // (ADR-168) is a check metric and matches this needle too.
+    expect(
+      filterMetricOptions(opts, 'util_pct')
+        .map((o) => o.name)
+        .filter((n) => n.startsWith('if_')),
+    ).toEqual(['if_in_util_pct', 'if_out_util_pct']);
+    expect(filterMetricOptions(opts, 'util_pct').map((o) => o.name)).toContain(
+      'wlan_radio_non_wifi_util_pct',
+    );
     expect(filterMetricOptions(opts, 'if_out_util').map((o) => o.name)).toEqual([
       'if_out_util_pct',
     ]);

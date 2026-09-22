@@ -292,6 +292,9 @@ pub struct MerakiCollectSpec {
     /// The switch-port tier only: also read the ports' configured names this time (ADR-167 決定 1,
     /// `yagra_bus::MerakiCollectCheck::port_names`).
     pub port_names: bool,
+    /// The wireless tier only: also read every access point's SSIDs and radio settings this time
+    /// (ADR-168 決定 1, `yagra_bus::MerakiCollectCheck::ssid_statuses`).
+    pub ssid_statuses: bool,
 }
 
 /// Raw per-device observations from a Meraki collect. The poller maps these to per-node
@@ -308,6 +311,30 @@ pub struct MerakiObservation {
     /// A switch's ports (ADR-167) → the interface inventory, as an SNMP switch's ifTable walk
     /// fills it. Empty on every other device and every other tier.
     pub ports: Vec<MerakiPort>,
+    /// An access point's radios (ADR-168) → one `interfaces` row and one set of per-slot readings
+    /// each, built on the poller by `yagra_bus::RadioReadings` so a Meraki radio publishes exactly
+    /// what a controller-walked one does. Empty on every other device and every other tier.
+    pub radios: Vec<MerakiRadio>,
+}
+
+/// One radio of a Meraki access point seen on a wireless collect (ADR-168 決定 2): its slot on the
+/// AP node and whatever the collect read about it this time. Every reading is `None` when this
+/// collect did not read it — the channel and power come from the twenty-minute SSID read only.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerakiRadio {
+    /// The radio's slot on its AP node — [`yagra_common::WlanBand::slot_base`] for the first radio
+    /// of a band, [`yagra_common::assign_radio_slots`]' numbering after that.
+    pub slot: u32,
+    /// The band it works in.
+    pub band: yagra_common::WlanBand,
+    /// Channel utilization over the last five minutes, percent (`total`).
+    pub channel_util_pct: Option<f64>,
+    /// The part of it that was not Wi-Fi, percent (`nonWifi`).
+    pub non_wifi_util_pct: Option<f64>,
+    /// The working channel.
+    pub channel: Option<u32>,
+    /// Transmit power, dBm.
+    pub tx_power_dbm: Option<f64>,
 }
 
 /// One Meraki switch port seen on a switch-port collect (ADR-167): what goes in its `interfaces`

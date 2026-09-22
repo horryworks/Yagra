@@ -870,6 +870,13 @@
   {
     "family": "wlan",
     "metric_kind": "gauge",
+    "metric_name": "wlan_ap_ssid_count",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "wlan",
+    "metric_kind": "gauge",
     "metric_name": "wlan_ap_temp_c",
     "per_interface": false,
     "source": "check"
@@ -1006,6 +1013,13 @@
     "metric_name": "wlan_radio_noise_dbm",
     "per_interface": true,
     "source": "collected"
+  },
+  {
+    "family": "wlan",
+    "metric_kind": "gauge",
+    "metric_name": "wlan_radio_non_wifi_util_pct",
+    "per_interface": false,
+    "source": "check"
   },
   {
     "family": "Huawei WLAN radios (AC)",

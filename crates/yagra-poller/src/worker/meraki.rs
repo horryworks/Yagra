@@ -30,7 +30,7 @@
 //! well, because an alert may only be closed on evidence — and "the Dashboard answered" is it.
 
 use super::*;
-use yagra_bus::{MerakiCollectReport, RowName};
+use yagra_bus::{MerakiCollectReport, RadioReadings, RowName};
 use yagra_common::{MerakiTier, METRIC_MERAKI_DEVICE_UP};
 
 /// What an availability result says about the device, read from the sample the transport made.
@@ -65,7 +65,10 @@ fn tier_verdict(tier: MerakiTier, samples: &[Sample]) -> (CheckOutcome, bool, bo
         // The outcome is a placeholder the engine never reads for an observational result. A
         // switch port's status is a reading like an uplink's (ADR-167): a port down says nothing
         // about whether the switch is.
+        // An access point's clients and radios are readings too (ADR-168): a radio with nothing on
+        // it says nothing about whether the access point is up — availability does.
         MerakiTier::Uplink
+        | MerakiTier::Wireless
         | MerakiTier::SwitchPorts
         | MerakiTier::Traffic
         | MerakiTier::Inventory => (CheckOutcome::Reachable, true, true),
@@ -119,6 +122,7 @@ pub async fn execute_meraki(
             continue; // reported by the API but not imported → not in scope
         };
         let row_names = uplink_row_names(&obs.samples, &obs.uplinks);
+        let radios: Vec<RadioReadings> = obs.radios.iter().map(radio_readings).collect();
         let samples: Vec<Sample> = obs
             .samples
             .into_iter()
@@ -126,6 +130,7 @@ pub async fn execute_meraki(
                 Some(idx) => Sample::interface(s.metric, IfIndex(idx), s.value, MetricKind::Gauge),
                 None => Sample::gauge(s.metric, s.value),
             })
+            .chain(radios.iter().flat_map(RadioReadings::samples))
             .collect();
         let (outcome, observational, judge_samples) = tier_verdict(check.tier, &samples);
         let interfaces = obs
@@ -148,6 +153,7 @@ pub async fn execute_meraki(
                 tx_power_high_dbm: None,
             })
             .chain(obs.ports.into_iter().map(switch_port_interface))
+            .chain(radios.iter().map(RadioReadings::interface))
             .collect();
         results.push(PollResult {
             job_id: job.job_id,
@@ -194,6 +200,25 @@ fn spec_for(job: &PollJob, check: &yagra_bus::MerakiCollectCheck) -> MerakiColle
         target_rps: check.target_rps,
         interval_secs: job.interval_secs,
         port_names: check.port_names,
+        ssid_statuses: check.ssid_statuses,
+    }
+}
+
+/// One radio of a Meraki access point (ADR-168), in the form every radio path publishes from — so an
+/// MR's radio is the same slot, the same row and the same metric names as a controller-walked one.
+///
+/// `up` stays `None`: nothing the Dashboard answers says whether a radio is on (決定 3), and a
+/// radio's `if_oper_status` drawn from a guess would page someone about a healthy access point.
+fn radio_readings(r: &yagra_transport::MerakiRadio) -> RadioReadings {
+    RadioReadings {
+        slot: r.slot,
+        band: Some(r.band),
+        up: None,
+        channel: r.channel,
+        channel_util_pct: r.channel_util_pct,
+        non_wifi_util_pct: r.non_wifi_util_pct,
+        tx_power_dbm: r.tx_power_dbm,
+        ..RadioReadings::default()
     }
 }
 
@@ -326,6 +351,7 @@ mod tests {
         let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
             serial: "Q2-A".into(),
             ports: vec![],
+            radios: vec![],
             samples: vec![MerakiSample {
                 metric: METRIC_MERAKI_DEVICE_UP.into(),
                 ifindex: None,
@@ -348,6 +374,7 @@ mod tests {
             target_rps: 2.0,
             timeout_ms: 30_000,
             port_names: false,
+            ssid_statuses: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
         device_results(execute_meraki(&job, &transport, 42).await)
@@ -383,6 +410,7 @@ mod tests {
             target_rps: 2.0,
             timeout_ms: 30_000,
             port_names: false,
+            ssid_statuses: false,
         };
         let job = PollJob::meraki_collect(Uuid::from_u128(7), check, 300);
         execute_meraki(&job, transport, 42).await
@@ -392,6 +420,7 @@ mod tests {
         vec![yagra_transport::MerakiObservation {
             serial: "Q2-A".into(),
             ports: vec![],
+            radios: vec![],
             samples: vec![yagra_transport::MerakiSample {
                 metric: METRIC_MERAKI_DEVICE_UP.into(),
                 ifindex: None,
@@ -426,6 +455,7 @@ mod tests {
             target_rps: 2.0,
             timeout_ms: 30_000,
             port_names: false,
+            ssid_statuses: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check.clone(), 1_800);
         let spec = spec_for(&job, &check);
@@ -466,6 +496,7 @@ mod tests {
                 sample("meraki_port_out_bps", 1, 32_300.0),
             ],
             uplinks: vec![],
+            radios: vec![],
             ports: vec![
                 MerakiPort {
                     ifindex: 1,
@@ -515,6 +546,94 @@ mod tests {
         );
     }
 
+    /// ADR-168. An access point's radios become `interfaces` rows and per-slot readings the way a
+    /// controller-walked access point's do — the same slot, the same names, type 71 — its clients
+    /// stay a node-level reading, and nothing claims whether a radio is on (決定 3).
+    #[tokio::test]
+    async fn an_access_points_radios_become_ports_and_claim_no_status() {
+        use yagra_transport::{MerakiObservation, MerakiRadio, MerakiSample};
+        let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
+            serial: "Q2-A".into(),
+            samples: vec![MerakiSample {
+                metric: "wlan_ap_client_count".into(),
+                ifindex: None,
+                value: 12.0,
+            }],
+            uplinks: vec![],
+            ports: vec![],
+            radios: vec![
+                MerakiRadio {
+                    slot: 1,
+                    band: yagra_common::WlanBand::Band2G4,
+                    channel_util_pct: Some(37.25),
+                    non_wifi_util_pct: Some(0.5),
+                    channel: Some(6),
+                    tx_power_dbm: Some(17.0),
+                },
+                MerakiRadio {
+                    slot: 2,
+                    band: yagra_common::WlanBand::Band5G,
+                    channel_util_pct: Some(3.08),
+                    non_wifi_util_pct: Some(0.0),
+                    channel: None,
+                    tx_power_dbm: None,
+                },
+            ],
+        }]);
+        let results = device_results(
+            collect_with(&transport, Uuid::from_u128(5), MerakiTier::Wireless).await,
+        );
+        assert_eq!(results.len(), 1);
+        let r = &results[0];
+        assert!(
+            r.observational && r.judge_samples,
+            "a radio's reading is judged, and never the access point's liveness"
+        );
+        assert!(r.row_names.is_empty(), "{:?}", r.row_names);
+
+        let at = |metric: &str, slot: Option<u32>| {
+            r.samples
+                .iter()
+                .find(|s| s.metric == metric && s.ifindex == slot.map(IfIndex))
+                .map(|s| s.value)
+        };
+        assert_eq!(at("wlan_ap_client_count", None), Some(12.0));
+        assert_eq!(at("wlan_radio_channel_util_pct", Some(1)), Some(37.25));
+        assert_eq!(at("wlan_radio_non_wifi_util_pct", Some(2)), Some(0.0));
+        assert_eq!(at("wlan_radio_channel", Some(1)), Some(6.0));
+        assert_eq!(at("wlan_radio_tx_power_dbm", Some(1)), Some(17.0));
+        assert_eq!(
+            at("wlan_radio_channel", Some(2)),
+            None,
+            "absent is not zero"
+        );
+        assert!(
+            r.samples.iter().all(|s| s.metric != "if_oper_status"),
+            "the Dashboard says nothing about whether a radio is on"
+        );
+
+        let rows: Vec<_> = r
+            .interfaces
+            .iter()
+            .map(|i| {
+                (
+                    i.ifindex.0,
+                    i.if_name.as_deref(),
+                    i.if_alias.as_deref(),
+                    i.if_type,
+                    i.if_speed,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (1, Some("2.4 GHz"), Some("channel 6"), Some(71), None),
+                (2, Some("5 GHz"), None, Some(71), None),
+            ]
+        );
+    }
+
     /// Per-uplink readings carry their uplink's name, once per (metric, row); device-level ones
     /// carry none (ADR-164 決定 24).
     #[tokio::test]
@@ -528,6 +647,7 @@ mod tests {
         let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
             serial: "Q2-A".into(),
             ports: vec![],
+            radios: vec![],
             samples: vec![
                 sample("meraki_uplink_sent_bps", Some(1)),
                 sample("meraki_uplink_recv_bps", Some(1)),
@@ -754,6 +874,7 @@ mod tests {
             MerakiObservation {
                 serial: "Q2-A".into(),
                 ports: vec![],
+                radios: vec![],
                 samples: vec![
                     MerakiSample {
                         metric: "meraki_device_up".into(),
@@ -775,6 +896,7 @@ mod tests {
             MerakiObservation {
                 serial: "Q2-UNMAPPED".into(),
                 ports: vec![],
+                radios: vec![],
                 samples: vec![MerakiSample {
                     metric: "meraki_device_up".into(),
                     ifindex: None,
@@ -799,6 +921,7 @@ mod tests {
             target_rps: 2.0,
             timeout_ms: 30_000,
             port_names: false,
+            ssid_statuses: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
 

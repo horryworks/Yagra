@@ -107,6 +107,21 @@ pub const METRIC_MERAKI_PORT_OUT_BPS: &str = "meraki_port_out_bps";
 /// declares.
 pub const MERAKI_PORT_METRICS: [&str; 2] = [METRIC_MERAKI_PORT_IN_BPS, METRIC_MERAKI_PORT_OUT_BPS];
 
+/// The radio metrics only a Meraki MR publishes, one series per radio slot (ADR-168 決定 2). The
+/// other radio readings an MR sends — utilization, channel, transmit power — share their names with
+/// the controller-walked access points, and the built-in radio template already declares those; this
+/// one no template can declare, for the reason [`MERAKI_PORT_METRICS`] gives.
+pub const MERAKI_RADIO_METRICS: [&str; 1] = [crate::wlan::METRIC_WLAN_RADIO_NON_WIFI_UTIL_PCT];
+
+/// Every metric the Meraki collect publishes **per interface** that no collection item declares:
+/// a switch port's traffic ([`MERAKI_PORT_METRICS`]) and an access point's non-Wi-Fi utilization
+/// ([`MERAKI_RADIO_METRICS`]). The one list both readers take — the per-interface metric set the
+/// alert engine judges by, and the API's dimension of a series with no item behind it — so a third
+/// list cannot be added to one of them and forgotten by the other.
+pub fn meraki_interface_metrics() -> impl Iterator<Item = &'static str> {
+    MERAKI_PORT_METRICS.into_iter().chain(MERAKI_RADIO_METRICS)
+}
+
 /// One Dashboard read a collect makes (ADR-164 決定 25). A tier may make several — the uplink tier
 /// reads loss and latency, the uplinks' statuses and the Auto VPN statuses — and when one of them fails
 /// while the others answer, this names which, on the organization's row and in the API.
@@ -132,11 +147,20 @@ pub enum MerakiListing {
     SwitchPortUsage,
     /// `switch/ports/bySwitch` — the ports' configured names, read once an hour (ADR-167 決定 1).
     SwitchPortConfig,
+    /// `wireless/clients/overview/byDevice` — the wireless tier's first read: each access point's
+    /// clients online (ADR-168).
+    WirelessClients,
+    /// `wireless/devices/channelUtilization/byDevice` — the wireless tier's second read: each radio's
+    /// channel utilization over the last five minutes.
+    WirelessChannelUtilization,
+    /// `wireless/ssids/statuses/byDevice` — the SSIDs and radio settings, read every twenty minutes
+    /// (ADR-168 決定 1).
+    WirelessSsidStatuses,
 }
 
 impl MerakiListing {
     /// Every listing.
-    pub const ALL: [MerakiListing; 8] = [
+    pub const ALL: [MerakiListing; 11] = [
         MerakiListing::Availabilities,
         MerakiListing::UplinksLossAndLatency,
         MerakiListing::ApplianceUplinkStatuses,
@@ -145,6 +169,9 @@ impl MerakiListing {
         MerakiListing::SwitchPortStatuses,
         MerakiListing::SwitchPortUsage,
         MerakiListing::SwitchPortConfig,
+        MerakiListing::WirelessClients,
+        MerakiListing::WirelessChannelUtilization,
+        MerakiListing::WirelessSsidStatuses,
     ];
 
     /// The token stored and sent — the serde tag.
@@ -159,6 +186,9 @@ impl MerakiListing {
             MerakiListing::SwitchPortStatuses => "switch_port_statuses",
             MerakiListing::SwitchPortUsage => "switch_port_usage",
             MerakiListing::SwitchPortConfig => "switch_port_config",
+            MerakiListing::WirelessClients => "wireless_clients",
+            MerakiListing::WirelessChannelUtilization => "wireless_channel_utilization",
+            MerakiListing::WirelessSsidStatuses => "wireless_ssid_statuses",
         }
     }
 
@@ -218,6 +248,11 @@ pub enum MerakiTier {
     Availability,
     /// WAN uplink loss / latency / status.
     Uplink,
+    /// Every access point's clients, each radio's channel utilization and — every twenty minutes —
+    /// the SSIDs it broadcasts and its radios' channel and power (ADR-168). The MR access points
+    /// only, read organization-wide and joined by serial. Observational: nothing here says whether
+    /// an access point is up.
+    Wireless,
     /// Every switch port's status, speed and traffic (ADR-167) — the MS switches only, read
     /// organization-wide and joined by serial. Observational: a port's readings say nothing about
     /// whether its switch is up.
@@ -231,9 +266,10 @@ pub enum MerakiTier {
 
 impl MerakiTier {
     /// Every tier, in cadence order (most frequent → least).
-    pub const ALL: [MerakiTier; 5] = [
+    pub const ALL: [MerakiTier; 6] = [
         MerakiTier::Availability,
         MerakiTier::Uplink,
+        MerakiTier::Wireless,
         MerakiTier::SwitchPorts,
         MerakiTier::Traffic,
         MerakiTier::Inventory,
@@ -245,6 +281,7 @@ impl MerakiTier {
         match self {
             MerakiTier::Availability => "availability",
             MerakiTier::Uplink => "uplink",
+            MerakiTier::Wireless => "wireless",
             MerakiTier::SwitchPorts => "switch_ports",
             MerakiTier::Traffic => "traffic",
             MerakiTier::Inventory => "inventory",

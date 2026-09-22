@@ -1052,6 +1052,8 @@ export const api = {
       inventory_secs: number;
       /** Optional on the wire: left out, the stored interval stays (ADR-167). */
       switch_ports_secs?: number;
+      /** Optional on the wire, for the same reason (ADR-168). */
+      wireless_secs?: number;
       enabled_tiers: string[];
       target_rps: number;
     },

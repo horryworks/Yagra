@@ -501,11 +501,15 @@
       "appliance_uplinks_usage": "uplink usage",
       "switch_port_statuses": "switch port statuses",
       "switch_port_usage": "switch port traffic",
-      "switch_port_config": "switch port names"
+      "switch_port_config": "switch port names",
+      "wireless_clients": "access point clients",
+      "wireless_channel_utilization": "radio channel utilization",
+      "wireless_ssid_statuses": "SSIDs and radio settings"
     },
     "tier": {
       "availability": "Availability",
       "uplink": "Uplink",
+      "wireless": "Wireless",
       "switch_ports": "Switch ports",
       "traffic": "Traffic",
       "inventory": "Inventory"
@@ -598,6 +602,7 @@
       "availabilityAlways": "Availability is always collected: it is what tells whether a device is up.",
       "availabilityInterval": "Availability interval (s)",
       "uplinkInterval": "Uplink interval (s)",
+      "wirelessInterval": "Wireless interval (s)",
       "switchPortsInterval": "Switch port interval (s)",
       "trafficInterval": "Traffic interval (s)",
       "inventoryInterval": "Device sync interval (s)",

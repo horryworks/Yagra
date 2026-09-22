@@ -12,7 +12,6 @@ use rmcp::schemars;
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_router, ErrorData as McpError};
 use serde::Deserialize;
-use std::collections::HashMap;
 use uuid::Uuid;
 use yagra_common::{NodeId, NodeKind, Permission};
 
@@ -330,9 +329,9 @@ impl YagraMcp {
         // has no side tables to read, so everything resolves to `device` — the same degradation
         // the REST path takes on a failed read.
         let uuids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
-        let kinds = match self.state.admin.as_ref() {
-            Some(admin) => crate::api::nodes::node_kinds(admin, &uuids).await,
-            None => HashMap::new(),
+        let mut kinds = match self.state.admin.as_ref() {
+            Some(admin) => crate::api::nodes::node_kinds_with_products(admin, &uuids).await,
+            None => crate::api::nodes::NodeKinds::default(),
         };
         // Built once for the whole page, like `kinds` above — a resolver per node would be one
         // whole-table read per row.
@@ -347,11 +346,13 @@ impl YagraMcp {
                     n,
                     states.get(&n.id).copied(),
                     kinds
+                        .kinds
                         .get(&n.id.as_uuid())
                         .copied()
                         .unwrap_or(NodeKind::Device),
                     &tags,
                 )
+                .with_meraki_product_type(kinds.meraki_product_types.remove(&n.id.as_uuid()))
             })
             .collect();
         ok_json(TOOL, &out)

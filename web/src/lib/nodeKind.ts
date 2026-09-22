@@ -53,3 +53,46 @@ export const NODE_KIND_SPEC: Record<NodeKind, NodeKindSpec> = {
 // text in English and Japanese (the hardcoded `Meraki` badge this generalizes already was), and
 // routing three unchanging ASCII tokens through `t()` would add six locale entries that can only
 // ever drift. The tooltip beside them *is* translated, which is what carries the meaning.
+
+/** The product type the Meraki Dashboard gives an access point (an MR), as the API carries it on
+ *  `NodeSummary.meraki_product_type` and `NodeDetail.meraki_device.product_type`. */
+export const MERAKI_ACCESS_POINT_PRODUCT = 'wireless';
+
+/** Whether a Meraki product type is an access point — read case-blind, as core reads it. */
+export function isMerakiAccessPoint(productType: string | null | undefined): boolean {
+  return productType?.trim().toLowerCase() === MERAKI_ACCESS_POINT_PRODUCT;
+}
+
+/** One badge after a node's name. */
+export interface NodeBadge {
+  readonly text: string;
+  /** Whose colours it wears (`lib/brandBadge.ts`); `null` for Yagra's own accent. */
+  readonly brand: BadgeBrand | null;
+  /** `nodes`-namespace key for the tooltip that says what the badge means. */
+  readonly labelKey: string;
+}
+
+/**
+ * Every badge a node wears after its name, in order — the one answer the tree, the folder view, the
+ * node header and the move dialog all draw from, so none of them can forget one.
+ *
+ * Its kind's badge first (none for an ordinary device). Then, for a Meraki access point, "AP"
+ * beside "Meraki" (ADR-168 決定 11, the user's decision): an MR stays `kind: meraki` — its
+ * liveness and its screens are the Meraki ones — so the kind alone cannot say it is an access
+ * point. The "AP" wears Yagra's accent, like the controller-walked AP's badge, because it names
+ * what the device is rather than whose it is.
+ */
+export function nodeBadges(node: {
+  kind: NodeKind;
+  merakiProductType?: string | null;
+}): NodeBadge[] {
+  const spec = NODE_KIND_SPEC[node.kind];
+  const out: NodeBadge[] = [];
+  if (spec.badge) {
+    out.push({ text: spec.badge, brand: spec.badgeBrand, labelKey: spec.labelKey });
+  }
+  if (node.kind === 'meraki' && isMerakiAccessPoint(node.merakiProductType)) {
+    out.push({ text: 'AP', brand: null, labelKey: 'kindBadge.accessPoint' });
+  }
+  return out;
+}

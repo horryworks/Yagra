@@ -160,6 +160,7 @@ fn spec(tier: MerakiTier, networks: &[&str]) -> MerakiCollectSpec {
         target_rps: 1000.0,
         interval_secs: 1_800,
         port_names: false,
+        ssid_statuses: false,
     }
 }
 
@@ -963,4 +964,286 @@ async fn a_500_on_the_second_status_page_keeps_the_first() {
     assert_eq!(serials(&got), vec!["Q2SW-0001"]);
     assert_eq!(got.stopped, Some(MerakiFetchError::Status(500)));
     assert_eq!(got.failure(), None);
+}
+
+// ── The wireless tier (ADR-168) ───────────────────────────────────────────────────────────────
+
+/// One access point's clients row, as `wireless/clients/overview/byDevice` lists it.
+fn clients_row(serial: &str, network: &str, online: u32) -> String {
+    format!(
+        r#"{{"network":{{"id":"{network}"}},"counts":{{"byStatus":{{"online":{online}}}}},"serial":"{serial}"}}"#
+    )
+}
+
+/// Rows in the envelope the clients and SSID listings answer.
+fn envelope(rows: &str) -> String {
+    format!(r#"{{"items":[{rows}],"meta":{{"counts":{{"items":{{"total":9,"remaining":0}}}}}}}}"#)
+}
+
+/// One access point's utilization row (a bare-array element). `bands` is `(band, total, nonWifi)`.
+fn util_row(serial: &str, network: &str, bands: &[(&str, f64, f64)]) -> String {
+    let by_band: Vec<String> = bands
+        .iter()
+        .map(|(band, total, non_wifi)| {
+            format!(
+                r#"{{"band":"{band}","wifi":{{"percentage":{}}},"nonWifi":{{"percentage":{non_wifi}}},"total":{{"percentage":{total}}}}}"#,
+                total - non_wifi
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"serial":"{serial}","mac":"00:18:0a:00:00:01","network":{{"id":"{network}"}},"byBand":[{}]}}"#,
+        by_band.join(",")
+    )
+}
+
+/// One BSS of `wireless/ssids/statuses/byDevice`: `ssid` is `(number, name, enabled)` and `radio`
+/// is `(index, band, channel, power)`, the last two as JSON (`null` allowed).
+fn bss(ssid: (u32, &str, bool), broadcasting: bool, radio: (&str, &str, &str, &str)) -> String {
+    let (number, name, enabled) = ssid;
+    let (index, band, channel, power) = radio;
+    format!(
+        r#"{{"bssid":"00:18:0a:00:00:{number:02x}","ssid":{{"name":"{name}","number":{number},"enabled":{enabled},"advertised":true}},"radio":{{"isBroadcasting":{broadcasting},"band":"{band}","channel":{channel},"channelWidth":20,"power":{power},"index":"{index}"}}}}"#
+    )
+}
+
+fn ssid_row(serial: &str, network: &str, sets: &[String]) -> String {
+    format!(
+        r#"{{"serial":"{serial}","name":"ap-01","network":{{"name":"site-a","id":"{network}"}},"basicServiceSets":[{}]}}"#,
+        sets.join(",")
+    )
+}
+
+fn wireless_spec(ssid_statuses: bool) -> MerakiCollectSpec {
+    MerakiCollectSpec {
+        ssid_statuses,
+        ..spec(MerakiTier::Wireless, &["N_1"])
+    }
+}
+
+/// A device-level reading of one observation.
+fn reading(obs: &crate::MerakiObservation, metric: &str) -> Option<f64> {
+    obs.samples
+        .iter()
+        .find(|s| s.metric == metric && s.ifindex.is_none())
+        .map(|s| s.value)
+}
+
+/// The tier through HTTP, without the SSID read: the clients listing out of its envelope, the
+/// utilization over the last five minutes as a bare array, the watched networks kept, both asked of
+/// the whole organization — and the slow SSID listing not asked for at all.
+#[tokio::test]
+async fn the_wireless_tier_reads_clients_and_utilization_and_leaves_the_ssids_for_when_asked() {
+    let clients = envelope(&format!(
+        "{},{},{}",
+        clients_row("Q2AP-0001", "N_1", 12),
+        clients_row("Q2AP-0002", "N_1", 0),
+        clients_row("Q2AP-0009", "N_9", 4),
+    ));
+    let util = format!(
+        "[{},{},{}]",
+        util_row("Q2AP-0001", "N_1", &[("2.4", 37.25, 0.5), ("5", 3.08, 0.0)]),
+        // Stopped: the Dashboard lists no band for it.
+        util_row("Q2AP-0002", "N_1", &[]),
+        util_row("Q2AP-0009", "N_9", &[("5", 50.0, 1.0)]),
+    );
+    let (origin, _, seen) = serve(vec![Reply::ok(&clients), Reply::ok(&util)]).await;
+
+    let got = collect(&wireless_spec(false), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+    assert_eq!(got.failure(), None);
+    assert_eq!(
+        serials(&got),
+        vec!["Q2AP-0001", "Q2AP-0002"],
+        "N_9 is not watched"
+    );
+
+    let one = &got.observations[0];
+    assert_eq!(reading(one, "wlan_ap_client_count"), Some(12.0));
+    assert_eq!(
+        reading(one, "wlan_ap_ssid_count"),
+        None,
+        "not read this time"
+    );
+    let radios: Vec<_> = one
+        .radios
+        .iter()
+        .map(|r| (r.slot, r.channel_util_pct, r.non_wifi_util_pct, r.channel))
+        .collect();
+    assert_eq!(
+        radios,
+        [
+            (1, Some(37.25), Some(0.5), None),
+            (2, Some(3.08), Some(0.0), None)
+        ],
+        "a fraction is kept as it came, and the channel waits for the SSID read"
+    );
+
+    let two = &got.observations[1];
+    assert_eq!(
+        reading(two, "wlan_ap_client_count"),
+        Some(0.0),
+        "a stopped access point's zero is the truth about it"
+    );
+    assert!(two.radios.is_empty(), "no band measured, no radio");
+
+    let sent = lines(&seen);
+    assert_eq!(
+        sent,
+        [
+            "GET /api/v1/organizations/1/wireless/clients/overview/byDevice?perPage=1000 HTTP/1.1",
+            "GET /api/v1/organizations/1/wireless/devices/channelUtilization/byDevice?interval=300&timespan=300&perPage=1000 HTTP/1.1",
+        ]
+    );
+}
+
+/// 決定 1 and 4: the SSID read is made when core asks, at 250 a page, paged through — and a
+/// stopped access point, which the Dashboard still answers as broadcasting, gets nothing from it.
+#[tokio::test]
+async fn the_ssid_read_counts_what_a_measured_access_point_broadcasts_and_skips_a_stopped_one() {
+    let clients = envelope(&format!(
+        "{},{}",
+        clients_row("Q2AP-0001", "N_1", 12),
+        clients_row("Q2AP-0002", "N_1", 0),
+    ));
+    let util = format!(
+        "[{},{}]",
+        util_row("Q2AP-0001", "N_1", &[("2.4", 37.25, 0.5), ("5", 3.08, 0.0)]),
+        util_row("Q2AP-0002", "N_1", &[]),
+    );
+    let page_two = format!(
+        "{BASE}/api/v1/organizations/1/wireless/ssids/statuses/byDevice?perPage=250&startingAfter=Q2AP-0001"
+    );
+    let r24 = ("0", "2.4", "6", "17");
+    let r5 = ("1", "5", "44", "null");
+    let first = envelope(&ssid_row(
+        "Q2AP-0001",
+        "N_1",
+        &[
+            // corp on both radios, guest enabled but on air nowhere, iot on 5 GHz only.
+            bss((1, "corp", true), true, r24),
+            bss((1, "corp", true), true, r5),
+            bss((2, "guest", true), false, r24),
+            bss((2, "guest", true), false, r5),
+            bss((3, "iot", true), true, r5),
+        ],
+    ));
+    let second = envelope(&ssid_row(
+        "Q2AP-0002",
+        "N_1",
+        &[bss((1, "corp", true), true, r24)],
+    ));
+    let (origin, _, seen) = serve(vec![
+        Reply::ok(&clients),
+        Reply::ok(&util),
+        Reply::ok(&first).next(&page_two),
+        Reply::ok(&second),
+    ])
+    .await;
+
+    let got = collect(&wireless_spec(true), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+    assert_eq!(got.failure(), None);
+
+    let one = &got.observations[0];
+    assert_eq!(
+        reading(one, "wlan_ap_ssid_count"),
+        Some(2.0),
+        "corp and iot"
+    );
+    let radios: Vec<_> = one
+        .radios
+        .iter()
+        .map(|r| (r.slot, r.channel, r.tx_power_dbm, r.channel_util_pct))
+        .collect();
+    assert_eq!(
+        radios,
+        [
+            (1, Some(6), Some(17.0), Some(37.25)),
+            (2, Some(44), None, Some(3.08)),
+        ],
+        "a null power is left out, never zero"
+    );
+
+    let two = &got.observations[1];
+    assert_eq!(
+        reading(two, "wlan_ap_ssid_count"),
+        None,
+        "a stopped access point is still answered as broadcasting; that is not a reading"
+    );
+    assert!(two.radios.is_empty());
+
+    let sent = lines(&seen);
+    assert_eq!(sent.len(), 4, "{sent:?}");
+    assert_eq!(
+        sent[2],
+        "GET /api/v1/organizations/1/wireless/ssids/statuses/byDevice?perPage=250 HTTP/1.1"
+    );
+    assert!(sent[3].contains("startingAfter=Q2AP-0001"), "{}", sent[3]);
+    assert!(sent.iter().all(|l| !l.contains("networkIds")), "{sent:?}");
+}
+
+/// The shape each listing answers is its own: a bare array where the clients' envelope belongs fails
+/// the collect (it is the tier's first read), and an envelope where the utilization's bare array
+/// belongs costs that listing only — named, with the clients kept (ADR-164 決定 25).
+#[tokio::test]
+async fn a_wireless_listing_in_the_wrong_shape_is_malformed() {
+    let (origin, _, seen) = serve(vec![Reply::ok(&format!(
+        "[{}]",
+        clients_row("Q2AP-0001", "N_1", 1)
+    ))])
+    .await;
+    let got = collect(&wireless_spec(false), TIMEOUT, Some(&origin)).await;
+    assert_eq!(got, Err(MerakiFetchError::Malformed));
+    assert_eq!(lines(&seen).len(), 1);
+
+    let clients = envelope(&clients_row("Q2AP-0001", "N_1", 3));
+    let util = envelope(&util_row("Q2AP-0001", "N_1", &[("5", 1.0, 0.0)]));
+    let (origin, _, _) = serve(vec![Reply::ok(&clients), Reply::ok(&util)]).await;
+    let got = collect(&wireless_spec(false), TIMEOUT, Some(&origin))
+        .await
+        .expect("the clients answered");
+    assert_eq!(
+        got.failed_listing,
+        Some((
+            MerakiListing::WirelessChannelUtilization,
+            MerakiFetchError::Malformed
+        ))
+    );
+    assert_eq!(
+        reading(&got.observations[0], "wlan_ap_client_count"),
+        Some(3.0)
+    );
+    assert!(got.observations[0].radios.is_empty());
+}
+
+/// A failed SSID read costs its own readings and names itself; the clients and the utilization it
+/// came after still go out (ADR-164 決定 25).
+#[tokio::test]
+async fn a_failed_ssid_read_keeps_the_utilization_and_names_itself() {
+    let clients = envelope(&clients_row("Q2AP-0001", "N_1", 3));
+    let util = format!("[{}]", util_row("Q2AP-0001", "N_1", &[("2.4", 9.5, 0.0)]));
+    let (origin, _, _) = serve(vec![
+        Reply::ok(&clients),
+        Reply::ok(&util),
+        Reply::json(500, r#"{"errors":["mock"]}"#),
+    ])
+    .await;
+    let got = collect(&wireless_spec(true), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+    assert_eq!(
+        got.failed_listing,
+        Some((
+            MerakiListing::WirelessSsidStatuses,
+            MerakiFetchError::Status(500)
+        ))
+    );
+    let one = &got.observations[0];
+    assert_eq!(one.radios.len(), 1);
+    assert_eq!(one.radios[0].channel_util_pct, Some(9.5));
+    assert_eq!(one.radios[0].channel, None);
+    assert_eq!(reading(one, "wlan_ap_ssid_count"), None);
 }

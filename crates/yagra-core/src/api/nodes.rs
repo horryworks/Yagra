@@ -256,6 +256,12 @@ pub(crate) struct NodeSummary {
     /// Resolved by `NodeKind::resolve`, the same function `GET /nodes/{id}` and the scheduler ask,
     /// so a list row can never disagree with the detail page it opens.
     kind: NodeKind,
+    /// A Meraki node's product type as the Dashboard names it — `wireless` (an MR access point),
+    /// `switch`, `appliance`, … — and absent on every other node. What the list's "AP" badge is
+    /// read from (ADR-168 決定 11): an MR stays `kind: meraki`, so the kind alone cannot say it is
+    /// an access point. The detail page reads the same value from `meraki_device.product_type`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    meraki_product_type: Option<String>,
 }
 
 /// One keyset page of the inventory.
@@ -413,7 +419,21 @@ pub(crate) async fn filtered_node_page(
 /// Shared with the MCP `list_nodes` / `get_node_status` tools (ADR-042 read parity) so the two
 /// surfaces answer "what is this node" from one place rather than two.
 pub(crate) async fn node_kinds(admin: &AdminState, ids: &[Uuid]) -> HashMap<Uuid, NodeKind> {
-    let (wireless_ap, meraki, url, dns) = tokio::join!(
+    node_kinds_with_products(admin, ids).await.kinds
+}
+
+/// Each node's kind, and — for a Meraki node — the Dashboard's product type beside it.
+#[derive(Debug, Default)]
+pub(crate) struct NodeKinds {
+    pub(crate) kinds: HashMap<Uuid, NodeKind>,
+    /// A Meraki node's product type (`wireless`, `switch`, …), for the list's "AP" badge
+    /// (ADR-168 決定 11). Read in the same query that says the node is a Meraki one.
+    pub(crate) meraki_product_types: HashMap<Uuid, String>,
+}
+
+/// [`node_kinds`], keeping the Meraki product types the kind was read from.
+pub(crate) async fn node_kinds_with_products(admin: &AdminState, ids: &[Uuid]) -> NodeKinds {
+    let (wireless_ap, meraki_product_types, url, dns) = tokio::join!(
         async {
             admin
                 .wireless
@@ -424,22 +444,26 @@ pub(crate) async fn node_kinds(admin: &AdminState, ids: &[Uuid]) -> HashMap<Uuid
         async {
             admin
                 .meraki_devices
-                .filter_meraki(ids)
+                .product_types(ids)
                 .await
                 .unwrap_or_default()
         },
         async { admin.url_checks.filter_url(ids).await.unwrap_or_default() },
         async { admin.dns_checks.filter_dns(ids).await.unwrap_or_default() },
     );
-    resolve_kinds(
+    let kinds = resolve_kinds(
         ids,
         &KindSets {
             wireless_ap,
-            meraki,
+            meraki: meraki_product_types.keys().copied().collect(),
             url,
             dns,
         },
-    )
+    );
+    NodeKinds {
+        kinds,
+        meraki_product_types,
+    }
 }
 
 /// One membership set per side table a node's kind is read from — the inputs to [`resolve_kinds`].
@@ -512,9 +536,9 @@ pub(super) async fn build_node_summaries(
                         orders
                     }
                 },
-                node_kinds(admin, &ids),
+                node_kinds_with_products(admin, &ids),
             ),
-            None => (known_orders, HashMap::new()),
+            None => (known_orders, NodeKinds::default()),
         }
     };
     // Up to five independent reads — four PostgreSQL, one TSDB — on the hottest list in the
@@ -529,16 +553,18 @@ pub(super) async fn build_node_summaries(
     // spends four, not five. The wall clock barely moves — they were always parallel — but the
     // number of connections one request holds at its peak does, and that is what a pool of 20
     // against eight `ListSlot` seats is measured against.
-    let ((orders, kinds), states) = tokio::join!(inventory, display_states(st, &node_ids));
+    let ((orders, mut kinds), states) = tokio::join!(inventory, display_states(st, &node_ids));
     nodes
         .into_iter()
         .map(|n| NodeSummary {
             state: states.get(&n.id).copied().unwrap_or(NodeState::Unknown),
             sort_order: orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0),
             kind: kinds
+                .kinds
                 .get(&n.id.as_uuid())
                 .copied()
                 .unwrap_or(NodeKind::Device),
+            meraki_product_type: kinds.meraki_product_types.remove(&n.id.as_uuid()),
             id: n.id,
             name: n.name,
             address: n.address.to_string(),

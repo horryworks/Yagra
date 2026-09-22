@@ -21,7 +21,7 @@ pub const MAX_POLL_INTERVAL_SECS: u32 = 3600;
 
 // ── Cisco Meraki cadence bounds (own band, NOT the per-node 1h cap — slow tiers must not be
 // blocked). Mirror the CHECK constraints in migration 0038 — and 0124 for the inventory floor, 0130
-// for the switch ports; the API validates against these. ──
+// for the switch ports, 0131 for the wireless tier; the API validates against these. ──
 /// Availability/uplink tier cadence bounds (seconds).
 pub const MERAKI_FAST_MIN_SECS: i32 = 60;
 pub const MERAKI_FAST_MAX_SECS: i32 = 3600;
@@ -31,6 +31,10 @@ pub const MERAKI_FAST_MAX_SECS: i32 = 3600;
 /// two collects and be drawn as stale.
 pub const MERAKI_SWITCH_PORTS_MIN_SECS: i32 = 300;
 pub const MERAKI_SWITCH_PORTS_MAX_SECS: i32 = 600;
+/// Wireless tier cadence bounds (seconds, ADR-168 決定 9): the channel utilization is a five-minute
+/// bucket, and much past ten minutes a radio's row would be drawn as stale between two collects.
+pub const MERAKI_WIRELESS_MIN_SECS: i32 = 300;
+pub const MERAKI_WIRELESS_MAX_SECS: i32 = 600;
 /// Traffic tier cadence bounds (seconds).
 pub const MERAKI_TRAFFIC_MIN_SECS: i32 = 300;
 pub const MERAKI_TRAFFIC_MAX_SECS: i32 = 86_400;

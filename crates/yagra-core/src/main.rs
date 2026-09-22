@@ -2129,7 +2129,8 @@ struct MerakiScheduler {
 /// The switch-port tier (ADR-167) is offered only to a pool whose every live poller claims
 /// [`yagra_bus::CAP_MERAKI_SWITCH_PORTS`], carries the organization's switches alone, and asks for
 /// the ports' configured names once an hour per organization — and on its first collect after this
-/// core started.
+/// core started. The wireless tier (ADR-168) is the same shape: [`yagra_bus::CAP_MERAKI_WIRELESS`],
+/// the access points alone, and the SSIDs and radio settings every twenty minutes.
 async fn run_meraki_scheduler(s: MerakiScheduler) {
     use std::time::Instant;
     use yagra_bus::{PollJob, SyncBus};
@@ -2150,6 +2151,9 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
     let mut last: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
     // When each organization's switch-port collect last asked for the ports' names (ADR-167 決定 1).
     let mut port_names_at: HashMap<Uuid, Instant> = HashMap::new();
+    // When each organization's wireless collect last asked for the SSIDs and radio settings (ADR-168
+    // 決定 1).
+    let mut ssid_statuses_at: HashMap<Uuid, Instant> = HashMap::new();
     // When a tier was last counted as failed for a reason **core itself** knows about — its key
     // could not be opened, its imported devices could not be read, or which networks it watches
     // could not be read. No job is sent for any of the three, so no poller can report them, and
@@ -2173,19 +2177,26 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             }
         };
         let now = Instant::now();
-        // Whether this pool can run the switch-port tier at all (ADR-167 決定 9): asked once a tick,
+        // Which tiers this pool can run at all (ADR-167 決定 9, ADR-168 決定 7): asked once a tick,
         // since every organization's collect goes to the same pool.
-        let switch_ports = coordinator.pollers_support(
-            Some(&meraki_pool),
-            yagra_bus::CAP_MERAKI_SWITCH_PORTS,
-            now,
-        );
+        let caps = meraki::PoolCaps {
+            switch_ports: coordinator.pollers_support(
+                Some(&meraki_pool),
+                yagra_bus::CAP_MERAKI_SWITCH_PORTS,
+                now,
+            ),
+            wireless: coordinator.pollers_support(
+                Some(&meraki_pool),
+                yagra_bus::CAP_MERAKI_WIRELESS,
+                now,
+            ),
+        };
         for org in orgs {
             if inflight.is_inflight(org.id, now) {
                 continue; // a collect is still outstanding for this org
             }
             // The most-overdue due tier the pool can run (never-dispatched sorts first).
-            let Some(tier) = meraki::pick_due_tier(&org, &last, now, switch_ports) else {
+            let Some(tier) = meraki::pick_due_tier(&org, &last, now, caps) else {
                 continue; // nothing due
             };
 
@@ -2261,23 +2272,24 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             if !inflight.acquire_collect(org.id, job_id, tier, LEASE, now) {
                 continue; // lost an acquire race
             }
-            let port_names = tier == MerakiTier::SwitchPorts
-                && meraki::port_names_due(port_names_at.get(&org.id).copied(), now);
-            let check = meraki::build_collect_check(
-                &org,
-                tier,
-                api_key,
-                device_refs,
-                network_ids,
-                port_names,
-            );
+            let slow = meraki::SlowReads {
+                port_names: tier == MerakiTier::SwitchPorts
+                    && meraki::port_names_due(port_names_at.get(&org.id).copied(), now),
+                ssid_statuses: tier == MerakiTier::Wireless
+                    && meraki::ssid_statuses_due(ssid_statuses_at.get(&org.id).copied(), now),
+            };
+            let check =
+                meraki::build_collect_check(&org, tier, api_key, device_refs, network_ids, slow);
             let interval = org.tier_cadence(tier);
             let job = PollJob::meraki_collect(job_id, check, interval);
             match bus.publish_job_for_pool(&meraki_pool, job).await {
                 Ok(()) => {
                     last.insert((org.id, tier), now);
-                    if port_names {
+                    if slow.port_names {
                         port_names_at.insert(org.id, now);
+                    }
+                    if slow.ssid_statuses {
+                        ssid_statuses_at.insert(org.id, now);
                     }
                     metrics::counter!("yagra_meraki_collects_dispatched_total").increment(1);
                     tracing::debug!(org = %org.org_id, tier = tier.as_str(), "dispatched meraki collect");

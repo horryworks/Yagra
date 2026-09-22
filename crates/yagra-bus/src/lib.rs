@@ -12,6 +12,7 @@ pub mod messages;
 #[cfg(feature = "nats")]
 pub mod nats;
 pub mod subjects;
+pub mod wlan_radio;
 
 pub use bus::{Bus, BusError, DiscoveryBus, InMemoryBus, LogBus, PeerBus, SyncBus, UpgradeBus};
 pub use messages::{
@@ -27,12 +28,13 @@ pub use messages::{
     SnmpV3RoutingCheck, SnmpV3TableCheck, SnmpV3WlanApCheck, SnmpWlanApCheck, SyncMsg, SyncRequest,
     TraceContext, UpgradeReport, UpgradeReportCommand, UpgradeReportState, UpgradeStep,
     WorkingSetDelta, WorkingSetSnapshot, CAP_DISCOVERY_CANCEL, CAP_FLOW_RELAY, CAP_HTTP_AUTH,
-    CAP_HTTP_BODY, CAP_LOG_SHIP, CAP_MERAKI_SWITCH_PORTS, CAP_POOL_FOLLOW, CAP_RAW_CAPTURE,
-    CAP_SELF_UPGRADE, CAP_SITE_PREPARED, CAP_UPGRADE_REPORT, HEARTBEAT_SECS, OFFLINE_AFTER_SECS,
-    SITE_PREPARED_FIELD, SNAPSHOT_CHUNK_NODES,
+    CAP_HTTP_BODY, CAP_LOG_SHIP, CAP_MERAKI_SWITCH_PORTS, CAP_MERAKI_WIRELESS, CAP_POOL_FOLLOW,
+    CAP_RAW_CAPTURE, CAP_SELF_UPGRADE, CAP_SITE_PREPARED, CAP_UPGRADE_REPORT, HEARTBEAT_SECS,
+    OFFLINE_AFTER_SECS, SITE_PREPARED_FIELD, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
 pub use nats::{
     install_tls_crypto_provider, redact_url, split_userinfo_password, BusBytes, NatsBus,
     DEFAULT_POOL, POLLER_QUEUE,
 };
+pub use wlan_radio::{RadioReadings, IF_TYPE_IEEE80211};

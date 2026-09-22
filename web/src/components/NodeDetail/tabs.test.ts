@@ -102,8 +102,9 @@ describe('node-detail tab visibility', () => {
   // The other side of the same rule: widening it for access points must not widen it for a
   // device nobody gave an SNMP credential, which is the case ADR-119 exists for.
   // ADR-167 決定 13. A Meraki switch's ports come from its organization's switch-port collect, so it
-  // gets the tab — whatever the SNMP flag says, because it is never walked.
-  it('shows Interfaces on a Meraki switch and on no other Meraki node', () => {
+  // gets the tab — whatever the SNMP flag says, because it is never walked. ADR-168: an access
+  // point's radios come from the wireless collect, as rows, so it gets the tab too.
+  it('shows Interfaces on a Meraki switch or access point and on no other Meraki node', () => {
     for (const snmpConfigured of [true, false]) {
       const node = (merakiProductType: string | null) => ({
         kind: 'meraki' as const,
@@ -114,9 +115,11 @@ describe('node-detail tab visibility', () => {
       expect(visibleNodeDetailTabs(node('switch'))).toContain('interfaces');
       // The Dashboard's spelling is not trusted to stay lower case.
       expect(visibleNodeDetailTabs(node('Switch'))).toContain('interfaces');
+      expect(visibleNodeDetailTabs(node('wireless'))).toContain('interfaces');
+      expect(visibleNodeDetailTabs(node(' Wireless '))).toContain('interfaces');
       // 🚨 The case the per-kind rule exists for: `snmpConfigured` is true of every node on a
       // deployment with a default community, and the old rule offered an MX an empty tab.
-      for (const other of ['appliance', 'wireless', 'camera', null]) {
+      for (const other of ['appliance', 'camera', 'cellularGateway', null]) {
         expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('interfaces');
       }
       // Neighbours and flow have no Meraki source at all.
@@ -132,6 +135,8 @@ describe('node-detail tab visibility', () => {
     expect(interfacesFed({ ...base, kind: 'wireless_ap' })).toBe(true);
     expect(interfacesFed({ ...base, kind: 'meraki', snmpConfigured: true })).toBe(false);
     expect(interfacesFed({ ...base, kind: 'meraki', merakiProductType: 'switch' })).toBe(true);
+    expect(interfacesFed({ ...base, kind: 'meraki', merakiProductType: 'wireless' })).toBe(true);
+    expect(interfacesFed({ ...base, kind: 'meraki', merakiProductType: 'appliance' })).toBe(false);
     expect(interfacesFed({ ...base, kind: 'url', snmpConfigured: true })).toBe(false);
     expect(interfacesFed({ ...base, kind: 'dns', snmpConfigured: true })).toBe(false);
   });

@@ -59,6 +59,9 @@
     "dns": "DNS monitor (name resolution)",
     "meraki": "Cisco Meraki (Dashboard API)"
   },
+  "kindBadge": {
+    "accessPoint": "Access point"
+  },
   "groupType": {
     "site": "Site",
     "region": "Region",
@@ -374,6 +377,10 @@
     "bodyTruncated": "The body was larger than the read budget, so the rule could not be decided.",
     "tlsCertificate": "TLS certificate",
     "merakiIdentity": "{{productType}} · serial {{serial}}",
+    "merakiClients": "Connected clients",
+    "merakiSsids": "SSIDs broadcast",
+    "merakiChannelUtil": "Channel utilization ({{band}})",
+    "merakiNonWifi": "of which non-Wi-Fi {{pct}}",
     "online": "Online",
     "offline": "Offline",
     "vpn": "Auto VPN",

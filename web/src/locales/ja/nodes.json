@@ -59,6 +59,9 @@
     "dns": "DNS 監視（名前解決）",
     "meraki": "Cisco Meraki (Dashboard API)"
   },
+  "kindBadge": {
+    "accessPoint": "アクセスポイント"
+  },
   "groupType": {
     "site": "サイト",
     "region": "リージョン",
@@ -373,6 +376,10 @@
     "bodyTruncated": "本文が読み取り上限を超えたため、判定できませんでした。",
     "tlsCertificate": "TLS 証明書",
     "merakiIdentity": "{{productType}} · シリアル {{serial}}",
+    "merakiClients": "接続中の端末",
+    "merakiSsids": "発信中の SSID",
+    "merakiChannelUtil": "チャネル使用率（{{band}}）",
+    "merakiNonWifi": "うち Wi-Fi 以外 {{pct}}",
     "online": "オンライン",
     "offline": "オフライン",
     "vpn": "Auto VPN",

@@ -931,7 +931,7 @@ export const MERAKI_SYNC_FAILURES = [
 export type MerakiSyncFailure = (typeof MERAKI_SYNC_FAILURES)[number];
 
 /** Which read of a collect tier failed (`MerakiCollectFailureView.listing`, ADR-164 決定 25) — the
- *  uplink tier reads three, the switch-port tier up to three (ADR-167). The API sends the token as a
+ *  uplink tier reads three, the switch-port and wireless tiers up to three each (ADR-167, ADR-168). The API sends the token as a
  *  plain string, so a listing this bundle does not know is shown without a label rather than
  *  breaking the row. `i18nEnumKeys.test.ts` iterates this, and a Rust test
  *  (`api/meraki.rs::every_listing_token_is_one_the_webui_lists`) holds it equal to
@@ -945,6 +945,9 @@ export const MERAKI_LISTINGS = [
   'switch_port_statuses',
   'switch_port_usage',
   'switch_port_config',
+  'wireless_clients',
+  'wireless_channel_utilization',
+  'wireless_ssid_statuses',
 ] as const;
 
 /** One read a Meraki collect makes. */

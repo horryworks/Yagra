@@ -82,6 +82,8 @@ pub struct MerakiOrg {
     pub inventory_secs: u32,
     /// The switch-port tier's cadence (ADR-167, migration 0130).
     pub switch_ports_secs: u32,
+    /// The wireless tier's cadence (ADR-168, migration 0131).
+    pub wireless_secs: u32,
     pub enabled_tiers: Vec<String>,
     pub target_rps: f64,
     pub group_id: Option<Uuid>,
@@ -114,6 +116,7 @@ impl MerakiOrg {
         let traffic_secs: i32 = row.try_get("traffic_secs")?;
         let inventory_secs: i32 = row.try_get("inventory_secs")?;
         let switch_ports_secs: i32 = row.try_get("switch_ports_secs")?;
+        let wireless_secs: i32 = row.try_get("wireless_secs")?;
         let max_devices: i32 = row.try_get("max_devices")?;
         let devices_over_cap: i32 = row.try_get("devices_over_cap")?;
         Ok(Self {
@@ -127,6 +130,7 @@ impl MerakiOrg {
             traffic_secs: traffic_secs.max(0) as u32,
             inventory_secs: inventory_secs.max(0) as u32,
             switch_ports_secs: switch_ports_secs.max(0) as u32,
+            wireless_secs: wireless_secs.max(0) as u32,
             enabled_tiers: row.try_get("enabled_tiers")?,
             target_rps: row.try_get("target_rps")?,
             group_id: row.try_get("group_id")?,
@@ -178,6 +182,7 @@ impl MerakiOrg {
         match tier {
             MerakiTier::Availability => self.availability_secs,
             MerakiTier::Uplink => self.uplink_secs,
+            MerakiTier::Wireless => self.wireless_secs,
             MerakiTier::SwitchPorts => self.switch_ports_secs,
             MerakiTier::Traffic => self.traffic_secs,
             MerakiTier::Inventory => self.inventory_secs,
@@ -195,14 +200,27 @@ pub struct MerakiCadence {
     pub inventory_secs: i32,
     /// `None` keeps the stored value (ADR-167 決定 12).
     pub switch_ports_secs: Option<i32>,
+    /// `None` keeps the stored value (ADR-168 決定 10).
+    pub wireless_secs: Option<i32>,
     pub enabled_tiers: Vec<String>,
     pub target_rps: f64,
 }
 
+/// The slow reads a collect makes only now and then, beside its tier's every-time ones. Each is
+/// ignored by every tier but its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SlowReads {
+    /// A switch-port collect also reads the ports' configured names ([`port_names_due`], ADR-167
+    /// 決定 1).
+    pub port_names: bool,
+    /// A wireless collect also reads every access point's SSIDs and radio settings
+    /// ([`ssid_statuses_due`], ADR-168 決定 1).
+    pub ssid_statuses: bool,
+}
+
 /// Build the collect-job check for `(org, tier)` given the resolved key, the serial→node_id map,
-/// and the in-scope networks. `port_names` asks a switch-port collect to read the ports' configured
-/// names as well ([`port_names_due`]); every other tier ignores it. Pure — unit-tested without a
-/// database.
+/// the in-scope networks, and which of the slow reads this one makes ([`SlowReads`]). Pure —
+/// unit-tested without a database.
 #[must_use]
 pub fn build_collect_check(
     org: &MerakiOrg,
@@ -210,7 +228,7 @@ pub fn build_collect_check(
     api_key: String,
     devices: Vec<MerakiDeviceRef>,
     network_ids: Vec<String>,
-    port_names: bool,
+    slow: SlowReads,
 ) -> MerakiCollectCheck {
     MerakiCollectCheck {
         org_id: org.org_id.clone(),
@@ -223,21 +241,33 @@ pub fn build_collect_check(
         per_page: DEFAULT_PER_PAGE,
         target_rps: org.target_rps,
         timeout_ms: DEFAULT_COLLECT_TIMEOUT_MS,
-        port_names,
+        port_names: slow.port_names,
+        ssid_statuses: slow.ssid_statuses,
     }
 }
 
-/// Whether the pool a collect would go to can run `tier` at all (ADR-167 決定 9).
+/// Which of the tiers a poller has to claim the pool a Meraki collect goes to can run. Each field is
+/// `Coordinator::pollers_support(pool, CAP_…)` — every live poller there claims it — asked once a
+/// tick, since every organization's collect goes to the same pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PoolCaps {
+    /// `CAP_MERAKI_SWITCH_PORTS` (ADR-167 決定 9).
+    pub switch_ports: bool,
+    /// `CAP_MERAKI_WIRELESS` (ADR-168 決定 7).
+    pub wireless: bool,
+}
+
+/// Whether the pool a collect would go to can run `tier` at all (ADR-167 決定 9, ADR-168 決定 7).
 ///
-/// `switch_ports` is `Coordinator::pollers_support(pool, CAP_MERAKI_SWITCH_PORTS)`: every live
-/// poller in the pool claims the switch-port tier. A poller from before it cannot decode the job,
-/// drops it, and the organization's single collect flight then stays taken for the whole lease —
-/// availability collects included — so a tier the pool cannot run is not offered, and not counted
-/// as failing either. Exhaustive, so the next tier has to answer the question.
+/// A poller from before a tier cannot decode its job, drops it, and the organization's single
+/// collect flight then stays taken for the whole lease — availability collects included — so a tier
+/// the pool cannot run is not offered, and not counted as failing either. Exhaustive, so the next
+/// tier has to answer the question.
 #[must_use]
-pub fn pool_can_run(tier: MerakiTier, switch_ports: bool) -> bool {
+pub fn pool_can_run(tier: MerakiTier, caps: PoolCaps) -> bool {
     match tier {
-        MerakiTier::SwitchPorts => switch_ports,
+        MerakiTier::SwitchPorts => caps.switch_ports,
+        MerakiTier::Wireless => caps.wireless,
         MerakiTier::Availability
         | MerakiTier::Uplink
         | MerakiTier::Traffic
@@ -257,11 +287,11 @@ pub fn pick_due_tier(
     org: &MerakiOrg,
     last: &HashMap<(Uuid, MerakiTier), Instant>,
     now: Instant,
-    switch_ports: bool,
+    caps: PoolCaps,
 ) -> Option<MerakiTier> {
     let mut best: Option<(MerakiTier, Duration)> = None;
     for tier in org.active_tiers() {
-        if !pool_can_run(tier, switch_ports) {
+        if !pool_can_run(tier, caps) {
             continue;
         }
         let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
@@ -288,7 +318,27 @@ pub const PORT_NAMES_EVERY: Duration = Duration::from_secs(3600);
 /// (so a restarted core fills them at once), or not for [`PORT_NAMES_EVERY`].
 #[must_use]
 pub fn port_names_due(last: Option<Instant>, now: Instant) -> bool {
-    last.is_none_or(|t| now.duration_since(t) >= PORT_NAMES_EVERY)
+    due_every(last, now, PORT_NAMES_EVERY)
+}
+
+/// How often a wireless collect also reads every access point's SSIDs and radio settings (ADR-168
+/// 決定 1). The listing took 78 s for 1,710 access points on a real organization and barely changes,
+/// so not on every collect. But what it answers is **drawn**: the SSID count and a radio's channel
+/// and power are read back as a latest value, which looks back thirty minutes
+/// (`store.rs::latest_query`). An hourly read would leave them blank for half of every hour; twenty
+/// minutes keeps them on screen, and one missed read blanks them for ten minutes at most.
+pub const SSID_STATUSES_EVERY: Duration = Duration::from_secs(1200);
+
+/// Whether this wireless collect should read the SSIDs and radio settings too: never read in this
+/// process (so a restarted core fills them at once), or not for [`SSID_STATUSES_EVERY`].
+#[must_use]
+pub fn ssid_statuses_due(last: Option<Instant>, now: Instant) -> bool {
+    due_every(last, now, SSID_STATUSES_EVERY)
+}
+
+/// A slow read is due when it has never been made in this process, or not for `every`.
+fn due_every(last: Option<Instant>, now: Instant, every: Duration) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= every)
 }
 
 /// Why the scheduler sends an organization no collect this tick.
@@ -540,8 +590,8 @@ impl MerakiOrgRepo {
     }
 
     const COLUMNS: &'static str = "id, org_id, name, base_url, credential_id, availability_secs, \
-        uplink_secs, traffic_secs, inventory_secs, switch_ports_secs, enabled_tiers, target_rps, \
-        group_id, enabled, last_sync_at, last_sync_ok, last_sync_error, import_devices, \
+        uplink_secs, traffic_secs, inventory_secs, switch_ports_secs, wireless_secs, enabled_tiers, \
+        target_rps, group_id, enabled, last_sync_at, last_sync_ok, last_sync_error, import_devices, \
         file_by_prefix, max_devices, devices_over_cap, collect_failures";
 
     /// Every org (for the Integrations UI).
@@ -630,13 +680,15 @@ impl MerakiOrgRepo {
 
     /// Update per-tier cadence, enabled tiers, and the rate budget. Returns whether it exists.
     ///
-    /// A `switch_ports_secs` of `None` leaves the stored one as it is: a client written before the
-    /// switch-port tier existed does not send it, and must not reset it (ADR-167 決定 12).
+    /// A `switch_ports_secs` or `wireless_secs` of `None` leaves the stored one as it is: a client
+    /// written before that tier existed does not send it, and must not reset it (ADR-167 決定 12,
+    /// ADR-168 決定 10).
     pub async fn update_cadence(&self, id: Uuid, c: &MerakiCadence) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE meraki_orgs SET availability_secs = $2, uplink_secs = $3, traffic_secs = $4, \
              inventory_secs = $5, enabled_tiers = $6, target_rps = $7, \
-             switch_ports_secs = COALESCE($8, switch_ports_secs), updated_at = now() \
+             switch_ports_secs = COALESCE($8, switch_ports_secs), \
+             wireless_secs = COALESCE($9, wireless_secs), updated_at = now() \
              WHERE id = $1",
         )
         .bind(id)
@@ -647,6 +699,7 @@ impl MerakiOrgRepo {
         .bind(&c.enabled_tiers)
         .bind(c.target_rps)
         .bind(c.switch_ports_secs)
+        .bind(c.wireless_secs)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -1105,18 +1158,26 @@ impl MerakiDeviceRepo {
     }
 
     /// Of the given node ids, which are Meraki devices — a page-scoped variant of [`Self::node_ids`]
-    /// for the node-list badge (bounded by the page size, not a full-table scan). Empty input
-    /// short-circuits so we never run an empty-array query.
+    /// (bounded by the page size, not a full-table scan).
     pub async fn filter_meraki(&self, node_ids: &[Uuid]) -> anyhow::Result<HashSet<Uuid>> {
+        Ok(self.product_types(node_ids).await?.into_keys().collect())
+    }
+
+    /// Of the given node ids, the Meraki devices and each one's product type as the Dashboard names
+    /// it (`wireless`, `switch`, `appliance`, …) — what the node list needs for both its kind and
+    /// the "AP" badge beside it (ADR-168 決定 11), in the one read it already made for the kind.
+    /// Empty input short-circuits so we never run an empty-array query.
+    pub async fn product_types(&self, node_ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, String>> {
         if node_ids.is_empty() {
-            return Ok(HashSet::new());
+            return Ok(HashMap::new());
         }
-        let rows = sqlx::query("SELECT node_id FROM meraki_devices WHERE node_id = ANY($1)")
-            .bind(node_ids)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT node_id, product_type FROM meraki_devices WHERE node_id = ANY($1)")
+                .bind(node_ids)
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter()
-            .map(|r| Ok(r.try_get::<Uuid, _>("node_id")?))
+            .map(|r| Ok((r.try_get("node_id")?, r.try_get("product_type")?)))
             .collect()
     }
 
@@ -1124,8 +1185,9 @@ impl MerakiDeviceRepo {
     /// poller can attribute each API row to a node.
     ///
     /// Every imported device, except for the switch-port tier, which gets the switches alone
-    /// (ADR-167 決定 10): only a switch has ports to report, and an organization with none is sent
-    /// no switch-port collect at all. The product type is compared case-blind, as
+    /// (ADR-167 決定 10), and the wireless tier, which gets the access points alone (ADR-168 決定 8):
+    /// only a switch has ports and only an access point has radios to report, and an organization
+    /// with none is sent no such collect at all. The product type is compared case-blind, as
     /// `yagra_common::category_for_product_type` reads it.
     pub async fn device_refs(
         &self,
@@ -1134,6 +1196,8 @@ impl MerakiDeviceRepo {
     ) -> anyhow::Result<Vec<MerakiDeviceRef>> {
         let only: Option<&str> = match tier {
             MerakiTier::SwitchPorts => Some("switch"),
+            // The access points alone (ADR-168 決定 8) — the Dashboard's word for an MR.
+            MerakiTier::Wireless => Some("wireless"),
             MerakiTier::Availability
             | MerakiTier::Uplink
             | MerakiTier::Traffic
@@ -1215,6 +1279,7 @@ mod tests {
             inventory_secs: 900,
             // Likewise distinct from every other interval.
             switch_ports_secs: 600,
+            wireless_secs: 420,
             enabled_tiers: vec!["availability".into(), "uplink".into(), "inventory".into()],
             target_rps: 2.0,
             group_id: Some(Uuid::nil()),
@@ -1282,6 +1347,7 @@ mod tests {
         assert_eq!(o.tier_cadence(MerakiTier::Traffic), 1800);
         assert_eq!(o.tier_cadence(MerakiTier::Inventory), 900);
         assert_eq!(o.tier_cadence(MerakiTier::SwitchPorts), 600);
+        assert_eq!(o.tier_cadence(MerakiTier::Wireless), 420);
     }
 
     #[test]
@@ -1296,7 +1362,7 @@ mod tests {
                 node_id: yagra_common::NodeId::from(Uuid::nil()),
             }],
             vec!["N_1".into()],
-            false,
+            SlowReads::default(),
         );
         assert_eq!(check.org_id, "123456");
         assert_eq!(check.meraki_org_uuid, o.id);
@@ -1305,15 +1371,40 @@ mod tests {
         assert_eq!(check.devices.len(), 1);
         assert_eq!(check.network_ids, vec!["N_1".to_string()]);
         assert!(!check.port_names);
+        assert!(!check.ssid_statuses);
         let names = build_collect_check(
             &o,
             MerakiTier::SwitchPorts,
             "key".into(),
             vec![],
             vec![],
-            true,
+            SlowReads {
+                port_names: true,
+                ssid_statuses: false,
+            },
         );
-        assert!(names.port_names);
+        assert!(names.port_names && !names.ssid_statuses);
+        let ssids = build_collect_check(
+            &o,
+            MerakiTier::Wireless,
+            "key".into(),
+            vec![],
+            vec![],
+            SlowReads {
+                port_names: false,
+                ssid_statuses: true,
+            },
+        );
+        assert!(ssids.ssid_statuses && !ssids.port_names);
+    }
+
+    /// A pool whose every poller claims the wireless tier; whether it can run the switch ports is
+    /// the question.
+    fn ports(switch_ports: bool) -> PoolCaps {
+        PoolCaps {
+            switch_ports,
+            wireless: true,
+        }
     }
 
     fn with_switch_ports() -> MerakiOrg {
@@ -1333,11 +1424,11 @@ mod tests {
         let mut last = HashMap::new();
         // Nothing dispatched yet: availability wins the tie either way.
         assert_eq!(
-            pick_due_tier(&o, &last, now, true),
+            pick_due_tier(&o, &last, now, ports(true)),
             Some(MerakiTier::Availability)
         );
         assert_eq!(
-            pick_due_tier(&o, &last, now, false),
+            pick_due_tier(&o, &last, now, ports(false)),
             Some(MerakiTier::Availability)
         );
 
@@ -1345,20 +1436,20 @@ mod tests {
         last.insert((o.id, MerakiTier::Availability), now);
         last.insert((o.id, MerakiTier::Uplink), now);
         assert_eq!(
-            pick_due_tier(&o, &last, now, true),
+            pick_due_tier(&o, &last, now, ports(true)),
             Some(MerakiTier::SwitchPorts)
         );
         assert_eq!(
-            pick_due_tier(&o, &last, now, false),
+            pick_due_tier(&o, &last, now, ports(false)),
             Some(MerakiTier::Traffic),
             "a pool with an old poller was offered the switch-port tier"
         );
 
         // Traffic went too: with the tier withheld, nothing is due — not a failure, just nothing.
         last.insert((o.id, MerakiTier::Traffic), now);
-        assert_eq!(pick_due_tier(&o, &last, now, false), None);
+        assert_eq!(pick_due_tier(&o, &last, now, ports(false)), None);
         assert_eq!(
-            pick_due_tier(&o, &last, now, true),
+            pick_due_tier(&o, &last, now, ports(true)),
             Some(MerakiTier::SwitchPorts)
         );
 
@@ -1366,7 +1457,7 @@ mod tests {
         last.insert((o.id, MerakiTier::SwitchPorts), now);
         let later = now + Duration::from_secs(599);
         assert_ne!(
-            pick_due_tier(&o, &last, later, true),
+            pick_due_tier(&o, &last, later, ports(true)),
             Some(MerakiTier::SwitchPorts)
         );
         let due = now + Duration::from_secs(600);
@@ -1374,21 +1465,91 @@ mod tests {
         last.insert((o.id, MerakiTier::Uplink), due);
         last.insert((o.id, MerakiTier::Traffic), due);
         assert_eq!(
-            pick_due_tier(&o, &last, due, true),
+            pick_due_tier(&o, &last, due, ports(true)),
             Some(MerakiTier::SwitchPorts)
         );
     }
 
+    /// ADR-168 決定 7, and the starvation it must not bring back: an organization whose pool cannot
+    /// run the wireless tier is never offered it, and one that can but has not had it yet does not
+    /// keep availability waiting — every never-dispatched tier ties, and availability wins the tie.
     #[test]
-    fn only_the_switch_port_tier_asks_the_pool_what_it_can_run() {
+    fn the_wireless_tier_is_picked_only_where_every_poller_can_run_it() {
+        let mut o = org();
+        o.enabled_tiers = ["availability", "wireless", "switch_ports"]
+            .map(str::to_owned)
+            .to_vec();
+        let now = Instant::now();
+        let all = PoolCaps {
+            switch_ports: true,
+            wireless: true,
+        };
+        let old = PoolCaps {
+            switch_ports: true,
+            wireless: false,
+        };
+        let mut last = HashMap::new();
+        assert_eq!(
+            pick_due_tier(&o, &last, now, all),
+            Some(MerakiTier::Availability)
+        );
+        last.insert((o.id, MerakiTier::Availability), now);
+        // The cheap wireless read goes before the long switch-port one when both are due.
+        assert_eq!(
+            pick_due_tier(&o, &last, now, all),
+            Some(MerakiTier::Wireless)
+        );
+        assert_eq!(
+            pick_due_tier(&o, &last, now, old),
+            Some(MerakiTier::SwitchPorts),
+            "a pool with an old poller was offered the wireless tier"
+        );
+        last.insert((o.id, MerakiTier::SwitchPorts), now);
+        assert_eq!(pick_due_tier(&o, &last, now, old), None);
+
+        // Availability is due again before the wireless tier has ever gone: the wireless tier's
+        // "never dispatched" must not outrank it forever — it wins once, then waits its cadence.
+        let later = now + Duration::from_secs(300);
+        assert_eq!(
+            pick_due_tier(&o, &last, later, all),
+            Some(MerakiTier::Wireless)
+        );
+        last.insert((o.id, MerakiTier::Wireless), later);
+        assert_eq!(
+            pick_due_tier(&o, &last, later, all),
+            Some(MerakiTier::Availability)
+        );
+    }
+
+    #[test]
+    fn only_the_tiers_a_poller_must_claim_ask_the_pool_what_it_can_run() {
+        let none = PoolCaps::default();
         for tier in MerakiTier::ALL {
-            assert!(pool_can_run(tier, true), "{tier:?}");
+            let all = PoolCaps {
+                switch_ports: true,
+                wireless: true,
+            };
+            assert!(pool_can_run(tier, all), "{tier:?}");
             assert_eq!(
-                pool_can_run(tier, false),
-                tier != MerakiTier::SwitchPorts,
+                pool_can_run(tier, none),
+                !matches!(tier, MerakiTier::SwitchPorts | MerakiTier::Wireless),
                 "{tier:?}"
             );
         }
+        assert!(!pool_can_run(
+            MerakiTier::Wireless,
+            PoolCaps {
+                switch_ports: true,
+                wireless: false
+            }
+        ));
+        assert!(!pool_can_run(
+            MerakiTier::SwitchPorts,
+            PoolCaps {
+                switch_ports: false,
+                wireless: true
+            }
+        ));
     }
 
     /// 決定 1: the names are read on the first switch-port collect after a restart, then hourly.
@@ -1398,6 +1559,24 @@ mod tests {
         assert!(port_names_due(None, now));
         assert!(!port_names_due(Some(now), now + Duration::from_secs(3599)));
         assert!(port_names_due(Some(now), now + PORT_NAMES_EVERY));
+    }
+
+    /// ADR-168 決定 1: the SSIDs and radio settings are read on the first wireless collect after a
+    /// restart, then every twenty minutes — inside the thirty minutes a latest value is looked back
+    /// for, so the SSID count and a radio's channel never go blank between two reads.
+    #[test]
+    fn the_ssid_statuses_are_read_at_once_and_then_every_twenty_minutes() {
+        let now = Instant::now();
+        assert!(ssid_statuses_due(None, now));
+        assert!(!ssid_statuses_due(
+            Some(now),
+            now + Duration::from_secs(1199)
+        ));
+        assert!(ssid_statuses_due(Some(now), now + SSID_STATUSES_EVERY));
+        assert!(
+            SSID_STATUSES_EVERY < Duration::from_secs(1800),
+            "a read every {SSID_STATUSES_EVERY:?} leaves the latest value blank between two"
+        );
     }
 
     /// 決定 16. The poller reads an empty list as "every network", so the two states that used to
@@ -1624,7 +1803,9 @@ mod tests {
                 "uplink".to_owned(),
                 "traffic".to_owned(),
                 // ADR-167, migration 0130: new organizations collect their switch ports too.
-                "switch_ports".to_owned()
+                "switch_ports".to_owned(),
+                // ADR-168, migration 0131: and their access points' readings.
+                "wireless".to_owned()
             ],
             "the default tier set changed"
         );
@@ -1740,6 +1921,7 @@ mod tests {
 
         let tiers = vec!["availability".to_owned(), "inventory".to_owned()];
         let cadence = |availability, inventory, switch_ports, rps| MerakiCadence {
+            wireless_secs: None,
             availability_secs: availability,
             uplink_secs: 900,
             traffic_secs: 3600,
@@ -2553,6 +2735,18 @@ mod tests {
                 .map(|r| r.serial.as_str())
                 .collect::<Vec<_>>(),
             ["Q3-SW"]
+        );
+        // ADR-168 決定 8: a wireless collect is about the access points alone — the switch that just
+        // joined is not one.
+        assert_eq!(
+            devices
+                .device_refs(acme, MerakiTier::Wireless)
+                .await
+                .expect("access point refs")
+                .iter()
+                .map(|r| r.serial.as_str())
+                .collect::<Vec<_>>(),
+            ["Q3-1"]
         );
         assert_eq!(
             devices

@@ -63,6 +63,11 @@ pub struct NodeSummaryDto {
     /// supplies, minus what it refuses (ADR-135 inc. 2). This is what the WebUI shows on the node,
     /// so MCP read parity means the resolved set rather than the raw column.
     pub tags: Vec<String>,
+    /// A Meraki node's product type as the Dashboard names it — `wireless` is an MR access point —
+    /// and absent on every other node. The WebUI's list badges an MR "AP" from this (ADR-168), so
+    /// the list tool carries it too (read parity).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meraki_product_type: Option<String>,
 }
 
 impl NodeSummaryDto {
@@ -93,7 +98,15 @@ impl NodeSummaryDto {
             vendor: node.vendor.clone(),
             model: node.model.clone(),
             tags: tags.effective(node),
+            meraki_product_type: None,
         }
+    }
+
+    /// The same row, with the Meraki product type the caller read beside the kind.
+    #[must_use]
+    pub fn with_meraki_product_type(mut self, product_type: Option<String>) -> Self {
+        self.meraki_product_type = product_type;
+        self
     }
 }
 

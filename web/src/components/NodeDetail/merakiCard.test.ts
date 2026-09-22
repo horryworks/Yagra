@@ -6,6 +6,7 @@ import { MERAKI_PAIR_STATES, type MerakiPair } from '../../types/api';
 import {
   MERAKI_UPLINK_STATES,
   merakiPairLine,
+  merakiRadioLines,
   merakiTrafficSeries,
   merakiUplinkLines,
   merakiUplinkState,
@@ -212,5 +213,33 @@ describe('merakiTrafficSeries (ADR-164 決定 27)', () => {
       timestamps: [],
       series: [],
     });
+  });
+});
+
+describe('merakiRadioLines', () => {
+  const names = new Map([
+    [1, '2.4 GHz'],
+    [2, '5 GHz'],
+  ]);
+
+  // ADR-168: a Meraki access point's radios, one line each in slot order, named by their rows.
+  it('joins the utilization and its non-Wi-Fi part by radio, in slot order', () => {
+    expect(
+      merakiRadioLines([row(2, 3.08), row(1, 37.25)], [row(1, 0.5), row(2, 0)], names),
+    ).toEqual([
+      { row: 1, band: '2.4 GHz', utilPct: 37.25, nonWifiPct: 0.5 },
+      { row: 2, band: '5 GHz', utilPct: 3.08, nonWifiPct: 0 },
+    ]);
+  });
+
+  it('keeps a radio with one reading, and names a row it has no name for by its key', () => {
+    expect(merakiRadioLines([row(12, 9)], [row(2, 1)], names)).toEqual([
+      { row: 2, band: '5 GHz', utilPct: null, nonWifiPct: 1 },
+      { row: 12, band: '#12', utilPct: 9, nonWifiPct: null },
+    ]);
+  });
+
+  it('draws nothing for an access point with no radio measured', () => {
+    expect(merakiRadioLines([], [], names)).toEqual([]);
   });
 });

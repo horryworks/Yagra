@@ -7,8 +7,8 @@
 // the server answers `400 invalid_cadence`, so a hint that disagrees sends the operator into it.
 //
 // ⚠️ The second copy of a fact. The first is `crates/yagra-core/src/config.rs` (`MERAKI_FAST_*`,
-// `MERAKI_TRAFFIC_*`, `MERAKI_INVENTORY_*`, `MERAKI_SWITCH_PORTS_*`, mirrored by the CHECKs in
-// migrations 0038, 0124 and 0130), and
+// `MERAKI_TRAFFIC_*`, `MERAKI_INVENTORY_*`, `MERAKI_SWITCH_PORTS_*`, `MERAKI_WIRELESS_*`, mirrored
+// by the CHECKs in migrations 0038, 0124, 0130 and 0131), and
 // `api/meraki.rs::the_cadence_bounds_the_webui_shows_are_the_ones_this_api_accepts` reads THIS file
 // to hold the two together. It finds each bound as `export const NAME = <digits>;` — keep them
 // plain numbers on one line, or that check stops seeing them and says so.
@@ -20,6 +20,10 @@ export const CADENCE_FAST_MAX_SECS = 3600;
  *  five-minute buckets exists, and much past ten minutes a port would be drawn as stale. */
 export const CADENCE_SWITCH_PORTS_MIN_SECS = 300;
 export const CADENCE_SWITCH_PORTS_MAX_SECS = 600;
+/** Every access point's clients and each radio's utilization (ADR-168): the utilization is a
+ *  five-minute bucket, and much past ten minutes a radio would be drawn as stale. */
+export const CADENCE_WIRELESS_MIN_SECS = 300;
+export const CADENCE_WIRELESS_MAX_SECS = 600;
 /** Traffic. */
 export const CADENCE_TRAFFIC_MIN_SECS = 300;
 export const CADENCE_TRAFFIC_MAX_SECS = 86_400;
@@ -31,6 +35,7 @@ export const CADENCE_INVENTORY_MAX_SECS = 604_800;
 export const MERAKI_CADENCE_FIELDS = [
   'availability',
   'uplink',
+  'wireless',
   'switch_ports',
   'traffic',
   'inventory',
@@ -48,6 +53,7 @@ export interface CadenceBounds {
 export const MERAKI_CADENCE_BOUNDS: Record<MerakiCadenceField, CadenceBounds> = {
   availability: { min: CADENCE_FAST_MIN_SECS, max: CADENCE_FAST_MAX_SECS },
   uplink: { min: CADENCE_FAST_MIN_SECS, max: CADENCE_FAST_MAX_SECS },
+  wireless: { min: CADENCE_WIRELESS_MIN_SECS, max: CADENCE_WIRELESS_MAX_SECS },
   switch_ports: { min: CADENCE_SWITCH_PORTS_MIN_SECS, max: CADENCE_SWITCH_PORTS_MAX_SECS },
   traffic: { min: CADENCE_TRAFFIC_MIN_SECS, max: CADENCE_TRAFFIC_MAX_SECS },
   inventory: { min: CADENCE_INVENTORY_MIN_SECS, max: CADENCE_INVENTORY_MAX_SECS },

@@ -1555,7 +1555,8 @@ export interface paths {
          * Update an org's per-tier cadence, enabled tiers, and rate budget.
          * @description `enabled_tiers` must include `availability`. It is the one tier that decides whether a device
          *     is up; the others only record readings, so an organization without it could raise no node-down
-         *     alert at all. `switch_ports_secs` may be left out, and the stored interval then stays.
+         *     alert at all. `switch_ports_secs` and `wireless_secs` may be left out, and the stored interval
+         *     then stays.
          */
         put: operations["set_meraki_org_cadence"];
         post?: never;
@@ -8708,6 +8709,11 @@ export interface components {
             traffic_secs: number;
             /** Format: int32 */
             uplink_secs: number;
+            /**
+             * Format: int32
+             * @description The wireless tier's interval, 300–600 seconds. Optional, for the same reason.
+             */
+            wireless_secs?: number | null;
         };
         /** @description One collect tier the Dashboard API is not answering (see `MerakiOrgView.collect_failures`). */
         MerakiCollectFailureView: {
@@ -8720,8 +8726,9 @@ export interface components {
              * @description Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
              *     `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
              *     uplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,
-             *     `switch_port_usage`, `switch_port_config`). Absent when the whole collect failed, or a
-             *     poller from before this reported it.
+             *     `switch_port_usage`, `switch_port_config`), the wireless tier up to three
+             *     (`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when
+             *     the whole collect failed, or a poller from before this reported it.
              */
             listing?: string | null;
             /**
@@ -8734,7 +8741,7 @@ export interface components {
              * @description When this run of failures began.
              */
             since: string;
-            /** @description `availability`, `uplink`, `switch_ports` or `traffic`. */
+            /** @description `availability`, `uplink`, `wireless`, `switch_ports` or `traffic`. */
             tier: string;
         };
         /** @description What an onboarding batch did. */
@@ -9000,8 +9007,8 @@ export interface components {
              *     organization holds. A collect is a poller asking how the devices are, and it is what a
              *     device's state depends on: while `availability` is listed here the organization's nodes keep
              *     the last state they had, and after three failures in a row one alert is raised about the
-             *     organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `switch_ports`
-             *     or `traffic` listed alone raises nothing: readings are missing, liveness is not.
+             *     organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `wireless`,
+             *     `switch_ports` or `traffic` listed alone raises nothing: readings are missing, liveness is not.
              */
             collect_failures: components["schemas"]["MerakiCollectFailureView"][];
             /**
@@ -9056,6 +9063,13 @@ export interface components {
             traffic_secs: number;
             /** Format: int32 */
             uplink_secs: number;
+            /**
+             * Format: int32
+             * @description The wireless tier's interval (seconds) — every access point's clients and each radio's
+             *     channel utilization (ADR-168). The SSIDs and radio settings are read every twenty minutes
+             *     whatever this says.
+             */
+            wireless_secs: number;
         };
         /**
          * @description What a warm-spare pair is doing, seen from one of its MX (ADR-164 決定 26).
@@ -10011,6 +10025,13 @@ export interface components {
              *     so a list row can never disagree with the detail page it opens.
              */
             kind: components["schemas"]["NodeKind"];
+            /**
+             * @description A Meraki node's product type as the Dashboard names it — `wireless` (an MR access point),
+             *     `switch`, `appliance`, … — and absent on every other node. What the list's "AP" badge is
+             *     read from (ADR-168 決定 11): an MR stays `kind: meraki`, so the kind alone cannot say it is
+             *     an access point. The detail page reads the same value from `meraki_device.product_type`.
+             */
+            meraki_product_type?: string | null;
             model?: string | null;
             name: string;
             /**
@@ -19076,7 +19097,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A cadence value is outside its band (`switch_ports_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`) */
+            /** @description A cadence value is outside its band (`switch_ports_secs` and `wireless_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;

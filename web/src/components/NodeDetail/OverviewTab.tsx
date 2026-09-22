@@ -82,13 +82,16 @@ import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overv
 import { memPctSeries } from './overviewMetrics';
 import {
   merakiPairLine,
+  merakiRadioLines,
   merakiTrafficSeries,
   merakiUplinkLines,
   merakiVpnLine,
+  type MerakiRadioLine,
   type MerakiUplinkHistory,
   type MerakiUplinkLine,
   type MerakiVpnLine,
 } from './merakiCard';
+import { isMerakiAccessPoint } from '../../lib/nodeKind';
 import { PALETTE } from '../MetricChart/palette';
 import { mirrorAxisLabels } from '../../dashboard/widgets/interfaceTraffic';
 import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
@@ -628,7 +631,11 @@ function MerakiHealth({
   const [vpn, setVpn] = useState<MerakiVpnLine | null>(null);
   const [history, setHistory] = useState<MerakiUplinkHistory[]>([]);
   const [win, setWin] = useState<[number, number] | null>(null);
+  const [clients, setClients] = useState<number | null>(null);
+  const [ssids, setSsids] = useState<number | null>(null);
+  const [radios, setRadios] = useState<MerakiRadioLine[]>([]);
   const appliance = device.product_type === 'appliance';
+  const accessPoint = isMerakiAccessPoint(device.product_type);
 
   useEffect(() => {
     let cancelled = false;
@@ -678,6 +685,39 @@ function MerakiHealth({
       cancelled = true;
     };
   }, [nodeId, tick, range]);
+
+  // A Meraki access point's readings (ADR-168): asked only of one, so an MX or a switch card makes
+  // no request for a number it can never have.
+  useEffect(() => {
+    if (!accessPoint) return;
+    let cancelled = false;
+    void Promise.allSettled([
+      api.getNodeMetric(nodeId, MERAKI_CARD.clients),
+      api.getNodeMetric(nodeId, MERAKI_CARD.ssids),
+      api.getNodeMetric(nodeId, MERAKI_CARD.radioUtil, { agg: 'max', rows: true }),
+      api.getNodeMetric(nodeId, MERAKI_CARD.radioNonWifi, { agg: 'max', rows: true }),
+      api.listNodeInterfaces(nodeId),
+    ]).then(([c, s, u, n, ifs]) => {
+      if (cancelled) return;
+      setClients(c.status === 'fulfilled' ? c.value.value : null);
+      setSsids(s.status === 'fulfilled' ? s.value.value : null);
+      const names = new Map<number, string>(
+        ifs.status === 'fulfilled'
+          ? ifs.value.flatMap((i) => (i.if_name ? [[i.ifindex, i.if_name] as [number, string]] : []))
+          : [],
+      );
+      setRadios(
+        merakiRadioLines(
+          u.status === 'fulfilled' ? (u.value.rows ?? []) : [],
+          n.status === 'fulfilled' ? (n.value.rows ?? []) : [],
+          names,
+        ),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, tick, accessPoint]);
 
   const pairLine = merakiPairLine(pair);
   const traffic = merakiTrafficSeries(history, PALETTE, {
@@ -767,6 +807,31 @@ function MerakiHealth({
               )}
             </div>
           </div>
+        )}
+        {accessPoint && (
+          <>
+            <div className="nd-mk-tile">
+              <div className="nd-mk-tile-label">{t('overview.merakiClients')}</div>
+              <div className="nd-mk-tile-value">{clients == null ? '—' : formatCount(clients)}</div>
+            </div>
+            <div className="nd-mk-tile">
+              <div className="nd-mk-tile-label">{t('overview.merakiSsids')}</div>
+              <div className="nd-mk-tile-value">{ssids == null ? '—' : formatCount(ssids)}</div>
+            </div>
+            {radios.map((r) => (
+              <div className="nd-mk-tile" key={r.row}>
+                <div className="nd-mk-tile-label">
+                  {t('overview.merakiChannelUtil', { band: r.band })}
+                </div>
+                <div className="nd-mk-tile-value">{formatUtil(r.utilPct)}</div>
+                {r.nonWifiPct != null && (
+                  <div className="nd-mk-tile-sub">
+                    {t('overview.merakiNonWifi', { pct: formatUtil(r.nonWifiPct) })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </>
         )}
         {uplinks.length === 0 && appliance && (
           <div className="nd-mk-tile">

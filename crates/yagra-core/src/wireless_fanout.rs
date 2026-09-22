@@ -52,16 +52,12 @@ use std::time::Duration;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use uuid::Uuid;
 use yagra_bus::DiscoveredInterface;
-use yagra_bus::{CheckOutcome, PollResult, Sample};
+use yagra_bus::{CheckOutcome, PollResult, RadioReadings, Sample};
 use yagra_common::{
-    ap_id, IfIndex, MetricKind, NodeId, WlanApObservation, WlanApState, WlanRadioObservation,
-    METRIC_IF_HC_IN_OCTETS, METRIC_IF_HC_OUT_OCTETS, METRIC_IF_OPER_STATUS,
-    METRIC_WLAN_AP_CLIENT_COUNT, METRIC_WLAN_AP_CPU_PCT, METRIC_WLAN_AP_CPU_TEMP_C,
-    METRIC_WLAN_AP_MEM_PCT, METRIC_WLAN_AP_POWER_STATE, METRIC_WLAN_AP_TEMP_C, METRIC_WLAN_AP_UP,
-    METRIC_WLAN_CONTROLLER_APS_MISSING, METRIC_WLAN_RADIO_CHANNEL,
-    METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT, METRIC_WLAN_RADIO_CLIENT_COUNT,
-    METRIC_WLAN_RADIO_CLIENT_SIGNAL_DBM, METRIC_WLAN_RADIO_INTERFERENCE_PCT,
-    METRIC_WLAN_RADIO_NOISE_DBM, METRIC_WLAN_RADIO_TX_POWER_DBM,
+    ap_id, NodeId, WlanApObservation, WlanApState, METRIC_WLAN_AP_CLIENT_COUNT,
+    METRIC_WLAN_AP_CPU_PCT, METRIC_WLAN_AP_CPU_TEMP_C, METRIC_WLAN_AP_MEM_PCT,
+    METRIC_WLAN_AP_POWER_STATE, METRIC_WLAN_AP_TEMP_C, METRIC_WLAN_AP_UP,
+    METRIC_WLAN_CONTROLLER_APS_MISSING,
 };
 
 use crate::wireless::{ownership, ApBinding, Ownership, WirelessRepo, OWNER_STALE_AFTER_SECS};
@@ -255,7 +251,7 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
                     .filter_map(|(metric, value)| value.map(|v| Sample::gauge(metric, v))),
             );
             for radio in &ap.radios {
-                samples.extend(radio_samples(radio));
+                samples.extend(RadioReadings::from(radio).samples());
             }
             (CheckOutcome::Reachable, samples)
         }
@@ -274,7 +270,10 @@ fn ap_result(controller: &PollResult, node: NodeId, ap: &WlanApObservation) -> O
         node,
         outcome,
         samples,
-        radio_interfaces(ap),
+        ap.radios
+            .iter()
+            .map(|r| RadioReadings::from(r).interface())
+            .collect(),
     ))
 }
 
@@ -316,100 +315,8 @@ fn ap_poll_result(
     }
 }
 
-/// One radio's samples, keyed by its slot so the AP node reads it as a port (ADR-064 R6/R9).
-///
-/// The traffic counters and the operational status go out under the **IF-MIB** names, which is
-/// what makes a radio draw on every screen that already draws a port — throughput, the up/down
-/// dot, the interface-tier threshold rules — without any of them learning what a radio is.
-///
-/// ⚠️ A reading the controller did not have is absent, never zero: `radio.noise_dbm` is `None`
-/// where the dialect answered its invalid marker, and a 0 dBm noise floor would read as a radio
-/// being drowned (ADR-064 改訂 R10).
-fn radio_samples(radio: &WlanRadioObservation) -> Vec<Sample> {
-    let slot = IfIndex(radio.slot);
-    let gauge = |metric: &'static str, value: Option<f64>| {
-        value.map(move |v| Sample::interface(metric, slot, v, MetricKind::Gauge))
-    };
-    let mut out: Vec<Sample> = [
-        gauge(METRIC_WLAN_RADIO_CLIENT_COUNT, radio.clients.map(f64::from)),
-        gauge(
-            METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT,
-            radio.channel_util_pct.map(f64::from),
-        ),
-        gauge(
-            METRIC_WLAN_RADIO_INTERFERENCE_PCT,
-            radio.interference_pct.map(f64::from),
-        ),
-        gauge(METRIC_WLAN_RADIO_NOISE_DBM, radio.noise_dbm.map(f64::from)),
-        gauge(
-            METRIC_WLAN_RADIO_CLIENT_SIGNAL_DBM,
-            radio.client_signal_dbm.map(f64::from),
-        ),
-        gauge(
-            METRIC_WLAN_RADIO_TX_POWER_DBM,
-            radio.tx_power_dbm.map(f64::from),
-        ),
-        gauge(METRIC_WLAN_RADIO_CHANNEL, radio.channel.map(f64::from)),
-        radio.up.map(|up| {
-            Sample::interface(
-                METRIC_IF_OPER_STATUS,
-                slot,
-                if up { 1.0 } else { 2.0 },
-                MetricKind::Gauge,
-            )
-        }),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    #[allow(clippy::cast_precision_loss)]
-    for (metric, value) in [
-        (METRIC_IF_HC_IN_OCTETS, radio.in_octets),
-        (METRIC_IF_HC_OUT_OCTETS, radio.out_octets),
-    ] {
-        if let Some(v) = value {
-            out.push(Sample::interface(
-                metric,
-                slot,
-                v as f64,
-                MetricKind::Counter,
-            ));
-        }
-    }
-    out
-}
-
-/// The `interfaces` rows an AP's radios stand for.
-///
-/// 🚨 **`if_speed` stays `None`, and the channel width must never be put there.** A radio reports
-/// a 20 MHz channel, which is not a line rate: stored as a speed it would make `if_in_util_pct`
-/// out of twenty bits per second, and every radio would read as thousands of percent utilised.
-/// `if_type` is IANAifType 71, `ieee80211`, so a reader can tell "this is not an Ethernet port"
-/// from "we could not read it".
-fn radio_interfaces(ap: &WlanApObservation) -> Vec<DiscoveredInterface> {
-    ap.radios
-        .iter()
-        .map(|r| DiscoveredInterface {
-            ifindex: IfIndex(r.slot),
-            if_name: Some(r.band.label().to_owned()),
-            if_alias: r.channel.map(|c| format!("channel {c}")),
-            if_speed: None,
-            if_duplex: None,
-            if_type: Some(IF_TYPE_IEEE80211),
-            // A radio has no pluggable and no optical window; every one of these is a question
-            // about a wired port, and answering it would be inventing an answer.
-            if_media: None,
-            transceiver_model: None,
-            rx_power_low_dbm: None,
-            rx_power_high_dbm: None,
-            tx_power_low_dbm: None,
-            tx_power_high_dbm: None,
-        })
-        .collect()
-}
-
-/// IANAifType for a radio: `ieee80211(71)`.
-const IF_TYPE_IEEE80211: i32 = 71;
+// A radio's samples and its `interfaces` row are built by `yagra_bus::RadioReadings`, the one place
+// both radio paths share (ADR-168 決定 6): this one, and the poller's Meraki wireless collect.
 
 /// Leader-only upkeep of the fan-out: re-read the node bindings every [`BINDINGS_REFRESH`], and run
 /// the importer once a minute (ADR-064 決定 8).

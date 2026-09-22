@@ -333,6 +333,10 @@ pub(crate) struct MerakiOrgView {
     inventory_secs: u32,
     /// The switch-port tier's interval (seconds) — every switch port's status, speed and traffic.
     switch_ports_secs: u32,
+    /// The wireless tier's interval (seconds) — every access point's clients and each radio's
+    /// channel utilization (ADR-168). The SSIDs and radio settings are read every twenty minutes
+    /// whatever this says.
+    wireless_secs: u32,
     enabled_tiers: Vec<String>,
     target_rps: f64,
     group_id: Option<Uuid>,
@@ -363,15 +367,15 @@ pub(crate) struct MerakiOrgView {
     /// organization holds. A collect is a poller asking how the devices are, and it is what a
     /// device's state depends on: while `availability` is listed here the organization's nodes keep
     /// the last state they had, and after three failures in a row one alert is raised about the
-    /// organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `switch_ports`
-    /// or `traffic` listed alone raises nothing: readings are missing, liveness is not.
+    /// organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `wireless`,
+    /// `switch_ports` or `traffic` listed alone raises nothing: readings are missing, liveness is not.
     collect_failures: Vec<MerakiCollectFailureView>,
 }
 
 /// One collect tier the Dashboard API is not answering (see `MerakiOrgView.collect_failures`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiCollectFailureView {
-    /// `availability`, `uplink`, `switch_ports` or `traffic`.
+    /// `availability`, `uplink`, `wireless`, `switch_ports` or `traffic`.
     tier: String,
     /// Why the most recent collect of this tier failed. The vocabulary of `last_sync_error`, plus
     /// `no_answer`: the collect was sent and nothing came back.
@@ -383,8 +387,9 @@ pub(crate) struct MerakiCollectFailureView {
     /// Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
     /// `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
     /// uplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,
-    /// `switch_port_usage`, `switch_port_config`). Absent when the whole collect failed, or a
-    /// poller from before this reported it.
+    /// `switch_port_usage`, `switch_port_config`), the wireless tier up to three
+    /// (`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when
+    /// the whole collect failed, or a poller from before this reported it.
     #[serde(skip_serializing_if = "Option::is_none")]
     listing: Option<String>,
 }
@@ -420,6 +425,7 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
         traffic_secs: o.traffic_secs,
         inventory_secs: o.inventory_secs,
         switch_ports_secs: o.switch_ports_secs,
+        wireless_secs: o.wireless_secs,
         enabled_tiers: o.enabled_tiers.clone(),
         target_rps: o.target_rps,
         group_id: o.group_id,
@@ -729,6 +735,9 @@ pub(super) struct MerakiCadenceReq {
     /// stays as it is, so a client written before the tier existed does not reset it.
     #[serde(default)]
     switch_ports_secs: Option<i32>,
+    /// The wireless tier's interval, 300–600 seconds. Optional, for the same reason.
+    #[serde(default)]
+    wireless_secs: Option<i32>,
     enabled_tiers: Vec<String>,
     target_rps: f64,
 }
@@ -764,6 +773,9 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
                 MERAKI_SWITCH_PORTS_MAX_SECS,
             )
         })
+        || body
+            .wireless_secs
+            .is_some_and(|v| !in_range(v, MERAKI_WIRELESS_MIN_SECS, MERAKI_WIRELESS_MAX_SECS))
     {
         return Err(ApiError::bad_request(
             "invalid_cadence",
@@ -809,14 +821,15 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
 ///
 /// `enabled_tiers` must include `availability`. It is the one tier that decides whether a device
 /// is up; the others only record readings, so an organization without it could raise no node-down
-/// alert at all. `switch_ports_secs` may be left out, and the stored interval then stays.
+/// alert at all. `switch_ports_secs` and `wireless_secs` may be left out, and the stored interval
+/// then stays.
 #[utoipa::path(
     put, path = "/api/v1/meraki/orgs/{id}/cadence", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
     request_body = MerakiCadenceReq,
     responses(
         (status = 204, description = "Cadence, enabled tiers and rate budget updated"),
-        (status = 400, description = "A cadence value is outside its band (`switch_ports_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)", body = super::error::ErrorBody),
+        (status = 400, description = "A cadence value is outside its band (`switch_ports_secs` and `wireless_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
@@ -838,6 +851,7 @@ async fn set_meraki_org_cadence(
         traffic_secs: body.traffic_secs,
         inventory_secs: body.inventory_secs,
         switch_ports_secs: body.switch_ports_secs,
+        wireless_secs: body.wireless_secs,
         enabled_tiers: body.enabled_tiers,
         target_rps: body.target_rps,
     };
@@ -1777,6 +1791,7 @@ mod tests {
             traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
             inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
             switch_ports_secs: None,
+            wireless_secs: None,
             enabled_tiers: vec!["availability".to_owned()],
             target_rps: 1.0,
         };
@@ -1785,6 +1800,19 @@ mod tests {
         let mut fast = ok();
         fast.availability_secs = 1;
         assert_eq!(check_cadence(&fast).unwrap_err().code(), "invalid_cadence");
+
+        // ADR-168 決定 9: the wireless band, likewise.
+        for (secs, accepted) in [
+            (crate::config::MERAKI_WIRELESS_MIN_SECS - 1, false),
+            (crate::config::MERAKI_WIRELESS_MIN_SECS, true),
+            (crate::config::MERAKI_WIRELESS_MAX_SECS, true),
+            (crate::config::MERAKI_WIRELESS_MAX_SECS + 1, false),
+        ] {
+            let mut wireless = ok();
+            wireless.wireless_secs = Some(secs);
+            wireless.enabled_tiers = vec!["availability".to_owned(), "wireless".to_owned()];
+            assert_eq!(check_cadence(&wireless).is_ok(), accepted, "{secs}");
+        }
 
         // ADR-167 決定 11: the switch-port band, when the field is sent at all.
         for (secs, accepted) in [
@@ -1826,6 +1854,7 @@ mod tests {
             traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
             inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
             switch_ports_secs: None,
+            wireless_secs: None,
             enabled_tiers: tiers.iter().map(|t| (*t).to_owned()).collect(),
             target_rps: 1.0,
         };
@@ -2008,7 +2037,7 @@ mod tests {
             .iter()
             .map(|l| l.as_str())
             .collect();
-        assert_eq!(ours.len(), 8, "the listings a collect reads today");
+        assert_eq!(ours.len(), 11, "the listings a collect reads today");
         assert_eq!(
             listed, ours,
             "types/api.ts lists exactly these, in this order"
@@ -2053,6 +2082,14 @@ mod tests {
                 "CADENCE_SWITCH_PORTS_MAX_SECS",
                 crate::config::MERAKI_SWITCH_PORTS_MAX_SECS,
             ),
+            (
+                "CADENCE_WIRELESS_MIN_SECS",
+                crate::config::MERAKI_WIRELESS_MIN_SECS,
+            ),
+            (
+                "CADENCE_WIRELESS_MAX_SECS",
+                crate::config::MERAKI_WIRELESS_MAX_SECS,
+            ),
         ] {
             assert_eq!(
                 declared_number(&text, path, name),
@@ -2061,27 +2098,32 @@ mod tests {
             );
         }
         // The edge really is held to those constants: one second outside each band is refused.
-        let at = |availability: i32, traffic: i32, inventory: i32, ports: i32| MerakiCadenceReq {
-            availability_secs: availability,
-            uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
-            traffic_secs: traffic,
-            inventory_secs: inventory,
-            switch_ports_secs: Some(ports),
-            enabled_tiers: vec!["availability".to_owned()],
-            target_rps: 1.0,
+        let at = |availability: i32, traffic: i32, inventory: i32, ports: i32, wireless: i32| {
+            MerakiCadenceReq {
+                availability_secs: availability,
+                uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
+                traffic_secs: traffic,
+                inventory_secs: inventory,
+                switch_ports_secs: Some(ports),
+                wireless_secs: Some(wireless),
+                enabled_tiers: vec!["availability".to_owned()],
+                target_rps: 1.0,
+            }
         };
-        let (fast, traffic, inventory, ports) = (
+        let (fast, traffic, inventory, ports, wireless) = (
             crate::config::MERAKI_FAST_MAX_SECS,
             crate::config::MERAKI_TRAFFIC_MAX_SECS,
             crate::config::MERAKI_INVENTORY_MAX_SECS,
             crate::config::MERAKI_SWITCH_PORTS_MAX_SECS,
+            crate::config::MERAKI_WIRELESS_MAX_SECS,
         );
-        assert!(check_cadence(&at(fast, traffic, inventory, ports)).is_ok());
+        assert!(check_cadence(&at(fast, traffic, inventory, ports, wireless)).is_ok());
         for outside in [
-            at(fast + 1, traffic, inventory, ports),
-            at(fast, traffic + 1, inventory, ports),
-            at(fast, traffic, inventory + 1, ports),
-            at(fast, traffic, inventory, ports + 1),
+            at(fast + 1, traffic, inventory, ports, wireless),
+            at(fast, traffic + 1, inventory, ports, wireless),
+            at(fast, traffic, inventory + 1, ports, wireless),
+            at(fast, traffic, inventory, ports + 1, wireless),
+            at(fast, traffic, inventory, ports, wireless + 1),
         ] {
             assert_eq!(
                 check_cadence(&outside).unwrap_err().code(),
@@ -2906,6 +2948,30 @@ mod tests {
         let mut fast = cadence(&["availability", "switch_ports"]);
         fast["switch_ports_secs"] = serde_json::json!(60);
         let (status, body) = send(&st, "PUT", &path, &operator, Some(fast)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_cadence", "{body}");
+
+        // ADR-168: the wireless tier and its interval, accepted and stored — and an interval left
+        // out keeps the stored one, as the switch ports' does.
+        assert_eq!(stored.wireless_secs, 300, "the column default");
+        let mut wireless = cadence(&["availability", "wireless"]);
+        wireless["wireless_secs"] = serde_json::json!(600);
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(wireless)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        assert_eq!(stored.wireless_secs, 600);
+        assert_eq!(
+            stored.switch_ports_secs, 600,
+            "an omitted interval was reset"
+        );
+        assert_eq!(stored.enabled_tiers, vec!["availability", "wireless"]);
+        let view = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None)
+            .await
+            .1;
+        assert_eq!(view[0]["wireless_secs"], 600, "{view}");
+        let mut slow = cadence(&["availability", "wireless"]);
+        slow["wireless_secs"] = serde_json::json!(601);
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(slow)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_cadence", "{body}");
 

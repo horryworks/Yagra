@@ -961,9 +961,14 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         const SWITCH_PORTS: i64 = 130;
+        // 0131 appends the wireless tier to every row (ADR-168), which is its own test below; this
+        // one stops before it, so it pins what 0130 did and nothing after.
+        const WIRELESS: i64 = 131;
         let embedded = embedded_migrations();
-        let (before, from): (Vec<_>, Vec<_>) =
-            embedded.iter().partition(|m| m.version < SWITCH_PORTS);
+        let (before, from): (Vec<_>, Vec<_>) = embedded
+            .iter()
+            .filter(|m| m.version < WIRELESS)
+            .partition(|m| m.version < SWITCH_PORTS);
         assert!(
             from.iter().any(|m| m.version == SWITCH_PORTS),
             "migration 0130 is not embedded"
@@ -1002,21 +1007,117 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
 
+        // Read raw: the repository's reader names columns later migrations add.
+        let read = |id: uuid::Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (Vec<String>, i32)>(
+                    "SELECT enabled_tiers, switch_ports_secs FROM meraki_orgs WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("the row")
+            }
+        };
+        let mut after = Vec::new();
+        for id in &made {
+            after.push(read(*id).await);
+        }
+        assert_eq!(
+            after[0].0,
+            ["availability", "uplink", "traffic", "switch_ports"]
+        );
+        assert_eq!(after[1].0, ["availability", "switch_ports"]);
+        assert_eq!(
+            after[2].0,
+            ["availability", "switch_ports"],
+            "a row that already carried the tier got it twice"
+        );
+        assert!(after.iter().all(|o| o.1 == 300));
+
+        // A new organization gets the tier and the interval from the column defaults.
+        let fresh = orgs
+            .create("4", "4", "https://api.meraki.com", credential)
+            .await
+            .expect("a new organization");
+        let fresh = read(fresh).await;
+        assert!(fresh.0.iter().any(|t| t == "switch_ports"));
+        assert_eq!(fresh.1, 300);
+    }
+
+    /// **Migration 0131 starts every existing organization collecting its access points' readings**
+    /// (ADR-168 決定 10): the tier is appended once, whatever else the row holds, the interval takes
+    /// its default, and a new organization gets both from the column defaults. Applied in two steps
+    /// with the rows written in between, like 0130's test.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0131_adds_the_wireless_tier_to_every_organization_once(pool: sqlx::PgPool) {
+        const WIRELESS: i64 = 131;
+        let embedded = embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) = embedded.iter().partition(|m| m.version < WIRELESS);
+        assert!(
+            from.iter().any(|m| m.version == WIRELESS),
+            "migration 0131 is not embedded"
+        );
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let mut made = Vec::new();
+        for (org_id, tiers) in [
+            (
+                "1",
+                vec!["availability", "uplink", "traffic", "switch_ports"],
+            ),
+            ("2", vec!["availability"]),
+            // Already carrying it (a core that had it, rolled back and forward again).
+            ("3", vec!["availability", "wireless"]),
+        ] {
+            let id = orgs
+                .create(org_id, org_id, "https://api.meraki.com", credential)
+                .await
+                .expect("an organization from before 0131");
+            sqlx::query("UPDATE meraki_orgs SET enabled_tiers = $2 WHERE id = $1")
+                .bind(id)
+                .bind(&tiers)
+                .execute(&pool)
+                .await
+                .expect("store the tiers");
+            made.push(id);
+        }
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+
         let mut after = Vec::new();
         for id in &made {
             after.push(orgs.get(*id).await.expect("get").expect("org"));
         }
         assert_eq!(
             after[0].enabled_tiers,
-            ["availability", "uplink", "traffic", "switch_ports"]
+            [
+                "availability",
+                "uplink",
+                "traffic",
+                "switch_ports",
+                "wireless"
+            ]
         );
-        assert_eq!(after[1].enabled_tiers, ["availability", "switch_ports"]);
+        assert_eq!(after[1].enabled_tiers, ["availability", "wireless"]);
         assert_eq!(
             after[2].enabled_tiers,
-            ["availability", "switch_ports"],
+            ["availability", "wireless"],
             "a row that already carried the tier got it twice"
         );
-        assert!(after.iter().all(|o| o.switch_ports_secs == 300));
+        assert!(after.iter().all(|o| o.wireless_secs == 300));
 
         // A new organization gets the tier and the interval from the column defaults.
         let fresh = orgs
@@ -1024,8 +1125,18 @@ mod tests {
             .await
             .expect("a new organization");
         let fresh = orgs.get(fresh).await.expect("get").expect("org");
-        assert!(fresh.enabled_tiers.iter().any(|t| t == "switch_ports"));
-        assert_eq!(fresh.switch_ports_secs, 300);
+        assert!(fresh.enabled_tiers.iter().any(|t| t == "wireless"));
+        assert_eq!(fresh.wireless_secs, 300);
+
+        // The band is the database's too, not only the API's.
+        for outside in [299, 601] {
+            let refused = sqlx::query("UPDATE meraki_orgs SET wireless_secs = $2 WHERE id = $1")
+                .bind(made[0])
+                .bind(outside)
+                .execute(&pool)
+                .await;
+            assert!(refused.is_err(), "{outside} s was stored");
+        }
     }
 
     /// **Migrating twice does nothing the second time**, which is what every restart does.

@@ -40,6 +40,11 @@ pub const METRIC_WLAN_AP_WALK_COMPLETE: &str = "wlan_ap_walk_complete";
 pub const METRIC_WLAN_AP_UP: &str = "wlan_ap_up";
 /// Wireless clients online through an AP, as the controller serving it reports.
 pub const METRIC_WLAN_AP_CLIENT_COUNT: &str = "wlan_ap_client_count";
+/// How many SSIDs an AP is broadcasting: enabled, and on air on at least one of its radios
+/// (ADR-168 決定 2). Only a Meraki MR publishes it today — `wireless/ssids/statuses/byDevice`, read
+/// every twenty minutes — and only while the AP's radios are measured at all (決定 4): the
+/// Dashboard keeps answering a stopped AP's last configuration as broadcasting.
+pub const METRIC_WLAN_AP_SSID_COUNT: &str = "wlan_ap_ssid_count";
 /// An AP's CPU in use, percent, as its controller reports.
 pub const METRIC_WLAN_AP_CPU_PCT: &str = "wlan_ap_cpu_pct";
 /// An AP's memory in use, percent, as its controller reports.
@@ -191,6 +196,15 @@ pub const METRIC_WLAN_RADIO_TX_POWER_DBM: &str = "wlan_radio_tx_power_dbm";
 /// The channel the radio is working on. An identifier rather than a measurement — useful as a
 /// history (a radio-resource-management change shows as a step), never as a threshold.
 pub const METRIC_WLAN_RADIO_CHANNEL: &str = "wlan_radio_channel";
+/// How much of the radio channel is taken by energy that is not Wi-Fi (microwave ovens, Bluetooth,
+/// radar), percent — part of [`METRIC_WLAN_RADIO_CHANNEL_UTIL_PCT`], never added to it.
+///
+/// Its own name rather than [`METRIC_WLAN_RADIO_INTERFERENCE_PCT`] (ADR-064's "Meraki MR"): a
+/// Huawei controller's interference ratio counts co-channel Wi-Fi as interference, and Meraki's
+/// `nonWifi` counts only what is not Wi-Fi, so one name would chart two different quantities as
+/// one. Only a Meraki MR publishes it (ADR-168), so no collection template declares it and
+/// [`crate::MERAKI_RADIO_METRICS`] is what makes it a per-port reading.
+pub const METRIC_WLAN_RADIO_NON_WIFI_UTIL_PCT: &str = "wlan_radio_non_wifi_util_pct";
 
 /// Every metric a radio publishes under its own name, in the order the Overview lists them.
 ///
@@ -261,6 +275,21 @@ impl WlanBand {
             1 => Some(Self::Band2G4),
             2 => Some(Self::Band5G),
             3 => Some(Self::Band6G),
+            _ => None,
+        }
+    }
+
+    /// The band the Meraki Dashboard names — `"2.4"`, `"5"`, `"6"` — on both
+    /// `wireless/devices/channelUtilization/byDevice` (`byBand[].band`) and
+    /// `wireless/ssids/statuses/byDevice` (`radio.band`). Measured on a real organization
+    /// (2026-09-22): `"2.4"` and `"5"` only. A word this build does not know is `None` — a radio
+    /// filed under a guessed band is a series under the wrong slot.
+    #[must_use]
+    pub fn from_meraki(word: &str) -> Option<Self> {
+        match word.trim() {
+            "2.4" => Some(Self::Band2G4),
+            "5" => Some(Self::Band5G),
+            "6" => Some(Self::Band6G),
             _ => None,
         }
     }
@@ -1177,6 +1206,24 @@ mod tests {
             WlanBand::from_cisco_airespace(None, Some(11)),
             Some(Band2G4)
         );
+    }
+
+    /// ADR-168: the Dashboard's band words. `"2.4"` and `"5"` were the only two on a real
+    /// organization of 1,710 access points; anything else is not guessed at.
+    #[test]
+    fn a_meraki_band_word_names_one_band_or_none() {
+        use WlanBand::{Band2G4, Band5G, Band6G};
+        for (word, band) in [
+            ("2.4", Some(Band2G4)),
+            ("5", Some(Band5G)),
+            ("6", Some(Band6G)),
+            (" 5 ", Some(Band5G)),
+            ("2.4GHz", None),
+            ("5.0", None),
+            ("", None),
+        ] {
+            assert_eq!(WlanBand::from_meraki(word), band, "{word:?}");
+        }
     }
 
     #[test]

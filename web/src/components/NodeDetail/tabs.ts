@@ -38,6 +38,7 @@ import {
   type NodeState,
   type WirelessControllerSummary,
 } from '../../types/api';
+import { isMerakiAccessPoint } from '../../lib/nodeKind';
 
 export const NODE_DETAIL_TABS = [
   'overview',
@@ -116,8 +117,8 @@ const DEVICE_ONLY: readonly NodeKind[] = ['device'];
  *  Interfaces tab is in this position: neighbours and flow have no equivalent from either, so they
  *  stay [`DEVICE_ONLY`] and stay hidden.
  *
- *  ⚠️ Necessary and **not sufficient** for a Meraki node: only a switch has ports. An MX or an MR
- *  passes this list, and [`interfacesFed`] is what keeps the tab off it. */
+ *  ⚠️ Necessary and **not sufficient** for a Meraki node: only a switch has ports and only an access
+ *  point has radios. An MX passes this list, and [`interfacesFed`] is what keeps the tab off it. */
 const INTERFACE_KINDS: readonly NodeKind[] = ['device', 'wireless_ap', 'meraki'];
 
 /**
@@ -142,7 +143,8 @@ export interface NodeDetailSubject {
   isWlanController: boolean;
   /** A Meraki node's product type as the Dashboard names it (`switch`, `appliance`, `wireless`, …)
    *  — `NodeDetail.meraki_device.product_type` — and `null` on every other node. Only a switch has
-   *  ports for the Interfaces tab to list (ADR-167 決定 13). */
+   *  ports and only an access point has radios for the Interfaces tab to list (ADR-167 決定 13,
+   *  ADR-168 決定 11). */
   merakiProductType: string | null;
 }
 
@@ -306,10 +308,10 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
  *  * A device: its own SNMP walk, when it has one.
  *  * An access point: its controller's walk. It has no SNMP credential and never will (ADR-064), so
  *    asking `snmpConfigured` alone hid the radios a controller had already collected.
- *  * A Meraki node: its organization's switch-port collect — **for a switch alone**. An MX or an MR
- *    has no ports there. `snmpConfigured` is not asked: it is true of every node on a deployment
- *    with a default community in its environment, and asking it offered every Meraki node an empty
- *    tab.
+ *  * A Meraki node: its organization's switch-port collect for a switch, and its wireless collect
+ *    for an access point, whose radios are rows as a controller-walked AP's are (ADR-168). An MX has
+ *    neither. `snmpConfigured` is not asked: it is true of every node on a deployment with a
+ *    default community in its environment, and asking it offered every Meraki node an empty tab.
  *  * A URL or DNS monitor: nothing. */
 export function interfacesFed(node: NodeDetailSubject): boolean {
   switch (node.kind) {
@@ -318,7 +320,10 @@ export function interfacesFed(node: NodeDetailSubject): boolean {
     case 'wireless_ap':
       return true;
     case 'meraki':
-      return node.merakiProductType?.trim().toLowerCase() === 'switch';
+      return (
+        node.merakiProductType?.trim().toLowerCase() === 'switch' ||
+        isMerakiAccessPoint(node.merakiProductType)
+      );
     case 'url':
     case 'dns':
       return false;

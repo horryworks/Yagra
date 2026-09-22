@@ -48,6 +48,11 @@ export const MERAKI_CARD = {
   vpnHubsReachable: 'meraki_vpn_hubs_reachable',
   vpnHubsUnreachable: 'meraki_vpn_hubs_unreachable',
   vpnSpokesUnreachable: 'meraki_vpn_spokes_unreachable',
+  // A Meraki access point's (ADR-168): the same names a controller-walked AP publishes.
+  clients: 'wlan_ap_client_count',
+  ssids: 'wlan_ap_ssid_count',
+  radioUtil: 'wlan_radio_channel_util_pct',
+  radioNonWifi: 'wlan_radio_non_wifi_util_pct',
 } as const;
 
 /**

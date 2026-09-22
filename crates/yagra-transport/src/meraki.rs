@@ -24,13 +24,14 @@
 //!   collected so far rather than hammering.
 
 use crate::{
-    MerakiCollectSpec, MerakiCollected, MerakiObservation, MerakiPort, MerakiSample, MerakiUplink,
-    TransportError,
+    MerakiCollectSpec, MerakiCollected, MerakiObservation, MerakiPort, MerakiRadio, MerakiSample,
+    MerakiUplink, TransportError,
 };
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
+use yagra_common::{assign_radio_slots, WlanBand, WlanRadioObservation};
 use yagra_common::{
     is_meraki_api_host, switch_port_ifindex, switch_port_oper_status, switch_port_speed_bps,
     uplink_ifindex, uplink_name, Duplex, MerakiHaRole, MerakiListing, MerakiTier,
@@ -39,7 +40,7 @@ use yagra_common::{
     METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS,
     METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
     METRIC_MERAKI_VPN_HUBS_UNREACHABLE, METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT,
-    METRIC_MERAKI_VPN_SPOKES_UNREACHABLE,
+    METRIC_MERAKI_VPN_SPOKES_UNREACHABLE, METRIC_WLAN_AP_CLIENT_COUNT, METRIC_WLAN_AP_SSID_COUNT,
 };
 
 /// Dashboard API v1 path prefix (appended to the org's `base_url`).
@@ -797,6 +798,8 @@ pub(crate) async fn collect(
     let mut data: Vec<DeviceDatum> = Vec::new();
     // A switch's ports, by serial — the switch-port tier's interface inventory (ADR-167).
     let mut ports: BTreeMap<String, BTreeMap<u32, MerakiPort>> = BTreeMap::new();
+    // An access point's radios, by serial then slot — the wireless tier's (ADR-168).
+    let mut radios: BTreeMap<String, BTreeMap<u32, MerakiRadio>> = BTreeMap::new();
     match spec.tier {
         MerakiTier::Availability => {
             let path = format!(
@@ -954,12 +957,88 @@ pub(crate) async fn collect(
                 name_switch_ports(&items, &mut ports);
             }
         }
+        // Every access point's clients and each radio's channel utilization, and — when core asks,
+        // every twenty minutes — the SSIDs each one broadcasts and its radios' channel and power
+        // (ADR-168). Organization-wide listings joined by serial.
+        MerakiTier::Wireless => {
+            // Measured on a real organization (1,710 access points): clients about 3 s, utilization
+            // about 2 s, the SSIDs 78 s at 500 a page. The budget is the switch ports' reason: the
+            // organization's single collect flight is leased for 300 s and its availability
+            // collects wait behind this one.
+            session.max_pages = WIRELESS_MAX_PAGES;
+            session.deadline = Some(Instant::now() + WIRELESS_BUDGET);
+
+            let clients_path = format!(
+                "{API_PREFIX}/organizations/{}/wireless/clients/overview/byDevice",
+                spec.org_id
+            );
+            let (items, stop) = session
+                .get_paged_reported(
+                    &clients_path,
+                    &no_query,
+                    Paging::Upto(spec.per_page.min(WIRELESS_CLIENTS_PER_PAGE)),
+                    Shape::Items,
+                )
+                .await?;
+            let kept = watched.keep(items);
+            listings.note(MerakiListing::WirelessClients, stop, kept.len());
+            data.extend(parse_wireless_clients(&kept));
+
+            let util_path = format!(
+                "{API_PREFIX}/organizations/{}/wireless/devices/channelUtilization/byDevice",
+                spec.org_id
+            );
+            let window = WIRELESS_UTIL_WINDOW_SECS.to_string();
+            let q = [("interval", window.clone()), ("timespan", window)];
+            let (items, stop) = contained(
+                session
+                    .get_paged_reported(
+                        &util_path,
+                        &q,
+                        Paging::Upto(spec.per_page.min(WIRELESS_UTIL_PER_PAGE)),
+                        Shape::Array,
+                    )
+                    .await,
+            );
+            let kept = watched.keep(items);
+            listings.note(MerakiListing::WirelessChannelUtilization, stop, kept.len());
+            radios = parse_channel_utilization(&kept);
+
+            if spec.ssid_statuses {
+                let ssid_path = format!(
+                    "{API_PREFIX}/organizations/{}/wireless/ssids/statuses/byDevice",
+                    spec.org_id
+                );
+                let (items, stop) = contained(
+                    session
+                        .get_paged_reported(
+                            &ssid_path,
+                            &no_query,
+                            Paging::Upto(WIRELESS_SSIDS_PER_PAGE),
+                            Shape::Items,
+                        )
+                        .await,
+                );
+                let kept = watched.keep(items);
+                let admitted = kept
+                    .iter()
+                    .filter(|it| {
+                        it.get("serial")
+                            .and_then(Value::as_str)
+                            .is_some_and(|s| radios.contains_key(s))
+                    })
+                    .count();
+                listings.note(MerakiListing::WirelessSsidStatuses, stop, admitted);
+                data.extend(apply_ssid_statuses(&kept, &mut radios));
+            }
+        }
         // The inventory is read by core's periodic sync (`fetch_inventory`), not by a collect —
         // nothing to gather here.
         MerakiTier::Inventory => {}
     }
     let mut observations = fold(data);
     attach_ports(&mut observations, ports);
+    attach_radios(&mut observations, radios);
     Ok(MerakiCollected {
         observations,
         stopped: listings.stopped,
@@ -1222,6 +1301,257 @@ fn attach_ports(
                 samples: Vec::new(),
                 uplinks: Vec::new(),
                 ports,
+                radios: Vec::new(),
+            }),
+        }
+    }
+}
+
+// ── The wireless tier (ADR-168) ─────────────────────────────────────────────────────────────
+
+/// The largest page `wireless/clients/overview/byDevice` accepts: "The perPage parameter must be
+/// between 3 and 1000" (measured 2026-09-22).
+const WIRELESS_CLIENTS_PER_PAGE: u32 = 1000;
+/// The largest page `wireless/devices/channelUtilization/byDevice` accepts (3–1000, measured).
+const WIRELESS_UTIL_PER_PAGE: u32 = 1000;
+/// The page `wireless/ssids/statuses/byDevice` is read at. It accepts up to 500, and a page of 500
+/// took 20–25 s on a real organization — close to the 30 s a request may take. Half of that keeps
+/// each page near 11 s; the time is per row, so the whole listing costs the same either way.
+const WIRELESS_SSIDS_PER_PAGE: u32 = 250;
+/// How many pages one wireless listing may run to: the most access points one organization may hold
+/// as nodes (50,000, `max_devices`' ceiling) at [`WIRELESS_SSIDS_PER_PAGE`]. A bound against a
+/// server that never stops; the clock is what bounds a collect ([`WIRELESS_BUDGET`]).
+const WIRELESS_MAX_PAGES: usize = 200;
+/// How long one wireless collect may keep asking — inside core's 300 s collect lease, for the reason
+/// [`SWITCH_PORTS_BUDGET`] gives.
+const WIRELESS_BUDGET: Duration = Duration::from_secs(240);
+/// The channel-utilization window, asked as both `interval` and `timespan`: the last five minutes,
+/// one bucket. Measured: accepted, and nearly every value changed from one five-minute read to the
+/// next. The Dashboard refuses windows it has no bucket for.
+const WIRELESS_UTIL_WINDOW_SECS: u32 = 300;
+
+/// `wireless/clients/overview/byDevice` → each access point's clients online
+/// (`counts.byStatus.online`) as `wlan_ap_client_count`, the name a controller-walked AP uses.
+///
+/// Every access point of the organization has a row — a stopped one answers 0, which is the truth
+/// about it (ADR-168 決定 4), so it is published like any other.
+fn parse_wireless_clients(items: &[Value]) -> Vec<DeviceDatum> {
+    items
+        .iter()
+        .filter_map(|it| {
+            let serial = it.get("serial")?.as_str()?.to_owned();
+            let online = it
+                .get("counts")?
+                .get("byStatus")?
+                .get("online")
+                .and_then(json_number)?;
+            Some(DeviceDatum {
+                serial,
+                sample: MerakiSample {
+                    metric: METRIC_WLAN_AP_CLIENT_COUNT.to_owned(),
+                    ifindex: None,
+                    value: online,
+                },
+                uplink: None,
+            })
+        })
+        .collect()
+}
+
+/// `wireless/devices/channelUtilization/byDevice` → each access point's radios, one per band it
+/// reported, with the band's utilization (`total`) and the non-Wi-Fi part of it (`nonWifi`).
+///
+/// * The radio is the band's **first** slot ([`WlanBand::slot_base`]). The Dashboard reports per
+///   band, so on an access point with two radios in one band both are in this number, and it lands
+///   on the first (ADR-168 決定 5 — measured: no such access point among 1,710).
+/// * A stopped access point lists no band at all (measured: every offline and dormant one), so it
+///   gets no radio — and, by [`apply_ssid_statuses`], nothing from the SSID read either.
+/// * A band word this build does not know is skipped, never guessed.
+/// * The values are percentages with two decimals and are kept as they came.
+fn parse_channel_utilization(items: &[Value]) -> BTreeMap<String, BTreeMap<u32, MerakiRadio>> {
+    let mut out: BTreeMap<String, BTreeMap<u32, MerakiRadio>> = BTreeMap::new();
+    for row in items {
+        let Some(serial) = row.get("serial").and_then(Value::as_str) else {
+            continue;
+        };
+        for b in row
+            .get("byBand")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(band) = b
+                .get("band")
+                .and_then(Value::as_str)
+                .and_then(WlanBand::from_meraki)
+            else {
+                continue;
+            };
+            let pct = |key: &str| b.get(key)?.get("percentage").and_then(json_number);
+            let (total, non_wifi) = (pct("total"), pct("nonWifi"));
+            if total.is_none() && non_wifi.is_none() {
+                continue;
+            }
+            let slot = band.slot_base();
+            out.entry(serial.to_owned()).or_default().insert(
+                slot,
+                MerakiRadio {
+                    slot,
+                    band,
+                    channel_util_pct: total,
+                    non_wifi_util_pct: non_wifi,
+                    channel: None,
+                    tx_power_dbm: None,
+                },
+            );
+        }
+    }
+    out
+}
+
+/// `wireless/ssids/statuses/byDevice` → for each access point whose radios were measured just now:
+/// how many SSIDs it broadcasts (`wlan_ap_ssid_count`), and each radio's channel and transmit power.
+///
+/// 🚨 **Only access points already in `radios` — the ones the utilization read measured** (ADR-168
+/// 決定 4). Measured on a real organization: every offline and dormant access point was still
+/// answered here with its last configuration, broadcasting. Published as such, a stopped access point
+/// would read as broadcasting its SSIDs on its channels.
+///
+/// * One row per BSS (SSID × radio). A radio is its `radio.index`; its band, channel and power are the
+///   same on every BSS of it (measured: no disagreement among 11,566). Radios are numbered into slots
+///   by [`assign_radio_slots`], in index order within a band, as a controller-walked AP's are.
+/// * A radio gets its channel and power only in a band the utilization read measured: a band that is
+///   not on air has no row to put them on (決定 2).
+/// * An SSID counts once when it is enabled and broadcasting on at least one radio. A measured access
+///   point broadcasting nothing is a real 0.
+/// * A channel or power the Dashboard left `null` is left out, never published as 0.
+fn apply_ssid_statuses(
+    items: &[Value],
+    radios: &mut BTreeMap<String, BTreeMap<u32, MerakiRadio>>,
+) -> Vec<DeviceDatum> {
+    let mut out = Vec::new();
+    for row in items {
+        let Some(serial) = row.get("serial").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(measured) = radios.get_mut(serial) else {
+            continue;
+        };
+        let bss = row
+            .get("basicServiceSets")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+
+        let mut ssids: HashSet<String> = HashSet::new();
+        let mut by_index: BTreeMap<u32, WlanRadioObservation> = BTreeMap::new();
+        for b in bss {
+            let radio = b.get("radio");
+            let ssid = b.get("ssid");
+            let on = |v: Option<&Value>, key: &str| {
+                v.and_then(|v| v.get(key)).and_then(Value::as_bool) == Some(true)
+            };
+            if on(ssid, "enabled") && on(radio, "isBroadcasting") {
+                let key = ssid.and_then(|s| {
+                    s.get("number")
+                        .and_then(Value::as_u64)
+                        .map(|n| n.to_string())
+                        .or_else(|| s.get("name").and_then(Value::as_str).map(str::to_owned))
+                });
+                if let Some(key) = key {
+                    ssids.insert(key);
+                }
+            }
+            let Some(radio) = radio else {
+                continue;
+            };
+            let (Some(index), Some(band)) = (
+                radio
+                    .get("index")
+                    .and_then(Value::as_str)
+                    .and_then(|i| i.trim().parse::<u32>().ok()),
+                radio
+                    .get("band")
+                    .and_then(Value::as_str)
+                    .and_then(WlanBand::from_meraki),
+            ) else {
+                continue;
+            };
+            let channel = radio
+                .get("channel")
+                .and_then(Value::as_u64)
+                .and_then(|c| u32::try_from(c).ok());
+            // Whole dBm on the Dashboard (5–25 measured); the conversion only ever drops a fraction
+            // nothing sends.
+            #[allow(clippy::cast_possible_truncation)]
+            let power = radio
+                .get("power")
+                .and_then(json_number)
+                .map(|p| p.round() as i32);
+            by_index
+                .entry(index)
+                .or_insert_with(|| WlanRadioObservation {
+                    slot: 0,
+                    band,
+                    up: None,
+                    clients: None,
+                    channel,
+                    channel_util_pct: None,
+                    interference_pct: None,
+                    noise_dbm: None,
+                    client_signal_dbm: None,
+                    tx_power_dbm: power,
+                    in_octets: None,
+                    out_octets: None,
+                });
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        out.push(DeviceDatum {
+            serial: serial.to_owned(),
+            sample: MerakiSample {
+                metric: METRIC_WLAN_AP_SSID_COUNT.to_owned(),
+                ifindex: None,
+                value: ssids.len() as f64,
+            },
+            uplink: None,
+        });
+
+        for r in assign_radio_slots(by_index.into_iter().collect()) {
+            if !measured.values().any(|m| m.band == r.band) {
+                continue;
+            }
+            let radio = measured.entry(r.slot).or_insert(MerakiRadio {
+                slot: r.slot,
+                band: r.band,
+                channel_util_pct: None,
+                non_wifi_util_pct: None,
+                channel: None,
+                tx_power_dbm: None,
+            });
+            radio.channel = r.channel;
+            radio.tx_power_dbm = r.tx_power_dbm.map(f64::from);
+        }
+    }
+    out
+}
+
+/// Hand each access point its radios, creating the observation for one that has radios but no
+/// sample.
+fn attach_radios(
+    observations: &mut Vec<MerakiObservation>,
+    radios: BTreeMap<String, BTreeMap<u32, MerakiRadio>>,
+) {
+    for (serial, slots) in radios {
+        let slots: Vec<MerakiRadio> = slots.into_values().collect();
+        match observations.iter_mut().find(|o| o.serial == serial) {
+            Some(obs) => obs.radios = slots,
+            None => observations.push(MerakiObservation {
+                serial,
+                samples: Vec::new(),
+                uplinks: Vec::new(),
+                ports: Vec::new(),
+                radios: slots,
             }),
         }
     }
@@ -1412,6 +1742,7 @@ fn fold(data: Vec<DeviceDatum>) -> Vec<MerakiObservation> {
                 samples: Vec::new(),
                 uplinks: Vec::new(),
                 ports: Vec::new(),
+                radios: Vec::new(),
             });
         obs.samples.push(d.sample);
         if let Some(u) = d.uplink {
@@ -2893,6 +3224,7 @@ mod tests {
             samples: Vec::new(),
             uplinks: Vec::new(),
             ports: Vec::new(),
+            radios: Vec::new(),
         }
     }
 
@@ -2983,5 +3315,54 @@ mod tests {
             assert!(covered, "{e:?}");
         }
         assert_eq!(MerakiFetchError::ALL.len(), 8);
+    }
+
+    /// ADR-168 決定 5, the case the recorded organization did not have: two radios in one band. The
+    /// utilization is per band and lands on the band's first slot; the SSID read numbers the radios
+    /// the way a controller-walked access point's are (second 5 GHz radio = 12), so the second gets
+    /// its channel and power with no utilization of its own. A band word nobody knows is dropped.
+    #[test]
+    fn a_second_radio_in_a_band_takes_the_next_slot_and_shares_no_utilization() {
+        let util = serde_json::json!([{
+            "serial": "Q2AP-0001",
+            "network": {"id": "N_1"},
+            "byBand": [
+                {"band": "5", "total": {"percentage": 12.5}, "nonWifi": {"percentage": 1.0}},
+                {"band": "60", "total": {"percentage": 99.0}, "nonWifi": {"percentage": 0.0}},
+            ],
+        }]);
+        let mut radios = parse_channel_utilization(util.as_array().unwrap());
+        assert_eq!(
+            radios["Q2AP-0001"].keys().copied().collect::<Vec<_>>(),
+            [2],
+            "the unknown band was guessed at"
+        );
+
+        let radio = |index: &str, channel: u32| {
+            serde_json::json!({
+                "ssid": {"number": 0, "enabled": true},
+                "radio": {"isBroadcasting": true, "band": "5", "channel": channel,
+                          "power": 14, "index": index},
+            })
+        };
+        let ssids = serde_json::json!([{
+            "serial": "Q2AP-0001",
+            "network": {"id": "N_1"},
+            // Listed out of order on purpose: the slot follows the radio's index, not the row.
+            "basicServiceSets": [radio("2", 149), radio("1", 36)],
+        }]);
+        let data = apply_ssid_statuses(ssids.as_array().unwrap(), &mut radios);
+        let got: Vec<_> = radios["Q2AP-0001"]
+            .values()
+            .map(|r| (r.slot, r.channel, r.channel_util_pct))
+            .collect();
+        assert_eq!(got, [(2, Some(36), Some(12.5)), (12, Some(149), None)]);
+        assert_eq!(
+            data.iter()
+                .find(|d| d.sample.metric == METRIC_WLAN_AP_SSID_COUNT)
+                .map(|d| d.sample.value),
+            Some(1.0),
+            "one SSID on two radios is one SSID"
+        );
     }
 }
