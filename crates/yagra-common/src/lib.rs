@@ -82,9 +82,9 @@ pub use link_mode::{
 pub use meraki::{
     api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,
     uplink_ifindex, uplink_name, uplink_status_value, MerakiDeviceConfig, MerakiTier,
-    METRIC_MERAKI_CLIENT_COUNT, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_LAST_SEEN_SECS,
-    METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_STATUS,
-    METRIC_MERAKI_USAGE_RECV_KB, METRIC_MERAKI_USAGE_SENT_KB,
+    METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_LAST_SEEN_SECS, METRIC_MERAKI_UPLINK_LATENCY_MS,
+    METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS,
+    METRIC_MERAKI_UPLINK_STATUS,
 };
 pub use metric::{
     is_valid_metric_name, MetricKind, SeriesKey, METRIC_ICMP_RTT_MS, METRIC_SNMP_UP,

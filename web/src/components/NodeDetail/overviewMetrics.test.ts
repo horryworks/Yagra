@@ -8,7 +8,7 @@
 // that a point with no partner (or no derivable percentage) becomes a gap rather than a zero.
 
 import { describe, expect, it } from 'vitest';
-import { formatKb, memPctSeries } from './overviewMetrics';
+import { memPctSeries } from './overviewMetrics';
 import type { ResolvedMem } from './metricCards';
 import type { MetricPoint } from '../../types/api';
 
@@ -117,27 +117,5 @@ describe('memPctSeries', () => {
       timestamps: [],
       values: [],
     });
-  });
-});
-
-describe('formatKb', () => {
-  it('steps at the binary boundaries', () => {
-    expect(formatKb(0)).toBe('0 KB');
-    expect(formatKb(1023)).toBe('1023 KB');
-    expect(formatKb(1024)).toBe('1.0 MB');
-    expect(formatKb(1_048_575)).toBe('1024.0 MB');
-    expect(formatKb(1_048_576)).toBe('1.0 GB');
-    expect(formatKb(3_670_016)).toBe('3.5 GB');
-  });
-
-  it('rounds a fractional KB reading rather than showing decimals', () => {
-    expect(formatKb(12.4)).toBe('12 KB');
-    expect(formatKb(12.6)).toBe('13 KB');
-  });
-
-  it('keeps one decimal above the KB step, unlike formatBytes', () => {
-    // Pinned because this helper is slated to move into `lib/format.ts`: `formatBytes(2048 * 1024)`
-    // renders "2 MB", and folding it in must not silently change what the Meraki card shows.
-    expect(formatKb(2048)).toBe('2.0 MB');
   });
 });

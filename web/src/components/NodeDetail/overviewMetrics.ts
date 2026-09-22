@@ -39,16 +39,3 @@ export function memPctSeries(
   return { timestamps, values };
 }
 
-/** Human-friendly kilobyte formatter for Meraki windowed usage gauges.
- *
- *  ⚠️ This belongs in `lib/format.ts` with the rest of the formatters — it sits here only because
- *  it was extracted out of `OverviewTab.tsx` in a change that did not own that file. Fold it in the
- *  next time `lib/format.ts` is touched. It is *not* `formatBytes(kb * 1024)`: this keeps one
- *  decimal place unconditionally above the KB step (`2.0 MB`), where `formatBytes` drops it for
- *  whole and large values (`2 MB`). Moving it must not quietly change which of the two the Meraki
- *  card shows. */
-export function formatKb(kb: number): string {
-  if (kb >= 1_048_576) return `${(kb / 1_048_576).toFixed(1)} GB`;
-  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
-  return `${Math.round(kb)} KB`;
-}

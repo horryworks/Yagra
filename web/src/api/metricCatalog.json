@@ -518,6 +518,20 @@
     "source": "check"
   },
   {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_uplink_recv_bps",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_uplink_sent_bps",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
     "family": "MikroTik RouterOS health",
     "metric_kind": "gauge",
     "metric_name": "mikrotik_cpu_temp",

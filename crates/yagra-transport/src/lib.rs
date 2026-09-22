@@ -285,6 +285,9 @@ pub struct MerakiCollectSpec {
     pub per_page: u32,
     /// Conservative request-rate budget (requests/sec) the collector paces itself to.
     pub target_rps: f64,
+    /// This tier's collect interval (the job's `interval_secs`). The traffic tier asks for usage
+    /// over this window, so consecutive collects tile time (ADR-164 決定 23); other tiers ignore it.
+    pub interval_secs: u32,
 }
 
 /// Raw per-device observations from a Meraki collect. The poller maps these to per-node

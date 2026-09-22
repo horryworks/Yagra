@@ -36,15 +36,17 @@ pub const METRIC_MERAKI_UPLINK_LOSS_PCT: &str = "meraki_uplink_loss_pct";
 pub const METRIC_MERAKI_UPLINK_LATENCY_MS: &str = "meraki_uplink_latency_ms";
 /// Stable TSDB metric: per-uplink status (`active`=2, `ready`=1, otherwise 0).
 pub const METRIC_MERAKI_UPLINK_STATUS: &str = "meraki_uplink_status";
-/// Stable TSDB metric: number of clients seen on the device/network (gauge).
-pub const METRIC_MERAKI_CLIENT_COUNT: &str = "meraki_client_count";
-/// Stable TSDB metric: traffic sent over the reported window, kilobytes.
+/// Stable TSDB metric: per-uplink average send rate over the traffic collect's window, bits per
+/// second — an MX appliance's WAN uplinks only (`appliance/uplinks/usage/byNetwork`, ADR-164 決定
+/// 23).
 ///
-/// **ADR-012 exception:** Meraki returns *pre-aggregated windowed usage*, not a monotonic counter,
-/// so this is stored as a **gauge** — never hand-rolled counter deltas or a query-time `rate()`.
-pub const METRIC_MERAKI_USAGE_SENT_KB: &str = "meraki_usage_sent_kb";
-/// Stable TSDB metric: traffic received over the reported window, kilobytes (gauge — see above).
-pub const METRIC_MERAKI_USAGE_RECV_KB: &str = "meraki_usage_recv_kb";
+/// **ADR-012 exception:** Meraki returns *pre-aggregated windowed usage* (bytes over the window),
+/// not a monotonic counter, so this is stored as a **gauge** — never hand-rolled counter deltas or a
+/// query-time `rate()`. It is stored as a rate rather than as the window's bytes so that changing
+/// the traffic tier's interval does not change what the number means.
+pub const METRIC_MERAKI_UPLINK_SENT_BPS: &str = "meraki_uplink_sent_bps";
+/// Stable TSDB metric: per-uplink average receive rate over the window, bits per second (see above).
+pub const METRIC_MERAKI_UPLINK_RECV_BPS: &str = "meraki_uplink_recv_bps";
 
 /// A Meraki collection tier: a group of Dashboard endpoints polled together on one cadence.
 ///
@@ -58,7 +60,8 @@ pub enum MerakiTier {
     Availability,
     /// WAN uplink loss / latency / status.
     Uplink,
-    /// Device & network traffic usage and client counts (heavier, low cadence).
+    /// MX WAN uplink usage — sent and received per uplink over the tier's interval (heavier, low
+    /// cadence). The switches and access points have no reading here (ADR-164 決定 23).
     Traffic,
     /// Inventory reconciliation: networks + devices (very low cadence).
     Inventory,

@@ -22,6 +22,7 @@ import { api } from '../../services/api';
 import {
   alertWhatOf,
   deriveMem,
+  formatBps,
   formatBytes,
   formatCount,
   formatDaysToExpiry,
@@ -78,7 +79,8 @@ import {
   type ResolvedMetric,
 } from './metricCards';
 import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overviewClaims';
-import { formatKb, memPctSeries } from './overviewMetrics';
+import { memPctSeries } from './overviewMetrics';
+import { merakiUplinkLines, type MerakiUplinkLine } from './merakiCard';
 import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { metricMeaningKey } from '../../lib/metricMeaning';
@@ -586,9 +588,10 @@ function UrlHealth({
   );
 }
 
-/** Cisco Meraki device health: availability (`meraki_device_up`), client count, and windowed
- *  traffic usage — all node-level gauges from the org collector. Shown only for Meraki nodes
- *  (the caller guards on `node.meraki_device`). Per-uplink loss/latency live on the Interfaces tab. */
+/** Cisco Meraki device health: availability (`meraki_device_up`) and, for an MX, one line per WAN
+ *  uplink with its average send and receive rates over the traffic collect's interval (ADR-164
+ *  増分 13). Shown only for Meraki nodes (the caller guards on `node.meraki_device`). What each line
+ *  says is decided in `merakiCard.ts`. */
 function MerakiHealth({
   nodeId,
   device,
@@ -599,24 +602,24 @@ function MerakiHealth({
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
   const [up, setUp] = useState<number | null>(null);
-  const [clients, setClients] = useState<number | null>(null);
-  const [sent, setSent] = useState<number | null>(null);
-  const [recv, setRecv] = useState<number | null>(null);
+  const [uplinks, setUplinks] = useState<MerakiUplinkLine[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
       void Promise.allSettled([
         api.getNodeMetric(nodeId, MERAKI_CARD.up),
-        api.getNodeMetric(nodeId, MERAKI_CARD.clients),
-        api.getNodeMetric(nodeId, MERAKI_CARD.sentKb),
-        api.getNodeMetric(nodeId, MERAKI_CARD.recvKb),
-      ]).then(([u, c, s, r]) => {
+        api.getNodeMetric(nodeId, MERAKI_CARD.sentBps, { agg: 'max', rows: true }),
+        api.getNodeMetric(nodeId, MERAKI_CARD.recvBps, { agg: 'max', rows: true }),
+      ]).then(([u, s, r]) => {
         if (cancelled) return;
         setUp(u.status === 'fulfilled' ? u.value.value : null);
-        setClients(c.status === 'fulfilled' ? c.value.value : null);
-        setSent(s.status === 'fulfilled' ? s.value.value : null);
-        setRecv(r.status === 'fulfilled' ? r.value.value : null);
+        setUplinks(
+          merakiUplinkLines(
+            s.status === 'fulfilled' ? (s.value.rows ?? []) : [],
+            r.status === 'fulfilled' ? (r.value.rows ?? []) : [],
+          ),
+        );
       });
     };
     load();
@@ -624,7 +627,6 @@ function MerakiHealth({
       cancelled = true;
     };
   }, [nodeId, tick]);
-
 
   return (
     <section>
@@ -646,24 +648,24 @@ function MerakiHealth({
             </span>
           </div>
         </div>
-        <div className="nd-health-metric">
-          <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">{t('overview.clients')}</span>
-            <span className="nd-health-metric-value">
-              {clients == null ? '—' : Math.round(clients)}
-            </span>
+        {uplinks.map((l) => (
+          <div className="nd-health-metric" key={l.row}>
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">{t('overview.wanTraffic', { uplink: l.name })}</span>
+              <span className="nd-health-metric-value">
+                {formatBps(l.sentBps)} / {formatBps(l.recvBps)}
+              </span>
+            </div>
           </div>
-        </div>
-        <div className="nd-health-metric">
-          <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">{t('overview.trafficSentRecv')}</span>
-            <span className="nd-health-metric-value">
-              {sent == null && recv == null
-                ? '—'
-                : `${sent == null ? '—' : formatKb(sent)} / ${recv == null ? '—' : formatKb(recv)}`}
-            </span>
+        ))}
+        {uplinks.length === 0 && device.product_type === 'appliance' && (
+          <div className="nd-health-metric">
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">{t('overview.wanTrafficNone')}</span>
+              <span className="nd-health-metric-value">—</span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </section>
   );

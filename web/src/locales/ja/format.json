@@ -42,9 +42,8 @@
   "scalar": {
     "snmp_sys_uptime_ticks": "稼働時間",
     "meraki_device_up": "可用性",
-    "meraki_client_count": "クライアント数",
-    "meraki_usage_sent_kb": "送信トラフィック (KB)",
-    "meraki_usage_recv_kb": "受信トラフィック (KB)",
+    "meraki_uplink_sent_bps": "回線の送信 (bps)",
+    "meraki_uplink_recv_bps": "回線の受信 (bps)",
     "meraki_uplink_loss_pct": "アップリンク損失 %",
     "meraki_uplink_latency_ms": "アップリンク遅延 (ms)",
     "meraki_uplink_status": "アップリンクステータス"

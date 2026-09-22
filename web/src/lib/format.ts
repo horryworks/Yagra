@@ -401,9 +401,8 @@ export const KNOWN_SCALARS = new Set<string>([
   'snmp_sys_uptime_ticks',
   // Cisco Meraki (Dashboard API) metrics.
   'meraki_device_up',
-  'meraki_client_count',
-  'meraki_usage_sent_kb',
-  'meraki_usage_recv_kb',
+  'meraki_uplink_sent_bps',
+  'meraki_uplink_recv_bps',
   'meraki_uplink_loss_pct',
   'meraki_uplink_latency_ms',
   'meraki_uplink_status',
@@ -504,9 +503,7 @@ export function scalarValueFormat(metric: string): ((v: number) => string) | und
   switch (u.unit) {
     case 'bytes':
       return (v) => formatBytes(v);
-    // Not `formatKb`: that one is the Meraki windowed-usage gauge and keeps a decimal
-    // unconditionally. These are memory and swap totals, and they have to read the same way the
-    // MEMORY card beside them does.
+    // Memory and swap totals: they have to read the same way the MEMORY card beside them does.
     case 'kilobytes':
       return (v) => formatBytes(v * 1024);
     case 'hundredths of a second':

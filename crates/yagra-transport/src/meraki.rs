@@ -33,9 +33,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 use yagra_common::{
     is_meraki_api_host, uplink_ifindex, uplink_name, uplink_status_value, MerakiTier,
-    METRIC_MERAKI_CLIENT_COUNT, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_LATENCY_MS,
-    METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_USAGE_RECV_KB,
-    METRIC_MERAKI_USAGE_SENT_KB,
+    METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT,
+    METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS, METRIC_MERAKI_UPLINK_STATUS,
 };
 
 /// Dashboard API v1 path prefix (appended to the org's `base_url`).
@@ -274,9 +273,9 @@ impl Session {
         &mut self,
         path: &str,
         query: &[(&str, String)],
-        per_page: u32,
+        paging: Paging,
     ) -> Result<Vec<Value>, TransportError> {
-        let (items, stop) = self.get_paged_traced(path, query, per_page).await;
+        let (items, stop) = self.get_paged_traced(path, query, paging).await;
         match stop {
             Some(stop) if stop.fails_a_collect() => Err(io(stop.collect_message())),
             _ => Ok(items),
@@ -290,9 +289,9 @@ impl Session {
         &mut self,
         path: &str,
         query: &[(&str, String)],
-        per_page: u32,
+        paging: Paging,
     ) -> Result<(Vec<Value>, Option<MerakiFetchError>), MerakiFetchError> {
-        let (items, stop) = self.get_paged_traced(path, query, per_page).await;
+        let (items, stop) = self.get_paged_traced(path, query, paging).await;
         match stop {
             Some(stop) if stop.fails_a_collect() => Err(stop.into()),
             stop => Ok((items, stop.map(MerakiFetchError::from))),
@@ -309,9 +308,9 @@ impl Session {
         &mut self,
         path: &str,
         query: &[(&str, String)],
-        per_page: u32,
+        paging: Paging,
     ) -> Result<Vec<Value>, MerakiFetchError> {
-        let (items, stop) = self.get_paged_traced(path, query, per_page).await;
+        let (items, stop) = self.get_paged_traced(path, query, paging).await;
         match stop {
             None => Ok(items),
             Some(stop) => Err(stop.into()),
@@ -324,11 +323,11 @@ impl Session {
         &mut self,
         path: &str,
         query: &[(&str, String)],
-        per_page: u32,
+        paging: Paging,
     ) -> (Vec<Value>, Option<Stop>) {
         let mut items: Vec<Value> = Vec::new();
         let stop = self
-            .page_through(path, query, per_page, &mut items)
+            .page_through(path, query, paging, &mut items)
             .await
             .err();
         (items, stop)
@@ -339,7 +338,7 @@ impl Session {
         &mut self,
         path: &str,
         query: &[(&str, String)],
-        per_page: u32,
+        paging: Paging,
         items: &mut Vec<Value>,
     ) -> Result<(), Stop> {
         let mut url = self.base.join(path).map_err(|e| {
@@ -351,7 +350,9 @@ impl Session {
             for (k, v) in query {
                 qp.append_pair(k, v);
             }
-            qp.append_pair("perPage", &per_page.to_string());
+            if let Paging::Upto(per_page) = paging {
+                qp.append_pair("perPage", &per_page.to_string());
+            }
         }
 
         let mut visited: Vec<reqwest::Url> = Vec::new();
@@ -422,6 +423,20 @@ impl Session {
             }
         }
     }
+}
+
+/// How a listing is asked to page: with a page size, or with none at all.
+///
+/// A page size used to be appended to every listing, which is only right for listings that document
+/// one. `appliance/uplinks/usage/byNetwork` documents none and was recorded without one — one page
+/// for a whole 434-network organization (ADR-164 決定 23) — and a listing's documented maximum
+/// differs (`appliance/vpn/statuses` stops at 300), so each call site says which it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Paging {
+    /// Send `perPage` with this size.
+    Upto(u32),
+    /// Send no `perPage`. A `Link: rel=next` is still followed if the server ever sends one.
+    Unpaged,
 }
 
 /// Why a paged read ended before the server said it had no more pages.
@@ -715,7 +730,7 @@ pub(crate) async fn collect(
                 spec.org_id
             );
             let (items, stop) = session
-                .get_paged_reported(&path, &no_query, spec.per_page)
+                .get_paged_reported(&path, &no_query, Paging::Upto(spec.per_page))
                 .await?;
             stopped = stopped.or(stop);
             data.extend(parse_availability(&watched.keep(items)));
@@ -727,7 +742,7 @@ pub(crate) async fn collect(
             );
             let q = [("timespan", "300".to_owned())];
             let (items, stop) = session
-                .get_paged_reported(&loss_path, &q, spec.per_page)
+                .get_paged_reported(&loss_path, &q, Paging::Upto(spec.per_page))
                 .await?;
             stopped = stopped.or(stop);
             data.extend(parse_uplink_loss_latency(&watched.keep(items)));
@@ -737,20 +752,27 @@ pub(crate) async fn collect(
                 spec.org_id
             );
             let (items, stop) = session
-                .get_paged_reported(&status_path, &no_query, spec.per_page)
+                .get_paged_reported(&status_path, &no_query, Paging::Upto(spec.per_page))
                 .await?;
             stopped = stopped.or(stop);
             data.extend(parse_uplink_statuses(&watched.keep(items)));
         }
+        // Every MX's WAN uplinks, over the tier's own interval (ADR-164 決定 23). What this read
+        // replaced, `summary/top/devices/byUsage`, refuses a timespan under 28,800 seconds, answers
+        // an organization's top ten devices only, and carries a total rather than sent/received —
+        // it failed on every real organization and never stored a sample.
         MerakiTier::Traffic => {
             let path = format!(
-                "{API_PREFIX}/organizations/{}/summary/top/devices/byUsage",
+                "{API_PREFIX}/organizations/{}/appliance/uplinks/usage/byNetwork",
                 spec.org_id
             );
-            let q = [("timespan", "3600".to_owned())];
-            let (items, stop) = session.get_paged_reported(&path, &q, spec.per_page).await?;
+            let window = usage_window(spec.interval_secs);
+            let q = [("timespan", window.to_string())];
+            let (items, stop) = session
+                .get_paged_reported(&path, &q, Paging::Unpaged)
+                .await?;
             stopped = stopped.or(stop);
-            data.extend(parse_traffic(&watched.keep(items)));
+            data.extend(parse_uplinks_usage(&watched.keep(items), window));
         }
         // The inventory is read by core's periodic sync (`fetch_inventory`), not by a collect —
         // nothing to gather here.
@@ -785,8 +807,8 @@ impl<'a> Watched<'a> {
     }
 }
 
-/// A row's network: `networkId` on the two uplink listings, `network.id` on availabilities and
-/// byUsage. Measured on a real organization (2026-09-22): every row of all four carried one.
+/// A row's network: `networkId` on the two uplink listings and on the uplink usage, `network.id` on
+/// availabilities. Measured on a real organization (2026-09-22): every row of all four carried one.
 fn row_network(it: &Value) -> Option<&str> {
     it.get("networkId").and_then(Value::as_str).or_else(|| {
         it.get("network")
@@ -933,47 +955,76 @@ fn parse_uplink_statuses(items: &[Value]) -> Vec<DeviceDatum> {
     out
 }
 
-fn parse_traffic(items: &[Value]) -> Vec<DeviceDatum> {
+/// The window a traffic collect asks usage over: the tier's interval, so consecutive collects tile
+/// time without a gap or an overlap — within what the Dashboard was measured to accept (300 s to one
+/// day; ADR-164 決定 23). The traffic tier's cadence bounds are the same range, so the clamp only
+/// matters to a job that does not say its interval.
+#[must_use]
+pub fn usage_window(interval_secs: u32) -> u32 {
+    interval_secs.clamp(USAGE_WINDOW_MIN_SECS, USAGE_WINDOW_MAX_SECS)
+}
+
+/// The shortest usage window the Dashboard was measured to accept (2026-09-22).
+const USAGE_WINDOW_MIN_SECS: u32 = 300;
+/// The longest window the recording measured. The Dashboard documents 14 days; nothing longer
+/// than a day was ever asked of it, and the traffic tier's cadence tops out at a day anyway.
+const USAGE_WINDOW_MAX_SECS: u32 = 86_400;
+
+/// `appliance/uplinks/usage/byNetwork`: each row is a network, and each of its `byUplink` entries
+/// one MX's one uplink — `sent` / `received` in bytes over the window. Stored as the window's
+/// average rate in bits per second, per uplink.
+///
+/// A number that arrives as a JSON string is read too: `appliance/vpn/stats` sends its byte counts
+/// that way although its documentation says integer, so the sibling listing is not trusted to stay
+/// numeric either. An entry whose interface is not one of the three known uplinks is skipped, not
+/// given an invented row key (cardinality). A zero is a reading: an idle uplink is not a missing one.
+fn parse_uplinks_usage(items: &[Value], window_secs: u32) -> Vec<DeviceDatum> {
+    let secs = f64::from(window_secs.max(1));
     let mut out = Vec::new();
-    for it in items {
-        let Some(serial) = it.get("serial").and_then(Value::as_str) else {
+    for row in items {
+        let Some(uplinks) = row.get("byUplink").and_then(Value::as_array) else {
             continue;
         };
-        if let Some(sent) = it.pointer("/usage/sent").and_then(Value::as_f64) {
-            out.push(DeviceDatum {
-                serial: serial.to_owned(),
-                sample: MerakiSample {
-                    metric: METRIC_MERAKI_USAGE_SENT_KB.to_owned(),
-                    ifindex: None,
-                    value: sent,
-                },
-                uplink: None,
-            });
-        }
-        if let Some(recv) = it.pointer("/usage/recv").and_then(Value::as_f64) {
-            out.push(DeviceDatum {
-                serial: serial.to_owned(),
-                sample: MerakiSample {
-                    metric: METRIC_MERAKI_USAGE_RECV_KB.to_owned(),
-                    ifindex: None,
-                    value: recv,
-                },
-                uplink: None,
-            });
-        }
-        if let Some(clients) = it.pointer("/clients/counts/total").and_then(Value::as_f64) {
-            out.push(DeviceDatum {
-                serial: serial.to_owned(),
-                sample: MerakiSample {
-                    metric: METRIC_MERAKI_CLIENT_COUNT.to_owned(),
-                    ifindex: None,
-                    value: clients,
-                },
-                uplink: None,
-            });
+        for u in uplinks {
+            let (Some(serial), Some(iface)) = (
+                u.get("serial").and_then(Value::as_str),
+                u.get("interface").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            let Some(ifindex) = uplink_ifindex(iface) else {
+                continue;
+            };
+            let meta = MerakiUplink {
+                ifindex,
+                name: uplink_name(ifindex).unwrap_or(iface).to_owned(),
+            };
+            for (field, metric) in [
+                ("sent", METRIC_MERAKI_UPLINK_SENT_BPS),
+                ("received", METRIC_MERAKI_UPLINK_RECV_BPS),
+            ] {
+                if let Some(bytes) = u.get(field).and_then(json_number) {
+                    out.push(DeviceDatum {
+                        serial: serial.to_owned(),
+                        sample: MerakiSample {
+                            metric: metric.to_owned(),
+                            ifindex: Some(ifindex),
+                            value: bytes * 8.0 / secs,
+                        },
+                        uplink: Some(meta.clone()),
+                    });
+                }
+            }
         }
     }
     out
+}
+
+/// A JSON number, or a string holding one.
+fn json_number(v: &Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        .filter(|n: &f64| n.is_finite())
 }
 
 // ── Control-plane (adding an organization) ──────────────────────────────────────────────────
@@ -990,7 +1041,11 @@ pub async fn list_organizations(
 ) -> Result<Vec<MerakiOrgInfo>, TransportError> {
     let mut s = Session::new(base_url, api_key, 2.0, timeout, wire)?;
     let items = s
-        .get_paged(&format!("{API_PREFIX}/organizations"), &[], 1000)
+        .get_paged(
+            &format!("{API_PREFIX}/organizations"),
+            &[],
+            Paging::Upto(1000),
+        )
         .await?;
     Ok(items
         .iter()
@@ -1100,13 +1155,17 @@ pub async fn fetch_inventory(
     let org = format!("{API_PREFIX}/organizations/{org_id}");
 
     let networks = s
-        .get_paged_strict(&format!("{org}/networks"), &[], 1000)
+        .get_paged_strict(&format!("{org}/networks"), &[], Paging::Upto(1000))
         .await?;
     let devices = s
-        .get_paged_strict(&format!("{org}/devices"), &[], 1000)
+        .get_paged_strict(&format!("{org}/devices"), &[], Paging::Upto(1000))
         .await?;
     let availabilities = s
-        .get_paged_strict(&format!("{org}/devices/availabilities"), &[], 1000)
+        .get_paged_strict(
+            &format!("{org}/devices/availabilities"),
+            &[],
+            Paging::Upto(1000),
+        )
         .await?;
 
     Ok(assemble_inventory(&networks, &devices, &availabilities))
@@ -1587,23 +1646,88 @@ mod tests {
     }
 
     #[test]
-    fn traffic_maps_usage_and_clients() {
-        let items = vec![json!({
-            "serial": "Q2-A",
-            "usage": {"sent": 100.0, "recv": 250.0, "total": 350.0},
-            "clients": {"counts": {"total": 12}}
-        })];
-        let obs = fold(parse_traffic(&items));
-        let get = |m: &str| {
-            obs[0]
-                .samples
-                .iter()
-                .find(|s| s.metric == m)
+    fn the_usage_window_is_the_collect_interval_within_what_the_dashboard_accepted() {
+        assert_eq!(usage_window(0), 300, "a job that does not say its interval");
+        assert_eq!(usage_window(299), 300);
+        assert_eq!(usage_window(300), 300);
+        assert_eq!(
+            usage_window(1_800),
+            1_800,
+            "the traffic tier's default cadence"
+        );
+        assert_eq!(usage_window(86_400), 86_400);
+        assert_eq!(usage_window(90_000), 86_400);
+    }
+
+    #[test]
+    fn uplink_usage_becomes_an_average_rate_per_uplink() {
+        // Two networks: one MX with three uplinks (one of them idle, one an unknown interface),
+        // and a second MX whose byte counts arrive as strings.
+        let items = vec![
+            json!({"networkId": "N_1", "name": "site-a", "byUplink": [
+                {"serial": "Q2-A", "interface": "wan1", "sent": 1_125_000, "received": 2_250_000},
+                {"serial": "Q2-A", "interface": "wan2", "sent": 0, "received": 0},
+                {"serial": "Q2-A", "interface": "cellular", "sent": 450, "received": 900},
+                {"serial": "Q2-A", "interface": "eth7", "sent": 1, "received": 1}
+            ]}),
+            json!({"networkId": "N_2", "name": "site-b", "byUplink": [
+                {"serial": "Q2-B", "interface": "wan1", "sent": "1800", "received": "3600"}
+            ]}),
+        ];
+        let obs = fold(parse_uplinks_usage(&items, 1_800));
+        let rate = |serial: &str, metric: &str, ifindex: u32| {
+            obs.iter()
+                .find(|o| o.serial == serial)
+                .and_then(|o| {
+                    o.samples
+                        .iter()
+                        .find(|s| s.metric == metric && s.ifindex == Some(ifindex))
+                })
                 .map(|s| s.value)
         };
-        assert_eq!(get(METRIC_MERAKI_USAGE_SENT_KB), Some(100.0));
-        assert_eq!(get(METRIC_MERAKI_USAGE_RECV_KB), Some(250.0));
-        assert_eq!(get(METRIC_MERAKI_CLIENT_COUNT), Some(12.0));
+        // 1,125,000 bytes over 1,800 s = 625 B/s = 5,000 bit/s.
+        assert_eq!(
+            rate("Q2-A", METRIC_MERAKI_UPLINK_SENT_BPS, 1),
+            Some(5_000.0)
+        );
+        assert_eq!(
+            rate("Q2-A", METRIC_MERAKI_UPLINK_RECV_BPS, 1),
+            Some(10_000.0)
+        );
+        assert_eq!(
+            rate("Q2-A", METRIC_MERAKI_UPLINK_SENT_BPS, 2),
+            Some(0.0),
+            "idle is a reading"
+        );
+        assert_eq!(rate("Q2-A", METRIC_MERAKI_UPLINK_RECV_BPS, 3), Some(4.0));
+        assert_eq!(rate("Q2-B", METRIC_MERAKI_UPLINK_SENT_BPS, 1), Some(8.0));
+        assert_eq!(rate("Q2-B", METRIC_MERAKI_UPLINK_RECV_BPS, 1), Some(16.0));
+        let a = obs.iter().find(|o| o.serial == "Q2-A").unwrap();
+        assert_eq!(
+            a.samples.len(),
+            6,
+            "eth7 is skipped, not given an invented row"
+        );
+        let mut uplinks: Vec<_> = a
+            .uplinks
+            .iter()
+            .map(|u| (u.ifindex, u.name.as_str()))
+            .collect();
+        uplinks.sort_unstable();
+        assert_eq!(uplinks, [(1, "WAN1"), (2, "WAN2"), (3, "cellular")]);
+    }
+
+    #[test]
+    fn uplink_usage_skips_what_it_cannot_place() {
+        let items = vec![
+            json!({"networkId": "N_1"}),
+            json!({"networkId": "N_1", "byUplink": [
+                {"interface": "wan1", "sent": 1, "received": 1},
+                {"serial": "Q2-A", "sent": 1, "received": 1},
+                {"serial": "Q2-A", "interface": "wan1", "sent": "n/a", "received": null}
+            ]}),
+        ];
+        assert!(parse_uplinks_usage(&items, 300).is_empty());
     }
 
     #[test]

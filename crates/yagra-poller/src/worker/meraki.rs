@@ -30,7 +30,7 @@
 //! well, because an alert may only be closed on evidence — and "the Dashboard answered" is it.
 
 use super::*;
-use yagra_bus::MerakiCollectReport;
+use yagra_bus::{MerakiCollectReport, RowName};
 use yagra_common::{MerakiTier, METRIC_MERAKI_DEVICE_UP};
 
 /// What an availability result says about the device, read from the sample the transport made.
@@ -84,15 +84,7 @@ pub async fn execute_meraki(
         return Vec::new();
     };
     let timeout = Duration::from_millis(u64::from(check.timeout_ms));
-    let spec = MerakiCollectSpec {
-        org_id: check.org_id.clone(),
-        base_url: check.base_url.clone(),
-        api_key: check.api_key.clone(),
-        tier: check.tier,
-        network_ids: check.network_ids.clone(),
-        per_page: check.per_page,
-        target_rps: check.target_rps,
-    };
+    let spec = spec_for(job, check);
     // `failure` is the closed reason core is told. A collect that was refused outright has one;
     // so does one that stopped early with nothing in hand — a Dashboard outage, a 429 storm and
     // a dropped connection all used to arrive here as an `Ok` with no observations, log nothing,
@@ -120,6 +112,7 @@ pub async fn execute_meraki(
         let Some(&node_id) = by_serial.get(obs.serial.as_str()) else {
             continue; // reported by the API but not imported → not in scope
         };
+        let row_names = uplink_row_names(&obs.samples, &obs.uplinks);
         let samples: Vec<Sample> = obs
             .samples
             .into_iter()
@@ -168,7 +161,7 @@ pub async fn execute_meraki(
             arp: None,
             routing: None,
             wlan: None,
-            row_names: Vec::new(),
+            row_names,
             observational,
             judge_samples,
             poller_id: None,
@@ -178,6 +171,57 @@ pub async fn execute_meraki(
     }
     results.push(collect_report(job, check, failure, at_unix_ms));
     results
+}
+
+/// What the transport is asked for this job. The collect's interval travels on the job, not on
+/// the check, and the traffic tier needs it: its usage window is the interval, so consecutive
+/// collects tile time (ADR-164 決定 23).
+fn spec_for(job: &PollJob, check: &yagra_bus::MerakiCollectCheck) -> MerakiCollectSpec {
+    MerakiCollectSpec {
+        org_id: check.org_id.clone(),
+        base_url: check.base_url.clone(),
+        api_key: check.api_key.clone(),
+        tier: check.tier,
+        network_ids: check.network_ids.clone(),
+        per_page: check.per_page,
+        target_rps: check.target_rps,
+        interval_secs: job.interval_secs,
+    }
+}
+
+/// Names for the per-uplink rows of one device's samples (ADR-164 決定 24): every metric that
+/// carries an uplink key gets that uplink's name (WAN1 / WAN2 / cellular). An alert on one uplink
+/// then says which, and a rule can be narrowed to one uplink with a row pattern (ADR-143).
+///
+/// Built from the samples this result carries, so no name is sent for a row without a reading. The
+/// name comes from the uplinks the transport reported beside them, falling back to the synthetic
+/// index's canonical name.
+fn uplink_row_names(
+    samples: &[yagra_transport::MerakiSample],
+    uplinks: &[yagra_transport::MerakiUplink],
+) -> Vec<RowName> {
+    let mut names: Vec<RowName> = Vec::new();
+    for s in samples {
+        let Some(row) = s.ifindex else {
+            continue;
+        };
+        if names.iter().any(|n| n.metric == s.metric && n.row == row) {
+            continue;
+        }
+        let name = uplinks
+            .iter()
+            .find(|u| u.ifindex == row)
+            .map(|u| u.name.clone())
+            .or_else(|| yagra_common::uplink_name(row).map(str::to_owned));
+        if let Some(name) = name {
+            names.push(RowName {
+                metric: s.metric.clone(),
+                row,
+                name,
+            });
+        }
+    }
+    RowName::cleaned(&names)
 }
 
 /// The one result that says how this collect ended.
@@ -319,6 +363,78 @@ mod tests {
             .iter()
             .filter(|r| r.meraki_collect.is_some())
             .collect()
+    }
+
+    /// The traffic tier's usage window is the collect's interval, which travels on the job and not
+    /// on the check (ADR-164 決定 23) — dropped here, every window would be the transport's floor.
+    #[test]
+    fn the_transport_is_told_the_jobs_interval() {
+        use yagra_bus::MerakiCollectCheck;
+        let check = MerakiCollectCheck {
+            org_id: "1".into(),
+            meraki_org_uuid: Uuid::nil(),
+            tier: MerakiTier::Traffic,
+            base_url: "https://api.meraki.com".into(),
+            api_key: "k".into(),
+            devices: vec![],
+            network_ids: vec!["N_1".into()],
+            per_page: 1000,
+            target_rps: 2.0,
+            timeout_ms: 30_000,
+        };
+        let job = PollJob::meraki_collect(Uuid::nil(), check.clone(), 1_800);
+        let spec = spec_for(&job, &check);
+        assert_eq!(spec.interval_secs, 1_800);
+        assert_eq!(spec.tier, MerakiTier::Traffic);
+        assert_eq!(spec.network_ids, ["N_1"]);
+    }
+
+    /// Per-uplink readings carry their uplink's name, once per (metric, row); device-level ones
+    /// carry none (ADR-164 決定 24).
+    #[tokio::test]
+    async fn per_uplink_samples_carry_their_uplinks_name() {
+        use yagra_transport::{MerakiObservation, MerakiSample, MerakiUplink};
+        let sample = |metric: &str, ifindex: Option<u32>| MerakiSample {
+            metric: metric.into(),
+            ifindex,
+            value: 1.0,
+        };
+        let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
+            serial: "Q2-A".into(),
+            samples: vec![
+                sample("meraki_uplink_sent_bps", Some(1)),
+                sample("meraki_uplink_recv_bps", Some(1)),
+                sample("meraki_uplink_sent_bps", Some(3)),
+                sample(METRIC_MERAKI_DEVICE_UP, None),
+            ],
+            uplinks: vec![
+                MerakiUplink {
+                    ifindex: 1,
+                    name: "WAN1".into(),
+                },
+                MerakiUplink {
+                    ifindex: 3,
+                    name: "cellular".into(),
+                },
+            ],
+        }]);
+        let results =
+            device_results(collect_with(&transport, Uuid::from_u128(1), MerakiTier::Traffic).await);
+        assert_eq!(results.len(), 1);
+        let mut names: Vec<_> = results[0]
+            .row_names
+            .iter()
+            .map(|n| (n.metric.as_str(), n.row, n.name.as_str()))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                ("meraki_uplink_recv_bps", 1, "WAN1"),
+                ("meraki_uplink_sent_bps", 1, "WAN1"),
+                ("meraki_uplink_sent_bps", 3, "cellular"),
+            ]
+        );
     }
 
     /// 🚨 The defect (ADR-164 決定 18): a refused key published **nothing**, so core heard nothing,

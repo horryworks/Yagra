@@ -157,6 +157,7 @@ fn spec(tier: MerakiTier, networks: &[&str]) -> MerakiCollectSpec {
         network_ids: networks.iter().map(|n| (*n).to_owned()).collect(),
         per_page: 1000,
         target_rps: 1000.0,
+        interval_secs: 1_800,
     }
 }
 
@@ -584,16 +585,16 @@ async fn the_uplink_tier_asks_the_whole_organization_and_keeps_the_watched_netwo
     );
 }
 
-/// ⚠️ Deliberately silent on `timespan`: the value sent today (3600) is one the real Dashboard
-/// refuses (400, minimum 28800 — measured 2026-09-22), and a test pinning it would pin the defect.
-/// What this holds is the part that is right: no network in the URL, and the watched rows kept.
+/// The traffic tier asks every MX's uplink usage over the tier's interval, with no page size —
+/// the listing documents none — and keeps the watched networks' rows (ADR-164 決定 23). What it
+/// replaced asked `summary/top/devices/byUsage` for an hour, which the real Dashboard refuses.
 #[tokio::test]
-async fn the_traffic_tier_keeps_the_watched_networks_rows() {
+async fn the_traffic_tier_asks_uplink_usage_over_its_interval_and_keeps_the_watched_rows() {
     let rows = r#"[
-        {"serial":"Q2XX-TEST-0001","network":{"id":"N_1","name":"site-a"},
-         "usage":{"sent":10.0,"recv":20.0},"clients":{"counts":{"total":3}}},
-        {"serial":"Q2XX-TEST-0009","network":{"id":"N_9","name":"site-z"},
-         "usage":{"sent":99.0,"recv":99.0},"clients":{"counts":{"total":9}}}]"#;
+        {"networkId":"N_1","name":"site-a","byUplink":[
+          {"serial":"Q2XX-TEST-0001","interface":"wan1","sent":1125000,"received":2250000}]},
+        {"networkId":"N_9","name":"site-z","byUplink":[
+          {"serial":"Q2XX-TEST-0009","interface":"wan1","sent":99,"received":99}]}]"#;
     let (origin, _, seen) = serve(vec![Reply::ok(rows)]).await;
 
     let got = collect(&spec(MerakiTier::Traffic, &["N_1"]), TIMEOUT, Some(&origin))
@@ -601,12 +602,28 @@ async fn the_traffic_tier_keeps_the_watched_networks_rows() {
         .expect("a collect");
 
     assert_eq!(serials(&got), vec!["Q2XX-TEST-0001"]);
-    let sent = lines(&seen);
-    assert_eq!(sent.len(), 1);
-    assert!(
-        sent[0].starts_with("GET /api/v1/organizations/1/summary/top/devices/byUsage?")
-            && !sent[0].contains("networkId"),
-        "{}",
-        sent[0]
+    let sent_bps = got.observations[0]
+        .samples
+        .iter()
+        .find(|s| s.metric == "meraki_uplink_sent_bps")
+        .map(|s| (s.ifindex, s.value));
+    assert_eq!(
+        sent_bps,
+        Some((Some(1), 5_000.0)),
+        "1,125,000 bytes over 1,800 s"
     );
+    assert_eq!(
+        lines(&seen),
+        vec![
+            "GET /api/v1/organizations/1/appliance/uplinks/usage/byNetwork?timespan=1800 HTTP/1.1"
+        ]
+    );
+}
+
+/// 🚨 A 200 that is not a list is not an answer (決定 19) — on the traffic listing too.
+#[tokio::test]
+async fn a_traffic_answer_that_is_not_a_list_fails_the_collect() {
+    let (origin, _, _) = serve(vec![Reply::ok(r#"{"networkId":"N_1"}"#)]).await;
+    let got = collect(&spec(MerakiTier::Traffic, &["N_1"]), TIMEOUT, Some(&origin)).await;
+    assert_eq!(got, Err(MerakiFetchError::Malformed));
 }

@@ -86,6 +86,8 @@
     "juniper_buffer_util": "%",
     "juniper_cpu_1min": "%",
     "juniper_temp": "°C",
+    "meraki_uplink_recv_bps": "bps",
+    "meraki_uplink_sent_bps": "bps",
     "nxos_cpu_util": "%",
     "nxos_mem_util": "%",
     "panos_session_util_pct": "%",
