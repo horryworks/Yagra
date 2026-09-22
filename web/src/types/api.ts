@@ -100,6 +100,10 @@ const schemaEnumPins: {
   // compiling here before it can reach an operator as a raw key (ADR-164 Inc.4/5).
   MerakiDeviceState: AssertEqual<MerakiDeviceState, components['schemas']['MerakiDeviceState']>;
   MerakiFilingReason: AssertEqual<MerakiFilingReason, components['schemas']['FilingReason']>;
+  // An MX's warm-spare role and what its pair is doing, each drawn from a token the server sent
+  // (`meraki.devices.haRole.*`, `overview.pairState.*`) — ADR-164 決定 26.
+  MerakiHaRole: AssertEqual<MerakiHaRole, components['schemas']['MerakiHaRole']>;
+  MerakiPairState: AssertEqual<MerakiPairState, components['schemas']['MerakiPairState']>;
   // The tree draws a folder's badge and builds `tree.origin.<token>` from it. `groups.rs` compares
   // the array's tokens with the Rust enum as text; this is the half the compiler holds, so a third
   // integration that starts keeping folders stops compiling here (ADR-164 Inc.7).
@@ -142,6 +146,8 @@ const schemaEnumPins: {
   MerakiSyncFailure: true,
   MerakiDeviceState: true,
   MerakiFilingReason: true,
+  MerakiHaRole: true,
+  MerakiPairState: true,
   GroupOrigin: true,
   DuplicateEvidenceKind: true,
   DuplicateConfidence: true,
@@ -984,6 +990,35 @@ export const MERAKI_FILING_REASONS = [
 
 /** One reason a device is filed where it is. */
 export type MerakiFilingReason = (typeof MERAKI_FILING_REASONS)[number];
+
+/** An MX's configured warm-spare role (`MerakiDevice.ha_role`, `MerakiPair.role`), ADR-164 決定 26.
+ *
+ *  The **configured** one: Meraki keeps calling the primary `primary` while its spare carries the
+ *  traffic, so a role never says which MX is running — `MerakiPair.state` does. `as const`
+ *  because the device list and the node card both build a label key from the token. Pinned by
+ *  `schemaEnumPins`. */
+export const MERAKI_HA_ROLES = ['primary', 'spare'] as const;
+
+/** One warm-spare role. */
+export type MerakiHaRole = (typeof MERAKI_HA_ROLES)[number];
+
+/** What a warm-spare pair is doing (`MerakiPair.state`), worked out by the server from both MX's
+ *  liveness. `as const` for the node card's `overview.pairState.${state}` key; pinned by
+ *  `schemaEnumPins`. */
+export const MERAKI_PAIR_STATES = [
+  'normal',
+  'running_on_spare',
+  'spare_down',
+  'both_down',
+  'unknown',
+] as const;
+
+/** One state a warm-spare pair can be in. */
+export type MerakiPairState = (typeof MERAKI_PAIR_STATES)[number];
+
+/** One MX's warm-spare pair on the node detail (`NodeDetail.meraki_pair`). The partner is `null`
+ *  when there is none, it cannot be told apart, or it sits in a folder the caller cannot see. */
+export type MerakiPair = components['schemas']['MerakiPairView'];
 
 /** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`).
  *  `already_added` marks one this deployment monitors already, under this key or another. */

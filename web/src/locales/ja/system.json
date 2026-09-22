@@ -623,6 +623,10 @@
         "deleted": "以前に削除",
         "missing": "Meraki 側に見つからない"
       },
+      "haRole": {
+        "primary": "ウォームスペア: 主",
+        "spare": "ウォームスペア: 控え"
+      },
       "filing": {
         "matched": "IP レンジ {{prefix}} に一致",
         "ambiguous": "{{count}} 個のフォルダが同じ長さで一致",

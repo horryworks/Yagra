@@ -489,6 +489,15 @@ impl YagraMcp {
         let serial_number = crate::api::nodes::serial_number_of(serial_number, meraki.as_ref());
         let wireless =
             crate::api::wireless::node_wireless(&self.state, admin, scope, p.node_id).await;
+        // The same pair, from the same function, narrowed to the same scope (ADR-164 決定 26).
+        let meraki_pair = crate::api::meraki::node_meraki_pair(
+            &self.state,
+            admin,
+            scope,
+            p.node_id,
+            meraki.as_ref(),
+        )
+        .await;
         let dto = NodeStatusDto {
             node: NodeSummaryDto::from_node(
                 &node,
@@ -504,6 +513,7 @@ impl YagraMcp {
             serial_number,
             profile_locked,
             wireless,
+            meraki_pair,
             collection_fault: crate::api::nodes::collection_fault_of(&self.state, node.id).await,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts

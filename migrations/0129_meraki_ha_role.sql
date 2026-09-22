@@ -1,0 +1,18 @@
+-- 0129_meraki_ha_role — which role each MX holds in its warm-spare pair (ADR-164 決定 26).
+--
+-- reversible: one nullable column is added to `meraki_inventory`. Nothing is dropped and nothing is
+-- narrowed. A core from before it names its columns explicitly, never reads this one, and its
+-- inventory upsert does not name it, so rolling the binary back leaves every row readable and this
+-- column untouched. No `schema_compat` floor, for the reason 0108 records: every release from 0.2.2
+-- on tolerates a database carrying migrations it does not embed.
+--
+-- WHAT IT HOLDS
+-- `primary` or `spare` — the role the Dashboard's `appliance/uplink/statuses` reports for an MX whose
+-- warm spare is enabled — and NULL for everything else: a device that is not an appliance, a single
+-- MX, and any row the sync has not read a role for yet. It is the CONFIGURED role: measured on a real
+-- organization, a primary that was down still said `primary` while its spare carried the traffic,
+-- so "running on the spare" is worked out from the two devices' liveness, not read from this column.
+--
+-- No CHECK: the token is validated in Rust (`yagra_common::MerakiHaRole`), so a token a newer core
+-- writes is a value an older one ignores rather than a row it cannot write.
+ALTER TABLE meraki_inventory ADD COLUMN IF NOT EXISTS ha_role TEXT;

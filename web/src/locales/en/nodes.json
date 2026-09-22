@@ -387,6 +387,21 @@
       "notConnected": "No line",
       "failed": "Failed"
     },
+    "vpnNotRead": "Not read while the site runs on its spare",
+    "warmSpare": "Warm spare",
+    "haRole": {
+      "primary": "Primary",
+      "spare": "Spare"
+    },
+    "pairState": {
+      "normal": "Normal",
+      "running_on_spare": "Running on spare",
+      "spare_down": "Spare down",
+      "both_down": "Both down",
+      "unknown": "Unknown"
+    },
+    "pairPartner": "partner",
+    "pairPartnerNone": "partner not identified",
     "wanTrafficNone": "WAN traffic",
     "deviceHealth": "Device health",
     "healthLoadFailed": "This node’s metric list could not be read, so its health cards are not shown. Reload to try again.",

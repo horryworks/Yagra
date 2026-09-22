@@ -95,6 +95,18 @@ export function deviceDestination(device: DestinationFields): DeviceDestinationV
   };
 }
 
+/** The line under a device's model: its product type and, for an MX in a warm-spare pair, its
+ *  configured role (ADR-164 決定 26). Configured, so it never says which of the two is carrying the
+ *  traffic — the node's own card does, from both devices' liveness. */
+export function modelSubLine(
+  device: Pick<MerakiDevice, 'product_type' | 'ha_role'>,
+  t: TFunction,
+): string {
+  return device.ha_role
+    ? `${device.product_type} · ${t(`meraki.devices.haRole.${device.ha_role}`)}`
+    : device.product_type;
+}
+
 /** A network's name, or its id for one the sync has not recorded a name for. */
 export function networkLabel(device: Pick<MerakiDevice, 'network_id' | 'network_name'>): string {
   return device.network_name?.trim() || device.network_id;

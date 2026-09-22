@@ -31787,6 +31787,17 @@
             "format": "uuid",
             "description": "The folder the device is filed in, when it is a node — or the folder an import would file\nit in, when `filing.reason` is `matched`. `null` for a node at the top of the tree, and for\na device an import would put under the organization's own folder, in one named after its\nnetwork (that folder is created by the import that first needs it)."
           },
+          "ha_role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiHaRole",
+                "description": "An MX's configured warm-spare role (ADR-164 決定 26); `null` for a single MX, a device that\nis not an MX, and one whose role the sync has not read yet."
+              }
+            ]
+          },
           "lan_ip": {
             "type": [
               "string",
@@ -31944,6 +31955,14 @@
             "$ref": "#/components/schemas/FilingReason"
           }
         }
+      },
+      "MerakiHaRole": {
+        "type": "string",
+        "description": "The role an MX is **configured** to hold in its warm-spare pair (ADR-164 決定 26), from\n`appliance/uplink/statuses`' `highAvailability.role` while `highAvailability.enabled` is true.\n\n⚠️ Configured, not current: measured on a real organization, a primary that was down still said\n`primary` while its spare — still saying `spare` — carried the traffic. So \"running on the spare\"\nis worked out from the two devices' liveness, never read from this.",
+        "enum": [
+          "primary",
+          "spare"
+        ]
       },
       "MerakiImportDeviceReq": {
         "type": "object",
@@ -32262,6 +32281,89 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "MerakiPairState": {
+        "type": "string",
+        "description": "What a warm-spare pair is doing, seen from one of its MX (ADR-164 決定 26).\n\nWorked out from the two devices' **liveness**, never from their roles: the role Meraki reports\nis the configured one, and on a real organization a primary that was down still said `primary`\nwhile its spare carried the traffic.",
+        "enum": [
+          "normal",
+          "running_on_spare",
+          "spare_down",
+          "both_down",
+          "unknown"
+        ]
+      },
+      "MerakiPairView": {
+        "type": "object",
+        "description": "One MX's warm-spare pair (ADR-164 決定 26) — `GET /api/v1/nodes/{node_id}`'s `meraki_pair`.",
+        "required": [
+          "role",
+          "state"
+        ],
+        "properties": {
+          "partner": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiPartnerView",
+                "description": "The other MX; `null` when there is none, it cannot be told apart, or it sits in a folder the\ncaller cannot see — in which case `state` is `unknown` too."
+              }
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/MerakiHaRole",
+            "description": "This MX's configured role."
+          },
+          "state": {
+            "$ref": "#/components/schemas/MerakiPairState",
+            "description": "What the pair is doing."
+          }
+        }
+      },
+      "MerakiPartnerView": {
+        "type": "object",
+        "description": "The other MX of a pair, as the caller may see it.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name Meraki lists it under."
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Its node, when it has been imported."
+          },
+          "node_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NodeState",
+                "description": "Its node's displayed state; `null` without a node."
+              }
+            ]
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiHaRole",
+                "description": "Its configured role; `null` when none has been read."
+              }
+            ]
           }
         }
       },
@@ -33254,6 +33356,17 @@
               {
                 "$ref": "#/components/schemas/MerakiDeviceConfig",
                 "description": "Cisco Meraki binding when this node carries a `meraki_devices` row; `null` otherwise."
+              }
+            ]
+          },
+          "meraki_pair": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiPairView",
+                "description": "A Meraki MX's warm-spare pair: its configured role, the other MX, and whether the site runs on\nits spare (ADR-164 決定 26). `null` for a node that is not an MX in a pair."
               }
             ]
           },

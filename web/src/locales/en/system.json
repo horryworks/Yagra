@@ -642,6 +642,10 @@
         "deleted": "Deleted here",
         "missing": "Not found in Meraki"
       },
+      "haRole": {
+        "primary": "warm spare: primary",
+        "spare": "warm spare: spare"
+      },
       "filing": {
         "matched": "Matches IP range {{prefix}}",
         "ambiguous": "{{count}} folders match equally",

@@ -458,6 +458,9 @@ pub struct NodeStatusDto {
     /// import settings, or an imported AP's entry in the AP list. Mirrors `NodeDetail.wireless`,
     /// from the same function, so a scoped caller's controllers are narrowed the same way.
     pub wireless: Option<crate::api::wireless::NodeWireless>,
+    /// A Meraki MX's warm-spare pair (ADR-164 決定 26). Mirrors `NodeDetail.meraki_pair`, from the
+    /// same function and narrowed to the same scope.
+    pub meraki_pair: Option<crate::api::meraki::MerakiPairView>,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -1084,6 +1087,16 @@ mod tests {
                         last_seen: unix_s_to_rfc3339(0),
                         last_associated_at: None,
                     }],
+                }),
+            }),
+            meraki_pair: Some(crate::api::meraki::MerakiPairView {
+                role: yagra_common::MerakiHaRole::Primary,
+                state: crate::api::meraki::MerakiPairState::RunningOnSpare,
+                partner: Some(crate::api::meraki::MerakiPartnerView {
+                    name: "site-a-mx-2".to_owned(),
+                    role: Some(yagra_common::MerakiHaRole::Spare),
+                    node_id: Some(uuid::Uuid::nil()),
+                    node_state: Some(yagra_common::NodeState::Ok),
                 }),
             }),
             interfaces: vec![InterfaceDto {

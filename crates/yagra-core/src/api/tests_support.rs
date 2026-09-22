@@ -200,6 +200,15 @@ impl crate::meraki_sync::MerakiDirectory for EmptyDashboard {
     ) -> Result<yagra_transport::MerakiInventory, yagra_transport::MerakiFetchError> {
         Ok(yagra_transport::MerakiInventory::default())
     }
+
+    async fn ha_roles(
+        &self,
+        _org: &crate::meraki::MerakiOrg,
+        _api_key: &str,
+    ) -> Result<Vec<(String, Option<yagra_common::MerakiHaRole>)>, yagra_transport::MerakiFetchError>
+    {
+        Ok(Vec::new())
+    }
 }
 
 /// [`live_state`], with a hand-off directory the upgrade and relocation mechanisms can use.

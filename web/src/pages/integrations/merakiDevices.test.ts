@@ -21,6 +21,7 @@ import {
   isImportable,
   merakiDeviceFilterColumns,
   merakiDeviceFilters,
+  modelSubLine,
   networkLabel,
   networksToWatchOnImport,
   parseMaxDevices,
@@ -124,6 +125,19 @@ describe('deviceDestination', () => {
     for (const reason of MERAKI_FILING_REASONS) {
       expect(deviceDestination(device({ filing: { reason } })).note?.reason).toBe(reason);
     }
+  });
+});
+
+describe('modelSubLine (ADR-164 決定 26)', () => {
+  const t = ((key: string) => `<${key}>`) as unknown as TFunction;
+
+  it("adds an MX's warm-spare role after its product type, and nothing for a single device", () => {
+    expect(modelSubLine(device({ ha_role: 'primary' }), t)).toBe(
+      'appliance · <meraki.devices.haRole.primary>',
+    );
+    expect(modelSubLine(device({ ha_role: 'spare' }), t)).toBe('appliance · <meraki.devices.haRole.spare>');
+    expect(modelSubLine(device(), t)).toBe('appliance');
+    expect(modelSubLine(device({ product_type: 'switch', ha_role: null }), t)).toBe('switch');
   });
 });
 

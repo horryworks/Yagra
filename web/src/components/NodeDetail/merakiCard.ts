@@ -8,6 +8,7 @@
  * spells that mapping a second time.
  */
 import type { components } from '../../api/schema';
+import type { MerakiHaRole, MerakiPair, MerakiPairState } from '../../types/api';
 
 type RowReading = components['schemas']['MetricRowReading'];
 
@@ -111,4 +112,51 @@ export function merakiVpnLine(
   const total = hubsReachable + hubsUnreachable;
   const tone = hubsUnreachable === 0 ? 'ok' : hubsReachable === 0 ? 'critical' : 'warning';
   return { reached: hubsReachable, total, spokesDown: spokesUnreachable, tone };
+}
+
+/** The card's warm-spare line (ADR-164 決定 26). */
+export interface MerakiPairLine {
+  role: MerakiHaRole;
+  state: MerakiPairState;
+  /** The other MX, when the server named one the caller may see. */
+  partner: { name: string; role: MerakiHaRole | null; nodeId: string | null } | null;
+  /** The colour the state is drawn in; `null` draws it uncoloured (`unknown` says nothing). */
+  tone: 'ok' | 'warning' | 'critical' | null;
+  /**
+   * Why the card has no VPN line, when that is the pair's doing. Meraki reports a pair's Auto VPN
+   * on the **primary's** serial, and the collector reads a row only while its own device is online —
+   * so while the site runs on its spare, neither MX has a reading, and an absent line would read as
+   * "no VPN here" rather than "not readable now".
+   */
+  vpnNotRead: boolean;
+}
+
+/** Keyed by the state so a sixth one cannot land without a colour. `running_on_spare` is a
+ *  warning rather than critical: the site is carrying traffic, and the primary's own liveness alert
+ *  already says the rest. */
+const PAIR_TONE: Record<MerakiPairState, MerakiPairLine['tone']> = {
+  normal: 'ok',
+  running_on_spare: 'warning',
+  spare_down: 'warning',
+  both_down: 'critical',
+  unknown: null,
+};
+
+/**
+ * What the pair line says, or `null` for an MX with no pair. `hasVpn` is whether the card drew a VPN
+ * line from this node's own readings — a reading that is there needs no note.
+ */
+export function merakiPairLine(
+  pair: MerakiPair | null | undefined,
+  hasVpn: boolean,
+): MerakiPairLine | null {
+  if (!pair) return null;
+  const p = pair.partner;
+  return {
+    role: pair.role,
+    state: pair.state,
+    partner: p ? { name: p.name, role: p.role ?? null, nodeId: p.node_id ?? null } : null,
+    tone: PAIR_TONE[pair.state],
+    vpnNotRead: !hasVpn && pair.state === 'running_on_spare',
+  };
 }

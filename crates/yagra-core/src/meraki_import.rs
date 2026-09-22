@@ -244,6 +244,7 @@ mod tests {
             node_group_id: None,
             first_seen_at: DateTime::from_timestamp(1_800_000_000, 0).expect("in range"),
             missing_since: None,
+            ha_role: None,
         }
     }
 

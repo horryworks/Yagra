@@ -2,7 +2,14 @@
 // The Overview's Cisco Meraki card (ADR-164 増分 13): what it draws per WAN uplink.
 
 import { describe, expect, it } from 'vitest';
-import { MERAKI_UPLINK_STATES, merakiUplinkLines, merakiUplinkState, merakiVpnLine } from './merakiCard';
+import { MERAKI_PAIR_STATES, type MerakiPair } from '../../types/api';
+import {
+  MERAKI_UPLINK_STATES,
+  merakiPairLine,
+  merakiUplinkLines,
+  merakiUplinkState,
+  merakiVpnLine,
+} from './merakiCard';
 
 const row = (r: number, value: number, name?: string) => ({ row: r, value, name });
 
@@ -94,5 +101,60 @@ describe('merakiVpnLine', () => {
     // A down MX, or one whose only hub is down, is not reported at all (ADR-164 決定 25).
     expect(merakiVpnLine(null, null, null)).toBeNull();
     expect(merakiVpnLine(1, null, null)).toBeNull();
+  });
+});
+
+describe('merakiPairLine', () => {
+  const pair = (state: MerakiPair['state'], partner: MerakiPair['partner'] = null): MerakiPair => ({
+    role: 'primary',
+    state,
+    partner,
+  });
+
+  it('an MX with no pair draws no line', () => {
+    expect(merakiPairLine(null, false)).toBeNull();
+    expect(merakiPairLine(undefined, true)).toBeNull();
+  });
+
+  it('names the partner the server named, and links it only when it is a node', () => {
+    const line = merakiPairLine(
+      pair('normal', { name: 'mx-b', role: 'spare', node_id: 'n-2', node_state: 'ok' }),
+      true,
+    );
+    expect(line).toEqual({
+      role: 'primary',
+      state: 'normal',
+      partner: { name: 'mx-b', role: 'spare', nodeId: 'n-2' },
+      tone: 'ok',
+      vpnNotRead: false,
+    });
+    expect(merakiPairLine(pair('unknown', { name: 'mx-b' }), false)?.partner).toEqual({
+      name: 'mx-b',
+      role: null,
+      nodeId: null,
+    });
+  });
+
+  it('colours each state, and leaves unknown uncoloured rather than calling it fine', () => {
+    const tones = Object.fromEntries(
+      MERAKI_PAIR_STATES.map((s) => [s, merakiPairLine(pair(s), true)?.tone]),
+    );
+    expect(tones).toEqual({
+      normal: 'ok',
+      running_on_spare: 'warning',
+      spare_down: 'warning',
+      both_down: 'critical',
+      unknown: null,
+    });
+  });
+
+  it('says VPN is not read only while the site runs on its spare and no reading is there', () => {
+    expect(merakiPairLine(pair('running_on_spare'), false)?.vpnNotRead).toBe(true);
+    // A reading still on the card needs no excuse.
+    expect(merakiPairLine(pair('running_on_spare'), true)?.vpnNotRead).toBe(false);
+    // A spare in a normal pair has no VPN line of its own either, but that is not "not readable".
+    for (const s of MERAKI_PAIR_STATES.filter((s) => s !== 'running_on_spare')) {
+      expect(merakiPairLine(pair(s), false)?.vpnNotRead).toBe(false);
+    }
   });
 });

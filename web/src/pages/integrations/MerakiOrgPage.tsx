@@ -50,6 +50,7 @@ import {
   importableSerials,
   isImportable,
   merakiDeviceFilterColumns,
+  modelSubLine,
   merakiDeviceFilters,
   networkLabel,
   networksToWatchOnImport,
@@ -361,8 +362,8 @@ export function MerakiOrgPage() {
             <span className="meraki-dev-line" title={d.model ?? undefined}>
               {d.model ?? '—'}
             </span>
-            <span className="meraki-dev-sub" title={d.product_type}>
-              {d.product_type}
+            <span className="meraki-dev-sub" title={modelSubLine(d, t)}>
+              {modelSubLine(d, t)}
             </span>
           </span>
         ),

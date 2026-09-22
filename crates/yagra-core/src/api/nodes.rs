@@ -1101,6 +1101,9 @@ pub(crate) struct NodeDetail {
     /// What this node is to the wireless inventory: a controller's AP inventory and import settings,
     /// or an imported access point's entry in the AP list. `null` for a node that is neither.
     wireless: Option<super::wireless::NodeWireless>,
+    /// A Meraki MX's warm-spare pair: its configured role, the other MX, and whether the site runs on
+    /// its spare (ADR-164 決定 26). `null` for a node that is not an MX in a pair.
+    meraki_pair: Option<super::meraki::MerakiPairView>,
     /// Whether SNMP polling is **configured** for this node — not whether it is answering.
     ///
     /// 🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the
@@ -1205,6 +1208,8 @@ async fn get_node(
     let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
     let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
     let wireless = super::wireless::node_wireless(&st, admin, &scope, node_id).await;
+    let meraki_pair =
+        super::meraki::node_meraki_pair(&st, admin, &scope, node_id, meraki_device.as_ref()).await;
     let serial_number = serial_number_of(serial_number, meraki_device.as_ref());
     // Asked of the dispatcher, which is the only holder of the environment community — before the
     // struct literal below moves `node`'s fields out.
@@ -1226,6 +1231,7 @@ async fn get_node(
         dns_check,
         meraki_device,
         wireless,
+        meraki_pair,
         id: node.id,
         name: node.name,
         address: node.address.to_string(),

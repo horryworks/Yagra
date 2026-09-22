@@ -1143,6 +1143,10 @@ pub(crate) struct MerakiDeviceView {
     /// Where an import would file the device, and why. `null` for a device that is already a
     /// node: it is where it is, and no import moves it.
     filing: Option<MerakiFilingView>,
+    /// An MX's configured warm-spare role (ADR-164 決定 26); `null` for a single MX, a device that
+    /// is not an MX, and one whose role the sync has not read yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ha_role: Option<yagra_common::MerakiHaRole>,
 }
 
 /// Where an import would file a device that is not a node yet, under the organization's current
@@ -1194,8 +1198,154 @@ impl MerakiDeviceView {
             node_id: d.node_id,
             first_seen_at: d.first_seen_at,
             missing_since: d.missing_since,
+            ha_role: d.ha_role,
         }
     }
+}
+
+/// What a warm-spare pair is doing, seen from one of its MX (ADR-164 決定 26).
+///
+/// Worked out from the two devices' **liveness**, never from their roles: the role Meraki reports
+/// is the configured one, and on a real organization a primary that was down still said `primary`
+/// while its spare carried the traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MerakiPairState {
+    /// Both are up.
+    Normal,
+    /// The primary is down and the spare is up — the site runs on its spare.
+    RunningOnSpare,
+    /// The spare is down while the primary is up — the site has lost its redundancy.
+    SpareDown,
+    /// Both are down.
+    BothDown,
+    /// Not known: the partner is not a node, the caller cannot see it, a state is neither up nor
+    /// down (unknown, maintenance), or the two roles do not make a pair.
+    Unknown,
+}
+
+/// The other MX of a pair, as the caller may see it.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MerakiPartnerView {
+    /// The name Meraki lists it under.
+    pub(crate) name: String,
+    /// Its configured role; `null` when none has been read.
+    pub(crate) role: Option<yagra_common::MerakiHaRole>,
+    /// Its node, when it has been imported.
+    pub(crate) node_id: Option<Uuid>,
+    /// Its node's displayed state; `null` without a node.
+    pub(crate) node_state: Option<yagra_common::NodeState>,
+}
+
+/// One MX's warm-spare pair (ADR-164 決定 26) — `GET /api/v1/nodes/{node_id}`'s `meraki_pair`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MerakiPairView {
+    /// This MX's configured role.
+    pub(crate) role: yagra_common::MerakiHaRole,
+    /// What the pair is doing.
+    pub(crate) state: MerakiPairState,
+    /// The other MX; `null` when there is none, it cannot be told apart, or it sits in a folder the
+    /// caller cannot see — in which case `state` is `unknown` too.
+    pub(crate) partner: Option<MerakiPartnerView>,
+}
+
+/// Up, down, or neither, as the pair verdict reads a node's displayed state.
+fn up_of(state: yagra_common::NodeState) -> Option<bool> {
+    use yagra_common::NodeState;
+    match state {
+        NodeState::Ok | NodeState::Warning | NodeState::Critical => Some(true),
+        NodeState::Unreachable => Some(false),
+        NodeState::Unknown | NodeState::Maintenance => None,
+    }
+}
+
+/// What the pair is doing. Pure, so the table is tested without a database.
+pub(crate) fn pair_state(
+    own_role: yagra_common::MerakiHaRole,
+    own: yagra_common::NodeState,
+    partner: Option<(
+        Option<yagra_common::MerakiHaRole>,
+        Option<yagra_common::NodeState>,
+    )>,
+) -> MerakiPairState {
+    use yagra_common::MerakiHaRole::{Primary, Spare};
+    let Some((partner_role, Some(partner_state))) = partner else {
+        return MerakiPairState::Unknown;
+    };
+    let (primary, spare) = match (own_role, partner_role) {
+        (Primary, Some(Spare)) => (up_of(own), up_of(partner_state)),
+        (Spare, Some(Primary)) => (up_of(partner_state), up_of(own)),
+        (Primary | Spare, _) => return MerakiPairState::Unknown,
+    };
+    match (primary, spare) {
+        (Some(true), Some(true)) => MerakiPairState::Normal,
+        (Some(false), Some(true)) => MerakiPairState::RunningOnSpare,
+        (Some(true), Some(false)) => MerakiPairState::SpareDown,
+        (Some(false), Some(false)) => MerakiPairState::BothDown,
+        _ => MerakiPairState::Unknown,
+    }
+}
+
+/// `node`'s warm-spare pair, for the node detail and the MCP tool that folds it (ADR-164 決定 26).
+/// `None` for a node that is not an MX in a pair. Best effort: a failed read reads as "no pair".
+///
+/// 🚨 The partner is narrowed to the caller's scope, as `wireless::node_wireless` narrows an AP's
+/// controller: reading this node proves only that **this** node is visible, and the partner may sit
+/// in a folder the caller cannot see. Then no partner is named and the state is `unknown`.
+pub(crate) async fn node_meraki_pair(
+    st: &ApiState,
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    node: Uuid,
+    binding: Option<&yagra_common::MerakiDeviceConfig>,
+) -> Option<MerakiPairView> {
+    let binding = binding.filter(|b| b.product_type == "appliance")?;
+    let pair = match admin
+        .meraki_inventory
+        .ha_pair(binding.org_uuid, &binding.serial)
+        .await
+    {
+        Ok(p) => p?,
+        Err(e) => {
+            tracing::warn!(node = %node, error = %e, "meraki pair read failed");
+            return None;
+        }
+    };
+    let own = super::nodes::display_state(st, yagra_common::NodeId::from(node)).await;
+    let partner = match pair.partner {
+        Some(p) => {
+            let visible = p
+                .node_id
+                .is_none_or(|n| scope.allows_node(st, yagra_common::NodeId::from(n)));
+            if visible {
+                let node_state = match p.node_id {
+                    Some(n) => {
+                        Some(super::nodes::display_state(st, yagra_common::NodeId::from(n)).await)
+                    }
+                    None => None,
+                };
+                Some(MerakiPartnerView {
+                    name: p.name,
+                    role: p.role,
+                    node_id: p.node_id,
+                    node_state,
+                })
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let state = pair_state(
+        pair.role,
+        own,
+        partner.as_ref().map(|p| (p.role, p.node_state)),
+    );
+    Some(MerakiPairView {
+        role: pair.role,
+        state,
+        partner,
+    })
 }
 
 /// An organization's devices as the last successful sync recorded them — monitored or not — with
@@ -1754,6 +1904,63 @@ mod tests {
             .unwrap_or_else(|_| panic!("{name} in {path} is not a plain number"))
     }
 
+    /// ADR-164 決定 26, as a table: what a warm-spare pair is doing, from either MX. The roles say
+    /// which is which; only the two devices' liveness says what is happening — a down primary
+    /// still reports `primary` (measured), so reading the role for this would say "normal".
+    #[test]
+    fn a_pairs_state_comes_from_both_devices_liveness_whichever_side_asks() {
+        use yagra_common::MerakiHaRole::{Primary, Spare};
+        use yagra_common::NodeState::{Critical, Maintenance, Ok, Unknown, Unreachable, Warning};
+        use MerakiPairState as S;
+        // (own role, own state, partner role, partner state) → verdict
+        let table = [
+            (Primary, Ok, Some(Spare), Some(Ok), S::Normal),
+            (Primary, Warning, Some(Spare), Some(Critical), S::Normal),
+            (
+                Primary,
+                Unreachable,
+                Some(Spare),
+                Some(Ok),
+                S::RunningOnSpare,
+            ),
+            (
+                Spare,
+                Ok,
+                Some(Primary),
+                Some(Unreachable),
+                S::RunningOnSpare,
+            ),
+            (Primary, Ok, Some(Spare), Some(Unreachable), S::SpareDown),
+            (Spare, Unreachable, Some(Primary), Some(Ok), S::SpareDown),
+            (
+                Primary,
+                Unreachable,
+                Some(Spare),
+                Some(Unreachable),
+                S::BothDown,
+            ),
+            // Neither up nor down: not known.
+            (Primary, Maintenance, Some(Spare), Some(Ok), S::Unknown),
+            (Spare, Ok, Some(Primary), Some(Unknown), S::Unknown),
+            // Not a pair: two primaries, or a partner with no role read yet.
+            (Primary, Ok, Some(Primary), Some(Ok), S::Unknown),
+            (Primary, Ok, None, Some(Ok), S::Unknown),
+        ];
+        for (own_role, own, partner_role, partner_state, want) in table {
+            assert_eq!(
+                pair_state(own_role, own, Some((partner_role, partner_state))),
+                want,
+                "{own_role:?} {own:?} / {partner_role:?} {partner_state:?}"
+            );
+        }
+        // A partner with no node, or one the caller cannot see, is not known either.
+        assert_eq!(
+            pair_state(Primary, Ok, Some((Some(Spare), None))),
+            S::Unknown
+        );
+        assert_eq!(pair_state(Primary, Ok, None), S::Unknown);
+    }
+
     /// `MerakiCollectFailureView.listing` is a plain string on the wire, so the WebUI's list of the
     /// tokens it labels (`MERAKI_LISTINGS` in `web/src/types/api.ts`) is a hand-kept copy of
     /// `yagra_common::MerakiListing` that no generated type checks (ADR-164 決定 25). A token missing
@@ -2117,6 +2324,140 @@ mod tests {
         let unknown = format!("/api/v1/meraki/orgs/{ID}/devices");
         let (status, answer) = send(&st, "GET", &unknown, &operator, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    }
+
+    /// A warm-spare pair on the node detail and on the device list (ADR-164 決定 26): the partner is
+    /// named to a caller who can see it, and withheld — with the state `unknown` — from one whose
+    /// folders hold only this MX. Reading a node proves only that **this** node is visible.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_pairs_partner_is_named_only_to_a_caller_who_can_see_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = admin
+            .creds
+            .create(
+                "Meraki API — Acme",
+                crate::secrets::KIND_MERAKI_API,
+                br#"{"api_key":"not-a-real-key"}"#,
+            )
+            .await
+            .expect("seal key");
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let site = crate::pgtest::group(&pool, "Site").await;
+        let elsewhere = crate::pgtest::group(&pool, "Elsewhere").await;
+        let primary = crate::pgtest::node(&pool, "mx-a", 1, Some(site)).await;
+        let spare = crate::pgtest::node(&pool, "mx-b", 2, Some(elsewhere)).await;
+        let single = crate::pgtest::node(&pool, "mx-c", 3, Some(site)).await;
+        for (node, serial, name, network, role) in [
+            (primary, "Q2-A", "mx-a-dashboard", "N_1", Some("primary")),
+            (spare, "Q2-B", "mx-b-dashboard", "N_1", Some("spare")),
+            (single, "Q2-C", "mx-c-dashboard", "N_2", None),
+        ] {
+            sqlx::query(
+                "INSERT INTO meraki_inventory \
+                     (org_id, serial, name, model, product_type, network_id, ha_role) \
+                 VALUES ($1, $2, $3, 'MX85', 'appliance', $4, $5)",
+            )
+            .bind(org)
+            .bind(serial)
+            .bind(name)
+            .bind(network)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .expect("inventory row");
+            sqlx::query(
+                "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type, model) \
+                 VALUES ($1, $2, $3, $4, 'appliance', 'MX85')",
+            )
+            .bind(node)
+            .bind(org)
+            .bind(serial)
+            .bind(network)
+            .execute(&pool)
+            .await
+            .expect("binding");
+        }
+        let detail = |node: Uuid| format!("/api/v1/nodes/{node}");
+        let admin_token = token(&st, yagra_common::Role::Admin);
+
+        let (status, body) = send(&st, "GET", &detail(primary), &admin_token, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let pair = &body["meraki_pair"];
+        assert_eq!(pair["role"], "primary", "{body}");
+        assert_eq!(pair["partner"]["name"], "mx-b-dashboard", "{body}");
+        assert_eq!(pair["partner"]["role"], "spare", "{body}");
+        assert_eq!(pair["partner"]["node_id"], spare.to_string(), "{body}");
+        // No poll has been judged here, so neither side is up or down yet.
+        assert_eq!(pair["state"], "unknown", "{body}");
+        // Either side can ask.
+        let (_, body) = send(&st, "GET", &detail(spare), &admin_token, None).await;
+        assert_eq!(body["meraki_pair"]["role"], "spare", "{body}");
+        assert_eq!(
+            body["meraki_pair"]["partner"]["name"], "mx-a-dashboard",
+            "{body}"
+        );
+
+        // A caller who can see only the primary's folder: no partner, not even its name. Scope is
+        // read from the alert engine's snapshot, which the config loader would have built.
+        st.alerts.set_config(crate::alerts::AlertConfig::new(
+            Vec::new(),
+            [(primary, site), (spare, elsewhere), (single, site)]
+                .into_iter()
+                .map(|(node, group)| {
+                    (
+                        yagra_common::NodeId::from(node),
+                        crate::alerts::NodeMeta {
+                            folder_group: Some(group),
+                            folder_chain: vec![group],
+                            ..crate::alerts::NodeMeta::default()
+                        },
+                    )
+                })
+                .collect(),
+        ));
+        let scoped = scoped_token(&st, &[site]);
+        let (status, body) = send(&st, "GET", &detail(primary), &scoped, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["meraki_pair"]["role"], "primary", "{body}");
+        assert_eq!(body["meraki_pair"]["state"], "unknown", "{body}");
+        assert!(body["meraki_pair"]["partner"].is_null(), "{body}");
+        assert!(
+            !body.to_string().contains("mx-b-dashboard"),
+            "the partner leaked to a caller who cannot see it: {body}"
+        );
+
+        // A single MX holds no role, so it has no pair at all.
+        let (_, body) = send(&st, "GET", &detail(single), &admin_token, None).await;
+        assert!(body["meraki_pair"].is_null(), "{body}");
+
+        // The device list carries each MX's role, and nothing for the single one.
+        let (status, list) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/meraki/orgs/{org}/devices"),
+            &admin_token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        let role_of = |serial: &str| {
+            list.as_array()
+                .expect("a list")
+                .iter()
+                .find(|d| d["serial"] == serial)
+                .map(|d| d.get("ha_role").cloned())
+                .expect("listed")
+        };
+        assert_eq!(role_of("Q2-A"), Some(serde_json::json!("primary")));
+        assert_eq!(role_of("Q2-B"), Some(serde_json::json!("spare")));
+        assert_eq!(role_of("Q2-C"), None, "{list}");
     }
 
     /// An import is accepted, files each device by its address, and says how (ADR-164): the one
@@ -2750,6 +3091,17 @@ mod tests {
             _api_key: &str,
         ) -> Result<yagra_transport::MerakiInventory, yagra_transport::MerakiFetchError> {
             Ok(yagra_transport::MerakiInventory::default())
+        }
+
+        async fn ha_roles(
+            &self,
+            _org: &crate::meraki::MerakiOrg,
+            _api_key: &str,
+        ) -> Result<
+            Vec<(String, Option<yagra_common::MerakiHaRole>)>,
+            yagra_transport::MerakiFetchError,
+        > {
+            Ok(Vec::new())
         }
     }
 

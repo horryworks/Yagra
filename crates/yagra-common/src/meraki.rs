@@ -118,6 +118,43 @@ impl MerakiListing {
     }
 }
 
+/// The role an MX is **configured** to hold in its warm-spare pair (ADR-164 決定 26), from
+/// `appliance/uplink/statuses`' `highAvailability.role` while `highAvailability.enabled` is true.
+///
+/// ⚠️ Configured, not current: measured on a real organization, a primary that was down still said
+/// `primary` while its spare — still saying `spare` — carried the traffic. So "running on the spare"
+/// is worked out from the two devices' liveness, never read from this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MerakiHaRole {
+    /// The pair's primary.
+    Primary,
+    /// The pair's spare (Meraki's word for the standby).
+    Spare,
+}
+
+impl MerakiHaRole {
+    /// Every role.
+    pub const ALL: [MerakiHaRole; 2] = [MerakiHaRole::Primary, MerakiHaRole::Spare];
+
+    /// The token stored in `meraki_inventory.ha_role` — the serde tag.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            MerakiHaRole::Primary => "primary",
+            MerakiHaRole::Spare => "spare",
+        }
+    }
+
+    /// Read a token back (the Dashboard's word or the stored one). `None` for anything else.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|r| r.as_str() == s.trim().to_ascii_lowercase())
+    }
+}
+
 /// A Meraki collection tier: a group of Dashboard endpoints polled together on one cadence.
 ///
 /// Each `(org, enabled tier)` is one org-scoped collector job. Tiers exist because Meraki data has
@@ -355,6 +392,22 @@ mod tests {
         assert_eq!(uplink_ifindex("eth9"), None);
         assert_eq!(uplink_name(1), Some("WAN1"));
         assert_eq!(uplink_name(99), None);
+    }
+
+    #[test]
+    fn a_ha_role_token_is_its_serde_tag_and_reads_the_dashboards_word() {
+        for r in MerakiHaRole::ALL {
+            assert_eq!(
+                serde_json::to_value(r).unwrap(),
+                serde_json::Value::String(r.as_str().to_owned())
+            );
+            assert_eq!(MerakiHaRole::from_token(r.as_str()), Some(r));
+        }
+        assert_eq!(
+            MerakiHaRole::from_token(" Primary "),
+            Some(MerakiHaRole::Primary)
+        );
+        assert_eq!(MerakiHaRole::from_token("standby"), None);
     }
 
     #[test]

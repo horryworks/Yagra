@@ -8816,6 +8816,7 @@ export interface components {
              *     network (that folder is created by the import that first needs it).
              */
             folder_id?: string | null;
+            ha_role?: null | components["schemas"]["MerakiHaRole"];
             /** @description The address Meraki reports, when it reports a usable one. */
             lan_ip?: string | null;
             /**
@@ -8894,6 +8895,16 @@ export interface components {
             prefix?: string | null;
             reason: components["schemas"]["FilingReason"];
         };
+        /**
+         * @description The role an MX is **configured** to hold in its warm-spare pair (ADR-164 決定 26), from
+         *     `appliance/uplink/statuses`' `highAvailability.role` while `highAvailability.enabled` is true.
+         *
+         *     ⚠️ Configured, not current: measured on a real organization, a primary that was down still said
+         *     `primary` while its spare — still saying `spare` — carried the traffic. So "running on the spare"
+         *     is worked out from the two devices' liveness, never read from this.
+         * @enum {string}
+         */
+        MerakiHaRole: "primary" | "spare";
         MerakiImportDeviceReq: {
             lan_ip?: string | null;
             model?: string | null;
@@ -9033,6 +9044,35 @@ export interface components {
             traffic_secs: number;
             /** Format: int32 */
             uplink_secs: number;
+        };
+        /**
+         * @description What a warm-spare pair is doing, seen from one of its MX (ADR-164 決定 26).
+         *
+         *     Worked out from the two devices' **liveness**, never from their roles: the role Meraki reports
+         *     is the configured one, and on a real organization a primary that was down still said `primary`
+         *     while its spare carried the traffic.
+         * @enum {string}
+         */
+        MerakiPairState: "normal" | "running_on_spare" | "spare_down" | "both_down" | "unknown";
+        /** @description One MX's warm-spare pair (ADR-164 決定 26) — `GET /api/v1/nodes/{node_id}`'s `meraki_pair`. */
+        MerakiPairView: {
+            partner?: null | components["schemas"]["MerakiPartnerView"];
+            /** @description This MX's configured role. */
+            role: components["schemas"]["MerakiHaRole"];
+            /** @description What the pair is doing. */
+            state: components["schemas"]["MerakiPairState"];
+        };
+        /** @description The other MX of a pair, as the caller may see it. */
+        MerakiPartnerView: {
+            /** @description The name Meraki lists it under. */
+            name: string;
+            /**
+             * Format: uuid
+             * @description Its node, when it has been imported.
+             */
+            node_id?: string | null;
+            node_state?: null | components["schemas"]["NodeState"];
+            role?: null | components["schemas"]["MerakiHaRole"];
         };
         /** @description The global Meraki polling kill switch. */
         MerakiPolling: {
@@ -9632,6 +9672,7 @@ export interface components {
              */
             kind: components["schemas"]["NodeKind"];
             meraki_device?: null | components["schemas"]["MerakiDeviceConfig"];
+            meraki_pair?: null | components["schemas"]["MerakiPairView"];
             model?: string | null;
             name: string;
             /**

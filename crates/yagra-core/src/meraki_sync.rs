@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
+use yagra_common::MerakiHaRole;
 use yagra_transport::{
     MerakiFetchError, MerakiInventory, MerakiOrgInfo, MerakiWireOrigin, TransportError,
 };
@@ -183,6 +184,15 @@ pub trait MerakiDirectory: Send + Sync {
         org: &MerakiOrg,
         api_key: &str,
     ) -> Result<MerakiInventory, MerakiFetchError>;
+
+    /// Read every MX's warm-spare role, to the end (ADR-164 決定 26): `(serial, role)`, `None` for
+    /// an MX whose warm spare is not enabled. No default body on purpose — a fake that forgot this
+    /// would answer "no pairs" and hide every role the sync should write.
+    async fn ha_roles(
+        &self,
+        org: &MerakiOrg,
+        api_key: &str,
+    ) -> Result<Vec<(String, Option<MerakiHaRole>)>, MerakiFetchError>;
 }
 
 /// The real Dashboard API, through `yagra-transport` (GET only, host allow-listed, paced).
@@ -217,6 +227,22 @@ impl MerakiDirectory for DashboardApi {
         api_key: &str,
     ) -> Result<MerakiInventory, MerakiFetchError> {
         yagra_transport::fetch_inventory(
+            &org.base_url,
+            api_key,
+            &org.org_id,
+            org.target_rps,
+            REQUEST_TIMEOUT,
+            self.wire.as_ref(),
+        )
+        .await
+    }
+
+    async fn ha_roles(
+        &self,
+        org: &MerakiOrg,
+        api_key: &str,
+    ) -> Result<Vec<(String, Option<MerakiHaRole>)>, MerakiFetchError> {
+        yagra_transport::fetch_ha_roles(
             &org.base_url,
             api_key,
             &org.org_id,
@@ -392,6 +418,10 @@ impl MerakiSync {
         let api_key = resolve_meraki_key(&self.creds, org.credential_id)
             .await
             .ok_or(MerakiSyncFailure::Credential)?;
+        // One deadline for every read of this sync: the flight's lease (`LEASE`) is sized against
+        // `SYNC_TIMEOUT`, and a read that got its own fresh budget could outlive the lease and let a
+        // collect start beside a sync that is still running.
+        let started = Instant::now();
         let listing = tokio::time::timeout(SYNC_TIMEOUT, self.directory.inventory(org, &api_key))
             .await
             .map_err(|_| MerakiSyncFailure::Timeout)??;
@@ -433,17 +463,59 @@ impl MerakiSync {
             .apply(org.id, &plan)
             .await
             .map_err(internal("writing the inventory failed"))?;
+        // After `apply`, which created the rows of devices seen for the first time.
+        let roles = self
+            .ha_roles(
+                org,
+                &api_key,
+                SYNC_TIMEOUT.saturating_sub(started.elapsed()),
+            )
+            .await;
         let (imported, over_cap) = self.import(org).await?;
 
         Ok(MerakiSyncReport {
             devices: count(seen.len()),
             networks: count(listing.networks.len()),
-            written: u32::try_from(network_rows + applied.rows).unwrap_or(u32::MAX),
+            written: u32::try_from(network_rows + applied.rows + roles).unwrap_or(u32::MAX),
             newly_missing: count(plan.newly_missing.len()),
             imported,
             over_cap,
             followed: applied.followed,
         })
+    }
+
+    /// Read and record every MX's warm-spare role (ADR-164 決定 26): the rows written.
+    ///
+    /// **Best effort, and never a reason to fail the sync.** The roles only label the pair on a
+    /// node's card; the sync's job is the inventory, and a licence or a read that fails here must
+    /// not stop it or mark a single device missing. A failure keeps the roles already stored.
+    /// Outside `apply`'s one transaction on purpose: that exists because a rename is planned from a
+    /// difference the same write erases, and a role has no such follow-up.
+    async fn ha_roles(&self, org: &MerakiOrg, api_key: &str, left: Duration) -> u64 {
+        let outcome = match tokio::time::timeout(left, self.directory.ha_roles(org, api_key)).await
+        {
+            Ok(Ok(roles)) => match self.inventory.record_ha_roles(org.id, &roles).await {
+                Ok(written) => {
+                    metrics::counter!("yagra_meraki_ha_role_reads_total", "outcome" => "ok")
+                        .increment(1);
+                    return written;
+                }
+                Err(e) => {
+                    tracing::warn!(org = %org.org_id, error = %e, "meraki sync: recording ha roles failed");
+                    "write_failed"
+                }
+            },
+            Ok(Err(why)) => {
+                tracing::warn!(org = %org.org_id, reason = why.token(), "meraki sync: reading ha roles failed");
+                "read_failed"
+            }
+            Err(_) => {
+                tracing::warn!(org = %org.org_id, "meraki sync: reading ha roles ran out of time");
+                "timeout"
+            }
+        };
+        metrics::counter!("yagra_meraki_ha_role_reads_total", "outcome" => outcome).increment(1);
+        0
     }
 
     /// The import stage: `(imported, over_cap)`. Runs on every successful listing, and for an
@@ -704,14 +776,22 @@ mod tests {
     struct FakeDirectory {
         answer: Mutex<Result<MerakiInventory, MerakiFetchError>>,
         asked: Mutex<u32>,
+        roles: Mutex<RolesAnswer>,
     }
+
+    type RolesAnswer = Result<Vec<(String, Option<MerakiHaRole>)>, MerakiFetchError>;
 
     impl FakeDirectory {
         fn answering(answer: Result<MerakiInventory, MerakiFetchError>) -> Arc<Self> {
             Arc::new(Self {
                 answer: Mutex::new(answer),
                 asked: Mutex::new(0),
+                roles: Mutex::new(Ok(Vec::new())),
             })
+        }
+
+        fn roles_answer(&self, roles: RolesAnswer) {
+            *self.roles.lock().expect("roles") = roles;
         }
 
         fn now_answers(&self, answer: Result<MerakiInventory, MerakiFetchError>) {
@@ -741,6 +821,10 @@ mod tests {
         ) -> Result<MerakiInventory, MerakiFetchError> {
             *self.asked.lock().expect("asked") += 1;
             self.answer.lock().expect("answer").clone()
+        }
+
+        async fn ha_roles(&self, _org: &MerakiOrg, _api_key: &str) -> RolesAnswer {
+            self.roles.lock().expect("roles").clone()
         }
     }
 
@@ -889,6 +973,118 @@ mod tests {
         let a = stored.iter().find(|d| d.serial == "Q2-A").expect("Q2-A");
         assert_eq!(a.missing_since, None);
         assert_eq!(a.first_online_at, first_online, "first_online_at moved");
+    }
+
+    /// ADR-164 決定 26: the sync records each MX's warm-spare role — once; the next sync writes no
+    /// role — and a roles read that fails costs nothing: the roles stay, the sync is still a
+    /// success, and no device is marked missing. A pair is the other MX of the same network.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_sync_records_warm_spare_roles_and_a_failed_roles_read_costs_nothing(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::meraki_inventory::HaPair;
+        let device = |serial: &str, product: &str, net: &str| MerakiInventoryDevice {
+            info: MerakiDeviceInfo {
+                serial: serial.into(),
+                name: format!("dev-{serial}"),
+                model: Some("MX85".into()),
+                product_type: product.into(),
+                network_id: net.into(),
+                lan_ip: Some("10.0.0.1".into()),
+            },
+            availability: UP,
+        };
+        // N_1: a pair, and a cellular gateway beside it. N_2: one MX alone. N_3: three MX.
+        let inventory = MerakiInventory {
+            networks: ["N_1", "N_2", "N_3"]
+                .iter()
+                .map(|n| MerakiNetworkInfo {
+                    id: (*n).into(),
+                    name: format!("site-{n}"),
+                })
+                .collect(),
+            devices: vec![
+                device("Q2-P", "appliance", "N_1"),
+                device("Q2-S", "appliance", "N_1"),
+                device("Q2-G", "cellularGateway", "N_1"),
+                device("Q2-1", "appliance", "N_2"),
+                device("Q2-X", "appliance", "N_3"),
+                device("Q2-Y", "appliance", "N_3"),
+                device("Q2-Z", "appliance", "N_3"),
+            ],
+        };
+        let r = rig(&pool, Ok(inventory)).await;
+        let roles = |p: MerakiHaRole, s: MerakiHaRole| -> RolesAnswer {
+            Ok(vec![
+                ("Q2-P".into(), Some(p)),
+                ("Q2-S".into(), Some(s)),
+                ("Q2-1".into(), None),
+                ("Q2-X".into(), Some(MerakiHaRole::Primary)),
+                ("Q2-Y".into(), Some(MerakiHaRole::Spare)),
+                ("Q2-Z".into(), Some(MerakiHaRole::Spare)),
+            ])
+        };
+        r.directory
+            .roles_answer(roles(MerakiHaRole::Primary, MerakiHaRole::Spare));
+
+        let first = r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(
+            first.written,
+            7 + 3 + 5,
+            "seven devices, three networks, five roles"
+        );
+        let pair = |serial: &'static str| {
+            let inv = r.inventory.clone();
+            let org = r.org;
+            async move { inv.ha_pair(org, serial).await.expect("ha_pair") }
+        };
+        let p = pair("Q2-P").await.expect("Q2-P is in a pair");
+        assert_eq!(p.role, MerakiHaRole::Primary);
+        let partner = p.partner.expect("the other MX of N_1 — not the gateway");
+        assert_eq!(
+            (partner.serial.as_str(), partner.role),
+            ("Q2-S", Some(MerakiHaRole::Spare))
+        );
+        assert_eq!(pair("Q2-1").await, None, "a single MX holds no role");
+        assert_eq!(pair("Q2-G").await, None, "a gateway is not an MX");
+        assert_eq!(
+            pair("Q2-X").await,
+            Some(HaPair {
+                role: MerakiHaRole::Primary,
+                partner: None
+            }),
+            "three MX in one network: no telling which is the pair"
+        );
+
+        // Unchanged roles: nothing written.
+        let again = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(again.written, 0);
+
+        // The roles read fails: the sync still succeeds, the roles stay, nothing goes missing.
+        r.directory.roles_answer(Err(MerakiFetchError::Auth(403)));
+        r.sync
+            .sync_org(&r.org().await)
+            .await
+            .expect("a failed roles read does not fail the sync");
+        let org = r.org().await;
+        assert_eq!((org.last_sync_ok, org.last_sync_error), (Some(true), None));
+        assert_eq!(
+            pair("Q2-P").await.map(|p| p.role),
+            Some(MerakiHaRole::Primary)
+        );
+        let stored = r.inventory.stored(r.org).await.expect("stored");
+        assert!(stored.iter().all(|d| d.missing_since.is_none()));
+
+        // The roles swap (someone reconfigured the pair): two rows written, read back.
+        r.directory
+            .roles_answer(roles(MerakiHaRole::Spare, MerakiHaRole::Primary));
+        let swapped = r.sync.sync_org(&r.org().await).await.expect("third sync");
+        assert_eq!(swapped.written, 2);
+        assert_eq!(
+            pair("Q2-P").await.map(|p| p.role),
+            Some(MerakiHaRole::Spare)
+        );
     }
 
     /// ADR-164 決定 3, the one that matters most: a sync that fails changes **nothing** it could be

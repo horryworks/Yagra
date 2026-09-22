@@ -81,6 +81,7 @@ import {
 import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overviewClaims';
 import { memPctSeries } from './overviewMetrics';
 import {
+  merakiPairLine,
   merakiUplinkLines,
   merakiVpnLine,
   type MerakiUplinkLine,
@@ -278,7 +279,7 @@ export function OverviewTab({
         />
       )}
       {node.kind === 'meraki' && node.meraki_device && (
-        <MerakiHealth nodeId={node.id} device={node.meraki_device} />
+        <MerakiHealth nodeId={node.id} device={node.meraki_device} pair={node.meraki_pair} />
       )}
       <DeviceHealth nodeId={node.id} />
       <OverviewSections node={node} />
@@ -595,14 +596,17 @@ function UrlHealth({
 
 /** Cisco Meraki device health: availability (`meraki_device_up`) and, for an MX, one line per WAN
  *  uplink with its state and its average send and receive rates over the traffic collect's
- *  interval (ADR-164 増分 13). Shown only for Meraki nodes (the caller guards on `node.meraki_device`). What each line
- *  says is decided in `merakiCard.ts`. */
+ *  interval, its Auto VPN reach, and its warm-spare pair (ADR-164 増分 13). Shown only for Meraki
+ *  nodes (the caller guards on `node.meraki_device`). What each line says is decided in
+ *  `merakiCard.ts`. */
 function MerakiHealth({
   nodeId,
   device,
+  pair,
 }: {
   nodeId: string;
   device: NonNullable<NodeDetail['meraki_device']>;
+  pair: NodeDetail['meraki_pair'];
 }) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
@@ -640,6 +644,19 @@ function MerakiHealth({
       cancelled = true;
     };
   }, [nodeId, tick]);
+
+  const pairLine = merakiPairLine(pair, vpn != null);
+  // The sub-line's whole text, for its `title`: it is clamped, and a clipped line owes one.
+  const pairSummary = pairLine
+    ? [
+        t(`overview.haRole.${pairLine.role}`),
+        pairLine.partner
+          ? `${t('overview.pairPartner')} ${pairLine.partner.name}${
+              pairLine.partner.role ? ` (${t(`overview.haRole.${pairLine.partner.role}`)})` : ''
+            }`
+          : t('overview.pairPartnerNone'),
+      ].join(' · ')
+    : undefined;
 
   return (
     <section>
@@ -693,6 +710,57 @@ function MerakiHealth({
                 {vpn.spokesDown != null ? t('overview.vpnSpokesDown', { count: vpn.spokesDown }) : ''}
               </span>
             </div>
+          </div>
+        )}
+        {pairLine?.vpnNotRead && (
+          <div className="nd-health-metric">
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">{t('overview.vpn')}</span>
+              <span className="nd-health-metric-value">—</span>
+            </div>
+            <p className="nd-health-metric-meaning" title={t('overview.vpnNotRead')}>
+              {t('overview.vpnNotRead')}
+            </p>
+          </div>
+        )}
+        {pairLine && (
+          <div className="nd-health-metric">
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">{t('overview.warmSpare')}</span>
+              <span
+                className="nd-health-metric-value"
+                style={
+                  pairLine.tone && pairLine.tone !== 'ok'
+                    ? { color: severityColorVar(pairLine.tone) }
+                    : undefined
+                }
+              >
+                {t(`overview.pairState.${pairLine.state}`)}
+              </span>
+            </div>
+            <p className="nd-health-metric-meaning" title={pairSummary}>
+              {t(`overview.haRole.${pairLine.role}`)}
+              {' · '}
+              {pairLine.partner ? (
+                <>
+                  {t('overview.pairPartner')}{' '}
+                  {pairLine.partner.nodeId ? (
+                    <Link
+                      to={nodesPageHref({ kind: 'node', id: pairLine.partner.nodeId })}
+                      title={pairLine.partner.name}
+                    >
+                      {pairLine.partner.name}
+                    </Link>
+                  ) : (
+                    pairLine.partner.name
+                  )}
+                  {pairLine.partner.role &&
+                    ` (${t(`overview.haRole.${pairLine.partner.role}`)})`}
+                </>
+              ) : (
+                t('overview.pairPartnerNone')
+              )}
+            </p>
           </div>
         )}
         {uplinks.length === 0 && device.product_type === 'appliance' && (

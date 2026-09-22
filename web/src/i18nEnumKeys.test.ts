@@ -102,6 +102,8 @@ import {
   GROUP_ORIGINS,
   MERAKI_DEVICE_STATES,
   MERAKI_FILING_REASONS,
+  MERAKI_HA_ROLES,
+  MERAKI_PAIR_STATES,
   MERAKI_SYNC_FAILURES,
   PREFIX_SOURCES,
 } from './types/api';
@@ -925,6 +927,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'overview.uplinkState.',
       MERAKI_UPLINK_STATES,
     );
+  });
+
+  it('every warm-spare role and pair state has a word (nodes:overview.haRole.* / pairState.*)', () => {
+    // The Meraki card renders the node's role, its partner's role and the pair's state from the
+    // tokens the server sent (ADR-164 決定 26). A sixth state would reach the card as a raw key.
+    expectKeys('meraki ha role', { en: enNodes, ja: jaNodes }, 'overview.haRole.', MERAKI_HA_ROLES);
+    expectKeys('meraki pair state', { en: enNodes, ja: jaNodes }, 'overview.pairState.', MERAKI_PAIR_STATES);
+  });
+
+  it('every warm-spare role has its device-list label (system:meraki.devices.haRole.*)', () => {
+    // The organization's device list puts the role under the model (`modelSubLine`).
+    expectKeys('meraki device ha role', { en: enSystem, ja: jaSystem }, 'meraki.devices.haRole.', MERAKI_HA_ROLES);
   });
 
   it('every Meraki API region has a label (system:meraki.regions.*)', () => {

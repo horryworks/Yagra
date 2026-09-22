@@ -32,10 +32,10 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 use yagra_common::{
-    is_meraki_api_host, uplink_ifindex, uplink_name, MerakiListing, MerakiTier, MerakiUplinkStatus,
-    METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_FAILED, METRIC_MERAKI_UPLINK_LATENCY_MS,
-    METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS,
-    METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
+    is_meraki_api_host, uplink_ifindex, uplink_name, MerakiHaRole, MerakiListing, MerakiTier,
+    MerakiUplinkStatus, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_FAILED,
+    METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS,
+    METRIC_MERAKI_UPLINK_SENT_BPS, METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
     METRIC_MERAKI_VPN_HUBS_UNREACHABLE, METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT,
     METRIC_MERAKI_VPN_SPOKES_UNREACHABLE,
 };
@@ -1361,6 +1361,56 @@ pub async fn fetch_inventory(
     Ok(assemble_inventory(&networks, &devices, &availabilities))
 }
 
+/// Read every MX's warm-spare role (ADR-164 決定 26): `(serial, role)` for every appliance the
+/// organization lists, `None` for one whose warm spare is not enabled. One paged GET of
+/// `appliance/uplink/statuses` — the listing the uplink collect also reads. Read-only.
+///
+/// Strict, like [`fetch_inventory`]: a short answer is an error rather than a partial list, so a
+/// device missing from a truncated answer is never read as having lost its role. The caller treats
+/// any error as "no roles this time" and keeps what it stored.
+pub async fn fetch_ha_roles(
+    base_url: &str,
+    api_key: &str,
+    org_id: &str,
+    target_rps: f64,
+    timeout: Duration,
+    wire: Option<&MerakiWireOrigin>,
+) -> Result<Vec<(String, Option<MerakiHaRole>)>, MerakiFetchError> {
+    let mut s = Session::new(base_url, api_key, target_rps, timeout, wire).map_err(|e| {
+        tracing::debug!(error = %e, "meraki ha-role session refused");
+        MerakiFetchError::Config
+    })?;
+    let rows = s
+        .get_paged_strict(
+            &format!("{API_PREFIX}/organizations/{org_id}/appliance/uplink/statuses"),
+            &[],
+            Paging::Upto(1000),
+        )
+        .await?;
+    Ok(parse_ha_roles(&rows))
+}
+
+/// `(serial, role)` per row: the role only while the warm spare is enabled. A single MX reports
+/// `enabled: false` with `role: "primary"` — measured on 14 of 14 — which is not a pair.
+fn parse_ha_roles(rows: &[Value]) -> Vec<(String, Option<MerakiHaRole>)> {
+    rows.iter()
+        .filter_map(|r| {
+            let serial = r.get("serial")?.as_str()?.to_owned();
+            let ha = r.get("highAvailability");
+            let enabled = ha
+                .and_then(|h| h.get("enabled"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let role = ha
+                .and_then(|h| h.get("role"))
+                .and_then(Value::as_str)
+                .and_then(MerakiHaRole::from_token)
+                .filter(|_| enabled);
+            Some((serial, role))
+        })
+        .collect()
+}
+
 /// Join the three listings. Pure, so the join is tested without a server.
 fn assemble_inventory(
     networks: &[Value],
@@ -1864,6 +1914,29 @@ mod tests {
         assert_eq!(value(METRIC_MERAKI_UPLINK_FAILED, 2), Some(1.0));
         assert_eq!(value(METRIC_MERAKI_UPLINK_FAILED, 3), Some(0.0));
         assert_eq!(obs[0].samples.len(), 6);
+    }
+
+    /// ADR-164 決定 26: a role only while the warm spare is enabled.
+    #[test]
+    fn ha_roles_are_read_only_from_an_enabled_pair() {
+        let rows = vec![
+            json!({"serial": "Q2-P", "highAvailability": {"enabled": true, "role": "primary"}}),
+            json!({"serial": "Q2-S", "highAvailability": {"enabled": true, "role": "spare"}}),
+            json!({"serial": "Q2-1", "highAvailability": {"enabled": false, "role": "primary"}}),
+            json!({"serial": "Q2-X", "highAvailability": {"enabled": true, "role": "standby"}}),
+            json!({"serial": "Q2-N"}),
+            json!({"highAvailability": {"enabled": true, "role": "primary"}}),
+        ];
+        assert_eq!(
+            parse_ha_roles(&rows),
+            vec![
+                ("Q2-P".to_owned(), Some(MerakiHaRole::Primary)),
+                ("Q2-S".to_owned(), Some(MerakiHaRole::Spare)),
+                ("Q2-1".to_owned(), None),
+                ("Q2-X".to_owned(), None),
+                ("Q2-N".to_owned(), None),
+            ]
+        );
     }
 
     /// ADR-164 決定 25, as a table: who counts on whose Auto VPN line.

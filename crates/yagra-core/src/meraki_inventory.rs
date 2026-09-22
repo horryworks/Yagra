@@ -29,6 +29,7 @@ use std::net::IpAddr;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+use yagra_common::MerakiHaRole;
 use yagra_transport::{MerakiInventory, MerakiInventoryDevice};
 
 /// One device as a complete sync saw it.
@@ -424,6 +425,28 @@ pub struct DeviceRecord {
     pub node_group_id: Option<Uuid>,
     pub first_seen_at: DateTime<Utc>,
     pub missing_since: Option<DateTime<Utc>>,
+    /// The MX's configured warm-spare role, when the sync has read one (ADR-164 決定 26).
+    pub ha_role: Option<MerakiHaRole>,
+}
+
+/// One MX's warm-spare pair as the inventory records it (ADR-164 決定 26).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HaPair {
+    /// This MX's configured role.
+    pub role: MerakiHaRole,
+    /// The other MX of its network — `None` when there is none, or more than one and so no telling
+    /// which is the pair.
+    pub partner: Option<HaPartner>,
+}
+
+/// The other MX of a pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HaPartner {
+    pub serial: String,
+    pub name: String,
+    pub role: Option<MerakiHaRole>,
+    /// Its node, when it has been imported.
+    pub node_id: Option<Uuid>,
 }
 
 /// PostgreSQL-backed store for `meraki_inventory`.
@@ -626,7 +649,7 @@ impl MerakiInventoryRepo {
     pub async fn devices(&self, org: Uuid) -> anyhow::Result<Vec<DeviceRecord>> {
         let rows = sqlx::query(
             "SELECT i.serial, i.name, i.model, i.product_type, i.network_id, i.lan_ip, \
-                    i.first_seen_at, i.first_online_at, i.missing_since, i.imported_at, \
+                    i.first_seen_at, i.first_online_at, i.missing_since, i.imported_at, i.ha_role, \
                     d.node_id, nd.group_id AS node_group_id, n.name AS network_name, \
                     COALESCE(n.monitored, false) AS monitored \
              FROM meraki_inventory i \
@@ -663,9 +686,103 @@ impl MerakiInventoryRepo {
                 node_group_id: r.try_get("node_group_id")?,
                 first_seen_at: r.try_get("first_seen_at")?,
                 missing_since,
+                ha_role: r
+                    .try_get::<Option<String>, _>("ha_role")?
+                    .as_deref()
+                    .and_then(MerakiHaRole::from_token),
             });
         }
         Ok(out)
+    }
+
+    /// Record each MX's warm-spare role (ADR-164 決定 26): the rows whose role changed. Only rows
+    /// that exist are written — so this runs after [`Self::apply`], which creates new devices' rows —
+    /// and a device the list does not name keeps what it has.
+    ///
+    /// Outside `apply`'s one transaction on purpose. That transaction exists because a rename is
+    /// planned from a stored-vs-listed difference the same write erases; a role has no such
+    /// follow-up, and nothing else reads it back within the sync.
+    pub async fn record_ha_roles(
+        &self,
+        org: Uuid,
+        roles: &[(String, Option<MerakiHaRole>)],
+    ) -> anyhow::Result<u64> {
+        if roles.is_empty() {
+            return Ok(0);
+        }
+        let serials: Vec<String> = roles.iter().map(|(s, _)| s.clone()).collect();
+        let tokens: Vec<Option<String>> = roles
+            .iter()
+            .map(|(_, r)| r.map(|r| r.as_str().to_owned()))
+            .collect();
+        let done = sqlx::query(
+            "UPDATE meraki_inventory i SET ha_role = r.role \
+             FROM unnest($2::text[], $3::text[]) AS r(serial, role) \
+             WHERE i.org_id = $1 AND i.serial = r.serial AND i.ha_role IS DISTINCT FROM r.role",
+        )
+        .bind(org)
+        .bind(&serials)
+        .bind(&tokens)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
+    /// `serial`'s warm-spare pair (ADR-164 決定 26), or `None` when it holds no role — it is not an
+    /// MX, its warm spare is not enabled, or no role has been read yet.
+    ///
+    /// The partner is the other MX of the same network that Meraki still lists. Measured on a real
+    /// organization: every pair was exactly two MX in one network (336 pairs, 14 single MX). More
+    /// than one candidate is not a pair anyone can name, and reads as no partner.
+    pub async fn ha_pair(&self, org: Uuid, serial: &str) -> anyhow::Result<Option<HaPair>> {
+        let rows = sqlx::query(
+            "SELECT i.ha_role AS own_role, p.serial AS p_serial, p.name AS p_name, \
+                    p.ha_role AS p_role, d.node_id AS p_node \
+             FROM meraki_inventory i \
+             LEFT JOIN meraki_inventory p \
+                    ON p.org_id = i.org_id AND p.network_id = i.network_id \
+                   AND p.serial <> i.serial AND p.product_type = 'appliance' \
+                   AND p.missing_since IS NULL \
+             LEFT JOIN meraki_devices d ON d.org_id = p.org_id AND d.serial = p.serial \
+             WHERE i.org_id = $1 AND i.serial = $2",
+        )
+        .bind(org)
+        .bind(serial)
+        .fetch_all(&self.pool)
+        .await?;
+        let Some(first) = rows.first() else {
+            return Ok(None);
+        };
+        let Some(role) = first
+            .try_get::<Option<String>, _>("own_role")?
+            .as_deref()
+            .and_then(MerakiHaRole::from_token)
+        else {
+            return Ok(None);
+        };
+        let mut partners = Vec::new();
+        for r in &rows {
+            let Some(p_serial) = r.try_get::<Option<String>, _>("p_serial")? else {
+                continue;
+            };
+            partners.push(HaPartner {
+                serial: p_serial,
+                name: r
+                    .try_get::<Option<String>, _>("p_name")?
+                    .unwrap_or_default(),
+                role: r
+                    .try_get::<Option<String>, _>("p_role")?
+                    .as_deref()
+                    .and_then(MerakiHaRole::from_token),
+                node_id: r.try_get("p_node")?,
+            });
+        }
+        let partner = if partners.len() == 1 {
+            partners.pop()
+        } else {
+            None
+        };
+        Ok(Some(HaPair { role, partner }))
     }
 
     /// Every organization's counts, for the organization list. An organization with no rows yet is

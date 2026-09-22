@@ -385,6 +385,21 @@
       "notConnected": "回線なし",
       "failed": "障害"
     },
+    "vpnNotRead": "控えで稼働中は読めない",
+    "warmSpare": "ウォームスペア",
+    "haRole": {
+      "primary": "主",
+      "spare": "控え"
+    },
+    "pairState": {
+      "normal": "通常",
+      "running_on_spare": "控えで稼働中",
+      "spare_down": "控えが停止",
+      "both_down": "両方停止",
+      "unknown": "不明"
+    },
+    "pairPartner": "相方",
+    "pairPartnerNone": "相方は特定できない",
     "wanTrafficNone": "WAN の通信量",
     "deviceHealth": "デバイスヘルス",
     "healthLoadFailed": "このノードのメトリクス一覧を読み込めなかったため、ヘルスのカードを表示していません。再読み込みしてください。",
