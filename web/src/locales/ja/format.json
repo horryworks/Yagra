@@ -44,6 +44,7 @@
     "meraki_device_up": "可用性",
     "meraki_uplink_sent_bps": "回線の送信 (bps)",
     "meraki_uplink_recv_bps": "回線の受信 (bps)",
+    "meraki_uplink_failed": "回線の障害",
     "meraki_uplink_loss_pct": "アップリンク損失 %",
     "meraki_uplink_latency_ms": "アップリンク遅延 (ms)",
     "meraki_uplink_status": "アップリンクステータス"

@@ -375,7 +375,13 @@
     "merakiIdentity": "{{productType}} · シリアル {{serial}}",
     "online": "オンライン",
     "offline": "オフライン",
-    "wanTraffic": "{{uplink}} の送信 / 受信",
+    "wanRates": "送信 {{sent}} / 受信 {{recv}}",
+    "uplinkState": {
+      "active": "使用中",
+      "ready": "待機",
+      "notConnected": "回線なし",
+      "failed": "障害"
+    },
     "wanTrafficNone": "WAN の通信量",
     "deviceHealth": "デバイスヘルス",
     "healthLoadFailed": "このノードのメトリクス一覧を読み込めなかったため、ヘルスのカードを表示していません。再読み込みしてください。",

@@ -37,13 +37,14 @@ export const URL_CARD = {
  */
 export const DNS_CARD = { up: 'dns_up', resolveMs: 'dns_resolve_ms' } as const;
 
-/** The Meraki card's metrics: the device's availability and, for an MX, each WAN uplink's average
- *  rates (ADR-164 増分 13). Per-uplink loss and latency are not drawn here — a Meraki node has no
- *  Interfaces tab, so they show on the Collection tab. */
+/** The Meraki card's metrics: the device's availability and, for an MX, each WAN uplink's state and
+ *  average rates (ADR-164 増分 13). Per-uplink loss, latency and the failed flag are not drawn here
+ *  — a Meraki node has no Interfaces tab, so they show on the Collection tab. */
 export const MERAKI_CARD = {
   up: 'meraki_device_up',
   sentBps: 'meraki_uplink_sent_bps',
   recvBps: 'meraki_uplink_recv_bps',
+  status: 'meraki_uplink_status',
 } as const;
 
 /**

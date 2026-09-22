@@ -376,7 +376,13 @@
     "merakiIdentity": "{{productType}} · serial {{serial}}",
     "online": "Online",
     "offline": "Offline",
-    "wanTraffic": "{{uplink}} sent / received",
+    "wanRates": "sent {{sent}} / received {{recv}}",
+    "uplinkState": {
+      "active": "Active",
+      "ready": "Standby",
+      "notConnected": "No line",
+      "failed": "Failed"
+    },
     "wanTrafficNone": "WAN traffic",
     "deviceHealth": "Device health",
     "healthLoadFailed": "This node’s metric list could not be read, so its health cards are not shown. Reload to try again.",

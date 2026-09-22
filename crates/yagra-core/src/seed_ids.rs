@@ -43,17 +43,22 @@ pub enum SeedRange {
     /// Unlike the two above these are not tied to a profile, so they reach a node with no
     /// profile at all — which is the reason the global scope exists.
     DefaultThresholds,
+    /// `thresholds` seeded for the built-in "Cisco Meraki MX (API)" profile (ADR-164 増分 13): a
+    /// failed WAN uplink, and — from 13c — an Auto VPN site that cannot reach its hubs. Profile-scoped
+    /// like the URL and DNS sets, because only an MX reports either.
+    MerakiThresholds,
 }
 
 impl SeedRange {
     /// Every declared range. Iterated by [`is_builtin`] and by the disjointness test.
-    pub const ALL: [SeedRange; 6] = [
+    pub const ALL: [SeedRange; 7] = [
         SeedRange::Profiles,
         SeedRange::CollectionTemplates,
         SeedRange::ClassificationRules,
         SeedRange::UrlThresholds,
         SeedRange::DnsThresholds,
         SeedRange::DefaultThresholds,
+        SeedRange::MerakiThresholds,
     ];
 
     /// The first id of the range.
@@ -66,6 +71,7 @@ impl SeedRange {
             SeedRange::UrlThresholds => 0x0000_0000_0000_0000_0000_0000_5eed_a000,
             SeedRange::DnsThresholds => 0x0000_0000_0000_0000_0000_0000_5eed_b000,
             SeedRange::DefaultThresholds => 0x0000_0000_0000_0000_0000_0000_5eed_c000,
+            SeedRange::MerakiThresholds => 0x0000_0000_0000_0000_0000_0000_5eed_d000,
         }
     }
 

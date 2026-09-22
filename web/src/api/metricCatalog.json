@@ -520,6 +520,27 @@
   {
     "family": "meraki",
     "metric_kind": "gauge",
+    "metric_name": "meraki_uplink_failed",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_uplink_latency_ms",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_uplink_loss_pct",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
     "metric_name": "meraki_uplink_recv_bps",
     "per_interface": false,
     "source": "check"
@@ -528,6 +549,13 @@
     "family": "meraki",
     "metric_kind": "gauge",
     "metric_name": "meraki_uplink_sent_bps",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_uplink_status",
     "per_interface": false,
     "source": "check"
   },

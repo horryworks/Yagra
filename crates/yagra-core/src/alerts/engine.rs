@@ -6746,6 +6746,67 @@ mod row_tests {
         );
     }
 
+    /// ADR-164 決定 24: a Meraki MX's failed WAN uplink alerts on its own row, under its uplink's
+    /// name, through the seeded rule's shape (above 0.5, warning only, dwell 2) — from an
+    /// observational result that still has its samples judged, which is how the uplink tier
+    /// arrives. The healthy uplink's 0 beside it neither fires nor holds any state, and the alert
+    /// closes on the readings that say the uplink came back.
+    #[test]
+    fn a_failed_meraki_uplink_alerts_on_its_own_row_under_its_name() {
+        const FAILED: &str = yagra_common::METRIC_MERAKI_UPLINK_FAILED;
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::new_v4(),
+                ScopeLevel::Global,
+                Vec::new(),
+                ThresholdRule::new(FAILED, ThresholdBounds::above(Some(0.5), None), 2),
+            )],
+            meta_for(node),
+        ));
+        mgr.record_row_names(node, &[name(FAILED, 1, "WAN1"), name(FAILED, 2, "WAN2")]);
+        let uplinks = |wan2: f64, at: i64| {
+            let mut r = result(node, CheckOutcome::Reachable, at);
+            r.observational = true;
+            r.judge_samples = true;
+            r.samples = vec![
+                Sample::interface(FAILED, IfIndex(1), 0.0, MetricKind::Gauge),
+                Sample::interface(FAILED, IfIndex(2), wan2, MetricKind::Gauge),
+            ];
+            r
+        };
+
+        assert!(
+            fires(&mgr.observe(&uplinks(1.0, 1))).is_empty(),
+            "one collect is not the dwell"
+        );
+        let actions = mgr.observe(&uplinks(1.0, 2));
+        let fired = fires(&actions);
+        assert_eq!(fired.len(), 1, "{actions:?}");
+        assert_eq!(fired[0].check, row_check_id(node, 2, FAILED));
+        assert_eq!(fired[0].row_name.as_deref(), Some("WAN2"));
+        assert_eq!(fired[0].severity, Severity::Warning);
+        assert!(
+            !mgr.states
+                .lock()
+                .unwrap()
+                .contains_key(&row_check_id(node, 1, FAILED)),
+            "the healthy uplink holds no state"
+        );
+
+        let mut closed = Vec::new();
+        for at in 3..=4 {
+            closed.extend(
+                resolves(&mgr.observe(&uplinks(0.0, at)))
+                    .iter()
+                    .map(|a| a.row),
+            );
+        }
+        assert_eq!(closed, vec![Some(2)], "closed on the readings, once");
+        assert!(mgr.active_alerts().is_empty());
+    }
+
     /// The ADR-077 failure, both directions, now structurally impossible: a bad row among good ones
     /// reaches its dwell, and two bad rows do not reach it in one poll.
     #[test]

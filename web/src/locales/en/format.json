@@ -49,6 +49,7 @@
     "meraki_device_up": "Availability",
     "meraki_uplink_sent_bps": "Uplink sent (bps)",
     "meraki_uplink_recv_bps": "Uplink received (bps)",
+    "meraki_uplink_failed": "Uplink failed",
     "meraki_uplink_loss_pct": "Uplink loss %",
     "meraki_uplink_latency_ms": "Uplink latency (ms)",
     "meraki_uplink_status": "Uplink status"

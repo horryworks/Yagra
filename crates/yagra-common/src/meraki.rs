@@ -34,8 +34,14 @@ pub const METRIC_MERAKI_LAST_SEEN_SECS: &str = "meraki_device_last_seen_secs";
 pub const METRIC_MERAKI_UPLINK_LOSS_PCT: &str = "meraki_uplink_loss_pct";
 /// Stable TSDB metric: per-uplink average latency in milliseconds.
 pub const METRIC_MERAKI_UPLINK_LATENCY_MS: &str = "meraki_uplink_latency_ms";
-/// Stable TSDB metric: per-uplink status (`active`=2, `ready`=1, otherwise 0).
+/// Stable TSDB metric: per-uplink status — `active` 2, `ready` 1, `not connected` / `connecting` /
+/// a word this build does not know 0, **`failed` −1** ([`MerakiUplinkStatus::gauge`]). Before ADR-164
+/// 決定 24 a failed uplink was stored as 0 as well, so older history cannot tell the two apart.
 pub const METRIC_MERAKI_UPLINK_STATUS: &str = "meraki_uplink_status";
+/// Stable TSDB metric: per-uplink `1` when the Dashboard reports the uplink `failed`, else `0` — what
+/// the seeded Meraki rule alerts on (ADR-164 決定 24). Emitted for every uplink status row, healthy
+/// ones included, so an open alert always has a reading to close on.
+pub const METRIC_MERAKI_UPLINK_FAILED: &str = "meraki_uplink_failed";
 /// Stable TSDB metric: per-uplink average send rate over the traffic collect's window, bits per
 /// second — an MX appliance's WAN uplinks only (`appliance/uplinks/usage/byNetwork`, ADR-164 決定
 /// 23).
@@ -121,14 +127,65 @@ pub fn uplink_name(ifindex: u32) -> Option<&'static str> {
     }
 }
 
-/// Encode a Meraki uplink status string as the `meraki_uplink_status` gauge value.
-#[must_use]
-pub fn uplink_status_value(status: &str) -> f64 {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "active" => 2.0,
-        "ready" => 1.0,
-        // connecting / not connected / failed / unknown
-        _ => 0.0,
+/// A WAN uplink's status word from `appliance/uplink/statuses` (ADR-164 決定 24).
+///
+/// `failed` and `not connected` used to be one number. Measured on a real organization (2026-09-22):
+/// on the online appliances every `not connected` uplink (284) had no address at all — a port with no
+/// line behind it — and `failed` was 2. A rule on the shared 0 would have raised ~300 false alarms
+/// and buried the two real ones. ⚠️ What an in-use uplink whose cable is pulled reports was never
+/// observed (no uplink changed state in a recorded hour), so an unplugged line may read as
+/// `NotConnected` and not alert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MerakiUplinkStatus {
+    /// Carrying traffic.
+    Active,
+    /// Up and standing by.
+    Ready,
+    /// Coming up.
+    Connecting,
+    /// No link — usually a port with no line behind it.
+    NotConnected,
+    /// The Dashboard says the uplink failed.
+    Failed,
+    /// A word this build does not know.
+    Other,
+}
+
+impl MerakiUplinkStatus {
+    /// Read the Dashboard's word (case and surrounding space ignored).
+    #[must_use]
+    pub fn from_word(word: &str) -> Self {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "active" => Self::Active,
+            "ready" => Self::Ready,
+            "connecting" => Self::Connecting,
+            "not connected" => Self::NotConnected,
+            "failed" => Self::Failed,
+            _ => Self::Other,
+        }
+    }
+
+    /// The `meraki_uplink_status` value: better is higher, and only `failed` is below zero — so an
+    /// operator's `below 0.5` rule still fires on both 0 and −1, exactly as before.
+    #[must_use]
+    pub fn gauge(self) -> f64 {
+        match self {
+            Self::Active => 2.0,
+            Self::Ready => 1.0,
+            Self::Connecting | Self::NotConnected | Self::Other => 0.0,
+            Self::Failed => -1.0,
+        }
+    }
+
+    /// Whether this is the one status the seeded rule alerts on.
+    #[must_use]
+    pub fn failed(self) -> bool {
+        match self {
+            Self::Failed => true,
+            Self::Active | Self::Ready | Self::Connecting | Self::NotConnected | Self::Other => {
+                false
+            }
+        }
     }
 }
 
@@ -237,11 +294,28 @@ mod tests {
     }
 
     #[test]
-    fn uplink_status_encoding() {
-        assert_eq!(uplink_status_value("active"), 2.0);
-        assert_eq!(uplink_status_value("Ready"), 1.0);
-        assert_eq!(uplink_status_value("failed"), 0.0);
-        assert_eq!(uplink_status_value("not connected"), 0.0);
+    fn uplink_status_words_become_the_gauge_and_the_failed_flag() {
+        // (word, gauge, failed)
+        for (word, gauge, failed) in [
+            ("active", 2.0, false),
+            ("Ready", 1.0, false),
+            ("connecting", 0.0, false),
+            ("not connected", 0.0, false),
+            (" Not Connected ", 0.0, false),
+            ("failed", -1.0, true),
+            ("FAILED", -1.0, true),
+            ("something new", 0.0, false),
+            ("", 0.0, false),
+        ] {
+            let s = MerakiUplinkStatus::from_word(word);
+            assert_eq!(s.gauge(), gauge, "{word:?}");
+            assert_eq!(s.failed(), failed, "{word:?}");
+        }
+        // The one distinction this exists for (ADR-164 決定 24).
+        assert_ne!(
+            MerakiUplinkStatus::from_word("failed").gauge(),
+            MerakiUplinkStatus::from_word("not connected").gauge()
+        );
     }
 
     #[test]

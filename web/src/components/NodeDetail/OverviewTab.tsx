@@ -589,8 +589,8 @@ function UrlHealth({
 }
 
 /** Cisco Meraki device health: availability (`meraki_device_up`) and, for an MX, one line per WAN
- *  uplink with its average send and receive rates over the traffic collect's interval (ADR-164
- *  増分 13). Shown only for Meraki nodes (the caller guards on `node.meraki_device`). What each line
+ *  uplink with its state and its average send and receive rates over the traffic collect's
+ *  interval (ADR-164 増分 13). Shown only for Meraki nodes (the caller guards on `node.meraki_device`). What each line
  *  says is decided in `merakiCard.ts`. */
 function MerakiHealth({
   nodeId,
@@ -611,13 +611,15 @@ function MerakiHealth({
         api.getNodeMetric(nodeId, MERAKI_CARD.up),
         api.getNodeMetric(nodeId, MERAKI_CARD.sentBps, { agg: 'max', rows: true }),
         api.getNodeMetric(nodeId, MERAKI_CARD.recvBps, { agg: 'max', rows: true }),
-      ]).then(([u, s, r]) => {
+        api.getNodeMetric(nodeId, MERAKI_CARD.status, { agg: 'max', rows: true }),
+      ]).then(([u, s, r, st]) => {
         if (cancelled) return;
         setUp(u.status === 'fulfilled' ? u.value.value : null);
         setUplinks(
           merakiUplinkLines(
             s.status === 'fulfilled' ? (s.value.rows ?? []) : [],
             r.status === 'fulfilled' ? (r.value.rows ?? []) : [],
+            st.status === 'fulfilled' ? (st.value.rows ?? []) : [],
           ),
         );
       });
@@ -651,9 +653,18 @@ function MerakiHealth({
         {uplinks.map((l) => (
           <div className="nd-health-metric" key={l.row}>
             <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.wanTraffic', { uplink: l.name })}</span>
+              <span className="nd-health-metric-label">{l.name}</span>
               <span className="nd-health-metric-value">
-                {formatBps(l.sentBps)} / {formatBps(l.recvBps)}
+                {l.state && (
+                  <span
+                    style={l.state === 'failed' ? { color: severityColorVar('critical') } : undefined}
+                  >
+                    {t(`overview.uplinkState.${l.state}`)}
+                  </span>
+                )}
+                {l.state && (l.sentBps != null || l.recvBps != null) && ' · '}
+                {(l.sentBps != null || l.recvBps != null) &&
+                  t('overview.wanRates', { sent: formatBps(l.sentBps), recv: formatBps(l.recvBps) })}
               </span>
             </div>
           </div>

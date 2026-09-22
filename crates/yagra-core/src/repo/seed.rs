@@ -333,6 +333,51 @@ impl NodeRepo {
                 .await?;
             }
         }
+        // 6b. Defaults for the built-in "Cisco Meraki MX (API)" profile (ADR-164 増分 13).
+        //
+        //    Offset 0 (決定 24): a WAN uplink the Dashboard reports `failed` ⇒ warning, after two
+        //    uplink collects in a row (ten minutes at the default 300 s). `meraki_uplink_failed` is a
+        //    0/1 gauge per uplink and `above` is inclusive, so the bound sits between the two states
+        //    at 0.5, as on every other seeded 0/1 gauge. Warning and not critical: an MX that lost a
+        //    line is still up, and one that is not raises critical through the availability tier.
+        //    `not connected` does not trip it — on a real organization every such uplink of an online
+        //    MX was a port with no line behind it (284), and a rule on them was ~300 false alarms.
+        //    It alerts per uplink, on the row path (ADR-143): the uplink is the samples' row key, and
+        //    its name (WAN1 / WAN2 / cellular) rides the result.
+        //
+        //    Offsets are explicit and append-only, for the reason given at 7 below.
+        if let Some(&mx_profile_id) =
+            profile_id_by_name.get(yagra_common::meraki::PROFILE_MERAKI_MX_API)
+        {
+            let scope_ids = vec![mx_profile_id.to_string()];
+            // (offset, metric, direction, warning, critical, dwell_samples)
+            let defaults = [(
+                0usize,
+                yagra_common::METRIC_MERAKI_UPLINK_FAILED,
+                "above",
+                Some(0.5),
+                None::<f64>,
+                2i32,
+            )];
+            for (offset, metric, direction, warning, critical, dwell) in defaults {
+                sqlx::query(
+                    "INSERT INTO thresholds \
+                        (id, scope_level, scope_id, scope_ids, metric, direction, warning, \
+                         critical, dwell_samples) \
+                     VALUES ($1, 'profile', $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING",
+                )
+                .bind(SeedRange::MerakiThresholds.id(offset))
+                .bind(&scope_ids[0])
+                .bind(&scope_ids)
+                .bind(metric)
+                .bind(direction)
+                .bind(warning)
+                .bind(critical)
+                .bind(dwell)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
         // 7. The fleet defaults (ADR-075) — `global` scope, so they reach every node including
         //    the ones no profile-scoped rule can: a node with no profile, and a node on a profile
         //    the operator created. Three rows, and each is an ordinary row: editable per scope,
@@ -493,6 +538,67 @@ mod tests {
             before.iter().all(|(_, keys)| !keys.is_empty()),
             "a table was compared while empty: {before:?}"
         );
+    }
+
+    /// **The Meraki MX profile gets its failed-uplink rule, and nothing else does** (ADR-164 決定 24).
+    ///
+    /// The bound is the thing to pin: `meraki_uplink_failed` is a 0/1 gauge, and a seed row is
+    /// `ON CONFLICT DO NOTHING`, so a wrong bound shipped once needs a corrective migration.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_meraki_mx_profile_gets_its_failed_uplink_rule_and_no_other_profile_does(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.seed_builtin_profiles().await.expect("seed");
+        let profiles = yagra_common::builtin_profiles();
+        let mx = profiles
+            .iter()
+            .position(|p| p.name == yagra_common::meraki::PROFILE_MERAKI_MX_API)
+            .map(|i| SeedRange::Profiles.id(i).to_string())
+            .expect("the MX API profile is built in");
+
+        // (scope_level, scope_id, scope_ids, metric, direction, warning, critical, dwell_samples)
+        type Seeded = (
+            String,
+            String,
+            Vec<String>,
+            String,
+            String,
+            Option<f64>,
+            Option<f64>,
+            i32,
+        );
+        let row: Seeded = sqlx::query_as(
+            "SELECT scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
+                        dwell_samples FROM thresholds WHERE id = $1",
+        )
+        .bind(SeedRange::MerakiThresholds.id(0))
+        .fetch_one(&pool)
+        .await
+        .expect("the seeded Meraki rule");
+        assert_eq!(
+            row,
+            (
+                "profile".to_owned(),
+                mx.clone(),
+                vec![mx.clone()],
+                yagra_common::METRIC_MERAKI_UPLINK_FAILED.to_owned(),
+                "above".to_owned(),
+                Some(0.5),
+                None,
+                2
+            )
+        );
+        let elsewhere: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thresholds WHERE metric = $1 AND scope_id <> $2",
+        )
+        .bind(yagra_common::METRIC_MERAKI_UPLINK_FAILED)
+        .bind(&mx)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+        assert_eq!(elsewhere, 0, "only the MX profile reports an uplink");
     }
 
     /// **Migration 0114 replaces a built-in classification rule only while it is still what Yagra

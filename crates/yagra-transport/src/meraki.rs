@@ -32,9 +32,10 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 use yagra_common::{
-    is_meraki_api_host, uplink_ifindex, uplink_name, uplink_status_value, MerakiTier,
-    METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT,
-    METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS, METRIC_MERAKI_UPLINK_STATUS,
+    is_meraki_api_host, uplink_ifindex, uplink_name, MerakiTier, MerakiUplinkStatus,
+    METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_FAILED, METRIC_MERAKI_UPLINK_LATENCY_MS,
+    METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS,
+    METRIC_MERAKI_UPLINK_STATUS,
 };
 
 /// Dashboard API v1 path prefix (appended to the org's `base_url`).
@@ -937,19 +938,32 @@ fn parse_uplink_statuses(items: &[Value]) -> Vec<DeviceDatum> {
             let Some(ifindex) = uplink_ifindex(iface) else {
                 continue;
             };
-            let status = u.get("status").and_then(Value::as_str).unwrap_or("");
-            out.push(DeviceDatum {
-                serial: serial.to_owned(),
-                sample: MerakiSample {
-                    metric: METRIC_MERAKI_UPLINK_STATUS.to_owned(),
-                    ifindex: Some(ifindex),
-                    value: uplink_status_value(status),
-                },
-                uplink: Some(MerakiUplink {
-                    ifindex,
-                    name: uplink_name(ifindex).unwrap_or(iface).to_owned(),
-                }),
-            });
+            let status = MerakiUplinkStatus::from_word(
+                u.get("status").and_then(Value::as_str).unwrap_or(""),
+            );
+            let meta = MerakiUplink {
+                ifindex,
+                name: uplink_name(ifindex).unwrap_or(iface).to_owned(),
+            };
+            // The status for the chart, and the failed flag the seeded rule reads — the second on
+            // every row, healthy ones too, so an open alert has a reading to close on (決定 24).
+            for (metric, value) in [
+                (METRIC_MERAKI_UPLINK_STATUS, status.gauge()),
+                (
+                    METRIC_MERAKI_UPLINK_FAILED,
+                    if status.failed() { 1.0 } else { 0.0 },
+                ),
+            ] {
+                out.push(DeviceDatum {
+                    serial: serial.to_owned(),
+                    sample: MerakiSample {
+                        metric: metric.to_owned(),
+                        ifindex: Some(ifindex),
+                        value,
+                    },
+                    uplink: Some(meta.clone()),
+                });
+            }
         }
     }
     out
@@ -1643,6 +1657,37 @@ mod tests {
             "timeSeries": [{"lossPercent": 1.0, "latencyMs": 5.0}]
         })];
         assert!(parse_uplink_loss_latency(&items).is_empty());
+    }
+
+    /// ADR-164 決定 24: `failed` and `not connected` are different numbers, and the failed flag is
+    /// on every uplink row — 0 on the healthy ones — so an alert on it always has something to
+    /// close on.
+    #[test]
+    fn uplink_statuses_emit_a_status_and_a_failed_flag_per_uplink() {
+        let items = vec![json!({
+            "serial": "Q2-A", "networkId": "N_1",
+            "highAvailability": {"enabled": true, "role": "primary"},
+            "uplinks": [
+                {"interface": "wan1", "status": "active"},
+                {"interface": "wan2", "status": "failed"},
+                {"interface": "cellular", "status": "not connected"}
+            ]
+        })];
+        let obs = fold(parse_uplink_statuses(&items));
+        let value = |metric: &str, ifindex: u32| {
+            obs[0]
+                .samples
+                .iter()
+                .find(|s| s.metric == metric && s.ifindex == Some(ifindex))
+                .map(|s| s.value)
+        };
+        assert_eq!(value(METRIC_MERAKI_UPLINK_STATUS, 1), Some(2.0));
+        assert_eq!(value(METRIC_MERAKI_UPLINK_STATUS, 2), Some(-1.0));
+        assert_eq!(value(METRIC_MERAKI_UPLINK_STATUS, 3), Some(0.0));
+        assert_eq!(value(METRIC_MERAKI_UPLINK_FAILED, 1), Some(0.0));
+        assert_eq!(value(METRIC_MERAKI_UPLINK_FAILED, 2), Some(1.0));
+        assert_eq!(value(METRIC_MERAKI_UPLINK_FAILED, 3), Some(0.0));
+        assert_eq!(obs[0].samples.len(), 6);
     }
 
     #[test]

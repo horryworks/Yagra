@@ -10,8 +10,13 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`meraki_uplink_status` stores a failed uplink as −1 (it was 0).** 0 now means not connected or connecting — on a real organization almost always a port with no line behind it — and a failed uplink was indistinguishable from one. Active is still 2 and ready 1. A rule an operator wrote as `below 0.5` still fires on both, exactly as before; history recorded before this change holds 0 for both.
+
 ### New Features
 
+- **A failed Meraki MX WAN uplink raises a warning, named after the uplink.** The new `meraki_uplink_failed` (1 per uplink the Dashboard reports failed, 0 otherwise) carries a default rule on the built-in "Cisco Meraki MX (API)" profile — warning after two uplink collects in a row. A port with no line (not connected) does not trip it. Per-uplink readings and alerts now carry the uplink's name (WAN1, WAN2, cellular), so a rule can be narrowed to one uplink with a row pattern, and a Meraki MX node's card shows each uplink's state beside its rates. ⚠️ What an in-use uplink whose cable is pulled reports has not been observed; if the Dashboard calls it not connected, this rule stays quiet for it.
 - **Cisco wireless controllers show clients per band and how many access points the platform supports** (ADR-064 increment H). A Cisco controller now publishes `wlan_controller_clients_2g4`, `wlan_controller_clients_5g` and `wlan_controller_clients_6g` — the clients on every radio in each band, added up — beside the totals it already had, and `wlan_controller_ap_capacity`, the most access points the model supports (150 on an AIR-CT3504). The capacity is the platform's ceiling, not the licence count, and has its own name for that reason; AireOS and the Catalyst 9800 keep it in different objects and Yagra reads whichever answers. A radio whose band cannot be told is left out, so the three bands need not add up to the overall client count. Other Huawei controller readings — configured APs, the share of APs working normally, per-SSID AP counts and traffic — have no Cisco equivalent and are not shown.
 - **`GET /api/v1/nodes/{node_id}/metrics` and MCP `list_node_metrics` name the metric set each metric comes from** in a new optional `template` field. It is absent for a node's own collection items and for metrics no collection item produces.
 

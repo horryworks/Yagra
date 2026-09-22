@@ -82,7 +82,7 @@ impl CheckFamily {
 ///
 /// `__liveness__` is the one row with no family: it is the liveness rule's sentinel, not a
 /// series, so the catalog generator skips it and no Overview card can ever carry it.
-pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 28] = [
+pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 32] = [
     ("__liveness__", None),
     ("icmp_rtt_ms", Some(CheckFamily::Icmp)),
     ("icmp_loss_pct", Some(CheckFamily::Icmp)),
@@ -102,9 +102,13 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 28] = [
     ("dns_answer_count", Some(CheckFamily::Dns)),
     ("dns_chain_length", Some(CheckFamily::Dns)),
     ("meraki_device_up", Some(CheckFamily::Meraki)),
-    // An MX's WAN uplinks, one row each (ADR-164 決定 23).
+    // An MX's WAN uplinks, one row each (ADR-164 決定 23 and 24).
     ("meraki_uplink_sent_bps", Some(CheckFamily::Meraki)),
     ("meraki_uplink_recv_bps", Some(CheckFamily::Meraki)),
+    ("meraki_uplink_status", Some(CheckFamily::Meraki)),
+    ("meraki_uplink_failed", Some(CheckFamily::Meraki)),
+    ("meraki_uplink_loss_pct", Some(CheckFamily::Meraki)),
+    ("meraki_uplink_latency_ms", Some(CheckFamily::Meraki)),
     // An imported AP's numbers, published by core from its controller's AP walk (ADR-064 B2) —
     // collected by no template of the AP's own, which is why they are listed here.
     ("wlan_ap_up", Some(CheckFamily::Wlan)),
@@ -122,10 +126,10 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 28] = [
 /// that makes [`METRIC_MEANINGS`] checkable — without the list, a sentence for a metric nothing
 /// collects would look identical to a sentence for one that does. Derived from the family table
 /// so the two cannot disagree about a name.
-pub const CHECK_METRICS: [&str; 28] = check_names(&CHECK_FAMILIES);
+pub const CHECK_METRICS: [&str; 32] = check_names(&CHECK_FAMILIES);
 
-const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 28]) -> [&'static str; 28] {
-    let mut out = [""; 28];
+const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 32]) -> [&'static str; 32] {
+    let mut out = [""; 32];
     let mut i = 0;
     while i < rows.len() {
         out[i] = rows[i].0;
@@ -231,7 +235,7 @@ impl MetricUnit {
 /// already pins this table to the collection catalogue in **both** directions, so a new metric now
 /// fails to compile until someone decides its unit. That guarantee is bought, not built — there is
 /// no separate check for units and there should not be one.
-pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 142] = [
+pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 146] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.", MetricUnit::None),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).", MetricUnit::Counted("connections")),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.", MetricUnit::None),
@@ -302,8 +306,12 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 142] = [
     ("juniper_cpu_1min", "CPU utilisation in percent (jnxOperatingCPU). ⚠️ Despite the metric name this is the instantaneous value, not a one-minute average, so it is spikier than a load figure.", MetricUnit::Symbol("%")),
     ("juniper_temp", "Temperature in degrees Celsius (jnxOperatingTemp). One row per operating subject.", MetricUnit::Symbol("°C")),
     ("meraki_device_up", "Does the Meraki dashboard report the device online. 1 = online, 0 = offline.", MetricUnit::None),
+    ("meraki_uplink_failed", "Does the Meraki dashboard report this WAN uplink of an MX failed. 1 = failed, 0 = any other status — including not connected, which on a real organization was almost always a port with no line behind it. One row per uplink.", MetricUnit::None),
+    ("meraki_uplink_latency_ms", "Latency of one WAN uplink of a Meraki MX to the Dashboard's test address, in milliseconds — the latest minute the Dashboard reported. One row per uplink.", MetricUnit::Symbol("ms")),
+    ("meraki_uplink_loss_pct", "Packet loss of one WAN uplink of a Meraki MX to the Dashboard's test address, in percent — the latest minute the Dashboard reported. One row per uplink.", MetricUnit::Symbol("%")),
     ("meraki_uplink_recv_bps", "Receive rate of one WAN uplink of a Meraki MX (WAN1, WAN2 or cellular), in bits per second — the average over the traffic collect's interval, not a peak. One row per uplink. The Dashboard reports it for MX appliances only.", MetricUnit::Symbol("bps")),
     ("meraki_uplink_sent_bps", "Send rate of one WAN uplink of a Meraki MX (WAN1, WAN2 or cellular), in bits per second — the average over the traffic collect's interval, not a peak. One row per uplink. The Dashboard reports it for MX appliances only.", MetricUnit::Symbol("bps")),
+    ("meraki_uplink_status", "Status of one WAN uplink of a Meraki MX: 2 = active, 1 = ready (standing by), 0 = not connected or connecting, −1 = failed. Before this build a failed uplink was also stored as 0. One row per uplink.", MetricUnit::None),
     ("mikrotik_cpu_temp", "Temperature reported by RouterOS (mtxrHlTemperature). ⚠️ Some models report degrees Celsius and others tenths of a degree — read the live value once before choosing a bound.", MetricUnit::None),
     ("mikrotik_voltage", "Input voltage reported by RouterOS (mtxrHlVoltage). ⚠️ Usually tenths of a volt, so 240 means 24.0 V — confirm against the live value.", MetricUnit::None),
     ("nxos_cpu_util", "CPU utilisation of the supervisor, in percent (NX-OS).", MetricUnit::Symbol("%")),

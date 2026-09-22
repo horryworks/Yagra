@@ -1853,9 +1853,11 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
         // Cisco Meraki (Dashboard API) profiles — distinct from the SNMP "Cisco Meraki MX/MS"
         // profiles above. These devices are polled over the cloud Dashboard API (org-scoped
         // collector), not SNMP, so they carry NO collection templates; the per-org collector emits
-        // the metrics and the profile only groups these nodes + hosts their default thresholds
-        // (device up / uplink loss/latency, seeded in core). Kept at the array end for seed-id
-        // stability. Roles mirror category_for_product_type(): MX→firewall, MS→switch, MR→AP.
+        // the metrics and the profile only groups these nodes. The MX one also hosts the seeded
+        // Meraki thresholds (`SeedRange::MerakiThresholds`, ADR-164 増分 13); MS and MR have none —
+        // a Meraki device's liveness comes from the global rule, fed by the availability tier.
+        // Kept at the array end for seed-id stability. Roles mirror category_for_product_type():
+        // MX→firewall, MS→switch, MR→AP.
         prof(
             crate::meraki::PROFILE_MERAKI_MX_API,
             C::Firewall,

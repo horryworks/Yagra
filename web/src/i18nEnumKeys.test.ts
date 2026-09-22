@@ -91,6 +91,7 @@ import {
 } from './troubleshoot/report/format';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { MERAKI_TIERS } from './pages/merakiTiers';
+import { MERAKI_UPLINK_STATES } from './components/NodeDetail/merakiCard';
 import { MERAKI_REGION_KEYS } from './pages/integrations/merakiRegions';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
 import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
@@ -906,6 +907,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // had strings, so an org with `inventory` enabled showed the operator the raw key. The cadence
     // dialog's checkboxes are a deliberate subset (`SELECTABLE_MERAKI_TIERS`); the *labels* are not.
     expectKeys('meraki tier', { en: enSystem, ja: jaSystem }, 'meraki.tier.', MERAKI_TIERS);
+  });
+
+  it('every Meraki uplink state has a word (nodes:overview.uplinkState.*)', () => {
+    // The Meraki card renders `overview.uplinkState.<state>` for each WAN uplink (ADR-164 決定 24).
+    // A state added to the decoder without its word would show the operator the raw key.
+    expectKeys(
+      'meraki uplink state',
+      { en: enNodes, ja: jaNodes },
+      'overview.uplinkState.',
+      MERAKI_UPLINK_STATES,
+    );
   });
 
   it('every Meraki API region has a label (system:meraki.regions.*)', () => {
