@@ -29,7 +29,7 @@ use crate::{
 };
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 use yagra_common::{
     is_meraki_api_host, uplink_ifindex, uplink_name, uplink_status_value, MerakiTier,
@@ -698,11 +698,14 @@ pub(crate) async fn collect(
     // The FIRST reason a listing of this collect stopped early. One is enough: what core asks
     // of it is "did the Dashboard answer", and a second stop after the first adds nothing.
     let mut stopped: Option<MerakiFetchError> = None;
-    let net_query: Vec<(&str, String)> = spec
-        .network_ids
-        .iter()
-        .map(|n| ("networkIds[]", n.clone()))
-        .collect();
+    // Every listing asks the WHOLE organization and keeps the watched networks' rows here
+    // (ADR-164 決定 22). Sending the networks as `networkIds[]` is what the Dashboard documents and
+    // what it refuses: its nginx answers 414 past a request target of 8,177 characters (measured
+    // 2026-09-22), which about two hundred network ids reach — and a new organization watches every
+    // network it has. Two of the four listings ignored the filter anyway: `uplinksLossAndLatency`
+    // and `byUsage` answered the whole organization when asked about one network.
+    let watched = Watched::new(&spec.network_ids);
+    let no_query: [(&str, String); 0] = [];
 
     let mut data: Vec<DeviceDatum> = Vec::new();
     match spec.tier {
@@ -712,44 +715,42 @@ pub(crate) async fn collect(
                 spec.org_id
             );
             let (items, stop) = session
-                .get_paged_reported(&path, &net_query, spec.per_page)
+                .get_paged_reported(&path, &no_query, spec.per_page)
                 .await?;
             stopped = stopped.or(stop);
-            data.extend(parse_availability(&items));
+            data.extend(parse_availability(&watched.keep(items)));
         }
         MerakiTier::Uplink => {
             let loss_path = format!(
                 "{API_PREFIX}/organizations/{}/devices/uplinksLossAndLatency",
                 spec.org_id
             );
-            let mut q = net_query.clone();
-            q.push(("timespan", "300".to_owned()));
+            let q = [("timespan", "300".to_owned())];
             let (items, stop) = session
                 .get_paged_reported(&loss_path, &q, spec.per_page)
                 .await?;
             stopped = stopped.or(stop);
-            data.extend(parse_uplink_loss_latency(&items));
+            data.extend(parse_uplink_loss_latency(&watched.keep(items)));
 
             let status_path = format!(
                 "{API_PREFIX}/organizations/{}/appliance/uplink/statuses",
                 spec.org_id
             );
             let (items, stop) = session
-                .get_paged_reported(&status_path, &net_query, spec.per_page)
+                .get_paged_reported(&status_path, &no_query, spec.per_page)
                 .await?;
             stopped = stopped.or(stop);
-            data.extend(parse_uplink_statuses(&items));
+            data.extend(parse_uplink_statuses(&watched.keep(items)));
         }
         MerakiTier::Traffic => {
             let path = format!(
                 "{API_PREFIX}/organizations/{}/summary/top/devices/byUsage",
                 spec.org_id
             );
-            let mut q = net_query.clone();
-            q.push(("timespan", "3600".to_owned()));
+            let q = [("timespan", "3600".to_owned())];
             let (items, stop) = session.get_paged_reported(&path, &q, spec.per_page).await?;
             stopped = stopped.or(stop);
-            data.extend(parse_traffic(&items));
+            data.extend(parse_traffic(&watched.keep(items)));
         }
         // The inventory is read by core's periodic sync (`fetch_inventory`), not by a collect —
         // nothing to gather here.
@@ -758,6 +759,39 @@ pub(crate) async fn collect(
     Ok(MerakiCollected {
         observations: fold(data),
         stopped,
+    })
+}
+
+/// The networks a collect reports on (ADR-164 決定 22). **Empty means every network** — the bus's
+/// reading of an empty list, which core no longer sends (決定 16) but which a message omitting the
+/// field still decodes to.
+struct Watched<'a>(HashSet<&'a str>);
+
+impl<'a> Watched<'a> {
+    fn new(ids: &'a [String]) -> Self {
+        Self(ids.iter().map(String::as_str).collect())
+    }
+
+    /// The rows of an organization-wide answer that belong to a watched network. A row naming no
+    /// network is dropped: nothing places it in a watched one.
+    fn keep(&self, items: Vec<Value>) -> Vec<Value> {
+        if self.0.is_empty() {
+            return items;
+        }
+        items
+            .into_iter()
+            .filter(|it| row_network(it).is_some_and(|n| self.0.contains(n)))
+            .collect()
+    }
+}
+
+/// A row's network: `networkId` on the two uplink listings, `network.id` on availabilities and
+/// byUsage. Measured on a real organization (2026-09-22): every row of all four carried one.
+fn row_network(it: &Value) -> Option<&str> {
+    it.get("networkId").and_then(Value::as_str).or_else(|| {
+        it.get("network")
+            .and_then(|n| n.get("id"))
+            .and_then(Value::as_str)
     })
 }
 

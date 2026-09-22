@@ -2091,7 +2091,10 @@ pub struct MerakiCollectCheck {
     /// serial → node_id map for this org (only in-scope devices; empty ⇒ nothing to attribute).
     #[serde(default)]
     pub devices: Vec<MerakiDeviceRef>,
-    /// Meraki networkIds in scope (narrows API calls where supported; empty ⇒ all).
+    /// The Meraki networks this collect reports on (empty ⇒ all). A poller keeps only their rows;
+    /// since ADR-164 決定 22 it asks the whole organization and filters itself, because the
+    /// Dashboard refuses a URL carrying a couple of hundred `networkIds[]` (414). A poller from
+    /// before that sends them in the URL and still fails that way until it is upgraded.
     ///
     /// ⚠️ Core no longer sends an empty list (ADR-164 決定 16): an organization that watches no
     /// network gets no collect at all. The "empty ⇒ all" reading stays, because a poller from

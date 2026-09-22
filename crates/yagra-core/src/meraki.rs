@@ -213,7 +213,8 @@ pub enum NoCollect {
     Unreadable,
 }
 
-/// The networks a collect for one organization may ask about — or why none is sent (ADR-164 決定 16).
+/// The networks a collect for one organization reports on — or why none is sent (ADR-164 決定 16).
+/// The poller asks the whole organization and keeps these networks' rows (決定 22).
 ///
 /// 🚨 **An empty list must never reach the poller.** On the bus an empty `network_ids` means
 /// "every network" (`yagra_bus::MerakiCollectCheck`), and a poller from before this change still

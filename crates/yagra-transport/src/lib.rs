@@ -276,7 +276,10 @@ pub struct MerakiCollectSpec {
     pub api_key: String,
     /// Which tier of endpoints to page this cycle.
     pub tier: MerakiTier,
-    /// Networks in scope (narrows `networkIds[]` where supported; empty ⇒ all).
+    /// The watched networks: a collect keeps only these networks' rows (empty ⇒ all). It asks the
+    /// whole organization and filters here, never sending them as `networkIds[]` — the Dashboard
+    /// refuses a request target past 8,177 characters, which a couple of hundred network ids reach
+    /// (ADR-164 決定 22).
     pub network_ids: Vec<String>,
     /// Page-size cap for paginated endpoints.
     pub per_page: u32,

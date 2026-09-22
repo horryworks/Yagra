@@ -160,14 +160,21 @@ fn spec(tier: MerakiTier, networks: &[&str]) -> MerakiCollectSpec {
     }
 }
 
-/// The logical URL of the availability collect's first page for network `N_1`.
-const AVAILABILITY_N1: &str =
-    "https://api.meraki.com/api/v1/organizations/1/devices/availabilities?networkIds%5B%5D=N_1&perPage=1000";
-const AVAILABILITY_N1_LINE: &str =
-    "GET /api/v1/organizations/1/devices/availabilities?networkIds%5B%5D=N_1&perPage=1000 HTTP/1.1";
+/// The logical URL of the availability collect's first page. It names no network, whichever are
+/// watched: a collect asks the whole organization and keeps the watched rows (ADR-164 決定 22).
+const AVAILABILITY: &str =
+    "https://api.meraki.com/api/v1/organizations/1/devices/availabilities?perPage=1000";
+const AVAILABILITY_LINE: &str =
+    "GET /api/v1/organizations/1/devices/availabilities?perPage=1000 HTTP/1.1";
 
+/// An availability row in the Dashboard's shape — the network is an object, `network.id`.
+fn device_up_in(serial: &str, network: &str) -> String {
+    format!(r#"{{"serial":"{serial}","status":"online","network":{{"id":"{network}"}}}}"#)
+}
+
+/// An online device in network `N_1`, the network most tests watch.
 fn device_up(serial: &str) -> String {
-    format!(r#"{{"serial":"{serial}","status":"online"}}"#)
+    device_up_in(serial, "N_1")
 }
 
 #[tokio::test]
@@ -239,7 +246,7 @@ async fn listing_organizations_goes_through_the_wire_origin() {
 
 #[tokio::test]
 async fn a_next_link_to_a_regional_shard_is_followed_and_sent_to_the_wire_origin() {
-    let shard = "https://n123.meraki.com/api/v1/organizations/1/devices/availabilities?networkIds%5B%5D=N_1&perPage=1000&startingAfter=Q2XX-TEST-0001";
+    let shard = "https://n123.meraki.com/api/v1/organizations/1/devices/availabilities?perPage=1000&startingAfter=Q2XX-TEST-0001";
     let (origin, addr, seen) = serve(vec![
         Reply::ok(&format!("[{}]", device_up("Q2XX-TEST-0001"))).next(shard),
         Reply::ok(&format!("[{}]", device_up("Q2XX-TEST-0002"))),
@@ -260,7 +267,7 @@ async fn a_next_link_to_a_regional_shard_is_followed_and_sent_to_the_wire_origin
     assert_eq!(seen_lines.len(), 2);
     assert_eq!(
         seen_lines[1],
-        "GET /api/v1/organizations/1/devices/availabilities?networkIds%5B%5D=N_1&perPage=1000&startingAfter=Q2XX-TEST-0001 HTTP/1.1"
+        "GET /api/v1/organizations/1/devices/availabilities?perPage=1000&startingAfter=Q2XX-TEST-0001 HTTP/1.1"
     );
     // The shard host was checked and then replaced like any other.
     assert_eq!(header(&seen, 1, "host"), Some(addr.to_string()));
@@ -299,7 +306,7 @@ async fn a_next_link_naming_the_page_just_fetched_stops_as_a_cycle() {
         "[{}]",
         device_up("Q2XX-TEST-0001")
     ))
-    .next(AVAILABILITY_N1)])
+    .next(AVAILABILITY)])
     .await;
 
     let got = collect(
@@ -312,7 +319,7 @@ async fn a_next_link_naming_the_page_just_fetched_stops_as_a_cycle() {
 
     assert_eq!(got.stopped, Some(MerakiFetchError::Truncated));
     assert_eq!(got.observations.len(), 1, "page one is kept");
-    assert_eq!(lines(&seen), vec![AVAILABILITY_N1_LINE]);
+    assert_eq!(lines(&seen), vec![AVAILABILITY_LINE]);
 }
 
 #[tokio::test]
@@ -333,10 +340,7 @@ async fn a_429_is_retried_on_the_same_request_and_then_answered() {
 
     assert_eq!(got.stopped, None);
     assert_eq!(got.observations.len(), 1);
-    assert_eq!(
-        lines(&seen),
-        vec![AVAILABILITY_N1_LINE, AVAILABILITY_N1_LINE]
-    );
+    assert_eq!(lines(&seen), vec![AVAILABILITY_LINE, AVAILABILITY_LINE]);
 }
 
 #[tokio::test]
@@ -406,7 +410,7 @@ async fn a_redirect_is_not_followed() {
 
 #[tokio::test]
 async fn a_500_on_page_two_keeps_page_one_for_a_collect_and_fails_the_inventory() {
-    let page2 = format!("{AVAILABILITY_N1}&startingAfter=Q2XX-TEST-0001");
+    let page2 = format!("{AVAILABILITY}&startingAfter=Q2XX-TEST-0001");
     let (origin, _, _) = serve(vec![
         Reply::ok(&format!("[{}]", device_up("Q2XX-TEST-0001"))).next(&page2),
         Reply::json(500, r#"{"errors":["internal"]}"#),
@@ -460,9 +464,106 @@ async fn a_wire_origin_does_not_admit_a_base_url_the_allow_list_refuses() {
     assert!(lines(&seen).is_empty(), "nothing was sent anywhere");
 }
 
+/// The serials a collect observed, in its (sorted) order.
+fn serials(got: &crate::MerakiCollected) -> Vec<&str> {
+    got.observations.iter().map(|o| o.serial.as_str()).collect()
+}
+
+/// Three devices in three networks, and one whose row names no network at all.
+fn four_devices() -> String {
+    format!(
+        "[{},{},{},{}]",
+        device_up_in("Q2XX-TEST-0001", "N_1"),
+        device_up_in("Q2XX-TEST-0002", "N_2"),
+        device_up_in("Q2XX-TEST-0009", "N_9"),
+        r#"{"serial":"Q2XX-TEST-0010","status":"online"}"#,
+    )
+}
+
 #[tokio::test]
-async fn the_uplink_tier_sends_exactly_the_query_the_dashboard_documents() {
-    let (origin, _, seen) = serve(vec![Reply::ok("[]"), Reply::ok("[]")]).await;
+async fn a_collect_asks_the_whole_organization_and_keeps_only_the_watched_networks() {
+    let (origin, _, seen) = serve(vec![Reply::ok(&four_devices())]).await;
+
+    let got = collect(
+        &spec(MerakiTier::Availability, &["N_1", "N_2"]),
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a collect");
+
+    assert_eq!(
+        serials(&got),
+        vec!["Q2XX-TEST-0001", "Q2XX-TEST-0002"],
+        "an unwatched network's device and one naming no network are dropped"
+    );
+    assert_eq!(
+        lines(&seen),
+        vec![AVAILABILITY_LINE],
+        "no network in the URL"
+    );
+}
+
+/// On the bus an empty list means every network (ADR-164 決定 16). Core no longer sends one, but a
+/// message omitting the field still decodes to it, so it must keep meaning what it always meant.
+#[tokio::test]
+async fn an_empty_network_list_keeps_every_row() {
+    let (origin, _, seen) = serve(vec![Reply::ok(&four_devices())]).await;
+
+    let got = collect(&spec(MerakiTier::Availability, &[]), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+
+    assert_eq!(
+        serials(&got),
+        vec![
+            "Q2XX-TEST-0001",
+            "Q2XX-TEST-0002",
+            "Q2XX-TEST-0009",
+            "Q2XX-TEST-0010"
+        ]
+    );
+    assert_eq!(lines(&seen), vec![AVAILABILITY_LINE]);
+}
+
+/// 🚨 **The 414 this replaced.** The Dashboard's nginx refuses a request target past 8,177
+/// characters (measured 2026-09-22); 434 network ids of the real length made the old query 16,662
+/// characters, so every collect of that organization failed. The request must not grow with the
+/// number of watched networks at all.
+#[tokio::test]
+async fn hundreds_of_watched_networks_do_not_lengthen_the_request() {
+    let many: Vec<String> = (0..500).map(|i| format!("L_{i:018}")).collect();
+    let watched: Vec<&str> = many.iter().map(String::as_str).collect();
+    let (origin, _, seen) = serve(vec![Reply::ok(&format!(
+        "[{}]",
+        device_up_in("Q2XX-TEST-0001", &many[499])
+    ))])
+    .await;
+
+    let got = collect(
+        &spec(MerakiTier::Availability, &watched),
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a collect");
+
+    assert_eq!(serials(&got), vec!["Q2XX-TEST-0001"]);
+    assert_eq!(lines(&seen), vec![AVAILABILITY_LINE]);
+}
+
+#[tokio::test]
+async fn the_uplink_tier_asks_the_whole_organization_and_keeps_the_watched_networks() {
+    // Both uplink listings name the network as `networkId`, not `network.id`.
+    let loss = r#"[
+        {"networkId":"N_1","serial":"Q2XX-TEST-0001","uplink":"wan1","ip":"192.0.2.1",
+         "timeSeries":[{"ts":"2026-09-22T00:00:00Z","lossPercent":0.0,"latencyMs":12.5}]},
+        {"networkId":"N_9","serial":"Q2XX-TEST-0009","uplink":"wan1","ip":"192.0.2.9",
+         "timeSeries":[{"ts":"2026-09-22T00:00:00Z","lossPercent":1.0,"latencyMs":30.0}]}]"#;
+    let statuses = r#"[
+        {"networkId":"N_2","serial":"Q2XX-TEST-0002","uplinks":[{"interface":"wan1","status":"active"}]},
+        {"networkId":"N_9","serial":"Q2XX-TEST-0009","uplinks":[{"interface":"wan1","status":"active"}]}]"#;
+    let (origin, _, seen) = serve(vec![Reply::ok(loss), Reply::ok(statuses)]).await;
 
     let got = collect(
         &spec(MerakiTier::Uplink, &["N_1", "N_2"]),
@@ -473,11 +574,39 @@ async fn the_uplink_tier_sends_exactly_the_query_the_dashboard_documents() {
     .expect("a collect");
 
     assert_eq!(got.stopped, None);
+    assert_eq!(serials(&got), vec!["Q2XX-TEST-0001", "Q2XX-TEST-0002"]);
     assert_eq!(
         lines(&seen),
         vec![
-            "GET /api/v1/organizations/1/devices/uplinksLossAndLatency?networkIds%5B%5D=N_1&networkIds%5B%5D=N_2&timespan=300&perPage=1000 HTTP/1.1",
-            "GET /api/v1/organizations/1/appliance/uplink/statuses?networkIds%5B%5D=N_1&networkIds%5B%5D=N_2&perPage=1000 HTTP/1.1",
+            "GET /api/v1/organizations/1/devices/uplinksLossAndLatency?timespan=300&perPage=1000 HTTP/1.1",
+            "GET /api/v1/organizations/1/appliance/uplink/statuses?perPage=1000 HTTP/1.1",
         ]
+    );
+}
+
+/// ⚠️ Deliberately silent on `timespan`: the value sent today (3600) is one the real Dashboard
+/// refuses (400, minimum 28800 — measured 2026-09-22), and a test pinning it would pin the defect.
+/// What this holds is the part that is right: no network in the URL, and the watched rows kept.
+#[tokio::test]
+async fn the_traffic_tier_keeps_the_watched_networks_rows() {
+    let rows = r#"[
+        {"serial":"Q2XX-TEST-0001","network":{"id":"N_1","name":"site-a"},
+         "usage":{"sent":10.0,"recv":20.0},"clients":{"counts":{"total":3}}},
+        {"serial":"Q2XX-TEST-0009","network":{"id":"N_9","name":"site-z"},
+         "usage":{"sent":99.0,"recv":99.0},"clients":{"counts":{"total":9}}}]"#;
+    let (origin, _, seen) = serve(vec![Reply::ok(rows)]).await;
+
+    let got = collect(&spec(MerakiTier::Traffic, &["N_1"]), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+
+    assert_eq!(serials(&got), vec!["Q2XX-TEST-0001"]);
+    let sent = lines(&seen);
+    assert_eq!(sent.len(), 1);
+    assert!(
+        sent[0].starts_with("GET /api/v1/organizations/1/summary/top/devices/byUsage?")
+            && !sent[0].contains("networkId"),
+        "{}",
+        sent[0]
     );
 }
