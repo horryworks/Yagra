@@ -19,7 +19,7 @@
 //! and explains in its own `.env` that "the central Auth Callout scopes this connection's
 //! permissions" on that id — and the only thing that can validate such a token is the callout the
 //! product does not enable. A remote poller was refused with
-//! `authentication error - User "yagra-poller2a"`. The artefact declared a precondition nothing
+//! `authentication error - User "site-poller-a"`. The artefact declared a precondition nothing
 //! created.
 //!
 //! ## Why the issuer is written into its own file

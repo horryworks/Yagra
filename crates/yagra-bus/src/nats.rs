@@ -40,7 +40,7 @@ pub const POLLER_QUEUE: &str = "pollers";
 /// `async_nats`'s `add_root_certificates` builds its own, and so does `lettre`'s SMTP TLS. Those
 /// have no call site to fix, so the answer has to be process-wide.
 ///
-/// Measured on 192.168.1.211, 2026-08-25 (ADR-065 Inc.5 bug 3): the first `tls://` bus URL this
+/// Measured on a lab deployment, 2026-08-25 (ADR-065 Inc.5 bug 3): the first `tls://` bus URL this
 /// product has ever run with put core into a crash loop **three seconds after the WebUI reported
 /// the switch had succeeded**. Nothing before that point exercises this — the single-node bus is
 /// plaintext, and every test builds an `InMemoryBus`.
@@ -101,7 +101,7 @@ pub fn split_userinfo_password(url: &str) -> (String, Option<String>) {
 /// 0.49 builds its `CONNECT` from `ConnectOptions` alone — `ServerAddr::username()` and
 /// `password()` exist and the connector never calls them. So a URL of the form
 /// `tls://core:secret@nats:4222` handed straight to `connect()` authenticates as **nobody**, and
-/// the server answers `authentication error`. Measured on 192.168.1.211, 2026-08-25: core
+/// the server answers `authentication error`. Measured on a lab deployment, 2026-08-25: core
 /// retried that forever against a bus whose password it was holding all along.
 ///
 /// This is the single parser both callers share, so "where does the userinfo end" has one answer
@@ -236,7 +236,7 @@ impl NatsBus {
     ///
     /// This took the poller's id unconditionally until 2026-08-25, so on the default configuration
     /// it presented its **container hostname** and NATS answered `authentication error - User
-    /// "4aeea2381430"` forever (measured on 192.168.1.211, ADR-065 Inc.5 bug 8). The configuration
+    /// "4aeea2381430"` forever (measured on a lab deployment, ADR-065 Inc.5 bug 8). The configuration
     /// file said what should happen — "this static account remains the fallback when callout is
     /// off" — and nothing on this side had ever been told which mode it was in.
     pub async fn connect_opts_identified(

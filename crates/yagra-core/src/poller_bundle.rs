@@ -411,7 +411,7 @@ mod tests {
     /// name is that callout — and the shipped `nats-server.conf` had it commented out, with an
     /// instruction to uncomment it that `bus-cert-init` erases on the next `up`. Every site bundle
     /// ever issued declared a precondition nothing created, and the failure landed at the remote
-    /// end: `authentication error - User "yagra-poller2a"`, at a site nobody was watching.
+    /// end: `authentication error - User "site-poller-a"`, at a site nobody was watching.
     ///
     /// So the two are pinned to each other here. Comment the include out and this fails with the
     /// consequence rather than with a diff.

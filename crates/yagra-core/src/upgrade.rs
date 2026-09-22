@@ -700,7 +700,7 @@ pub(crate) fn poller_builds(coordinator: &crate::coordinator::Coordinator) -> Ve
 /// How long the tail of core's own upgrade waits for the pollers it was asked to move to reconnect.
 ///
 /// core has just restarted, so its registry of pollers starts empty and fills one heartbeat at a
-/// time (every 10 s). On 192.168.1.211 the two chosen pollers beat 3 s and about 12 s after core
+/// time (every 10 s). On a lab deployment the two chosen pollers beat 3 s and about 12 s after core
 /// started, while the targets were fixed at 10 s — so the second stayed on its old build with the
 /// screen reading "aligned" (ADR-051 Inc.8). Sixty seconds is six beats, and leaves room for a bus
 /// the same upgrade recreated. A selection that is complete sooner ends the wait sooner.
@@ -1528,7 +1528,7 @@ pub(crate) async fn start(
                 );
             }
             // 🚨 core has just restarted, so the registry holds only the pollers that have beaten
-            // since. Deciding at this moment is how 192.168.1.212 was left on its old build while
+            // since. Deciding at this moment is how a lab remote site was left on its old build while
             // the screen read "aligned" (ADR-051 Inc.8 decision 32) — wait for the chosen ones.
             tracing::info!(
                 run = %run.id,
@@ -2422,7 +2422,7 @@ pub(crate) mod tests {
     /// inside the apply container and could never pass inside the updater. What kept it unfound for
     /// its whole life is the shape of the refusal: it reported a misconfigured deployment ("the
     /// compose label this reads names …"), and the path it named was correct and the file was
-    /// there. Measured on 192.168.1.211, 2026-08-25.
+    /// there. Measured on a lab deployment, 2026-08-25.
     ///
     /// ⚠️ Its healthy answer is "found nothing", so it has to tell that apart from "looked at
     /// nothing". Both needles are asserted **present** in the half that was cut out, and the half
@@ -2512,7 +2512,7 @@ pub(crate) mod tests {
     /// bus change rewrites it from a container running as root. `mv` carries the **temp file's**
     /// mode and owner onto the real file, so the rewrite has to seed them from the file it replaces.
     ///
-    /// Measured on 192.168.1.211 the first time this code ever ran (2026-08-25, ADR-065 Inc.5):
+    /// Measured on a lab deployment the first time this code ever ran (2026-08-25, ADR-065 Inc.5):
     /// `0600 ubuntu:ubuntu` became `0644 root:root`. Nothing failed and nothing was logged. The
     /// switch reported exactly the state it was asked for, with three plaintext passwords newly
     /// readable by every account on the host — which is why this is a test and not a comment.
@@ -2820,7 +2820,7 @@ pub(crate) mod tests {
     // ── The tail of core's own upgrade (ADR-051 Inc.8) ──────────────────────────────────────────
 
     /// The wait ends when every chosen poller is connected, and not before — the decision on
-    /// 192.168.1.211 was made with one of the two chosen pollers still to beat.
+    /// a lab deployment was made with one of the two chosen pollers still to beat.
     #[test]
     fn a_selection_has_arrived_only_once_every_chosen_poller_is_connected() {
         let chosen = ["edge-a".to_owned(), "edge-b".to_owned()];

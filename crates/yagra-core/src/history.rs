@@ -1514,7 +1514,7 @@ mod tests {
     /// recent 1,000 history rows, so a busy window silently reported fewer fires than it held —
     /// and fires and resolutions shared that budget, so the effective ceiling depended on the mix.
     ///
-    /// 🚨 **The deployment could not answer this.** `.210`'s seven-day window held 816 rows
+    /// 🚨 **The deployment could not answer this.** A lab deployment's seven-day window held 816 rows
     /// (503 fires, 313 resolutions), so the old code and the new one both said 503 and the fix was
     /// only ever confirmed as "not broken". 1,200 fires plus 400 resolutions is 1,600 rows — over
     /// the old cap in total, and over it in fires alone.

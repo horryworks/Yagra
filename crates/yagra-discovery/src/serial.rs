@@ -714,7 +714,7 @@ mod tests {
             by_boards: true,
         },
         HuaweiRecording {
-            name: "vrp_5720, one switch (.210's sim-huawei-vrp), its main board in `Board slot 0`",
+            name: "vrp_5720, one switch (a lab simulator), its main board in `Board slot 0`",
             rows: &[
                 (
                     67_108_867,

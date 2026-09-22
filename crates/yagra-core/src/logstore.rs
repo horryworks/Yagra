@@ -999,7 +999,7 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
 /// store on 2026-08-13 after the first version of this function guessed otherwise: `i("to"*)`
 /// returns 836 rows while `Trust_to_Untrust` appears in 111,021 of them, so the underscore is
 /// inside the word. `-` `.` `=` `/` `%` all do separate (`i("zone"*)` finds `source-zone=trust`,
-/// `i("168"*)` finds `192.168.1.119`).
+/// `i("168"*)` finds `192.168.9.119`).
 ///
 /// ⚠️ This mirrors an *engine*, so it can only ever be approximate. What it must not be is **more
 /// permissive** than the engine — and the underscore bug was exactly that, in exactly the direction
@@ -2124,12 +2124,12 @@ mod tests {
         let bodies = [
             (
                 "Aug  7 2026 15:43:42 jpmyj01fw01 %%01URL/4/FILTER(l):CID=0x814f0420;The URL \
-              filtering policy was matched. (SrcIp=192.168.1.142, DstIp=182.22.31.124)",
+              filtering policy was matched. (SrcIp=192.168.9.142, DstIp=182.22.31.124)",
                 3,
             ),
             (
                 "Aug  7 2026 15:43:41 jpmyj01fw01 %%01POLICY/6/POLICYPERMIT(l):CID=0x814f041e;\
-              vsys=public, protocol=6, source-ip=192.168.1.142",
+              vsys=public, protocol=6, source-ip=192.168.9.142",
                 2,
             ),
         ];

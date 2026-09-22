@@ -32,7 +32,7 @@ const SVI_SHORT: Address[] = [
   { ip: 'fec0::a:0:0:4', prefix_len: null },
 ];
 
-/** The eleven a real SVI carries — `Vlanif100` on the PoC recording `sim-hw-ys1202`, verbatim.
+/** The eleven a real SVI carries — `Vlanif100` on a PoC recording, with its addresses replaced.
  *  The phone test needs this one: three addresses fit a 390px line without wrapping, so a tile
  *  that could not wrap passed with the short list (found by breaking the CSS, 2026-09-17). */
 const SVI_RECORDED: Address[] = [

@@ -1714,7 +1714,7 @@ mod tests {
 
     /// A wireless controller's AP-walk item is one value for the controller, like a scalar (ADR-064).
     ///
-    /// Measured on .210 before this existed: `list_node_metrics` reported `wlan_ap_walk_complete` as
+    /// Measured on a lab deployment before this existed: `list_node_metrics` reported `wlan_ap_walk_complete` as
     /// `entity`, which tells a client to read a node-wide max across table rows.
     #[test]
     fn a_wireless_controller_ap_walk_item_is_a_node_level_metric() {

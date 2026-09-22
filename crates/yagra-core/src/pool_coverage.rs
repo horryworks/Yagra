@@ -914,7 +914,7 @@ mod tests {
             after_signature.contains("raised_pools(") && after_signature.contains(".seed("),
             "the watch loop no longer seeds itself from the already-open coverage alerts \
              (ADR-107 増分 5). Without that, a pool that recovers while this core is down keeps a \
-             `critical` open for the life of the deployment — measured at 15 days on .211"
+             `critical` open for the life of the deployment — measured at 15 days on a lab deployment"
         );
         assert!(
             after_signature.contains("remember("),

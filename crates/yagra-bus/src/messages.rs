@@ -96,7 +96,7 @@ pub const CAP_SELF_UPGRADE: &str = "self-upgrade";
 /// behaviour changed underneath it. Inc.4 made core wait for a site to say it had the image instead
 /// of sleeping out a fifteen-minute budget — but a build that reports nothing and a build that has
 /// not reported *yet* look the same on the bus, so core spent the whole budget on both. Measured on
-/// 192.168.1.212, 2026-08-27: the site's prefetch succeeded in **six seconds** and core applied
+/// a lab remote site, 2026-08-27: the site's prefetch succeeded in **six seconds** and core applied
 /// **870 seconds** later.
 ///
 /// Absence therefore means "no report is coming", and core stops waiting for one — **unless** the
@@ -122,7 +122,7 @@ pub const CAP_UPGRADE_REPORT: &str = "upgrade-report";
 /// relative certificate bind against the wrong root, and Docker creates the missing source as an
 /// **empty directory** rather than failing. The replacement poller starts, finds no CA, never
 /// reaches the bus — and `up -d` exits 0, so both the site and core report success. Measured on
-/// 192.168.1.212, 2026-08-27.
+/// a lab remote site, 2026-08-27.
 ///
 /// **Why not read [`CAP_UPGRADE_REPORT`] for this instead** — it was the obvious candidate, since
 /// the fix and that token shipped in one commit, so a build predating one predates the other. It is

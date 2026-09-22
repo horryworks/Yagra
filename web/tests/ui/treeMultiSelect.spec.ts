@@ -97,8 +97,8 @@ test('Ctrl click adds a row to the batch without moving the pane', async ({ page
 });
 
 test('a plain click then Ctrl clicks keep the first row in the batch', async ({ page }) => {
-  // 🚨 THE REGRESSION (Inc.3), in the gesture the report used: click sim-comware, then Ctrl-click
-  // sim-huawei-vrp and sim-junos-vmx. The screenshot showed three marked rows — one accent bar,
+  // 🚨 THE REGRESSION (Inc.3), in the gesture the report used: click sw-a, then Ctrl-click
+  // sw-b and sw-c. The screenshot showed three marked rows — one accent bar,
   // two tints — and only the two Ctrl-clicked ones would have moved, because the plain click
   // emptied the batch and the Ctrl clicks started from nothing.
   await page.goto('/nodes');

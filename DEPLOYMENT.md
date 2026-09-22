@@ -325,7 +325,7 @@ YAGRA_CORE_BUS_URL=tls://core:a-strong-core-bus-password@nats:4222
 YAGRA_POLLER_BUS_URL=tls://poller:a-strong-poller-bus-password@nats:4222
 YAGRA_BUS_CA_FILE=/etc/nats/certs/server-cert.pem
 # Extra names for the bus certificate, added to the internal defaults:
-YAGRA_BUS_TLS_SANS=core.example.com,192.168.1.2
+YAGRA_BUS_TLS_SANS=core.example.com,192.0.2.10
 ```
 
 To turn it back off, delete those lines and bring the stack up again.

@@ -544,7 +544,7 @@ impl PollerRepo {
 ///
 /// 🚨 **The updater's list is not usable on its own, and this was measured rather than reasoned.**
 /// Its heartbeat is a file refreshed on a timer, so at core startup it still names the container
-/// that compose has just replaced. On 192.168.1.211 (2026-08-26) that created a row for a dead id —
+/// that compose has just replaced. On a lab deployment (2026-08-26) that created a row for a dead id —
 /// `last_version` NULL, `last_seen` equal to the adoption instant — while the live poller stayed
 /// unregistered with 13 nodes assigned to it. Reading the env var first is what makes startup
 /// adoption correct on the one run where it matters: the upgrade that changes the id.

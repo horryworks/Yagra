@@ -221,12 +221,12 @@ mod tests {
         // ── Huawei USG, real capture ──
         (
             "Aug  7 2026 15:43:42 jpmyj01fw01 %%01URL/4/FILTER(l):CID=0x814f0420;The URL filtering \
-             policy was matched. (SyslogId=1598559, VSys=\"public\", SrcIp=192.168.1.142)",
+             policy was matched. (SyslogId=1598559, VSys=\"public\", SrcIp=192.168.9.142)",
             Some(("URL/4/FILTER", SignaturePattern::HuaweiBrief)),
         ),
         (
             "Aug  7 2026 15:43:41 jpmyj01fw01 %%01POLICY/6/POLICYPERMIT(l):CID=0x814f041e;\
-             vsys=public, protocol=6, source-ip=192.168.1.142, source-port=52433",
+             vsys=public, protocol=6, source-ip=192.168.9.142, source-port=52433",
             Some(("POLICY/6/POLICYPERMIT", SignaturePattern::HuaweiBrief)),
         ),
         // ── Cisco IOS (the shape `syslog.rs::cisco_style_falls_back_to_raw_with_pri` already uses) ──

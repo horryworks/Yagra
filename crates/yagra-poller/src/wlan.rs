@@ -1287,7 +1287,7 @@ mod tests {
     #[test]
     fn the_optional_walk_fills_its_readings_and_drops_the_placeholder() {
         let up = [84, 246, 226, 10, 2, 128];
-        let warm = [96, 16, 158, 31, 186, 96];
+        let warm = [96, 16, 158, 10, 5, 96];
         let optional = vec![
             row(83, up, SnmpValue::Int(66)),
             row(80, up, SnmpValue::Int(1)),
@@ -1440,7 +1440,7 @@ mod tests {
     fn active_controller_rows() -> Vec<SnmpInstanceRow> {
         let up = [84, 246, 226, 10, 2, 128];
         let down = [96, 16, 158, 10, 3, 160];
-        let warm = [96, 16, 158, 31, 186, 96];
+        let warm = [96, 16, 158, 10, 5, 96];
         vec![
             row(6, up, SnmpValue::Int(8)),
             row(4, up, bytes("site-ap-001")),

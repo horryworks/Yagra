@@ -423,7 +423,7 @@ fn env_f64(key: &str, default: f64) -> f64 {
 ///
 /// 🚨 The id was presented unconditionally until 2026-08-25, so on the default configuration the
 /// poller offered its **container hostname** and NATS answered `authentication error - User
-/// "4aeea2381430"` forever (measured on 192.168.1.211, ADR-065 Inc.5 bug 8). `nats-server.conf`
+/// "4aeea2381430"` forever (measured on a lab deployment, ADR-065 Inc.5 bug 8). `nats-server.conf`
 /// already said what should happen — "this static account remains the fallback when callout is
 /// off" — and nothing on this side had ever been told which mode it was in. The knob is the
 /// missing half of that sentence, and it defaults to the configuration that ships.
@@ -480,7 +480,7 @@ mod tests {
     /// 🚨 This is the fix for a poller that could never authenticate on the configuration that
     /// ships. It presented its own id — a container hostname — while `nats-server.conf`'s static
     /// account is called `poller`, so NATS answered `authentication error - User "4aeea2381430"`
-    /// for as long as the deployment was up (192.168.1.211, 2026-08-25).
+    /// for as long as the deployment was up (a lab deployment, 2026-08-25).
     ///
     /// Reads no environment, so it cannot race the other tests over process-global state; the
     /// callout branch is asserted through its own env var in a test that does set one.

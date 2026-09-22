@@ -392,7 +392,7 @@ fn merge_names(supplied: &[String]) -> Vec<String> {
 /// `.env` value is substituted into `nats-server.conf` as `password: $YAGRA_NATS_POLLER_PASSWORD`,
 /// and nats-server **parses what it substitutes**. A value starting with a digit begins a number
 /// and then hits a letter, so the server refuses to start; a value that is *all* digits parses as
-/// an integer and crashes it on the type assertion. Measured on 192.168.1.211, 2026-08-25:
+/// an integer and crashes it on the type assertion. Measured on a lab deployment, 2026-08-25:
 ///
 /// | drawn | nats-server |
 /// |---|---|
@@ -572,7 +572,7 @@ mod tests {
     /// 🚨 nginx resolves `proxy_pass http://core:8080` once, at startup, and the shipped
     /// configuration carries no `resolver` directive. Recreating core moves it to a new container
     /// address, so a `web` left running keeps dialling the old one: the page still loads and every
-    /// API call answers 502. Measured on 192.168.1.211, 2026-08-25 — core moved to `172.18.0.6`,
+    /// API call answers 502. Measured on a lab deployment, 2026-08-25 — core moved to `172.18.0.6`,
     /// nginx held `172.18.0.11`, and the operator who had just been told the switch succeeded could
     /// not log in.
     ///

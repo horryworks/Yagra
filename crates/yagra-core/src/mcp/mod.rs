@@ -157,7 +157,7 @@ pub fn build_router(state: ApiState, cancel: CancellationToken) -> axum::Router 
 }
 
 /// Operator-configured `Host`-header allowlist for the MCP endpoint (`YAGRA_MCP_ALLOWED_HOSTS`,
-/// comma-separated, e.g. `yagra.example.com,192.168.1.2:8080`). Empty/unset ⇒ the allowlist is
+/// comma-separated, e.g. `yagra.example.com,192.0.2.10:8080`). Empty/unset ⇒ the allowlist is
 /// disabled and any Host is accepted (Bearer auth remains the gate — see `build_router`).
 fn mcp_allowed_hosts() -> Vec<String> {
     std::env::var("YAGRA_MCP_ALLOWED_HOSTS")

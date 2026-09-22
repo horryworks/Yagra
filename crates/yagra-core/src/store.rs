@@ -640,7 +640,7 @@ impl VmStore {
     /// `-search.latencyOffset`** (30 s by default) so that a graph does not end in a gap. On a gauge
     /// that draws a flat tail. On a per-step counter increase it **repeats a real increase**, and
     /// anything that adds the points up counts it once more for every repeat. Measured 2026-09-13
-    /// on 192.168.1.211 (v1.148.0): the last three 15 s steps of core's received bytes all read
+    /// on a lab deployment (v1.148.0): the last three 15 s steps of core's received bytes all read
     /// 4,084,483, the points of a two-minute window summed to about 12.5 MB, and one
     /// `increase(...[2m])` over the same window said 4.57 MB. The `latency_offset` query argument
     /// overrides the flag for one query; the newest step then comes back as measured or not at
@@ -2253,7 +2253,7 @@ mod tests {
     /// 🚨 A counter read asks VictoriaMetrics not to fill its newest steps, and a plain read does not.
     ///
     /// Filling is harmless on a gauge and a double count on a per-step increase, because the
-    /// cumulative card adds the points up (measured on 192.168.1.211: three repeated 4 MB steps
+    /// cumulative card adds the points up (measured on a lab deployment: three repeated 4 MB steps
     /// summed to 12.5 MB where one `increase` said 4.57 MB). The argument builder is pure, so its
     /// half is checked directly; that the counter read *uses* it can only be held on the text.
     #[test]

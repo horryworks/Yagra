@@ -825,7 +825,7 @@ mod tests {
             &token,
             Some(serde_json::json!({
                 "name": "lab",
-                "base_url": "http://192.168.1.214:8000/",
+                "base_url": "http://10.0.0.14:8000/",
                 "token": "0123456789abcdef",
                 "sync_interval_secs": 3600
             })),
@@ -1092,7 +1092,7 @@ mod tests {
         let body = |field: serde_json::Value| {
             serde_json::json!({
                 "name": "lab",
-                "base_url": "http://192.168.1.214:8000/",
+                "base_url": "http://10.0.0.14:8000/",
                 "token": "0123456789abcdef",
                 "sync_interval_secs": 3600,
                 "site_id_field": field
@@ -1145,7 +1145,7 @@ mod tests {
             &hdr,
             Some(serde_json::json!({
                 "name": "lab",
-                "base_url": "http://192.168.1.214:8000/",
+                "base_url": "http://10.0.0.14:8000/",
                 "enabled": true,
                 "sync_interval_secs": 3600,
                 "site_id_field": "facility"
@@ -1168,7 +1168,7 @@ mod tests {
             &hdr,
             Some(serde_json::json!({
                 "name": "lab",
-                "base_url": "http://192.168.1.214:8000/",
+                "base_url": "http://10.0.0.14:8000/",
                 "enabled": true,
                 "sync_interval_secs": 3600
             })),

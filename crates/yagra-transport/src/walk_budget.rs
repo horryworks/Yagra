@@ -33,7 +33,7 @@
 //! `noSuchInstance`, returning `Ok(empty)`**. The v3 walker reaches the same place through
 //! `EndOfMibView` / `NoSuchObject` varbind values, which end that column normally.
 //!
-//! Measured confirmation: `.210`'s healthy table walk asks for twenty columns — five of them vendor
+//! Measured confirmation: a lab deployment's healthy table walk asks for twenty columns — five of them vendor
 //! columns most of its devices do not have — and takes **513 ms**. If an unimplemented column
 //! errored, that walk would take forty seconds.
 //!

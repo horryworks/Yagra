@@ -242,7 +242,7 @@ pub fn callout_account() -> String {
 /// poller claims — not a second opinion about it. Core needs its own copy because the updater
 /// heartbeat is a file refreshed on a timer: at startup it still names the container that was
 /// replaced, so adopting from it alone creates a row for an id no poller claims and leaves the
-/// live one unregistered. Measured on 192.168.1.211, 2026-08-26 — that is exactly what happened.
+/// live one unregistered. Measured on a lab deployment, 2026-08-26 — that is exactly what happened.
 ///
 /// `None` on a deployment whose composition predates this, where the updater list is all there is.
 #[must_use]

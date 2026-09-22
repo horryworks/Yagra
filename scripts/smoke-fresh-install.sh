@@ -8,7 +8,7 @@
 # commands **verbatim** — the same `releases/latest/download` URL a stranger would use. Nothing else
 # guards that path: /verify stops at `docker compose config`, CI only builds images, and
 # /flashdeploy updates boxes that are already grown. The one time a human walked it by hand
-# (2026-09-01, `.215`) it turned up a real mismatch between the documented steps and the product
+# (2026-09-01, on a lab box) it turned up a real mismatch between the documented steps and the product
 # (ADR-065 Inc.9).
 #
 # 🚨 **The box is the documented MINIMUM on purpose — 2 vCPU / 4 GB / 20 GB.** README says that is
@@ -24,9 +24,10 @@
 #
 # Usage:  scripts/smoke-fresh-install.sh v0.3.12
 #
-# Environment overrides (all optional):
+# Environment (all optional except SMOKE_HOST):
 #   SMOKE_PVE       ssh alias of the hypervisor        (default: pve)
-#   SMOKE_HOST      ssh alias of the throwaway box     (default: yagra-smoke1)
+#   SMOKE_HOST      ssh alias of the throwaway box     (required — a lab name, so it lives in the
+#                   command that runs this, never in the repository; ADR-165)
 #   SMOKE_VMID      its VMID                           (default: 217)
 #   SMOKE_SNAPSHOT  the pristine snapshot to roll to   (default: pristine)
 #   SMOKE_KEEP      1 = leave the VM running afterwards, to look at it
@@ -36,7 +37,7 @@
 set -euo pipefail
 
 PVE="${SMOKE_PVE:-pve}"
-HOST="${SMOKE_HOST:-yagra-smoke1}"
+HOST="${SMOKE_HOST:?set SMOKE_HOST to the ssh alias of the throwaway box}"
 VMID="${SMOKE_VMID:-217}"
 SNAP="${SMOKE_SNAPSHOT:-pristine}"
 BOOT_TIMEOUT="${SMOKE_BOOT_TIMEOUT:-300}"

@@ -50,7 +50,7 @@ describe('matchRanges — a plain term on a word-prefix deployment', () => {
   it('treats an underscore as part of a word and every other separator as a break', () => {
     // ⚠️ Measured, not guessed — the guess was wrong. On the live store `i("to"*)` returns 836 rows
     // while `Trust_to_Untrust` occurs in 111,021 of them, so `_` is *inside* the word. `-` `.` `=`
-    // `/` all break it (`i("zone"*)` finds `source-zone=trust`, `i("168"*)` finds `192.168.1.119`).
+    // `/` all break it (`i("zone"*)` finds `source-zone=trust`, `i("168"*)` finds `192.168.9.119`).
     expect(matchRanges('x_policy', c('policy'), 'prefix')).toEqual([]);
     for (const sep of ['-', '.', '=', '/', ' ', ':']) {
       expect(matchRanges(`x${sep}policy`, c('policy'), 'prefix')).toHaveLength(1);

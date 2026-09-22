@@ -1699,7 +1699,7 @@ mod tests {
         // An NMS monitors inside the perimeter, so RFC1918 is the *normal* case — this is the half
         // that a copied "block everything internal" SSRF rule would get backwards.
         for ok in [
-            "http://192.168.1.214:8000/",
+            "http://10.0.0.14:8000/",
             "https://netbox.example.com",
             "http://10.0.0.5",
             "http://[fd00::1]:8000",
@@ -1742,8 +1742,8 @@ mod tests {
         // A pasted URL usually carries a path (people copy the browser's address bar). Keeping it
         // would produce `/api/dcim/…` appended to `/dcim/regions/`.
         assert_eq!(
-            validate_base_url("http://192.168.1.214:8000/dcim/sites/?q=x"),
-            Ok("http://192.168.1.214:8000".to_owned())
+            validate_base_url("http://10.0.0.14:8000/dcim/sites/?q=x"),
+            Ok("http://10.0.0.14:8000".to_owned())
         );
         assert_eq!(
             validate_base_url("  https://netbox.example.com/  "),
@@ -1753,7 +1753,7 @@ mod tests {
 
     // ── the lab's own inventory, as fixtures ──────────────────────────────────────────────────
     //
-    // Taken verbatim from `http://192.168.1.214:8000/` (NetBox 4.6.9, 2026-09-03) rather than
+    // Taken verbatim from the lab's NetBox (4.6.9, 2026-09-03) rather than
     // invented, because the shape that mattered — a region tree two levels deep — is exactly the
     // one ADR-100 got wrong from the published spec. A fixture built from the corrected belief
     // would have proved nothing; this one is the belief's source.
@@ -1826,7 +1826,7 @@ mod tests {
         let cred = crate::pgtest::credential(pool, "netbox-token", KIND_NETBOX_TOKEN).await;
         let repo = NetboxRepo::new(pool.clone());
         let id = repo
-            .create("lab", "http://192.168.1.214:8000", cred, None, 3600, None)
+            .create("lab", "http://10.0.0.14:8000", cred, None, 3600, None)
             .await
             .expect("create server");
         (repo, id)
@@ -2089,7 +2089,7 @@ mod tests {
         let id = repo
             .create(
                 "lab",
-                "http://192.168.1.214:8000",
+                "http://10.0.0.14:8000",
                 cred,
                 Some("PEM"),
                 900,
@@ -2099,7 +2099,7 @@ mod tests {
             .expect("create");
 
         let got = repo.get(id).await.expect("get").expect("row");
-        assert_eq!(got.base_url, "http://192.168.1.214:8000");
+        assert_eq!(got.base_url, "http://10.0.0.14:8000");
         assert_eq!(got.ca_cert_pem.as_deref(), Some("PEM"));
         assert_eq!(got.sync_interval_secs, 900);
         assert!(got.enabled, "a new server starts enabled");
@@ -2113,7 +2113,7 @@ mod tests {
 
         let edit = |ca| ServerUpdate {
             name: "lab2",
-            base_url: "http://192.168.1.214:8000",
+            base_url: "http://10.0.0.14:8000",
             credential_id: cred,
             ca_cert_pem: ca,
             enabled: false,
@@ -3004,7 +3004,7 @@ mod tests {
         let (repo, first) = lab_server(&pool).await;
         let cred = crate::pgtest::credential(&pool, "netbox-token-2", KIND_NETBOX_TOKEN).await;
         let second = repo
-            .create("lab2", "http://192.168.1.214:8001", cred, None, 3600, None)
+            .create("lab2", "http://10.0.0.14:8001", cred, None, 3600, None)
             .await
             .expect("second server");
 

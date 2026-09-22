@@ -154,8 +154,8 @@ describe('clickOutcome', () => {
   });
 
   it('takes the whole run when a plain click is followed by a Shift click', () => {
-    // 🚨 THE 増分 1 REGRESSION. Reported from the running box: select `sim-arista-eos`, Shift-click
-    // `sim-cisco-2960x-mau`, and the row between them stayed unselected — because the range had
+    // 🚨 THE 増分 1 REGRESSION. Reported from the running box: select `sw-a`, Shift-click
+    // `sw-c`, and the row between them stayed unselected — because the range had
     // never started. Both clicks, in order, through the same function the tree calls.
     const first = clickOutcome(plain, node('a'), ctx());
     expect(first.anchorId, 'a plain click left no anchor for Shift to measure from').toBe('a');
@@ -169,8 +169,8 @@ describe('clickOutcome', () => {
   });
 
   it('keeps the first row when a plain click is followed by Ctrl clicks', () => {
-    // 🚨 THE 増分 3 REGRESSION, reported with a screenshot: `sim-comware` clicked, then
-    // `sim-huawei-vrp` and `sim-junos-vmx` Ctrl-clicked. Three rows painted as marked — one
+    // 🚨 THE 増分 3 REGRESSION, reported with a screenshot: `sw-a` clicked, then
+    // `sw-b` and `sw-c` Ctrl-clicked. Three rows painted as marked — one
     // accent bar, two tints — and two of them would move.
     const first = clickOutcome(plain, node('a'), ctx());
     const second = clickOutcome(

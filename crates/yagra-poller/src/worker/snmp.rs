@@ -837,7 +837,7 @@ mod tests {
         assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
     }
 
-    /// ADR-138 Increment 5, the shape of `.210`'s `sim-cisco-n9k`: the agent answers, and
+    /// ADR-138 Increment 5, the shape of a lab Nexus 9000 simulator: the agent answers, and
     /// implements none of the profile's scalars. `snmp_up` still says the scalar set is dead, and
     /// the identity probe still runs — the device it would otherwise never identify is exactly the
     /// one whose profile an operator has to correct.
@@ -1102,7 +1102,7 @@ mod tests {
         );
     }
 
-    /// 🚨 The defect ADR-138 Increment 3 closes, as `.210` and `.211` showed it: the patch table's
+    /// 🚨 The defect ADR-138 Increment 3 closes, as both lab deployments showed it: the patch table's
     /// walk did not finish, so the probe sent the bare version and core overwrote the patched one.
     /// Now nothing is sent — `None` is what makes core keep the stored value — while the device's
     /// own identity still arrives. The rows are all in hand here on purpose: a probe that decided
@@ -1212,7 +1212,7 @@ mod tests {
         );
     }
 
-    /// The other side of the rule, and the one that protects `.210`'s two simulated VRP devices: a
+    /// The other side of the rule, and the one that protects the lab's two simulated VRP devices: a
     /// table that **answered** without a state column is a device with no running patch, not an
     /// unfinished read, so the bare version is still sent.
     #[tokio::test]
@@ -1249,7 +1249,7 @@ mod tests {
         t
     }
 
-    /// A Catalyst 2960X stack as LibreNMS recorded it (`ios_2960x`, which `.210` replays): the stack
+    /// A Catalyst 2960X stack as LibreNMS recorded it (`ios_2960x`, which a lab simulator replays): the stack
     /// row at index 1 carries no serial, and the three members are the chassis rows.
     fn catalyst_stack() -> FakeTransport {
         let t = FakeTransport::reachable(0.0)
@@ -1348,7 +1348,7 @@ mod tests {
         assert!(!walked_for_a_serial(&unasked), "{:?}", unasked.asked());
     }
 
-    /// ADR-147 Increment 3, the shape of `.210`'s `sim-cisco-c3560`: the recording has no class
+    /// ADR-147 Increment 3, the shape of a lab Catalyst 3560 simulator: the recording has no class
     /// column and one serial — and, like the n9k, no scalar the profile asks for, so this is the
     /// ADR-138 Increment 5 gate too. The fake answers a column with no rows as answered, which is
     /// what the real walker does for a column the agent does not implement, so the walk finishes
@@ -1743,7 +1743,7 @@ mod tests {
         t
     }
 
-    /// LibreNMS's `junos_ex4600mp`, which `.210` replays as `sim-juniper-ex`: eight members, and a
+    /// LibreNMS's `junos_ex4600mp`, which a lab simulator replays: eight members, and a
     /// box serial that is only member 0's.
     fn juniper_virtual_chassis() -> FakeTransport {
         let members: Vec<(u32, String)> = (0..8)
@@ -1782,7 +1782,7 @@ mod tests {
         assert!(!walked_for_a_serial(&t), "{:?}", t.asked());
     }
 
-    /// LibreNMS's `junos_vmx`, which `.210` replays as `sim-junos-vmx`.
+    /// LibreNMS's `junos_vmx`, which a lab simulator replays.
     #[tokio::test]
     async fn a_juniper_box_outside_a_virtual_chassis_gives_its_box_serial() {
         let mut job = snmp_job();

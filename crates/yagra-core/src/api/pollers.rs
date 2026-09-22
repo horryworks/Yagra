@@ -1971,7 +1971,7 @@ mod tests {
     /// container-local mount point (`- ${PWD}:/project`, then `cd /project`) gives the
     /// replacement poller an empty `/certs` on the host: the container starts, finds no CA, never
     /// reaches the bus — and `up -d` still exits 0, so the site reports `succeeded` and core's
-    /// alignment card reads "aligned" while that site is dark. Measured on 192.168.1.212,
+    /// alignment card reads "aligned" while that site is dark. Measured on a lab remote site,
     /// 2026-08-27, on the first real self-upgrade of a remote site. The same reasoning stamps a
     /// `com.docker.compose.project.working_dir` label naming a path that exists only inside a
     /// container that is already gone, which is what broke the central updater on 2026-08-12.

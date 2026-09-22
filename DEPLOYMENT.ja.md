@@ -317,7 +317,7 @@ YAGRA_CORE_BUS_URL=tls://core:強いコア用バスパスワード@nats:4222
 YAGRA_POLLER_BUS_URL=tls://poller:強いポーラー用バスパスワード@nats:4222
 YAGRA_BUS_CA_FILE=/etc/nats/certs/server-cert.pem
 # バス証明書に追加する宛先（内部の既定名に追加されます）:
-YAGRA_BUS_TLS_SANS=core.example.com,192.168.1.2
+YAGRA_BUS_TLS_SANS=core.example.com,192.0.2.10
 ```
 
 戻すときはこれらの行を消して、もう一度 up し直します。

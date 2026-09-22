@@ -593,7 +593,7 @@ async fn send(run: &Run, poller_id: &str, step: UpgradeStep) {
 /// **A site that cannot report at all is a third case, and Inc.4 got it wrong.** Decision 18 shipped
 /// the report without a capability saying who sends one, so a build that reports nothing and a build
 /// that has not reported *yet* were the same silence — and core spent the full budget on both. That
-/// is not hypothetical: on 192.168.1.212 the prefetch succeeded in **six seconds** and the apply
+/// is not hypothetical: on a lab remote site the prefetch succeeded in **six seconds** and the apply
 /// followed **870 seconds** later, which is every remote site's first self-upgrade by construction,
 /// since the poller being replaced is always the older build. `CAP_UPGRADE_REPORT` (Inc.5) names the
 /// difference, and the rule it enables is:
@@ -764,7 +764,7 @@ mod tests {
 
     /// ADR-051 Inc.8: a chosen site that was not connected is on the record from the first second,
     /// after the queued ones, and says so — rather than being left out of the run altogether, which
-    /// is how 192.168.1.212 stayed behind under a screen that read "aligned".
+    /// is how a lab remote site stayed behind under a screen that read "aligned".
     #[test]
     fn the_opening_record_lists_the_absent_pollers_as_not_connected() {
         let by_pool = queues(vec![target("edge-tokyo-1", "tokyo")]);
@@ -851,7 +851,7 @@ mod tests {
         assert!(
             !should_wait_for_prefetch(false, false),
             "no report and a peer still polling the pool: 870 blind seconds buy nothing. This is \
-             the case measured on 192.168.1.212, where the site had the image after six"
+             the case measured on a lab remote site, where the site had the image after six"
         );
     }
 

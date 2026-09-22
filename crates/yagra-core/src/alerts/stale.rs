@@ -9,7 +9,7 @@
 //!   Nothing closed a collected metric's alert. Two doc comments and two tests said otherwise.
 //! * **The data stopped.** A node whose SNMP credential is detached stops producing `snmp_up`
 //!   entirely, so `observe` never visits that check again and no rule lookup can tell: the rule is
-//!   still there, and still resolves. Measured on `.211` 2026-09-02 — four nodes red on a metric
+//!   still there, and still resolves. Measured on a lab deployment 2026-09-02 — four nodes red on a metric
 //!   whose last sample was 4.33 days old, across three restarts.
 //!
 //! The judgement for the first lives in [`AlertManager::resolve_orphaned_collected_alerts`]; for
@@ -538,7 +538,7 @@ mod tests {
     }
 
     /// 🚨 **The accepting half, and it is load-bearing.** A sweep that closed everything would
-    /// satisfy every other assertion in this file. This is the `.210` control in unit form: a node
+    /// satisfy every other assertion in this file. This is the lab control in unit form: a node
     /// that is answering, on a metric that is arriving, must not be touched.
     #[tokio::test]
     async fn a_metric_that_is_still_arriving_is_left_alone() {

@@ -788,14 +788,14 @@ describe('api client', () => {
       .mockResolvedValue({ ok: true, status: 202, json: async () => ({ scan_id: 's1' }) } as Response);
     globalThis.fetch = spy;
     await api.startDiscoveryScan({
-      targets: ['192.168.1.1', '192.168.1.2'],
+      targets: ['192.168.1.1', '192.168.1.3'],
       communities: ['public'],
       credential_ids: ['c1', 'c2'],
     });
     const [url, init] = spy.mock.calls[0];
     expect(url).toBe('/api/v1/discovery/scan');
     expect(JSON.parse(init.body)).toEqual({
-      targets: ['192.168.1.1', '192.168.1.2'],
+      targets: ['192.168.1.1', '192.168.1.3'],
       communities: ['public'],
       credential_ids: ['c1', 'c2'],
     });

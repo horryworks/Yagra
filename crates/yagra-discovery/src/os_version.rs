@@ -1345,7 +1345,7 @@ mod tests {
 
     /// A patch table whose walk did not finish leaves **no** version, not a bare one. A bare one
     /// would overwrite the patched value stored from the last read — ADR-138 decision 10 broken,
-    /// and what `.210` and `.211` both showed (Increment 3). Only rows that walk a column are held
+    /// and what both lab deployments showed (Increment 3). Only rows that walk a column are held
     /// back; a row reading named instances is not the flag's business.
     #[test]
     fn a_patch_table_that_did_not_answer_leaves_no_version() {

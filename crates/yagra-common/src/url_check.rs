@@ -817,7 +817,7 @@ mod tests {
         assert!(is_ssrf_blocked("fe80::1".parse().unwrap()));
         // Allowed: legitimate internal monitoring targets.
         assert!(!is_ssrf_blocked(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))));
-        assert!(!is_ssrf_blocked(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))));
+        assert!(!is_ssrf_blocked(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))));
         assert!(!is_ssrf_blocked(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_ssrf_blocked("2001:db8::1".parse().unwrap()));
     }
@@ -830,6 +830,6 @@ mod tests {
         assert!(is_ssrf_blocked("::ffff:0.0.0.0".parse().unwrap())); // mapped unspecified
                                                                      // A mapped *private* address stays allowed (still a legitimate internal target).
         assert!(!is_ssrf_blocked("::ffff:10.0.0.1".parse().unwrap()));
-        assert!(!is_ssrf_blocked("::ffff:192.168.1.2".parse().unwrap()));
+        assert!(!is_ssrf_blocked("::ffff:192.168.1.20".parse().unwrap()));
     }
 }

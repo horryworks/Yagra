@@ -120,7 +120,7 @@ export type RootCause =
  * 🚨 **`root_cause` can point at the alert's own node.** ADR-087 widened it from "an *upstream*
  * node" to "the node whose outage this alert is part of": when a device falls over, its `snmp_up`
  * alert is attributed to the device itself so that one outage opens one incident instead of two.
- * Rendering that with the arrow every other case uses produces `sim-panos ← sim-panos`, which
+ * Rendering that with the arrow every other case uses produces `fw-01 ← fw-01`, which
  * reads as a bug even though it is the correct answer — so the two cases need different words,
  * and the branch lives here rather than in the components because `.tsx` tests are never run
  * (`testing.md`).

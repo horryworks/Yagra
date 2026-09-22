@@ -117,7 +117,7 @@ services:
   # The poller runs as uid 10002 (core is 10001) and needs `server-cert.pem` as its trust anchor —
   # the same certificate the WebUI hands out to remote sites, so it is public by construction. At
   # 0750 the directory could not be traversed and the poller failed every connection with
-  # `TLS error: Permission denied (os error 13)`, measured on 192.168.1.211 the first time the TLS
+  # `TLS error: Permission denied (os error 13)`, measured on a lab deployment the first time the TLS
   # bus was ever run (2026-08-25).
   # 🚨 The obvious fix — `group_add: ["10001"]` on the poller, mirroring what `nats` does — is
   # WRONG here. nats needs it because nats needs the private *key*; giving the poller group 10001
@@ -342,7 +342,7 @@ services:
       # the SAME expression, so the two cannot name different pollers (ADR-065 Inc.8). Core needs
       # its own copy because the updater heartbeat it would otherwise read is a file on a timer:
       # at startup it still names the container compose has just replaced, so adopting from it
-      # alone registers a dead id and leaves the live poller invisible. Measured on 192.168.1.211.
+      # alone registers a dead id and leaves the live poller invisible. Measured on a lab deployment.
       YAGRA_LOCAL_POLLER_ID: ${YAGRA_POLLER_ID:-local}
       # Only for a deployment that mounted an account seed under ADR-030 before Inc.7 existed. It
       # takes precedence over the stored key; nothing new should set it.
@@ -418,7 +418,7 @@ services:
       #     registered) — but this poller connects on the STATIC `poller` account, which the callout
       #     deliberately bypasses (`auth_users`), so the bus never refuses it. It is neither refused
       #     nor registered: it keeps polling off its Redis liveness and vanishes from Settings ▸
-      #     Pollers. Measured on 192.168.1.211, 2026-08-26 — 11 nodes assigned, 389 jobs run, no row.
+      #     Pollers. Measured on a lab deployment, 2026-08-26 — 11 nodes assigned, 389 jobs run, no row.
       #   * every previous container id is left behind as a row that never goes offline-and-away,
       #     so the page shows a fleet of ghosts and not the poller doing the work.
       # `local` because this poller is part of the deployment rather than something discovered. The
@@ -439,7 +439,7 @@ services:
       # and this composition did not pass the variable at all, so that instruction was inert on the
       # co-located poller: the value sat in .env, reached nothing, and the operator waited for a move
       # that never happened with no error anywhere. Found by running the round trip on
-      # 192.168.1.211, 2026-08-28; no test could see it. Inc.2 removed the instruction rather than
+      # a lab deployment, 2026-08-28; no test could see it. Inc.2 removed the instruction rather than
       # the trap, which is the better fix, but the line stays because first contact still needs it.
       YAGRA_POLLER_POOL: ${YAGRA_POLLER_POOL:-}
       # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
@@ -1158,7 +1158,7 @@ services:
         # directory is a host path this updater cannot see.** `set_env` wrote into it and the
         # compose call ran from it, out of a container that mounts neither, so the `bus` command was
         # structurally guaranteed to be refused and had never once succeeded since it shipped
-        # (measured on 192.168.1.211, 2026-08-25: 202 accepted, then `rejected` at `validate`).
+        # (measured on a lab deployment, 2026-08-25: 202 accepted, then `rejected` at `validate`).
         # The apply below already had the answer — the third `-v` — and only this path lacked it.
         #
         # Arguments: <mode> <run id> <requested by> [core password] [poller password].
@@ -1189,7 +1189,7 @@ services:
         # ⚠️ **`cp -p` first, and it is not tidiness.** This file holds POSTGRES_PASSWORD and, three
         # lines below, both bus passwords. `mv` carries the temp file's mode and owner onto it, so
         # without seeding them the rewrite lands whatever this container's umask says — measured
-        # 2026-08-25 on 192.168.1.211, the first time this code ever ran: `0600 ubuntu:ubuntu`
+        # 2026-08-25 on a lab deployment, the first time this code ever ran: `0600 ubuntu:ubuntu`
         # became `0644 root:root`, i.e. every account on the host could read all three. The `mv`
         # stays regardless: rewriting in place would be non-atomic, and a deployment whose `.env`
         # was truncated mid-write has lost POSTGRES_PASSWORD and does not come back.
@@ -1225,7 +1225,7 @@ services:
         # 🚨 `web` is here because nginx resolves `proxy_pass http://core:8080` **once, at startup**,
         # and there is no `resolver` directive to make it look again. Recreating core gives it a new
         # container address, so a `web` left running keeps dialling the old one and answers 502 to
-        # every API call — while serving the page itself perfectly. Measured on 192.168.1.211,
+        # every API call — while serving the page itself perfectly. Measured on a lab deployment,
         # 2026-08-25: core moved to 172.18.0.6, nginx kept 172.18.0.11, and the operator who had
         # just been told the switch succeeded had a WebUI that could not log in.
         #

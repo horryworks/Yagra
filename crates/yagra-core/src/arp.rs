@@ -532,11 +532,11 @@ mod tests {
 
     #[test]
     fn an_address_the_fleet_already_monitors_is_not_a_discovery() {
-        let known: BTreeSet<IpAddr> = [ip("192.168.1.1"), ip("192.168.1.2")].into_iter().collect();
+        let known: BTreeSet<IpAddr> = [ip("192.168.1.1"), ip("192.168.1.3")].into_iter().collect();
         let found = unmonitored(
             &[(
                 node(1),
-                summary(&[(8, "192.168.1.1"), (8, "192.168.1.2"), (8, "192.168.1.50")]),
+                summary(&[(8, "192.168.1.1"), (8, "192.168.1.3"), (8, "192.168.1.50")]),
             )],
             &known,
         );

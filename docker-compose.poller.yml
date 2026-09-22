@@ -215,7 +215,7 @@ services:
       # from a container-local mount point, the poller's `./certs` therefore became an empty
       # /certs on the host: the replacement poller started, could not read its CA, and never
       # reached the bus — while `up -d` exited 0 and this script reported success (measured on
-      # 192.168.1.212, 2026-08-27). The same reasoning stamps a working_dir label naming a path
+      # a lab remote site, 2026-08-27). The same reasoning stamps a working_dir label naming a path
       # that exists only inside a container which is already gone. Mounting it at its own name
       # makes the two spellings the same string, so neither can be wrong. The central updater
       # passes `-v "$WORKDIR:$WORKDIR"` to its throwaway containers for exactly this reason.
