@@ -118,6 +118,7 @@ export function NodeDetail({
             kind: node.kind,
             snmpConfigured: node.snmp_configured,
             isWlanController: node.wireless?.controller != null,
+            merakiProductType: node.meraki_device?.product_type ?? null,
           }
         : null,
     [node],

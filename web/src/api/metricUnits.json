@@ -86,6 +86,8 @@
     "juniper_buffer_util": "%",
     "juniper_cpu_1min": "%",
     "juniper_temp": "°C",
+    "meraki_port_in_bps": "bps",
+    "meraki_port_out_bps": "bps",
     "meraki_uplink_latency_ms": "ms",
     "meraki_uplink_loss_pct": "%",
     "meraki_uplink_recv_bps": "bps",

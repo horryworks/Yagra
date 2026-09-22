@@ -24,7 +24,7 @@
 //!   collected so far rather than hammering.
 
 use crate::{
-    MerakiCollectSpec, MerakiCollected, MerakiObservation, MerakiSample, MerakiUplink,
+    MerakiCollectSpec, MerakiCollected, MerakiObservation, MerakiPort, MerakiSample, MerakiUplink,
     TransportError,
 };
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
@@ -32,17 +32,20 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 use yagra_common::{
-    is_meraki_api_host, uplink_ifindex, uplink_name, MerakiHaRole, MerakiListing, MerakiTier,
-    MerakiUplinkStatus, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_FAILED,
-    METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS,
-    METRIC_MERAKI_UPLINK_SENT_BPS, METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
+    is_meraki_api_host, switch_port_ifindex, switch_port_oper_status, switch_port_speed_bps,
+    uplink_ifindex, uplink_name, Duplex, MerakiHaRole, MerakiListing, MerakiTier,
+    MerakiUplinkStatus, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_PORT_IN_BPS,
+    METRIC_MERAKI_PORT_OUT_BPS, METRIC_MERAKI_UPLINK_FAILED, METRIC_MERAKI_UPLINK_LATENCY_MS,
+    METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS,
+    METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
     METRIC_MERAKI_VPN_HUBS_UNREACHABLE, METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT,
     METRIC_MERAKI_VPN_SPOKES_UNREACHABLE,
 };
 
 /// Dashboard API v1 path prefix (appended to the org's `base_url`).
 const API_PREFIX: &str = "/api/v1";
-/// Hard cap on pages per endpoint (bounded-pagination safeguard).
+/// Hard cap on pages per endpoint (bounded-pagination safeguard). The switch-port listings have
+/// their own ([`SWITCH_PORT_MAX_PAGES`]) and a clock besides ([`SWITCH_PORTS_BUDGET`]).
 const MAX_PAGES: usize = 50;
 /// Hard cap on consecutive 429/Retry-After waits before giving up on an endpoint.
 const MAX_RATE_LIMIT_RETRIES: u32 = 6;
@@ -202,6 +205,11 @@ struct Session {
     wire: Option<MerakiWireOrigin>,
     min_interval: Duration,
     last: Option<Instant>,
+    /// How many pages one listing may run to. [`MAX_PAGES`] unless a collect says otherwise.
+    max_pages: usize,
+    /// When no further request may be sent, if the collect set one (ADR-167: the switch-port tier
+    /// must end inside the organization's collect lease).
+    deadline: Option<Instant>,
 }
 
 impl Session {
@@ -251,6 +259,8 @@ impl Session {
             wire: wire.cloned(),
             min_interval: Duration::from_secs_f64(1.0 / rps),
             last: None,
+            max_pages: MAX_PAGES,
+            deadline: None,
         })
     }
 
@@ -277,8 +287,9 @@ impl Session {
         path: &str,
         query: &[(&str, String)],
         paging: Paging,
+        shape: Shape,
     ) -> Result<Vec<Value>, TransportError> {
-        let (items, stop) = self.get_paged_traced(path, query, paging).await;
+        let (items, stop) = self.get_paged_traced(path, query, paging, shape).await;
         match stop {
             Some(stop) if stop.fails_a_collect() => Err(io(stop.collect_message())),
             _ => Ok(items),
@@ -293,8 +304,9 @@ impl Session {
         path: &str,
         query: &[(&str, String)],
         paging: Paging,
+        shape: Shape,
     ) -> Result<(Vec<Value>, Option<MerakiFetchError>), MerakiFetchError> {
-        let (items, stop) = self.get_paged_traced(path, query, paging).await;
+        let (items, stop) = self.get_paged_traced(path, query, paging, shape).await;
         match stop {
             Some(stop) if stop.fails_a_collect() => Err(stop.into()),
             stop => Ok((items, stop.map(MerakiFetchError::from))),
@@ -312,8 +324,9 @@ impl Session {
         path: &str,
         query: &[(&str, String)],
         paging: Paging,
+        shape: Shape,
     ) -> Result<Vec<Value>, MerakiFetchError> {
-        let (items, stop) = self.get_paged_traced(path, query, paging).await;
+        let (items, stop) = self.get_paged_traced(path, query, paging, shape).await;
         match stop {
             None => Ok(items),
             Some(stop) => Err(stop.into()),
@@ -327,10 +340,11 @@ impl Session {
         path: &str,
         query: &[(&str, String)],
         paging: Paging,
+        shape: Shape,
     ) -> (Vec<Value>, Option<Stop>) {
         let mut items: Vec<Value> = Vec::new();
         let stop = self
-            .page_through(path, query, paging, &mut items)
+            .page_through(path, query, paging, shape, &mut items)
             .await
             .err();
         (items, stop)
@@ -342,6 +356,7 @@ impl Session {
         path: &str,
         query: &[(&str, String)],
         paging: Paging,
+        shape: Shape,
         items: &mut Vec<Value>,
     ) -> Result<(), Stop> {
         let mut url = self.base.join(path).map_err(|e| {
@@ -369,6 +384,14 @@ impl Session {
             }
 
             self.pace().await;
+            // Checked after pacing, which may itself have slept past it.
+            if self.deadline.is_some_and(|d| Instant::now() >= d) {
+                tracing::warn!(
+                    pages = visited.len(),
+                    "meraki collect ran out of its time budget; keeping what it read"
+                );
+                return Err(Stop::Budget);
+            }
             // What goes on the wire (ADR-166). `url` itself stays the logical one: the allow-list
             // above and `visited` below compare logical URLs. A physical URL in `visited` would
             // never equal a `Link` again, so a server answering with its own page would be paged
@@ -416,10 +439,10 @@ impl Session {
                 tracing::debug!(error = %e, "meraki response read failed");
                 Stop::Malformed
             })?;
-            items.extend(page_items(&body)?);
+            items.extend(page_items(&body, shape)?);
             visited.push(url);
 
-            match next_page(&visited, next.as_deref()) {
+            match next_page(&visited, next.as_deref(), self.max_pages) {
                 PageStep::Next(n) => url = n,
                 PageStep::Done => return Ok(()),
                 PageStep::Stop(stop) => return Err(stop),
@@ -442,10 +465,25 @@ enum Paging {
     Unpaged,
 }
 
+/// What a page of a listing looks like (ADR-167 決定 2).
+///
+/// Every listing this module read before the switch ports answers a bare JSON array, and ADR-164
+/// 決定 19 made anything else `Malformed`. Two of the three switch-port listings answer an envelope
+/// instead — `{"items": [...], "meta": {...}}`, measured on a real organization — while the third
+/// (`switch/ports/bySwitch`) is a bare array again. So each call site says which it reads, and the
+/// rule stays exactly as strict for both: the wrong shape is `Malformed`, never an empty page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// A bare JSON array.
+    Array,
+    /// An object whose `items` is a JSON array; whatever else it carries (`meta`) is not read.
+    Items,
+}
+
 /// Why a paged read ended before the server said it had no more pages.
 ///
 /// One vocabulary for both readers, because which of these is an error is the *caller's* question:
-/// the lenient reader keeps what it has for the last five, the strict one refuses all eight.
+/// the lenient reader keeps what it has for the last six, the strict one refuses all nine.
 /// Nothing here carries request or response text — a Dashboard API error body can quote the request,
 /// and the request carries the key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -464,8 +502,12 @@ enum Stop {
     Status(u16),
     /// The next link named a page already fetched (ADR-158 B5).
     Cycle,
-    /// [`MAX_PAGES`] pages were read and the server still offered another.
+    /// The session's page cap ([`MAX_PAGES`] unless the collect set its own) was read and the
+    /// server still offered another.
     PageCap,
+    /// The collect's time budget ran out before the next request (ADR-167). Only the switch-port
+    /// tier sets one ([`SWITCH_PORTS_BUDGET`]).
+    Budget,
 }
 
 impl Stop {
@@ -475,9 +517,12 @@ impl Stop {
     fn fails_a_collect(self) -> bool {
         match self {
             Self::Host | Self::Auth(_) | Self::Malformed => true,
-            Self::Network | Self::RateLimited | Self::Status(_) | Self::Cycle | Self::PageCap => {
-                false
-            }
+            Self::Network
+            | Self::RateLimited
+            | Self::Status(_)
+            | Self::Cycle
+            | Self::PageCap
+            | Self::Budget => false,
         }
     }
 
@@ -491,7 +536,8 @@ impl Stop {
             | Self::RateLimited
             | Self::Status(_)
             | Self::Cycle
-            | Self::PageCap => "meraki response could not be read".into(),
+            | Self::PageCap
+            | Self::Budget => "meraki response could not be read".into(),
         }
     }
 }
@@ -577,28 +623,44 @@ impl From<Stop> for MerakiFetchError {
             Stop::Network => Self::Network,
             Stop::RateLimited => Self::RateLimited,
             Stop::Status(code) => Self::Status(code),
-            Stop::Cycle | Stop::PageCap => Self::Truncated,
+            Stop::Cycle | Stop::PageCap | Stop::Budget => Self::Truncated,
         }
     }
 }
 
 /// The items of one page. Pure, so the rule is tested without a server.
 ///
-/// 🚨 **A 200 whose body is not a JSON array is not a page** (ADR-164 決定 19). Every listing this
-/// module pages answers an array, and every parser below reads array elements only. Such a body
-/// used to be taken as one item, which no parser can read a `serial` out of — so it read as a
-/// listing that was **complete and empty**: the inventory sync marked every stored device missing,
-/// and a collect counted as answered by the Dashboard, which is what closes an organization's
-/// collection alert (決定 18). An empty array is still an answer; an organization may hold nothing.
-fn page_items(body: &str) -> Result<Vec<Value>, Stop> {
-    match serde_json::from_str::<Value>(body) {
-        Ok(Value::Array(items)) => Ok(items),
-        Ok(_) => {
-            tracing::debug!("meraki listing answered something other than an array");
-            Err(Stop::Malformed)
-        }
+/// 🚨 **A 200 whose body is not the listing's shape is not a page** (ADR-164 決定 19). Every parser
+/// below reads array elements only. A body of the wrong shape used to be taken as one item, which no
+/// parser can read a `serial` out of — so it read as a listing that was **complete and empty**: the
+/// inventory sync marked every stored device missing, and a collect counted as answered by the
+/// Dashboard, which is what closes an organization's collection alert (決定 18). An empty array is
+/// still an answer; an organization may hold nothing.
+///
+/// Which shape is right is the listing's to say ([`Shape`], ADR-167 決定 2): an envelope where a
+/// bare array is expected is `Malformed`, and so is a bare array where an envelope is.
+fn page_items(body: &str, shape: Shape) -> Result<Vec<Value>, Stop> {
+    let parsed = match serde_json::from_str::<Value>(body) {
+        Ok(v) => v,
         Err(e) => {
             tracing::debug!(error = %e, "meraki json parse failed");
+            return Err(Stop::Malformed);
+        }
+    };
+    match (shape, parsed) {
+        (Shape::Array, Value::Array(items)) => Ok(items),
+        (Shape::Items, Value::Object(mut envelope)) => match envelope.remove("items") {
+            Some(Value::Array(items)) => Ok(items),
+            _ => {
+                tracing::debug!("meraki listing answered an envelope with no items array");
+                Err(Stop::Malformed)
+            }
+        },
+        (Shape::Array | Shape::Items, _) => {
+            tracing::debug!(
+                ?shape,
+                "meraki listing answered something other than its shape"
+            );
             Err(Stop::Malformed)
         }
     }
@@ -617,14 +679,15 @@ enum PageStep {
 
 /// Decide the step after the pages in `visited`, given the response's `rel=next` URL.
 ///
-/// Stops at [`MAX_PAGES`], and — ADR-158 B5 — at a next link naming a page already fetched. A
-/// server that answered with its own URL, or a cycle between two pages, used to be followed to the
-/// cap and every repeat taken in again: the same devices fifty times over, each one a sample.
+/// Stops at `max_pages` ([`MAX_PAGES`] for every listing but the switch ports'), and — ADR-158 B5 —
+/// at a next link naming a page already fetched. A server that answered with its own URL, or a
+/// cycle between two pages, used to be followed to the cap and every repeat taken in again: the
+/// same devices fifty times over, each one a sample.
 ///
 /// 🚨 Those two stops are **not** [`PageStep::Done`]. They used to be indistinguishable from it
 /// (both were `None`), which is harmless to a collect and would be read by the inventory sync as
 /// "the organization has exactly these devices" (ADR-164).
-fn next_page(visited: &[reqwest::Url], next: Option<&str>) -> PageStep {
+fn next_page(visited: &[reqwest::Url], next: Option<&str>, max_pages: usize) -> PageStep {
     let Some(next) = next else {
         return PageStep::Done;
     };
@@ -639,8 +702,8 @@ fn next_page(visited: &[reqwest::Url], next: Option<&str>) -> PageStep {
         );
         return PageStep::Stop(Stop::Cycle);
     }
-    if visited.len() >= MAX_PAGES {
-        tracing::warn!(max = MAX_PAGES, "meraki pagination truncated at page cap");
+    if visited.len() >= max_pages {
+        tracing::warn!(max = max_pages, "meraki pagination truncated at page cap");
         return PageStep::Stop(Stop::PageCap);
     }
     PageStep::Next(next)
@@ -732,6 +795,8 @@ pub(crate) async fn collect(
     };
 
     let mut data: Vec<DeviceDatum> = Vec::new();
+    // A switch's ports, by serial — the switch-port tier's interface inventory (ADR-167).
+    let mut ports: BTreeMap<String, BTreeMap<u32, MerakiPort>> = BTreeMap::new();
     match spec.tier {
         MerakiTier::Availability => {
             let path = format!(
@@ -739,7 +804,7 @@ pub(crate) async fn collect(
                 spec.org_id
             );
             let (items, stop) = session
-                .get_paged_reported(&path, &no_query, Paging::Upto(spec.per_page))
+                .get_paged_reported(&path, &no_query, Paging::Upto(spec.per_page), Shape::Array)
                 .await?;
             let kept = watched.keep(items);
             listings.note(MerakiListing::Availabilities, stop, kept.len());
@@ -752,7 +817,7 @@ pub(crate) async fn collect(
             );
             let q = [("timespan", "300".to_owned())];
             let (items, stop) = session
-                .get_paged_reported(&loss_path, &q, Paging::Upto(spec.per_page))
+                .get_paged_reported(&loss_path, &q, Paging::Upto(spec.per_page), Shape::Array)
                 .await?;
             let kept = watched.keep(items);
             listings.note(MerakiListing::UplinksLossAndLatency, stop, kept.len());
@@ -764,7 +829,12 @@ pub(crate) async fn collect(
             );
             let (items, stop) = contained(
                 session
-                    .get_paged_reported(&status_path, &no_query, Paging::Upto(spec.per_page))
+                    .get_paged_reported(
+                        &status_path,
+                        &no_query,
+                        Paging::Upto(spec.per_page),
+                        Shape::Array,
+                    )
                     .await,
             );
             let kept = watched.keep(items);
@@ -784,6 +854,7 @@ pub(crate) async fn collect(
                         &vpn_path,
                         &no_query,
                         Paging::Upto(spec.per_page.min(VPN_STATUSES_MAX_PER_PAGE)),
+                        Shape::Array,
                     )
                     .await,
             );
@@ -804,21 +875,356 @@ pub(crate) async fn collect(
             let window = usage_window(spec.interval_secs);
             let q = [("timespan", window.to_string())];
             let (items, stop) = session
-                .get_paged_reported(&path, &q, Paging::Unpaged)
+                .get_paged_reported(&path, &q, Paging::Unpaged, Shape::Array)
                 .await?;
             let kept = watched.keep(items);
             listings.note(MerakiListing::ApplianceUplinksUsage, stop, kept.len());
             data.extend(parse_uplinks_usage(&kept, window));
         }
+        // Every switch port's status, speed and traffic (ADR-167). Three organization-wide
+        // listings joined by serial; the first is the spine.
+        MerakiTier::SwitchPorts => {
+            // Measured on a real organization (854 switches): statuses 76 s, one usage bucket
+            // 20–30 s, the configured names 84 s. The organization's single collect flight is
+            // leased for 300 s and its availability collects wait behind this one, so it stops
+            // asking at the budget and keeps what it read — the names, read last, go first.
+            session.max_pages = SWITCH_PORT_MAX_PAGES;
+            session.deadline = Some(Instant::now() + SWITCH_PORTS_BUDGET);
+
+            let status_path = format!(
+                "{API_PREFIX}/organizations/{}/switch/ports/statuses/bySwitch",
+                spec.org_id
+            );
+            let (items, stop) = session
+                .get_paged_reported(
+                    &status_path,
+                    &no_query,
+                    Paging::Upto(SWITCH_PORT_STATUSES_PER_PAGE),
+                    Shape::Items,
+                )
+                .await?;
+            let kept = watched.keep(items);
+            listings.note(MerakiListing::SwitchPortStatuses, stop, kept.len());
+            let (statuses, spine) = parse_switch_port_statuses(&kept);
+            data.extend(statuses);
+            ports = spine;
+
+            // One five-minute bucket the Dashboard has had time to fill (決定 6).
+            let (t0, t1) = switch_usage_bucket(unix_now_secs());
+            let usage_path = format!(
+                "{API_PREFIX}/organizations/{}/switch/ports/usage/history/byDevice/byInterval",
+                spec.org_id
+            );
+            let q = [
+                ("interval", SWITCH_USAGE_BUCKET_SECS.to_string()),
+                ("t0", t0.to_string()),
+                ("t1", t1.to_string()),
+            ];
+            let (items, stop) = contained(
+                session
+                    .get_paged_reported(
+                        &usage_path,
+                        &q,
+                        Paging::Upto(SWITCH_PORT_USAGE_PER_PAGE),
+                        Shape::Items,
+                    )
+                    .await,
+            );
+            let admitted = items.iter().filter(|it| on_spine(it, &ports)).count();
+            listings.note(MerakiListing::SwitchPortUsage, stop, admitted);
+            data.extend(parse_switch_port_usage(&items, &ports));
+
+            if spec.port_names {
+                let config_path = format!(
+                    "{API_PREFIX}/organizations/{}/switch/ports/bySwitch",
+                    spec.org_id
+                );
+                let (items, stop) = contained(
+                    session
+                        .get_paged_reported(
+                            &config_path,
+                            &no_query,
+                            Paging::Upto(SWITCH_PORT_CONFIG_PER_PAGE),
+                            Shape::Array,
+                        )
+                        .await,
+                );
+                let admitted = items.iter().filter(|it| on_spine(it, &ports)).count();
+                listings.note(MerakiListing::SwitchPortConfig, stop, admitted);
+                name_switch_ports(&items, &mut ports);
+            }
+        }
         // The inventory is read by core's periodic sync (`fetch_inventory`), not by a collect —
         // nothing to gather here.
         MerakiTier::Inventory => {}
     }
+    let mut observations = fold(data);
+    attach_ports(&mut observations, ports);
     Ok(MerakiCollected {
-        observations: fold(data),
+        observations,
         stopped: listings.stopped,
         failed_listing: listings.failed,
     })
+}
+
+// ── The switch-port tier (ADR-167) ──────────────────────────────────────────────────────────
+
+/// The largest page `switch/ports/statuses/bySwitch` accepts: "The perPage parameter must be
+/// between 3 and 20" (measured 2026-09-22). The collect's default of 1000 is a 400 here.
+const SWITCH_PORT_STATUSES_PER_PAGE: u32 = 20;
+/// The largest page `switch/ports/usage/history/byDevice/byInterval` accepts (3–50, measured).
+const SWITCH_PORT_USAGE_PER_PAGE: u32 = 50;
+/// The largest page `switch/ports/bySwitch` accepts (3–50, measured).
+const SWITCH_PORT_CONFIG_PER_PAGE: u32 = 50;
+/// How many pages one switch-port listing may run to: enough for the most switches one
+/// organization may hold as nodes (50,000, `max_devices`' ceiling) at 20 a page. It is a bound
+/// against a server that never stops, not the thing that bounds a collect — the clock is
+/// ([`SWITCH_PORTS_BUDGET`]). At the measured 1.7 s a page the fixed [`MAX_PAGES`] would have cut
+/// the listing at 1,000 switches, silently.
+const SWITCH_PORT_MAX_PAGES: usize = 2_500;
+/// How long one switch-port collect may keep asking. Core leases an organization's single collect
+/// flight for 300 s ("LEASE" in its Meraki scheduler) and counts a flight that outlives it as
+/// unanswered, so this stops well inside it.
+const SWITCH_PORTS_BUDGET: Duration = Duration::from_secs(240);
+/// The Dashboard's switch-port usage buckets are five minutes long.
+const SWITCH_USAGE_BUCKET_SECS: u64 = 300;
+/// How long after a bucket ends it is read. Measured on a real organization: 78 s after its end no
+/// switch had a bucket, 378 s 18%, 460 s 43%, 678 s all of them — each switch appears whole and at
+/// once, and before that it lists `ports: []`. Twelve minutes clears the slowest measured.
+const SWITCH_USAGE_SETTLE_SECS: u64 = 720;
+
+/// The one usage bucket a switch-port collect at `now` reads (ADR-167 決定 6): the newest
+/// five-minute bucket that ended at least [`SWITCH_USAGE_SETTLE_SECS`] ago, as `(t0, t1)` in Unix
+/// seconds. Aligned to the bucket grid — the Dashboard rounds an unaligned `t0` down, which would
+/// make the answer two buckets.
+#[must_use]
+fn switch_usage_bucket(now_unix_secs: u64) -> (u64, u64) {
+    let t1 = now_unix_secs.saturating_sub(SWITCH_USAGE_SETTLE_SECS) / SWITCH_USAGE_BUCKET_SECS
+        * SWITCH_USAGE_BUCKET_SECS;
+    (t1.saturating_sub(SWITCH_USAGE_BUCKET_SECS), t1)
+}
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Whether a usage or configuration row belongs to a switch on the spine.
+fn on_spine(row: &Value, spine: &BTreeMap<String, BTreeMap<u32, MerakiPort>>) -> bool {
+    row.get("serial")
+        .and_then(Value::as_str)
+        .is_some_and(|s| spine.contains_key(s))
+}
+
+/// `switch/ports/statuses/bySwitch` → each port's status, admin state and speed, and the spine the
+/// other two listings are joined to: every switch it reports ports for, with those ports.
+///
+/// * `if_oper_status`: `Connected` 1, `Disconnected` 2, a word this build does not know nothing.
+/// * `if_admin_status`: `enabled` true 1, false 2.
+/// * `if_high_speed`: Mbps, only while the port has a speed.
+///
+/// 🚨 **A switch with no port `Connected` is left out altogether** (決定 14). Measured on a real
+/// organization: every offline or dormant switch was still listed, with every port `Disconnected`.
+/// Reported as such, each switch that went down would raise a port-down alert per port beside its
+/// own node-down one. An online switch with nothing plugged in is left out too, which costs nothing:
+/// it has no reading worth taking.
+fn parse_switch_port_statuses(
+    items: &[Value],
+) -> (
+    Vec<DeviceDatum>,
+    BTreeMap<String, BTreeMap<u32, MerakiPort>>,
+) {
+    let mut data = Vec::new();
+    let mut spine: BTreeMap<String, BTreeMap<u32, MerakiPort>> = BTreeMap::new();
+    for row in items {
+        let (Some(serial), Some(rows)) = (
+            row.get("serial").and_then(Value::as_str),
+            row.get("ports").and_then(Value::as_array),
+        ) else {
+            continue;
+        };
+        let status_of = |p: &Value| {
+            p.get("status")
+                .and_then(Value::as_str)
+                .and_then(switch_port_oper_status)
+        };
+        if !rows.iter().any(|p| status_of(p) == Some(1.0)) {
+            continue;
+        }
+        let ports = spine.entry(serial.to_owned()).or_default();
+        for p in rows {
+            let Some(port_id) = p.get("portId").and_then(Value::as_str) else {
+                continue;
+            };
+            let ifindex = switch_port_ifindex(port_id);
+            let speed_bps = p
+                .get("speed")
+                .and_then(Value::as_str)
+                .and_then(switch_port_speed_bps);
+            let duplex = p
+                .get("duplex")
+                .and_then(Value::as_str)
+                .and_then(|w| Duplex::parse(&w.trim().to_ascii_lowercase()));
+            let mut push = |metric: &str, value: f64| {
+                data.push(DeviceDatum {
+                    serial: serial.to_owned(),
+                    sample: MerakiSample {
+                        metric: metric.to_owned(),
+                        ifindex: Some(ifindex),
+                        value,
+                    },
+                    uplink: None,
+                });
+            };
+            if let Some(oper) = status_of(p) {
+                push("if_oper_status", oper);
+            }
+            if let Some(enabled) = p.get("enabled").and_then(Value::as_bool) {
+                push("if_admin_status", if enabled { 1.0 } else { 2.0 });
+            }
+            if let Some(bps) = speed_bps {
+                // `ifHighSpeed` is whole Mbps; every speed the Dashboard reports is one.
+                #[allow(clippy::cast_precision_loss)]
+                push("if_high_speed", bps as f64 / 1e6);
+            }
+            ports.insert(
+                ifindex,
+                MerakiPort {
+                    ifindex,
+                    port_id: port_id.to_owned(),
+                    alias: None,
+                    speed_bps,
+                    duplex,
+                },
+            );
+        }
+    }
+    (data, spine)
+}
+
+/// `switch/ports/usage/history/byDevice/byInterval` → each port's average receive and send rate
+/// over the bucket, bits per second (決定 6), for the switches on the spine.
+///
+/// * `bandwidth.usage.downstream` is what the port **received** (`meraki_port_in_bps`) and
+///   `upstream` what it **sent** — measured: uplink ports' downstream about twice their upstream,
+///   every access port's the other way round, over three settled buckets and every switch.
+/// * `bandwidth` is kilobits per second of **1,000** bits (its ratio to `data.usage`'s kilobytes of
+///   1,024 bytes was 0.977), so bits/s is `× 1000`.
+/// * Both directions or neither: a port with one would draw half a link.
+/// * A port the bucket does not list gets **no** reading, never a zero — measured, about 1.7% of the
+///   connected ports were missing from a settled bucket, and a zero there would be a false outage.
+/// * Should the answer carry more than one interval, the newest is read.
+fn parse_switch_port_usage(
+    items: &[Value],
+    spine: &BTreeMap<String, BTreeMap<u32, MerakiPort>>,
+) -> Vec<DeviceDatum> {
+    let mut out = Vec::new();
+    for row in items {
+        let Some(serial) = row.get("serial").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(known) = spine.get(serial) else {
+            continue;
+        };
+        for p in row
+            .get("ports")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(ifindex) = p
+                .get("portId")
+                .and_then(Value::as_str)
+                .map(switch_port_ifindex)
+            else {
+                continue;
+            };
+            if !known.contains_key(&ifindex) {
+                continue;
+            }
+            let newest = p
+                .get("intervals")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .max_by_key(|i| i.get("endTs").and_then(Value::as_str).unwrap_or(""));
+            let Some(usage) = newest.and_then(|i| i.get("bandwidth")?.get("usage")) else {
+                continue;
+            };
+            let (Some(down), Some(up)) = (
+                usage.get("downstream").and_then(json_number),
+                usage.get("upstream").and_then(json_number),
+            ) else {
+                continue;
+            };
+            for (metric, kbps) in [
+                (METRIC_MERAKI_PORT_IN_BPS, down),
+                (METRIC_MERAKI_PORT_OUT_BPS, up),
+            ] {
+                out.push(DeviceDatum {
+                    serial: serial.to_owned(),
+                    sample: MerakiSample {
+                        metric: metric.to_owned(),
+                        ifindex: Some(ifindex),
+                        // Whole bits: `32.3 * 1000.0` is 32,299.999… in binary floating point.
+                        value: (kbps * 1000.0).round(),
+                    },
+                    uplink: None,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// `switch/ports/bySwitch` → the name each port on the spine was given in the Dashboard. A port
+/// with no name gets `""`, so a name an operator removed is removed here too.
+fn name_switch_ports(items: &[Value], spine: &mut BTreeMap<String, BTreeMap<u32, MerakiPort>>) {
+    for row in items {
+        let Some(known) = row
+            .get("serial")
+            .and_then(Value::as_str)
+            .and_then(|s| spine.get_mut(s))
+        else {
+            continue;
+        };
+        for p in row
+            .get("ports")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(port) = p
+                .get("portId")
+                .and_then(Value::as_str)
+                .and_then(|id| known.get_mut(&switch_port_ifindex(id)))
+            else {
+                continue;
+            };
+            let name = p.get("name").and_then(Value::as_str).unwrap_or("").trim();
+            port.alias = Some(name.to_owned());
+        }
+    }
+}
+
+/// Hand each switch its ports, creating the observation for a switch that has ports but no sample.
+fn attach_ports(
+    observations: &mut Vec<MerakiObservation>,
+    spine: BTreeMap<String, BTreeMap<u32, MerakiPort>>,
+) {
+    for (serial, ports) in spine {
+        let ports: Vec<MerakiPort> = ports.into_values().collect();
+        match observations.iter_mut().find(|o| o.serial == serial) {
+            Some(obs) => obs.ports = ports,
+            None => observations.push(MerakiObservation {
+                serial,
+                samples: Vec::new(),
+                uplinks: Vec::new(),
+                ports,
+            }),
+        }
+    }
 }
 
 /// How the listings of one collect ended (ADR-164 決定 18 and 25).
@@ -1005,6 +1411,7 @@ fn fold(data: Vec<DeviceDatum>) -> Vec<MerakiObservation> {
                 serial: d.serial.clone(),
                 samples: Vec::new(),
                 uplinks: Vec::new(),
+                ports: Vec::new(),
             });
         obs.samples.push(d.sample);
         if let Some(u) = d.uplink {
@@ -1235,6 +1642,7 @@ pub async fn list_organizations(
             &format!("{API_PREFIX}/organizations"),
             &[],
             Paging::Upto(1000),
+            Shape::Array,
         )
         .await?;
     Ok(items
@@ -1345,16 +1753,27 @@ pub async fn fetch_inventory(
     let org = format!("{API_PREFIX}/organizations/{org_id}");
 
     let networks = s
-        .get_paged_strict(&format!("{org}/networks"), &[], Paging::Upto(1000))
+        .get_paged_strict(
+            &format!("{org}/networks"),
+            &[],
+            Paging::Upto(1000),
+            Shape::Array,
+        )
         .await?;
     let devices = s
-        .get_paged_strict(&format!("{org}/devices"), &[], Paging::Upto(1000))
+        .get_paged_strict(
+            &format!("{org}/devices"),
+            &[],
+            Paging::Upto(1000),
+            Shape::Array,
+        )
         .await?;
     let availabilities = s
         .get_paged_strict(
             &format!("{org}/devices/availabilities"),
             &[],
             Paging::Upto(1000),
+            Shape::Array,
         )
         .await?;
 
@@ -1385,6 +1804,7 @@ pub async fn fetch_ha_roles(
             &format!("{API_PREFIX}/organizations/{org_id}/appliance/uplink/statuses"),
             &[],
             Paging::Upto(1000),
+            Shape::Array,
         )
         .await?;
     Ok(parse_ha_roles(&rows))
@@ -1595,7 +2015,11 @@ mod tests {
     fn a_next_link_that_repeats_the_current_page_ends_the_paging() {
         let first = page("Q2-A");
         assert_eq!(
-            next_page(std::slice::from_ref(&first), Some(first.as_str())),
+            next_page(
+                std::slice::from_ref(&first),
+                Some(first.as_str()),
+                MAX_PAGES
+            ),
             PageStep::Stop(Stop::Cycle)
         );
     }
@@ -1604,7 +2028,7 @@ mod tests {
     fn a_next_link_back_to_an_earlier_page_ends_the_paging() {
         let (a, b) = (page("Q2-A"), page("Q2-B"));
         assert_eq!(
-            next_page(&[a.clone(), b], Some(a.as_str())),
+            next_page(&[a.clone(), b], Some(a.as_str()), MAX_PAGES),
             PageStep::Stop(Stop::Cycle)
         );
     }
@@ -1614,21 +2038,21 @@ mod tests {
     fn a_new_next_link_is_followed_until_the_page_cap() {
         let fresh = page("Q2-NEW");
         assert_eq!(
-            next_page(&[page("Q2-A")], Some(fresh.as_str())),
+            next_page(&[page("Q2-A")], Some(fresh.as_str()), MAX_PAGES),
             PageStep::Next(fresh.clone())
         );
 
         let full: Vec<reqwest::Url> = (0..MAX_PAGES).map(|i| page(&i.to_string())).collect();
         assert_eq!(
-            next_page(&full, Some(fresh.as_str())),
+            next_page(&full, Some(fresh.as_str()), MAX_PAGES),
             PageStep::Stop(Stop::PageCap)
         );
         assert_eq!(
-            next_page(&full[..MAX_PAGES - 1], Some(fresh.as_str())),
+            next_page(&full[..MAX_PAGES - 1], Some(fresh.as_str()), MAX_PAGES),
             PageStep::Next(fresh)
         );
         assert_eq!(
-            next_page(&[], Some("not a url")),
+            next_page(&[], Some("not a url"), MAX_PAGES),
             PageStep::Stop(Stop::Malformed)
         );
     }
@@ -1640,13 +2064,16 @@ mod tests {
     #[test]
     fn only_the_absence_of_a_next_link_is_a_complete_listing() {
         let (a, fresh) = (page("Q2-A"), page("Q2-NEW"));
-        assert_eq!(next_page(std::slice::from_ref(&a), None), PageStep::Done);
+        assert_eq!(
+            next_page(std::slice::from_ref(&a), None, MAX_PAGES),
+            PageStep::Done
+        );
 
         let full: Vec<reqwest::Url> = (0..MAX_PAGES).map(|i| page(&i.to_string())).collect();
         for abandoned in [
-            next_page(std::slice::from_ref(&a), Some(a.as_str())),
-            next_page(&full, Some(fresh.as_str())),
-            next_page(&[], Some("not a url")),
+            next_page(std::slice::from_ref(&a), Some(a.as_str()), MAX_PAGES),
+            next_page(&full, Some(fresh.as_str()), MAX_PAGES),
+            next_page(&[], Some("not a url"), MAX_PAGES),
         ] {
             assert_ne!(abandoned, PageStep::Done);
             assert!(matches!(abandoned, PageStep::Stop(_)), "{abandoned:?}");
@@ -1667,7 +2094,11 @@ mod tests {
             "",
             "<html>maintenance</html>",
         ] {
-            assert_eq!(page_items(body), Err(Stop::Malformed), "{body}");
+            assert_eq!(
+                page_items(body, Shape::Array),
+                Err(Stop::Malformed),
+                "{body}"
+            );
         }
         assert!(Stop::Malformed.fails_a_collect());
     }
@@ -1676,10 +2107,289 @@ mod tests {
     /// may hold no devices, and that must not become a failure.
     #[test]
     fn an_array_body_is_its_items_and_an_empty_one_is_still_an_answer() {
-        let items = page_items(r#"[{"serial":"Q2-A"},{"serial":"Q2-B"}]"#).expect("two items");
+        let items = page_items(r#"[{"serial":"Q2-A"},{"serial":"Q2-B"}]"#, Shape::Array)
+            .expect("two items");
         assert_eq!(items.len(), 2);
         assert_eq!(items[1]["serial"], "Q2-B");
-        assert_eq!(page_items("[]"), Ok(Vec::new()));
+        assert_eq!(page_items("[]", Shape::Array), Ok(Vec::new()));
+    }
+
+    /// ADR-167 決定 2. Two of the switch-port listings answer `{items, meta}`: that is their page,
+    /// and the rule stays as strict as 決定 19's — a bare array where the envelope belongs, or an
+    /// envelope with no `items` array, is `Malformed`, never an empty listing.
+    #[test]
+    fn an_envelope_is_a_page_only_where_the_listing_answers_one() {
+        let items = page_items(
+            r#"{"items":[{"serial":"Q2-A"}],"meta":{"counts":{"items":{"total":1,"remaining":0}}}}"#,
+            Shape::Items,
+        )
+        .expect("one item");
+        assert_eq!(items.len(), 1);
+        assert_eq!(page_items(r#"{"items":[]}"#, Shape::Items), Ok(Vec::new()));
+        for body in [
+            r#"[{"serial":"Q2-A"}]"#,
+            r#"{"meta":{}}"#,
+            r#"{"items":{"serial":"Q2-A"}}"#,
+            r#"{"items":null}"#,
+            r#"{"errors":["nope"]}"#,
+            "",
+        ] {
+            assert_eq!(
+                page_items(body, Shape::Items),
+                Err(Stop::Malformed),
+                "{body}"
+            );
+        }
+        // And the other way round: every listing read before ADR-167 still refuses an envelope.
+        assert_eq!(
+            page_items(r#"{"items":[{"serial":"Q2-A"}]}"#, Shape::Array),
+            Err(Stop::Malformed)
+        );
+    }
+
+    /// 決定 3's page cap is the session's, not a constant's: a switch-port listing runs past 50.
+    #[test]
+    fn the_page_cap_is_the_one_the_session_was_given() {
+        let fresh = page("Q2-NEW");
+        let fifty: Vec<reqwest::Url> = (0..MAX_PAGES).map(|i| page(&i.to_string())).collect();
+        assert_eq!(
+            next_page(&fifty, Some(fresh.as_str()), SWITCH_PORT_MAX_PAGES),
+            PageStep::Next(fresh.clone())
+        );
+        assert_eq!(
+            next_page(&fifty, Some(fresh.as_str()), MAX_PAGES),
+            PageStep::Stop(Stop::PageCap)
+        );
+        assert_eq!(
+            MerakiFetchError::from(Stop::Budget),
+            MerakiFetchError::Truncated
+        );
+        assert!(!Stop::Budget.fails_a_collect());
+    }
+
+    /// 決定 6. The bucket read ended at least twelve minutes ago, lies on the five-minute grid, and
+    /// is exactly one bucket long.
+    #[test]
+    fn the_usage_bucket_is_the_newest_one_the_dashboard_has_had_time_to_fill() {
+        // 12:00:00 UTC on some day: the newest bucket that had ended by 11:48 is 11:40–11:45.
+        let noon = 1_790_078_400;
+        assert_eq!(switch_usage_bucket(noon), (noon - 1200, noon - 900));
+        for now in [noon, noon + 1, noon + 299, noon + 300, noon + 4_321] {
+            let (t0, t1) = switch_usage_bucket(now);
+            assert_eq!(t1 - t0, 300, "{now}");
+            assert_eq!(t1 % 300, 0, "{now}");
+            assert!(
+                now - t1 >= 720,
+                "{now}: the bucket ended only {}s ago",
+                now - t1
+            );
+            assert!(now - t1 < 720 + 300, "{now}: a newer settled bucket exists");
+        }
+        // A clock at the epoch does not underflow.
+        assert_eq!(switch_usage_bucket(0), (0, 0));
+    }
+
+    /// The shape measured on a real organization, with fake identities: a status row per switch,
+    /// every port listed.
+    fn status_row(serial: &str, ports: &[(&str, &str, bool, &str, &str)]) -> Value {
+        serde_json::json!({
+            "serial": serial,
+            "network": { "id": "N_1" },
+            "ports": ports.iter().map(|(id, status, enabled, speed, duplex)| serde_json::json!({
+                "portId": id, "status": status, "enabled": enabled,
+                "speed": speed, "duplex": duplex, "isUplink": false,
+                "errors": [], "warnings": [],
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    fn sample_of(data: &[DeviceDatum], serial: &str, metric: &str, ifindex: u32) -> Option<f64> {
+        data.iter()
+            .find(|d| {
+                d.serial == serial && d.sample.metric == metric && d.sample.ifindex == Some(ifindex)
+            })
+            .map(|d| d.sample.value)
+    }
+
+    #[test]
+    fn a_switch_ports_status_speed_and_duplex_read_as_an_snmp_switchs_do() {
+        let rows = [status_row(
+            "Q2SW-0001",
+            &[
+                ("1", "Connected", true, "1 Gbps", "full"),
+                ("2", "Disconnected", true, "", ""),
+                ("3", "Disconnected", false, "", ""),
+                ("1_MA-MOD-8X10G_1", "Connected", true, "10 Gbps", "full"),
+                ("5", "Something new", true, "100 Mbps", "half"),
+            ],
+        )];
+        let (data, spine) = parse_switch_port_statuses(&rows);
+        let at = |metric, ifindex| sample_of(&data, "Q2SW-0001", metric, ifindex);
+        assert_eq!(at("if_oper_status", 1), Some(1.0));
+        assert_eq!(at("if_oper_status", 2), Some(2.0));
+        assert_eq!(at("if_admin_status", 2), Some(1.0));
+        assert_eq!(at("if_admin_status", 3), Some(2.0));
+        assert_eq!(at("if_high_speed", 1), Some(1000.0));
+        assert_eq!(at("if_high_speed", 2), None, "no link, no speed");
+        // A word this build does not know says nothing about the link — the port is still listed.
+        assert_eq!(at("if_oper_status", 5), None);
+        assert_eq!(at("if_high_speed", 5), Some(100.0));
+
+        let module = switch_port_ifindex("1_MA-MOD-8X10G_1");
+        assert_eq!(at("if_high_speed", module), Some(10_000.0));
+
+        let ports = &spine["Q2SW-0001"];
+        assert_eq!(ports.len(), 5);
+        assert_eq!(ports[&1].port_id, "1");
+        assert_eq!(ports[&1].speed_bps, Some(1_000_000_000));
+        assert_eq!(ports[&1].duplex, Some(Duplex::Full));
+        assert_eq!(ports[&5].duplex, Some(Duplex::Half));
+        assert_eq!(ports[&2].speed_bps, None);
+        assert_eq!(ports[&2].duplex, None);
+        assert_eq!(ports[&module].port_id, "1_MA-MOD-8X10G_1");
+        assert!(
+            ports.values().all(|p| p.alias.is_none()),
+            "names are read separately"
+        );
+    }
+
+    /// 決定 14. A switch that is down is still listed, every port `Disconnected`; reporting that
+    /// would raise a port-down alert per port beside the switch's own node-down one.
+    #[test]
+    fn a_switch_with_no_port_connected_reports_no_ports() {
+        let rows = [
+            status_row(
+                "Q2SW-DOWN",
+                &[
+                    ("1", "Disconnected", true, "", ""),
+                    ("2", "Disconnected", true, "", ""),
+                ],
+            ),
+            status_row("Q2SW-UP", &[("1", "Connected", true, "1 Gbps", "full")]),
+            serde_json::json!({ "serial": "Q2SW-EMPTY", "ports": [] }),
+        ];
+        let (data, spine) = parse_switch_port_statuses(&rows);
+        assert!(data.iter().all(|d| d.serial == "Q2SW-UP"));
+        assert_eq!(spine.keys().collect::<Vec<_>>(), ["Q2SW-UP"]);
+    }
+
+    fn usage_row(serial: &str, ports: &[(&str, Value)]) -> Value {
+        serde_json::json!({
+            "serial": serial,
+            "network": { "id": "N_1" },
+            "ports": ports.iter().map(|(id, intervals)| serde_json::json!({
+                "portId": id, "intervals": intervals,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    fn interval(end: &str, down: Value, up: Value) -> Value {
+        serde_json::json!({
+            "startTs": "2026-09-22T11:40:00.000000Z", "endTs": end,
+            "data": { "usage": { "total": 1, "upstream": 1, "downstream": 1 } },
+            "bandwidth": { "usage": { "total": 0, "upstream": up, "downstream": down } },
+        })
+    }
+
+    #[test]
+    fn a_ports_usage_is_downstream_in_and_upstream_out_in_bits_per_second() {
+        let (_, spine) = parse_switch_port_statuses(&[status_row(
+            "Q2SW-0001",
+            &[
+                ("1", "Connected", true, "1 Gbps", "full"),
+                ("2", "Connected", true, "1 Gbps", "full"),
+                ("3", "Connected", true, "1 Gbps", "full"),
+                ("4", "Connected", true, "1 Gbps", "full"),
+            ],
+        )]);
+        let end = "2026-09-22T11:45:00.000000Z";
+        let rows = [
+            usage_row(
+                "Q2SW-0001",
+                &[
+                    (
+                        "1",
+                        serde_json::json!([interval(
+                            end,
+                            serde_json::json!(16.1),
+                            serde_json::json!(32.3)
+                        )]),
+                    ),
+                    // One direction only: neither is stored.
+                    (
+                        "2",
+                        serde_json::json!([interval(end, serde_json::json!(5), Value::Null)]),
+                    ),
+                    // Two intervals: the newer is read.
+                    (
+                        "3",
+                        serde_json::json!([
+                            interval(
+                                "2026-09-22T11:50:00.000000Z",
+                                serde_json::json!(2),
+                                serde_json::json!(1)
+                            ),
+                            interval(end, serde_json::json!(9), serde_json::json!(9)),
+                        ]),
+                    ),
+                    // A port the status listing never named.
+                    (
+                        "9",
+                        serde_json::json!([interval(
+                            end,
+                            serde_json::json!(1),
+                            serde_json::json!(1)
+                        )]),
+                    ),
+                ],
+            ),
+            // A switch not on the spine.
+            usage_row(
+                "Q2SW-OFF",
+                &[(
+                    "1",
+                    serde_json::json!([interval(end, serde_json::json!(1), serde_json::json!(1))]),
+                )],
+            ),
+        ];
+        let data = parse_switch_port_usage(&rows, &spine);
+        let at = |metric, ifindex| sample_of(&data, "Q2SW-0001", metric, ifindex);
+        assert_eq!(at(METRIC_MERAKI_PORT_IN_BPS, 1), Some(16_100.0));
+        assert_eq!(at(METRIC_MERAKI_PORT_OUT_BPS, 1), Some(32_300.0));
+        assert_eq!(at(METRIC_MERAKI_PORT_IN_BPS, 2), None);
+        assert_eq!(at(METRIC_MERAKI_PORT_OUT_BPS, 2), None);
+        assert_eq!(at(METRIC_MERAKI_PORT_IN_BPS, 3), Some(2_000.0));
+        // Port 4 was not in the bucket: no reading, not a zero.
+        assert_eq!(at(METRIC_MERAKI_PORT_IN_BPS, 4), None);
+        assert_eq!(at(METRIC_MERAKI_PORT_IN_BPS, 9), None);
+        assert!(data.iter().all(|d| d.serial == "Q2SW-0001"));
+    }
+
+    #[test]
+    fn a_ports_configured_name_becomes_its_alias_and_a_missing_one_clears_it() {
+        let (_, mut spine) = parse_switch_port_statuses(&[status_row(
+            "Q2SW-0001",
+            &[
+                ("1", "Connected", true, "1 Gbps", "full"),
+                ("2", "Connected", true, "1 Gbps", "full"),
+                ("3", "Disconnected", true, "", ""),
+            ],
+        )]);
+        let rows = [
+            serde_json::json!({ "serial": "Q2SW-0001", "ports": [
+                { "portId": "1", "name": "uplink to core" },
+                { "portId": "2", "name": null },
+                { "portId": "7", "name": "not a port the statuses named" },
+            ]}),
+            serde_json::json!({ "serial": "Q2SW-OFF", "ports": [{ "portId": "1", "name": "x" }] }),
+        ];
+        name_switch_ports(&rows, &mut spine);
+        let ports = &spine["Q2SW-0001"];
+        assert_eq!(ports[&1].alias.as_deref(), Some("uplink to core"));
+        assert_eq!(ports[&2].alias.as_deref(), Some(""));
+        assert_eq!(ports[&3].alias, None, "not in the answer: nothing said");
+        assert!(!ports.contains_key(&7));
+        assert!(!spine.contains_key("Q2SW-OFF"));
     }
 
     /// Both directions of the split between the two readers. The lenient one keeps its old
@@ -2182,6 +2892,7 @@ mod tests {
             serial: "Q2-A".into(),
             samples: Vec::new(),
             uplinks: Vec::new(),
+            ports: Vec::new(),
         }
     }
 

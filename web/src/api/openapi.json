@@ -7814,7 +7814,7 @@
           "meraki"
         ],
         "summary": "Update an org's per-tier cadence, enabled tiers, and rate budget.",
-        "description": "`enabled_tiers` must include `availability`. It is the one tier that decides whether a device\nis up; the others only record readings, so an organization without it could raise no node-down\nalert at all.",
+        "description": "`enabled_tiers` must include `availability`. It is the one tier that decides whether a device\nis up; the others only record readings, so an organization without it could raise no node-down\nalert at all. `switch_ports_secs` may be left out, and the stored interval then stays.",
         "operationId": "set_meraki_org_cadence",
         "parameters": [
           {
@@ -7843,7 +7843,7 @@
             "description": "Cadence, enabled tiers and rate budget updated"
           },
           "400": {
-            "description": "A cadence value is outside its band, target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)",
+            "description": "A cadence value is outside its band (`switch_ports_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -31582,6 +31582,14 @@
             "type": "integer",
             "format": "int32"
           },
+          "switch_ports_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The switch-port tier's interval, 300–600 seconds. Optional: left out, the stored interval\nstays as it is, so a client written before the tier existed does not reset it."
+          },
           "target_rps": {
             "type": "number",
             "format": "double"
@@ -31617,7 +31625,7 @@
               "string",
               "null"
             ],
-            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three. Absent when the whole collect failed, or a poller from before this\nreported it."
+            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,\n`switch_port_usage`, `switch_port_config`). Absent when the whole collect failed, or a\npoller from before this reported it."
           },
           "reason": {
             "$ref": "#/components/schemas/MerakiSyncFailure",
@@ -31630,7 +31638,7 @@
           },
           "tier": {
             "type": "string",
-            "description": "`availability`, `uplink` or `traffic`."
+            "description": "`availability`, `uplink`, `switch_ports` or `traffic`."
           }
         }
       },
@@ -32156,6 +32164,7 @@
           "uplink_secs",
           "traffic_secs",
           "inventory_secs",
+          "switch_ports_secs",
           "enabled_tiers",
           "target_rps",
           "credential_id",
@@ -32180,7 +32189,7 @@
             "items": {
               "$ref": "#/components/schemas/MerakiCollectFailureView"
             },
-            "description": "The collect tiers the Dashboard API is **not answering** right now, each with why and since\nwhen. Empty when none is known to be failing.\n\nDistinct from `last_sync_error`, which is the inventory sync — this server asking what the\norganization holds. A collect is a poller asking how the devices are, and it is what a\ndevice's state depends on: while `availability` is listed here the organization's nodes keep\nthe last state they had, and after three failures in a row one alert is raised about the\norganization (`subject_kind: meraki_org`) — never one per device. `uplink` or `traffic`\nlisted alone raises nothing: readings are missing, liveness is not."
+            "description": "The collect tiers the Dashboard API is **not answering** right now, each with why and since\nwhen. Empty when none is known to be failing.\n\nDistinct from `last_sync_error`, which is the inventory sync — this server asking what the\norganization holds. A collect is a poller asking how the devices are, and it is what a\ndevice's state depends on: while `availability` is listed here the organization's nodes keep\nthe last state they had, and after three failures in a row one alert is raised about the\norganization (`subject_kind: meraki_org`) — never one per device. `uplink`, `switch_ports`\nor `traffic` listed alone raises nothing: readings are missing, liveness is not."
           },
           "credential_id": {
             "type": "string",
@@ -32267,6 +32276,12 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "switch_ports_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The switch-port tier's interval (seconds) — every switch port's status, speed and traffic.",
+            "minimum": 0
           },
           "target_rps": {
             "type": "number",

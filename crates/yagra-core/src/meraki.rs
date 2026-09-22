@@ -80,6 +80,8 @@ pub struct MerakiOrg {
     pub uplink_secs: u32,
     pub traffic_secs: u32,
     pub inventory_secs: u32,
+    /// The switch-port tier's cadence (ADR-167, migration 0130).
+    pub switch_ports_secs: u32,
     pub enabled_tiers: Vec<String>,
     pub target_rps: f64,
     pub group_id: Option<Uuid>,
@@ -111,6 +113,7 @@ impl MerakiOrg {
         let uplink_secs: i32 = row.try_get("uplink_secs")?;
         let traffic_secs: i32 = row.try_get("traffic_secs")?;
         let inventory_secs: i32 = row.try_get("inventory_secs")?;
+        let switch_ports_secs: i32 = row.try_get("switch_ports_secs")?;
         let max_devices: i32 = row.try_get("max_devices")?;
         let devices_over_cap: i32 = row.try_get("devices_over_cap")?;
         Ok(Self {
@@ -123,6 +126,7 @@ impl MerakiOrg {
             uplink_secs: uplink_secs.max(0) as u32,
             traffic_secs: traffic_secs.max(0) as u32,
             inventory_secs: inventory_secs.max(0) as u32,
+            switch_ports_secs: switch_ports_secs.max(0) as u32,
             enabled_tiers: row.try_get("enabled_tiers")?,
             target_rps: row.try_get("target_rps")?,
             group_id: row.try_get("group_id")?,
@@ -174,14 +178,31 @@ impl MerakiOrg {
         match tier {
             MerakiTier::Availability => self.availability_secs,
             MerakiTier::Uplink => self.uplink_secs,
+            MerakiTier::SwitchPorts => self.switch_ports_secs,
             MerakiTier::Traffic => self.traffic_secs,
             MerakiTier::Inventory => self.inventory_secs,
         }
     }
 }
 
+/// What `PUT /meraki/orgs/{id}/cadence` stores: each tier's interval, which tiers run, and the
+/// organization's request-rate budget. The API checks the bands before it gets here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerakiCadence {
+    pub availability_secs: i32,
+    pub uplink_secs: i32,
+    pub traffic_secs: i32,
+    pub inventory_secs: i32,
+    /// `None` keeps the stored value (ADR-167 決定 12).
+    pub switch_ports_secs: Option<i32>,
+    pub enabled_tiers: Vec<String>,
+    pub target_rps: f64,
+}
+
 /// Build the collect-job check for `(org, tier)` given the resolved key, the serial→node_id map,
-/// and the in-scope networks. Pure — unit-tested without a database.
+/// and the in-scope networks. `port_names` asks a switch-port collect to read the ports' configured
+/// names as well ([`port_names_due`]); every other tier ignores it. Pure — unit-tested without a
+/// database.
 #[must_use]
 pub fn build_collect_check(
     org: &MerakiOrg,
@@ -189,6 +210,7 @@ pub fn build_collect_check(
     api_key: String,
     devices: Vec<MerakiDeviceRef>,
     network_ids: Vec<String>,
+    port_names: bool,
 ) -> MerakiCollectCheck {
     MerakiCollectCheck {
         org_id: org.org_id.clone(),
@@ -201,7 +223,72 @@ pub fn build_collect_check(
         per_page: DEFAULT_PER_PAGE,
         target_rps: org.target_rps,
         timeout_ms: DEFAULT_COLLECT_TIMEOUT_MS,
+        port_names,
     }
+}
+
+/// Whether the pool a collect would go to can run `tier` at all (ADR-167 決定 9).
+///
+/// `switch_ports` is `Coordinator::pollers_support(pool, CAP_MERAKI_SWITCH_PORTS)`: every live
+/// poller in the pool claims the switch-port tier. A poller from before it cannot decode the job,
+/// drops it, and the organization's single collect flight then stays taken for the whole lease —
+/// availability collects included — so a tier the pool cannot run is not offered, and not counted
+/// as failing either. Exhaustive, so the next tier has to answer the question.
+#[must_use]
+pub fn pool_can_run(tier: MerakiTier, switch_ports: bool) -> bool {
+    match tier {
+        MerakiTier::SwitchPorts => switch_ports,
+        MerakiTier::Availability
+        | MerakiTier::Uplink
+        | MerakiTier::Traffic
+        | MerakiTier::Inventory => true,
+    }
+}
+
+/// The tier an organization's next collect is for: the most overdue of its due tiers that the pool
+/// can run ([`pool_can_run`]), or `None` when nothing is due. `last` is when each tier was last
+/// dispatched; a tier never dispatched in this process is due and the most overdue of all.
+///
+/// Ties keep the **first** tier in [`MerakiOrg::active_tiers`]' cadence order, which is what puts
+/// availability first after a restart — the one tier whose failures raise an alert (ADR-164 決定 18).
+/// Pure, so that order and the capability gate are tested without the scheduler's loop.
+#[must_use]
+pub fn pick_due_tier(
+    org: &MerakiOrg,
+    last: &HashMap<(Uuid, MerakiTier), Instant>,
+    now: Instant,
+    switch_ports: bool,
+) -> Option<MerakiTier> {
+    let mut best: Option<(MerakiTier, Duration)> = None;
+    for tier in org.active_tiers() {
+        if !pool_can_run(tier, switch_ports) {
+            continue;
+        }
+        let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
+        let (due, overdue) = match last.get(&(org.id, tier)) {
+            Some(&t) => {
+                let e = now.duration_since(t);
+                (e >= cadence, e)
+            }
+            None => (true, Duration::MAX),
+        };
+        if due && best.is_none_or(|(_, bo)| overdue > bo) {
+            best = Some((tier, overdue));
+        }
+    }
+    best.map(|(tier, _)| tier)
+}
+
+/// How often a switch-port collect also reads the ports' configured names (ADR-167 決定 1). The
+/// listing took 84 s for 854 switches on a real organization — longer than the rest of the collect —
+/// and a port's name is not a reading.
+pub const PORT_NAMES_EVERY: Duration = Duration::from_secs(3600);
+
+/// Whether this switch-port collect should read the ports' names too: never read in this process
+/// (so a restarted core fills them at once), or not for [`PORT_NAMES_EVERY`].
+#[must_use]
+pub fn port_names_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= PORT_NAMES_EVERY)
 }
 
 /// Why the scheduler sends an organization no collect this tick.
@@ -453,9 +540,9 @@ impl MerakiOrgRepo {
     }
 
     const COLUMNS: &'static str = "id, org_id, name, base_url, credential_id, availability_secs, \
-        uplink_secs, traffic_secs, inventory_secs, enabled_tiers, target_rps, group_id, enabled, \
-        last_sync_at, last_sync_ok, last_sync_error, import_devices, file_by_prefix, max_devices, \
-        devices_over_cap, collect_failures";
+        uplink_secs, traffic_secs, inventory_secs, switch_ports_secs, enabled_tiers, target_rps, \
+        group_id, enabled, last_sync_at, last_sync_ok, last_sync_error, import_devices, \
+        file_by_prefix, max_devices, devices_over_cap, collect_failures";
 
     /// Every org (for the Integrations UI).
     pub async fn list(&self) -> anyhow::Result<Vec<MerakiOrg>> {
@@ -542,29 +629,24 @@ impl MerakiOrgRepo {
     }
 
     /// Update per-tier cadence, enabled tiers, and the rate budget. Returns whether it exists.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn update_cadence(
-        &self,
-        id: Uuid,
-        availability_secs: i32,
-        uplink_secs: i32,
-        traffic_secs: i32,
-        inventory_secs: i32,
-        enabled_tiers: &[String],
-        target_rps: f64,
-    ) -> anyhow::Result<bool> {
+    ///
+    /// A `switch_ports_secs` of `None` leaves the stored one as it is: a client written before the
+    /// switch-port tier existed does not send it, and must not reset it (ADR-167 決定 12).
+    pub async fn update_cadence(&self, id: Uuid, c: &MerakiCadence) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE meraki_orgs SET availability_secs = $2, uplink_secs = $3, traffic_secs = $4, \
-             inventory_secs = $5, enabled_tiers = $6, target_rps = $7, updated_at = now() \
+             inventory_secs = $5, enabled_tiers = $6, target_rps = $7, \
+             switch_ports_secs = COALESCE($8, switch_ports_secs), updated_at = now() \
              WHERE id = $1",
         )
         .bind(id)
-        .bind(availability_secs)
-        .bind(uplink_secs)
-        .bind(traffic_secs)
-        .bind(inventory_secs)
-        .bind(enabled_tiers)
-        .bind(target_rps)
+        .bind(c.availability_secs)
+        .bind(c.uplink_secs)
+        .bind(c.traffic_secs)
+        .bind(c.inventory_secs)
+        .bind(&c.enabled_tiers)
+        .bind(c.target_rps)
+        .bind(c.switch_ports_secs)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -1038,13 +1120,33 @@ impl MerakiDeviceRepo {
             .collect()
     }
 
-    /// The serial→node_id map for an org, inlined into its collect jobs so the stateless poller can
-    /// attribute each API row to a node.
-    pub async fn device_refs(&self, org_uuid: Uuid) -> anyhow::Result<Vec<MerakiDeviceRef>> {
-        let rows = sqlx::query("SELECT serial, node_id FROM meraki_devices WHERE org_id = $1")
-            .bind(org_uuid)
-            .fetch_all(&self.pool)
-            .await?;
+    /// The serial→node_id map for an org's `tier` collect, inlined into the job so the stateless
+    /// poller can attribute each API row to a node.
+    ///
+    /// Every imported device, except for the switch-port tier, which gets the switches alone
+    /// (ADR-167 決定 10): only a switch has ports to report, and an organization with none is sent
+    /// no switch-port collect at all. The product type is compared case-blind, as
+    /// `yagra_common::category_for_product_type` reads it.
+    pub async fn device_refs(
+        &self,
+        org_uuid: Uuid,
+        tier: MerakiTier,
+    ) -> anyhow::Result<Vec<MerakiDeviceRef>> {
+        let only: Option<&str> = match tier {
+            MerakiTier::SwitchPorts => Some("switch"),
+            MerakiTier::Availability
+            | MerakiTier::Uplink
+            | MerakiTier::Traffic
+            | MerakiTier::Inventory => None,
+        };
+        let rows = sqlx::query(
+            "SELECT serial, node_id FROM meraki_devices WHERE org_id = $1 \
+             AND ($2::TEXT IS NULL OR lower(product_type) = $2)",
+        )
+        .bind(org_uuid)
+        .bind(only)
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
             .map(|r| {
                 Ok(MerakiDeviceRef {
@@ -1111,6 +1213,8 @@ mod tests {
             // Not the column default (300): it has to differ from the other three, or
             // `tier_cadence_maps_each_tier` could not tell Inventory from Availability.
             inventory_secs: 900,
+            // Likewise distinct from every other interval.
+            switch_ports_secs: 600,
             enabled_tiers: vec!["availability".into(), "uplink".into(), "inventory".into()],
             target_rps: 2.0,
             group_id: Some(Uuid::nil()),
@@ -1177,6 +1281,7 @@ mod tests {
         assert_eq!(o.tier_cadence(MerakiTier::Availability), 300);
         assert_eq!(o.tier_cadence(MerakiTier::Traffic), 1800);
         assert_eq!(o.tier_cadence(MerakiTier::Inventory), 900);
+        assert_eq!(o.tier_cadence(MerakiTier::SwitchPorts), 600);
     }
 
     #[test]
@@ -1191,6 +1296,7 @@ mod tests {
                 node_id: yagra_common::NodeId::from(Uuid::nil()),
             }],
             vec!["N_1".into()],
+            false,
         );
         assert_eq!(check.org_id, "123456");
         assert_eq!(check.meraki_org_uuid, o.id);
@@ -1198,6 +1304,100 @@ mod tests {
         assert_eq!(check.target_rps, 2.0);
         assert_eq!(check.devices.len(), 1);
         assert_eq!(check.network_ids, vec!["N_1".to_string()]);
+        assert!(!check.port_names);
+        let names = build_collect_check(
+            &o,
+            MerakiTier::SwitchPorts,
+            "key".into(),
+            vec![],
+            vec![],
+            true,
+        );
+        assert!(names.port_names);
+    }
+
+    fn with_switch_ports() -> MerakiOrg {
+        let mut o = org();
+        o.enabled_tiers = ["availability", "uplink", "switch_ports", "traffic"]
+            .map(str::to_owned)
+            .to_vec();
+        o
+    }
+
+    /// ADR-167 決定 9. A pool that cannot run the switch-port tier is never offered it — and the
+    /// other tiers carry on exactly as before, availability first.
+    #[test]
+    fn the_switch_port_tier_is_picked_only_where_every_poller_can_run_it() {
+        let o = with_switch_ports();
+        let now = Instant::now();
+        let mut last = HashMap::new();
+        // Nothing dispatched yet: availability wins the tie either way.
+        assert_eq!(
+            pick_due_tier(&o, &last, now, true),
+            Some(MerakiTier::Availability)
+        );
+        assert_eq!(
+            pick_due_tier(&o, &last, now, false),
+            Some(MerakiTier::Availability)
+        );
+
+        // Availability and uplink just went; switch ports and traffic are next.
+        last.insert((o.id, MerakiTier::Availability), now);
+        last.insert((o.id, MerakiTier::Uplink), now);
+        assert_eq!(
+            pick_due_tier(&o, &last, now, true),
+            Some(MerakiTier::SwitchPorts)
+        );
+        assert_eq!(
+            pick_due_tier(&o, &last, now, false),
+            Some(MerakiTier::Traffic),
+            "a pool with an old poller was offered the switch-port tier"
+        );
+
+        // Traffic went too: with the tier withheld, nothing is due — not a failure, just nothing.
+        last.insert((o.id, MerakiTier::Traffic), now);
+        assert_eq!(pick_due_tier(&o, &last, now, false), None);
+        assert_eq!(
+            pick_due_tier(&o, &last, now, true),
+            Some(MerakiTier::SwitchPorts)
+        );
+
+        // Its own cadence decides when it is due again (600 s in this fixture).
+        last.insert((o.id, MerakiTier::SwitchPorts), now);
+        let later = now + Duration::from_secs(599);
+        assert_ne!(
+            pick_due_tier(&o, &last, later, true),
+            Some(MerakiTier::SwitchPorts)
+        );
+        let due = now + Duration::from_secs(600);
+        last.insert((o.id, MerakiTier::Availability), due);
+        last.insert((o.id, MerakiTier::Uplink), due);
+        last.insert((o.id, MerakiTier::Traffic), due);
+        assert_eq!(
+            pick_due_tier(&o, &last, due, true),
+            Some(MerakiTier::SwitchPorts)
+        );
+    }
+
+    #[test]
+    fn only_the_switch_port_tier_asks_the_pool_what_it_can_run() {
+        for tier in MerakiTier::ALL {
+            assert!(pool_can_run(tier, true), "{tier:?}");
+            assert_eq!(
+                pool_can_run(tier, false),
+                tier != MerakiTier::SwitchPorts,
+                "{tier:?}"
+            );
+        }
+    }
+
+    /// 決定 1: the names are read on the first switch-port collect after a restart, then hourly.
+    #[test]
+    fn the_port_names_are_read_at_once_and_then_hourly() {
+        let now = Instant::now();
+        assert!(port_names_due(None, now));
+        assert!(!port_names_due(Some(now), now + Duration::from_secs(3599)));
+        assert!(port_names_due(Some(now), now + PORT_NAMES_EVERY));
     }
 
     /// 決定 16. The poller reads an empty list as "every network", so the two states that used to
@@ -1422,7 +1622,9 @@ mod tests {
             vec![
                 "availability".to_owned(),
                 "uplink".to_owned(),
-                "traffic".to_owned()
+                "traffic".to_owned(),
+                // ADR-167, migration 0130: new organizations collect their switch ports too.
+                "switch_ports".to_owned()
             ],
             "the default tier set changed"
         );
@@ -1527,9 +1729,27 @@ mod tests {
             .await
             .expect("create");
 
-        let tiers = vec!["availability".to_owned(), "inventory".to_owned()];
+        // A new organization collects its switches' ports at the column default (migration 0130).
+        let fresh = repo.get(id).await.expect("get").expect("the org");
+        assert_eq!(fresh.switch_ports_secs, 300);
         assert!(
-            repo.update_cadence(id, 600, 900, 3600, 43200, &tiers, 4.5)
+            fresh.enabled_tiers.iter().any(|t| t == "switch_ports"),
+            "{:?}",
+            fresh.enabled_tiers
+        );
+
+        let tiers = vec!["availability".to_owned(), "inventory".to_owned()];
+        let cadence = |availability, inventory, switch_ports, rps| MerakiCadence {
+            availability_secs: availability,
+            uplink_secs: 900,
+            traffic_secs: 3600,
+            inventory_secs: inventory,
+            switch_ports_secs: switch_ports,
+            enabled_tiers: tiers.clone(),
+            target_rps: rps,
+        };
+        assert!(
+            repo.update_cadence(id, &cadence(600, 43200, Some(600), 4.5))
                 .await
                 .expect("update"),
             "updating an org that exists reported that it did not"
@@ -1540,9 +1760,10 @@ mod tests {
                 org.availability_secs,
                 org.uplink_secs,
                 org.traffic_secs,
-                org.inventory_secs
+                org.inventory_secs,
+                org.switch_ports_secs
             ),
-            (600, 900, 3600, 43200)
+            (600, 900, 3600, 43200, 600)
         );
         assert!((org.target_rps - 4.5).abs() < f64::EPSILON);
         assert_eq!(
@@ -1550,9 +1771,17 @@ mod tests {
             "the enabled tier set did not survive the round trip"
         );
 
+        // ADR-167 決定 12: a client that does not know the switch-port tier does not reset it.
+        assert!(repo
+            .update_cadence(id, &cadence(600, 43200, None, 4.5))
+            .await
+            .expect("update"));
+        let kept = repo.get(id).await.expect("get").expect("the org");
+        assert_eq!(kept.switch_ports_secs, 600, "an omitted interval was reset");
+
         assert!(
             !repo
-                .update_cadence(Uuid::new_v4(), 600, 600, 3600, 43200, &tiers, 2.0)
+                .update_cadence(Uuid::new_v4(), &cadence(600, 43200, None, 2.0))
                 .await
                 .expect("update"),
             "updating an org that does not exist reported success"
@@ -1563,17 +1792,27 @@ mod tests {
         for (label, res) in [
             (
                 "availability below the floor",
-                repo.update_cadence(id, 30, 600, 3600, 43200, &tiers, 2.0)
+                repo.update_cadence(id, &cadence(30, 43200, None, 2.0))
                     .await,
             ),
             (
                 "inventory above the ceiling",
-                repo.update_cadence(id, 600, 600, 3600, 999_999, &tiers, 2.0)
+                repo.update_cadence(id, &cadence(600, 999_999, None, 2.0))
                     .await,
             ),
             (
                 "a rate budget over the cap",
-                repo.update_cadence(id, 600, 600, 3600, 43200, &tiers, 99.0)
+                repo.update_cadence(id, &cadence(600, 43200, None, 99.0))
+                    .await,
+            ),
+            (
+                "switch ports faster than the Dashboard's buckets",
+                repo.update_cadence(id, &cadence(600, 43200, Some(299), 2.0))
+                    .await,
+            ),
+            (
+                "switch ports slower than the band",
+                repo.update_cadence(id, &cadence(600, 43200, Some(601), 2.0))
                     .await,
             ),
         ] {
@@ -1584,6 +1823,7 @@ mod tests {
             after.availability_secs, 600,
             "a refused write landed anyway"
         );
+        assert_eq!(after.switch_ports_secs, 600);
         assert!((after.target_rps - 4.5).abs() < f64::EPSILON);
     }
 
@@ -2276,12 +2516,53 @@ mod tests {
             2,
             "the fleet-wide set did not return both orgs' devices"
         );
-        let refs = devices.device_refs(acme).await.expect("device_refs");
+        let refs = devices
+            .device_refs(acme, MerakiTier::Availability)
+            .await
+            .expect("device_refs");
         assert_eq!(refs.len(), 1, "the device refs are not scoped to their org");
         assert_eq!(refs[0].serial, "Q3-1");
-        let theirs = devices.device_refs(other).await.expect("device_refs");
+        let theirs = devices
+            .device_refs(other, MerakiTier::Availability)
+            .await
+            .expect("device_refs");
         assert_eq!(theirs.len(), 1);
         assert_eq!(theirs[0].serial, "Q3-9");
+
+        // ADR-167 決定 10: a switch-port collect is about the switches alone. Acme holds an access
+        // point only, so it has none — until a switch (spelt as the Dashboard may spell it) joins.
+        assert!(devices
+            .device_refs(acme, MerakiTier::SwitchPorts)
+            .await
+            .expect("switch refs")
+            .is_empty());
+        let org = repo.get(acme).await.expect("get").expect("org");
+        let switch = MerakiImportDevice {
+            product_type: "Switch".to_owned(),
+            model: Some("MS120-24P".to_owned()),
+            ..device("Q3-SW", "N_1", "Net")
+        };
+        repo.import_devices(&org, &[switch]).await.expect("import");
+        let switches = devices
+            .device_refs(acme, MerakiTier::SwitchPorts)
+            .await
+            .expect("switch refs");
+        assert_eq!(
+            switches
+                .iter()
+                .map(|r| r.serial.as_str())
+                .collect::<Vec<_>>(),
+            ["Q3-SW"]
+        );
+        assert_eq!(
+            devices
+                .device_refs(acme, MerakiTier::Uplink)
+                .await
+                .expect("refs")
+                .len(),
+            2,
+            "every other tier is about every device"
+        );
 
         let mut mixed: Vec<Uuid> = devices
             .node_ids()
@@ -2293,7 +2574,7 @@ mod tests {
         let meraki_only = devices.filter_meraki(&mixed).await.expect("filter");
         assert_eq!(
             meraki_only.len(),
-            2,
+            3,
             "the filter dropped a Meraki device or kept the SNMP node"
         );
         assert!(

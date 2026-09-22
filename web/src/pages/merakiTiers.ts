@@ -20,7 +20,13 @@ import type { TFunction } from 'i18next';
  * tier is a bare string in the API (`MerakiOrgView.enabled_tiers`), so nothing generated carries
  * the set.
  */
-export const MERAKI_TIERS = ['availability', 'uplink', 'traffic', 'inventory'] as const;
+export const MERAKI_TIERS = [
+  'availability',
+  'uplink',
+  'switch_ports',
+  'traffic',
+  'inventory',
+] as const;
 
 export type MerakiTier = (typeof MERAKI_TIERS)[number];
 
@@ -37,6 +43,7 @@ export type MerakiTier = (typeof MERAKI_TIERS)[number];
 export const SELECTABLE_MERAKI_TIERS = [
   'availability',
   'uplink',
+  'switch_ports',
   'traffic',
 ] as const satisfies readonly MerakiTier[];
 

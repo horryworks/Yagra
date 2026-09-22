@@ -16,7 +16,13 @@ describe('MERAKI_TIERS', () => {
   it('lists every backend tier exactly once, in cadence order', () => {
     // Mirrors `MerakiTier::ALL` (crates/yagra-common/src/meraki.rs). The order is cadence order,
     // which is also the order the cadence dialog renders its interval fields in.
-    expect([...MERAKI_TIERS]).toEqual(['availability', 'uplink', 'traffic', 'inventory']);
+    expect([...MERAKI_TIERS]).toEqual([
+      'availability',
+      'uplink',
+      'switch_ports',
+      'traffic',
+      'inventory',
+    ]);
     expect(new Set(MERAKI_TIERS).size).toBe(MERAKI_TIERS.length);
   });
 });
@@ -42,7 +48,7 @@ describe('the tier an organization cannot go without (ADR-164 決定 17)', () =>
     // Availability is the only tier that says whether a device is up. Equality on the rest: a new
     // selectable tier has to land on one side or the other on purpose.
     expect(REQUIRED_MERAKI_TIER).toBe('availability');
-    expect([...OPTIONAL_MERAKI_TIERS]).toEqual(['uplink', 'traffic']);
+    expect([...OPTIONAL_MERAKI_TIERS]).toEqual(['uplink', 'switch_ports', 'traffic']);
     expect([REQUIRED_MERAKI_TIER, ...OPTIONAL_MERAKI_TIERS]).toEqual([...SELECTABLE_MERAKI_TIERS]);
   });
 

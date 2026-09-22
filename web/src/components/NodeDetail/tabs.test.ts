@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   NODE_DETAIL_TAB_META,
   NODE_DETAIL_TABS,
+  interfacesFed,
   normalizeNodeDetailTab,
   requestedNodeDetailTab,
   resolveNodeDetailTab,
@@ -64,14 +65,25 @@ describe('node-detail tabs', () => {
  *  ping-only device — the whole case ADR-119 exists for — unexercised while every one of them
  *  still passes. Cross the two axes here, once, so no test below can forget the second. */
 const SUBJECTS: NodeDetailSubject[] = NODE_KINDS.flatMap((kind) => [
-  { kind, snmpConfigured: true, isWlanController: false },
-  { kind, snmpConfigured: false, isWlanController: false },
+  { kind, snmpConfigured: true, isWlanController: false, merakiProductType: null },
+  { kind, snmpConfigured: false, isWlanController: false, merakiProductType: null },
   // The third axis is a device that is also a wireless controller — the only subject that sees
   // the AP tab, and the one every "is this tab reachable at all" assertion needs in the set.
-  { kind, snmpConfigured: true, isWlanController: true },
+  { kind, snmpConfigured: true, isWlanController: true, merakiProductType: null },
+  // The fourth: a Meraki node is a switch, an appliance or an access point, and only the first
+  // has ports (ADR-167). Crossed with SNMP, because a default community makes it read true.
+  ...(['switch', 'appliance', 'wireless'] as const).flatMap((merakiProductType) =>
+    [true, false].map((snmpConfigured) => ({
+      kind,
+      snmpConfigured,
+      isWlanController: false,
+      merakiProductType,
+    })),
+  ),
 ]);
 const label = (n: NodeDetailSubject) =>
-  `${n.kind}/${n.snmpConfigured ? 'snmp' : 'ping-only'}${n.isWlanController ? '/wlc' : ''}`;
+  `${n.kind}/${n.snmpConfigured ? 'snmp' : 'ping-only'}${n.isWlanController ? '/wlc' : ''}` +
+  (n.merakiProductType ? `/${n.merakiProductType}` : '');
 
 describe('node-detail tab visibility', () => {
   // ADR-064 増分 C. An access point is never polled itself, so `snmpConfigured` is false on every
@@ -79,7 +91,7 @@ describe('node-detail tab visibility', () => {
   // collected. The two halves are separate and both are needed: `kinds` lets the tab through for
   // this node kind, and `snmpFed` lets it through despite the node having no credential.
   it('shows Interfaces on an access point, whose rows come from its controller', () => {
-    const ap = { kind: 'wireless_ap' as const, snmpConfigured: false, isWlanController: false };
+    const ap = { kind: 'wireless_ap' as const, snmpConfigured: false, isWlanController: false, merakiProductType: null };
     expect(visibleNodeDetailTabs(ap)).toContain('interfaces');
     // And only Interfaces: neighbours and flow have no controller-side equivalent, so opening
     // them would promise a tab nothing can ever fill.
@@ -89,8 +101,43 @@ describe('node-detail tab visibility', () => {
 
   // The other side of the same rule: widening it for access points must not widen it for a
   // device nobody gave an SNMP credential, which is the case ADR-119 exists for.
+  // ADR-167 決定 13. A Meraki switch's ports come from its organization's switch-port collect, so it
+  // gets the tab — whatever the SNMP flag says, because it is never walked.
+  it('shows Interfaces on a Meraki switch and on no other Meraki node', () => {
+    for (const snmpConfigured of [true, false]) {
+      const node = (merakiProductType: string | null) => ({
+        kind: 'meraki' as const,
+        snmpConfigured,
+        isWlanController: false,
+        merakiProductType,
+      });
+      expect(visibleNodeDetailTabs(node('switch'))).toContain('interfaces');
+      // The Dashboard's spelling is not trusted to stay lower case.
+      expect(visibleNodeDetailTabs(node('Switch'))).toContain('interfaces');
+      // 🚨 The case the per-kind rule exists for: `snmpConfigured` is true of every node on a
+      // deployment with a default community, and the old rule offered an MX an empty tab.
+      for (const other of ['appliance', 'wireless', 'camera', null]) {
+        expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('interfaces');
+      }
+      // Neighbours and flow have no Meraki source at all.
+      expect(visibleNodeDetailTabs(node('switch'))).not.toContain('neighbors');
+      expect(visibleNodeDetailTabs(node('switch'))).not.toContain('flow');
+    }
+  });
+
+  it('asks every kind whether its ports are walked, and the answer is per kind', () => {
+    const base = { snmpConfigured: false, isWlanController: false, merakiProductType: null };
+    expect(interfacesFed({ ...base, kind: 'device' })).toBe(false);
+    expect(interfacesFed({ ...base, kind: 'device', snmpConfigured: true })).toBe(true);
+    expect(interfacesFed({ ...base, kind: 'wireless_ap' })).toBe(true);
+    expect(interfacesFed({ ...base, kind: 'meraki', snmpConfigured: true })).toBe(false);
+    expect(interfacesFed({ ...base, kind: 'meraki', merakiProductType: 'switch' })).toBe(true);
+    expect(interfacesFed({ ...base, kind: 'url', snmpConfigured: true })).toBe(false);
+    expect(interfacesFed({ ...base, kind: 'dns', snmpConfigured: true })).toBe(false);
+  });
+
   it('still hides Interfaces on a ping-only device', () => {
-    const pingOnly = { kind: 'device' as const, snmpConfigured: false, isWlanController: false };
+    const pingOnly = { kind: 'device' as const, snmpConfigured: false, isWlanController: false, merakiProductType: null };
     expect(visibleNodeDetailTabs(pingOnly)).not.toContain('interfaces');
   });
 
@@ -106,8 +153,8 @@ describe('node-detail tab visibility', () => {
   // The recognition test for the second axis. Without it every assertion here is satisfiable by a
   // `needsSnmp` nothing reads — which is exactly what an under-reporting check looks like.
   it('actually narrows a device when SNMP is not configured', () => {
-    const withSnmp = visibleNodeDetailTabs({ kind: 'device', snmpConfigured: true, isWlanController: false });
-    const without = visibleNodeDetailTabs({ kind: 'device', snmpConfigured: false, isWlanController: false });
+    const withSnmp = visibleNodeDetailTabs({ kind: 'device', snmpConfigured: true, isWlanController: false, merakiProductType: null });
+    const without = visibleNodeDetailTabs({ kind: 'device', snmpConfigured: false, isWlanController: false, merakiProductType: null });
     expect(without.length).toBeLessThan(withSnmp.length);
     for (const tab of without) expect(withSnmp, tab).toContain(tab);
     expect(NODE_DETAIL_TABS.filter((t) => NODE_DETAIL_TAB_META[t].needsSnmp).length).toBeGreaterThan(
@@ -135,7 +182,8 @@ describe('node-detail tab visibility', () => {
       kind: NodeDetailSubject['kind'],
       snmpConfigured: boolean,
       isWlanController = false,
-    ) => [...visibleNodeDetailTabs({ kind, snmpConfigured, isWlanController })];
+      merakiProductType: string | null = null,
+    ) => [...visibleNodeDetailTabs({ kind, snmpConfigured, isWlanController, merakiProductType })];
     // An ordinary SNMP device sees everything EXCEPT the AP tab, and that exclusion is the whole
     // point of the third axis: a switch passes `kinds` and `needsSnmp` exactly as a controller
     // does, so without it every device in the fleet would grow an AP tab with nothing behind it.
@@ -154,6 +202,13 @@ describe('node-detail tab visibility', () => {
     expect(tabs('url', false)).toEqual(['overview', 'collection']);
     expect(tabs('dns', false)).toEqual(['overview', 'collection']);
     expect(tabs('meraki', false)).toEqual(['overview', 'collection', 'events']);
+    expect(tabs('meraki', true, false, 'appliance')).toEqual(['overview', 'collection', 'events']);
+    expect(tabs('meraki', false, false, 'switch')).toEqual([
+      'overview',
+      'interfaces',
+      'collection',
+      'events',
+    ]);
   });
 
   // The bar's order comes from NODE_DETAIL_TABS, never from a per-node list, so nothing can
@@ -185,19 +240,19 @@ describe('resolveNodeDetailTab', () => {
   // ping-only device — would paint a body whose button is not in the bar, the mirror image of the
   // ADR-031 Flow-tab bug.
   it('falls back to overview for a tab this node cannot show', () => {
-    const snmpDevice: NodeDetailSubject = { kind: 'device', snmpConfigured: true, isWlanController: false };
-    const pingOnly: NodeDetailSubject = { kind: 'device', snmpConfigured: false, isWlanController: false };
-    expect(resolveNodeDetailTab('flow', { kind: 'dns', snmpConfigured: false, isWlanController: false })).toBe('overview');
-    expect(resolveNodeDetailTab('interfaces', { kind: 'url', snmpConfigured: true, isWlanController: false })).toBe(
+    const snmpDevice: NodeDetailSubject = { kind: 'device', snmpConfigured: true, isWlanController: false, merakiProductType: null };
+    const pingOnly: NodeDetailSubject = { kind: 'device', snmpConfigured: false, isWlanController: false, merakiProductType: null };
+    expect(resolveNodeDetailTab('flow', { kind: 'dns', snmpConfigured: false, isWlanController: false, merakiProductType: null })).toBe('overview');
+    expect(resolveNodeDetailTab('interfaces', { kind: 'url', snmpConfigured: true, isWlanController: false, merakiProductType: null })).toBe(
       'overview',
     );
-    expect(resolveNodeDetailTab('events', { kind: 'url', snmpConfigured: false, isWlanController: false })).toBe('overview');
-    expect(resolveNodeDetailTab('neighbors', { kind: 'dns', snmpConfigured: false, isWlanController: false })).toBe(
+    expect(resolveNodeDetailTab('events', { kind: 'url', snmpConfigured: false, isWlanController: false, merakiProductType: null })).toBe('overview');
+    expect(resolveNodeDetailTab('neighbors', { kind: 'dns', snmpConfigured: false, isWlanController: false, merakiProductType: null })).toBe(
       'overview',
     );
-    expect(resolveNodeDetailTab('flow', { kind: 'meraki', snmpConfigured: false, isWlanController: false })).toBe('overview');
+    expect(resolveNodeDetailTab('flow', { kind: 'meraki', snmpConfigured: false, isWlanController: false, merakiProductType: null })).toBe('overview');
     // Meraki appliances do export syslog, so Events is not hidden for them.
-    expect(resolveNodeDetailTab('events', { kind: 'meraki', snmpConfigured: false, isWlanController: false })).toBe('events');
+    expect(resolveNodeDetailTab('events', { kind: 'meraki', snmpConfigured: false, isWlanController: false, merakiProductType: null })).toBe('events');
     expect(resolveNodeDetailTab('flow', snmpDevice)).toBe('flow');
 
     // ADR-119: the two SNMP-fed tabs bounce on a ping-only device, and the two address-attributed
@@ -325,7 +380,7 @@ describe('which tab a host requests (ADR-134)', () => {
   // Deciding *whether the node offers* the tab is `resolveNodeDetailTab`'s job and needs the loaded
   // node, which no host has when this runs. Pinned so the two are not folded together later.
   it('does not ask whether the node offers the tab', () => {
-    const pingOnly: NodeDetailSubject = { kind: 'device', snmpConfigured: false, isWlanController: false };
+    const pingOnly: NodeDetailSubject = { kind: 'device', snmpConfigured: false, isWlanController: false, merakiProductType: null };
     expect(requestedNodeDetailTab('', 'interfaces')).toBe('interfaces');
     expect(resolveNodeDetailTab(requestedNodeDetailTab('', 'interfaces'), pingOnly)).toBe('overview');
   });

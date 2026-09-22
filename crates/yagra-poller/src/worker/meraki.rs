@@ -62,10 +62,13 @@ fn availability_outcome(samples: &[Sample]) -> CheckOutcome {
 fn tier_verdict(tier: MerakiTier, samples: &[Sample]) -> (CheckOutcome, bool, bool) {
     match tier {
         MerakiTier::Availability => (availability_outcome(samples), false, false),
-        // The outcome is a placeholder the engine never reads for an observational result.
-        MerakiTier::Uplink | MerakiTier::Traffic | MerakiTier::Inventory => {
-            (CheckOutcome::Reachable, true, true)
-        }
+        // The outcome is a placeholder the engine never reads for an observational result. A
+        // switch port's status is a reading like an uplink's (ADR-167): a port down says nothing
+        // about whether the switch is.
+        MerakiTier::Uplink
+        | MerakiTier::SwitchPorts
+        | MerakiTier::Traffic
+        | MerakiTier::Inventory => (CheckOutcome::Reachable, true, true),
     }
 }
 
@@ -144,6 +147,7 @@ pub async fn execute_meraki(
                 tx_power_low_dbm: None,
                 tx_power_high_dbm: None,
             })
+            .chain(obs.ports.into_iter().map(switch_port_interface))
             .collect();
         results.push(PollResult {
             job_id: job.job_id,
@@ -189,16 +193,44 @@ fn spec_for(job: &PollJob, check: &yagra_bus::MerakiCollectCheck) -> MerakiColle
         per_page: check.per_page,
         target_rps: check.target_rps,
         interval_secs: job.interval_secs,
+        port_names: check.port_names,
     }
 }
 
-/// Names for the per-uplink rows of one device's samples (ADR-164 決定 24): every metric that
-/// carries an uplink key gets that uplink's name (WAN1 / WAN2 / cellular). An alert on one uplink
-/// then says which, and a rule can be narrowed to one uplink with a row pattern (ADR-143).
+/// A switch port's `interfaces` row (ADR-167), filled as an SNMP switch's ifTable walk fills one:
+/// the port id as its name, the name an operator gave it as its alias, its line rate and duplex,
+/// and Ethernet as its type. A column the Dashboard said nothing about this time is `None`, which
+/// the multi-writer upsert reads as "keep what is stored" — the alias between two hourly reads of
+/// the names, and the speed while the port has no link.
+fn switch_port_interface(p: yagra_transport::MerakiPort) -> DiscoveredInterface {
+    DiscoveredInterface {
+        ifindex: IfIndex(p.ifindex),
+        if_name: Some(p.port_id),
+        if_alias: p.alias,
+        if_speed: p.speed_bps,
+        if_duplex: p.duplex,
+        if_type: Some(yagra_common::IF_TYPE_ETHERNET_CSMACD),
+        if_media: None,
+        transceiver_model: None,
+        rx_power_low_dbm: None,
+        rx_power_high_dbm: None,
+        tx_power_low_dbm: None,
+        tx_power_high_dbm: None,
+    }
+}
+
+/// Names for the per-uplink rows of one device's samples (ADR-164 決定 24): every uplink metric gets
+/// its uplink's name (WAN1 / WAN2 / cellular). An alert on one uplink then says which, and a rule can
+/// be narrowed to one uplink with a row pattern (ADR-143).
 ///
 /// Built from the samples this result carries, so no name is sent for a row without a reading. The
 /// name comes from the uplinks the transport reported beside them, falling back to the synthetic
 /// index's canonical name.
+///
+/// 🚨 **Only the uplink metrics** ([`yagra_common::MERAKI_UPLINK_ROW_METRICS`]). A switch port's
+/// samples carry a row key too — the port's own number (ADR-167) — and the fallback above would
+/// have called ports 1, 2 and 3 of every switch WAN1, WAN2 and cellular. A port's name lives in its
+/// `interfaces` row, the way an SNMP switch's does.
 fn uplink_row_names(
     samples: &[yagra_transport::MerakiSample],
     uplinks: &[yagra_transport::MerakiUplink],
@@ -208,6 +240,9 @@ fn uplink_row_names(
         let Some(row) = s.ifindex else {
             continue;
         };
+        if !yagra_common::MERAKI_UPLINK_ROW_METRICS.contains(&s.metric.as_str()) {
+            continue;
+        }
         if names.iter().any(|n| n.metric == s.metric && n.row == row) {
             continue;
         }
@@ -290,6 +325,7 @@ mod tests {
 
         let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
             serial: "Q2-A".into(),
+            ports: vec![],
             samples: vec![MerakiSample {
                 metric: METRIC_MERAKI_DEVICE_UP.into(),
                 ifindex: None,
@@ -311,6 +347,7 @@ mod tests {
             per_page: 1000,
             target_rps: 2.0,
             timeout_ms: 30_000,
+            port_names: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
         device_results(execute_meraki(&job, &transport, 42).await)
@@ -345,6 +382,7 @@ mod tests {
             per_page: 1000,
             target_rps: 2.0,
             timeout_ms: 30_000,
+            port_names: false,
         };
         let job = PollJob::meraki_collect(Uuid::from_u128(7), check, 300);
         execute_meraki(&job, transport, 42).await
@@ -353,6 +391,7 @@ mod tests {
     fn one_device_up() -> Vec<yagra_transport::MerakiObservation> {
         vec![yagra_transport::MerakiObservation {
             serial: "Q2-A".into(),
+            ports: vec![],
             samples: vec![yagra_transport::MerakiSample {
                 metric: METRIC_MERAKI_DEVICE_UP.into(),
                 ifindex: None,
@@ -386,12 +425,94 @@ mod tests {
             per_page: 1000,
             target_rps: 2.0,
             timeout_ms: 30_000,
+            port_names: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check.clone(), 1_800);
         let spec = spec_for(&job, &check);
         assert_eq!(spec.interval_secs, 1_800);
         assert_eq!(spec.tier, MerakiTier::Traffic);
         assert_eq!(spec.network_ids, ["N_1"]);
+        assert!(!spec.port_names);
+
+        // ADR-167 決定 1: core's hourly "read the names this time" reaches the transport.
+        let names = yagra_bus::MerakiCollectCheck {
+            tier: MerakiTier::SwitchPorts,
+            port_names: true,
+            ..check
+        };
+        let job = PollJob::meraki_collect(Uuid::nil(), names.clone(), 300);
+        assert!(spec_for(&job, &names).port_names);
+    }
+
+    /// ADR-167. A switch's ports become `interfaces` rows the way an SNMP switch's ifTable walk makes
+    /// them, their readings ride under the port's own number, and — the defect this fixed before it
+    /// shipped — ports 1, 2 and 3 are **not** named WAN1, WAN2 and cellular.
+    #[tokio::test]
+    async fn a_switchs_ports_become_interfaces_and_are_not_named_after_uplinks() {
+        use yagra_transport::{MerakiObservation, MerakiPort, MerakiSample};
+        let sample = |metric: &str, ifindex: u32, value: f64| MerakiSample {
+            metric: metric.into(),
+            ifindex: Some(ifindex),
+            value,
+        };
+        let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
+            serial: "Q2-A".into(),
+            samples: vec![
+                sample("if_oper_status", 1, 1.0),
+                sample("if_oper_status", 2, 2.0),
+                sample("if_oper_status", 3, 2.0),
+                sample("if_high_speed", 1, 1000.0),
+                sample("meraki_port_in_bps", 1, 16_100.0),
+                sample("meraki_port_out_bps", 1, 32_300.0),
+            ],
+            uplinks: vec![],
+            ports: vec![
+                MerakiPort {
+                    ifindex: 1,
+                    port_id: "1".into(),
+                    alias: Some("to core".into()),
+                    speed_bps: Some(1_000_000_000),
+                    duplex: Some(yagra_common::Duplex::Full),
+                },
+                MerakiPort {
+                    ifindex: 2,
+                    port_id: "2".into(),
+                    alias: None,
+                    speed_bps: None,
+                    duplex: None,
+                },
+            ],
+        }]);
+        let results = device_results(
+            collect_with(&transport, Uuid::from_u128(4), MerakiTier::SwitchPorts).await,
+        );
+        assert_eq!(results.len(), 1);
+        let r = &results[0];
+        assert!(
+            r.observational && r.judge_samples,
+            "a port's status is a reading, never the switch's liveness"
+        );
+        assert!(
+            r.row_names.is_empty(),
+            "a switch port named after an uplink: {:?}",
+            r.row_names
+        );
+        assert!(r.samples.iter().any(|s| s.metric == "if_oper_status"
+            && s.ifindex == Some(IfIndex(2))
+            && s.value == 2.0));
+        let first = &r.interfaces[0];
+        assert_eq!(first.ifindex, IfIndex(1));
+        assert_eq!(first.if_name.as_deref(), Some("1"));
+        assert_eq!(first.if_alias.as_deref(), Some("to core"));
+        assert_eq!(first.if_speed, Some(1_000_000_000));
+        assert_eq!(first.if_duplex, Some(yagra_common::Duplex::Full));
+        assert_eq!(first.if_type, Some(yagra_common::IF_TYPE_ETHERNET_CSMACD));
+        // Nothing said about port 2's name, speed or duplex this time: the stored values stay.
+        let second = &r.interfaces[1];
+        assert_eq!(
+            (second.if_alias.as_ref(), second.if_speed, second.if_duplex),
+            (None, None, None)
+        );
     }
 
     /// Per-uplink readings carry their uplink's name, once per (metric, row); device-level ones
@@ -406,6 +527,7 @@ mod tests {
         };
         let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
             serial: "Q2-A".into(),
+            ports: vec![],
             samples: vec![
                 sample("meraki_uplink_sent_bps", Some(1)),
                 sample("meraki_uplink_recv_bps", Some(1)),
@@ -631,6 +753,7 @@ mod tests {
         let transport = FakeTransport::reachable(1.0).with_meraki(vec![
             MerakiObservation {
                 serial: "Q2-A".into(),
+                ports: vec![],
                 samples: vec![
                     MerakiSample {
                         metric: "meraki_device_up".into(),
@@ -651,6 +774,7 @@ mod tests {
             // Reported by the API but not imported → must be skipped (scope at fan-out).
             MerakiObservation {
                 serial: "Q2-UNMAPPED".into(),
+                ports: vec![],
                 samples: vec![MerakiSample {
                     metric: "meraki_device_up".into(),
                     ifindex: None,
@@ -674,6 +798,7 @@ mod tests {
             per_page: 1000,
             target_rps: 2.0,
             timeout_ms: 30_000,
+            port_names: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
 

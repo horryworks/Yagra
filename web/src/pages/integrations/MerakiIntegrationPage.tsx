@@ -379,6 +379,7 @@ function CadenceModal({
   const [uplink, setUplink] = useState(org.uplink_secs);
   const [traffic, setTraffic] = useState(org.traffic_secs);
   const [inventory, setInventory] = useState(org.inventory_secs);
+  const [switchPorts, setSwitchPorts] = useState(org.switch_ports_secs);
   const [tiers, setTiers] = useState<Set<string>>(new Set(org.enabled_tiers));
   const [targetRps, setTargetRps] = useState(org.target_rps);
   const [error, setError] = useState<string | null>(null);
@@ -401,6 +402,7 @@ function CadenceModal({
         uplink_secs: uplink,
         traffic_secs: traffic,
         inventory_secs: inventory,
+        switch_ports_secs: switchPorts,
         enabled_tiers: tiersToSave(tiers),
         target_rps: targetRps,
       })
@@ -478,6 +480,12 @@ function CadenceModal({
         setAvailability,
       )}
       {intervalField('uplink', t('meraki.cadence.uplinkInterval'), uplink, setUplink)}
+      {intervalField(
+        'switch_ports',
+        t('meraki.cadence.switchPortsInterval'),
+        switchPorts,
+        setSwitchPorts,
+      )}
       {intervalField('traffic', t('meraki.cadence.trafficInterval'), traffic, setTraffic)}
       {intervalField('inventory', t('meraki.cadence.inventoryInterval'), inventory, setInventory)}
       {numField(

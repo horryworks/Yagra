@@ -68,11 +68,20 @@ fn parse_scope_level(s: &str) -> ScopeLevel {
 /// thing that can decide this, because `ifindex` is a row key rather than a port number (ADR-011).
 /// The engine needs the set, not a per-metric probe, because it asks the question once per distinct
 /// metric on every poll result. `items` is [`CollectionRepo::collected_items`].
+///
+/// ➕ Plus [`yagra_common::MERAKI_PORT_METRICS`] (ADR-167 決定 8): a Meraki switch port's traffic
+/// is read from the Dashboard, so no collection item — and so no OID — could ever declare it. The
+/// port's status and speed use the SNMP names, which the built-in catalog declares already.
 pub fn per_interface_metric_names(items: &[CollectionItem]) -> BTreeSet<String> {
     items
         .iter()
         .filter(|i| yagra_common::item_publishes_per_interface(i))
         .map(|i| i.metric_name.clone())
+        .chain(
+            yagra_common::MERAKI_PORT_METRICS
+                .iter()
+                .map(|m| (*m).to_owned()),
+        )
         .collect()
 }
 
@@ -511,6 +520,17 @@ mod tests {
     /// [`crate::module_source::code_no_comments`] for why both.
     fn production_source() -> String {
         crate::module_source::code_no_comments("src", "collection")
+    }
+
+    /// ADR-167 決定 8: a Meraki switch port's traffic is per-interface whatever the catalogue holds —
+    /// no item can declare it — and only those two names are added.
+    #[test]
+    fn a_meraki_switch_ports_traffic_is_per_interface_with_no_item_behind_it() {
+        let set = per_interface_metric_names(&[]);
+        assert_eq!(
+            set.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["meraki_port_in_bps", "meraki_port_out_bps"]
+        );
     }
 
     #[test]

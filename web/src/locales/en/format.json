@@ -49,6 +49,8 @@
     "meraki_device_up": "Availability",
     "meraki_uplink_sent_bps": "Uplink sent (bps)",
     "meraki_uplink_recv_bps": "Uplink received (bps)",
+    "meraki_port_in_bps": "Port received (bps)",
+    "meraki_port_out_bps": "Port sent (bps)",
     "meraki_uplink_failed": "Uplink failed",
     "meraki_vpn_hubs_reachable": "VPN hubs reachable",
     "meraki_vpn_hubs_unreachable": "VPN hubs unreachable",

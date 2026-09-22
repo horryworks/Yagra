@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FAULT_SERIES,
   faultValues,
+  faultChartShown,
   hasOpticalData,
   latestDiscardRate,
   opticalBands,
@@ -235,6 +236,25 @@ describe('faultValues', () => {
 });
 
 // ── Optical power (ADR-062) ──────────────────────────────────────────────────────────
+
+describe('faultChartShown (ADR-167)', () => {
+  it('draws the chart while the series is still loading, so an SNMP dock does not jump', () => {
+    expect(faultChartShown(null)).toBe(true);
+  });
+
+  it('drops it for a port that reports no errors or discards at all — a Meraki switch port', () => {
+    expect(faultChartShown(series({}))).toBe(false);
+    expect(
+      faultChartShown(series({ in_errors: [null], out_errors: [null], in_discards: [], out_discards: [] })),
+    ).toBe(false);
+  });
+
+  // Zeros are readings: a healthy SNMP port keeps its chart.
+  it('keeps it for a port whose counters read zero', () => {
+    expect(faultChartShown(series({ in_errors: [0, 0] }))).toBe(true);
+    expect(faultChartShown(series({ out_discards: [null, 3] }))).toBe(true);
+  });
+});
 
 describe('hasOpticalData', () => {
   // This predicate IS the "show the chart when the port is optical" rule, so its edges are the

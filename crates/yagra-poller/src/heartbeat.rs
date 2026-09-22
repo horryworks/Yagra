@@ -178,9 +178,17 @@ async fn run_heartbeat_loop<B>(
                 // id-keyed subject and every screen reads correct, while "poll now" and discovery
                 // keep going to the old pool's subject where nothing is listening.
                 yagra_bus::CAP_POOL_FOLLOW.to_owned(),
+                // This build runs the Meraki switch-port collect tier (ADR-167). Unconditional,
+                // like the seven above: a claim about the build.
+                //
+                // 🚨 Core withholds that tier from a pool unless every live member claims this —
+                // an older poller cannot decode the job, drops it, and the organization's single
+                // collect flight then sits taken for its whole lease, availability collects
+                // included.
+                yagra_bus::CAP_MERAKI_SWITCH_PORTS.to_owned(),
             ]
             .into_iter()
-            // Unlike the seven above, these two are conditional and come from the same read: the
+            // Unlike the eight above, these two are conditional and come from the same read: the
             // site updater beside this poller is alive (`self-upgrade`), and it has vouched for
             // itself (`site-prepared`, ADR-051 Inc.7). Claiming the first unconditionally would
             // make core send commands into sites that cannot act on them and report every such

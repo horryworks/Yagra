@@ -331,6 +331,8 @@ pub(crate) struct MerakiOrgView {
     uplink_secs: u32,
     traffic_secs: u32,
     inventory_secs: u32,
+    /// The switch-port tier's interval (seconds) — every switch port's status, speed and traffic.
+    switch_ports_secs: u32,
     enabled_tiers: Vec<String>,
     target_rps: f64,
     group_id: Option<Uuid>,
@@ -361,15 +363,15 @@ pub(crate) struct MerakiOrgView {
     /// organization holds. A collect is a poller asking how the devices are, and it is what a
     /// device's state depends on: while `availability` is listed here the organization's nodes keep
     /// the last state they had, and after three failures in a row one alert is raised about the
-    /// organization (`subject_kind: meraki_org`) — never one per device. `uplink` or `traffic`
-    /// listed alone raises nothing: readings are missing, liveness is not.
+    /// organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `switch_ports`
+    /// or `traffic` listed alone raises nothing: readings are missing, liveness is not.
     collect_failures: Vec<MerakiCollectFailureView>,
 }
 
 /// One collect tier the Dashboard API is not answering (see `MerakiOrgView.collect_failures`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiCollectFailureView {
-    /// `availability`, `uplink` or `traffic`.
+    /// `availability`, `uplink`, `switch_ports` or `traffic`.
     tier: String,
     /// Why the most recent collect of this tier failed. The vocabulary of `last_sync_error`, plus
     /// `no_answer`: the collect was sent and nothing came back.
@@ -380,8 +382,9 @@ pub(crate) struct MerakiCollectFailureView {
     failures: u32,
     /// Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
     /// `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
-    /// uplink tier reads three. Absent when the whole collect failed, or a poller from before this
-    /// reported it.
+    /// uplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,
+    /// `switch_port_usage`, `switch_port_config`). Absent when the whole collect failed, or a
+    /// poller from before this reported it.
     #[serde(skip_serializing_if = "Option::is_none")]
     listing: Option<String>,
 }
@@ -416,6 +419,7 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
         uplink_secs: o.uplink_secs,
         traffic_secs: o.traffic_secs,
         inventory_secs: o.inventory_secs,
+        switch_ports_secs: o.switch_ports_secs,
         enabled_tiers: o.enabled_tiers.clone(),
         target_rps: o.target_rps,
         group_id: o.group_id,
@@ -721,6 +725,10 @@ pub(super) struct MerakiCadenceReq {
     uplink_secs: i32,
     traffic_secs: i32,
     inventory_secs: i32,
+    /// The switch-port tier's interval, 300–600 seconds. Optional: left out, the stored interval
+    /// stays as it is, so a client written before the tier existed does not reset it.
+    #[serde(default)]
+    switch_ports_secs: Option<i32>,
     enabled_tiers: Vec<String>,
     target_rps: f64,
 }
@@ -749,6 +757,13 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
             MERAKI_INVENTORY_MIN_SECS,
             MERAKI_INVENTORY_MAX_SECS,
         )
+        || body.switch_ports_secs.is_some_and(|v| {
+            !in_range(
+                v,
+                MERAKI_SWITCH_PORTS_MIN_SECS,
+                MERAKI_SWITCH_PORTS_MAX_SECS,
+            )
+        })
     {
         return Err(ApiError::bad_request(
             "invalid_cadence",
@@ -794,14 +809,14 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
 ///
 /// `enabled_tiers` must include `availability`. It is the one tier that decides whether a device
 /// is up; the others only record readings, so an organization without it could raise no node-down
-/// alert at all.
+/// alert at all. `switch_ports_secs` may be left out, and the stored interval then stays.
 #[utoipa::path(
     put, path = "/api/v1/meraki/orgs/{id}/cadence", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
     request_body = MerakiCadenceReq,
     responses(
         (status = 204, description = "Cadence, enabled tiers and rate budget updated"),
-        (status = 400, description = "A cadence value is outside its band, target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)", body = super::error::ErrorBody),
+        (status = 400, description = "A cadence value is outside its band (`switch_ports_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
@@ -817,19 +832,16 @@ async fn set_meraki_org_cadence(
 ) -> ApiResult<StatusCode> {
     meraki_is_deployment_wide(&scope)?;
     check_cadence(&body)?;
-    match admin
-        .meraki_orgs
-        .update_cadence(
-            id,
-            body.availability_secs,
-            body.uplink_secs,
-            body.traffic_secs,
-            body.inventory_secs,
-            &body.enabled_tiers,
-            body.target_rps,
-        )
-        .await
-    {
+    let cadence = crate::meraki::MerakiCadence {
+        availability_secs: body.availability_secs,
+        uplink_secs: body.uplink_secs,
+        traffic_secs: body.traffic_secs,
+        inventory_secs: body.inventory_secs,
+        switch_ports_secs: body.switch_ports_secs,
+        enabled_tiers: body.enabled_tiers,
+        target_rps: body.target_rps,
+    };
+    match admin.meraki_orgs.update_cadence(id, &cadence).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(no_org(id)),
         Err(e) => Err(ApiError::from_internal(
@@ -1764,6 +1776,7 @@ mod tests {
             uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
             traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
             inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
+            switch_ports_secs: None,
             enabled_tiers: vec!["availability".to_owned()],
             target_rps: 1.0,
         };
@@ -1772,6 +1785,19 @@ mod tests {
         let mut fast = ok();
         fast.availability_secs = 1;
         assert_eq!(check_cadence(&fast).unwrap_err().code(), "invalid_cadence");
+
+        // ADR-167 決定 11: the switch-port band, when the field is sent at all.
+        for (secs, accepted) in [
+            (crate::config::MERAKI_SWITCH_PORTS_MIN_SECS - 1, false),
+            (crate::config::MERAKI_SWITCH_PORTS_MIN_SECS, true),
+            (crate::config::MERAKI_SWITCH_PORTS_MAX_SECS, true),
+            (crate::config::MERAKI_SWITCH_PORTS_MAX_SECS + 1, false),
+        ] {
+            let mut ports = ok();
+            ports.switch_ports_secs = Some(secs);
+            ports.enabled_tiers = vec!["availability".to_owned(), "switch_ports".to_owned()];
+            assert_eq!(check_cadence(&ports).is_ok(), accepted, "{secs}");
+        }
 
         let mut rps = ok();
         rps.target_rps = 0.0;
@@ -1799,6 +1825,7 @@ mod tests {
             uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
             traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
             inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
+            switch_ports_secs: None,
             enabled_tiers: tiers.iter().map(|t| (*t).to_owned()).collect(),
             target_rps: 1.0,
         };
@@ -1981,7 +2008,7 @@ mod tests {
             .iter()
             .map(|l| l.as_str())
             .collect();
-        assert_eq!(ours.len(), 5, "the listings a collect reads today");
+        assert_eq!(ours.len(), 8, "the listings a collect reads today");
         assert_eq!(
             listed, ours,
             "types/api.ts lists exactly these, in this order"
@@ -2018,6 +2045,14 @@ mod tests {
                 "CADENCE_INVENTORY_MAX_SECS",
                 crate::config::MERAKI_INVENTORY_MAX_SECS,
             ),
+            (
+                "CADENCE_SWITCH_PORTS_MIN_SECS",
+                crate::config::MERAKI_SWITCH_PORTS_MIN_SECS,
+            ),
+            (
+                "CADENCE_SWITCH_PORTS_MAX_SECS",
+                crate::config::MERAKI_SWITCH_PORTS_MAX_SECS,
+            ),
         ] {
             assert_eq!(
                 declared_number(&text, path, name),
@@ -2026,24 +2061,27 @@ mod tests {
             );
         }
         // The edge really is held to those constants: one second outside each band is refused.
-        let at = |availability: i32, traffic: i32, inventory: i32| MerakiCadenceReq {
+        let at = |availability: i32, traffic: i32, inventory: i32, ports: i32| MerakiCadenceReq {
             availability_secs: availability,
             uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
             traffic_secs: traffic,
             inventory_secs: inventory,
+            switch_ports_secs: Some(ports),
             enabled_tiers: vec!["availability".to_owned()],
             target_rps: 1.0,
         };
-        let (fast, traffic, inventory) = (
+        let (fast, traffic, inventory, ports) = (
             crate::config::MERAKI_FAST_MAX_SECS,
             crate::config::MERAKI_TRAFFIC_MAX_SECS,
             crate::config::MERAKI_INVENTORY_MAX_SECS,
+            crate::config::MERAKI_SWITCH_PORTS_MAX_SECS,
         );
-        assert!(check_cadence(&at(fast, traffic, inventory)).is_ok());
+        assert!(check_cadence(&at(fast, traffic, inventory, ports)).is_ok());
         for outside in [
-            at(fast + 1, traffic, inventory),
-            at(fast, traffic + 1, inventory),
-            at(fast, traffic, inventory + 1),
+            at(fast + 1, traffic, inventory, ports),
+            at(fast, traffic + 1, inventory, ports),
+            at(fast, traffic, inventory + 1, ports),
+            at(fast, traffic, inventory, ports + 1),
         ] {
             assert_eq!(
                 check_cadence(&outside).unwrap_err().code(),
@@ -2847,6 +2885,39 @@ mod tests {
         let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
         assert_eq!(stored.availability_secs, 120);
         assert_eq!(stored.enabled_tiers, vec!["availability", "traffic"]);
+        assert_eq!(
+            stored.switch_ports_secs, 300,
+            "a request without the switch-port interval kept the stored one (ADR-167 決定 12)"
+        );
+
+        // ADR-167: the switch-port tier and its interval, accepted and stored.
+        let mut ports = cadence(&["availability", "switch_ports"]);
+        ports["switch_ports_secs"] = serde_json::json!(600);
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(ports)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let stored = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        assert_eq!(stored.switch_ports_secs, 600);
+        assert_eq!(stored.enabled_tiers, vec!["availability", "switch_ports"]);
+        let view = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None)
+            .await
+            .1;
+        assert_eq!(view[0]["switch_ports_secs"], 600, "{view}");
+
+        let mut fast = cadence(&["availability", "switch_ports"]);
+        fast["switch_ports_secs"] = serde_json::json!(60);
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(fast)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_cadence", "{body}");
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &operator,
+            Some(cadence(&["availability", "traffic"])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 
         let (status, body) = send(
             &st,

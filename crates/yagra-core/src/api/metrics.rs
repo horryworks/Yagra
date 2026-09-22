@@ -23,7 +23,9 @@ use super::{
     clamp_range_step, is_valid_metric_name, ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS,
     DEFAULT_STEP_SECS,
 };
-use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, NodeSeries, TopAgg};
+use crate::store::{
+    DeltaDirection, InterfaceTopMetric, MetricPoint, NodeSeries, PortDirection, TopAgg,
+};
 use axum::{
     extract::{Path, Query, State},
     routing::get,
@@ -275,6 +277,11 @@ fn dimension_of_item(item: &CollectionItem) -> MetricDimension {
 fn dimension_of(s: &NodeSeries, known: &std::collections::BTreeSet<i32>) -> MetricDimension {
     if !s.has_ifindex {
         return MetricDimension::None;
+    }
+    // A Meraki switch port's traffic has no collection item behind it and never will (ADR-167
+    // 決定 8) — but it is declared, so it is not guessed at, even before the port's row exists.
+    if yagra_common::MERAKI_PORT_METRICS.contains(&s.metric.as_str()) {
+        return MetricDimension::Interface;
     }
     // Every ifindex naming a real interface ⇒ per-interface. A metric with an unparseable ifindex
     // has `has_ifindex` set and an empty list, which lands on Entity — the safe side, since Entity
@@ -798,8 +805,11 @@ pub(crate) fn interface_series_step(from: i64, to: i64, requested: Option<u64>) 
 /// them is the only thing that makes the call site checkable. The optical pair makes that sharper
 /// still — swapping receive for transmit produces two plausible lines and no other symptom.
 struct RawInterfaceRates<'a> {
-    in_oct: &'a [MetricPoint],
-    out_oct: &'a [MetricPoint],
+    /// Already bits/sec: `MetricStore::interface_bps_range`, which reads a Meraki switch port's
+    /// stored rate where an SNMP port has an octet counter (ADR-167).
+    in_bps: &'a [MetricPoint],
+    /// See [`RawInterfaceRates::in_bps`].
+    out_bps: &'a [MetricPoint],
     in_pkt: &'a [MetricPoint],
     out_pkt: &'a [MetricPoint],
     in_err: &'a [MetricPoint],
@@ -814,9 +824,10 @@ struct RawInterfaceRates<'a> {
 
 /// One interface's eight aligned series (ADR-042 I1's `get_interface_series` reads this too).
 ///
-/// The eight metric names, the step/lookback rule and the ×8 bytes→bits scaling live here rather
-/// than in the handler because a second surface needs the same answer, and reproducing it there
-/// would mean a model (or a maintainer) having to know all three.
+/// The eight metric names and the step/lookback rule live here rather than in the handler because a
+/// second surface needs the same answer, and reproducing it there would mean a model (or a
+/// maintainer) having to know both. The traffic pair is read in bits/sec through
+/// `MetricStore::interface_bps_range`, which is what charts a Meraki switch port too (ADR-167).
 ///
 /// Discards ride along with errors (ADR-046 Inc.4): `if_in_discards` / `if_out_discards` have been
 /// collected since `7fdf2c8` and had no reader, so that increment was a read-side change only.
@@ -839,9 +850,7 @@ pub(crate) async fn interface_series(
     // The eight series are independent range queries — fan them out concurrently (this endpoint
     // fires per lazy row-sparkline and on the 15s interface-dock refresh). Bind the keys first so
     // they outlive the joined futures.
-    let (k_in, k_out, k_ipkt, k_opkt, k_ierr, k_oerr, k_idisc, k_odisc, k_rx, k_tx) = (
-        key("if_hc_in_octets"),
-        key("if_hc_out_octets"),
+    let (k_ipkt, k_opkt, k_ierr, k_oerr, k_idisc, k_odisc, k_rx, k_tx) = (
         key("if_hc_in_ucast_pkts"),
         key("if_hc_out_ucast_pkts"),
         key("if_in_errors"),
@@ -855,9 +864,12 @@ pub(crate) async fn interface_series(
     // *change* in a logarithmic level per second, which is not a quantity anyone wants and would
     // read as a flat zero on a healthy link — the failure mode ADR-012 exists to prevent, arrived
     // at from the other direction.
-    let (in_oct, out_oct, in_pkt, out_pkt, in_err, out_err, in_disc, out_disc, rx_dbm, tx_dbm) = tokio::join!(
-        st.store.rate_range(&k_in, from, to, step, lookback),
-        st.store.rate_range(&k_out, from, to, step, lookback),
+    let port = (node.as_uuid(), i32::try_from(ifindex.0).unwrap_or(i32::MAX));
+    let (in_bps, out_bps, in_pkt, out_pkt, in_err, out_err, in_disc, out_disc, rx_dbm, tx_dbm) = tokio::join!(
+        st.store
+            .interface_bps_range(port, PortDirection::In, from, to, step, lookback),
+        st.store
+            .interface_bps_range(port, PortDirection::Out, from, to, step, lookback),
         st.store.rate_range(&k_ipkt, from, to, step, lookback),
         st.store.rate_range(&k_opkt, from, to, step, lookback),
         st.store.rate_range(&k_ierr, from, to, step, lookback),
@@ -868,8 +880,8 @@ pub(crate) async fn interface_series(
         st.store.range(&k_tx, from, to, step),
     );
     align_interface_series(&RawInterfaceRates {
-        in_oct: &in_oct,
-        out_oct: &out_oct,
+        in_bps: &in_bps,
+        out_bps: &out_bps,
         in_pkt: &in_pkt,
         out_pkt: &out_pkt,
         in_err: &in_err,
@@ -883,14 +895,14 @@ pub(crate) async fn interface_series(
 
 /// Align the eight counter-derived series onto one shared axis.
 ///
-/// Octet rates are scaled ×8 here — the counters are bytes and the chart is bits/sec. Doing it at
-/// the edge rather than in the store keeps the stored series raw (ADR-012), and doing it in one
-/// place keeps the two octet series from drifting apart from the packet, error and discard series,
-/// which are all counts and are not scaled.
+/// Nothing is scaled here any more: the traffic pair arrives in bits/sec from
+/// `MetricStore::interface_bps_range` (ADR-167), which scales the octet counter ×8 in the one
+/// expression that also reads a Meraki switch port's gauge, and the packet, error and discard
+/// series are counts. The stored series stay raw either way (ADR-012).
 fn align_interface_series(r: &RawInterfaceRates<'_>) -> InterfaceSeries {
     let mut grid_set: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for s in [
-        r.in_oct, r.out_oct, r.in_pkt, r.out_pkt, r.in_err, r.out_err, r.in_disc, r.out_disc,
+        r.in_bps, r.out_bps, r.in_pkt, r.out_pkt, r.in_err, r.out_err, r.in_disc, r.out_disc,
         r.rx_dbm, r.tx_dbm,
     ] {
         for p in s {
@@ -903,8 +915,8 @@ fn align_interface_series(r: &RawInterfaceRates<'_>) -> InterfaceSeries {
         grid.iter().map(|t| m.get(t).map(|v| v * scale)).collect()
     };
     InterfaceSeries {
-        in_bps: align(r.in_oct, 8.0),
-        out_bps: align(r.out_oct, 8.0),
+        in_bps: align(r.in_bps, 1.0),
+        out_bps: align(r.out_bps, 1.0),
         in_ucast_pps: align(r.in_pkt, 1.0),
         out_ucast_pps: align(r.out_pkt, 1.0),
         in_errors: align(r.in_err, 1.0),

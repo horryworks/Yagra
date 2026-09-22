@@ -1555,7 +1555,7 @@ export interface paths {
          * Update an org's per-tier cadence, enabled tiers, and rate budget.
          * @description `enabled_tiers` must include `availability`. It is the one tier that decides whether a device
          *     is up; the others only record readings, so an organization without it could raise no node-down
-         *     alert at all.
+         *     alert at all. `switch_ports_secs` may be left out, and the stored interval then stays.
          */
         put: operations["set_meraki_org_cadence"];
         post?: never;
@@ -8696,6 +8696,12 @@ export interface components {
             enabled_tiers: string[];
             /** Format: int32 */
             inventory_secs: number;
+            /**
+             * Format: int32
+             * @description The switch-port tier's interval, 300–600 seconds. Optional: left out, the stored interval
+             *     stays as it is, so a client written before the tier existed does not reset it.
+             */
+            switch_ports_secs?: number | null;
             /** Format: double */
             target_rps: number;
             /** Format: int32 */
@@ -8713,8 +8719,9 @@ export interface components {
             /**
              * @description Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
              *     `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
-             *     uplink tier reads three. Absent when the whole collect failed, or a poller from before this
-             *     reported it.
+             *     uplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,
+             *     `switch_port_usage`, `switch_port_config`). Absent when the whole collect failed, or a
+             *     poller from before this reported it.
              */
             listing?: string | null;
             /**
@@ -8727,7 +8734,7 @@ export interface components {
              * @description When this run of failures began.
              */
             since: string;
-            /** @description `availability`, `uplink` or `traffic`. */
+            /** @description `availability`, `uplink`, `switch_ports` or `traffic`. */
             tier: string;
         };
         /** @description What an onboarding batch did. */
@@ -8993,8 +9000,8 @@ export interface components {
              *     organization holds. A collect is a poller asking how the devices are, and it is what a
              *     device's state depends on: while `availability` is listed here the organization's nodes keep
              *     the last state they had, and after three failures in a row one alert is raised about the
-             *     organization (`subject_kind: meraki_org`) — never one per device. `uplink` or `traffic`
-             *     listed alone raises nothing: readings are missing, liveness is not.
+             *     organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `switch_ports`
+             *     or `traffic` listed alone raises nothing: readings are missing, liveness is not.
              */
             collect_failures: components["schemas"]["MerakiCollectFailureView"][];
             /**
@@ -9038,6 +9045,11 @@ export interface components {
             max_devices: number;
             name: string;
             org_id: string;
+            /**
+             * Format: int32
+             * @description The switch-port tier's interval (seconds) — every switch port's status, speed and traffic.
+             */
+            switch_ports_secs: number;
             /** Format: double */
             target_rps: number;
             /** Format: int32 */
@@ -19064,7 +19076,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A cadence value is outside its band, target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`) */
+            /** @description A cadence value is outside its band (`switch_ports_secs` 300–600), target_rps is outside the cap, a tier is unknown, or `enabled_tiers` leaves out `availability` (`availability_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;

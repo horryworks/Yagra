@@ -486,11 +486,15 @@
       "uplinks_loss_and_latency": "回線の損失と遅延",
       "appliance_uplink_statuses": "回線の状態",
       "appliance_vpn_statuses": "Auto VPN の状態",
-      "appliance_uplinks_usage": "回線の通信量"
+      "appliance_uplinks_usage": "回線の通信量",
+      "switch_port_statuses": "スイッチのポートの状態",
+      "switch_port_usage": "スイッチのポートの通信量",
+      "switch_port_config": "スイッチのポート名"
     },
     "tier": {
       "availability": "可用性",
       "uplink": "アップリンク",
+      "switch_ports": "スイッチのポート",
       "traffic": "トラフィック",
       "inventory": "インベントリ"
     },
@@ -578,6 +582,7 @@
       "availabilityAlways": "可用性は常に取得します。デバイスが動いているかどうかは、この値で判断します。",
       "availabilityInterval": "可用性の取得間隔（秒）",
       "uplinkInterval": "アップリンクの取得間隔（秒）",
+      "switchPortsInterval": "スイッチのポートの取得間隔（秒）",
       "trafficInterval": "トラフィックの取得間隔（秒）",
       "inventoryInterval": "デバイス一覧の同期間隔（秒）",
       "rateBudget": "レート予算（req/s）",

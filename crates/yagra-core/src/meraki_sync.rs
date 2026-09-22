@@ -675,6 +675,7 @@ mod tests {
             uplink_secs: 300,
             traffic_secs: 1800,
             inventory_secs,
+            switch_ports_secs: 300,
             enabled_tiers: Vec::new(),
             target_rps: 2.0,
             group_id: None,
@@ -1452,8 +1453,19 @@ mod tests {
             let orgs = r.orgs.clone();
             let id = r.org;
             async move {
-                orgs.update_cadence(id, 300, 300, 1800, secs, &[], 2.0)
-                    .await
+                orgs.update_cadence(
+                    id,
+                    &crate::meraki::MerakiCadence {
+                        availability_secs: 300,
+                        uplink_secs: 300,
+                        traffic_secs: 1800,
+                        inventory_secs: secs,
+                        switch_ports_secs: None,
+                        enabled_tiers: Vec::new(),
+                        target_rps: 2.0,
+                    },
+                )
+                .await
             }
         };
         assert!(set(60).await.expect("one minute is allowed"));

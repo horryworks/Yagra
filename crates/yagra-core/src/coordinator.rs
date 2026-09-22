@@ -627,11 +627,17 @@ impl Coordinator {
     /// `pool: None` asks about the whole live fleet, which is what a sweep published on the global
     /// subject needs: it is queue-delivered, so any live poller might hold it.
     ///
-    /// ⚠️ **This answers "would it work", never "should I send it".** Unlike
+    /// ⚠️ **For a discovery sweep this answers "would it work", never "should I send it".** Unlike
     /// [`spec_required_caps`], which withholds a check from a poller that cannot run it, there is
-    /// nothing to withhold here — core does not know which poller took a queue-delivered job. The
+    /// nothing to withhold there — core does not know which poller took a queue-delivered job. That
     /// caller uses this to *tell the operator* what to expect, and the authoritative answer still
     /// comes later from whatever the poller reports.
+    ///
+    /// ➕ **The Meraki scheduler uses it as a send gate** (ADR-167 決定 9), and for the same reason
+    /// read the other way round: a Meraki collect is queue-delivered too, so the switch-port tier
+    /// goes to a pool only when *every* live member could take it. A member that cannot decodes
+    /// nothing and drops the job, and the organization's single collect flight then waits out its
+    /// lease — availability collects included.
     ///
     /// **No live poller ⇒ `false`.** Vacuous truth would be the wrong reading: "every poller
     /// supports this" said of an empty set would tell an operator their stop will land when nothing
@@ -1700,6 +1706,46 @@ mod tests {
         // nobody to receive the snapshot that tells the poller where it went.
         assert_eq!(coord.caps_of("new", now + OFFLINE_AFTER), None);
         assert_eq!(coord.caps_of("nobody", now), None);
+    }
+
+    /// ADR-167 決定 9, the gate the Meraki scheduler reads: the switch-port tier goes to a pool only
+    /// when **every** live poller there claims it. One old poller is enough to refuse — it would
+    /// take its share of the queue-delivered jobs and drop each one — and a pool with nobody alive
+    /// supports nothing. Another pool's pollers do not answer for this one.
+    #[tokio::test]
+    async fn one_old_poller_keeps_the_switch_port_tier_from_its_pool() {
+        use yagra_bus::CAP_MERAKI_SWITCH_PORTS as CAP;
+        let (coord, _bus, _) = coordinator();
+        let now = t0();
+        assert!(
+            !coord.pollers_support(Some("meraki"), CAP, now),
+            "nobody alive"
+        );
+
+        let mut new = heartbeat("new", "meraki", Uuid::new_v4());
+        new.caps = vec![CAP.to_owned()];
+        coord.observe_heartbeat(new, now).await;
+        assert!(coord.pollers_support(Some("meraki"), CAP, now));
+
+        let mut elsewhere = heartbeat("elsewhere", "default", Uuid::new_v4());
+        elsewhere.caps = Vec::new();
+        coord.observe_heartbeat(elsewhere, now).await;
+        assert!(
+            coord.pollers_support(Some("meraki"), CAP, now),
+            "a poller in another pool decided this pool's answer"
+        );
+
+        let mut old = heartbeat("old", "meraki", Uuid::new_v4());
+        old.caps = Vec::new();
+        coord.observe_heartbeat(old, now).await;
+        assert!(!coord.pollers_support(Some("meraki"), CAP, now));
+
+        // The old poller goes quiet: the pool can run the tier again once it counts as offline.
+        let mut again = heartbeat("new", "meraki", Uuid::new_v4());
+        again.caps = vec![CAP.to_owned()];
+        let later = now + OFFLINE_AFTER;
+        coord.observe_heartbeat(again, later).await;
+        assert!(coord.pollers_support(Some("meraki"), CAP, later));
     }
 
     #[tokio::test]

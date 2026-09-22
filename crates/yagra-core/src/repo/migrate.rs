@@ -880,9 +880,13 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         const AVAILABILITY_ALWAYS_ON: i64 = 126;
+        // 0130 appends the switch-port tier to every row (ADR-167), which is its own test below;
+        // this one stops before it, so it pins what 0126 did and nothing after.
+        const SWITCH_PORTS: i64 = 130;
         let embedded = embedded_migrations();
         let (before, from): (Vec<_>, Vec<_>) = embedded
             .iter()
+            .filter(|m| m.version < SWITCH_PORTS)
             .partition(|m| m.version < AVAILABILITY_ALWAYS_ON);
         assert!(
             from.iter().any(|m| m.version == AVAILABILITY_ALWAYS_ON),
@@ -923,9 +927,16 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
 
-        let mut after = Vec::new();
+        // Read raw: the repository's reader names columns later migrations add.
+        let mut after: Vec<Vec<String>> = Vec::new();
         for id in made {
-            after.push(orgs.get(id).await.expect("get").expect("org").enabled_tiers);
+            after.push(
+                sqlx::query_scalar("SELECT enabled_tiers FROM meraki_orgs WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("the row"),
+            );
         }
         assert_eq!(
             after[0],
@@ -938,6 +949,83 @@ mod tests {
             vec!["traffic", "availability"],
             "a row that already carried the tier was rewritten"
         );
+    }
+
+    /// **Migration 0130 starts every existing organization collecting its switch ports** (ADR-167
+    /// 決定 12, the user's decision): the tier is appended once, whatever else the row holds, the
+    /// interval takes its default, and a new organization gets both from the column defaults.
+    /// Applied in two steps with the rows written in between, like 0126's test.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0130_adds_the_switch_port_tier_to_every_organization_once(
+        pool: sqlx::PgPool,
+    ) {
+        const SWITCH_PORTS: i64 = 130;
+        let embedded = embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) =
+            embedded.iter().partition(|m| m.version < SWITCH_PORTS);
+        assert!(
+            from.iter().any(|m| m.version == SWITCH_PORTS),
+            "migration 0130 is not embedded"
+        );
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let mut made = Vec::new();
+        for (org_id, tiers) in [
+            ("1", vec!["availability", "uplink", "traffic"]),
+            ("2", vec!["availability"]),
+            // Already carrying it (a core that had it, rolled back and forward again).
+            ("3", vec!["availability", "switch_ports"]),
+        ] {
+            let id = orgs
+                .create(org_id, org_id, "https://api.meraki.com", credential)
+                .await
+                .expect("an organization from before 0130");
+            sqlx::query("UPDATE meraki_orgs SET enabled_tiers = $2 WHERE id = $1")
+                .bind(id)
+                .bind(&tiers)
+                .execute(&pool)
+                .await
+                .expect("store the tiers");
+            made.push(id);
+        }
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+
+        let mut after = Vec::new();
+        for id in &made {
+            after.push(orgs.get(*id).await.expect("get").expect("org"));
+        }
+        assert_eq!(
+            after[0].enabled_tiers,
+            ["availability", "uplink", "traffic", "switch_ports"]
+        );
+        assert_eq!(after[1].enabled_tiers, ["availability", "switch_ports"]);
+        assert_eq!(
+            after[2].enabled_tiers,
+            ["availability", "switch_ports"],
+            "a row that already carried the tier got it twice"
+        );
+        assert!(after.iter().all(|o| o.switch_ports_secs == 300));
+
+        // A new organization gets the tier and the interval from the column defaults.
+        let fresh = orgs
+            .create("4", "4", "https://api.meraki.com", credential)
+            .await
+            .expect("a new organization");
+        let fresh = orgs.get(fresh).await.expect("get").expect("org");
+        assert!(fresh.enabled_tiers.iter().any(|t| t == "switch_ports"));
+        assert_eq!(fresh.switch_ports_secs, 300);
     }
 
     /// **Migrating twice does nothing the second time**, which is what every restart does.

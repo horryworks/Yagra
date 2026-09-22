@@ -1483,15 +1483,16 @@ impl LeaderTasks {
         );
         spawn_cancellable(
             &self.shutdown,
-            run_meraki_scheduler(
-                self.meraki_orgs.clone(),
-                self.meraki_devices.clone(),
-                self.creds.clone(),
-                self.bus.clone(),
-                self.meraki_inflight.clone(),
-                self.repo.clone(),
-                std::mem::take(&mut self.meraki_pool),
-            ),
+            run_meraki_scheduler(MerakiScheduler {
+                orgs: self.meraki_orgs.clone(),
+                devices: self.meraki_devices.clone(),
+                creds: self.creds.clone(),
+                bus: self.bus.clone(),
+                inflight: self.meraki_inflight.clone(),
+                settings: self.repo.clone(),
+                coordinator: self.coordinator.clone(),
+                pool: std::mem::take(&mut self.meraki_pool),
+            }),
         );
         // The Meraki inventory sync (ADR-164). Shares `meraki_inflight` with the scheduler above, so
         // the two never hold one organization at once; the loop decides which are due.
@@ -2102,6 +2103,21 @@ async fn run_routing_refresh(
     }
 }
 
+/// What the Meraki collect scheduler reads and publishes through ([`run_meraki_scheduler`]).
+struct MerakiScheduler {
+    orgs: Arc<meraki::MerakiOrgRepo>,
+    devices: Arc<meraki::MerakiDeviceRepo>,
+    creds: Arc<CredentialStore>,
+    bus: Arc<NatsBus>,
+    inflight: Arc<meraki::MerakiInflight>,
+    /// The deployment's settings — the global Meraki kill switch.
+    settings: Arc<NodeRepo>,
+    /// Which capabilities the pool's live pollers claim (ADR-167 決定 9).
+    coordinator: Arc<Coordinator>,
+    /// The pool Meraki collects are published to.
+    pool: String,
+}
+
 /// Dispatch Cisco Meraki org-scoped collects, one per due tier, **single-flighted per org** so an
 /// org's shared Dashboard API rate budget is never exceeded (the #1 safeguard). Separate from the
 /// per-node scheduler so that loop is untouched. Each short tick: honour the global kill switch,
@@ -2109,22 +2125,31 @@ async fn run_routing_refresh(
 /// dispatch one collect (serial→node_id map + monitored networks inlined). Tiers have their own
 /// cadences (free of the per-node 1h cap); the collect result clears the org's flight (a lease is
 /// the backstop). An org with no imported devices is skipped to save budget.
-async fn run_meraki_scheduler(
-    orgs_repo: Arc<meraki::MerakiOrgRepo>,
-    devices: Arc<meraki::MerakiDeviceRepo>,
-    creds: Arc<CredentialStore>,
-    bus: Arc<NatsBus>,
-    inflight: Arc<meraki::MerakiInflight>,
-    settings: Arc<NodeRepo>,
-    meraki_pool: String,
-) {
+///
+/// The switch-port tier (ADR-167) is offered only to a pool whose every live poller claims
+/// [`yagra_bus::CAP_MERAKI_SWITCH_PORTS`], carries the organization's switches alone, and asks for
+/// the ports' configured names once an hour per organization — and on its first collect after this
+/// core started.
+async fn run_meraki_scheduler(s: MerakiScheduler) {
     use std::time::Instant;
     use yagra_bus::{PollJob, SyncBus};
     use yagra_common::MerakiTier;
 
+    let MerakiScheduler {
+        orgs: orgs_repo,
+        devices,
+        creds,
+        bus,
+        inflight,
+        settings,
+        coordinator,
+        pool: meraki_pool,
+    } = s;
     const TICK: Duration = Duration::from_secs(15);
     const LEASE: Duration = Duration::from_secs(300);
     let mut last: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
+    // When each organization's switch-port collect last asked for the ports' names (ADR-167 決定 1).
+    let mut port_names_at: HashMap<Uuid, Instant> = HashMap::new();
     // When a tier was last counted as failed for a reason **core itself** knows about — its key
     // could not be opened, its imported devices could not be read, or which networks it watches
     // could not be read. No job is sent for any of the three, so no poller can report them, and
@@ -2148,26 +2173,19 @@ async fn run_meraki_scheduler(
             }
         };
         let now = Instant::now();
+        // Whether this pool can run the switch-port tier at all (ADR-167 決定 9): asked once a tick,
+        // since every organization's collect goes to the same pool.
+        let switch_ports = coordinator.pollers_support(
+            Some(&meraki_pool),
+            yagra_bus::CAP_MERAKI_SWITCH_PORTS,
+            now,
+        );
         for org in orgs {
             if inflight.is_inflight(org.id, now) {
                 continue; // a collect is still outstanding for this org
             }
-            // Pick the most-overdue due tier (never-dispatched sorts first).
-            let mut best: Option<(MerakiTier, Duration)> = None;
-            for tier in org.active_tiers() {
-                let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
-                let (due, overdue) = match last.get(&(org.id, tier)) {
-                    Some(&t) => {
-                        let e = now.duration_since(t);
-                        (e >= cadence, e)
-                    }
-                    None => (true, Duration::MAX),
-                };
-                if due && best.is_none_or(|(_, bo)| overdue > bo) {
-                    best = Some((tier, overdue));
-                }
-            }
-            let Some((tier, _)) = best else {
+            // The most-overdue due tier the pool can run (never-dispatched sorts first).
+            let Some(tier) = meraki::pick_due_tier(&org, &last, now, switch_ports) else {
                 continue; // nothing due
             };
 
@@ -2191,11 +2209,17 @@ async fn run_meraki_scheduler(
                     );
                 }
             };
-            let device_refs = match devices.device_refs(org.id).await {
+            let device_refs = match devices.device_refs(org.id, tier).await {
                 Ok(d) if !d.is_empty() => d,
                 // No imported device is not a failure — there is nothing to ask about, and this
-                // organization is what "save the budget" was always for.
-                Ok(_) => continue,
+                // organization is what "save the budget" was always for. For the switch-port tier
+                // it means no switch (ADR-167 決定 10): the tier is marked as having had its turn,
+                // or, never dispatched and so always the most overdue, it would be picked on every
+                // tick ahead of the tiers that do have something to ask.
+                Ok(_) => {
+                    last.insert((org.id, tier), now);
+                    continue;
+                }
                 // A read of this core's own database that failed *is* a collect that did not
                 // happen, and nothing downstream will ever say so.
                 Err(e) => {
@@ -2237,12 +2261,24 @@ async fn run_meraki_scheduler(
             if !inflight.acquire_collect(org.id, job_id, tier, LEASE, now) {
                 continue; // lost an acquire race
             }
-            let check = meraki::build_collect_check(&org, tier, api_key, device_refs, network_ids);
+            let port_names = tier == MerakiTier::SwitchPorts
+                && meraki::port_names_due(port_names_at.get(&org.id).copied(), now);
+            let check = meraki::build_collect_check(
+                &org,
+                tier,
+                api_key,
+                device_refs,
+                network_ids,
+                port_names,
+            );
             let interval = org.tier_cadence(tier);
             let job = PollJob::meraki_collect(job_id, check, interval);
             match bus.publish_job_for_pool(&meraki_pool, job).await {
                 Ok(()) => {
                     last.insert((org.id, tier), now);
+                    if port_names {
+                        port_names_at.insert(org.id, now);
+                    }
                     metrics::counter!("yagra_meraki_collects_dispatched_total").increment(1);
                     tracing::debug!(org = %org.org_id, tier = tier.as_str(), "dispatched meraki collect");
                 }

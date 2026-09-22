@@ -82,7 +82,7 @@ impl CheckFamily {
 ///
 /// `__liveness__` is the one row with no family: it is the liveness rule's sentinel, not a
 /// series, so the catalog generator skips it and no Overview card can ever carry it.
-pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 36] = [
+pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 38] = [
     ("__liveness__", None),
     ("icmp_rtt_ms", Some(CheckFamily::Icmp)),
     ("icmp_loss_pct", Some(CheckFamily::Icmp)),
@@ -114,6 +114,10 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 36] = [
     ("meraki_vpn_hubs_unreachable", Some(CheckFamily::Meraki)),
     ("meraki_vpn_hubs_unreachable_pct", Some(CheckFamily::Meraki)),
     ("meraki_vpn_spokes_unreachable", Some(CheckFamily::Meraki)),
+    // A switch port's traffic, one row per port (ADR-167). Its status and speed use the SNMP names,
+    // which the built-in catalog carries, so they are not listed here.
+    ("meraki_port_in_bps", Some(CheckFamily::Meraki)),
+    ("meraki_port_out_bps", Some(CheckFamily::Meraki)),
     // An imported AP's numbers, published by core from its controller's AP walk (ADR-064 B2) —
     // collected by no template of the AP's own, which is why they are listed here.
     ("wlan_ap_up", Some(CheckFamily::Wlan)),
@@ -131,10 +135,10 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 36] = [
 /// that makes [`METRIC_MEANINGS`] checkable — without the list, a sentence for a metric nothing
 /// collects would look identical to a sentence for one that does. Derived from the family table
 /// so the two cannot disagree about a name.
-pub const CHECK_METRICS: [&str; 36] = check_names(&CHECK_FAMILIES);
+pub const CHECK_METRICS: [&str; 38] = check_names(&CHECK_FAMILIES);
 
-const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 36]) -> [&'static str; 36] {
-    let mut out = [""; 36];
+const fn check_names(rows: &[(&'static str, Option<CheckFamily>); 38]) -> [&'static str; 38] {
+    let mut out = [""; 38];
     let mut i = 0;
     while i < rows.len() {
         out[i] = rows[i].0;
@@ -240,7 +244,7 @@ impl MetricUnit {
 /// already pins this table to the collection catalogue in **both** directions, so a new metric now
 /// fails to compile until someone decides its unit. That guarantee is bought, not built — there is
 /// no separate check for units and there should not be one.
-pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 150] = [
+pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 152] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.", MetricUnit::None),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).", MetricUnit::Counted("connections")),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.", MetricUnit::None),
@@ -311,6 +315,8 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit); 150] = [
     ("juniper_cpu_1min", "CPU utilisation in percent (jnxOperatingCPU). ⚠️ Despite the metric name this is the instantaneous value, not a one-minute average, so it is spikier than a load figure.", MetricUnit::Symbol("%")),
     ("juniper_temp", "Temperature in degrees Celsius (jnxOperatingTemp). One row per operating subject.", MetricUnit::Symbol("°C")),
     ("meraki_device_up", "Does the Meraki dashboard report the device online. 1 = online, 0 = offline.", MetricUnit::None),
+    ("meraki_port_in_bps", "Traffic one port of a Meraki switch received, in bits per second — the average over a five-minute bucket the Dashboard had finished filling, so the line runs twelve to seventeen minutes behind the port. One row per port; the Interfaces tab and its charts read it in place of an octet counter.", MetricUnit::Symbol("bps")),
+    ("meraki_port_out_bps", "Traffic one port of a Meraki switch sent, in bits per second — the average over a five-minute bucket the Dashboard had finished filling, so the line runs twelve to seventeen minutes behind the port. One row per port; the Interfaces tab and its charts read it in place of an octet counter.", MetricUnit::Symbol("bps")),
     ("meraki_uplink_failed", "Does the Meraki dashboard report this WAN uplink of an MX failed. 1 = failed, 0 = any other status — including not connected, which on a real organization was almost always a port with no line behind it. One row per uplink.", MetricUnit::None),
     ("meraki_uplink_latency_ms", "Latency of one WAN uplink of a Meraki MX to the Dashboard's test address, in milliseconds — the latest minute the Dashboard reported. One row per uplink.", MetricUnit::Symbol("ms")),
     ("meraki_uplink_loss_pct", "Packet loss of one WAN uplink of a Meraki MX to the Dashboard's test address, in percent — the latest minute the Dashboard reported. One row per uplink.", MetricUnit::Symbol("%")),

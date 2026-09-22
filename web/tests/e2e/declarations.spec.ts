@@ -44,6 +44,8 @@ interface NodeDetailRow {
   snmp_configured: boolean;
   /** Present only on a wireless controller or an imported AP; the third tab axis (ADR-064). */
   wireless?: { controller?: unknown | null } | null;
+  /** Present only on a Meraki node; only a switch has ports to list (ADR-167). */
+  meraki_device?: { product_type: string } | null;
 }
 
 interface RoleMatrix {
@@ -82,6 +84,8 @@ test('every node kind the deployment actually holds is one the tab rules know', 
       // Read off the same document the app reads it from: on a real deployment this is the only
       // way a wireless controller is told from any other SNMP device (ADR-064 増分 B3).
       isWlanController: detail.wireless?.controller != null,
+      // Likewise: only a Meraki switch has ports to list (ADR-167).
+      merakiProductType: detail.meraki_device?.product_type ?? null,
     };
     const who = `${node.name} is a ${node.kind}${subject.snmpConfigured ? '' : ' with no SNMP'}`;
 

@@ -106,13 +106,19 @@ const ALL_KINDS: readonly NodeKind[] = NODE_KINDS;
  *  a `device` and passes it. That half is `needsSnmp`. */
 const DEVICE_ONLY: readonly NodeKind[] = ['device'];
 
-/** An ordinary device, **or** an access point whose controller answers for it (ADR-064 増分 C).
+/** Every kind whose `interfaces` rows something else writes: an ordinary device (its own ifTable
+ *  walk), an access point whose controller answers for it (ADR-064 増分 C), and a Meraki node —
+ *  whose switch-port collect writes one row per port (ADR-167).
  *
  *  An AP node is never polled itself, so it has no ifTable walk of its own — but its controller's
- *  radio walk writes `interfaces` rows for it, one per radio, and those are as real as any port.
- *  Only the Interfaces tab is in this position: neighbours and flow have no controller-side
- *  equivalent, so they stay [`DEVICE_ONLY`] and stay hidden. */
-const DEVICE_OR_AP: readonly NodeKind[] = ['device', 'wireless_ap'];
+ *  radio walk writes `interfaces` rows for it, one per radio, and those are as real as any port. A
+ *  Meraki switch is not walked either, and its ports are read from the Dashboard. Only the
+ *  Interfaces tab is in this position: neighbours and flow have no equivalent from either, so they
+ *  stay [`DEVICE_ONLY`] and stay hidden.
+ *
+ *  ⚠️ Necessary and **not sufficient** for a Meraki node: only a switch has ports. An MX or an MR
+ *  passes this list, and [`interfacesFed`] is what keeps the tab off it. */
+const INTERFACE_KINDS: readonly NodeKind[] = ['device', 'wireless_ap', 'meraki'];
 
 /**
  * What the tab rules ask about a node. Both facts come off the `NodeDetail` the pane has already
@@ -134,6 +140,10 @@ export interface NodeDetailSubject {
    *  its first successful WLAN walk lands, and during that window there is no on-screen way to
    *  turn importing on (ADR-064 増分 B3 — known, and measured in the lab rather than guessed at). */
   isWlanController: boolean;
+  /** A Meraki node's product type as the Dashboard names it (`switch`, `appliance`, `wireless`, …)
+   *  — `NodeDetail.meraki_device.product_type` — and `null` on every other node. Only a switch has
+   *  ports for the Interfaces tab to list (ADR-167 決定 13). */
+  merakiProductType: string | null;
 }
 
 /** Live node facts the tab bar decorates itself from. Kept free of React types so the badge/warn
@@ -161,8 +171,10 @@ export interface NodeDetailTabMeta {
    *  being a second hand-written map, because a hardcoded list that also feeds a visibility guard
    *  makes the guard the dangerous copy (ui-conventions.md, the `metricCards.ts` lesson). */
   kinds: readonly NodeKind[];
-  /** True when every row this tab can show comes from an SNMP walk, so a node with no SNMP
-   *  configured would be offered the tab only to find it structurally empty.
+  /** True when every row this tab can show comes from a walk of the node's ports — its own SNMP
+   *  walk, its controller's, or its Meraki switch-port collect — so a node none of those reach
+   *  would be offered the tab only to find it structurally empty. Which of them reaches a node is
+   *  [`interfacesFed`]'s answer, per kind.
    *
    *  **Required for the same reason `kinds` is** — a new tab cannot compile until someone decides,
    *  and the visible set stays *derived* from these two rather than becoming a third hand-written
@@ -212,11 +224,11 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   //
   // ⚠️ **The ifTable walk is no longer the only writer of `interfaces`.** A wireless controller
   // writes a row per radio onto each of its access points (ADR-064 増分 C), so an AP node's rows
-  // come from a walk of a *different* node. That is why this tab takes `DEVICE_OR_AP` and why
-  // `snmpFed` asks about the controller as well as the node.
+  // come from a walk of a *different* node; and a Meraki switch's ports come from the Dashboard
+  // (ADR-167). That is why this tab takes `INTERFACE_KINDS` and why `interfacesFed` asks per kind.
   interfaces: {
     labelKey: 'tabs.interfaces',
-    kinds: DEVICE_OR_AP,
+    kinds: INTERFACE_KINDS,
     needsSnmp: true,
     needsWlanController: false,
     badge: (s) => s.interfaces.length || null,
@@ -288,13 +300,33 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
  *
  *  The three axes are ANDed and none subsumes the others — a URL monitor fails `kinds` for
  *  Interfaces, a ping-only device passes `kinds` and fails `needsSnmp`. */
-/** Whether an SNMP walk fills this node's SNMP-fed tabs — **its own walk, or its controller's**.
+/** Whether something walks this node's ports — what the `needsSnmp` tabs are fed by. Asked per
+ *  kind, exhaustively, so the next kind has to answer it (ADR-167 決定 13).
  *
- *  An access point has no SNMP credential and never will: it is answered for by the controller
- *  that manages it (ADR-064). Asking `snmpConfigured` alone therefore hid the radios a controller
- *  had already collected, on the one kind of node that cannot ever answer that question itself. */
-function snmpFed(node: NodeDetailSubject): boolean {
-  return node.snmpConfigured || node.kind === 'wireless_ap';
+ *  * A device: its own SNMP walk, when it has one.
+ *  * An access point: its controller's walk. It has no SNMP credential and never will (ADR-064), so
+ *    asking `snmpConfigured` alone hid the radios a controller had already collected.
+ *  * A Meraki node: its organization's switch-port collect — **for a switch alone**. An MX or an MR
+ *    has no ports there. `snmpConfigured` is not asked: it is true of every node on a deployment
+ *    with a default community in its environment, and asking it offered every Meraki node an empty
+ *    tab.
+ *  * A URL or DNS monitor: nothing. */
+export function interfacesFed(node: NodeDetailSubject): boolean {
+  switch (node.kind) {
+    case 'device':
+      return node.snmpConfigured;
+    case 'wireless_ap':
+      return true;
+    case 'meraki':
+      return node.merakiProductType?.trim().toLowerCase() === 'switch';
+    case 'url':
+    case 'dns':
+      return false;
+    default: {
+      const unreachable: never = node.kind;
+      return unreachable;
+    }
+  }
 }
 
 export function visibleNodeDetailTabs(node: NodeDetailSubject): readonly NodeDetailTab[] {
@@ -302,7 +334,7 @@ export function visibleNodeDetailTabs(node: NodeDetailSubject): readonly NodeDet
     const meta = NODE_DETAIL_TAB_META[tab];
     return (
       meta.kinds.includes(node.kind) &&
-      (snmpFed(node) || !meta.needsSnmp) &&
+      (interfacesFed(node) || !meta.needsSnmp) &&
       (node.isWlanController || !meta.needsWlanController)
     );
   });

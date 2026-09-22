@@ -403,6 +403,9 @@ export const KNOWN_SCALARS = new Set<string>([
   'meraki_device_up',
   'meraki_uplink_sent_bps',
   'meraki_uplink_recv_bps',
+  // A Meraki switch port's traffic (ADR-167) — one row per port.
+  'meraki_port_in_bps',
+  'meraki_port_out_bps',
   'meraki_uplink_loss_pct',
   'meraki_uplink_latency_ms',
   'meraki_uplink_status',

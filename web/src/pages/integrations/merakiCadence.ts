@@ -7,7 +7,8 @@
 // the server answers `400 invalid_cadence`, so a hint that disagrees sends the operator into it.
 //
 // ⚠️ The second copy of a fact. The first is `crates/yagra-core/src/config.rs` (`MERAKI_FAST_*`,
-// `MERAKI_TRAFFIC_*`, `MERAKI_INVENTORY_*`, mirrored by the CHECKs in migrations 0038 and 0124), and
+// `MERAKI_TRAFFIC_*`, `MERAKI_INVENTORY_*`, `MERAKI_SWITCH_PORTS_*`, mirrored by the CHECKs in
+// migrations 0038, 0124 and 0130), and
 // `api/meraki.rs::the_cadence_bounds_the_webui_shows_are_the_ones_this_api_accepts` reads THIS file
 // to hold the two together. It finds each bound as `export const NAME = <digits>;` — keep them
 // plain numbers on one line, or that check stops seeing them and says so.
@@ -15,6 +16,10 @@
 /** Availability and uplink: the two tiers that share the fast band. */
 export const CADENCE_FAST_MIN_SECS = 60;
 export const CADENCE_FAST_MAX_SECS = 3600;
+/** Every switch port's status, speed and traffic (ADR-167): nothing finer than the Dashboard's
+ *  five-minute buckets exists, and much past ten minutes a port would be drawn as stale. */
+export const CADENCE_SWITCH_PORTS_MIN_SECS = 300;
+export const CADENCE_SWITCH_PORTS_MAX_SECS = 600;
 /** Traffic. */
 export const CADENCE_TRAFFIC_MIN_SECS = 300;
 export const CADENCE_TRAFFIC_MAX_SECS = 86_400;
@@ -23,7 +28,13 @@ export const CADENCE_INVENTORY_MIN_SECS = 60;
 export const CADENCE_INVENTORY_MAX_SECS = 604_800;
 
 /** The intervals the dialog edits, in the order it draws them. */
-export const MERAKI_CADENCE_FIELDS = ['availability', 'uplink', 'traffic', 'inventory'] as const;
+export const MERAKI_CADENCE_FIELDS = [
+  'availability',
+  'uplink',
+  'switch_ports',
+  'traffic',
+  'inventory',
+] as const;
 
 export type MerakiCadenceField = (typeof MERAKI_CADENCE_FIELDS)[number];
 
@@ -32,11 +43,12 @@ export interface CadenceBounds {
   max: number;
 }
 
-/** Which band each interval is held to. A `Record`, so a fifth interval cannot be drawn without
+/** Which band each interval is held to. A `Record`, so another interval cannot be drawn without
  *  saying what it accepts. */
 export const MERAKI_CADENCE_BOUNDS: Record<MerakiCadenceField, CadenceBounds> = {
   availability: { min: CADENCE_FAST_MIN_SECS, max: CADENCE_FAST_MAX_SECS },
   uplink: { min: CADENCE_FAST_MIN_SECS, max: CADENCE_FAST_MAX_SECS },
+  switch_ports: { min: CADENCE_SWITCH_PORTS_MIN_SECS, max: CADENCE_SWITCH_PORTS_MAX_SECS },
   traffic: { min: CADENCE_TRAFFIC_MIN_SECS, max: CADENCE_TRAFFIC_MAX_SECS },
   inventory: { min: CADENCE_INVENTORY_MIN_SECS, max: CADENCE_INVENTORY_MAX_SECS },
 };

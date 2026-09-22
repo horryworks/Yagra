@@ -159,6 +159,7 @@ fn spec(tier: MerakiTier, networks: &[&str]) -> MerakiCollectSpec {
         per_page: 1000,
         target_rps: 1000.0,
         interval_secs: 1_800,
+        port_names: false,
     }
 }
 
@@ -744,4 +745,222 @@ async fn a_traffic_answer_that_is_not_a_list_fails_the_collect() {
     let (origin, _, _) = serve(vec![Reply::ok(r#"{"networkId":"N_1"}"#)]).await;
     let got = collect(&spec(MerakiTier::Traffic, &["N_1"]), TIMEOUT, Some(&origin)).await;
     assert_eq!(got, Err(MerakiFetchError::Malformed));
+}
+
+// ── The switch-port tier (ADR-167) ──────────────────────────────────────────────────────────
+
+/// A switch-port status page in the envelope the Dashboard answers with.
+fn status_page(rows: &str) -> String {
+    format!(r#"{{"items":[{rows}],"meta":{{"counts":{{"items":{{"total":3,"remaining":0}}}}}}}}"#)
+}
+
+fn switch_status(serial: &str, network: &str, ports: &str) -> String {
+    format!(r#"{{"serial":"{serial}","network":{{"id":"{network}"}},"ports":[{ports}]}}"#)
+}
+
+const PORT_1_UP: &str =
+    r#"{"portId":"1","enabled":true,"status":"Connected","speed":"1 Gbps","duplex":"full"}"#;
+const PORT_2_DOWN: &str =
+    r#"{"portId":"2","enabled":true,"status":"Disconnected","speed":"","duplex":""}"#;
+
+fn usage_page(serial: &str, network: &str) -> String {
+    format!(
+        r#"{{"items":[{{"serial":"{serial}","network":{{"id":"{network}"}},"ports":[
+            {{"portId":"1","intervals":[{{"startTs":"2026-09-22T11:40:00.000000Z",
+              "endTs":"2026-09-22T11:45:00.000000Z",
+              "data":{{"usage":{{"total":1773,"upstream":1183,"downstream":590}}}},
+              "bandwidth":{{"usage":{{"total":48.4,"upstream":32.3,"downstream":16.1}}}}}}]}}]}}],
+            "meta":{{"counts":{{"items":{{"total":1,"remaining":0}}}}}}}}"#
+    )
+}
+
+fn switch_ports_spec(port_names: bool) -> MerakiCollectSpec {
+    MerakiCollectSpec {
+        port_names,
+        ..spec(MerakiTier::SwitchPorts, &["N_1"])
+    }
+}
+
+/// `t0` and `t1` out of the usage request's line.
+fn bucket_of(line: &str) -> (u64, u64) {
+    let query = line.split_once('?').expect("a query").1;
+    let param = |name: &str| -> u64 {
+        query
+            .split(['&', ' '])
+            .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
+            .expect(name)
+            .parse()
+            .expect("a number")
+    };
+    (param("t0"), param("t1"))
+}
+
+/// The whole tier, through HTTP: the status listing paged at the size it accepts and read out of
+/// its envelope, the watched networks kept, one settled usage bucket asked for, the configured
+/// names not asked for, and every read organization-wide — no `networkIds[]` (ADR-164 決定 22).
+#[tokio::test]
+async fn the_switch_port_tier_reads_statuses_then_one_settled_usage_bucket() {
+    let page_two = format!(
+        "{BASE}/api/v1/organizations/1/switch/ports/statuses/bySwitch?perPage=20&startingAfter=Q2SW-0001"
+    );
+    let first = status_page(&format!(
+        "{},{}",
+        switch_status("Q2SW-0001", "N_1", &format!("{PORT_1_UP},{PORT_2_DOWN}")),
+        switch_status("Q2SW-0009", "N_9", PORT_1_UP),
+    ));
+    let second = status_page(&switch_status("Q2SW-0002", "N_1", PORT_1_UP));
+    let (origin, _, seen) = serve(vec![
+        Reply::ok(&first).next(&page_two),
+        Reply::ok(&second),
+        Reply::ok(&usage_page("Q2SW-0001", "N_1")),
+    ])
+    .await;
+
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let got = collect(&switch_ports_spec(false), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+
+    assert_eq!(got.failure(), None);
+    assert_eq!(
+        serials(&got),
+        vec!["Q2SW-0001", "Q2SW-0002"],
+        "N_9 is not watched"
+    );
+    let one = &got.observations[0];
+    let reading = |metric: &str, ifindex: u32| {
+        one.samples
+            .iter()
+            .find(|s| s.metric == metric && s.ifindex == Some(ifindex))
+            .map(|s| s.value)
+    };
+    assert_eq!(reading("if_oper_status", 1), Some(1.0));
+    assert_eq!(reading("if_oper_status", 2), Some(2.0));
+    assert_eq!(reading("if_high_speed", 1), Some(1000.0));
+    assert_eq!(reading("meraki_port_in_bps", 1), Some(16_100.0));
+    assert_eq!(reading("meraki_port_out_bps", 1), Some(32_300.0));
+    assert_eq!(
+        one.ports.iter().map(|p| p.ifindex).collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(one.ports.iter().all(|p| p.alias.is_none()));
+    // The second switch has statuses and no usage: its ports are there, its traffic is not.
+    let two = &got.observations[1];
+    assert!(two
+        .samples
+        .iter()
+        .all(|s| !s.metric.starts_with("meraki_port_")));
+    assert_eq!(two.ports.len(), 1);
+
+    let sent = lines(&seen);
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert_eq!(
+        sent[0],
+        "GET /api/v1/organizations/1/switch/ports/statuses/bySwitch?perPage=20 HTTP/1.1"
+    );
+    assert!(sent[1].contains("startingAfter=Q2SW-0001"), "{}", sent[1]);
+    assert!(
+        sent[2].starts_with(
+            "GET /api/v1/organizations/1/switch/ports/usage/history/byDevice/byInterval?interval=300&t0="
+        ) && sent[2].ends_with("&perPage=50 HTTP/1.1"),
+        "{}",
+        sent[2]
+    );
+    let (t0, t1) = bucket_of(&sent[2]);
+    assert_eq!((t1 - t0, t1 % 300), (300, 0));
+    assert!(
+        before - t1 >= 720,
+        "the bucket ended {}s before the collect",
+        before - t1
+    );
+    assert!(sent.iter().all(|l| !l.contains("networkIds")), "{sent:?}");
+}
+
+/// 決定 1: the names are read only when core asks, from the listing that is a bare array, and a
+/// port with none gets an empty alias rather than keeping an old one.
+#[tokio::test]
+async fn the_configured_port_names_are_read_only_when_asked_for() {
+    let statuses = status_page(&switch_status(
+        "Q2SW-0001",
+        "N_1",
+        &format!("{PORT_1_UP},{PORT_2_DOWN}"),
+    ));
+    let config = r#"[{"serial":"Q2SW-0001","network":{"id":"N_1"},"ports":[
+        {"portId":"1","name":"to core"},{"portId":"2","name":null}]}]"#;
+    let (origin, _, seen) = serve(vec![
+        Reply::ok(&statuses),
+        Reply::ok(&usage_page("Q2SW-0001", "N_1")),
+        Reply::ok(config),
+    ])
+    .await;
+
+    let got = collect(&switch_ports_spec(true), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+
+    assert_eq!(got.failure(), None);
+    let aliases: Vec<(u32, Option<&str>)> = got.observations[0]
+        .ports
+        .iter()
+        .map(|p| (p.ifindex, p.alias.as_deref()))
+        .collect();
+    assert_eq!(aliases, [(1, Some("to core")), (2, Some(""))]);
+    assert_eq!(
+        lines(&seen)[2],
+        "GET /api/v1/organizations/1/switch/ports/bySwitch?perPage=50 HTTP/1.1"
+    );
+}
+
+/// 決定 2, through HTTP. A usage answer in the wrong shape costs the traffic and names itself; the
+/// statuses read before it still arrive. The same answer on the statuses read fails the collect —
+/// the first read is not contained.
+#[tokio::test]
+async fn a_switch_port_listing_in_the_wrong_shape_is_malformed() {
+    let statuses = status_page(&switch_status("Q2SW-0001", "N_1", PORT_1_UP));
+    let (origin, _, _) = serve(vec![
+        Reply::ok(&statuses),
+        Reply::ok(r#"[{"serial":"Q2SW-0001","ports":[]}]"#),
+    ])
+    .await;
+    let got = collect(&switch_ports_spec(false), TIMEOUT, Some(&origin))
+        .await
+        .expect("the collect still answers");
+    assert_eq!(
+        got.failed_listing,
+        Some((MerakiListing::SwitchPortUsage, MerakiFetchError::Malformed))
+    );
+    assert!(got.observations[0]
+        .samples
+        .iter()
+        .any(|s| s.metric == "if_oper_status"));
+
+    let (origin, _, seen) = serve(vec![Reply::ok(r#"[{"serial":"Q2SW-0001"}]"#)]).await;
+    let got = collect(&switch_ports_spec(false), TIMEOUT, Some(&origin)).await;
+    assert_eq!(got, Err(MerakiFetchError::Malformed));
+    assert_eq!(lines(&seen).len(), 1);
+}
+
+/// A 500 on the second status page keeps the first page's switches, says why it stopped, and does
+/// not count as a failed collect — the Dashboard did answer (ADR-164 決定 18).
+#[tokio::test]
+async fn a_500_on_the_second_status_page_keeps_the_first() {
+    let page_two = format!(
+        "{BASE}/api/v1/organizations/1/switch/ports/statuses/bySwitch?perPage=20&startingAfter=Q2SW-0001"
+    );
+    let first = status_page(&switch_status("Q2SW-0001", "N_1", PORT_1_UP));
+    let (origin, _, _) = serve(vec![
+        Reply::ok(&first).next(&page_two),
+        Reply::json(500, r#"{"errors":["mock"]}"#),
+        Reply::ok(&usage_page("Q2SW-0001", "N_1")),
+    ])
+    .await;
+    let got = collect(&switch_ports_spec(false), TIMEOUT, Some(&origin))
+        .await
+        .expect("a partial collect");
+    assert_eq!(serials(&got), vec!["Q2SW-0001"]);
+    assert_eq!(got.stopped, Some(MerakiFetchError::Status(500)));
+    assert_eq!(got.failure(), None);
 }

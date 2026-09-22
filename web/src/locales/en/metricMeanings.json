@@ -69,6 +69,8 @@
   "juniper_cpu_1min": "CPU utilisation in percent (jnxOperatingCPU). ⚠️ Despite the metric name this is the instantaneous value, not a one-minute average, so it is spikier than a load figure.",
   "juniper_temp": "Temperature in degrees Celsius (jnxOperatingTemp). One row per operating subject.",
   "meraki_device_up": "Does the Meraki dashboard report the device online. 1 = online, 0 = offline.",
+  "meraki_port_in_bps": "Traffic one port of a Meraki switch received, in bits per second — the average over a five-minute bucket the Dashboard had finished filling, so the line runs twelve to seventeen minutes behind the port. One row per port; the Interfaces tab and its charts read it in place of an octet counter.",
+  "meraki_port_out_bps": "Traffic one port of a Meraki switch sent, in bits per second — the average over a five-minute bucket the Dashboard had finished filling, so the line runs twelve to seventeen minutes behind the port. One row per port; the Interfaces tab and its charts read it in place of an octet counter.",
   "meraki_uplink_failed": "Does the Meraki dashboard report this WAN uplink of an MX failed. 1 = failed, 0 = any other status — including not connected, which on a real organization was almost always a port with no line behind it. One row per uplink.",
   "meraki_uplink_latency_ms": "Latency of one WAN uplink of a Meraki MX to the Dashboard's test address, in milliseconds — the latest minute the Dashboard reported. One row per uplink.",
   "meraki_uplink_loss_pct": "Packet loss of one WAN uplink of a Meraki MX to the Dashboard's test address, in percent — the latest minute the Dashboard reported. One row per uplink.",

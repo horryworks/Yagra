@@ -189,6 +189,22 @@ pub const CAP_DISCOVERY_CANCEL: &str = "discovery-cancel";
 /// nothing" is the failure mode if it does not.
 pub const CAP_POOL_FOLLOW: &str = "pool-follow";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can run the Meraki
+/// **switch-port** collect tier (`MerakiTier::SwitchPorts`, ADR-167 決定 9).
+///
+/// 🚨 **Core withholds the tier from a pool unless every live poller in it claims this**, and the
+/// reason is worse than a missed reading. A Meraki collect is queue-delivered, and a poller from
+/// before the tier cannot decode a [`PollJob`] naming it — it drops the whole job. Core holds one
+/// collect in flight per organization, so the dropped job keeps that organization's flight taken
+/// for the full lease: its **availability** collects, the only ones that say whether a device is
+/// up, wait five minutes behind a job nobody will ever answer, over and over.
+///
+/// ⚠️ Like [`CAP_DISCOVERY_CANCEL`] it is asked of the whole pool (`Coordinator::pollers_support`),
+/// because core cannot know which member will take the job. A pool with no live poller does not
+/// support it either — nothing would answer — and the tier is simply not offered, never counted as
+/// failing.
+pub const CAP_MERAKI_SWITCH_PORTS: &str = "meraki-switch-ports";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -2111,6 +2127,14 @@ pub struct MerakiCollectCheck {
     /// Overall per-request timeout, in milliseconds.
     #[serde(default = "default_meraki_timeout_ms")]
     pub timeout_ms: u32,
+    /// The switch-port tier only (ADR-167 決定 1): also read the ports' configured names
+    /// (`switch/ports/bySwitch`) this time. That listing took 84 s for 854 switches on a real
+    /// organization — longer than the rest of the collect — so core asks for it once an hour per
+    /// organization, and on its first collect after starting. Every other tier ignores it, and so
+    /// does a poller from before it, which never runs the switch-port tier at all
+    /// ([`crate::CAP_MERAKI_SWITCH_PORTS`]).
+    #[serde(default)]
+    pub port_names: bool,
 }
 
 const fn default_meraki_per_page() -> u32 {
@@ -3250,6 +3274,7 @@ mod tests {
                 per_page: 1000,
                 target_rps: 2.0,
                 timeout_ms: 30_000,
+                port_names: false,
             },
             300,
         );
@@ -3279,6 +3304,31 @@ mod tests {
         assert_eq!(c.per_page, 1000);
         assert_eq!(c.target_rps, 2.0);
         assert_eq!(c.timeout_ms, 30_000);
+        assert!(
+            !c.port_names,
+            "a producer that never heard of port names asks for none"
+        );
+    }
+
+    /// ADR-167. The switch-port tier travels as its token, and the port-name flag with it — and an
+    /// unknown field from a newer core costs nothing.
+    #[test]
+    fn a_switch_port_collect_round_trips_and_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "org_id":"123456",
+            "meraki_org_uuid":"00000000-0000-0000-0000-000000000000",
+            "tier":"switch_ports",
+            "base_url":"https://api.meraki.com",
+            "api_key":"x",
+            "port_names":true,
+            "a_field_from_a_newer_core":[1,2,3]
+        }"#;
+        let c: MerakiCollectCheck = serde_json::from_str(json).unwrap();
+        assert_eq!(c.tier, MerakiTier::SwitchPorts);
+        assert!(c.port_names);
+        let back: MerakiCollectCheck =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
     }
 
     #[test]

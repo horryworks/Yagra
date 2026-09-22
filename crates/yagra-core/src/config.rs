@@ -20,11 +20,17 @@ pub const MIN_POLL_INTERVAL_SECS: u32 = 10;
 pub const MAX_POLL_INTERVAL_SECS: u32 = 3600;
 
 // ── Cisco Meraki cadence bounds (own band, NOT the per-node 1h cap — slow tiers must not be
-// blocked). Mirror the CHECK constraints in migration 0038 — and 0124 for the inventory floor; the
-// API validates against these. ──
+// blocked). Mirror the CHECK constraints in migration 0038 — and 0124 for the inventory floor, 0130
+// for the switch ports; the API validates against these. ──
 /// Availability/uplink tier cadence bounds (seconds).
 pub const MERAKI_FAST_MIN_SECS: i32 = 60;
 pub const MERAKI_FAST_MAX_SECS: i32 = 3600;
+/// Switch-port tier cadence bounds (seconds, ADR-167 決定 11). The Dashboard has nothing finer than
+/// its five-minute usage buckets, so a faster collect would read the same bucket twice; and much
+/// past ten minutes a healthy port's row would cross `repo::INTERFACE_STALE_SECS` (900 s) between
+/// two collects and be drawn as stale.
+pub const MERAKI_SWITCH_PORTS_MIN_SECS: i32 = 300;
+pub const MERAKI_SWITCH_PORTS_MAX_SECS: i32 = 600;
 /// Traffic tier cadence bounds (seconds).
 pub const MERAKI_TRAFFIC_MIN_SECS: i32 = 300;
 pub const MERAKI_TRAFFIC_MAX_SECS: i32 = 86_400;

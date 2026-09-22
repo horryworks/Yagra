@@ -44,6 +44,8 @@
     "meraki_device_up": "可用性",
     "meraki_uplink_sent_bps": "回線の送信 (bps)",
     "meraki_uplink_recv_bps": "回線の受信 (bps)",
+    "meraki_port_in_bps": "ポートの受信 (bps)",
+    "meraki_port_out_bps": "ポートの送信 (bps)",
     "meraki_uplink_failed": "回線の障害",
     "meraki_vpn_hubs_reachable": "VPN の hub（到達）",
     "meraki_vpn_hubs_unreachable": "VPN の hub（到達不能）",

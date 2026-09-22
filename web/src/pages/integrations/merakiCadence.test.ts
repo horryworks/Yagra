@@ -5,6 +5,8 @@ import {
   CADENCE_FAST_MIN_SECS,
   CADENCE_INVENTORY_MAX_SECS,
   CADENCE_INVENTORY_MIN_SECS,
+  CADENCE_SWITCH_PORTS_MAX_SECS,
+  CADENCE_SWITCH_PORTS_MIN_SECS,
   CADENCE_TRAFFIC_MAX_SECS,
   CADENCE_TRAFFIC_MIN_SECS,
   MERAKI_CADENCE_BOUNDS,
@@ -28,12 +30,18 @@ describe('the cadence bounds', () => {
       min: CADENCE_INVENTORY_MIN_SECS,
       max: CADENCE_INVENTORY_MAX_SECS,
     });
+    // ADR-167: the switch ports have a band of their own.
+    expect(MERAKI_CADENCE_BOUNDS.switch_ports).toEqual({
+      min: CADENCE_SWITCH_PORTS_MIN_SECS,
+      max: CADENCE_SWITCH_PORTS_MAX_SECS,
+    });
   });
 
   it('reads each hint out of the bounds it describes', () => {
     expect(cadenceRange('availability')).toBe('60–3600');
     expect(cadenceRange('uplink')).toBe('60–3600');
     expect(cadenceRange('traffic')).toBe('300–86400');
+    expect(cadenceRange('switch_ports')).toBe('300–600');
     // The floor that moved: 900 while the tier did nothing, 60 since the sync rides on it.
     expect(cadenceRange('inventory')).toBe('60–604800');
   });

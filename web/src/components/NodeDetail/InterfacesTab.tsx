@@ -32,6 +32,7 @@ import { useRefreshTick } from '../../lib/refreshTick';
 import { consumeEscape, escapeClosesInPageSurface } from '../../lib/escapeDismiss';
 import {
   FAULT_SERIES,
+  faultChartShown,
   faultValues,
   hasOpticalData,
   latestDiscardRate,
@@ -1024,6 +1025,9 @@ function InterfaceDock({
   // data itself — there is no "is optical" flag to disagree with — and it is asked here rather than
   // in the JSX so the rule stays in a file Vitest runs.
   const isOptical = hasOpticalData(series);
+  // A Meraki switch port reports no errors or discards, so its fault chart would only ever say
+  // "no data" (ADR-167). Asked in the .ts beside this, where a test reaches it.
+  const showFaults = faultChartShown(series);
   const opticalKeys = useMemo(
     () =>
       OPTICAL_SERIES.map((spec) => ({
@@ -1295,29 +1299,31 @@ function InterfaceDock({
             charts instead of three because both are zero on a healthy link and the reading an
             operator wants is "did either of them move". No CSS change is needed — the chart grid
             is auto-fit, so the remaining two just get wider. */}
-        <div className="nd-if-chart">
-          <div className="nd-if-chart-t">
-            <span>
-              {t('interfaces.faults')}{' '}
-              <span className="nd-unit">{t('interfaces.faultsUnit')}</span>
-            </span>
-            <ChartLegend entries={faultKeys} />
+        {showFaults && (
+          <div className="nd-if-chart">
+            <div className="nd-if-chart-t">
+              <span>
+                {t('interfaces.faults')}{' '}
+                <span className="nd-unit">{t('interfaces.faultsUnit')}</span>
+              </span>
+              <ChartLegend entries={faultKeys} />
+            </div>
+            {hasData ? (
+              <MetricChart
+                title=""
+                {...chartSizing}
+                timestamps={ts}
+                yFormat={formatSi}
+                legendFormat={formatPps}
+                xRange={win ?? undefined}
+                series={faultSeries}
+                syncKey={DOCK_CURSOR_SYNC}
+              />
+            ) : (
+              <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
+            )}
           </div>
-          {hasData ? (
-            <MetricChart
-              title=""
-              {...chartSizing}
-              timestamps={ts}
-              yFormat={formatSi}
-              legendFormat={formatPps}
-              xRange={win ?? undefined}
-              series={faultSeries}
-              syncKey={DOCK_CURSOR_SYNC}
-            />
-          ) : (
-            <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
-          )}
-        </div>
+        )}
 
         {/* Optical power, drawn ONLY for a port that reports it (ADR-062). Every other chart in
             this dock exists for every interface; this one is the fleet's answer to "is this port

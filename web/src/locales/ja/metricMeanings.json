@@ -69,6 +69,8 @@
   "juniper_cpu_1min": "CPU 使用率（%、jnxOperatingCPU）。⚠️ メトリクス名に反して 1 分平均ではなく現在値です。ロードアベレージより値が跳ねます。",
   "juniper_temp": "温度（℃、jnxOperatingTemp）。監視対象ごとに 1 行です。",
   "meraki_device_up": "Meraki ダッシュボードが機器をオンラインと報告しているか。1 = オンライン、0 = オフライン。",
+  "meraki_port_in_bps": "Meraki のスイッチのポート 1 本が受けた通信量。ビット毎秒で、Dashboard が埋め終えた 5 分枠の平均。そのため線はポートの実際より 12〜17 分遅れる。ポートごとに 1 行。Interfaces タブとそのグラフは、オクテットのカウンタの代わりにこれを読む。",
+  "meraki_port_out_bps": "Meraki のスイッチのポート 1 本が送り出した通信量。ビット毎秒で、Dashboard が埋め終えた 5 分枠の平均。そのため線はポートの実際より 12〜17 分遅れる。ポートごとに 1 行。Interfaces タブとそのグラフは、オクテットのカウンタの代わりにこれを読む。",
   "meraki_uplink_failed": "Meraki MX の WAN 回線 1 本を、Dashboard が障害（failed）と報告しているか。1 = 障害、0 = それ以外（未接続を含む。本物の組織では、未接続はほぼすべて回線をつないでいないポートだった）。回線ごとに 1 行。",
   "meraki_uplink_latency_ms": "Meraki MX の WAN 回線 1 本の、Dashboard の試験用アドレスまでの遅延。ミリ秒で、Dashboard が報告した直近の 1 分の値。回線ごとに 1 行。",
   "meraki_uplink_loss_pct": "Meraki MX の WAN 回線 1 本の、Dashboard の試験用アドレスまでのパケット損失。パーセントで、Dashboard が報告した直近の 1 分の値。回線ごとに 1 行。",

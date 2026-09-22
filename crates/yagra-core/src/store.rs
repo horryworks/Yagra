@@ -288,6 +288,38 @@ pub trait MetricStore: Send + Sync {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint>;
+    /// One port's traffic in one direction, in **bits**/sec, over `[from_s, to_s]` at `step_s`
+    /// (oldest first) — the port chart, on the REST edge and `get_interface_series` alike.
+    /// `port` is `(node, ifindex)`.
+    ///
+    /// Its own read rather than `rate_range` of the octet counter, because a Meraki switch port has
+    /// no counter: its rate is stored as a gauge, and [`VmStore`] folds the two into one expression
+    /// (ADR-167 決定 7). The default is the counter half alone — what every store without that
+    /// expression can answer, and exactly what the chart read before.
+    async fn interface_bps_range(
+        &self,
+        port: (Uuid, i32),
+        dir: PortDirection,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+        lookback_s: u64,
+    ) -> Vec<MetricPoint> {
+        let (node, ifindex) = port;
+        let key = SeriesKey::interface(
+            yagra_common::NodeId::from(node),
+            yagra_common::IfIndex(u32::try_from(ifindex).unwrap_or(0)),
+            dir.counter(),
+        );
+        self.rate_range(&key, from_s, to_s, step_s, lookback_s)
+            .await
+            .into_iter()
+            .map(|p| MetricPoint {
+                t: p.t,
+                v: p.v * 8.0,
+            })
+            .collect()
+    }
     /// The series `node` actually has data for within the trailing `within_secs` window, one entry
     /// per metric name (ADR-046 decision 3). Empty if the store can't enumerate (the in-memory sink,
     /// which keeps only the latest value and cannot enumerate per node).
@@ -1023,9 +1055,81 @@ fn topk_query(metric: &str, agg: TopAgg, limit: usize) -> String {
 /// so widening a window never thins how often the subquery samples.
 const RATE_SUBQUERY_STEP_SECS: u64 = 300;
 
+/// Which way a port's traffic flows, for the reads that answer "how many bits per second".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortDirection {
+    /// Received by the port (`if_hc_in_octets`, `meraki_port_in_bps`).
+    In,
+    /// Sent by the port (`if_hc_out_octets`, `meraki_port_out_bps`).
+    Out,
+}
+
+impl PortDirection {
+    /// The SNMP octet counter this direction is read from.
+    const fn counter(self) -> &'static str {
+        match self {
+            Self::In => "if_hc_in_octets",
+            Self::Out => "if_hc_out_octets",
+        }
+    }
+
+    /// The Meraki switch port gauge this direction is read from (ADR-167).
+    const fn gauge(self) -> &'static str {
+        match self {
+            Self::In => yagra_common::METRIC_MERAKI_PORT_IN_BPS,
+            Self::Out => yagra_common::METRIC_MERAKI_PORT_OUT_BPS,
+        }
+    }
+}
+
+/// How far back a port's Meraki traffic gauge is looked for (ADR-167 決定 7). A switch-port collect
+/// runs every 300–600 s, so this holds the last reading across one missed collect — a line broken
+/// by one slow Dashboard answer would read as an outage. Widened to the counter window when that is
+/// longer, so both halves of an expression look back at least as far.
+const PORT_GAUGE_WINDOW_SECS: u64 = 1800;
+
+/// **The one place a port's bits per second is spelled** (ADR-167 決定 7): the SNMP octet counter's
+/// rate for a port that has one, and a Meraki switch port's stored rate for one that does not.
+///
+/// `((rate(if_hc_in_octets{sel}[{w}s]) * 8) or (last_over_time(meraki_port_in_bps{sel}[{g}s]) * 1))`
+///
+/// * `or` keeps every series of the left side and adds a right-side series only where no left one
+///   has its labels, so on a deployment with no Meraki switch the answer is the counter rate,
+///   exactly as before, and a port with both (none exists) is read from its counter.
+/// * `* 1` is not decoration: it drops the gauge's metric name, as `rate()` drops the counter's, so
+///   both halves carry the same `node` + `ifindex` labels — for `or` to line them up and for the
+///   caller's `+` to add a port's two directions together.
+/// * The gauge is already bits/s (Meraki reports a five-minute average, never a counter, ADR-012's
+///   exception); only the counter is scaled.
+/// * `offset` (seconds, `0` for none) moves both halves back together, for the delta read.
+fn port_bps_expr(dir: PortDirection, sel: &str, w: u64, offset: u64) -> String {
+    let w = w.max(1);
+    let g = PORT_GAUGE_WINDOW_SECS.max(w);
+    let off = if offset == 0 {
+        String::new()
+    } else {
+        format!(" offset {offset}s")
+    };
+    format!(
+        "((rate({}{sel}[{w}s]{off}) * 8) or (last_over_time({}{sel}[{g}s]{off}) * 1))",
+        dir.counter(),
+        dir.gauge()
+    )
+}
+
+/// A port's total (in + out) bits per second through [`port_bps_expr`].
+fn port_throughput_expr(sel: &str, w: u64, offset: u64) -> String {
+    format!(
+        "({} + {})",
+        port_bps_expr(PortDirection::In, sel, w, offset),
+        port_bps_expr(PortDirection::Out, sel, w, offset)
+    )
+}
+
 /// The fixed rate expression for an interface Top-N dimension over the thin counters, through a
 /// `w`-second window. `in`+`out` rates share `(node,ifindex)` labels, so vector addition aligns per
-/// interface. Octet rates are scaled ×8 to bits/sec.
+/// interface. The traffic dimensions read [`port_bps_expr`], so a Meraki switch port ranks beside an
+/// SNMP one (ADR-167).
 fn interface_expr(metric: InterfaceTopMetric, w: u64) -> String {
     interface_expr_scoped(metric, "", w)
 }
@@ -1039,11 +1143,9 @@ fn interface_expr(metric: InterfaceTopMetric, w: u64) -> String {
 fn interface_expr_scoped(metric: InterfaceTopMetric, sel: &str, w: u64) -> String {
     let w = w.max(1);
     match metric {
-        InterfaceTopMetric::Throughput => {
-            format!("(rate(if_hc_in_octets{sel}[{w}s]) + rate(if_hc_out_octets{sel}[{w}s])) * 8")
-        }
-        InterfaceTopMetric::InBps => format!("rate(if_hc_in_octets{sel}[{w}s]) * 8"),
-        InterfaceTopMetric::OutBps => format!("rate(if_hc_out_octets{sel}[{w}s]) * 8"),
+        InterfaceTopMetric::Throughput => port_throughput_expr(sel, w, 0),
+        InterfaceTopMetric::InBps => port_bps_expr(PortDirection::In, sel, w, 0),
+        InterfaceTopMetric::OutBps => port_bps_expr(PortDirection::Out, sel, w, 0),
         InterfaceTopMetric::Errors => {
             format!("(rate(if_in_errors{sel}[{w}s]) + rate(if_out_errors{sel}[{w}s]))")
         }
@@ -1129,41 +1231,55 @@ const M_VM_IMPORT_SECONDS: &str = "yagra_vm_import_seconds";
 
 const VM_MAX_QUERY_LEN: usize = 16_384;
 
-/// The most times one [`interface_expr_scoped`] expression writes the selector.
+/// How many times one [`interface_expr_scoped`] expression writes the selector.
 ///
-/// 🚨 Not cosmetic: `Throughput`, `Errors` and `Discards` each name **two** series, so their
-/// selector is written twice and a budget computed per-selector buys half what it looks like. The
-/// first version of this got it wrong and produced a 16,495-byte query — one the server refuses,
-/// which the caller reads as "no answer" and turns into a skipped tick.
-/// `no_expression_repeats_the_selector_more_than_the_budget_assumes` pins it.
-const MAX_SELECTOR_REPEATS: usize = 2;
+/// 🚨 Not cosmetic: every series an expression names carries the selector, so a budget computed
+/// per selector buys a fraction of what it looks like. The first version of this was one constant
+/// that got it wrong and produced a 16,495-byte query — one the server refuses, which the caller
+/// reads as "no answer" and turns into a skipped tick. Since ADR-167 each traffic direction names a
+/// counter **and** a Meraki gauge, so the total writes it four times and the rest twice.
+/// Exhaustive, and `no_expression_repeats_the_selector_more_than_the_budget_assumes` holds each
+/// answer to the expression it describes.
+const fn selector_repeats(metric: InterfaceTopMetric) -> usize {
+    match metric {
+        InterfaceTopMetric::Throughput => 4,
+        InterfaceTopMetric::InBps
+        | InterfaceTopMetric::OutBps
+        | InterfaceTopMetric::Errors
+        | InterfaceTopMetric::Discards => 2,
+    }
+}
 
-/// Bytes of node selector one candidate query may carry.
+/// Bytes of node selector one candidate query for `metric` may carry.
 ///
-/// The server's ceiling, halved (the rest of the expression costs ~150 bytes, and a deployment may
-/// have tuned the flag *down*), then divided by how many times the expression repeats it.
+/// The server's ceiling, halved (the rest of the expression costs a few hundred bytes, and a
+/// deployment may have tuned the flag *down*), then divided by how many times the expression
+/// repeats it.
 ///
 /// ⚠️ The budget is in **bytes, not nodes**, because `-search.maxQueryLen` is a byte limit an
 /// operator can change; counting nodes would silently mean something different if the id spelling
 /// ever changed.
-const CANDIDATE_MAX_SELECTOR_BYTES: usize = VM_MAX_QUERY_LEN / 2 / MAX_SELECTOR_REPEATS;
+const fn candidate_max_selector_bytes(metric: InterfaceTopMetric) -> usize {
+    VM_MAX_QUERY_LEN / 2 / selector_repeats(metric)
+}
 
 /// The most queries one `interface_candidates` call may issue before giving up on narrowing.
 ///
 /// ⚠️ **This one is not measured.** It is a judgement about how much of a 60-second tick may be
-/// spent on one dimension. With the budget above it buys roughly 2,700 nodes, past which the
+/// spent on one dimension. With the in/out budget it buys roughly 2,700 nodes, past which the
 /// covered set is a large fraction of most fleets anyway and one fleet-wide query is the simpler
 /// bargain. Revisit it with a number rather than a feeling.
 const CANDIDATE_MAX_BATCHES: usize = 25;
 
-/// Split `nodes` into label selectors small enough for VictoriaMetrics to accept.
+/// Split `nodes` into label selectors small enough for VictoriaMetrics to accept in a candidate
+/// query for `metric`.
 ///
 /// `None` = the set needs more than [`CANDIDATE_MAX_BATCHES`] queries, so the caller should fall
 /// back to one fleet-wide query rather than issuing an unbounded number of them.
-fn candidate_selectors(nodes: &[Uuid]) -> Option<Vec<String>> {
+fn candidate_selectors(nodes: &[Uuid], metric: InterfaceTopMetric) -> Option<Vec<String>> {
     // A hyphenated UUID is 36 bytes; the `|` that joins it to the next is the 37th.
     const PER_ID: usize = 37;
-    let per_batch = (CANDIDATE_MAX_SELECTOR_BYTES / PER_ID).max(1);
+    let per_batch = (candidate_max_selector_bytes(metric) / PER_ID).max(1);
     let batches = nodes.len().div_ceil(per_batch);
     if batches > CANDIDATE_MAX_BATCHES {
         return None;
@@ -1187,15 +1303,16 @@ fn candidate_selectors(nodes: &[Uuid]) -> Option<Vec<String>> {
 }
 
 /// Fleet interface rate-delta PromQL: per `(node,ifindex)`, total throughput now minus the rate
-/// `window_secs` ago (×8 = bits/sec). `Up` keeps the biggest increases (`topk`), `Down` the
-/// biggest decreases (`bottomk`). The two `rate()`s share `(node,ifindex)` labels so the
-/// subtraction aligns per interface.
+/// `window_secs` ago, in bits/sec ([`port_throughput_expr`], so a Meraki switch port moves too).
+/// `Up` keeps the biggest increases (`topk`), `Down` the biggest decreases (`bottomk`). Both sides
+/// share `(node,ifindex)` labels so the subtraction aligns per interface.
 fn interface_delta_query(direction: DeltaDirection, window_secs: u64, limit: usize) -> String {
     let n = limit.clamp(1, 100);
     let w = window_secs.max(1);
     let delta = format!(
-        "((rate(if_hc_in_octets[{w}s]) + rate(if_hc_out_octets[{w}s])) - \
-          (rate(if_hc_in_octets[{w}s] offset {w}s) + rate(if_hc_out_octets[{w}s] offset {w}s))) * 8"
+        "({} - {})",
+        port_throughput_expr("", w, 0),
+        port_throughput_expr("", w, w)
     );
     match direction {
         DeltaDirection::Up => format!("topk({n}, {delta})"),
@@ -1203,24 +1320,47 @@ fn interface_delta_query(direction: DeltaDirection, window_secs: u64, limit: usi
     }
 }
 
-/// One node's octet rate for every interface at once, through a `w`-second window:
-/// `rate(if_hc_in_octets{node="…"}[300s])`. `node` is a UUID, so it is safe in the selector.
-fn node_interface_rate_query(counter: &str, node: Uuid, w: u64) -> String {
-    format!("rate({counter}{{node=\"{node}\"}}[{}s])", w.max(1))
-}
-
-/// The fleet's summed octet rate in bits/sec, through a `w`-second window:
-/// `sum(rate(if_hc_in_octets[300s])) * 8`.
-fn fleet_throughput_query(counter: &str, w: u64) -> String {
-    format!("sum(rate({counter}[{}s])) * 8", w.max(1))
-}
-
-/// One interface's total throughput (in + out) in bits/sec, through a `w`-second window.
-fn interface_throughput_query(node: Uuid, ifindex: i32, w: u64) -> String {
+/// One node's traffic in one direction for every interface at once, through a `w`-second window,
+/// in **bytes**/sec — the unit its callers were written for, which scale it ×8 themselves:
+/// `(rate(if_hc_in_octets{node="…"}[300s]) or (last_over_time(meraki_port_in_bps{node="…"}[1800s]) / 8))`.
+/// A Meraki switch port's gauge is bits/s, hence its `/ 8` (ADR-167). `node` is a UUID, so it is
+/// safe in the selector.
+fn node_interface_rate_query(dir: PortDirection, node: Uuid, w: u64) -> String {
     let w = w.max(1);
+    let g = PORT_GAUGE_WINDOW_SECS.max(w);
     format!(
-        "(rate(if_hc_in_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[{w}s]) + \
-          rate(if_hc_out_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[{w}s])) * 8"
+        "(rate({}{{node=\"{node}\"}}[{w}s]) or (last_over_time({}{{node=\"{node}\"}}[{g}s]) / 8))",
+        dir.counter(),
+        dir.gauge()
+    )
+}
+
+/// The fleet's summed traffic in one direction in bits/sec, through a `w`-second window.
+///
+/// `sum(A or B)`, never `sum(A) + sum(B)`: the sum of an empty vector is empty, not zero, so on a
+/// deployment with no Meraki switch the second form would be empty everywhere (ADR-167 決定 7).
+fn fleet_throughput_query(dir: PortDirection, w: u64) -> String {
+    format!("sum({})", port_bps_expr(dir, "", w, 0))
+}
+
+/// One interface's traffic in one direction in bits/sec, through a `w`-second window — a port's
+/// chart (ADR-167). `node` is a UUID and `ifindex` an integer, so both are safe in the selector.
+fn interface_bps_query(dir: PortDirection, node: Uuid, ifindex: i32, w: u64) -> String {
+    port_bps_expr(
+        dir,
+        &format!("{{node=\"{node}\",ifindex=\"{ifindex}\"}}"),
+        w,
+        0,
+    )
+}
+
+/// One interface's total throughput (in + out) in bits/sec, through a `w`-second window — the
+/// per-link utilization heatmap. A Meraki switch port reads its gauges ([`port_throughput_expr`]).
+fn interface_throughput_query(node: Uuid, ifindex: i32, w: u64) -> String {
+    port_throughput_expr(
+        &format!("{{node=\"{node}\",ifindex=\"{ifindex}\"}}"),
+        w.max(1),
+        0,
     )
 }
 
@@ -1653,8 +1793,8 @@ impl MetricStore for VmStore {
         // every interface at once, run concurrently — a constant 3 round-trips regardless of the
         // node's interface count. `node` is a UUID (no injection risk in the selector).
         let w = self.node_window(lookback_s, node);
-        let in_q = node_interface_rate_query("if_hc_in_octets", node, w);
-        let out_q = node_interface_rate_query("if_hc_out_octets", node, w);
+        let in_q = node_interface_rate_query(PortDirection::In, node, w);
+        let out_q = node_interface_rate_query(PortDirection::Out, node, w);
         let status_q =
             format!("last_over_time(if_oper_status{{node=\"{node}\"}}[{INSTANT_LOOKBACK_SECS}s])");
         let (ins, outs, status) = tokio::join!(
@@ -1807,7 +1947,7 @@ impl MetricStore for VmStore {
                 // this is the remainder of a fleet split into classes.
                 None => vec![String::new()],
                 Some([]) => continue,
-                Some(ids) => candidate_selectors(ids).unwrap_or_else(|| {
+                Some(ids) => candidate_selectors(ids, metric).unwrap_or_else(|| {
                     // Not silent. Falling back to the whole fleet is exactly the slow path this
                     // increment exists to avoid, and an operator whose rules quietly stopped being
                     // narrowed would have no way to find out. The counter is the durable signal.
@@ -1942,12 +2082,13 @@ impl MetricStore for VmStore {
         to_s: i64,
         step_s: u64,
     ) -> (Vec<MetricPoint>, Vec<MetricPoint>) {
-        // Fleet sum of per-interface octet rates ×8 = bits/sec, sampled at the requested step across
-        // the range. The window is at least five minutes (robust to poll jitter) and at least two
-        // polls of the slowest node, or that node drops out of the sum every other window (ADR-144).
+        // Fleet sum of per-interface bits/sec — octet rates ×8, and a Meraki switch port's stored
+        // rate (ADR-167) — sampled at the requested step across the range. The window is at least
+        // five minutes (robust to poll jitter) and at least two polls of the slowest node, or that
+        // node drops out of the sum every other window (ADR-144).
         let w = self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS);
-        let in_q = fleet_throughput_query("if_hc_in_octets", w);
-        let out_q = fleet_throughput_query("if_hc_out_octets", w);
+        let in_q = fleet_throughput_query(PortDirection::In, w);
+        let out_q = fleet_throughput_query(PortDirection::Out, w);
         // The in/out range queries are independent — run them concurrently.
         let started = std::time::Instant::now();
         let (in_pts, out_pts) = tokio::join!(
@@ -1971,6 +2112,27 @@ impl MetricStore for VmStore {
         let w = self.node_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS, node);
         let q = interface_throughput_query(node, ifindex, w);
         self.query_range_points(q, from_s, to_s, step_s).await
+    }
+
+    async fn interface_bps_range(
+        &self,
+        port: (Uuid, i32),
+        dir: PortDirection,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+        lookback_s: u64,
+    ) -> Vec<MetricPoint> {
+        let (node, ifindex) = port;
+        // The caller's lookback is a floor, as for `rate_range` (ADR-144).
+        let w = self.node_window(lookback_s, node);
+        self.query_range_points(
+            interface_bps_query(dir, node, ifindex, w),
+            from_s,
+            to_s,
+            step_s,
+        )
+        .await
     }
 
     async fn node_series(&self, node: Uuid, within_secs: u64) -> Vec<NodeSeries> {
@@ -2585,11 +2747,39 @@ mod tests {
             .is_empty());
     }
 
+    // ── ADR-167: every traffic read is one expression, counter `or` Meraki gauge ────────────────
+    //
+    // String regressions, because these queries are assembled by `format!` and nothing else checks
+    // what VictoriaMetrics is asked. The pieces are literals, joined with `concat!`, so a change to
+    // `port_bps_expr` shows up here as a diff rather than being re-derived by the test.
+
+    /// A port's inbound bits/s at the 300 s floor: the counter rate ×8, `or` the gauge as stored.
+    const IN_300: &str =
+        "((rate(if_hc_in_octets[300s]) * 8) or (last_over_time(meraki_port_in_bps[1800s]) * 1))";
+    const OUT_300: &str =
+        "((rate(if_hc_out_octets[300s]) * 8) or (last_over_time(meraki_port_out_bps[1800s]) * 1))";
+
+    #[test]
+    fn one_expression_reads_a_ports_bits_per_second_whichever_way_it_is_collected() {
+        assert_eq!(port_bps_expr(PortDirection::In, "", 300, 0), IN_300);
+        assert_eq!(port_bps_expr(PortDirection::Out, "", 300, 0), OUT_300);
+        // The gauge window never drops below the counter's, and the offset moves both halves.
+        assert_eq!(
+            port_bps_expr(PortDirection::In, "{node=\"n\"}", 3600, 600),
+            "((rate(if_hc_in_octets{node=\"n\"}[3600s] offset 600s) * 8) or \
+             (last_over_time(meraki_port_in_bps{node=\"n\"}[3600s] offset 600s) * 1))"
+        );
+        assert_eq!(
+            port_throughput_expr("", 300, 0),
+            format!("({IN_300} + {OUT_300})")
+        );
+    }
+
     #[test]
     fn topk_interface_throughput_sums_in_out_rate_scaled_to_bits() {
         assert_eq!(
             topk_interface_query(InterfaceTopMetric::Throughput, TopAgg::Now, 5, 300),
-            "topk(5, max by (node,ifindex) (last_over_time(((rate(if_hc_in_octets[300s]) + rate(if_hc_out_octets[300s])) * 8)[1800s:300s])))"
+            format!("topk(5, max by (node,ifindex) (last_over_time((({IN_300} + {OUT_300}))[1800s:300s])))")
         );
     }
 
@@ -2597,7 +2787,11 @@ mod tests {
     fn interface_delta_up_uses_topk_and_offset() {
         assert_eq!(
             interface_delta_query(DeltaDirection::Up, 300, 5),
-            "topk(5, ((rate(if_hc_in_octets[300s]) + rate(if_hc_out_octets[300s])) - (rate(if_hc_in_octets[300s] offset 300s) + rate(if_hc_out_octets[300s] offset 300s))) * 8)"
+            format!(
+                "topk(5, (({IN_300} + {OUT_300}) - \
+                 (((rate(if_hc_in_octets[300s] offset 300s) * 8) or (last_over_time(meraki_port_in_bps[1800s] offset 300s) * 1)) + \
+                 ((rate(if_hc_out_octets[300s] offset 300s) * 8) or (last_over_time(meraki_port_out_bps[1800s] offset 300s) * 1)))))"
+            )
         );
     }
 
@@ -2606,22 +2800,28 @@ mod tests {
         assert!(interface_delta_query(DeltaDirection::Down, 300, 5).starts_with("bottomk(5,"));
     }
 
-    /// ADR-144. At the 300s floor every query string in this module is byte-for-byte what shipped
-    /// before; this pins what a slower fleet asks instead. The window widens and a subquery's range
-    /// grows to hold it, while the subquery step stays 300s.
+    /// ADR-144, and what a slower fleet asks: the window widens and a subquery's range grows to hold
+    /// it, while the subquery step stays 300s — and the gauge window widens with the counter's.
     #[test]
     fn a_slow_fleet_widens_every_rate_window_and_keeps_the_subquery_step() {
         assert_eq!(
             topk_interface_query(InterfaceTopMetric::Throughput, TopAgg::Now, 5, 600),
-            "topk(5, max by (node,ifindex) (last_over_time(((rate(if_hc_in_octets[600s]) + rate(if_hc_out_octets[600s])) * 8)[1800s:300s])))"
+            "topk(5, max by (node,ifindex) (last_over_time(((\
+             ((rate(if_hc_in_octets[600s]) * 8) or (last_over_time(meraki_port_in_bps[1800s]) * 1)) + \
+             ((rate(if_hc_out_octets[600s]) * 8) or (last_over_time(meraki_port_out_bps[1800s]) * 1))\
+             ))[1800s:300s])))"
         );
         assert_eq!(
             topk_interface_query(InterfaceTopMetric::InBps, TopAgg::Max1h, 5, 7200),
-            "topk(5, max by (node,ifindex) (max_over_time((rate(if_hc_in_octets[7200s]) * 8)[7200s:300s])))"
+            "topk(5, max by (node,ifindex) (max_over_time((\
+             ((rate(if_hc_in_octets[7200s]) * 8) or (last_over_time(meraki_port_in_bps[7200s]) * 1))\
+             )[7200s:300s])))"
         );
         assert_eq!(
             interface_candidates_query(InterfaceTopMetric::InBps, 1.0, "", 2400),
-            "max by (node,ifindex) (last_over_time((rate(if_hc_in_octets[2400s]) * 8)[2400s:300s])) >= 1"
+            "max by (node,ifindex) (last_over_time((\
+             ((rate(if_hc_in_octets[2400s]) * 8) or (last_over_time(meraki_port_in_bps[2400s]) * 1))\
+             )[2400s:300s])) >= 1"
         );
         assert!(
             interface_delta_query(DeltaDirection::Up, 600, 5)
@@ -2630,22 +2830,138 @@ mod tests {
         );
     }
 
+    /// The three reads with no `topk`: one node's ports (bytes/s — its callers scale ×8, so the
+    /// gauge is divided), the fleet total (`sum(A or B)`, never `sum(A) + sum(B)`, which is empty
+    /// on a deployment with no Meraki switch), and one port's heatmap row.
     #[test]
-    fn the_node_and_fleet_throughput_reads_are_unchanged_at_the_floor() {
+    fn the_node_and_fleet_throughput_reads_fold_in_the_meraki_gauges() {
         let node = Uuid::nil();
         assert_eq!(
-            node_interface_rate_query("if_hc_in_octets", node, 300),
-            "rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\"}[300s])"
+            node_interface_rate_query(PortDirection::In, node, 300),
+            "(rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\"}[300s]) or \
+             (last_over_time(meraki_port_in_bps{node=\"00000000-0000-0000-0000-000000000000\"}[1800s]) / 8))"
         );
         assert_eq!(
-            fleet_throughput_query("if_hc_out_octets", 300),
-            "sum(rate(if_hc_out_octets[300s])) * 8"
+            fleet_throughput_query(PortDirection::Out, 300),
+            format!("sum({OUT_300})")
         );
+        let sel = "{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"7\"}";
         assert_eq!(
             interface_throughput_query(node, 7, 300),
-            "(rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"7\"}[300s]) + rate(if_hc_out_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"7\"}[300s])) * 8"
+            format!(
+                "(((rate(if_hc_in_octets{sel}[300s]) * 8) or (last_over_time(meraki_port_in_bps{sel}[1800s]) * 1)) + \
+                 ((rate(if_hc_out_octets{sel}[300s]) * 8) or (last_over_time(meraki_port_out_bps{sel}[1800s]) * 1)))"
+            )
         );
-        assert!(fleet_throughput_query("if_hc_in_octets", 1200).contains("[1200s]"));
+        assert_eq!(
+            interface_bps_query(PortDirection::Out, node, 7, 300),
+            format!(
+                "((rate(if_hc_out_octets{sel}[300s]) * 8) or (last_over_time(meraki_port_out_bps{sel}[1800s]) * 1))"
+            )
+        );
+        assert!(fleet_throughput_query(PortDirection::In, 1200).contains("[1200s]"));
+    }
+
+    /// The trait's default for a port chart is the counter half alone, in bits: what every store
+    /// without the folded expression can answer, and exactly what the chart read before ADR-167.
+    #[tokio::test]
+    async fn a_stores_default_port_chart_is_its_counter_rate_in_bits() {
+        struct Rates;
+        #[async_trait]
+        impl MetricStore for Rates {
+            async fn write(&self, _: &PollResult) {}
+            async fn latest(&self, _: &SeriesKey) -> Option<f64> {
+                None
+            }
+            async fn range(&self, _: &SeriesKey, _: i64, _: i64, _: u64) -> Vec<MetricPoint> {
+                Vec::new()
+            }
+            async fn rate_range(
+                &self,
+                key: &SeriesKey,
+                _: i64,
+                _: i64,
+                _: u64,
+                _: u64,
+            ) -> Vec<MetricPoint> {
+                let v = match key.metric.as_str() {
+                    "if_hc_in_octets" => 100.0,
+                    "if_hc_out_octets" => 10.0,
+                    _ => return Vec::new(),
+                };
+                vec![MetricPoint { t: 1, v }]
+            }
+            async fn aggregate_latest(&self, _: &SeriesKey) -> Option<f64> {
+                None
+            }
+            async fn aggregate_range(
+                &self,
+                _: &SeriesKey,
+                _: i64,
+                _: i64,
+                _: u64,
+            ) -> Vec<MetricPoint> {
+                Vec::new()
+            }
+            async fn top_nodes(&self, _: &str, _: TopAgg, _: usize) -> Vec<(Uuid, f64)> {
+                Vec::new()
+            }
+            async fn top_interfaces(
+                &self,
+                _: InterfaceTopMetric,
+                _: TopAgg,
+                _: usize,
+            ) -> Vec<(Uuid, i32, f64)> {
+                Vec::new()
+            }
+            async fn interface_candidates(
+                &self,
+                _: InterfaceTopMetric,
+                _: f64,
+                _: Option<&[Uuid]>,
+            ) -> Option<Vec<(Uuid, i32, f64)>> {
+                None
+            }
+            async fn fresh_node_ids(&self, _: &[&str], _: u64) -> Vec<Uuid> {
+                Vec::new()
+            }
+            async fn interface_delta(
+                &self,
+                _: DeltaDirection,
+                _: u64,
+                _: usize,
+            ) -> Vec<(Uuid, i32, f64)> {
+                Vec::new()
+            }
+            async fn throughput_range(
+                &self,
+                _: i64,
+                _: i64,
+                _: u64,
+            ) -> (Vec<MetricPoint>, Vec<MetricPoint>) {
+                (Vec::new(), Vec::new())
+            }
+            async fn interface_throughput_range(
+                &self,
+                _: Uuid,
+                _: i32,
+                _: i64,
+                _: i64,
+                _: u64,
+            ) -> Vec<MetricPoint> {
+                Vec::new()
+            }
+        }
+        let port = (Uuid::nil(), 3);
+        let at = |dir| Rates.interface_bps_range(port, dir, 0, 1, 1, 300);
+        assert_eq!(
+            at(PortDirection::In).await,
+            [MetricPoint { t: 1, v: 800.0 }]
+        );
+        assert_eq!(
+            at(PortDirection::Out).await,
+            [MetricPoint { t: 1, v: 80.0 }]
+        );
     }
 
     #[test]
@@ -2939,109 +3255,116 @@ mod tests {
     #[test]
     fn the_candidate_query_names_the_scoped_nodes_and_nothing_else_changes() {
         // A string regression, because this query is assembled by `format!` and nothing else
-        // checks what VictoriaMetrics is actually asked. The unscoped form must stay byte-for-byte
-        // what shipped before increment 6c, or the fleet-wide path changes meaning silently.
+        // checks what VictoriaMetrics is actually asked. Since ADR-167 the fleet-wide form reads a
+        // Meraki switch port's gauge beside the counter; on a deployment with none it answers what
+        // the counter alone did.
         let fleet = interface_candidates_query(InterfaceTopMetric::InBps, 900_000_000.0, "", 300);
         assert_eq!(
             fleet,
-            "max by (node,ifindex) (last_over_time((rate(if_hc_in_octets[300s]) * 8)[1800s:300s])) >= 900000000"
+            format!("max by (node,ifindex) (last_over_time(({IN_300})[1800s:300s])) >= 900000000")
         );
 
         let a = Uuid::nil();
-        let sel = candidate_selectors(&[a]).expect("one node fits in one batch");
+        let sel = candidate_selectors(&[a], InterfaceTopMetric::InBps)
+            .expect("one node fits in one batch");
         assert_eq!(sel.len(), 1);
         let scoped = interface_candidates_query(InterfaceTopMetric::InBps, 0.0, &sel[0], 300);
-        // The selector sits on the SERIES, inside `rate()`. Outside it, VictoriaMetrics would
-        // evaluate every series first and filter after — the exact cost this exists to remove.
+        // The selector sits on the SERIES, inside `rate()` and `last_over_time()`. Outside them,
+        // VictoriaMetrics would evaluate every series first and filter after — the exact cost this
+        // exists to remove.
         assert!(
             scoped.contains(&format!("rate(if_hc_in_octets{{node=~\"{a}\"}}[300s])")),
             "selector must be inside rate(): {scoped}"
         );
+        assert!(
+            scoped.contains(&format!(
+                "last_over_time(meraki_port_in_bps{{node=~\"{a}\"}}[1800s])"
+            )),
+            "selector must be inside last_over_time(): {scoped}"
+        );
         assert!(!scoped.contains("rate(if_hc_in_octets[300s])"));
 
-        // Throughput names two series, and both must carry the selector — missing one would query
-        // the whole fleet for half the expression and silently undo the narrowing.
-        let both = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &sel[0], 300);
+        // Throughput names four series, and every one must carry the selector — missing one would
+        // query the whole fleet for part of the expression and silently undo the narrowing.
+        let all = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &sel[0], 300);
         assert_eq!(
-            both.matches("node=~").count(),
-            2,
-            "both series need the selector: {both}"
+            all.matches("node=~").count(),
+            4,
+            "every series needs the selector: {all}"
         );
     }
 
     #[test]
     fn selectors_are_split_at_the_byte_budget_not_at_a_node_count() {
-        let per_batch = CANDIDATE_MAX_SELECTOR_BYTES / 37;
-        let ids: Vec<Uuid> = (0..per_batch as u128).map(Uuid::from_u128).collect();
+        for metric in InterfaceTopMetric::ALL {
+            let per_batch = candidate_max_selector_bytes(metric) / 37;
+            let ids: Vec<Uuid> = (0..per_batch as u128).map(Uuid::from_u128).collect();
 
-        // Exactly one batch's worth is one batch.
-        let one = candidate_selectors(&ids).expect("within the cap");
-        assert_eq!(one.len(), 1);
-        // 🚨 And it really fits: the whole query must stay under the server's limit, which
-        // VictoriaMetrics reports as `-search.maxQueryLen=16384` (measured 2026-08-20 — 500 nodes
-        // is refused with a 422). This is the assertion that would catch someone raising
-        // CANDIDATE_MAX_SELECTOR_BYTES past what the server accepts.
-        // The widest dimension, because the budget has to hold for the expression that repeats
-        // the selector most — not for the one the watch loop happens to use today.
-        let q = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &one[0], 300);
-        assert!(
-            q.len() < VM_MAX_QUERY_LEN,
-            "query is {} bytes, over the server's {VM_MAX_QUERY_LEN}",
-            q.len()
-        );
-
-        // One more node is one more batch.
-        let mut plus = ids.clone();
-        plus.push(Uuid::from_u128(u128::MAX));
-        assert_eq!(
-            candidate_selectors(&plus)
-                .expect("still within the cap")
-                .len(),
-            2
-        );
-
-        // Every id lands in exactly one batch — batches must partition, not overlap, or a port
-        // would be observed twice in one tick.
-        let joined: String = candidate_selectors(&plus).unwrap().join("");
-        for id in &plus {
-            assert_eq!(
-                joined.matches(&id.to_string()).count(),
-                1,
-                "{id} must appear in exactly one batch"
+            // Exactly one batch's worth is one batch.
+            let one = candidate_selectors(&ids, metric).expect("within the cap");
+            assert_eq!(one.len(), 1, "{metric:?}");
+            // 🚨 And it really fits: the whole query must stay under the server's limit, which
+            // VictoriaMetrics reports as `-search.maxQueryLen=16384` (measured 2026-08-20 — 500
+            // nodes is refused with a 422). This is the assertion that would catch someone raising
+            // the budget past what the server accepts, for every dimension.
+            let q = interface_candidates_query(metric, 0.0, &one[0], 300);
+            assert!(
+                q.len() < VM_MAX_QUERY_LEN,
+                "{metric:?}: query is {} bytes, over the server's {VM_MAX_QUERY_LEN}",
+                q.len()
             );
+
+            // One more node is one more batch.
+            let mut plus = ids.clone();
+            plus.push(Uuid::from_u128(u128::MAX));
+            assert_eq!(
+                candidate_selectors(&plus, metric)
+                    .expect("still within the cap")
+                    .len(),
+                2
+            );
+
+            // Every id lands in exactly one batch — batches must partition, not overlap, or a port
+            // would be observed twice in one tick.
+            let joined: String = candidate_selectors(&plus, metric).unwrap().join("");
+            for id in &plus {
+                assert_eq!(
+                    joined.matches(&id.to_string()).count(),
+                    1,
+                    "{id} must appear in exactly one batch"
+                );
+            }
         }
     }
 
     #[test]
     fn no_expression_repeats_the_selector_more_than_the_budget_assumes() {
-        // `CANDIDATE_MAX_SELECTOR_BYTES` is divided by `MAX_SELECTOR_REPEATS`; if a dimension ever
-        // names three series, every batch silently grows past what the server accepts and the
-        // whole tick starts being refused. Checked over `ALL`, so a new variant has to face it.
-        let mut worst = 0;
+        // The budget is divided by `selector_repeats`; if a dimension's expression names more series
+        // than that says, every batch silently grows past what the server accepts and the whole
+        // tick starts being refused. Equality, not a bound, so an answer that is stale-high —
+        // throwing budget away — fails too. Checked over `ALL`, so a new variant has to face it.
         for m in InterfaceTopMetric::ALL {
             let n = interface_expr_scoped(m, "{SELECTOR}", 300)
                 .matches("{SELECTOR}")
                 .count();
-            assert!(
-                n <= MAX_SELECTOR_REPEATS,
-                "{m:?} writes the selector {n} times, over MAX_SELECTOR_REPEATS"
+            assert_eq!(
+                n,
+                selector_repeats(m),
+                "{m:?} writes the selector {n} times"
             );
-            worst = worst.max(n);
         }
-        // And the constant is not stale-high: something really does write it twice, so halving the
-        // budget is buying real headroom rather than throwing it away.
-        assert_eq!(worst, MAX_SELECTOR_REPEATS);
     }
 
     #[test]
     fn too_many_nodes_to_batch_asks_for_the_whole_fleet_instead() {
         // The give-up case: past the batch cap the caller falls back to one fleet-wide query
         // rather than issuing an unbounded number of them.
-        let per_batch = CANDIDATE_MAX_SELECTOR_BYTES / 37;
+        let metric = InterfaceTopMetric::InBps;
+        let per_batch = candidate_max_selector_bytes(metric) / 37;
         let too_many: Vec<Uuid> = (0..(per_batch * CANDIDATE_MAX_BATCHES + 1) as u128)
             .map(Uuid::from_u128)
             .collect();
-        assert!(candidate_selectors(&too_many).is_none());
+        assert!(candidate_selectors(&too_many, metric).is_none());
 
         // ...and one node under the cap still narrows. A test that only proves the refusal would
         // pass just as well if `candidate_selectors` returned `None` for everything.
@@ -3049,7 +3372,7 @@ mod tests {
             .map(Uuid::from_u128)
             .collect();
         assert_eq!(
-            candidate_selectors(&just_under)
+            candidate_selectors(&just_under, metric)
                 .expect("exactly at the cap must still narrow")
                 .len(),
             CANDIDATE_MAX_BATCHES

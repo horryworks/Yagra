@@ -498,11 +498,15 @@
       "uplinks_loss_and_latency": "uplink loss and latency",
       "appliance_uplink_statuses": "uplink statuses",
       "appliance_vpn_statuses": "Auto VPN statuses",
-      "appliance_uplinks_usage": "uplink usage"
+      "appliance_uplinks_usage": "uplink usage",
+      "switch_port_statuses": "switch port statuses",
+      "switch_port_usage": "switch port traffic",
+      "switch_port_config": "switch port names"
     },
     "tier": {
       "availability": "Availability",
       "uplink": "Uplink",
+      "switch_ports": "Switch ports",
       "traffic": "Traffic",
       "inventory": "Inventory"
     },
@@ -594,6 +598,7 @@
       "availabilityAlways": "Availability is always collected: it is what tells whether a device is up.",
       "availabilityInterval": "Availability interval (s)",
       "uplinkInterval": "Uplink interval (s)",
+      "switchPortsInterval": "Switch port interval (s)",
       "trafficInterval": "Traffic interval (s)",
       "inventoryInterval": "Device sync interval (s)",
       "rateBudget": "Rate budget (req/s)",

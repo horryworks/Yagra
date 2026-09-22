@@ -68,6 +68,45 @@ pub const METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT: &str = "meraki_vpn_hubs_unreac
 /// the hubs above. Display only — a spoke that is down alerts for itself.
 pub const METRIC_MERAKI_VPN_SPOKES_UNREACHABLE: &str = "meraki_vpn_spokes_unreachable";
 
+/// The per-uplink metrics — the ones whose row key is a synthetic uplink index (WAN1 = 1, WAN2 = 2,
+/// cellular = 3) and whose rows are named after the uplink (ADR-164 決定 24).
+///
+/// 🚨 **Not every Meraki sample with a row key is an uplink's.** A switch port's samples carry the
+/// port's own number (ADR-167), so naming "every sample with a row key" after the uplinks called
+/// ports 1–3 of every switch WAN1, WAN2 and cellular. Whatever names uplink rows reads this list.
+pub const MERAKI_UPLINK_ROW_METRICS: [&str; 6] = [
+    METRIC_MERAKI_UPLINK_LOSS_PCT,
+    METRIC_MERAKI_UPLINK_LATENCY_MS,
+    METRIC_MERAKI_UPLINK_STATUS,
+    METRIC_MERAKI_UPLINK_FAILED,
+    METRIC_MERAKI_UPLINK_SENT_BPS,
+    METRIC_MERAKI_UPLINK_RECV_BPS,
+];
+
+/// Stable TSDB metric (ADR-167 決定 6): a Meraki switch port's average **receive** rate over one
+/// five-minute bucket of `switch/ports/usage/history/byDevice/byInterval`, bits per second — the
+/// Dashboard's `downstream`. Measured on a real organization: an uplink port's downstream was about
+/// twice its upstream, and every access port's the other way round.
+///
+/// **ADR-012 exception, like the uplink rates:** Meraki reports a per-bucket average and never a
+/// monotonic counter, so this is a gauge, and the interface reads fold it into the same bits/s as
+/// `rate(if_hc_in_octets) * 8` with PromQL's `or` (`yagra-core`'s `store.rs`). ⚠️ The bucket read
+/// is one that ended at least twelve minutes before the collect — the Dashboard fills a bucket five
+/// to eleven minutes after it ends — and the sample is stored at the collect's time, so the line
+/// runs twelve to seventeen minutes behind the port.
+pub const METRIC_MERAKI_PORT_IN_BPS: &str = "meraki_port_in_bps";
+/// Stable TSDB metric: a Meraki switch port's average **send** rate (the Dashboard's `upstream`),
+/// bits per second. See [`METRIC_MERAKI_PORT_IN_BPS`].
+pub const METRIC_MERAKI_PORT_OUT_BPS: &str = "meraki_port_out_bps";
+
+/// The Meraki metrics that publish **one series per switch port**, keyed by the port's ifindex
+/// ([`switch_port_ifindex`]). No collection item carries them — the Dashboard is not walked — so the
+/// set of per-interface metric names (`yagra-core`'s `per_interface_metric_names`) adds this list
+/// rather than learning it from a template (ADR-167 決定 8). A port's status and speed use the SNMP
+/// names (`if_oper_status`, `if_admin_status`, `if_high_speed`), which the built-in catalog already
+/// declares.
+pub const MERAKI_PORT_METRICS: [&str; 2] = [METRIC_MERAKI_PORT_IN_BPS, METRIC_MERAKI_PORT_OUT_BPS];
+
 /// One Dashboard read a collect makes (ADR-164 決定 25). A tier may make several — the uplink tier
 /// reads loss and latency, the uplinks' statuses and the Auto VPN statuses — and when one of them fails
 /// while the others answer, this names which, on the organization's row and in the API.
@@ -87,16 +126,25 @@ pub enum MerakiListing {
     ApplianceVpnStatuses,
     /// `appliance/uplinks/usage/byNetwork` — the traffic tier (決定 23).
     ApplianceUplinksUsage,
+    /// `switch/ports/statuses/bySwitch` — the switch-port tier's first read (ADR-167).
+    SwitchPortStatuses,
+    /// `switch/ports/usage/history/byDevice/byInterval` — the switch-port tier's second read.
+    SwitchPortUsage,
+    /// `switch/ports/bySwitch` — the ports' configured names, read once an hour (ADR-167 決定 1).
+    SwitchPortConfig,
 }
 
 impl MerakiListing {
     /// Every listing.
-    pub const ALL: [MerakiListing; 5] = [
+    pub const ALL: [MerakiListing; 8] = [
         MerakiListing::Availabilities,
         MerakiListing::UplinksLossAndLatency,
         MerakiListing::ApplianceUplinkStatuses,
         MerakiListing::ApplianceVpnStatuses,
         MerakiListing::ApplianceUplinksUsage,
+        MerakiListing::SwitchPortStatuses,
+        MerakiListing::SwitchPortUsage,
+        MerakiListing::SwitchPortConfig,
     ];
 
     /// The token stored and sent — the serde tag.
@@ -108,6 +156,9 @@ impl MerakiListing {
             MerakiListing::ApplianceUplinkStatuses => "appliance_uplink_statuses",
             MerakiListing::ApplianceVpnStatuses => "appliance_vpn_statuses",
             MerakiListing::ApplianceUplinksUsage => "appliance_uplinks_usage",
+            MerakiListing::SwitchPortStatuses => "switch_port_statuses",
+            MerakiListing::SwitchPortUsage => "switch_port_usage",
+            MerakiListing::SwitchPortConfig => "switch_port_config",
         }
     }
 
@@ -167,6 +218,10 @@ pub enum MerakiTier {
     Availability,
     /// WAN uplink loss / latency / status.
     Uplink,
+    /// Every switch port's status, speed and traffic (ADR-167) — the MS switches only, read
+    /// organization-wide and joined by serial. Observational: a port's readings say nothing about
+    /// whether its switch is up.
+    SwitchPorts,
     /// MX WAN uplink usage — sent and received per uplink over the tier's interval (heavier, low
     /// cadence). The switches and access points have no reading here (ADR-164 決定 23).
     Traffic,
@@ -176,9 +231,10 @@ pub enum MerakiTier {
 
 impl MerakiTier {
     /// Every tier, in cadence order (most frequent → least).
-    pub const ALL: [MerakiTier; 4] = [
+    pub const ALL: [MerakiTier; 5] = [
         MerakiTier::Availability,
         MerakiTier::Uplink,
+        MerakiTier::SwitchPorts,
         MerakiTier::Traffic,
         MerakiTier::Inventory,
     ];
@@ -189,6 +245,7 @@ impl MerakiTier {
         match self {
             MerakiTier::Availability => "availability",
             MerakiTier::Uplink => "uplink",
+            MerakiTier::SwitchPorts => "switch_ports",
             MerakiTier::Traffic => "traffic",
             MerakiTier::Inventory => "inventory",
         }
@@ -290,6 +347,74 @@ impl MerakiUplinkStatus {
     }
 }
 
+/// The ifindex a Meraki switch port is stored under (ADR-167 決定 4) — the row key of its series,
+/// its `interfaces` row, its threshold overrides and its alert history, so **a value handed out here
+/// can never be changed**.
+///
+/// * A plain decimal port id with no leading zero (`"1"` … `"54"` — every port of the organization
+///   the design was measured on) is its own number, so port 7 is ifindex 7, as on an SNMP switch.
+/// * Anything else — a module port such as `1_MA-MOD-8X10G_1`, a stack member's `"2_10"`, `"007"`,
+///   `"0"`, or a number too large to be one — is folded with 32-bit FNV-1a into `[2^30, 2^31 − 1)`:
+///   above every plain number a switch has, and below `i32::MAX`, so the `interfaces` table's
+///   INTEGER column holds it.
+///
+/// 🚨 FNV-1a and not `std::hash::DefaultHasher`: the standard hasher's output may change between
+/// Rust releases, which would move every folded port to a new row on the day the toolchain is
+/// bumped. The test pins the values.
+#[must_use]
+pub fn switch_port_ifindex(port_id: &str) -> u32 {
+    /// The first folded value; every plain port number stays below it.
+    const FOLD_BASE: u32 = 1 << 30;
+    let id = port_id.trim();
+    if !id.is_empty() && !id.starts_with('0') && id.bytes().all(|b| b.is_ascii_digit()) {
+        if let Ok(n) = id.parse::<u32>() {
+            if n < FOLD_BASE {
+                return n;
+            }
+        }
+    }
+    let mut hash: u32 = 0x811c_9dc5;
+    for b in id.bytes() {
+        hash ^= u32::from(b);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    // 2^30 − 1 slots, so `i32::MAX` itself is never produced.
+    FOLD_BASE + hash % (FOLD_BASE - 1)
+}
+
+/// A switch port's link-state word from `switch/ports/statuses/bySwitch` (ADR-167 決定 5), as the
+/// value `if_oper_status` takes on an SNMP switch: `Connected` is up (1), `Disconnected` down (2).
+/// `None` for a word this build does not know — it says nothing rather than something invented.
+#[must_use]
+pub fn switch_port_oper_status(word: &str) -> Option<f64> {
+    match word.trim().to_ascii_lowercase().as_str() {
+        "connected" => Some(1.0),
+        "disconnected" => Some(2.0),
+        _ => None,
+    }
+}
+
+/// A switch port's line rate in bits per second, from the Dashboard's speed word (`"1 Gbps"`,
+/// `"100 Mbps"`, `"2.5 Gbps"`). `None` for `""` — a port with no link; measured on 19,357 of 25,092
+/// ports — and for anything that is not a positive number and a unit this build knows.
+#[must_use]
+pub fn switch_port_speed_bps(word: &str) -> Option<i64> {
+    let (number, unit) = word.trim().split_once(' ')?;
+    let number: f64 = number.trim().parse().ok()?;
+    let scale = match unit.trim().to_ascii_lowercase().as_str() {
+        "kbps" => 1e3,
+        "mbps" => 1e6,
+        "gbps" => 1e9,
+        "tbps" => 1e12,
+        _ => return None,
+    };
+    let bps = (number * scale).round();
+    // The guard keeps NaN, zero and the negative out; a line rate is far below `i64::MAX`, and `as`
+    // saturates rather than wrapping if one ever were not.
+    #[allow(clippy::cast_possible_truncation)]
+    (bps.is_finite() && bps >= 1.0).then_some(bps as i64)
+}
+
 /// Map a Meraki `productType` to the Yagra role category the imported node should carry. Unknown
 /// product types fall back to `GenericSnmp` (still a valid node; the operator can re-profile).
 #[must_use]
@@ -384,6 +509,64 @@ mod tests {
         assert_eq!(MerakiTier::from_token("nonsense"), None);
     }
 
+    /// ADR-167 決定 4. These values are row keys in the TSDB, the `interfaces` table and the alert
+    /// history, so they are pinned: a change here moves every folded port to a new row.
+    #[test]
+    fn a_switch_port_id_is_its_own_number_or_a_pinned_folded_one() {
+        for (id, want) in [("1", 1), ("7", 7), ("54", 54), (" 12 ", 12), ("11", 11)] {
+            assert_eq!(switch_port_ifindex(id), want, "{id:?}");
+        }
+        for (id, want) in [
+            ("1_MA-MOD-8X10G_1", 2_092_357_084),
+            ("007", 1_657_484_817),
+            ("0", 1_963_763_887),
+            ("2_10", 1_546_608_473),
+            ("1_1", 1_886_141_273),
+            // 2^30: a plain number, but past the folded range's floor.
+            ("1073741824", 1_900_538_227),
+            ("", 1_092_394_439),
+        ] {
+            let got = switch_port_ifindex(id);
+            assert_eq!(got, want, "{id:?}");
+            assert!(
+                ((1u32 << 30)..(i32::MAX as u32)).contains(&got),
+                "{id:?} folded to {got}, outside [2^30, 2^31 - 1)"
+            );
+        }
+    }
+
+    #[test]
+    fn a_switch_port_status_and_speed_read_only_the_words_they_know() {
+        assert_eq!(switch_port_oper_status("Connected"), Some(1.0));
+        assert_eq!(switch_port_oper_status(" disconnected "), Some(2.0));
+        assert_eq!(switch_port_oper_status("Disabled"), None);
+        assert_eq!(switch_port_oper_status(""), None);
+
+        for (word, want) in [
+            ("10 Mbps", Some(10_000_000)),
+            ("100 Mbps", Some(100_000_000)),
+            ("1 Gbps", Some(1_000_000_000)),
+            ("2.5 Gbps", Some(2_500_000_000)),
+            ("10 Gbps", Some(10_000_000_000)),
+            ("20 Gbps", Some(20_000_000_000)),
+            ("", None),
+            ("auto", None),
+            ("1 Parsec", None),
+            ("0 Mbps", None),
+            ("-1 Gbps", None),
+        ] {
+            assert_eq!(switch_port_speed_bps(word), want, "{word:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_uplink_metrics_are_named_after_uplinks() {
+        for m in MERAKI_PORT_METRICS {
+            assert!(!MERAKI_UPLINK_ROW_METRICS.contains(&m), "{m}");
+        }
+        assert!(MERAKI_UPLINK_ROW_METRICS.contains(&METRIC_MERAKI_UPLINK_SENT_BPS));
+    }
+
     #[test]
     fn uplink_ifindex_is_bounded_and_named() {
         assert_eq!(uplink_ifindex("wan1"), Some(1));
@@ -420,7 +603,7 @@ mod tests {
             );
             assert_eq!(MerakiListing::from_token(l.as_str()), Some(l));
         }
-        assert_eq!(MerakiListing::from_token("switch_port_statuses"), None);
+        assert_eq!(MerakiListing::from_token("switch_port_errors"), None);
     }
 
     #[test]

@@ -1050,6 +1050,8 @@ export const api = {
       uplink_secs: number;
       traffic_secs: number;
       inventory_secs: number;
+      /** Optional on the wire: left out, the stored interval stays (ADR-167). */
+      switch_ports_secs?: number;
       enabled_tiers: string[];
       target_rps: number;
     },

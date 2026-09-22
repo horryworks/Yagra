@@ -289,6 +289,9 @@ pub struct MerakiCollectSpec {
     /// This tier's collect interval (the job's `interval_secs`). The traffic tier asks for usage
     /// over this window, so consecutive collects tile time (ADR-164 決定 23); other tiers ignore it.
     pub interval_secs: u32,
+    /// The switch-port tier only: also read the ports' configured names this time (ADR-167 決定 1,
+    /// `yagra_bus::MerakiCollectCheck::port_names`).
+    pub port_names: bool,
 }
 
 /// Raw per-device observations from a Meraki collect. The poller maps these to per-node
@@ -302,6 +305,28 @@ pub struct MerakiObservation {
     pub samples: Vec<MerakiSample>,
     /// Uplinks seen (WAN1/WAN2/cellular) → the interface inventory (names for the UI).
     pub uplinks: Vec<MerakiUplink>,
+    /// A switch's ports (ADR-167) → the interface inventory, as an SNMP switch's ifTable walk
+    /// fills it. Empty on every other device and every other tier.
+    pub ports: Vec<MerakiPort>,
+}
+
+/// One Meraki switch port seen on a switch-port collect (ADR-167): what goes in its `interfaces`
+/// row. The port's readings (status, speed, traffic) travel as [`MerakiSample`]s keyed by
+/// [`Self::ifindex`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerakiPort {
+    /// [`yagra_common::switch_port_ifindex`] of [`Self::port_id`].
+    pub ifindex: u32,
+    /// The Dashboard's port id (`"7"`, `"1_MA-MOD-8X10G_1"`) — the port's `if_name`.
+    pub port_id: String,
+    /// The name an operator gave the port in the Dashboard — its `if_alias`. `None` when the names
+    /// were not read on this collect (they are read once an hour), so the stored one stays;
+    /// `Some("")` when they were read and the port has none, so a removed name goes too.
+    pub alias: Option<String>,
+    /// Line rate in bits per second; `None` while the port has no link.
+    pub speed_bps: Option<i64>,
+    /// Negotiated duplex; `None` while the port has no link.
+    pub duplex: Option<yagra_common::Duplex>,
 }
 
 /// What one Meraki collect brought back, and why it ended early if it did (ADR-164 決定 18).

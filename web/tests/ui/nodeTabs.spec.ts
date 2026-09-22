@@ -43,6 +43,7 @@ function nodeOf(subject: NodeDetailSubject): Json {
     kind: NodeKind;
     snmp_configured: boolean;
     wireless: unknown;
+    meraki_device: unknown;
   };
   body.kind = subject.kind;
   body.snmp_configured = subject.snmpConfigured;
@@ -66,6 +67,18 @@ function nodeOf(subject: NodeDetailSubject): Json {
         ap: null,
       }
     : null;
+  // Stated for the same reason: the generated node carries a Meraki binding whatever its kind, and
+  // only a Meraki switch may show Interfaces for it (ADR-167). The values are invented.
+  body.meraki_device = subject.merakiProductType
+    ? {
+        org_uuid: '00000000-0000-4000-8000-0000000000bb',
+        org_id: '123456',
+        serial: 'Q2XX-TEST-0001',
+        network_id: 'N_1',
+        product_type: subject.merakiProductType,
+        model: null,
+      }
+    : null;
   return body as unknown as Json;
 }
 
@@ -82,13 +95,38 @@ const SNMP_STATES = [
 const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
   ...NODE_KINDS.flatMap((kind) =>
     SNMP_STATES.map(({ snmpConfigured, name }) => ({
-      subject: { kind, snmpConfigured, isWlanController: false },
+      subject: { kind, snmpConfigured, isWlanController: false, merakiProductType: null },
       name: `a ${kind} node (${name})`,
     })),
   ),
   {
-    subject: { kind: 'device', snmpConfigured: true, isWlanController: true },
+    subject: {
+      kind: 'device',
+      snmpConfigured: true,
+      isWlanController: true,
+      merakiProductType: null,
+    },
     name: 'a device that is a wireless controller',
+  },
+  // ADR-167: a Meraki switch shows Interfaces, and an MX — SNMP flag set, as a default community
+  // leaves it — does not.
+  {
+    subject: {
+      kind: 'meraki',
+      snmpConfigured: false,
+      isWlanController: false,
+      merakiProductType: 'switch',
+    },
+    name: 'a Meraki switch',
+  },
+  {
+    subject: {
+      kind: 'meraki',
+      snmpConfigured: true,
+      isWlanController: false,
+      merakiProductType: 'appliance',
+    },
+    name: 'a Meraki appliance',
   },
 ];
 
@@ -142,6 +180,7 @@ const SNMP_DEVICE: NodeDetailSubject = {
   kind: 'device',
   snmpConfigured: true,
   isWlanController: false,
+  merakiProductType: null,
 };
 
 test.describe('clicking a tab', () => {

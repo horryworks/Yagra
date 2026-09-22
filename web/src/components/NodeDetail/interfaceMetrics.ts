@@ -87,6 +87,21 @@ export function faultValues(series: InterfaceSeries, spec: FaultSeriesSpec): (nu
   return series[spec.key] ?? [];
 }
 
+/** Whether the errors/discards chart is drawn for this port (ADR-167 決定 13).
+ *
+ *  A Meraki switch port has no error or discard counters — the organization-wide Dashboard
+ *  listings Yagra reads carry none — so its four arrays come back empty and the chart could only
+ *  ever say "no data", on every Meraki port, forever. Once the series has arrived with nothing in
+ *  any of them, the chart goes, as the optical one does for a copper port.
+ *
+ *  ⚠️ **Drawn while the series is still loading** (`null`): hiding it then and showing it a moment
+ *  later would make every SNMP port's dock jump. And an SNMP port on a healthy link reports zeros,
+ *  which are readings — `!= null`, never truthiness, for the reason [`hasOpticalData`] gives. */
+export function faultChartShown(series: InterfaceSeries | null): boolean {
+  if (!series) return true;
+  return FAULT_SERIES.some((spec) => faultValues(series, spec).some((v) => v != null));
+}
+
 /** Which of the interface series' optical arrays one line of the optical chart reads. */
 export type OpticalSeriesKey = 'rx_power_dbm' | 'tx_power_dbm';
 
