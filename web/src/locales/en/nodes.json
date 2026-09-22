@@ -399,8 +399,10 @@
       "both_down": "Both down",
       "unknown": "Unknown"
     },
-    "pairPartner": "partner",
-    "pairPartnerNone": "partner not identified",
+    "pairSelf": "This MX: {{role}} (configured)",
+    "pairPartnerLabel": "Partner:",
+    "pairPartnerRole": " ({{role}})",
+    "pairPartnerNone": "Partner: not identified",
     "wanTraffic": "WAN traffic",
     "uplinkCols": {
       "uplink": "Uplink",

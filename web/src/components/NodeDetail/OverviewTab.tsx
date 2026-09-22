@@ -680,18 +680,6 @@ function MerakiHealth({
   }, [nodeId, tick, range]);
 
   const pairLine = merakiPairLine(pair);
-  // The sub-line's whole text, for its `title`: it wraps inside a narrow tile, and a clipped line
-  // owes one.
-  const pairSummary = pairLine
-    ? [
-        t(`overview.haRole.${pairLine.role}`),
-        pairLine.partner
-          ? `${t('overview.pairPartner')} ${pairLine.partner.name}${
-              pairLine.partner.role ? ` (${t(`overview.haRole.${pairLine.partner.role}`)})` : ''
-            }`
-          : t('overview.pairPartnerNone'),
-      ].join(' · ')
-    : undefined;
   const traffic = merakiTrafficSeries(history, PALETTE, {
     sent: t('overview.trafficAxis.sent'),
     recv: t('overview.trafficAxis.received'),
@@ -746,12 +734,19 @@ function MerakiHealth({
             >
               {t(`overview.pairState.${pairLine.state}`)}
             </div>
-            <div className="nd-mk-tile-sub" title={pairSummary}>
-              {t(`overview.haRole.${pairLine.role}`)}
-              {' · '}
+            {/* Two lines, each naming whose role it is: "Primary · partner X (Spare)" left the
+                reader to work out that the first word was this MX's. "(configured)" because it
+                is the role set in the Dashboard, not which MX is carrying traffic — that is the
+                state above. The partner's name is device-supplied, so the line is assembled
+                from parts rather than passed through `Trans`, which would parse a name that
+                looks like a tag. */}
+            <div className="nd-mk-tile-sub">
+              {t('overview.pairSelf', { role: t(`overview.haRole.${pairLine.role}`) })}
+            </div>
+            <div className="nd-mk-tile-sub">
               {pairLine.partner ? (
                 <>
-                  {t('overview.pairPartner')}{' '}
+                  {t('overview.pairPartnerLabel')}{' '}
                   {pairLine.partner.nodeId ? (
                     <Link
                       to={nodesPageHref({ kind: 'node', id: pairLine.partner.nodeId })}
@@ -763,7 +758,9 @@ function MerakiHealth({
                     pairLine.partner.name
                   )}
                   {pairLine.partner.role &&
-                    ` (${t(`overview.haRole.${pairLine.partner.role}`)})`}
+                    t('overview.pairPartnerRole', {
+                      role: t(`overview.haRole.${pairLine.partner.role}`),
+                    })}
                 </>
               ) : (
                 t('overview.pairPartnerNone')

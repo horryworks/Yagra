@@ -397,8 +397,10 @@
       "both_down": "両方停止",
       "unknown": "不明"
     },
-    "pairPartner": "相方",
-    "pairPartnerNone": "相方は特定できない",
+    "pairSelf": "この MX: {{role}}（設定）",
+    "pairPartnerLabel": "相方:",
+    "pairPartnerRole": "（{{role}}）",
+    "pairPartnerNone": "相方: 特定できない",
     "wanTraffic": "WAN の通信量",
     "uplinkCols": {
       "uplink": "回線",

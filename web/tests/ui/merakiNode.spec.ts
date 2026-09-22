@@ -199,8 +199,10 @@ test("an MX's card shows its tiles, a row per WAN uplink, and the WAN traffic ch
   const pairValue = tile('Warm spare').locator('.nd-mk-tile-value');
   await expect(pairValue).toHaveText('Spare down');
   await expect(pairValue).toHaveAttribute('style', /var\(--status-warning\)/);
+  // Two lines, each saying whose role it is — and that the role is the configured one, not which
+  // MX carries traffic (that is the state above).
   const pairSub = tile('Warm spare').locator('.nd-mk-tile-sub');
-  await expect(pairSub).toHaveText('Primary · partner mx-spare-test (Spare)');
+  await expect(pairSub).toHaveText(['This MX: Primary (configured)', 'Partner: mx-spare-test (Spare)']);
   await expect(pairSub.locator('a')).toHaveAttribute('href', new RegExp(PARTNER_ID));
 
   // One row per uplink: its name, state and both rates. A port with no line has no rates; a failed
