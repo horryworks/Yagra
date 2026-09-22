@@ -635,6 +635,94 @@ html[data-viewport='mobile'] .nd-extract-row {
   white-space: nowrap;
 }
 
+/* The Cisco Meraki card (ADR-164 決定 27). NOT the `.nd-health-metric` layout: that one puts the
+   label beside a 24px value that never wraps, which is right for one number and pushed a sentence
+   ("Standby · sent 14.1 kbps / received …") over the next tile. Here a tile stacks its label over a
+   value that may wrap, and the uplinks are a table whose numbers never wrap while the name shrinks. */
+.nd-mk-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px 24px;
+  margin-bottom: 16px;
+}
+
+.nd-mk-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.nd-mk-tile-label {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.nd-mk-tile-value {
+  font-size: var(--font-3xl);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.nd-mk-tile-sub {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* One row per uplink. The container is the grid and each row is `display: contents`, so the four
+   columns line up across rows without a fixed width: the name takes what is left and truncates,
+   the state and the two rates keep their width. */
+.nd-mk-uplinks {
+  display: grid;
+  grid-template-columns: minmax(3em, 1fr) auto auto auto;
+  margin-bottom: 16px;
+  font-size: var(--font-sm);
+}
+
+.nd-mk-uplink {
+  display: contents;
+}
+
+/* Padding, not column-gap, spaces the columns: a gap would break each row's rule into four pieces. */
+.nd-mk-uplink > span {
+  padding: 6px 16px 6px 0;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.nd-mk-uplink > span:last-child {
+  padding-right: 0;
+}
+
+.nd-mk-uplink-head > span {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.nd-mk-uplink > .nd-mk-uplink-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nd-mk-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.nd-mk-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
 /* Memory total shown next to the % (e.g. "62% / 32 GB") — secondary, so the % stays primary. */
 .nd-health-metric-sub {
   font-size: var(--font-sm);

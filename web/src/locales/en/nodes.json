@@ -376,7 +376,6 @@
     "merakiIdentity": "{{productType}} · serial {{serial}}",
     "online": "Online",
     "offline": "Offline",
-    "wanRates": "sent {{sent}} / received {{recv}}",
     "vpn": "Auto VPN",
     "vpnHubs": "{{reached}} of {{total}} hubs reachable",
     "vpnSpokesDown_one": "{{count}} spoke unreachable",
@@ -402,7 +401,17 @@
     },
     "pairPartner": "partner",
     "pairPartnerNone": "partner not identified",
-    "wanTrafficNone": "WAN traffic",
+    "wanTraffic": "WAN traffic",
+    "uplinkCols": {
+      "uplink": "Uplink",
+      "state": "State",
+      "sent": "Sent",
+      "received": "Received"
+    },
+    "trafficAxis": {
+      "sent": "sent",
+      "received": "received"
+    },
     "deviceHealth": "Device health",
     "healthLoadFailed": "This node’s metric list could not be read, so its health cards are not shown. Reload to try again.",
     "cpu": "CPU",

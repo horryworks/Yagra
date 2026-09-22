@@ -8,7 +8,10 @@
  * spells that mapping a second time.
  */
 import type { components } from '../../api/schema';
-import type { MerakiHaRole, MerakiPair, MerakiPairState } from '../../types/api';
+import { POSITIVE_HALF } from '../../dashboard/widgets/interfaceTraffic';
+import { alignTo } from '../../lib/seriesMath';
+import type { MerakiHaRole, MerakiPair, MerakiPairState, MetricPoint } from '../../types/api';
+import type { ChartSeries } from '../MetricChart/MetricChart';
 
 type RowReading = components['schemas']['MetricRowReading'];
 
@@ -157,4 +160,59 @@ export function merakiPairLine(pair: MerakiPair | null | undefined): MerakiPairL
     tone: PAIR_TONE[pair.state],
     vpnNotRead: pair.state === 'running_on_spare',
   };
+}
+
+/** One uplink's stored history, as the card read it back (ADR-164 決定 27). */
+export interface MerakiUplinkHistory {
+  row: number;
+  name: string;
+  sent: readonly MetricPoint[];
+  recv: readonly MetricPoint[];
+}
+
+/**
+ * The WAN traffic chart: one colour per uplink, sending above zero and receiving below it.
+ *
+ * Which direction is on top is not decided here — it is `POSITIVE_HALF`, the answer every other
+ * traffic chart in the product reads, so this one cannot draw the halves the other way round. The
+ * card passes the gutter words through `mirrorAxisLabels`, which reads the same constant.
+ *
+ * - **Placed by timestamp**, not by array position: the sent and received series are separate
+ *   reads, and a point missing from one must not shift the other.
+ * - **A gap stays a gap** (`null`), never a `0` — a zero is traffic that was measured.
+ * - **Colour by the uplink's place in the list**, not among those that answered: an uplink whose
+ *   read failed this tick must not move the others onto its colour.
+ */
+export function merakiTrafficSeries(
+  uplinks: readonly MerakiUplinkHistory[],
+  palette: readonly string[],
+  labels: { sent: string; recv: string },
+): { timestamps: number[]; series: ChartSeries[] } {
+  const at = new Set<number>();
+  for (const u of uplinks) for (const p of [...u.sent, ...u.recv]) at.add(p.t);
+  const timestamps = [...at].sort((a, b) => a - b);
+  const series: ChartSeries[] = [];
+  if (timestamps.length === 0) return { timestamps, series };
+  const signed = (points: readonly MetricPoint[], sign: 1 | -1) =>
+    alignTo(timestamps, [...points]).map((v) => (v == null ? null : sign * v));
+  const sentSign: 1 | -1 = POSITIVE_HALF === 'out' ? 1 : -1;
+  uplinks.forEach((u, i) => {
+    const color = palette[i % palette.length];
+    // The positive half first, so the legend reads in the order the chart draws it: top-down.
+    const halves: [string, readonly MetricPoint[], 1 | -1][] =
+      sentSign === 1
+        ? [
+            [labels.sent, u.sent, 1],
+            [labels.recv, u.recv, -1],
+          ]
+        : [
+            [labels.recv, u.recv, 1],
+            [labels.sent, u.sent, -1],
+          ];
+    for (const [label, points, sign] of halves) {
+      if (points.length === 0) continue;
+      series.push({ label: `${u.name} ${label}`, values: signed(points, sign), color });
+    }
+  });
+  return { timestamps, series };
 }

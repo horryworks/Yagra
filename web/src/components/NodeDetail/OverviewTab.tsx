@@ -82,11 +82,15 @@ import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overv
 import { memPctSeries } from './overviewMetrics';
 import {
   merakiPairLine,
+  merakiTrafficSeries,
   merakiUplinkLines,
   merakiVpnLine,
+  type MerakiUplinkHistory,
   type MerakiUplinkLine,
   type MerakiVpnLine,
 } from './merakiCard';
+import { PALETTE } from '../MetricChart/palette';
+import { mirrorAxisLabels } from '../../dashboard/widgets/interfaceTraffic';
 import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { metricMeaningKey } from '../../lib/metricMeaning';
@@ -594,11 +598,18 @@ function UrlHealth({
   );
 }
 
-/** Cisco Meraki device health: availability (`meraki_device_up`) and, for an MX, one line per WAN
- *  uplink with its state and its average send and receive rates over the traffic collect's
- *  interval, its Auto VPN reach, and its warm-spare pair (ADR-164 増分 13). Shown only for Meraki
- *  nodes (the caller guards on `node.meraki_device`). What each line says is decided in
- *  `merakiCard.ts`. */
+/** Cisco Meraki device health (ADR-164 増分 13・14): availability (`meraki_device_up`), an MX's Auto
+ *  VPN reach and warm-spare pair as tiles, its WAN uplinks as one row each (state, average send and
+ *  receive), and the WAN traffic those rows were stored as, charted over the range. Shown only for
+ *  Meraki nodes (the caller guards on `node.meraki_device`). What each line says is decided in
+ *  `merakiCard.ts`.
+ *
+ *  ⚠️ **Not the shared `.nd-health-metric` layout** (決定 27). That one puts the label and the value
+ *  side by side with a 24px value that never wraps — right for one number, and exactly what pushed
+ *  "Standby · sent 14.1 kbps / received …" over the next tile. A tile here stacks the label over a
+ *  value that may wrap, and the uplinks are a table whose numbers never wrap while the name shrinks.
+ *
+ *  The chart asks Meraki nothing: it reads back what each collect already stored. */
 function MerakiHealth({
   nodeId,
   device,
@@ -610,13 +621,19 @@ function MerakiHealth({
 }) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
   const [up, setUp] = useState<number | null>(null);
   const [uplinks, setUplinks] = useState<MerakiUplinkLine[]>([]);
   const [vpn, setVpn] = useState<MerakiVpnLine | null>(null);
+  const [history, setHistory] = useState<MerakiUplinkHistory[]>([]);
+  const [win, setWin] = useState<[number, number] | null>(null);
+  const appliance = device.product_type === 'appliance';
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
+      const { from, to } = resolveRange(range);
       void Promise.allSettled([
         api.getNodeMetric(nodeId, MERAKI_CARD.up),
         api.getNodeMetric(nodeId, MERAKI_CARD.sentBps, { agg: 'max', rows: true }),
@@ -630,23 +647,41 @@ function MerakiHealth({
         const value = (p: typeof hr) => (p.status === 'fulfilled' ? p.value.value : null);
         setVpn(merakiVpnLine(value(hr), value(hu), value(su)));
         setUp(u.status === 'fulfilled' ? u.value.value : null);
-        setUplinks(
-          merakiUplinkLines(
-            s.status === 'fulfilled' ? (s.value.rows ?? []) : [],
-            r.status === 'fulfilled' ? (r.value.rows ?? []) : [],
-            st.status === 'fulfilled' ? (st.value.rows ?? []) : [],
-          ),
+        const lines = merakiUplinkLines(
+          s.status === 'fulfilled' ? (s.value.rows ?? []) : [],
+          r.status === 'fulfilled' ? (r.value.rows ?? []) : [],
+          st.status === 'fulfilled' ? (st.value.rows ?? []) : [],
         );
+        setUplinks(lines);
+        // The chart's uplinks are the ones the rows read just named — each uplink's two series,
+        // by its row key. A read that fails costs that series, not the chart.
+        void Promise.allSettled(
+          lines.flatMap((l) => [
+            api.getNodeMetricRange(nodeId, MERAKI_CARD.sentBps, { from, to, row: l.row }),
+            api.getNodeMetricRange(nodeId, MERAKI_CARD.recvBps, { from, to, row: l.row }),
+          ]),
+        ).then((ranges) => {
+          if (cancelled) return;
+          const points = (i: number) => {
+            const p = ranges[i];
+            return p.status === 'fulfilled' ? p.value.points : [];
+          };
+          setHistory(
+            lines.map((l, i) => ({ row: l.row, name: l.name, sent: points(2 * i), recv: points(2 * i + 1) })),
+          );
+          setWin([from, to]);
+        });
       });
     };
     load();
     return () => {
       cancelled = true;
     };
-  }, [nodeId, tick]);
+  }, [nodeId, tick, range]);
 
   const pairLine = merakiPairLine(pair);
-  // The sub-line's whole text, for its `title`: it is clamped, and a clipped line owes one.
+  // The sub-line's whole text, for its `title`: it wraps inside a narrow tile, and a clipped line
+  // owes one.
   const pairSummary = pairLine
     ? [
         t(`overview.haRole.${pairLine.role}`),
@@ -657,88 +692,61 @@ function MerakiHealth({
           : t('overview.pairPartnerNone'),
       ].join(' · ')
     : undefined;
+  const traffic = merakiTrafficSeries(history, PALETTE, {
+    sent: t('overview.trafficAxis.sent'),
+    recv: t('overview.trafficAxis.received'),
+  });
 
   return (
     <section>
       <div className="nd-section-head">
         <div className="nd-section-t">Cisco Meraki</div>
+        {appliance && <RangeControl value={range} onChange={setRange} />}
       </div>
       <div className="nd-fact-v mono nd-url-target">
         {t('overview.merakiIdentity', { productType: device.product_type, serial: device.serial })}
       </div>
-      <div className="nd-health-metrics">
-        <div className="nd-health-metric">
-          <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">{t('overview.availability')}</span>
-            <span
-              className="nd-health-metric-value"
-              style={{ color: availabilityColorVar(up) }}
-            >
-              {up == null ? '—' : up === 1 ? t('overview.online') : t('overview.offline')}
-            </span>
+      <div className="nd-mk-tiles">
+        <div className="nd-mk-tile">
+          <div className="nd-mk-tile-label">{t('overview.availability')}</div>
+          <div className="nd-mk-tile-value" style={{ color: availabilityColorVar(up) }}>
+            {up == null ? '—' : up === 1 ? t('overview.online') : t('overview.offline')}
           </div>
         </div>
-        {uplinks.map((l) => (
-          <div className="nd-health-metric" key={l.row}>
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{l.name}</span>
-              <span className="nd-health-metric-value">
-                {l.state && (
-                  <span
-                    style={l.state === 'failed' ? { color: severityColorVar('critical') } : undefined}
-                  >
-                    {t(`overview.uplinkState.${l.state}`)}
-                  </span>
-                )}
-                {l.state && (l.sentBps != null || l.recvBps != null) && ' · '}
-                {(l.sentBps != null || l.recvBps != null) &&
-                  t('overview.wanRates', { sent: formatBps(l.sentBps), recv: formatBps(l.recvBps) })}
-              </span>
-            </div>
-          </div>
-        ))}
         {vpn && !pairLine?.vpnNotRead && (
-          <div className="nd-health-metric">
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.vpn')}</span>
-              <span
-                className="nd-health-metric-value"
-                style={vpn.tone === 'ok' ? undefined : { color: severityColorVar(vpn.tone) }}
-              >
-                {vpn.total > 0 && t('overview.vpnHubs', { reached: vpn.reached, total: vpn.total })}
-                {vpn.total > 0 && vpn.spokesDown != null ? ' · ' : ''}
-                {vpn.spokesDown != null ? t('overview.vpnSpokesDown', { count: vpn.spokesDown }) : ''}
-              </span>
+          <div className="nd-mk-tile">
+            <div className="nd-mk-tile-label">{t('overview.vpn')}</div>
+            <div
+              className="nd-mk-tile-value"
+              style={vpn.tone === 'ok' ? undefined : { color: severityColorVar(vpn.tone) }}
+            >
+              {vpn.total > 0 && t('overview.vpnHubs', { reached: vpn.reached, total: vpn.total })}
+              {vpn.total > 0 && vpn.spokesDown != null ? ' · ' : ''}
+              {vpn.spokesDown != null ? t('overview.vpnSpokesDown', { count: vpn.spokesDown }) : ''}
             </div>
           </div>
         )}
         {pairLine?.vpnNotRead && (
-          <div className="nd-health-metric">
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.vpn')}</span>
-              <span className="nd-health-metric-value">—</span>
-            </div>
-            <p className="nd-health-metric-meaning" title={t('overview.vpnNotRead')}>
-              {t('overview.vpnNotRead')}
-            </p>
+          <div className="nd-mk-tile">
+            <div className="nd-mk-tile-label">{t('overview.vpn')}</div>
+            <div className="nd-mk-tile-value">—</div>
+            <div className="nd-mk-tile-sub">{t('overview.vpnNotRead')}</div>
           </div>
         )}
         {pairLine && (
-          <div className="nd-health-metric">
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.warmSpare')}</span>
-              <span
-                className="nd-health-metric-value"
-                style={
-                  pairLine.tone && pairLine.tone !== 'ok'
-                    ? { color: severityColorVar(pairLine.tone) }
-                    : undefined
-                }
-              >
-                {t(`overview.pairState.${pairLine.state}`)}
-              </span>
+          <div className="nd-mk-tile">
+            <div className="nd-mk-tile-label">{t('overview.warmSpare')}</div>
+            <div
+              className="nd-mk-tile-value"
+              style={
+                pairLine.tone && pairLine.tone !== 'ok'
+                  ? { color: severityColorVar(pairLine.tone) }
+                  : undefined
+              }
+            >
+              {t(`overview.pairState.${pairLine.state}`)}
             </div>
-            <p className="nd-health-metric-meaning" title={pairSummary}>
+            <div className="nd-mk-tile-sub" title={pairSummary}>
               {t(`overview.haRole.${pairLine.role}`)}
               {' · '}
               {pairLine.partner ? (
@@ -760,18 +768,66 @@ function MerakiHealth({
               ) : (
                 t('overview.pairPartnerNone')
               )}
-            </p>
-          </div>
-        )}
-        {uplinks.length === 0 && device.product_type === 'appliance' && (
-          <div className="nd-health-metric">
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.wanTrafficNone')}</span>
-              <span className="nd-health-metric-value">—</span>
             </div>
           </div>
         )}
+        {uplinks.length === 0 && appliance && (
+          <div className="nd-mk-tile">
+            <div className="nd-mk-tile-label">{t('overview.wanTraffic')}</div>
+            <div className="nd-mk-tile-value">—</div>
+          </div>
+        )}
       </div>
+      {uplinks.length > 0 && (
+        <div className="nd-mk-uplinks" role="table" aria-label={t('overview.wanTraffic')}>
+          <div className="nd-mk-uplink nd-mk-uplink-head" role="row">
+            <span role="columnheader">{t('overview.uplinkCols.uplink')}</span>
+            <span role="columnheader">{t('overview.uplinkCols.state')}</span>
+            <span role="columnheader" className="nd-mk-num">
+              {t('overview.uplinkCols.sent')}
+            </span>
+            <span role="columnheader" className="nd-mk-num">
+              {t('overview.uplinkCols.received')}
+            </span>
+          </div>
+          {uplinks.map((l) => (
+            <div className="nd-mk-uplink" role="row" key={l.row}>
+              <span role="cell" className="nd-mk-uplink-name" title={l.name}>
+                {l.name}
+              </span>
+              <span
+                role="cell"
+                style={l.state === 'failed' ? { color: severityColorVar('critical') } : undefined}
+              >
+                {l.state ? t(`overview.uplinkState.${l.state}`) : '—'}
+              </span>
+              <span role="cell" className="nd-mk-num">
+                {l.sentBps == null ? '—' : formatBps(l.sentBps)}
+              </span>
+              <span role="cell" className="nd-mk-num">
+                {l.recvBps == null ? '—' : formatBps(l.recvBps)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {traffic.timestamps.length > 0 && (
+        <div className="nd-mk-chart">
+          <div className="nd-mk-tile-label">{t('overview.wanTraffic')}</div>
+          <MetricChart
+            title=""
+            timestamps={traffic.timestamps}
+            series={traffic.series}
+            xRange={win ?? undefined}
+            yFormat={(v) => formatSi(Math.abs(v))}
+            legendFormat={(v) => formatBps(Math.abs(v))}
+            mirrored={mirrorAxisLabels({
+              in: t('overview.trafficAxis.received'),
+              out: t('overview.trafficAxis.sent'),
+            })}
+          />
+        </div>
+      )}
     </section>
   );
 }

@@ -375,7 +375,6 @@
     "merakiIdentity": "{{productType}} · シリアル {{serial}}",
     "online": "オンライン",
     "offline": "オフライン",
-    "wanRates": "送信 {{sent}} / 受信 {{recv}}",
     "vpn": "Auto VPN",
     "vpnHubs": "hub {{total}} のうち {{reached}} に到達",
     "vpnSpokesDown": "届かない spoke {{count}}",
@@ -400,7 +399,17 @@
     },
     "pairPartner": "相方",
     "pairPartnerNone": "相方は特定できない",
-    "wanTrafficNone": "WAN の通信量",
+    "wanTraffic": "WAN の通信量",
+    "uplinkCols": {
+      "uplink": "回線",
+      "state": "状態",
+      "sent": "送信",
+      "received": "受信"
+    },
+    "trafficAxis": {
+      "sent": "送信",
+      "received": "受信"
+    },
     "deviceHealth": "デバイスヘルス",
     "healthLoadFailed": "このノードのメトリクス一覧を読み込めなかったため、ヘルスのカードを表示していません。再読み込みしてください。",
     "cpu": "CPU",

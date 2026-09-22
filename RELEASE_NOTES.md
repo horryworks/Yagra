@@ -24,6 +24,7 @@
 
 ### Improvements
 
+- **A Meraki node's card no longer draws its values over each other, and charts its WAN traffic.** On a node pane of ordinary width, an uplink's line ("Standby · sent 14.1 kbps / received …") ran over the next tile and the labels broke in two. The card now puts each label above its value and lets the value wrap, lists the WAN uplinks as a table (uplink, state, sent, received — the numbers never wrap, a long name is shortened with its full text on hover), and charts each uplink's traffic over the selected range, sending above zero and receiving below, one colour per uplink. The chart reads back the values each collect already stored; it sends Meraki nothing new.
 - **A Meraki collect that fails on one of its reads says which one.** The uplink collect reads three listings; one that failed used to be hidden whenever another answered, and a refused read after the first used to throw away the others' readings too. It now keeps what arrived and names the failed read on the organization's row — for example "Uplink (Auto VPN statuses) collection failing" — and in the API (`collect_failures[].listing`). As before, only the availability tier raises an alert.
 
 ### Bug Fixes

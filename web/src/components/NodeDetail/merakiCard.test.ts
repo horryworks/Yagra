@@ -6,6 +6,7 @@ import { MERAKI_PAIR_STATES, type MerakiPair } from '../../types/api';
 import {
   MERAKI_UPLINK_STATES,
   merakiPairLine,
+  merakiTrafficSeries,
   merakiUplinkLines,
   merakiUplinkState,
   merakiVpnLine,
@@ -155,5 +156,61 @@ describe('merakiPairLine', () => {
     for (const s of MERAKI_PAIR_STATES.filter((s) => s !== 'running_on_spare')) {
       expect(merakiPairLine(pair(s))?.vpnNotRead).toBe(false);
     }
+  });
+});
+
+describe('merakiTrafficSeries (ADR-164 決定 27)', () => {
+  const PAL = ['c0', 'c1', 'c2'];
+  const L = { sent: 'sent', recv: 'received' };
+  const pts = (...pairs: [number, number][]) => pairs.map(([t, v]) => ({ t, v }));
+
+  it('draws sending above zero and receiving below it, one colour per uplink', () => {
+    const { timestamps, series } = merakiTrafficSeries(
+      [
+        { row: 1, name: 'WAN1', sent: pts([60, 100], [120, 200]), recv: pts([60, 10], [120, 20]) },
+        { row: 2, name: 'WAN2', sent: pts([60, 5]), recv: pts([60, 7]) },
+      ],
+      PAL,
+      L,
+    );
+    expect(timestamps).toEqual([60, 120]);
+    expect(series).toEqual([
+      { label: 'WAN1 sent', values: [100, 200], color: 'c0' },
+      { label: 'WAN1 received', values: [-10, -20], color: 'c0' },
+      { label: 'WAN2 sent', values: [5, null], color: 'c1' },
+      { label: 'WAN2 received', values: [-7, null], color: 'c1' },
+    ]);
+  });
+
+  it('places each point by its timestamp, and keeps a gap a gap rather than a zero', () => {
+    const { timestamps, series } = merakiTrafficSeries(
+      [{ row: 1, name: 'WAN1', sent: pts([120, 3]), recv: pts([60, 0], [180, 4]) }],
+      PAL,
+      L,
+    );
+    expect(timestamps).toEqual([60, 120, 180]);
+    expect(series.map((s) => s.values)).toEqual([
+      [null, 3, null],
+      [-0, null, -4],
+    ]);
+  });
+
+  it('keeps an uplink on its colour when the one before it has no history', () => {
+    const { series } = merakiTrafficSeries(
+      [
+        { row: 1, name: 'WAN1', sent: [], recv: [] },
+        { row: 3, name: 'cellular', sent: pts([60, 1]), recv: [] },
+      ],
+      PAL,
+      L,
+    );
+    expect(series).toEqual([{ label: 'cellular sent', values: [1], color: 'c1' }]);
+  });
+
+  it('has nothing to draw when nothing was stored', () => {
+    expect(merakiTrafficSeries([{ row: 1, name: 'WAN1', sent: [], recv: [] }], PAL, L)).toEqual({
+      timestamps: [],
+      series: [],
+    });
   });
 });
