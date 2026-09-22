@@ -13,6 +13,11 @@ repository.workspace = true
 # into the shipped library; downstream crates enable it from **dev-dependencies** only, which
 # resolver v2 keeps out of a normal (non-test) build of the dependent.
 test-util = []
+# The lab build's reader for where Meraki requests physically go (`MerakiWireOrigin::from_env`,
+# ADR-166). Off by default, and enabled only through `yagra-core` / `yagra-poller`'s feature of the
+# same name, which only `scripts/flash-build.sh` turns on — so a release binary has no reader for the
+# variable and does not even carry its name.
+lab-meraki-mock = []
 
 [dependencies]
 yagra-common = { path = "../yagra-common" }

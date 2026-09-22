@@ -47,6 +47,9 @@ mimalloc = { workspace = true, optional = true }
 # unconditional so `--no-default-features` remains a one-flag way back to the system allocator.
 default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
+# Lab builds only: read where Meraki collects physically go from the environment (ADR-166). Only
+# `scripts/flash-build.sh` enables it; CI, `/release` and the Dockerfile's `build` stage do not.
+lab-meraki-mock = ["yagra-transport/lab-meraki-mock"]
 
 [dev-dependencies]
 # `FakeTransport` for the worker tests. A dev-dependency on purpose: under resolver v2 the feature

@@ -108,6 +108,10 @@ mimalloc = { workspace = true, optional = true }
 # future comparison needs.
 default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
+# Lab builds only: read where Meraki requests physically go from the environment (ADR-166). Only
+# `scripts/flash-build.sh` enables it; CI, `/release` and the Dockerfile's `build` stage do not, so
+# a published image cannot be pointed anywhere but the host each URL names.
+lab-meraki-mock = ["yagra-transport/lab-meraki-mock"]
 
 [dev-dependencies]
 # `srcread` for the checks that read a module's own text (ADR-091/099). A dev-dependency on purpose:

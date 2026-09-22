@@ -183,9 +183,15 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
+    // Where Meraki collects physically go. Only a lab build has a reader for anything but "the host
+    // each URL names" (ADR-166), and it refuses to start on a malformed value.
+    #[cfg(feature = "lab-meraki-mock")]
+    let meraki_wire = yagra_transport::MerakiWireOrigin::from_env()?;
+    #[cfg(not(feature = "lab-meraki-mock"))]
+    let meraki_wire = None;
     // Raw-socket ICMP transport — needs CAP_NET_RAW (granted to this container only).
     let transport: Arc<dyn yagra_transport::Transport> =
-        Arc::new(yagra_transport::SurgePingTransport::new()?);
+        Arc::new(yagra_transport::SurgePingTransport::new()?.with_meraki_wire_origin(meraki_wire));
     tracing::info!("ICMP transport ready (raw sockets)");
 
     // Remote pollers pin the server cert with a CA file (TLS mandatory across trust boundaries,

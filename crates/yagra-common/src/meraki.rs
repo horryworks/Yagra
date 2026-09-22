@@ -13,7 +13,9 @@
 //! The integration is strictly **READ-ONLY**: the poller only issues HTTP GET. Every request host
 //! is checked against [`is_meraki_api_host`] (the analog of [`crate::is_ssrf_blocked`]) — on the
 //! initial URL and on every pagination `Link: rel=next` — so an authenticated request, which
-//! carries the org API key, can never be redirected off-host and leak the key.
+//! carries the org API key, can never be redirected off-host and leak the key. The only way a
+//! request goes anywhere else is a lab build's wire origin (`yagra_transport::MerakiWireOrigin`,
+//! ADR-166), which whoever runs that box sets and a release build cannot.
 //!
 //! Secrets never live in these types: the org's API key is referenced by the `meraki_orgs` row's
 //! credential and inlined by core over the bus at dispatch time (ADR-018/020).
@@ -165,7 +167,8 @@ pub const PROFILE_MERAKI_MR_API: &str = "Cisco Meraki MR (API)";
 /// host not on this list — on the initial URL **and** on every pagination `Link: rel=next` — so a
 /// redirect/next-link can never exfiltrate the key to a non-Meraki host. Suffix matches are safe:
 /// Meraki owns `meraki.com` / `meraki.ca` / `meraki.cn` / `gov-meraki.com`, so a third party can't
-/// register a matching subdomain.
+/// register a matching subdomain. A lab build's wire origin (ADR-166) is applied only *after* this
+/// check has passed, and changes where the request is physically sent — never what passes here.
 ///
 /// **Every region the WebUI offers has to be on this list**, and for a while one was not: the
 /// region picker listed Canada (`api.meraki.ca`) while this function refused it, so choosing it

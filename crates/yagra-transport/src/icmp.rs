@@ -34,6 +34,9 @@ pub struct SurgePingTransport {
     ident: AtomicU16,
     /// The first sequence number of the next probe's block (`next_sequences`).
     seq: AtomicU16,
+    /// Where Meraki collects physically go, when a lab build says so (ADR-166). `None` from
+    /// [`Self::new`], and nothing but [`Self::with_meraki_wire_origin`] changes it.
+    meraki_wire: Option<crate::MerakiWireOrigin>,
 }
 
 impl SurgePingTransport {
@@ -56,7 +59,16 @@ impl SurgePingTransport {
             v6,
             ident: AtomicU16::new(seed),
             seq: AtomicU16::new(0),
+            meraki_wire: None,
         })
+    }
+
+    /// Send this transport's Meraki collects to `origin` instead of the host each URL names — a lab
+    /// build's recorded Dashboard (ADR-166). `None` leaves them where they were.
+    #[must_use]
+    pub fn with_meraki_wire_origin(mut self, origin: Option<crate::MerakiWireOrigin>) -> Self {
+        self.meraki_wire = origin;
+        self
     }
 
     fn next_ident(&self) -> PingIdentifier {
@@ -257,7 +269,7 @@ impl Transport for SurgePingTransport {
         spec: &crate::MerakiCollectSpec,
         timeout: Duration,
     ) -> Result<crate::MerakiCollected, crate::MerakiFetchError> {
-        crate::meraki::collect(spec, timeout).await
+        crate::meraki::collect(spec, timeout, self.meraki_wire.as_ref()).await
     }
 }
 

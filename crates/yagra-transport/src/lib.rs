@@ -24,6 +24,8 @@ mod http;
 mod icmp;
 mod meraki;
 #[cfg(test)]
+mod meraki_http_tests;
+#[cfg(test)]
 mod module_source;
 mod snmp;
 mod snmp_v3;
@@ -31,7 +33,7 @@ mod walk_budget;
 pub use icmp::SurgePingTransport;
 pub use meraki::{
     fetch_inventory, list_organizations, MerakiAvailability, MerakiDeviceInfo, MerakiFetchError,
-    MerakiInventory, MerakiInventoryDevice, MerakiNetworkInfo, MerakiOrgInfo,
+    MerakiInventory, MerakiInventoryDevice, MerakiNetworkInfo, MerakiOrgInfo, MerakiWireOrigin,
 };
 /// Why a multi-column walk stopped early, how long one may run, and how each of its columns ended.
 ///
@@ -261,7 +263,9 @@ impl std::fmt::Debug for BodyCapture {
 
 /// What one Cisco Meraki org-scoped collect needs (the non-secret request shape plus the resolved
 /// API key). Strictly **read-only**: the collector issues GET only, and every request host is
-/// checked against [`yagra_common::is_meraki_api_host`] so the `api_key` can never leak off-host.
+/// checked against [`yagra_common::is_meraki_api_host`] so no host a server names can receive the
+/// `api_key`. Where the requests physically go differs only in a lab build, and not through this
+/// spec — see [`MerakiWireOrigin`] (ADR-166).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MerakiCollectSpec {
     /// The Meraki organizationId (the API path segment).

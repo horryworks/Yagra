@@ -28,8 +28,17 @@
 #
 # `cargo fmt` is deliberately absent too — it belongs to the pre-commit guard, because the fix for
 # a failure is to rewrite files. By the time this script runs the commit already exists.
+#
+# `$LAB_FEATURES` is the one thing a flash build has that a release does not (ADR-166): the reader
+# for `YAGRA_MERAKI_MOCK_URL`, which sends a lab box's Meraki requests to a recorded Dashboard. It is
+# enabled here and nowhere else — not in CI, not in /release, not in the Dockerfile's `build` stage —
+# so a published image has no way to be pointed anywhere but the host each URL names. With the
+# variable unset the two builds behave the same. It goes on BOTH lines: clippy is the only thing
+# that lints the code behind the feature, and a build with a different feature set than its clippy
+# would compile the workspace crates a third time.
 set -euo pipefail
 
+LAB_FEATURES="yagra-core/lab-meraki-mock,yagra-poller/lab-meraki-mock"
 PROFILE=${PROFILE:-ci-fast}
 BUILDER=${BUILDER:-yagra-builder:1.90}
 SRC=${SRC:-/var/tmp/yagra-flash-src}        # ext4 inside WSL — never /mnt/c
@@ -62,8 +71,8 @@ docker run --rm \
   -v "$OUT":/out \
   -w /app "$BUILDER" bash -c "
     set -e
-    cargo clippy --workspace --profile $PROFILE -- -D warnings
-    cargo build  --profile $PROFILE --bin yagra-core --bin yagra-poller
+    cargo clippy --workspace --profile $PROFILE --features $LAB_FEATURES -- -D warnings
+    cargo build  --profile $PROFILE --features $LAB_FEATURES --bin yagra-core --bin yagra-poller
     install -m0755 target/$PROFILE/yagra-core target/$PROFILE/yagra-poller /out/
     install -m0644 docker-compose.deploy.yml docker-compose.poller.yml scripts/yagra-backup.sh scripts/yagra-relocate.sh scripts/RELOCATION-README.md docker/nats/nats-server.conf /out/
   "

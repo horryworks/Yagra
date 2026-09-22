@@ -658,11 +658,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         group_repo.clone(),
         repo.clone(),
     ));
+    // Where Dashboard API requests physically go. Only a lab build has a reader for anything but
+    // "the host each URL names" (ADR-166), and it refuses to start on a malformed value.
+    #[cfg(feature = "lab-meraki-mock")]
+    let meraki_wire = yagra_transport::MerakiWireOrigin::from_env()?;
+    #[cfg(not(feature = "lab-meraki-mock"))]
+    let meraki_wire = None;
     let meraki_sync = Arc::new(meraki_sync::MerakiSync::new(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
-        Arc::new(meraki_sync::DashboardApi),
+        Arc::new(meraki_sync::DashboardApi::new(meraki_wire)),
         meraki_inflight.clone(),
         meraki_import.clone(),
     ));

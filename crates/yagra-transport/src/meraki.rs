@@ -13,10 +13,13 @@
 //! * **GET only.** The only reqwest verb used anywhere in this module is `.get()`; there is no code
 //!   path that writes. Redirects are disabled (the sole "next" is a validated `Link` header).
 //! * **Host allow-list.** Every request URL — the initial one and every pagination `Link: rel=next`
-//!   — is checked with [`is_meraki_api_host`] before it is issued, so the bearer key can never be
-//!   sent off-host (credential-exfiltration guard).
+//!   — is checked with [`is_meraki_api_host`] before it is issued, so no URL a server hands back can
+//!   send the bearer key off-host (credential-exfiltration guard). The one other place a request can
+//!   physically go is a lab build's [`MerakiWireOrigin`] (ADR-166): chosen by whoever runs that
+//!   box, never by a URL, and a release build has no way to set one.
 //! * **Paced + Retry-After.** Requests are spaced to `target_rps` (well under the org cap, headroom
-//!   for the customer), and a 429 is obeyed via its `Retry-After` header, then adaptively backed off.
+//!   for the customer), and a 429 is obeyed via its `Retry-After` header — retried up to
+//!   `MAX_RATE_LIMIT_RETRIES` times in a row, then given up on.
 //! * **Bounded.** Pagination is capped; a transient network/5xx failure returns the partial results
 //!   collected so far rather than hammering.
 
@@ -44,6 +47,105 @@ const MAX_RATE_LIMIT_RETRIES: u32 = 6;
 
 fn io(msg: impl Into<String>) -> TransportError {
     TransportError::Io(msg.into())
+}
+
+// ── Where the requests physically go (ADR-166) ──────────────────────────────────────────────
+
+/// Where this process's Dashboard API requests are **physically** sent, when that is not the host
+/// each URL names. A lab points it at a recorded Dashboard; nothing else sets one.
+///
+/// Every URL is still built from the organization's stored `base_url` and still checked against
+/// [`is_meraki_api_host`] — on the first request and on every `Link: rel=next` — exactly as when no
+/// origin is set. Only the scheme, host and port of the request actually sent are replaced, at the
+/// one place a request leaves this module (`Session::page_through`). So the allow-list, the https
+/// rule on the stored URL and the region picker keep meaning what they meant.
+///
+/// 🚨 **A release build has no way to set one.** The only reader of the environment is
+/// `from_env`, which exists only under the `lab-meraki-mock` feature, and only the lab build script
+/// enables it; every other caller passes `None`. The type itself is not gated so the paths it
+/// changes are the paths every test run covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MerakiWireOrigin(reqwest::Url);
+
+impl MerakiWireOrigin {
+    /// Parse an origin: `http` or `https`, a host, an optional port — and nothing else.
+    ///
+    /// A path, query, fragment or user name is refused rather than dropped, so a value that meant
+    /// something else cannot quietly send requests somewhere half-intended. The error does not
+    /// repeat the value: a URL can carry credentials in its user-info.
+    pub fn parse(value: &str) -> Result<Self, TransportError> {
+        let refused = || io("meraki wire origin must be a bare http(s)://host[:port]");
+        let url = reqwest::Url::parse(value.trim()).map_err(|_| refused())?;
+        let bare = matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some_and(|h| !h.is_empty())
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none();
+        if bare {
+            Ok(Self(url))
+        } else {
+            Err(refused())
+        }
+    }
+
+    /// Read a setting: unset or blank means "no origin", anything else must [`parse`](Self::parse).
+    pub fn from_setting(value: Option<&str>) -> Result<Option<Self>, TransportError> {
+        match value.map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(v) => Self::parse(v).map(Some),
+        }
+    }
+
+    /// `logical` as it goes on the wire: the same path and query, sent to this origin. The query is
+    /// copied as already encoded, never rebuilt, so `networkIds%5B%5D` arrives exactly as the real
+    /// Dashboard would receive it.
+    fn wire(&self, logical: &reqwest::Url) -> reqwest::Url {
+        let mut sent = self.0.clone();
+        sent.set_path(logical.path());
+        sent.set_query(logical.query());
+        sent
+    }
+}
+
+impl std::fmt::Display for MerakiWireOrigin {
+    /// The origin only — scheme, host and port — which is all [`parse`](Self::parse) admits.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.origin().ascii_serialization())
+    }
+}
+
+#[cfg(feature = "lab-meraki-mock")]
+impl MerakiWireOrigin {
+    /// The variable a lab build reads. Named only inside the feature, so a binary built without it
+    /// does not even carry the name — which is how "a release build cannot set one" is checked.
+    const ENV: &'static str = "YAGRA_MERAKI_MOCK_URL";
+
+    /// Read the origin from the environment, once, at startup (ADR-166).
+    ///
+    /// Unset or blank is `None`. A value that is set and malformed is an **error**: the binary
+    /// refuses to start rather than send an organization's key somewhere nobody chose. A set value
+    /// is announced with one WARN naming the origin, so a box running this way says so in its log.
+    pub fn from_env() -> Result<Option<Self>, TransportError> {
+        let value = match std::env::var(Self::ENV) {
+            Ok(v) => Some(v),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(io(format!("{} is not valid UTF-8", Self::ENV)));
+            }
+        };
+        let origin =
+            Self::from_setting(value.as_deref()).map_err(|e| io(format!("{}: {e}", Self::ENV)))?;
+        if let Some(o) = &origin {
+            tracing::warn!(
+                origin = %o,
+                "lab build: Meraki Dashboard API requests are sent to this origin instead of the \
+                 host each URL names (ADR-166)"
+            );
+        }
+        Ok(origin)
+    }
 }
 
 // ── Control-plane result types (core: adding an organization, and the inventory sync) ───────
@@ -90,10 +192,12 @@ pub struct MerakiDeviceInfo {
 
 /// A Meraki API session: one reqwest client reused across all of a call's pages (keep-alive
 /// amortizes the many sequential GETs — unlike `probe_http`'s per-request client), plus a request
-/// pacer. Constructing it validates the base host against the allow-list up front.
+/// pacer. Constructing it validates the base host against the allow-list up front — whether or not
+/// a lab build has given it a [`MerakiWireOrigin`] to send to instead.
 struct Session {
     client: reqwest::Client,
     base: reqwest::Url,
+    wire: Option<MerakiWireOrigin>,
     min_interval: Duration,
     last: Option<Instant>,
 }
@@ -104,6 +208,7 @@ impl Session {
         api_key: &str,
         target_rps: f64,
         timeout: Duration,
+        wire: Option<&MerakiWireOrigin>,
     ) -> Result<Self, TransportError> {
         let base = reqwest::Url::parse(base_url)
             .map_err(|e| io(format!("invalid meraki base url: {e}")))?;
@@ -141,6 +246,7 @@ impl Session {
         Ok(Self {
             client,
             base,
+            wire: wire.cloned(),
             min_interval: Duration::from_secs_f64(1.0 / rps),
             last: None,
         })
@@ -259,7 +365,15 @@ impl Session {
             }
 
             self.pace().await;
-            let resp = match self.client.get(url.clone()).send().await {
+            // What goes on the wire (ADR-166). `url` itself stays the logical one: the allow-list
+            // above and `visited` below compare logical URLs. A physical URL in `visited` would
+            // never equal a `Link` again, so a server answering with its own page would be paged
+            // to the cap instead of stopped at `Cycle`.
+            let sent = match &self.wire {
+                Some(origin) => origin.wire(&url),
+                None => url.clone(),
+            };
+            let resp = match self.client.get(sent).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::debug!(error = %e, "meraki request did not complete");
@@ -563,15 +677,24 @@ struct DeviceDatum {
 }
 
 /// Run one org-scoped collect for `spec.tier`. See the trait docs for the error contract.
+///
+/// `wire` is where the requests physically go when a lab build says so (ADR-166), `None` otherwise.
 pub(crate) async fn collect(
     spec: &MerakiCollectSpec,
     timeout: Duration,
+    wire: Option<&MerakiWireOrigin>,
 ) -> Result<MerakiCollected, MerakiFetchError> {
-    let mut session = Session::new(&spec.base_url, &spec.api_key, spec.target_rps, timeout)
-        .map_err(|e| {
-            tracing::debug!(error = %e, "meraki collect session refused");
-            MerakiFetchError::Config
-        })?;
+    let mut session = Session::new(
+        &spec.base_url,
+        &spec.api_key,
+        spec.target_rps,
+        timeout,
+        wire,
+    )
+    .map_err(|e| {
+        tracing::debug!(error = %e, "meraki collect session refused");
+        MerakiFetchError::Config
+    })?;
     // The FIRST reason a listing of this collect stopped early. One is enough: what core asks
     // of it is "did the Dashboard answer", and a second stop after the first adds nothing.
     let mut stopped: Option<MerakiFetchError> = None;
@@ -822,12 +945,16 @@ fn parse_traffic(items: &[Value]) -> Vec<DeviceDatum> {
 // ── Control-plane (adding an organization) ──────────────────────────────────────────────────
 
 /// List the organizations the API key can access (`GET /organizations`). Read-only.
+///
+/// `wire` is where the request physically goes when a lab build says so (ADR-166), `None`
+/// otherwise.
 pub async fn list_organizations(
     base_url: &str,
     api_key: &str,
     timeout: Duration,
+    wire: Option<&MerakiWireOrigin>,
 ) -> Result<Vec<MerakiOrgInfo>, TransportError> {
-    let mut s = Session::new(base_url, api_key, 2.0, timeout)?;
+    let mut s = Session::new(base_url, api_key, 2.0, timeout, wire)?;
     let items = s
         .get_paged(&format!("{API_PREFIX}/organizations"), &[], 1000)
         .await?;
@@ -922,15 +1049,17 @@ pub struct MerakiInventory {
 /// [`Session::get_paged_strict`]. Deliberately **not** narrowed by network: core has to know about
 /// the devices in a network nobody is watching in order to say that they are there.
 ///
-/// `timeout` bounds one request. Bounding the whole read is the caller's job.
+/// `timeout` bounds one request. Bounding the whole read is the caller's job. `wire` is where the
+/// requests physically go when a lab build says so (ADR-166), `None` otherwise.
 pub async fn fetch_inventory(
     base_url: &str,
     api_key: &str,
     org_id: &str,
     target_rps: f64,
     timeout: Duration,
+    wire: Option<&MerakiWireOrigin>,
 ) -> Result<MerakiInventory, MerakiFetchError> {
-    let mut s = Session::new(base_url, api_key, target_rps, timeout).map_err(|e| {
+    let mut s = Session::new(base_url, api_key, target_rps, timeout, wire).map_err(|e| {
         tracing::debug!(error = %e, "meraki inventory session refused");
         MerakiFetchError::Config
     })?;
@@ -1021,14 +1150,81 @@ mod tests {
 
     #[test]
     fn session_new_refuses_non_meraki_host() {
-        // The key-exfiltration guard: a non-Meraki base is rejected before any request.
-        let err = Session::new("https://evil.example.com", "k", 2.0, Duration::from_secs(5));
-        assert!(matches!(err, Err(TransportError::Io(_))));
-        // And plain http is rejected.
-        let err = Session::new("http://api.meraki.com", "k", 2.0, Duration::from_secs(5));
-        assert!(matches!(err, Err(TransportError::Io(_))));
-        // The canonical host is accepted.
-        assert!(Session::new("https://api.meraki.com", "k", 2.0, Duration::from_secs(5)).is_ok());
+        let t = Duration::from_secs(5);
+        let lab = MerakiWireOrigin::parse("http://mock.example:8080").unwrap();
+        // The key-exfiltration guard: a non-Meraki base is rejected before any request — and a
+        // wire origin changes nothing about that, because it is checked on the stored URL.
+        for wire in [None, Some(&lab)] {
+            let err = Session::new("https://evil.example.com", "k", 2.0, t, wire);
+            assert!(matches!(err, Err(TransportError::Io(_))));
+            // And plain http is rejected.
+            let err = Session::new("http://api.meraki.com", "k", 2.0, t, wire);
+            assert!(matches!(err, Err(TransportError::Io(_))));
+            // The canonical host is accepted.
+            assert!(Session::new("https://api.meraki.com", "k", 2.0, t, wire).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_wire_origin_is_a_bare_origin_and_nothing_else() {
+        for ok in [
+            "http://mock.example:8080",
+            "http://mock.example:8080/",
+            "https://mock.example",
+            "  http://127.0.0.1:18080  ",
+            "http://[2001:db8::1]:8080",
+        ] {
+            assert!(
+                MerakiWireOrigin::parse(ok).is_ok(),
+                "{ok} should be accepted"
+            );
+        }
+        for refused in [
+            "",
+            "mock.example:8080",
+            "ftp://mock.example",
+            "http://mock.example:8080/api/v1",
+            "http://mock.example:8080/?x=1",
+            "http://mock.example:8080/#top",
+            "http://user@mock.example:8080",
+            "http://user:secret@mock.example:8080",
+        ] {
+            let err = MerakiWireOrigin::parse(refused).unwrap_err().to_string();
+            assert!(
+                !err.contains("secret") && !err.contains("user"),
+                "the refusal must not repeat the value: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unset_or_blank_setting_is_no_origin() {
+        assert_eq!(MerakiWireOrigin::from_setting(None).unwrap(), None);
+        assert_eq!(MerakiWireOrigin::from_setting(Some("")).unwrap(), None);
+        assert_eq!(MerakiWireOrigin::from_setting(Some("   ")).unwrap(), None);
+        assert!(MerakiWireOrigin::from_setting(Some("http://mock.example"))
+            .unwrap()
+            .is_some());
+        assert!(MerakiWireOrigin::from_setting(Some("not a url")).is_err());
+    }
+
+    #[test]
+    fn the_wire_url_keeps_the_path_and_the_encoded_query_byte_for_byte() {
+        let origin = MerakiWireOrigin::parse("http://mock.example:8080").unwrap();
+        let logical = reqwest::Url::parse(
+            "https://api.meraki.com/api/v1/organizations/1/devices/uplinksLossAndLatency\
+             ?networkIds%5B%5D=N_1&networkIds%5B%5D=N_2&timespan=300&perPage=1000",
+        )
+        .unwrap();
+        let sent = origin.wire(&logical);
+        assert_eq!(
+            sent.as_str(),
+            "http://mock.example:8080/api/v1/organizations/1/devices/uplinksLossAndLatency\
+             ?networkIds%5B%5D=N_1&networkIds%5B%5D=N_2&timespan=300&perPage=1000"
+        );
+        // The logical URL is what the allow-list and the cycle check keep reading.
+        assert_eq!(logical.host_str(), Some("api.meraki.com"));
+        assert_eq!(origin.to_string(), "http://mock.example:8080");
     }
 
     #[test]

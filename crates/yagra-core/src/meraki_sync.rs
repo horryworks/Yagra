@@ -38,7 +38,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use yagra_transport::{MerakiFetchError, MerakiInventory, MerakiOrgInfo, TransportError};
+use yagra_transport::{
+    MerakiFetchError, MerakiInventory, MerakiOrgInfo, MerakiWireOrigin, TransportError,
+};
 
 use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiOrg, MerakiOrgRepo};
 use crate::meraki_import::{pick_automatic, ImportResolver};
@@ -184,7 +186,19 @@ pub trait MerakiDirectory: Send + Sync {
 }
 
 /// The real Dashboard API, through `yagra-transport` (GET only, host allow-listed, paced).
-pub struct DashboardApi;
+///
+/// `wire` is where the requests physically go when that is not the host each URL names. Only a lab
+/// build can set it (ADR-166); `run_live` passes `None` everywhere else. This one value is what
+/// onboarding, "Sync now" and the periodic sync all read through.
+pub struct DashboardApi {
+    wire: Option<MerakiWireOrigin>,
+}
+
+impl DashboardApi {
+    pub fn new(wire: Option<MerakiWireOrigin>) -> Self {
+        Self { wire }
+    }
+}
 
 #[async_trait]
 impl MerakiDirectory for DashboardApi {
@@ -193,7 +207,8 @@ impl MerakiDirectory for DashboardApi {
         base_url: &str,
         api_key: &str,
     ) -> Result<Vec<MerakiOrgInfo>, TransportError> {
-        yagra_transport::list_organizations(base_url, api_key, REQUEST_TIMEOUT).await
+        yagra_transport::list_organizations(base_url, api_key, REQUEST_TIMEOUT, self.wire.as_ref())
+            .await
     }
 
     async fn inventory(
@@ -207,6 +222,7 @@ impl MerakiDirectory for DashboardApi {
             &org.org_id,
             org.target_rps,
             REQUEST_TIMEOUT,
+            self.wire.as_ref(),
         )
         .await
     }
