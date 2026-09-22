@@ -18,6 +18,15 @@
   --brand-fixed: #e95d08; /* orange seal tile / login brand panel */
   --brand-mark: #faf7f3; /* off-white 生成り mark on the seal     */
 
+  /* ---- third-party marks — an integration's own colour, on the badge that names it ----
+     Theme-independent like the seal: it is their logo's colour, not ours to shift per theme.
+     NOT a status. Meraki's green sits near --status-ok, which is why a brand badge always carries
+     its word ("Meraki") and is never a bare dot. White on this green is about 2.6:1 — below the
+     4.5:1 small text asks for; kept because the badge is meant to read as their logo (user
+     decision, 2026-09-23), and the word it carries is also the badge's tooltip. */
+  --brand-meraki: #67b346;
+  --brand-meraki-fg: #ffffff;
+
   /* ---- brand accent (§1.1) — orange, active/selected/focus ONLY ---- */
   --brand: #e95d08;
   --accent-color: var(--brand); /* alias used by interactive states */

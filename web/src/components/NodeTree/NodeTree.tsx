@@ -22,7 +22,8 @@ import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
 import { poolChoices, sharedOwnPool } from '../../lib/pool';
 import { targetNodeCount, type ActionTarget } from '../../lib/actionTarget';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
-import { GROUP_ORIGIN_BADGES, groupOriginOf } from '../../lib/groupOrigin';
+import { brandBadgeClass } from '../../lib/brandBadge';
+import { GROUP_ORIGIN_BADGE_BRANDS, GROUP_ORIGIN_BADGES, groupOriginOf } from '../../lib/groupOrigin';
 import {
   asGroupType,
   buildNodeTree,
@@ -1103,7 +1104,7 @@ export function NodeTree({
             mark below: an `aria-label` on a span with no role is not reliably read out. */}
         {origin && (
           <span
-            className="ntree-badge"
+            className={`ntree-badge${brandBadgeClass(GROUP_ORIGIN_BADGE_BRANDS[origin])}`}
             role="img"
             title={t(`tree.origin.${origin}`)}
             aria-label={t(`tree.origin.${origin}`)}
@@ -1264,7 +1265,10 @@ export function NodeTree({
             a DNS monitor or a Meraki device. Unmarked is the default: the tree is overwhelmingly
             ordinary devices, so a badge on every one of 50k rows would say nothing. */}
         {NODE_KIND_SPEC[node.kind].badge && (
-          <span className="ntree-badge" title={t(NODE_KIND_SPEC[node.kind].labelKey)}>
+          <span
+            className={`ntree-badge${brandBadgeClass(NODE_KIND_SPEC[node.kind].badgeBrand)}`}
+            title={t(NODE_KIND_SPEC[node.kind].labelKey)}
+          >
             {NODE_KIND_SPEC[node.kind].badge}
           </span>
         )}

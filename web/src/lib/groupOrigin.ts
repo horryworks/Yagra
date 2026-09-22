@@ -12,6 +12,7 @@
 // for a token this build has never heard of — is judgement, and Vitest never loads a `.tsx`.
 
 import { GROUP_ORIGINS, type GroupOrigin, type NodeGroup } from '../types/api';
+import type { BadgeBrand } from './brandBadge';
 
 /** The badge text per origin.
  *
@@ -21,6 +22,13 @@ import { GROUP_ORIGINS, type GroupOrigin, type NodeGroup } from '../types/api';
 export const GROUP_ORIGIN_BADGES: Record<GroupOrigin, string> = {
   meraki: 'Meraki',
   netbox: 'NetBox',
+};
+
+/** Whose colours each origin's badge wears (`lib/brandBadge.ts`). NetBox keeps Yagra's accent:
+ *  only Meraki was asked for. A `Record` so a third origin decides rather than inherits. */
+export const GROUP_ORIGIN_BADGE_BRANDS: Record<GroupOrigin, BadgeBrand | null> = {
+  meraki: 'meraki',
+  netbox: null,
 };
 
 /** The origin to mark a folder with, or `null` for none.

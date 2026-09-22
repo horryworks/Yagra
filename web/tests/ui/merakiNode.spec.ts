@@ -180,6 +180,12 @@ test("an MX's card shows its tiles, a row per WAN uplink, and the WAN traffic ch
   const card = cardOf(page);
   await expect(card).toBeVisible({ timeout: 15_000 });
 
+  // The header's kind badge wears Meraki's own green with white text (`lib/brandBadge.ts`) — read
+  // from the laid-out page, because a rule that lost to the default accent still has the class.
+  const badge = page.locator('.nd-kind', { hasText: /^Meraki$/ });
+  await expect(badge).toHaveCSS('background-color', 'rgb(103, 179, 70)');
+  await expect(badge).toHaveCSS('color', 'rgb(255, 255, 255)');
+
   const tile = (label: string) =>
     card.locator('.nd-mk-tile', {
       has: page.locator('.nd-mk-tile-label', { hasText: new RegExp(`^${label}$`) }),

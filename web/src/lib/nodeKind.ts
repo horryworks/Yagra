@@ -10,12 +10,16 @@
 // what `monitorKinds.test.ts`'s subset assertion is protecting.
 
 import type { NodeKind } from '../types/api';
+import type { BadgeBrand } from './brandBadge';
 
 export interface NodeKindSpec {
   /** Short badge shown after a node's name. `null` = no badge: the ordinary device is the
    *  *unmarked default*, so a 50k-row inventory tree does not grow a badge on every line, and the
    *  badge means "this one is not a normal device". */
   readonly badge: string | null;
+  /** Whose colours the badge wears: `null` for Yagra's own accent, or a third party's mark
+   *  (`lib/brandBadge.ts`). Required, so a new kind decides rather than inherits. */
+  readonly badgeBrand: BadgeBrand | null;
   /** `nodes`-namespace key naming the kind in prose (badge tooltip). Total over `NodeKind`. */
   readonly labelKey: string;
   /** The metric whose newest sample means "we heard from this monitor". Each kind is polled over a
@@ -28,15 +32,21 @@ export interface NodeKindSpec {
 export const NODE_KIND_SPEC: Record<NodeKind, NodeKindSpec> = {
   // An access point imported from its wireless controller (ADR-064): never polled itself, so its
   // liveness is what the controller serving it reports.
-  wireless_ap: { badge: 'AP', labelKey: 'kind.wireless_ap', livenessMetric: 'wlan_ap_up' },
+  wireless_ap: {
+    badge: 'AP',
+    badgeBrand: null,
+    labelKey: 'kind.wireless_ap',
+    livenessMetric: 'wlan_ap_up',
+  },
   meraki: {
     badge: 'Meraki',
+    badgeBrand: 'meraki',
     labelKey: 'kind.meraki',
     livenessMetric: 'meraki_device_up',
   },
-  url: { badge: 'URL', labelKey: 'kind.url', livenessMetric: 'http_up' },
-  dns: { badge: 'DNS', labelKey: 'kind.dns', livenessMetric: 'dns_up' },
-  device: { badge: null, labelKey: 'kind.device', livenessMetric: 'icmp_rtt_ms' },
+  url: { badge: 'URL', badgeBrand: null, labelKey: 'kind.url', livenessMetric: 'http_up' },
+  dns: { badge: 'DNS', badgeBrand: null, labelKey: 'kind.dns', livenessMetric: 'dns_up' },
+  device: { badge: null, badgeBrand: null, labelKey: 'kind.device', livenessMetric: 'icmp_rtt_ms' },
 };
 
 // The badge strings are literals, not i18n keys, on purpose: `URL`, `DNS` and `Meraki` are the same

@@ -673,3 +673,11 @@ button.ntree-supp-icon:hover {
   background: var(--bg-tertiary);
   border: var(--border-width) solid var(--border-color);
 }
+
+/* A badge that names a third party — a Meraki node, a folder Meraki keeps — wears that party's
+   colours (`lib/brandBadge.ts`). */
+.ntree-badge.is-meraki {
+  color: var(--brand-meraki-fg);
+  background: var(--brand-meraki);
+  border-color: var(--brand-meraki);
+}

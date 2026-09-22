@@ -46,6 +46,7 @@ import {
 import { SetParentModal } from '../SetParentModal/SetParentModal';
 import { PinButton } from './PinButton';
 import { nodeSubLineParts } from './nodeIdentity';
+import { brandBadgeClass } from '../../lib/brandBadge';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { MoveTarget } from '../MoveNodeModal/MoveNodeModal';
 import './NodeDetail.css';
@@ -371,7 +372,10 @@ export function NodeDetail({
             {/* What this node is, when it is not an ordinary device. Unmarked is the default so a
                 normal device's name is not decorated — the badge means "read this differently". */}
             {NODE_KIND_SPEC[node.kind].badge && (
-              <span className="nd-kind" title={t(NODE_KIND_SPEC[node.kind].labelKey)}>
+              <span
+                className={`nd-kind${brandBadgeClass(NODE_KIND_SPEC[node.kind].badgeBrand)}`}
+                title={t(NODE_KIND_SPEC[node.kind].labelKey)}
+              >
                 {NODE_KIND_SPEC[node.kind].badge}
               </span>
             )}

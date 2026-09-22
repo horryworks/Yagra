@@ -23,6 +23,7 @@ import {
   type StateCounts,
 } from '../../lib/nodeTree';
 import { stateLabel } from '../../lib/format';
+import { brandBadgeClass } from '../../lib/brandBadge';
 import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
@@ -254,7 +255,10 @@ export function GroupDetail({
                     <StatusDot state={n.state} withLabel={false} />
                     <span className="nd-member-name">{n.name}</span>
                     {NODE_KIND_SPEC[n.kind].badge && (
-                      <span className="nd-kind" title={t(NODE_KIND_SPEC[n.kind].labelKey)}>
+                      <span
+                        className={`nd-kind${brandBadgeClass(NODE_KIND_SPEC[n.kind].badgeBrand)}`}
+                        title={t(NODE_KIND_SPEC[n.kind].labelKey)}
+                      >
                         {NODE_KIND_SPEC[n.kind].badge}
                       </span>
                     )}

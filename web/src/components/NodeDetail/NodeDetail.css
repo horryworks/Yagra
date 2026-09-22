@@ -100,6 +100,13 @@
   border: var(--border-width) solid var(--border-color);
 }
 
+/* A kind named after a third party wears that party's colours (`lib/brandBadge.ts`). */
+.nd-kind.is-meraki {
+  color: var(--brand-meraki-fg);
+  background: var(--brand-meraki);
+  border-color: var(--brand-meraki);
+}
+
 .nd-actions {
   margin-left: auto;
   display: flex;
