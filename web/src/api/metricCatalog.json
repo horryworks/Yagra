@@ -521,14 +521,14 @@
     "family": "meraki",
     "metric_kind": "gauge",
     "metric_name": "meraki_port_in_bps",
-    "per_interface": false,
+    "per_interface": true,
     "source": "check"
   },
   {
     "family": "meraki",
     "metric_kind": "gauge",
     "metric_name": "meraki_port_out_bps",
-    "per_interface": false,
+    "per_interface": true,
     "source": "check"
   },
   {
@@ -1018,7 +1018,7 @@
     "family": "wlan",
     "metric_kind": "gauge",
     "metric_name": "wlan_radio_non_wifi_util_pct",
-    "per_interface": false,
+    "per_interface": true,
     "source": "check"
   },
   {

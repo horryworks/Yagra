@@ -227,12 +227,19 @@ mod tests {
         // skipped: it is a rule token, not a series, and its family is `None` for that reason.
         for (name, family) in crate::metric_meaning::CHECK_FAMILIES {
             let Some(family) = family else { continue };
+            // 🚨 A check metric is node-level — except the ones a Meraki collect publishes per port
+            // or per radio (ADR-167 決定 8, ADR-168 決定 2). The alert engine already judges those
+            // per interface (`per_interface_metric_names` adds the same list), so a `false` here
+            // only ever disagreed with it in one direction: the threshold editor's port-rule picker
+            // filters on this flag, so a rule could not be written for the very metrics that are
+            // stored one series per port.
+            let per_interface = yagra_common::meraki_interface_metrics().any(|m| m == name);
             let prior = by_name.insert(
                 name.to_owned(),
                 serde_json::json!({
                     "metric_name": name,
                     "metric_kind": "gauge",
-                    "per_interface": false,
+                    "per_interface": per_interface,
                     "source": "check",
                     "family": family.as_str(),
                 }),
@@ -243,6 +250,34 @@ mod tests {
         let mut out = serde_json::to_string_pretty(&rows).expect("serialize metric catalog");
         out.push('\n');
         out
+    }
+
+    /// ADR-167 決定 8 and ADR-168 決定 2: the metrics a Meraki collect stores one series per port or
+    /// per radio are marked per-interface in the generated catalogue, because the WebUI's port-rule
+    /// picker filters on that flag — and the alert engine, which judges them, reads its own list.
+    /// A disagreement is a rule an operator cannot write for a metric that has the rows for it.
+    #[test]
+    fn the_catalogue_marks_every_meraki_per_port_metric_as_per_interface() {
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(&metric_catalog_json()).expect("the generated catalogue");
+        let mut checked = 0;
+        for name in yagra_common::meraki_interface_metrics() {
+            let row = rows
+                .iter()
+                .find(|r| r["metric_name"] == name)
+                .unwrap_or_else(|| panic!("{name} is not in the catalogue at all"));
+            assert_eq!(row["per_interface"], true, "{name}");
+            checked += 1;
+        }
+        assert!(checked >= 3, "the list shrank to {checked}");
+        // And nothing else a check publishes became per-interface by accident.
+        let stray: Vec<&str> = rows
+            .iter()
+            .filter(|r| r["source"] == "check" && r["per_interface"] == true)
+            .filter_map(|r| r["metric_name"].as_str())
+            .filter(|n| !yagra_common::meraki_interface_metrics().any(|m| m == *n))
+            .collect();
+        assert!(stray.is_empty(), "{stray:?}");
     }
 
     #[test]

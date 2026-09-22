@@ -998,6 +998,25 @@ mod tests {
         assert!(json.get("profile").is_none());
     }
 
+    /// ADR-168: an MR stays `kind: meraki`, so the list tool carries the Dashboard product type
+    /// beside it — the field the WebUI badges "AP" from. Absent on every other node, so a reader
+    /// cannot mistake "not a Meraki node" for "a Meraki node of an unknown type".
+    #[test]
+    fn node_summary_dto_carries_a_meraki_product_type_only_when_there_is_one() {
+        let node = sample_node_with_secret();
+        let tags = crate::tagres::TagResolver::empty();
+        let plain = NodeSummaryDto::from_node(&node, None, NodeKind::Device, &tags);
+        assert!(serde_json::to_value(&plain)
+            .expect("serialize")
+            .get("meraki_product_type")
+            .is_none());
+        let ap = NodeSummaryDto::from_node(&node, None, NodeKind::Meraki, &tags)
+            .with_meraki_product_type(Some("wireless".to_owned()));
+        let json = serde_json::to_value(&ap).expect("serialize");
+        assert_eq!(json["kind"], "meraki");
+        assert_eq!(json["meraki_product_type"], "wireless");
+    }
+
     /// A URL check with the binding actually set — the only version of this test that proves
     /// anything. `has_credential: false` would pass with a projection that simply forgot the field.
     fn sample_url_check_with_credential() -> yagra_common::UrlCheckConfig {
