@@ -215,3 +215,20 @@ describe('groupMetricOptions', () => {
     );
   });
 });
+
+describe('a check metric the catalogue marks per-interface', () => {
+  // ADR-167 決定 8 / ADR-168 決定 2: a Meraki collect stores these one series per port or per
+  // radio, so a port-scoped threshold rule must be able to name them. They come from the check
+  // list, which used to carry no dimension at all and was dropped by the filter wholesale.
+  it('is offered for a port rule, and the node-level checks still are not', () => {
+    const names = metricOptions(CATALOG, LABELS, undefined, { onlyPerInterface: true }).map(
+      (o) => o.name,
+    );
+    for (const m of ['meraki_port_in_bps', 'meraki_port_out_bps', 'wlan_radio_non_wifi_util_pct']) {
+      expect(names, m).toContain(m);
+    }
+    for (const m of ['meraki_device_up', 'icmp_rtt_ms', 'wlan_ap_ssid_count']) {
+      expect(names, m).not.toContain(m);
+    }
+  });
+});
