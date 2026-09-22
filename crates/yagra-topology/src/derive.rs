@@ -554,11 +554,11 @@ mod tests {
 
     #[test]
     fn host_routes_never_join_a_subnet() {
-        // The lab's real PPPoE address, plus another unrelated /32. They share no subnet with
-        // anything — including each other.
+        // The lab's PPPoE address (documentation range), plus another unrelated /32. They share no
+        // subnet with anything — including each other.
         let n = ids(2);
         let out = derive(&[
-            (n[0], snap(&[("133.123.189.109", 32)])),
+            (n[0], snap(&[("203.0.113.109", 32)])),
             (n[1], snap(&[("203.0.113.7", 32)])),
         ]);
         assert!(out.links.is_empty());
@@ -787,7 +787,7 @@ mod tests {
         // The only real edge this lab can produce: the Huawei USG's LAN interface and the test
         // server share 192.168.1.0/24. Its `Dialer1` /32 must contribute nothing.
         let n = ids(2);
-        let usg = snap(&[("192.168.1.1", 24), ("133.123.189.109", 32)]);
+        let usg = snap(&[("192.168.1.1", 24), ("203.0.113.109", 32)]);
         let server = snap(&[("192.168.1.2", 24)]);
         let out = derive(&[(n[0], usg), (n[1], server)]);
         assert_eq!(out.links.len(), 1);
@@ -1217,13 +1217,13 @@ mod tests {
         let out = derive_links(DeriveInput {
             nodes: &[],
             l3: &[
-                (n[0], snap(&[("192.168.1.1", 24), ("133.123.189.109", 32)])),
+                (n[0], snap(&[("192.168.1.1", 24), ("203.0.113.109", 32)])),
                 (n[1], snap(&[("192.168.1.2", 24)])),
             ],
             neighbors: &[],
             routing: &[(
                 n[0],
-                RoutingSnapshot::new(vec![adj(RoutingProto::Route, "133.123.189.1")], false),
+                RoutingSnapshot::new(vec![adj(RoutingProto::Route, "203.0.113.254")], false),
             )],
             overrides: &[],
         });

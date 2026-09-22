@@ -251,7 +251,7 @@ mod tests {
         // The lab: the USG holds a PPPoE `/32` and nothing else in the inventory does, so there is
         // no destination worth asking about and no probe is issued at all.
         let n = ids(2);
-        let p = plan(&[(n[0], &["133.123.189.109"]), (n[1], &[])]);
+        let p = plan(&[(n[0], &["203.0.113.109"]), (n[1], &[])]);
         assert!(p.targets_for(n[0]).is_empty());
         assert_eq!(p.prober_count(), 0, "an empty probe list is not a probe");
     }

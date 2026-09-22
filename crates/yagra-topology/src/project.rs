@@ -389,13 +389,13 @@ mod tests {
                 pool: "default".into(),
                 mgmt_addrs: vec![
                     "127.0.0.1".parse().unwrap(),
-                    "133.123.189.1".parse().unwrap(),
+                    "203.0.113.254".parse().unwrap(),
                 ],
                 anchor_node_id: None,
             }],
             &[
                 (n[0], snapshot(&[("127.0.0.1", 8)])),
-                (n[1], snapshot(&[("133.123.189.109", 32)])),
+                (n[1], snapshot(&[("203.0.113.109", 32)])),
             ],
             &anchors(&n),
         );

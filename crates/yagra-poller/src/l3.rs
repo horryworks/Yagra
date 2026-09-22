@@ -275,16 +275,17 @@ mod tests {
 
     #[test]
     fn the_lab_host_route_is_recorded_but_forms_no_subnet() {
-        // `Dialer1 133.123.189.109/32` — the PPPoE WAN address on the real device. Increment 4
-        // resolves its peer through the routing table, so it must be *stored*, just not joined.
-        let inst = [1, 4, 133, 123, 189, 109];
+        // `Dialer1 203.0.113.109/32` — the device's PPPoE WAN address, in the documentation range.
+        // Increment 4 resolves its peer through the routing table, so it must be *stored*, just not
+        // joined.
+        let inst = [1, 4, 203, 0, 113, 109];
         let rows = vec![
             row(L3Column::IpAddressIfIndex, &inst, SnmpValue::Int(16)),
             row(L3Column::IpAddressType, &inst, SnmpValue::Int(1)),
             row(
                 L3Column::IpAddressPrefix,
                 &inst,
-                SnmpValue::Oid("1.3.6.1.2.1.4.32.1.5.16.1.4.133.123.189.109.32".into()),
+                SnmpValue::Oid("1.3.6.1.2.1.4.32.1.5.16.1.4.203.0.113.109.32".into()),
             ),
         ];
         let snap = assemble(&columns(), &rows);

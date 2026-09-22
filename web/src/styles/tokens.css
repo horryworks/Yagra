@@ -3,7 +3,7 @@
    CSS variables, not prose. Components reference these via var(); never hardcode a hex
    outside this file (uPlot canvas strokes are the one exemption — see ui-conventions.md).
 
-   Brand is a single LIXIL orange (#E95D08), seal style. It is the active/selected/focus
+   Brand is a single orange (#E95D08), seal style. It is the active/selected/focus
    accent ONLY (§1.1) — kept on its own channel, never mixed with status warning (amber).
    Status and series are separate channels from brand and from each other.
 

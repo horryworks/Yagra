@@ -558,10 +558,11 @@ mod tests {
 
     #[test]
     fn the_route_probe_oid_pins_the_destination_and_nothing_more() {
-        // The lab's real PPPoE address. A subtree walk from this OID returns only routes to it.
+        // The lab's PPPoE address (documentation range, not the real one). A subtree walk from
+        // this OID returns only routes to it.
         assert_eq!(
-            route_probe_oid("1.3.6.1.2.1.4.24.7.1.8", ip("133.123.189.109")),
-            "1.3.6.1.2.1.4.24.7.1.8.1.4.133.123.189.109"
+            route_probe_oid("1.3.6.1.2.1.4.24.7.1.8", ip("203.0.113.109")),
+            "1.3.6.1.2.1.4.24.7.1.8.1.4.203.0.113.109"
         );
         // v6 uses the InetAddressType/length pair its family requires; nothing here is v4-only.
         assert_eq!(

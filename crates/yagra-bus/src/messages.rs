@@ -4558,14 +4558,14 @@ mod tests {
             field: RoutingColumn::InetCidrRouteType,
             oid: yagra_common::route_probe_oid(
                 "1.3.6.1.2.1.4.24.7.1.8",
-                "133.123.189.109".parse().unwrap(),
+                "203.0.113.109".parse().unwrap(),
             ),
-            target: "133.123.189.109".parse().unwrap(),
+            target: "203.0.113.109".parse().unwrap(),
         };
         let back: SnmpRouteProbe =
             serde_json::from_str(&serde_json::to_string(&probe).unwrap()).unwrap();
         assert_eq!(back, probe);
-        assert!(back.oid.ends_with(".1.4.133.123.189.109"), "{}", back.oid);
+        assert!(back.oid.ends_with(".1.4.203.0.113.109"), "{}", back.oid);
     }
 
     /// A neighbour check from an N-1 core (or one that gains a field later) still decodes.

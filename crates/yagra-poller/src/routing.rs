@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn a_local_host_route_becomes_a_route_adjacency() {
-        let probes = probes_for("133.123.189.110");
+        let probes = probes_for("203.0.113.110");
         let rows = vec![
             probe_row(
                 &probes,
@@ -296,7 +296,7 @@ mod tests {
         let snap = assemble(&columns(), &probes, &rows, false);
         assert_eq!(snap.len(), 1);
         assert_eq!(snap.adjacencies[0].proto, RoutingProto::Route);
-        assert_eq!(snap.adjacencies[0].peer, ip("133.123.189.110"));
+        assert_eq!(snap.adjacencies[0].peer, ip("203.0.113.110"));
         assert_eq!(snap.adjacencies[0].local_ifindex, Some(16));
         assert_eq!(
             snap.adjacencies[0].state, None,
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn assembly_is_order_independent() {
-        let probes = probes_for("133.123.189.110");
+        let probes = probes_for("203.0.113.110");
         let mut rows = vec![
             walked(RoutingColumn::BgpPeerState, &[192, 0, 2, 1], 6),
             walked(RoutingColumn::OspfNbrState, &[10, 0, 0, 2, 7], 8),

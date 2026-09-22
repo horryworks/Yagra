@@ -30,7 +30,7 @@
 //! nodes wherever they belong, and deleting it purges all of them. Until ADR-164 these routes were
 //! ledgered "admin-only, an Admin is unscoped by construction" while taking a guard an Operator
 //! passes — so a scoped Operator could create nodes outside their folders and delete nodes they
-//! could not see. The same hole `cfeda70b` closed for wireless controllers.
+//! could not see. The same hole `9b1c295d` closed for wireless controllers.
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Leader, RequireManageConfig, RequireView, Scoped};

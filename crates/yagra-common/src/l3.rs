@@ -356,9 +356,10 @@ fn mask_octets(octets: &mut [u8], prefix_len: u8) {
 /// ```
 ///
 /// So the prefix length is simply the **last** sub-identifier, and `ipAddressPrefixTable` never has
-/// to be walked. Confirmed against a real Huawei USG6530F-D:
+/// to be walked. Confirmed against a real Huawei USG6530F-D (its WAN address written here in the
+/// documentation range):
 /// `…4.32.1.5.8.1.4.192.168.1.0.24` ⇒ ifIndex 8, `192.168.1.0/24`, and
-/// `…4.32.1.5.16.1.4.133.123.189.109.32` ⇒ `133.123.189.109/32` (a PPPoE `Dialer`).
+/// `…4.32.1.5.16.1.4.203.0.113.109.32` ⇒ `203.0.113.109/32` (a PPPoE `Dialer`).
 ///
 /// Returns the ifIndex the pointer itself names alongside the network, because it is the fallback
 /// when `ipAddressIfIndex` is missing from the walk.
@@ -668,8 +669,8 @@ mod tests {
 
     #[test]
     fn host_routes_are_stored_but_form_no_subnet() {
-        // The lab's real PPPoE WAN address.
-        let dialer = L3Address::new(16, v4("133.123.189.109"), 32);
+        // The lab's PPPoE WAN address, in the documentation range rather than the real one.
+        let dialer = L3Address::new(16, v4("203.0.113.109"), 32);
         assert!(dialer.is_host_route());
         assert!(!dialer.can_form_subnet_edge());
         assert_eq!(dialer.subnet(), None);
@@ -736,9 +737,9 @@ mod tests {
         assert_eq!(key.to_string(), "192.168.1.0/24");
 
         let (ifindex, key) =
-            decode_prefix_pointer("1.3.6.1.2.1.4.32.1.5.16.1.4.133.123.189.109.32").unwrap();
+            decode_prefix_pointer("1.3.6.1.2.1.4.32.1.5.16.1.4.203.0.113.109.32").unwrap();
         assert_eq!(ifindex, 16);
-        assert_eq!(key.to_string(), "133.123.189.109/32");
+        assert_eq!(key.to_string(), "203.0.113.109/32");
     }
 
     #[test]
