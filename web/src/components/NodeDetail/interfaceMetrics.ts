@@ -376,3 +376,17 @@ export function trafficCell(row: TrafficRow, dir: TrafficDir): TrafficCell | nul
   const speed = row.if_speed_bps != null && row.if_speed_bps > 0 ? row.if_speed_bps : null;
   return { bps, util, speedBps: speed };
 }
+
+/**
+ * Why a row has no traffic cell to draw: the device reports the port **down**, or its state is
+ * **unknown**.
+ *
+ * 🚨 The two must not be printed the same way. The cell used to say "down" whenever there was no
+ * rate, which is true of a port the device reports down and false of one nobody has an answer for
+ * — a Meraki access point's radio, which never gets an `if_oper_status` because nothing the
+ * Dashboard answers says whether a radio is on (ADR-168 決定 3), read "down" on every radio of
+ * every MR. A port whose walk has not reported a status yet is in the same position.
+ */
+export function noTrafficReason(row: Pick<TrafficRow, 'oper_status'>): 'down' | 'unknown' {
+  return row.oper_status == null ? 'unknown' : 'down';
+}

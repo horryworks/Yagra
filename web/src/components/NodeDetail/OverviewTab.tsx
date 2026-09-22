@@ -81,6 +81,7 @@ import {
 import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overviewClaims';
 import { memPctSeries } from './overviewMetrics';
 import {
+  merakiApRadioReadingsShown,
   merakiPairLine,
   merakiRadioLines,
   merakiTrafficSeries,
@@ -720,6 +721,10 @@ function MerakiHealth({
   }, [nodeId, tick, accessPoint]);
 
   const pairLine = merakiPairLine(pair);
+  // An access point the Dashboard reports offline has no live SSID count or radio utilization:
+  // the collect stops writing them, and the latest-value read would otherwise draw the last ones
+  // beside "Offline" for half an hour (ADR-168 決定 4).
+  const radioReadings = merakiApRadioReadingsShown(up);
   const traffic = merakiTrafficSeries(history, PALETTE, {
     sent: t('overview.trafficAxis.sent'),
     recv: t('overview.trafficAxis.received'),
@@ -816,9 +821,11 @@ function MerakiHealth({
             </div>
             <div className="nd-mk-tile">
               <div className="nd-mk-tile-label">{t('overview.merakiSsids')}</div>
-              <div className="nd-mk-tile-value">{ssids == null ? '—' : formatCount(ssids)}</div>
+              <div className="nd-mk-tile-value">
+                {ssids == null || !radioReadings ? '—' : formatCount(ssids)}
+              </div>
             </div>
-            {radios.map((r) => (
+            {(radioReadings ? radios : []).map((r) => (
               <div className="nd-mk-tile" key={r.row}>
                 <div className="nd-mk-tile-label">
                   {t('overview.merakiChannelUtil', { band: r.band })}

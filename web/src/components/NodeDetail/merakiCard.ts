@@ -255,3 +255,20 @@ export function merakiRadioLines(
   for (const r of nonWifi) line(r.row).nonWifiPct = r.value;
   return [...byRow.values()].sort((a, b) => a.row - b.row);
 }
+
+/**
+ * Whether an access point's SSID count and radio readings may be drawn (ADR-168 決定 4).
+ *
+ * 🚨 **Not while the Dashboard reports it offline.** Those two are the readings the collect stops
+ * writing for a stopped access point — its radios are not measured, and the Dashboard keeps
+ * answering its last SSID configuration as broadcasting — while the latest-value read looks back
+ * thirty minutes (`store.rs::latest_query`). Drawn anyway, the card says "Offline" and
+ * "Channel utilization 11%" side by side, which is the defect ADR-164 増分 13d fixed for a warm
+ * spare's VPN line and this is the same shape. Its client count is not affected: the Dashboard
+ * answers 0 for a stopped access point, and that 0 is stored like any reading.
+ *
+ * `null` — no availability reading at all — shows them: "we do not know" is not "it is down".
+ */
+export function merakiApRadioReadingsShown(up: number | null): boolean {
+  return up !== 0;
+}

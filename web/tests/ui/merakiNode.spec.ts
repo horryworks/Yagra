@@ -467,3 +467,87 @@ test.describe('a Meraki access point', () => {
     expect(errors.uncaught).toEqual([]);
   });
 });
+
+test.describe('a Meraki access point the Dashboard reports offline', () => {
+  // 🚨 The values ARE served here, and that is the point: the collect stops writing an access
+  // point's SSID count and radio utilization once its radios are not measured (ADR-168 決定 4),
+  // while the latest-value read looks back thirty minutes — so the card would draw "Offline"
+  // beside "Channel utilization 11%". Seen on the lab deployment, the same shape ADR-164 増分 13d
+  // fixed for a warm spare's VPN line.
+  const stale: Record<string, number> = {
+    meraki_device_up: 0,
+    wlan_ap_client_count: 0,
+    wlan_ap_ssid_count: 4,
+  };
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/nodes/{node_id}': (): Json => {
+          const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as unknown as Schemas['NodeDetail'];
+          return {
+            ...body,
+            id: NODE_ID,
+            kind: 'meraki',
+            snmp_configured: false,
+            meraki_device: {
+              serial: 'Q2XX-TEST-0002',
+              product_type: 'wireless',
+              model: 'MR46',
+              network_id: 'N_1',
+              org_id: '1',
+              org_uuid: '00000000-0000-4000-8000-000000000ace',
+            },
+            meraki_pair: null,
+          } as unknown as Json;
+        },
+        '/api/v1/nodes/{node_id}/metrics/{metric}': (url) => {
+          const name = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+          const body = defaultBodyFor(url.pathname) as unknown as Schemas['MetricReading'];
+          if (name === 'wlan_radio_channel_util_pct' || name === 'wlan_radio_non_wifi_util_pct') {
+            return {
+              ...body,
+              metric: name,
+              node_id: NODE_ID,
+              value: 11.41,
+              rows: [{ row: 1, value: 11.41 }],
+            } as unknown as Json;
+          }
+          return { ...body, metric: name, node_id: NODE_ID, value: stale[name] ?? 0 } as unknown as Json;
+        },
+      },
+      // An access point has no WAN uplink and no Auto VPN, as on the lab deployment.
+      failures: Object.fromEntries(
+        [
+          'meraki_uplink_sent_bps',
+          'meraki_uplink_recv_bps',
+          'meraki_uplink_status',
+          'meraki_vpn_hubs_reachable',
+          'meraki_vpn_hubs_unreachable',
+          'meraki_vpn_spokes_unreachable',
+        ].map((m) => [`/api/v1/nodes/${NODE_ID}/metrics/${m}`, 404]),
+      ),
+    },
+  });
+
+  test('keeps its last SSID count and radio utilization off the card', async ({ page, errors }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=overview`);
+    const card = cardOf(page);
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    const tile = (label: string) =>
+      card.locator('.nd-mk-tile', { has: page.locator('.nd-mk-tile-label', { hasText: label }) });
+
+    await expect(tile('Availability').locator('.nd-mk-tile-value')).toHaveText('Offline');
+    // The client count is a real reading for a stopped access point — the Dashboard answers 0.
+    await expect(tile('Connected clients').locator('.nd-mk-tile-value')).toHaveText('0');
+    await expect(tile('SSIDs broadcast').locator('.nd-mk-tile-value')).toHaveText('—');
+    await expect(card.locator('.nd-mk-tiles .nd-mk-tile-label')).toHaveText([
+      'Availability',
+      'Connected clients',
+      'SSIDs broadcast',
+    ]);
+    await expect(card).not.toContainText('Channel utilization');
+    await expect(card).not.toContainText('non-Wi-Fi');
+    expect(errors.uncaught).toEqual([]);
+  });
+});

@@ -2,23 +2,24 @@
 import { describe, expect, it } from 'vitest';
 import {
   FAULT_SERIES,
-  faultValues,
   faultChartShown,
+  faultValues,
   hasOpticalData,
   latestDiscardRate,
-  opticalBands,
-  opticalWindowText,
   latestErrorRate,
   latestRxPower,
   latestTxPower,
+  noTrafficReason,
   OPTICAL_SERIES,
+  opticalBands,
   opticalValues,
+  opticalWindowText,
   opticalYRange,
   sparklinePath,
   throughputBandwidthOverlay,
   throughputPair,
-  trafficCell,
   TRAFFIC_DIRS,
+  trafficCell,
 } from './interfaceMetrics';
 import { formatBps } from '../../lib/format';
 import type { InterfaceSeries } from '../../types/api';
@@ -503,5 +504,16 @@ describe('trafficCell', () => {
       util: null,
       speedBps: null,
     });
+  });
+});
+
+describe('noTrafficReason', () => {
+  // ADR-168: a Meraki radio never reports an operational status, and the cell used to print
+  // "down" for it — a claim nobody made. A port the device really reports down still says so.
+  it('says down only for a port the device reports down', () => {
+    expect(noTrafficReason({ oper_status: 2 })).toBe('down');
+    expect(noTrafficReason({ oper_status: 7 })).toBe('down');
+    expect(noTrafficReason({ oper_status: null })).toBe('unknown');
+    expect(noTrafficReason({ oper_status: undefined })).toBe('unknown');
   });
 });

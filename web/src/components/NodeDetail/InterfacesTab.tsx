@@ -36,19 +36,20 @@ import {
   faultValues,
   hasOpticalData,
   latestDiscardRate,
-  opticalBands,
-  opticalWindowText,
   latestErrorRate,
   latestRxPower,
   latestTxPower,
+  noTrafficReason,
   OPTICAL_SERIES,
+  opticalBands,
   opticalValues,
+  opticalWindowText,
   opticalYRange,
   sparklinePath,
   throughputBandwidthOverlay,
   throughputPair,
-  trafficCell,
   TRAFFIC_DIRS,
+  trafficCell,
 } from './interfaceMetrics';
 import {
   defaultDockHeight,
@@ -568,7 +569,8 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
                   ten-gig one, so an absolute scale would be wrong on one of them every time.
                   `trafficCell` returns null for a port that is not up, so nothing is washed behind
                   the word `down` — which is also what stops a green cell from ever sitting beside
-                  a red StatusDot. */}
+                  a red StatusDot. ⚠️ That word is only for a port the device reports **down**:
+                  a row whose state is unknown gets nothing ([`noTrafficReason`], ADR-168). */}
               {TRAFFIC_DIRS.map((dir) => {
                 const cell = trafficCell(r, dir);
                 const heat = cell ? utilHeat(cell.util) : null;
@@ -602,7 +604,11 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
                         : undefined
                     }
                   >
-                    {cell ? formatBps(cell.bps) : t('interfaces.operDown')}
+                    {cell
+                      ? formatBps(cell.bps)
+                      : noTrafficReason(r) === 'down'
+                        ? t('interfaces.operDown')
+                        : '—'}
                   </span>
                 );
               })}

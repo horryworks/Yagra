@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { MERAKI_PAIR_STATES, type MerakiPair } from '../../types/api';
 import {
   MERAKI_UPLINK_STATES,
+  merakiApRadioReadingsShown,
   merakiPairLine,
   merakiRadioLines,
   merakiTrafficSeries,
@@ -241,5 +242,15 @@ describe('merakiRadioLines', () => {
 
   it('draws nothing for an access point with no radio measured', () => {
     expect(merakiRadioLines([], [], names)).toEqual([]);
+  });
+});
+
+describe('merakiApRadioReadingsShown', () => {
+  // ADR-168 決定 4: the collect stops writing these for a stopped access point, and the latest
+  // value is looked back for thirty minutes — so the card must not keep drawing the last ones.
+  it('hides an access point’s radio readings only while it is reported offline', () => {
+    expect(merakiApRadioReadingsShown(0)).toBe(false);
+    expect(merakiApRadioReadingsShown(1)).toBe(true);
+    expect(merakiApRadioReadingsShown(null)).toBe(true);
   });
 });
