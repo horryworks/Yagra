@@ -29,6 +29,7 @@ use crate::{
     fetch_inventory, list_organizations, MerakiAvailability, MerakiCollectSpec, MerakiFetchError,
     MerakiTier, MerakiWireOrigin,
 };
+use yagra_common::MerakiListing;
 
 /// The stored base URL every test uses — the real one, because the allow-list admits nothing else.
 const BASE: &str = "https://api.meraki.com";
@@ -564,7 +565,8 @@ async fn the_uplink_tier_asks_the_whole_organization_and_keeps_the_watched_netwo
     let statuses = r#"[
         {"networkId":"N_2","serial":"Q2XX-TEST-0002","uplinks":[{"interface":"wan1","status":"active"}]},
         {"networkId":"N_9","serial":"Q2XX-TEST-0009","uplinks":[{"interface":"wan1","status":"active"}]}]"#;
-    let (origin, _, seen) = serve(vec![Reply::ok(loss), Reply::ok(statuses)]).await;
+    let (origin, _, seen) =
+        serve(vec![Reply::ok(loss), Reply::ok(statuses), Reply::ok("[]")]).await;
 
     let got = collect(
         &spec(MerakiTier::Uplink, &["N_1", "N_2"]),
@@ -581,8 +583,124 @@ async fn the_uplink_tier_asks_the_whole_organization_and_keeps_the_watched_netwo
         vec![
             "GET /api/v1/organizations/1/devices/uplinksLossAndLatency?timespan=300&perPage=1000 HTTP/1.1",
             "GET /api/v1/organizations/1/appliance/uplink/statuses?perPage=1000 HTTP/1.1",
+            // Auto VPN, last, at the largest page it accepts (ADR-164 決定 25).
+            "GET /api/v1/organizations/1/appliance/vpn/statuses?perPage=300 HTTP/1.1",
         ]
     );
+}
+
+/// ADR-164 決定 25: the uplink tier's third read is Auto VPN, at `perPage=300` — the real Dashboard
+/// answers `perPage=1000` with 400 — and it follows the listing's pages like any other.
+#[tokio::test]
+async fn the_uplink_tier_reads_auto_vpn_last_at_the_page_size_it_accepts_and_pages_through_it() {
+    let page2 = format!(
+        "{BASE}/api/v1/organizations/1/appliance/vpn/statuses?perPage=300&startingAfter=N_1"
+    );
+    let vpn1 = r#"[
+        {"networkId":"N_1","deviceSerial":"Q2XX-TEST-0001","deviceStatus":"online","vpnMode":"spoke",
+         "merakiVpnPeers":[{"networkId":"N_H","reachability":"reachable"},
+                           {"networkId":"N_G","reachability":"unreachable"}]}]"#;
+    let vpn2 = r#"[
+        {"networkId":"N_H","deviceSerial":"Q2XX-TEST-0008","deviceStatus":"online","vpnMode":"hub",
+         "merakiVpnPeers":[{"networkId":"N_1","reachability":"reachable"}]},
+        {"networkId":"N_G","deviceSerial":"Q2XX-TEST-0009","deviceStatus":"online","vpnMode":"hub",
+         "merakiVpnPeers":[]}]"#;
+    let (origin, _, seen) = serve(vec![
+        Reply::ok("[]"),
+        Reply::ok("[]"),
+        Reply::ok(vpn1).next(&page2),
+        Reply::ok(vpn2),
+    ])
+    .await;
+
+    let got = collect(&spec(MerakiTier::Uplink, &["N_1"]), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+
+    assert_eq!(got.failure(), None, "{got:?}");
+    assert_eq!(serials(&got), vec!["Q2XX-TEST-0001"], "only the watched MX");
+    let pct = got.observations[0]
+        .samples
+        .iter()
+        .find(|s| s.metric == "meraki_vpn_hubs_unreachable_pct")
+        .map(|s| s.value);
+    assert_eq!(
+        pct,
+        Some(50.0),
+        "one of its two hubs, judged by rows it does not watch"
+    );
+    let sent = lines(&seen);
+    assert_eq!(sent.len(), 4, "{sent:?}");
+    assert_eq!(
+        sent[2],
+        "GET /api/v1/organizations/1/appliance/vpn/statuses?perPage=300 HTTP/1.1"
+    );
+    assert!(
+        sent[3].starts_with(
+            "GET /api/v1/organizations/1/appliance/vpn/statuses?perPage=300&startingAfter=N_1 "
+        ),
+        "{}",
+        sent[3]
+    );
+}
+
+/// ADR-164 決定 25: an Auto VPN read that fails costs only its own readings. The uplinks' loss and
+/// status still arrive, and the collect says which read failed — it used to be hidden whenever
+/// another listing of the tier answered.
+#[tokio::test]
+async fn a_failed_vpn_read_keeps_the_uplinks_readings_and_names_itself() {
+    let loss = r#"[{"networkId":"N_1","serial":"Q2XX-TEST-0001","uplink":"wan1",
+        "timeSeries":[{"ts":"2026-09-22T00:00:00Z","lossPercent":0.0,"latencyMs":12.5}]}]"#;
+    let statuses = r#"[{"networkId":"N_1","serial":"Q2XX-TEST-0001",
+        "uplinks":[{"interface":"wan1","status":"active"}]}]"#;
+    for (reply, why) in [
+        (
+            Reply::json(400, r#"{"errors":["mock"]}"#),
+            MerakiFetchError::Status(400),
+        ),
+        (
+            Reply::ok(r#"{"not":"a list"}"#),
+            MerakiFetchError::Malformed,
+        ),
+        (
+            Reply::json(403, r#"{"errors":["forbidden"]}"#),
+            MerakiFetchError::Auth(403),
+        ),
+    ] {
+        let (origin, _, seen) = serve(vec![Reply::ok(loss), Reply::ok(statuses), reply]).await;
+        let got = collect(&spec(MerakiTier::Uplink, &["N_1"]), TIMEOUT, Some(&origin))
+            .await
+            .expect("the collect still answers");
+        assert_eq!(
+            got.failed_listing,
+            Some((MerakiListing::ApplianceVpnStatuses, why)),
+            "{why:?}"
+        );
+        assert_eq!(got.failure(), Some(why));
+        let metrics: Vec<&str> = got.observations[0]
+            .samples
+            .iter()
+            .map(|s| s.metric.as_str())
+            .collect();
+        assert!(metrics.contains(&"meraki_uplink_loss_pct"), "{metrics:?}");
+        assert!(metrics.contains(&"meraki_uplink_status"), "{metrics:?}");
+        assert!(
+            !metrics.iter().any(|m| m.starts_with("meraki_vpn_")),
+            "{metrics:?}"
+        );
+        assert_eq!(lines(&seen).len(), 3);
+    }
+}
+
+/// The first read of a tier is not contained: a refused key there is the whole collect refused, as
+/// before — one request, and nothing after it.
+#[tokio::test]
+async fn a_refused_key_on_the_first_uplink_read_still_refuses_the_whole_collect() {
+    let (origin, _, seen) =
+        serve(vec![Reply::json(401, r#"{"errors":["Invalid API key"]}"#)]).await;
+    let got = collect(&spec(MerakiTier::Uplink, &["N_1"]), TIMEOUT, Some(&origin)).await;
+    assert_eq!(got, Err(MerakiFetchError::Auth(401)));
+    assert_eq!(lines(&seen).len(), 1);
 }
 
 /// The traffic tier asks every MX's uplink usage over the tier's interval, with no page size —

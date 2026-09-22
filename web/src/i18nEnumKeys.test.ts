@@ -57,6 +57,7 @@ import {
   DUPLICATE_CONFIDENCES,
   DUPLICATE_CONTRADICTIONS,
   DUPLICATE_EVIDENCE_KINDS,
+  MERAKI_LISTINGS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -907,6 +908,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // had strings, so an org with `inventory` enabled showed the operator the raw key. The cadence
     // dialog's checkboxes are a deliberate subset (`SELECTABLE_MERAKI_TIERS`); the *labels* are not.
     expectKeys('meraki tier', { en: enSystem, ja: jaSystem }, 'meraki.tier.', MERAKI_TIERS);
+  });
+
+  it('every Meraki collect listing has a label (system:meraki.listing.*)', () => {
+    // A tier's failure line names which of its reads failed (ADR-164 決定 25) through
+    // `meraki.listing.<token>`. A listing added to the list without its label would show the raw key.
+    expectKeys('meraki listing', { en: enSystem, ja: jaSystem }, 'meraki.listing.', MERAKI_LISTINGS);
   });
 
   it('every Meraki uplink state has a word (nodes:overview.uplinkState.*)', () => {

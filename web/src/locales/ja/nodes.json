@@ -376,6 +376,9 @@
     "online": "オンライン",
     "offline": "オフライン",
     "wanRates": "送信 {{sent}} / 受信 {{recv}}",
+    "vpn": "Auto VPN",
+    "vpnHubs": "hub {{total}} のうち {{reached}} に到達",
+    "vpnSpokesDown": "届かない spoke {{count}}",
     "uplinkState": {
       "active": "使用中",
       "ready": "待機",

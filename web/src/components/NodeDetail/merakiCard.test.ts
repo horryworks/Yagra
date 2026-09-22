@@ -2,7 +2,7 @@
 // The Overview's Cisco Meraki card (ADR-164 増分 13): what it draws per WAN uplink.
 
 import { describe, expect, it } from 'vitest';
-import { MERAKI_UPLINK_STATES, merakiUplinkLines, merakiUplinkState } from './merakiCard';
+import { MERAKI_UPLINK_STATES, merakiUplinkLines, merakiUplinkState, merakiVpnLine } from './merakiCard';
 
 const row = (r: number, value: number, name?: string) => ({ row: r, value, name });
 
@@ -75,5 +75,24 @@ describe('merakiUplinkState', () => {
   it('every state is one the encoding can produce', () => {
     const produced = [2, 1, 0, -1].map(merakiUplinkState);
     expect([...produced].sort()).toEqual([...MERAKI_UPLINK_STATES].sort());
+  });
+});
+
+describe('merakiVpnLine', () => {
+  it('a spoke with both hubs, one, and none — the three tones the seeded rule draws', () => {
+    expect(merakiVpnLine(2, 0, null)).toEqual({ reached: 2, total: 2, spokesDown: null, tone: 'ok' });
+    expect(merakiVpnLine(1, 1, null)).toEqual({ reached: 1, total: 2, spokesDown: null, tone: 'warning' });
+    expect(merakiVpnLine(0, 2, null)).toEqual({ reached: 0, total: 2, spokesDown: null, tone: 'critical' });
+  });
+
+  it('a hub counts its hubs and its unreachable spokes, zero included', () => {
+    expect(merakiVpnLine(11, 0, 0)).toEqual({ reached: 11, total: 11, spokesDown: 0, tone: 'ok' });
+    expect(merakiVpnLine(11, 0, 3)?.spokesDown).toBe(3);
+  });
+
+  it('no reading draws no line, rather than a guessed "fine"', () => {
+    // A down MX, or one whose only hub is down, is not reported at all (ADR-164 決定 25).
+    expect(merakiVpnLine(null, null, null)).toBeNull();
+    expect(merakiVpnLine(1, null, null)).toBeNull();
   });
 });

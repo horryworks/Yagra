@@ -345,20 +345,37 @@ impl NodeRepo {
         //    It alerts per uplink, on the row path (ADR-143): the uplink is the samples' row key, and
         //    its name (WAN1 / WAN2 / cellular) rides the result.
         //
+        //    Offset 1 (決定 25): an Auto VPN MX that cannot reach its hubs. One rule on the
+        //    unreachable share, both bounds `above` — any unreachable hub is a warning (the site lost
+        //    its redundancy), all of them critical — so a site that loses one hub and then the other
+        //    has ONE alert that escalates, not a warning and a critical side by side. Three uplink
+        //    collects in a row. A hub that is itself down is not counted on its spokes (it raises its
+        //    own alert), so one dead hub does not put every spoke into warning.
+        //
         //    Offsets are explicit and append-only, for the reason given at 7 below.
         if let Some(&mx_profile_id) =
             profile_id_by_name.get(yagra_common::meraki::PROFILE_MERAKI_MX_API)
         {
             let scope_ids = vec![mx_profile_id.to_string()];
             // (offset, metric, direction, warning, critical, dwell_samples)
-            let defaults = [(
-                0usize,
-                yagra_common::METRIC_MERAKI_UPLINK_FAILED,
-                "above",
-                Some(0.5),
-                None::<f64>,
-                2i32,
-            )];
+            let defaults = [
+                (
+                    0usize,
+                    yagra_common::METRIC_MERAKI_UPLINK_FAILED,
+                    "above",
+                    Some(0.5),
+                    None::<f64>,
+                    2i32,
+                ),
+                (
+                    1usize,
+                    yagra_common::METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT,
+                    "above",
+                    Some(1.0),
+                    Some(100.0),
+                    3i32,
+                ),
+            ];
             for (offset, metric, direction, warning, critical, dwell) in defaults {
                 sqlx::query(
                     "INSERT INTO thresholds \
@@ -540,13 +557,14 @@ mod tests {
         );
     }
 
-    /// **The Meraki MX profile gets its failed-uplink rule, and nothing else does** (ADR-164 決定 24).
+    /// **The Meraki MX profile gets its seeded rules — a failed uplink, Auto VPN — and the failed-uplink
+    /// one goes nowhere else** (ADR-164 決定 24 and 25).
     ///
     /// The bound is the thing to pin: `meraki_uplink_failed` is a 0/1 gauge, and a seed row is
     /// `ON CONFLICT DO NOTHING`, so a wrong bound shipped once needs a corrective migration.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn the_meraki_mx_profile_gets_its_failed_uplink_rule_and_no_other_profile_does(
+    async fn the_meraki_mx_profile_gets_its_seeded_rules_and_no_other_profile_does(
         pool: sqlx::PgPool,
     ) {
         let repo = crate::pgtest::repo(pool.clone());
@@ -599,6 +617,30 @@ mod tests {
         .await
         .expect("count");
         assert_eq!(elsewhere, 0, "only the MX profile reports an uplink");
+
+        // ADR-164 決定 25: ONE rule for Auto VPN, warning and critical on the same side, so a site
+        // that loses its second hub escalates the alert it already has.
+        let vpn: Seeded = sqlx::query_as(
+            "SELECT scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
+                    dwell_samples FROM thresholds WHERE id = $1",
+        )
+        .bind(SeedRange::MerakiThresholds.id(1))
+        .fetch_one(&pool)
+        .await
+        .expect("the seeded Auto VPN rule");
+        assert_eq!(
+            vpn,
+            (
+                "profile".to_owned(),
+                mx.clone(),
+                vec![mx.clone()],
+                yagra_common::METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT.to_owned(),
+                "above".to_owned(),
+                Some(1.0),
+                Some(100.0),
+                3
+            )
+        );
     }
 
     /// **Migration 0114 replaces a built-in classification rule only while it is still what Yagra

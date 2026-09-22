@@ -493,6 +493,13 @@
     "note": "Read-only Dashboard API monitoring.",
     "tiersPrefix": "tiers:",
     "tiersNone": "none",
+    "listing": {
+      "availabilities": "device availability",
+      "uplinks_loss_and_latency": "uplink loss and latency",
+      "appliance_uplink_statuses": "uplink statuses",
+      "appliance_vpn_statuses": "Auto VPN statuses",
+      "appliance_uplinks_usage": "uplink usage"
+    },
     "tier": {
       "availability": "Availability",
       "uplink": "Uplink",
@@ -541,6 +548,7 @@
       "uncollected_other": "{{count}} not collected",
       "collectFailing": "Collection failing: {{reason}}. Device states are the last ones collected.",
       "tierFailing": "{{tier}} collection failing: {{reason}}",
+      "tierWithListing": "{{tier}} ({{listing}})",
       "now": "Sync now",
       "running": "Syncing…",
       "reason": {

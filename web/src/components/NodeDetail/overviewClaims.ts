@@ -45,6 +45,9 @@ export const MERAKI_CARD = {
   sentBps: 'meraki_uplink_sent_bps',
   recvBps: 'meraki_uplink_recv_bps',
   status: 'meraki_uplink_status',
+  vpnHubsReachable: 'meraki_vpn_hubs_reachable',
+  vpnHubsUnreachable: 'meraki_vpn_hubs_unreachable',
+  vpnSpokesUnreachable: 'meraki_vpn_spokes_unreachable',
 } as const;
 
 /**

@@ -2357,6 +2357,15 @@ pub struct MerakiCollectReport {
     /// the decode and with it the report that the collect failed at all.
     #[serde(default)]
     pub failure: Option<String>,
+    /// Which of the tier's reads failed, when one did while the others answered
+    /// (`yagra_common::MerakiListing::as_str`, ADR-164 決定 25) — the uplink tier reads three. `None`
+    /// for a success, and for a failure a poller from before 決定 25 reported.
+    ///
+    /// A `String` for the reason `failure` is one: a listing this core does not know costs the
+    /// label, never the report. Left off the wire when absent, so a report an older core reads is
+    /// byte-identical to what it has always read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing: Option<String>,
 }
 
 /// An interface discovered during a table walk: its index and the descriptive metadata
@@ -3983,7 +3992,13 @@ mod tests {
             org: Uuid::from_u128(7),
             tier: MerakiTier::Availability,
             failure: Some("auth".to_owned()),
+            listing: None,
         });
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(
+            !wire.contains("listing"),
+            "an absent listing stays off the wire: {wire}"
+        );
         let back: PollResult =
             serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
         assert_eq!(back.meraki_collect, result.meraki_collect);
@@ -4006,6 +4021,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ok.failure, None);
+        assert_eq!(ok.listing, None);
+
+        // ADR-164 決定 25: the failed listing travels, and an unknown one is still read.
+        let named: MerakiCollectReport = serde_json::from_str(
+            r#"{"org":"00000000-0000-0000-0000-000000000007","tier":"uplink",
+                "failure":"upstream","listing":"a_listing_from_the_future"}"#,
+        )
+        .unwrap();
+        assert_eq!(named.failure.as_deref(), Some("upstream"));
+        assert_eq!(named.listing.as_deref(), Some("a_listing_from_the_future"));
     }
 
     /// ADR-043's result field, N-1 sensitive in exactly the way `neighbors` was.

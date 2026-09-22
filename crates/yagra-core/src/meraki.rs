@@ -2019,6 +2019,7 @@ mod tests {
             reason: MerakiSyncFailure::Auth,
             since_unix_ms: 1_790_000_000_000,
             failures: 3,
+            listing: None,
         }];
         assert!(repo
             .record_collect_failures(id, &failing)

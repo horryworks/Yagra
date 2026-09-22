@@ -72,6 +72,9 @@ function metric(url: URL): Json {
     } as unknown as Json;
   }
   if (name === 'meraki_device_up') return { ...body, metric: name, node_id: NODE_ID, value: 1 } as unknown as Json;
+  // Auto VPN (ADR-164 決定 25): a spoke that reaches one of its two hubs.
+  const vpn: Record<string, number> = { meraki_vpn_hubs_reachable: 1, meraki_vpn_hubs_unreachable: 1 };
+  if (name in vpn) return { ...body, metric: name, node_id: NODE_ID, value: vpn[name] } as unknown as Json;
   return body as unknown as Json;
 }
 
@@ -82,6 +85,8 @@ test.use({
       '/api/v1/nodes/{node_id}': merakiNode,
       '/api/v1/nodes/{node_id}/metrics/{metric}': (url) => metric(url),
     },
+    // A spoke has no spoke count: the server answers 404 for a metric with no reading.
+    failures: { [`/api/v1/nodes/${NODE_ID}/metrics/meraki_vpn_spokes_unreachable`]: 404 },
   },
 });
 
@@ -108,11 +113,16 @@ test("an MX's card shows each WAN uplink with its state and rates — failed and
   await expect(line('cellular').locator('.nd-health-metric-value')).toHaveText(
     'Failed · sent 0 bps / received 0 bps',
   );
+  // One of its two hubs lost: the redundancy is gone, so the line reads as a warning (ADR-164 決定 25).
+  const vpnValue = line('Auto VPN').locator('.nd-health-metric-value');
+  await expect(vpnValue).toHaveText('1 of 2 hubs reachable');
+  await expect(vpnValue).toHaveAttribute('style', /var\(--status-warning\)/);
   await expect(card.locator('.nd-health-metric-label')).toHaveText([
     'Availability',
     'WAN1',
     'WAN2',
     'cellular',
+    'Auto VPN',
   ]);
 
   // The card asked for the rows — without `rows=true` the server answers one number per metric.

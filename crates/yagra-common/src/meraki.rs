@@ -53,6 +53,70 @@ pub const METRIC_MERAKI_UPLINK_FAILED: &str = "meraki_uplink_failed";
 pub const METRIC_MERAKI_UPLINK_SENT_BPS: &str = "meraki_uplink_sent_bps";
 /// Stable TSDB metric: per-uplink average receive rate over the window, bits per second (see above).
 pub const METRIC_MERAKI_UPLINK_RECV_BPS: &str = "meraki_uplink_recv_bps";
+/// Stable TSDB metric (ADR-164 決定 25): how many of an MX's Auto VPN **hub** peers it reaches. Node
+/// level, on the MX the VPN row names, and only while that MX is up — a down device's row is stale.
+/// A peer hub that is itself down is not counted either way: it raises its own alert, and counting it
+/// would put every spoke of a dead hub into warning at once.
+pub const METRIC_MERAKI_VPN_HUBS_REACHABLE: &str = "meraki_vpn_hubs_reachable";
+/// Stable TSDB metric: how many of an MX's counted Auto VPN hub peers it does NOT reach (see above).
+pub const METRIC_MERAKI_VPN_HUBS_UNREACHABLE: &str = "meraki_vpn_hubs_unreachable";
+/// Stable TSDB metric: the unreachable share of an MX's counted hub peers, 0–100. What the seeded rule
+/// reads: any unreachable hub is a warning (redundancy lost), all of them critical — one alert that
+/// escalates. Emitted only when at least one hub was counted.
+pub const METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT: &str = "meraki_vpn_hubs_unreachable_pct";
+/// Stable TSDB metric: on an Auto VPN **hub**, how many of its spokes it does not reach, counted like
+/// the hubs above. Display only — a spoke that is down alerts for itself.
+pub const METRIC_MERAKI_VPN_SPOKES_UNREACHABLE: &str = "meraki_vpn_spokes_unreachable";
+
+/// One Dashboard read a collect makes (ADR-164 決定 25). A tier may make several — the uplink tier
+/// reads loss and latency, the uplinks' statuses and the Auto VPN statuses — and when one of them fails
+/// while the others answer, this names which, on the organization's row and in the API.
+///
+/// The token travels as a plain string on the bus (`MerakiCollectReport.listing`) and is read back with
+/// [`Self::from_token`], so a listing a newer poller names costs the label, never the report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MerakiListing {
+    /// `devices/availabilities` — the availability tier.
+    Availabilities,
+    /// `devices/uplinksLossAndLatency` — the uplink tier's first read.
+    UplinksLossAndLatency,
+    /// `appliance/uplink/statuses` — the uplink tier's second read.
+    ApplianceUplinkStatuses,
+    /// `appliance/vpn/statuses` — the uplink tier's third read (決定 25).
+    ApplianceVpnStatuses,
+    /// `appliance/uplinks/usage/byNetwork` — the traffic tier (決定 23).
+    ApplianceUplinksUsage,
+}
+
+impl MerakiListing {
+    /// Every listing.
+    pub const ALL: [MerakiListing; 5] = [
+        MerakiListing::Availabilities,
+        MerakiListing::UplinksLossAndLatency,
+        MerakiListing::ApplianceUplinkStatuses,
+        MerakiListing::ApplianceVpnStatuses,
+        MerakiListing::ApplianceUplinksUsage,
+    ];
+
+    /// The token stored and sent — the serde tag.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            MerakiListing::Availabilities => "availabilities",
+            MerakiListing::UplinksLossAndLatency => "uplinks_loss_and_latency",
+            MerakiListing::ApplianceUplinkStatuses => "appliance_uplink_statuses",
+            MerakiListing::ApplianceVpnStatuses => "appliance_vpn_statuses",
+            MerakiListing::ApplianceUplinksUsage => "appliance_uplinks_usage",
+        }
+    }
+
+    /// Read a token back. `None` for one this build does not know.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|l| l.as_str() == s)
+    }
+}
 
 /// A Meraki collection tier: a group of Dashboard endpoints polled together on one cadence.
 ///
@@ -291,6 +355,19 @@ mod tests {
         assert_eq!(uplink_ifindex("eth9"), None);
         assert_eq!(uplink_name(1), Some("WAN1"));
         assert_eq!(uplink_name(99), None);
+    }
+
+    #[test]
+    fn a_listing_token_is_its_serde_tag_and_reads_back() {
+        for l in MerakiListing::ALL {
+            assert_eq!(
+                serde_json::to_value(l).unwrap(),
+                serde_json::Value::String(l.as_str().to_owned()),
+                "{l:?}"
+            );
+            assert_eq!(MerakiListing::from_token(l.as_str()), Some(l));
+        }
+        assert_eq!(MerakiListing::from_token("switch_port_statuses"), None);
     }
 
     #[test]

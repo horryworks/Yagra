@@ -378,6 +378,12 @@ pub(crate) struct MerakiCollectFailureView {
     since: chrono::DateTime<chrono::Utc>,
     /// How many collects in a row have failed.
     failures: u32,
+    /// Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
+    /// `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
+    /// uplink tier reads three. Absent when the whole collect failed, or a poller from before this
+    /// reported it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    listing: Option<String>,
 }
 
 impl MerakiCollectFailureView {
@@ -388,6 +394,7 @@ impl MerakiCollectFailureView {
             // Out of range only for a corrupt row; the epoch then, rather than a failed page.
             since: chrono::DateTime::from_timestamp_millis(f.since_unix_ms).unwrap_or_default(),
             failures: f.failures,
+            listing: f.listing.map(|l| l.as_str().to_owned()),
         }
     }
 }
@@ -1747,6 +1754,33 @@ mod tests {
             .unwrap_or_else(|_| panic!("{name} in {path} is not a plain number"))
     }
 
+    /// `MerakiCollectFailureView.listing` is a plain string on the wire, so the WebUI's list of the
+    /// tokens it labels (`MERAKI_LISTINGS` in `web/src/types/api.ts`) is a hand-kept copy of
+    /// `yagra_common::MerakiListing` that no generated type checks (ADR-164 決定 25). A token missing
+    /// there is a failure line with no label; read from the file so the two cannot drift silently.
+    #[test]
+    fn every_listing_token_is_one_the_webui_lists() {
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/types/api.ts"),
+        )
+        .expect("web/src/types/api.ts");
+        let start = ts
+            .find("export const MERAKI_LISTINGS = [")
+            .expect("MERAKI_LISTINGS is declared in types/api.ts");
+        let block = &ts[start..];
+        let block = &block[..block.find("] as const;").expect("the list is closed")];
+        let listed: Vec<&str> = block.split('\'').skip(1).step_by(2).collect();
+        let ours: Vec<&str> = yagra_common::MerakiListing::ALL
+            .iter()
+            .map(|l| l.as_str())
+            .collect();
+        assert_eq!(ours.len(), 5, "the listings a collect reads today");
+        assert_eq!(
+            listed, ours,
+            "types/api.ts lists exactly these, in this order"
+        );
+    }
+
     /// The cadence dialog's ranges are the third copy of these bounds (after `config.rs` and the
     /// CHECKs in migrations 0038 and 0124), and they were four string literals in a `.tsx` until
     /// ADR-164 Inc.11 — one of them already moved by hand when the inventory floor went from 900
@@ -2369,6 +2403,7 @@ mod tests {
                     reason: MerakiSyncFailure::Auth,
                     since_unix_ms: 1_789_999_100_000,
                     failures: 3,
+                    listing: None,
                 }],
             )
             .await

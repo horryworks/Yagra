@@ -106,8 +106,8 @@ describe('which of an organization’s collects are failing (ADR-164 決定 18)'
       collect_failures: [failing('traffic', 'upstream'), failing('availability', 'auth')],
     });
     expect(got).toEqual([
-      { tier: 'availability', reason: 'auth', stalesNodes: true },
-      { tier: 'traffic', reason: 'upstream', stalesNodes: false },
+      { tier: 'availability', reason: 'auth', stalesNodes: true, listing: null },
+      { tier: 'traffic', reason: 'upstream', stalesNodes: false, listing: null },
     ]);
   });
 
@@ -122,7 +122,17 @@ describe('which of an organization’s collects are failing (ADR-164 決定 18)'
     const got = orgCollectFailures({
       collect_failures: [failing('availability', 'a_reason_from_the_future')],
     });
-    expect(got).toEqual([{ tier: 'availability', reason: 'internal', stalesNodes: true }]);
+    expect(got).toEqual([{ tier: 'availability', reason: 'internal', stalesNodes: true, listing: null }]);
+  });
+
+  it('names which read of the tier failed, and reads one this bundle does not know as none (ADR-164 決定 25)', () => {
+    const got = orgCollectFailures({
+      collect_failures: [
+        { ...failing('uplink', 'upstream'), listing: 'appliance_vpn_statuses' },
+        { ...failing('traffic', 'upstream'), listing: 'a_listing_from_the_future' },
+      ],
+    });
+    expect(got.map((f) => f.listing)).toEqual(['appliance_vpn_statuses', null]);
   });
 
   it('carries `no_answer` through: a collect that was sent and never came back', () => {

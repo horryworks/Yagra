@@ -29,13 +29,15 @@ use crate::{
 };
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 use yagra_common::{
-    is_meraki_api_host, uplink_ifindex, uplink_name, MerakiTier, MerakiUplinkStatus,
+    is_meraki_api_host, uplink_ifindex, uplink_name, MerakiListing, MerakiTier, MerakiUplinkStatus,
     METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_UPLINK_FAILED, METRIC_MERAKI_UPLINK_LATENCY_MS,
     METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS,
-    METRIC_MERAKI_UPLINK_STATUS,
+    METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
+    METRIC_MERAKI_VPN_HUBS_UNREACHABLE, METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT,
+    METRIC_MERAKI_VPN_SPOKES_UNREACHABLE,
 };
 
 /// Dashboard API v1 path prefix (appended to the org's `base_url`).
@@ -711,9 +713,8 @@ pub(crate) async fn collect(
         tracing::debug!(error = %e, "meraki collect session refused");
         MerakiFetchError::Config
     })?;
-    // The FIRST reason a listing of this collect stopped early. One is enough: what core asks
-    // of it is "did the Dashboard answer", and a second stop after the first adds nothing.
-    let mut stopped: Option<MerakiFetchError> = None;
+    // How each listing of this collect ended (ADR-164 決定 18 and 25).
+    let mut listings = Listings::default();
     // Every listing asks the WHOLE organization and keeps the watched networks' rows here
     // (ADR-164 決定 22). Sending the networks as `networkIds[]` is what the Dashboard documents and
     // what it refuses: its nginx answers 414 past a request target of 8,177 characters (measured
@@ -722,6 +723,13 @@ pub(crate) async fn collect(
     // and `byUsage` answered the whole organization when asked about one network.
     let watched = Watched::new(&spec.network_ids);
     let no_query: [(&str, String); 0] = [];
+    // A listing after a tier's first one is contained: a refusal there costs that listing's readings
+    // and is named in the report, rather than throwing away what the listings before it brought back
+    // (決定 25). The FIRST listing's refusal still fails the collect — a revoked key or an unreadable
+    // answer is not a partial answer.
+    let contained = |r: Result<(Vec<Value>, Option<MerakiFetchError>), MerakiFetchError>| {
+        r.unwrap_or_else(|why| (Vec::new(), Some(why)))
+    };
 
     let mut data: Vec<DeviceDatum> = Vec::new();
     match spec.tier {
@@ -733,8 +741,9 @@ pub(crate) async fn collect(
             let (items, stop) = session
                 .get_paged_reported(&path, &no_query, Paging::Upto(spec.per_page))
                 .await?;
-            stopped = stopped.or(stop);
-            data.extend(parse_availability(&watched.keep(items)));
+            let kept = watched.keep(items);
+            listings.note(MerakiListing::Availabilities, stop, kept.len());
+            data.extend(parse_availability(&kept));
         }
         MerakiTier::Uplink => {
             let loss_path = format!(
@@ -745,18 +754,43 @@ pub(crate) async fn collect(
             let (items, stop) = session
                 .get_paged_reported(&loss_path, &q, Paging::Upto(spec.per_page))
                 .await?;
-            stopped = stopped.or(stop);
-            data.extend(parse_uplink_loss_latency(&watched.keep(items)));
+            let kept = watched.keep(items);
+            listings.note(MerakiListing::UplinksLossAndLatency, stop, kept.len());
+            data.extend(parse_uplink_loss_latency(&kept));
 
             let status_path = format!(
                 "{API_PREFIX}/organizations/{}/appliance/uplink/statuses",
                 spec.org_id
             );
-            let (items, stop) = session
-                .get_paged_reported(&status_path, &no_query, Paging::Upto(spec.per_page))
-                .await?;
-            stopped = stopped.or(stop);
-            data.extend(parse_uplink_statuses(&watched.keep(items)));
+            let (items, stop) = contained(
+                session
+                    .get_paged_reported(&status_path, &no_query, Paging::Upto(spec.per_page))
+                    .await,
+            );
+            let kept = watched.keep(items);
+            listings.note(MerakiListing::ApplianceUplinkStatuses, stop, kept.len());
+            data.extend(parse_uplink_statuses(&kept));
+
+            // Auto VPN, last (決定 25): the slowest of the three (4–5 s for 347 rows measured), and a
+            // listing whose failure must not cost the uplinks' readings. Its documented page size
+            // tops out at 300 — `perPage=1000` is a 400 (measured).
+            let vpn_path = format!(
+                "{API_PREFIX}/organizations/{}/appliance/vpn/statuses",
+                spec.org_id
+            );
+            let (items, stop) = contained(
+                session
+                    .get_paged_reported(
+                        &vpn_path,
+                        &no_query,
+                        Paging::Upto(spec.per_page.min(VPN_STATUSES_MAX_PER_PAGE)),
+                    )
+                    .await,
+            );
+            let admitted = items.iter().filter(|it| watched.admits(it)).count();
+            listings.note(MerakiListing::ApplianceVpnStatuses, stop, admitted);
+            // Every row goes in, watched or not: a peer is judged by its OWN row.
+            data.extend(parse_vpn_statuses(&items, &watched));
         }
         // Every MX's WAN uplinks, over the tier's own interval (ADR-164 決定 23). What this read
         // replaced, `summary/top/devices/byUsage`, refuses a timespan under 28,800 seconds, answers
@@ -772,8 +806,9 @@ pub(crate) async fn collect(
             let (items, stop) = session
                 .get_paged_reported(&path, &q, Paging::Unpaged)
                 .await?;
-            stopped = stopped.or(stop);
-            data.extend(parse_uplinks_usage(&watched.keep(items), window));
+            let kept = watched.keep(items);
+            listings.note(MerakiListing::ApplianceUplinksUsage, stop, kept.len());
+            data.extend(parse_uplinks_usage(&kept, window));
         }
         // The inventory is read by core's periodic sync (`fetch_inventory`), not by a collect —
         // nothing to gather here.
@@ -781,8 +816,147 @@ pub(crate) async fn collect(
     }
     Ok(MerakiCollected {
         observations: fold(data),
-        stopped,
+        stopped: listings.stopped,
+        failed_listing: listings.failed,
     })
+}
+
+/// How the listings of one collect ended (ADR-164 決定 18 and 25).
+#[derive(Debug, Default)]
+struct Listings {
+    /// The FIRST reason a listing stopped early. One is enough: what core asks of it is "did the
+    /// Dashboard answer", and a second stop after the first adds nothing.
+    stopped: Option<MerakiFetchError>,
+    /// The first listing that stopped early **with none of the rows this collect keeps** — and why.
+    failed: Option<(MerakiListing, MerakiFetchError)>,
+}
+
+impl Listings {
+    /// Record one listing's end. `kept` is how many of its rows the collect keeps: a listing that
+    /// stopped early with some is a partial answer, which is still an answer; one that stopped with
+    /// none is a failed listing, and is named even when the tier's other listings answered — that
+    /// used to be hidden, because a collect only counted as failed when it brought back nothing at
+    /// all.
+    fn note(&mut self, listing: MerakiListing, stop: Option<MerakiFetchError>, kept: usize) {
+        if let Some(why) = stop {
+            self.stopped = self.stopped.or(Some(why));
+            if kept == 0 {
+                self.failed = self.failed.or(Some((listing, why)));
+            }
+        }
+    }
+}
+
+/// The largest page `appliance/vpn/statuses` accepts: "The perPage parameter must be between 3 and
+/// 300" (measured 2026-09-22 with `perPage=1000`).
+const VPN_STATUSES_MAX_PER_PAGE: u32 = 300;
+
+/// `appliance/vpn/statuses` → each watched MX's Auto VPN reachability (ADR-164 決定 25).
+///
+/// A row is a network with its VPN-participating MX (`deviceSerial` — measured: always the pair's
+/// configured primary, even while the primary is down and its spare carries the tunnels), the MX's
+/// `deviceStatus`, its `vpnMode` and one entry per Meraki peer network with `reachability`.
+///
+/// * **Only a row whose own MX is up says anything.** A down device's row is stale — on a real
+///   organization every dormant spoke listed all its hubs unreachable. Its node has its own alert.
+/// * **A peer is judged by its own row.** An unreachable peer whose MX is down is not counted, so
+///   one dead hub does not put every one of its spokes into warning; a peer answering as reachable
+///   counts whatever its row says. A peer with no row of its own cannot be placed, and is skipped.
+/// * Every MX gets its **hub** peers counted — spokes peer with hubs, and hubs are meshed with each
+///   other — and the share unreachable, when at least one hub was counted. A hub also gets its
+///   unreachable **spokes** counted, for display.
+///
+/// `items` is the whole organization's answer, not only the watched rows: which peer is a hub, and
+/// whether it is up, comes from the peer's own row, which may sit in a network nobody watches.
+fn parse_vpn_statuses(items: &[Value], watched: &Watched<'_>) -> Vec<DeviceDatum> {
+    let mode_of = |row: &Value| {
+        row.get("vpnMode")
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+    };
+    let up_of = |row: &Value| {
+        MerakiAvailability::from_status(
+            row.get("deviceStatus")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        )
+        .is_up()
+    };
+    let peers: HashMap<&str, (Option<String>, bool)> = items
+        .iter()
+        .filter_map(|row| {
+            let net = row.get("networkId").and_then(Value::as_str)?;
+            Some((net, (mode_of(row), up_of(row))))
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    for row in items {
+        if !watched.admits(row) || !up_of(row) {
+            continue;
+        }
+        let Some(serial) = row.get("deviceSerial").and_then(Value::as_str) else {
+            continue;
+        };
+        let (mut hubs_ok, mut hubs_down, mut spokes_down) = (0u32, 0u32, 0u32);
+        for peer in row
+            .get("merakiVpnPeers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let reachable = match peer
+                .get("reachability")
+                .and_then(Value::as_str)
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("reachable") => true,
+                Some("unreachable") => false,
+                _ => continue, // a word this build does not know says nothing
+            };
+            let Some((peer_mode, peer_up)) = peer
+                .get("networkId")
+                .and_then(Value::as_str)
+                .and_then(|n| peers.get(n))
+            else {
+                continue;
+            };
+            if !reachable && !peer_up {
+                continue; // the peer is down: its own alert, not this MX's
+            }
+            match peer_mode.as_deref() {
+                Some("hub") if reachable => hubs_ok += 1,
+                Some("hub") => hubs_down += 1,
+                Some("spoke") if !reachable => spokes_down += 1,
+                _ => {}
+            }
+        }
+        let mut push = |metric: &str, value: f64| {
+            out.push(DeviceDatum {
+                serial: serial.to_owned(),
+                sample: MerakiSample {
+                    metric: metric.to_owned(),
+                    ifindex: None,
+                    value,
+                },
+                uplink: None,
+            });
+        };
+        let hubs = hubs_ok + hubs_down;
+        if hubs > 0 {
+            push(METRIC_MERAKI_VPN_HUBS_REACHABLE, f64::from(hubs_ok));
+            push(METRIC_MERAKI_VPN_HUBS_UNREACHABLE, f64::from(hubs_down));
+            push(
+                METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT,
+                f64::from(hubs_down) * 100.0 / f64::from(hubs),
+            );
+        }
+        if mode_of(row).as_deref() == Some("hub") {
+            push(METRIC_MERAKI_VPN_SPOKES_UNREACHABLE, f64::from(spokes_down));
+        }
+    }
+    out
 }
 
 /// The networks a collect reports on (ADR-164 決定 22). **Empty means every network** — the bus's
@@ -795,16 +969,18 @@ impl<'a> Watched<'a> {
         Self(ids.iter().map(String::as_str).collect())
     }
 
-    /// The rows of an organization-wide answer that belong to a watched network. A row naming no
-    /// network is dropped: nothing places it in a watched one.
+    /// Whether one row of an organization-wide answer belongs to a watched network. A row naming
+    /// no network is not admitted: nothing places it in a watched one.
+    fn admits(&self, it: &Value) -> bool {
+        self.0.is_empty() || row_network(it).is_some_and(|n| self.0.contains(n))
+    }
+
+    /// The rows of an organization-wide answer that belong to a watched network.
     fn keep(&self, items: Vec<Value>) -> Vec<Value> {
         if self.0.is_empty() {
             return items;
         }
-        items
-            .into_iter()
-            .filter(|it| row_network(it).is_some_and(|n| self.0.contains(n)))
-            .collect()
+        items.into_iter().filter(|it| self.admits(it)).collect()
     }
 }
 
@@ -1690,6 +1866,143 @@ mod tests {
         assert_eq!(obs[0].samples.len(), 6);
     }
 
+    /// ADR-164 決定 25, as a table: who counts on whose Auto VPN line.
+    #[test]
+    fn vpn_statuses_count_each_mxs_hubs_and_leave_out_a_peer_that_is_itself_down() {
+        let row = |net: &str, serial: &str, status: &str, mode: &str, peers: &[(&str, &str)]| {
+            json!({
+                "networkId": net, "deviceSerial": serial, "deviceStatus": status, "vpnMode": mode,
+                "merakiVpnPeers": peers.iter()
+                    .map(|(n, r)| json!({"networkId": n, "reachability": r}))
+                    .collect::<Vec<_>>()
+            })
+        };
+        let items = vec![
+            // Two meshed hubs, and a third that is itself down.
+            row(
+                "H1",
+                "Q2-H1",
+                "online",
+                "hub",
+                &[
+                    ("H2", "reachable"),
+                    ("S1", "reachable"),
+                    ("S2", "unreachable"),
+                    ("S3", "unreachable"),
+                ],
+            ),
+            row("H2", "Q2-H2", "online", "hub", &[("H1", "reachable")]),
+            row("H3", "Q2-H3", "dormant", "hub", &[]),
+            // Both hubs reached.
+            row(
+                "S1",
+                "Q2-S1",
+                "online",
+                "spoke",
+                &[("H1", "reachable"), ("H2", "reachable")],
+            ),
+            // One of two lost — and `alerting` is up.
+            row(
+                "S2",
+                "Q2-S2",
+                "alerting",
+                "spoke",
+                &[("H1", "unreachable"), ("H2", "reachable")],
+            ),
+            // A down MX's row is stale: nothing at all.
+            row(
+                "S3",
+                "Q2-S3",
+                "dormant",
+                "spoke",
+                &[("H1", "unreachable"), ("H2", "unreachable")],
+            ),
+            // Its unreachable hub is down: that hub is left out, the other one counts.
+            row(
+                "S4",
+                "Q2-S4",
+                "online",
+                "spoke",
+                &[("H3", "unreachable"), ("H1", "reachable")],
+            ),
+            // Its only hub is down: no hub counted, so nothing — never a guessed "fine".
+            row("S5", "Q2-S5", "online", "spoke", &[("H3", "unreachable")]),
+            // None reached; a peer with no row of its own and an unknown word say nothing.
+            row(
+                "S6",
+                "Q2-S6",
+                "online",
+                "spoke",
+                &[
+                    ("H1", "unreachable"),
+                    ("H2", "unreachable"),
+                    ("HX", "unreachable"),
+                    ("H1", "sideways"),
+                ],
+            ),
+        ];
+        let obs = fold(parse_vpn_statuses(&items, &Watched::new(&[])));
+        let get = |serial: &str, metric: &str| {
+            obs.iter()
+                .find(|o| o.serial == serial)
+                .and_then(|o| o.samples.iter().find(|s| s.metric == metric))
+                .map(|s| s.value)
+        };
+        let hubs = |serial: &str| {
+            (
+                get(serial, METRIC_MERAKI_VPN_HUBS_REACHABLE),
+                get(serial, METRIC_MERAKI_VPN_HUBS_UNREACHABLE),
+                get(serial, METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT),
+            )
+        };
+        assert_eq!(hubs("Q2-S1"), (Some(2.0), Some(0.0), Some(0.0)));
+        assert_eq!(hubs("Q2-S2"), (Some(1.0), Some(1.0), Some(50.0)));
+        assert_eq!(hubs("Q2-S4"), (Some(1.0), Some(0.0), Some(0.0)));
+        assert_eq!(hubs("Q2-S6"), (Some(0.0), Some(2.0), Some(100.0)));
+        assert_eq!(
+            hubs("Q2-H1"),
+            (Some(1.0), Some(0.0), Some(0.0)),
+            "hubs are meshed"
+        );
+        // A hub also counts its spokes it does not reach — S2 (up), never S3 (down).
+        assert_eq!(
+            get("Q2-H1", METRIC_MERAKI_VPN_SPOKES_UNREACHABLE),
+            Some(1.0)
+        );
+        assert_eq!(
+            get("Q2-H2", METRIC_MERAKI_VPN_SPOKES_UNREACHABLE),
+            Some(0.0)
+        );
+        assert_eq!(
+            get("Q2-S1", METRIC_MERAKI_VPN_SPOKES_UNREACHABLE),
+            None,
+            "not a hub"
+        );
+        for silent in ["Q2-S3", "Q2-S5", "Q2-H3"] {
+            assert!(
+                obs.iter().all(|o| o.serial != silent),
+                "{silent} said something"
+            );
+        }
+
+        // Watching one network keeps that MX only — but its peers are still judged by their own
+        // rows, which are not watched.
+        let watched = vec!["S2".to_owned()];
+        let obs = fold(parse_vpn_statuses(&items, &Watched::new(&watched)));
+        assert_eq!(
+            obs.iter().map(|o| o.serial.as_str()).collect::<Vec<_>>(),
+            ["Q2-S2"]
+        );
+        assert_eq!(
+            obs[0]
+                .samples
+                .iter()
+                .find(|s| s.metric == METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT)
+                .map(|s| s.value),
+            Some(50.0)
+        );
+    }
+
     #[test]
     fn the_usage_window_is_the_collect_interval_within_what_the_dashboard_accepted() {
         assert_eq!(usage_window(0), 300, "a job that does not say its interval");
@@ -1807,6 +2120,7 @@ mod tests {
         let nothing = MerakiCollected {
             observations: Vec::new(),
             stopped: Some(MerakiFetchError::Network),
+            failed_listing: None,
         };
         assert_eq!(
             nothing.failure(),
@@ -1817,6 +2131,7 @@ mod tests {
         let partial = MerakiCollected {
             observations: vec![one_observation()],
             stopped: Some(MerakiFetchError::RateLimited),
+            failed_listing: None,
         };
         assert_eq!(
             partial.failure(),
@@ -1826,6 +2141,18 @@ mod tests {
 
         let empty_organization = MerakiCollected::default();
         assert_eq!(empty_organization.failure(), None);
+
+        // ADR-164 決定 25: one listing of a tier failed while another answered — that is a
+        // failure now, and it says which listing.
+        let one_listing = MerakiCollected {
+            observations: vec![one_observation()],
+            stopped: Some(MerakiFetchError::Status(400)),
+            failed_listing: Some((
+                MerakiListing::ApplianceVpnStatuses,
+                MerakiFetchError::Status(400),
+            )),
+        };
+        assert_eq!(one_listing.failure(), Some(MerakiFetchError::Status(400)));
     }
 
     /// The five stops the lenient reader survives each become a reason — none is dropped, which is

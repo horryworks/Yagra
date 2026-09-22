@@ -407,6 +407,10 @@ export const KNOWN_SCALARS = new Set<string>([
   'meraki_uplink_latency_ms',
   'meraki_uplink_status',
   'meraki_uplink_failed',
+  'meraki_vpn_hubs_reachable',
+  'meraki_vpn_hubs_unreachable',
+  'meraki_vpn_hubs_unreachable_pct',
+  'meraki_vpn_spokes_unreachable',
 ]);
 
 /** How a scalar metric is named: a localized label when Yagra knows it, else its raw metric name

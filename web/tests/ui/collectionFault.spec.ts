@@ -54,6 +54,14 @@ const orgs = (() => {
     collect_failures: [
       // Sent in this order on purpose: the row must put availability first whatever arrives.
       { tier: 'traffic', reason: 'upstream', since: '2026-09-20T00:00:00Z', failures: 2 },
+      // One read of the uplink tier failed while the others answered (ADR-164 決定 25).
+      {
+        tier: 'uplink',
+        reason: 'upstream',
+        since: '2026-09-20T00:00:00Z',
+        failures: 1,
+        listing: 'appliance_vpn_statuses',
+      },
       { tier: 'availability', reason: 'no_answer', since: '2026-09-20T00:00:00Z', failures: 4 },
     ],
   };
@@ -118,6 +126,10 @@ test('the organization’s row says which collect is failing, the one that stale
     'Collection failing: the poller did not answer. Device states are the last ones collected.',
   );
   await expect(status).toContainText('Traffic collection failing: the Meraki API answered an error');
+  // …and a tier whose one read failed says which read.
+  await expect(status).toContainText(
+    'Uplink (Auto VPN statuses) collection failing: the Meraki API answered an error',
+  );
   const lines = await status.locator('.meraki-org-sync-failed').allInnerTexts();
   const stale = lines.findIndex((l) => l.startsWith('Collection failing'));
   const readings = lines.findIndex((l) => l.startsWith('Traffic collection failing'));

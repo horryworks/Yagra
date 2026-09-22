@@ -16,9 +16,14 @@
 
 ### 新機能
 
+- **Meraki MX の Auto VPN の到達性を監視し、1 つの警報が格上げされるようになった。** 回線の収集で `appliance/vpn/statuses` も読み、MX ごとに `meraki_vpn_hubs_reachable`・`meraki_vpn_hubs_unreachable`・`meraki_vpn_hubs_unreachable_pct` を保存する（hub には `meraki_vpn_spokes_unreachable` も）。組み込みのプロファイル「Cisco Meraki MX (API)」の既定ルールで、拠点が hub を 1 つ失うと警告、どの hub にも届かなくなると同じ警報が重大に上がる。止まっている hub は、その spoke 側では数えない（hub 自身の警報が出る）。止まっている MX は何も報告しないので、古い情報で警報は出ない。ノードのカードには「hub 2 のうち 1 に到達」と出る。⚠️ warm spare の控えで動いている拠点は VPN の値が無い。Dashboard は VPN をいつも主の MX の名前で返すため。
 - **Meraki MX の WAN 回線の障害で、回線名つきの警告が出るようになった。** 新しい `meraki_uplink_failed`（Dashboard が障害と報告した回線は 1、それ以外は 0）に、組み込みのプロファイル「Cisco Meraki MX (API)」の既定ルールを付けた。回線の収集で 2 回続いたら警告。回線をつないでいないポート（未接続）では鳴らない。回線ごとの値と警報に回線名（WAN1・WAN2・cellular）が付くので、行パターンで 1 回線に絞ったルールも書ける。Meraki MX のノードのカードには、回線ごとに状態と速さが出る。⚠️ 使っている回線のケーブルが抜けたときに Dashboard が何と報告するかは、まだ確かめていない。未接続と報告されれば、このルールは鳴らない。
 - **Cisco の無線コントローラに、帯域別のクライアント数と、機種が扱える AP の最大台数が出るようになった**（ADR-064 増分 H）。Cisco のコントローラは、これまでの合計に加えて `wlan_controller_clients_2g4`・`wlan_controller_clients_5g`・`wlan_controller_clients_6g`（各帯域の全部の電波の端末数の合計）と、`wlan_controller_ap_capacity`（機種が扱える AP の最大台数。AIR-CT3504 なら 150）を出す。最大台数は機種の上限で、ライセンス数ではないので、名前も別にした。AireOS と Catalyst 9800 は別の場所にこの値を持っていて、答えたほうを読む。帯域が分からない電波は数えないので、3 つの帯域を足しても全体のクライアント数と合わないことがある。Huawei のコントローラにあるほかの値（登録 AP 数、正常な AP の割合、SSID ごとの AP 数と通信量）は Cisco に同じ値が無いので出さない。
 - **`GET /api/v1/nodes/{node_id}/metrics` と MCP `list_node_metrics` が、各メトリクスを集めているメトリクスセットの名前を返すようになった**（任意の欄 `template`）。ノード独自の収集項目と、どの収集項目からも来ないメトリクスには付かない。
+
+### 改善
+
+- **Meraki の収集が問い合わせの 1 つで失敗したとき、どれかを示すようになった。** 回線の収集は 3 つの問い合わせを読む。そのうち 1 つが失敗しても、ほかが答えていれば隠れていた。また、2 つ目以降で断られると、ほかの値まで捨てていた。今は届いた値を残し、失敗した問い合わせを組織の行に「アップリンク（Auto VPN の状態）の収集に失敗」のように出す。API では `collect_failures[].listing`。警報を出すのは、これまでどおり稼働状態の段だけ。
 
 ### バグ修正
 

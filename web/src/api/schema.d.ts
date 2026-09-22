@@ -8711,6 +8711,13 @@ export interface components {
              */
             failures: number;
             /**
+             * @description Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
+             *     `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
+             *     uplink tier reads three. Absent when the whole collect failed, or a poller from before this
+             *     reported it.
+             */
+            listing?: string | null;
+            /**
              * @description Why the most recent collect of this tier failed. The vocabulary of `last_sync_error`, plus
              *     `no_answer`: the collect was sent and nothing came back.
              */

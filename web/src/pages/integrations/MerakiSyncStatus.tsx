@@ -74,7 +74,12 @@ export function MerakiSyncStatus({ org, error }: { org: MerakiOrg; error?: strin
       {orgCollectFailures(org).map((f) => (
         <span className="meraki-org-sync-failed" key={f.tier}>
           {t(f.stalesNodes ? 'meraki.sync.collectFailing' : 'meraki.sync.tierFailing', {
-            tier: t(`meraki.tier.${f.tier}`),
+            tier: f.listing
+              ? t('meraki.sync.tierWithListing', {
+                  tier: t(`meraki.tier.${f.tier}`),
+                  listing: t(`meraki.listing.${f.listing}`),
+                })
+              : t(`meraki.tier.${f.tier}`),
             reason: t(`meraki.sync.reason.${f.reason}`),
           })}
         </span>

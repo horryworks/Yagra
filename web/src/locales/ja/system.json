@@ -481,6 +481,13 @@
     "note": "読み取り専用の Dashboard API 監視。",
     "tiersPrefix": "ティア:",
     "tiersNone": "なし",
+    "listing": {
+      "availabilities": "機器の稼働",
+      "uplinks_loss_and_latency": "回線の損失と遅延",
+      "appliance_uplink_statuses": "回線の状態",
+      "appliance_vpn_statuses": "Auto VPN の状態",
+      "appliance_uplinks_usage": "回線の通信量"
+    },
     "tier": {
       "availability": "可用性",
       "uplink": "アップリンク",
@@ -526,6 +533,7 @@
       "uncollected_other": "未取得 {{count}} 台",
       "collectFailing": "収集に失敗: {{reason}}。デバイスの状態は、最後に取得したときのままです。",
       "tierFailing": "{{tier}}の収集に失敗: {{reason}}",
+      "tierWithListing": "{{tier}}（{{listing}}）",
       "now": "今すぐ同期",
       "running": "同期中…",
       "reason": {

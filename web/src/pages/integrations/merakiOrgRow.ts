@@ -9,7 +9,13 @@
 // last sync work?" from the same three columns, and two vocabularies for one question is how a
 // settings area starts reading as several products.
 
-import { MERAKI_SYNC_FAILURES, type MerakiOrg, type MerakiSyncFailure } from '../../types/api';
+import {
+  MERAKI_LISTINGS,
+  MERAKI_SYNC_FAILURES,
+  type MerakiListing,
+  type MerakiOrg,
+  type MerakiSyncFailure,
+} from '../../types/api';
 
 /** How an organization's last sync should be summarised. */
 export type OrgSyncSummary =
@@ -62,6 +68,9 @@ export interface CollectFailureLine {
    *  organization's nodes keep the last state they had, and after three failures in a row one
    *  alert is raised about the organization. The other tiers failing costs readings only. */
   stalesNodes: boolean;
+  /** Which of the tier's reads failed while the others answered (ADR-164 決定 25), when the server
+   *  said and this bundle knows the token. `null` reads as "the tier's collect". */
+  listing: MerakiListing | null;
 }
 
 /** Which of an organization's collects are failing, the one that matters first (ADR-164 決定 18).
@@ -74,11 +83,13 @@ export function orgCollectFailures(
   org: Pick<MerakiOrg, 'collect_failures'>,
 ): CollectFailureLine[] {
   const known = new Set<string>(MERAKI_SYNC_FAILURES);
+  const listings = new Set<string>(MERAKI_LISTINGS);
   return [...(org.collect_failures ?? [])]
     .map((f) => ({
       tier: f.tier,
       reason: (known.has(f.reason) ? f.reason : 'internal') as MerakiSyncFailure,
       stalesNodes: f.tier === 'availability',
+      listing: f.listing && listings.has(f.listing) ? (f.listing as MerakiListing) : null,
     }))
     .sort((a, b) => Number(b.stalesNodes) - Number(a.stalesNodes));
 }

@@ -56,7 +56,7 @@ use crate::meraki_sync::MerakiSyncFailure;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
-use yagra_common::MerakiTier;
+use yagra_common::{MerakiListing, MerakiTier};
 
 /// Consecutive failed availability collects before the organization's alert is raised.
 ///
@@ -81,6 +81,22 @@ pub struct TierFailure {
     pub since_unix_ms: i64,
     /// How many in a row.
     pub failures: u32,
+    /// Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25).
+    /// Read leniently: a listing a newer core stored costs the label, never the entry.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_listing"
+    )]
+    pub listing: Option<MerakiListing>,
+}
+
+/// A stored listing token, or `None` for one this build does not know.
+fn lenient_listing<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<MerakiListing>, D::Error> {
+    let token: Option<String> = serde::Deserialize::deserialize(d)?;
+    Ok(token.as_deref().and_then(MerakiListing::from_token))
 }
 
 impl TierFailure {
@@ -105,6 +121,7 @@ struct TierState {
     failures: u32,
     reason: MerakiSyncFailure,
     since_unix_ms: i64,
+    listing: Option<MerakiListing>,
 }
 
 /// How each organization's collects have been ending, per tier. In memory, leader-local, and
@@ -130,6 +147,7 @@ impl MerakiCollectHealth {
                     failures: 0,
                     reason: MerakiSyncFailure::Internal,
                     since_unix_ms: 0,
+                    listing: None,
                 },
             );
     }
@@ -142,17 +160,32 @@ impl MerakiCollectHealth {
         reason: MerakiSyncFailure,
         at_unix_ms: i64,
     ) {
+        self.record_failed_in(org, tier, reason, None, at_unix_ms);
+    }
+
+    /// [`Self::record_failed`], naming the read of the tier that failed when the poller said which
+    /// (ADR-164 決定 25). The most recent failure's listing is the one kept, like its reason.
+    pub fn record_failed_in(
+        &self,
+        org: Uuid,
+        tier: MerakiTier,
+        reason: MerakiSyncFailure,
+        listing: Option<MerakiListing>,
+        at_unix_ms: i64,
+    ) {
         let mut tiers = self.tiers.lock().expect("meraki collect health poisoned");
         let state = tiers.entry((org, tier)).or_insert(TierState {
             failures: 0,
             reason,
             since_unix_ms: at_unix_ms,
+            listing,
         });
         if state.failures == 0 {
             state.since_unix_ms = at_unix_ms;
         }
         state.failures = state.failures.saturating_add(1);
         state.reason = reason;
+        state.listing = listing;
     }
 
     /// Read one collect report off the bus. An unknown failure token costs the *reason* (it reads
@@ -160,10 +193,14 @@ impl MerakiCollectHealth {
     pub fn record_report(&self, report: &yagra_bus::MerakiCollectReport, at_unix_ms: i64) {
         match report.failure.as_deref() {
             None => self.record_answered(report.org, report.tier),
-            Some(token) => self.record_failed(
+            Some(token) => self.record_failed_in(
                 report.org,
                 report.tier,
                 MerakiSyncFailure::from_token(token),
+                report
+                    .listing
+                    .as_deref()
+                    .and_then(MerakiListing::from_token),
                 at_unix_ms,
             ),
         }
@@ -192,6 +229,7 @@ impl MerakiCollectHealth {
                     reason: s.reason,
                     since_unix_ms: s.since_unix_ms,
                     failures: s.failures,
+                    listing: s.listing,
                 })
             })
             .collect()
@@ -760,6 +798,7 @@ mod tests {
             org: ORG,
             tier: MerakiTier::Availability,
             failure: failure.map(str::to_owned),
+            listing: None,
         };
         health.record_report(&report(Some("a_token_from_the_future")), 5);
         let failing = health.failing(ORG);
@@ -791,6 +830,7 @@ mod tests {
             reason,
             since_unix_ms: 500,
             failures: 7,
+            listing: None,
         }
     }
 
@@ -882,5 +922,47 @@ mod tests {
             TierFailure::from_stored(written),
             vec![stored(MerakiTier::Traffic, MerakiSyncFailure::NoAnswer)]
         );
+    }
+
+    /// ADR-164 決定 25: a failure names the read of the tier that failed. The stored listing is read
+    /// leniently — one a newer core wrote costs the label, never the entry, and an entry from before
+    /// the field existed reads as "the whole collect".
+    #[test]
+    fn a_failure_names_its_listing_and_an_unknown_listing_costs_only_the_label() {
+        let read = TierFailure::from_stored(serde_json::json!([
+            {"tier": "uplink", "reason": "upstream", "since_unix_ms": 1, "failures": 2,
+             "listing": "appliance_vpn_statuses"},
+            {"tier": "traffic", "reason": "upstream", "since_unix_ms": 1, "failures": 1,
+             "listing": "a_listing_from_the_future"},
+            {"tier": "availability", "reason": "auth", "since_unix_ms": 1, "failures": 3},
+        ]));
+        assert_eq!(read.len(), 3, "{read:?}");
+        assert_eq!(read[0].listing, Some(MerakiListing::ApplianceVpnStatuses));
+        assert_eq!(read[1].listing, None);
+        assert_eq!(read[2].listing, None);
+
+        // From the report to the row: the listing arrives, is kept, and is written back out.
+        let health = MerakiCollectHealth::default();
+        health.record_report(
+            &yagra_bus::MerakiCollectReport {
+                org: ORG,
+                tier: MerakiTier::Uplink,
+                failure: Some("upstream".to_owned()),
+                listing: Some("appliance_vpn_statuses".to_owned()),
+            },
+            7,
+        );
+        let failing = health.failing(ORG);
+        assert_eq!(failing.len(), 1);
+        assert_eq!(
+            failing[0].listing,
+            Some(MerakiListing::ApplianceVpnStatuses)
+        );
+        let written = serde_json::to_value(&failing).expect("serialize");
+        assert_eq!(written[0]["listing"], "appliance_vpn_statuses");
+        assert_eq!(TierFailure::from_stored(written), failing);
+
+        // The uplink tier failing still raises nothing — only availability does (決定 18).
+        assert_eq!(health.answered(ORG, MerakiTier::Availability), None);
     }
 }

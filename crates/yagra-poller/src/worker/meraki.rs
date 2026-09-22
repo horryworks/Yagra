@@ -90,15 +90,18 @@ pub async fn execute_meraki(
     // a dropped connection all used to arrive here as an `Ok` with no observations, log nothing,
     // and leave every node of the organization at its last state. A partial answer is a success:
     // the Dashboard did answer.
-    let (observations, failure) = match transport.collect_meraki(&spec, timeout).await {
+    // `listing` names which of the tier's reads failed when one did while the others answered
+    // (ADR-164 決定 25): those readings still go out below, and the report says what is missing.
+    let (observations, failure, listing) = match transport.collect_meraki(&spec, timeout).await {
         Ok(collected) => {
             let failure = collected.failure();
-            (collected.observations, failure)
+            let listing = collected.failed_listing.map(|(l, _)| l);
+            (collected.observations, failure, listing)
         }
-        Err(err) => (Vec::new(), Some(err)),
+        Err(err) => (Vec::new(), Some(err), None),
     };
     if let Some(why) = failure {
-        tracing::warn!(job_id = %job.job_id, org = %check.org_id, tier = ?check.tier, error = %why, "meraki collect failed");
+        tracing::warn!(job_id = %job.job_id, org = %check.org_id, tier = ?check.tier, listing = listing.map(yagra_common::MerakiListing::as_str), error = %why, "meraki collect failed");
     }
 
     let by_serial: HashMap<&str, NodeId> = check
@@ -169,7 +172,7 @@ pub async fn execute_meraki(
             meraki_collect: None,
         });
     }
-    results.push(collect_report(job, check, failure, at_unix_ms));
+    results.push(collect_report(job, check, failure, listing, at_unix_ms));
     results
 }
 
@@ -236,6 +239,7 @@ fn collect_report(
     job: &PollJob,
     check: &yagra_bus::MerakiCollectCheck,
     failure: Option<yagra_transport::MerakiFetchError>,
+    listing: Option<yagra_common::MerakiListing>,
     at_unix_ms: i64,
 ) -> PollResult {
     PollResult {
@@ -267,6 +271,7 @@ fn collect_report(
             org: check.meraki_org_uuid,
             tier: check.tier,
             failure: failure.map(|why| why.token().to_owned()),
+            listing: listing.map(|l| l.as_str().to_owned()),
         }),
     }
 }
@@ -435,6 +440,31 @@ mod tests {
                 ("meraki_uplink_sent_bps", 3, "cellular"),
             ]
         );
+    }
+
+    /// ADR-164 決定 25: one read of the uplink tier failed while the others answered — the readings
+    /// that did arrive still go out, and the report says the tier failed and which read it was.
+    #[tokio::test]
+    async fn a_collect_with_one_failed_listing_keeps_its_readings_and_names_the_listing() {
+        use yagra_common::MerakiListing;
+        use yagra_transport::MerakiFetchError;
+        let transport = FakeTransport::reachable(1.0)
+            .with_meraki(one_device_up())
+            .with_meraki_listing_failed(
+                MerakiListing::ApplianceVpnStatuses,
+                MerakiFetchError::Status(400),
+            );
+        let results = collect_with(&transport, Uuid::from_u128(3), MerakiTier::Uplink).await;
+        assert_eq!(
+            device_results(results.clone()).len(),
+            1,
+            "the readings still go out"
+        );
+        let reports = reports(&results);
+        assert_eq!(reports.len(), 1);
+        let report = reports[0].meraki_collect.as_ref().expect("the report");
+        assert_eq!(report.failure.as_deref(), Some("upstream"));
+        assert_eq!(report.listing.as_deref(), Some("appliance_vpn_statuses"));
     }
 
     /// 🚨 The defect (ADR-164 決定 18): a refused key published **nothing**, so core heard nothing,

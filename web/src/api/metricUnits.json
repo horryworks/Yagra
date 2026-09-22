@@ -90,6 +90,7 @@
     "meraki_uplink_loss_pct": "%",
     "meraki_uplink_recv_bps": "bps",
     "meraki_uplink_sent_bps": "bps",
+    "meraki_vpn_hubs_unreachable_pct": "%",
     "nxos_cpu_util": "%",
     "nxos_mem_util": "%",
     "panos_session_util_pct": "%",

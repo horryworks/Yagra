@@ -377,6 +377,10 @@
     "online": "Online",
     "offline": "Offline",
     "wanRates": "sent {{sent}} / received {{recv}}",
+    "vpn": "Auto VPN",
+    "vpnHubs": "{{reached}} of {{total}} hubs reachable",
+    "vpnSpokesDown_one": "{{count}} spoke unreachable",
+    "vpnSpokesDown": "{{count}} spokes unreachable",
     "uplinkState": {
       "active": "Active",
       "ready": "Standby",

@@ -80,7 +80,12 @@ import {
 } from './metricCards';
 import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overviewClaims';
 import { memPctSeries } from './overviewMetrics';
-import { merakiUplinkLines, type MerakiUplinkLine } from './merakiCard';
+import {
+  merakiUplinkLines,
+  merakiVpnLine,
+  type MerakiUplinkLine,
+  type MerakiVpnLine,
+} from './merakiCard';
 import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { metricMeaningKey } from '../../lib/metricMeaning';
@@ -603,6 +608,7 @@ function MerakiHealth({
   const tick = useRefreshTick();
   const [up, setUp] = useState<number | null>(null);
   const [uplinks, setUplinks] = useState<MerakiUplinkLine[]>([]);
+  const [vpn, setVpn] = useState<MerakiVpnLine | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -612,8 +618,13 @@ function MerakiHealth({
         api.getNodeMetric(nodeId, MERAKI_CARD.sentBps, { agg: 'max', rows: true }),
         api.getNodeMetric(nodeId, MERAKI_CARD.recvBps, { agg: 'max', rows: true }),
         api.getNodeMetric(nodeId, MERAKI_CARD.status, { agg: 'max', rows: true }),
-      ]).then(([u, s, r, st]) => {
+        api.getNodeMetric(nodeId, MERAKI_CARD.vpnHubsReachable),
+        api.getNodeMetric(nodeId, MERAKI_CARD.vpnHubsUnreachable),
+        api.getNodeMetric(nodeId, MERAKI_CARD.vpnSpokesUnreachable),
+      ]).then(([u, s, r, st, hr, hu, su]) => {
         if (cancelled) return;
+        const value = (p: typeof hr) => (p.status === 'fulfilled' ? p.value.value : null);
+        setVpn(merakiVpnLine(value(hr), value(hu), value(su)));
         setUp(u.status === 'fulfilled' ? u.value.value : null);
         setUplinks(
           merakiUplinkLines(
@@ -669,6 +680,21 @@ function MerakiHealth({
             </div>
           </div>
         ))}
+        {vpn && (
+          <div className="nd-health-metric">
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">{t('overview.vpn')}</span>
+              <span
+                className="nd-health-metric-value"
+                style={vpn.tone === 'ok' ? undefined : { color: severityColorVar(vpn.tone) }}
+              >
+                {vpn.total > 0 && t('overview.vpnHubs', { reached: vpn.reached, total: vpn.total })}
+                {vpn.total > 0 && vpn.spokesDown != null ? ' · ' : ''}
+                {vpn.spokesDown != null ? t('overview.vpnSpokesDown', { count: vpn.spokesDown }) : ''}
+              </span>
+            </div>
+          </div>
+        )}
         {uplinks.length === 0 && device.product_type === 'appliance' && (
           <div className="nd-health-metric">
             <div className="nd-health-metric-head">

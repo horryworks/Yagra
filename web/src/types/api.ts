@@ -924,6 +924,22 @@ export const MERAKI_SYNC_FAILURES = [
 /** One reason an inventory sync — or, since ADR-164 決定 18, a collect — can fail. */
 export type MerakiSyncFailure = (typeof MERAKI_SYNC_FAILURES)[number];
 
+/** Which read of a collect tier failed (`MerakiCollectFailureView.listing`, ADR-164 決定 25) — the
+ *  uplink tier reads three. The API sends the token as a plain string, so a listing this bundle does
+ *  not know is shown without a label rather than breaking the row. `i18nEnumKeys.test.ts` iterates
+ *  this, and a Rust test (`api/meraki.rs::every_listing_token_is_one_the_webui_lists`) holds it
+ *  equal to `yagra_common::MerakiListing`. */
+export const MERAKI_LISTINGS = [
+  'availabilities',
+  'uplinks_loss_and_latency',
+  'appliance_uplink_statuses',
+  'appliance_vpn_statuses',
+  'appliance_uplinks_usage',
+] as const;
+
+/** One read a Meraki collect makes. */
+export type MerakiListing = (typeof MERAKI_LISTINGS)[number];
+
 /** What one successful inventory sync found (`POST /api/v1/meraki/orgs/:id/sync`). */
 export type MerakiSyncReport = components['schemas']['MerakiSyncReport'];
 

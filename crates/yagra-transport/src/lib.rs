@@ -317,17 +317,26 @@ pub struct MerakiCollected {
     pub observations: Vec<MerakiObservation>,
     /// Why a listing ended before the server said it was finished. `None` is a complete answer.
     pub stopped: Option<MerakiFetchError>,
+    /// The first listing that stopped early **with none of the rows the collect keeps**, and why
+    /// (ADR-164 決定 25). A tier that reads several listings — the uplink tier reads three — used to
+    /// hide a listing that failed whenever another one answered.
+    pub failed_listing: Option<(yagra_common::MerakiListing, MerakiFetchError)>,
 }
 
 impl MerakiCollected {
-    /// Why this collect counts as **failed**: it stopped early *and* brought nothing back.
+    /// Why this collect counts as **failed**: one of its listings stopped early with none of the
+    /// rows it keeps, or the collect stopped early and brought nothing back at all.
     ///
     /// A partial answer is not a failure — the Dashboard did answer, which is the question an
     /// "API is not answering" alert asks. A complete answer that lists no device is not one
-    /// either.
+    /// either. A tier with several listings fails when one of them does, even while the others
+    /// answered; which one is [`Self::failed_listing`] (ADR-164 決定 25). Only the availability
+    /// tier raises an alert on it — the others are shown on the organization's page.
     #[must_use]
     pub fn failure(&self) -> Option<MerakiFetchError> {
-        self.stopped.filter(|_| self.observations.is_empty())
+        self.failed_listing
+            .map(|(_, why)| why)
+            .or_else(|| self.stopped.filter(|_| self.observations.is_empty()))
     }
 }
 
@@ -593,6 +602,8 @@ pub struct FakeTransport {
     pub meraki_stopped: Option<MerakiFetchError>,
     /// When set, every Meraki collect is refused outright with this error.
     pub meraki_refused: Option<MerakiFetchError>,
+    /// A listing of every Meraki collect that failed while the others answered (ADR-164 決定 25).
+    pub meraki_failed_listing: Option<(yagra_common::MerakiListing, MerakiFetchError)>,
     /// The chain every DNS resolution returns.
     pub dns: DnsChain,
     /// Every SNMP call's requested OID list, in the order the calls were made.
@@ -902,6 +913,7 @@ impl FakeTransport {
             meraki: Vec::new(),
             meraki_stopped: None,
             meraki_refused: None,
+            meraki_failed_listing: None,
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             snmp_gets_silent: false,
@@ -943,6 +955,7 @@ impl FakeTransport {
             meraki: Vec::new(),
             meraki_stopped: None,
             meraki_refused: None,
+            meraki_failed_listing: None,
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
             snmp_gets_silent: false,
@@ -1073,6 +1086,17 @@ impl FakeTransport {
     #[must_use]
     pub fn with_meraki_stopped(mut self, why: MerakiFetchError) -> Self {
         self.meraki_stopped = Some(why);
+        self
+    }
+
+    /// Make one listing of every Meraki collect fail while the others answer (ADR-164 決定 25).
+    #[must_use]
+    pub fn with_meraki_listing_failed(
+        mut self,
+        listing: yagra_common::MerakiListing,
+        why: MerakiFetchError,
+    ) -> Self {
+        self.meraki_failed_listing = Some((listing, why));
         self
     }
 
@@ -1273,6 +1297,7 @@ impl Transport for FakeTransport {
         Ok(MerakiCollected {
             observations: self.meraki.clone(),
             stopped: self.meraki_stopped,
+            failed_listing: self.meraki_failed_listing,
         })
     }
 }

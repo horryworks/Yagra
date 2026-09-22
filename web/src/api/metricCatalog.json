@@ -560,6 +560,34 @@
     "source": "check"
   },
   {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_vpn_hubs_reachable",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_vpn_hubs_unreachable",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_vpn_hubs_unreachable_pct",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
+    "family": "meraki",
+    "metric_kind": "gauge",
+    "metric_name": "meraki_vpn_spokes_unreachable",
+    "per_interface": false,
+    "source": "check"
+  },
+  {
     "family": "MikroTik RouterOS health",
     "metric_kind": "gauge",
     "metric_name": "mikrotik_cpu_temp",

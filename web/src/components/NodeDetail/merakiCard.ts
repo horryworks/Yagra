@@ -80,3 +80,35 @@ export function merakiUplinkLines(
   for (const r of status) line(r).state = merakiUplinkState(r.value);
   return [...byRow.values()].sort((a, b) => a.row - b.row);
 }
+
+/** The card's Auto VPN line (ADR-164 決定 25), or `null` when there is nothing to say. */
+export interface MerakiVpnLine {
+  /** Hubs this MX reaches, and how many were counted. */
+  reached: number;
+  total: number;
+  /** On a hub: spokes it does not reach. `null` on a spoke. */
+  spokesDown: number | null;
+  /** `critical` when no counted hub is reached, `warning` when some are not, else `ok` — the same
+   *  two lines the seeded rule draws on the share. */
+  tone: 'ok' | 'warning' | 'critical';
+}
+
+/**
+ * What the VPN line says, from the three node-level readings. The collector reports hubs only when
+ * it counted at least one — an MX that is down, or whose only hub is down, has no reading — so no
+ * reading draws no line rather than a guessed "fine".
+ */
+export function merakiVpnLine(
+  hubsReachable: number | null,
+  hubsUnreachable: number | null,
+  spokesUnreachable: number | null,
+): MerakiVpnLine | null {
+  if (hubsReachable == null || hubsUnreachable == null) {
+    return spokesUnreachable == null
+      ? null
+      : { reached: 0, total: 0, spokesDown: spokesUnreachable, tone: 'ok' };
+  }
+  const total = hubsReachable + hubsUnreachable;
+  const tone = hubsUnreachable === 0 ? 'ok' : hubsReachable === 0 ? 'critical' : 'warning';
+  return { reached: hubsReachable, total, spokesDown: spokesUnreachable, tone };
+}
