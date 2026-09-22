@@ -112,14 +112,13 @@ describe('merakiPairLine', () => {
   });
 
   it('an MX with no pair draws no line', () => {
-    expect(merakiPairLine(null, false)).toBeNull();
-    expect(merakiPairLine(undefined, true)).toBeNull();
+    expect(merakiPairLine(null)).toBeNull();
+    expect(merakiPairLine(undefined)).toBeNull();
   });
 
   it('names the partner the server named, and links it only when it is a node', () => {
     const line = merakiPairLine(
       pair('normal', { name: 'mx-b', role: 'spare', node_id: 'n-2', node_state: 'ok' }),
-      true,
     );
     expect(line).toEqual({
       role: 'primary',
@@ -128,7 +127,7 @@ describe('merakiPairLine', () => {
       tone: 'ok',
       vpnNotRead: false,
     });
-    expect(merakiPairLine(pair('unknown', { name: 'mx-b' }), false)?.partner).toEqual({
+    expect(merakiPairLine(pair('unknown', { name: 'mx-b' }))?.partner).toEqual({
       name: 'mx-b',
       role: null,
       nodeId: null,
@@ -137,7 +136,7 @@ describe('merakiPairLine', () => {
 
   it('colours each state, and leaves unknown uncoloured rather than calling it fine', () => {
     const tones = Object.fromEntries(
-      MERAKI_PAIR_STATES.map((s) => [s, merakiPairLine(pair(s), true)?.tone]),
+      MERAKI_PAIR_STATES.map((s) => [s, merakiPairLine(pair(s))?.tone]),
     );
     expect(tones).toEqual({
       normal: 'ok',
@@ -148,13 +147,13 @@ describe('merakiPairLine', () => {
     });
   });
 
-  it('says VPN is not read only while the site runs on its spare and no reading is there', () => {
-    expect(merakiPairLine(pair('running_on_spare'), false)?.vpnNotRead).toBe(true);
-    // A reading still on the card needs no excuse.
-    expect(merakiPairLine(pair('running_on_spare'), true)?.vpnNotRead).toBe(false);
+  it('says VPN is not read while the site runs on its spare, and only then', () => {
+    // Whether or not a reading is on the card: one from before the failover is stale, and the
+    // latest-value read keeps it for 30 minutes.
+    expect(merakiPairLine(pair('running_on_spare'))?.vpnNotRead).toBe(true);
     // A spare in a normal pair has no VPN line of its own either, but that is not "not readable".
     for (const s of MERAKI_PAIR_STATES.filter((s) => s !== 'running_on_spare')) {
-      expect(merakiPairLine(pair(s), false)?.vpnNotRead).toBe(false);
+      expect(merakiPairLine(pair(s))?.vpnNotRead).toBe(false);
     }
   });
 });

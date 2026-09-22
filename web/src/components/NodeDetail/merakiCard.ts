@@ -123,10 +123,14 @@ export interface MerakiPairLine {
   /** The colour the state is drawn in; `null` draws it uncoloured (`unknown` says nothing). */
   tone: 'ok' | 'warning' | 'critical' | null;
   /**
-   * Why the card has no VPN line, when that is the pair's doing. Meraki reports a pair's Auto VPN
-   * on the **primary's** serial, and the collector reads a row only while its own device is online —
-   * so while the site runs on its spare, neither MX has a reading, and an absent line would read as
-   * "no VPN here" rather than "not readable now".
+   * The VPN line says "not read" instead of a reading. Meraki reports a pair's Auto VPN on the
+   * **primary's** serial, and the collector reads a row only while its own device is online — so
+   * while the site runs on its spare, nothing current exists for either MX.
+   *
+   * ⚠️ **A reading can still be there, and it is stale.** The latest-value read looks back 30
+   * minutes (`last_over_time[1800s]`), so the primary's card kept "2 of 2 hubs reachable" from
+   * before the failover beside "Running on spare" — measured on a lab deployment. Such a reading is
+   * hidden, not shown.
    */
   vpnNotRead: boolean;
 }
@@ -142,14 +146,8 @@ const PAIR_TONE: Record<MerakiPairState, MerakiPairLine['tone']> = {
   unknown: null,
 };
 
-/**
- * What the pair line says, or `null` for an MX with no pair. `hasVpn` is whether the card drew a VPN
- * line from this node's own readings — a reading that is there needs no note.
- */
-export function merakiPairLine(
-  pair: MerakiPair | null | undefined,
-  hasVpn: boolean,
-): MerakiPairLine | null {
+/** What the pair line says, or `null` for an MX with no pair. */
+export function merakiPairLine(pair: MerakiPair | null | undefined): MerakiPairLine | null {
   if (!pair) return null;
   const p = pair.partner;
   return {
@@ -157,6 +155,6 @@ export function merakiPairLine(
     state: pair.state,
     partner: p ? { name: p.name, role: p.role ?? null, nodeId: p.node_id ?? null } : null,
     tone: PAIR_TONE[pair.state],
-    vpnNotRead: !hasVpn && pair.state === 'running_on_spare',
+    vpnNotRead: pair.state === 'running_on_spare',
   };
 }

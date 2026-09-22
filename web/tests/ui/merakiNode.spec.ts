@@ -164,17 +164,20 @@ test("an MX's card shows each WAN uplink with its state and rates — failed and
 });
 
 test.describe('a primary that is down while its spare carries the site', () => {
-  // Nothing per uplink and no VPN reading: the collector reads a pair's VPN row on the primary's
-  // serial, and only while that device is online (ADR-164 決定 25) — so the card has to say the VPN
-  // is not readable rather than draw no line, which would read as "no VPN here".
+  // The collector reads a pair's VPN row on the primary's serial, and only while that device is
+  // online (ADR-164 決定 25), so nothing current exists — the card has to say the VPN is not
+  // readable rather than draw no line, which would read as "no VPN here".
+  //
+  // The VPN reading IS served here, and that is the point: the latest-value read looks back 30
+  // minutes, so on a lab deployment the primary's card kept "2 of 2 hubs reachable" from before the
+  // failover beside "Running on spare". The card must not show it.
   const quiet = [
     'meraki_uplink_sent_bps',
     'meraki_uplink_recv_bps',
     'meraki_uplink_status',
-    'meraki_vpn_hubs_reachable',
-    'meraki_vpn_hubs_unreachable',
     'meraki_vpn_spokes_unreachable',
   ];
+  const stale: Record<string, number> = { meraki_vpn_hubs_reachable: 2, meraki_vpn_hubs_unreachable: 0 };
   test.use({
     mockConfig: {
       overrides: {
@@ -185,8 +188,9 @@ test.describe('a primary that is down while its spare carries the site', () => {
           partner: partner('ok'),
         }),
         '/api/v1/nodes/{node_id}/metrics/{metric}': (url) => {
+          const name = decodeURIComponent(url.pathname.split('/').pop() ?? '');
           const body = defaultBodyFor(url.pathname) as unknown as Schemas['MetricReading'];
-          return { ...body, node_id: NODE_ID, value: 0 } as unknown as Json;
+          return { ...body, metric: name, node_id: NODE_ID, value: stale[name] ?? 0 } as unknown as Json;
         },
       },
       failures: Object.fromEntries(
@@ -217,6 +221,8 @@ test.describe('a primary that is down while its spare carries the site', () => {
     await expect(metric('Auto VPN').locator('.nd-health-metric-meaning')).toHaveText(
       'Not read while the site runs on its spare',
     );
+    await expect(metric('Auto VPN').locator('.nd-health-metric-value')).toHaveText('—');
+    await expect(card).not.toContainText('hubs reachable');
     await expect(card.locator('.nd-health-metric-label')).toHaveText([
       'Availability',
       'Auto VPN',

@@ -645,7 +645,7 @@ function MerakiHealth({
     };
   }, [nodeId, tick]);
 
-  const pairLine = merakiPairLine(pair, vpn != null);
+  const pairLine = merakiPairLine(pair);
   // The sub-line's whole text, for its `title`: it is clamped, and a clipped line owes one.
   const pairSummary = pairLine
     ? [
@@ -697,7 +697,7 @@ function MerakiHealth({
             </div>
           </div>
         ))}
-        {vpn && (
+        {vpn && !pairLine?.vpnNotRead && (
           <div className="nd-health-metric">
             <div className="nd-health-metric-head">
               <span className="nd-health-metric-label">{t('overview.vpn')}</span>
