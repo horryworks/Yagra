@@ -647,7 +647,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::new(repo.pool(), kek.clone()));
     // The Meraki inventory sync (ADR-164). Built once and shared: the leader's periodic loop and
-    // the "Sync now" endpoint must go through the same fast lane, which lives in this value.
+    // the "Sync now" endpoint must go through the same lanes, which live in this value.
     let meraki_inventory = Arc::new(meraki_inventory::MerakiInventoryRepo::new(repo.pool()));
     // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
     // group to its subtree, AdminState serves group CRUD, and a Meraki import reads the folders'
@@ -1151,7 +1151,7 @@ struct LeaderTasks {
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
     /// The Meraki inventory sync (ADR-164). Leader-only, and for a stronger reason than NetBox's:
     /// an organization's lanes live in this process, so two cores syncing would each believe they
-    /// held its fast lane alone.
+    /// held one alone.
     meraki_sync: Arc<meraki_sync::MerakiSync>,
     /// Configured NetBox deployments (ADR-100). Leader-only: two cores syncing one server would
     /// write the same folders twice — idempotent, but twice the load on someone else's NetBox.

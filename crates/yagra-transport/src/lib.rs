@@ -295,6 +295,10 @@ pub struct MerakiCollectSpec {
     /// The wireless tier only: also read every access point's SSIDs and radio settings this time
     /// (ADR-168 決定 1, `yagra_bus::MerakiCollectCheck::ssid_statuses`).
     pub ssid_statuses: bool,
+    /// The wireless tier only: the SSID read and nothing else — no client counts, no utilization
+    /// on the radios (ADR-169 決定 2, `yagra_bus::MerakiCollectCheck::ssid_only`). Implies
+    /// `ssid_statuses`.
+    pub ssid_only: bool,
 }
 
 /// Raw per-device observations from a Meraki collect. The poller maps these to per-node

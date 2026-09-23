@@ -969,26 +969,33 @@ pub(crate) async fn collect(
         MerakiTier::Wireless => {
             // Measured on a real organization (1,710 access points): clients about 3 s, utilization
             // about 2 s, the SSIDs 78 s at 500 a page. The budget is the switch ports' reason: core
-            // leases the collect lane for 300 s. A round that reads the SSIDs runs in the slow lane
-            // (ADR-169), so availability does not wait behind it.
+            // leases the collect lane for 300 s.
+            //
+            // 🚨 Since ADR-169 core sends the SSID read as a job of its own (`ssid_only`), in the
+            // slow lane: no clients, and the utilization is read only to know which radios
+            // answered — its values are the rounds' to publish. A second client count or
+            // utilization sample between two rounds shrinks VictoriaMetrics' interval estimate,
+            // and the ordinary interval is then drawn as a gap.
             session.max_pages = WIRELESS_MAX_PAGES;
             session.deadline = Some(Instant::now() + WIRELESS_BUDGET);
 
-            let clients_path = format!(
-                "{API_PREFIX}/organizations/{}/wireless/clients/overview/byDevice",
-                spec.org_id
-            );
-            let (items, stop) = session
-                .get_paged_reported(
-                    &clients_path,
-                    &no_query,
-                    Paging::Upto(spec.per_page.min(WIRELESS_CLIENTS_PER_PAGE)),
-                    Shape::Items,
-                )
-                .await?;
-            let kept = watched.keep(items);
-            listings.note(MerakiListing::WirelessClients, stop, kept.len());
-            data.extend(parse_wireless_clients(&kept));
+            if !spec.ssid_only {
+                let clients_path = format!(
+                    "{API_PREFIX}/organizations/{}/wireless/clients/overview/byDevice",
+                    spec.org_id
+                );
+                let (items, stop) = session
+                    .get_paged_reported(
+                        &clients_path,
+                        &no_query,
+                        Paging::Upto(spec.per_page.min(WIRELESS_CLIENTS_PER_PAGE)),
+                        Shape::Items,
+                    )
+                    .await?;
+                let kept = watched.keep(items);
+                listings.note(MerakiListing::WirelessClients, stop, kept.len());
+                data.extend(parse_wireless_clients(&kept));
+            }
 
             let util_path = format!(
                 "{API_PREFIX}/organizations/{}/wireless/devices/channelUtilization/byDevice",
@@ -996,21 +1003,26 @@ pub(crate) async fn collect(
             );
             let window = WIRELESS_UTIL_WINDOW_SECS.to_string();
             let q = [("interval", window.clone()), ("timespan", window)];
-            let (items, stop) = contained(
-                session
-                    .get_paged_reported(
-                        &util_path,
-                        &q,
-                        Paging::Upto(spec.per_page.min(WIRELESS_UTIL_PER_PAGE)),
-                        Shape::Array,
-                    )
-                    .await,
-            );
+            let util = session
+                .get_paged_reported(
+                    &util_path,
+                    &q,
+                    Paging::Upto(spec.per_page.min(WIRELESS_UTIL_PER_PAGE)),
+                    Shape::Array,
+                )
+                .await;
+            // On its own the SSID read has this listing first, and a first listing's refusal fails
+            // the collect (決定 25).
+            let (items, stop) = if spec.ssid_only {
+                util?
+            } else {
+                contained(util)
+            };
             let kept = watched.keep(items);
             listings.note(MerakiListing::WirelessChannelUtilization, stop, kept.len());
             radios = parse_channel_utilization(&kept);
 
-            if spec.ssid_statuses {
+            if spec.ssid_statuses || spec.ssid_only {
                 let ssid_path = format!(
                     "{API_PREFIX}/organizations/{}/wireless/ssids/statuses/byDevice",
                     spec.org_id
@@ -1036,6 +1048,12 @@ pub(crate) async fn collect(
                     .count();
                 listings.note(MerakiListing::WirelessSsidStatuses, stop, admitted);
                 data.extend(apply_ssid_statuses(&kept, &mut radios));
+            }
+            if spec.ssid_only {
+                for radio in radios.values_mut().flat_map(BTreeMap::values_mut) {
+                    radio.channel_util_pct = None;
+                    radio.non_wifi_util_pct = None;
+                }
             }
         }
         // The inventory is read by core's periodic sync (`fetch_inventory`), not by a collect —

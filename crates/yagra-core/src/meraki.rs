@@ -225,8 +225,9 @@ pub struct SlowReads {
     /// A switch-port collect also reads the ports' configured names ([`port_names_due`], ADR-167
     /// 決定 1).
     pub port_names: bool,
-    /// A wireless collect also reads every access point's SSIDs and radio settings
-    /// ([`ssid_statuses_due`], ADR-168 決定 1).
+    /// A wireless collect that reads every access point's SSIDs and radio settings
+    /// ([`ssid_statuses_due`], ADR-168 決定 1) — since ADR-169 決定 2 **instead of** a round's
+    /// clients and utilization: the SSID read is a job of its own, in the slow lane.
     pub ssid_statuses: bool,
 }
 
@@ -255,6 +256,9 @@ pub fn build_collect_check(
         timeout_ms: DEFAULT_COLLECT_TIMEOUT_MS,
         port_names: slow.port_names,
         ssid_statuses: slow.ssid_statuses,
+        // Every SSID read is a job of its own since ADR-169 決定 2: no client counts and no
+        // utilization between two wireless rounds.
+        ssid_only: tier == MerakiTier::Wireless && slow.ssid_statuses,
     }
 }
 
@@ -296,10 +300,12 @@ pub fn pool_can_run(tier: MerakiTier, caps: PoolCaps) -> bool {
 /// most — paced at half its `target_rps` each ([`MerakiOrg::lane_rps`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MerakiLane {
-    /// Availability, uplink, traffic, a wireless round without its SSID read, and the inventory
-    /// sync: seconds each.
+    /// Availability, uplink, traffic and a wireless round without its SSID read: seconds each.
     Fast,
-    /// The switch ports and the SSID read: minutes each, and nothing liveness waits on.
+    /// The switch ports, the SSID read and the periodic inventory sync: minutes, or nothing
+    /// liveness waits on. The sync is seconds, but it is here on purpose — measured on the lab
+    /// deployment, a sync in the fast lane delayed availability by one tick **every** time,
+    /// because its 315 s cycle and availability's shift after each delay stayed in step.
     Slow,
 }
 
@@ -444,7 +450,7 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
 /// its shared API rate budget is never exceeded (the #1 safeguard — each lane paces at half of it).
 /// Acquired at dispatch and cleared when the collect's first result returns (all fan-out results
 /// share the job's id); a lease deadline is the backstop if a result never arrives (poller crash),
-/// so a lane can't wedge forever. The inventory sync takes the fast lane (`meraki_sync.rs`).
+/// so a lane can't wedge forever. The inventory sync takes a lane too (`meraki_sync.rs`).
 ///
 /// Since ADR-164 決定 18 it also knows **which job, and which tier, holds the flight**, for two
 /// reasons:
@@ -485,12 +491,19 @@ impl MerakiInflight {
         Self::default()
     }
 
-    /// Try to mark `org`'s **fast** lane in flight for the inventory sync's `job_id` — the sync is
-    /// a few seconds, so it waits behind nothing slow and a "Sync now" is refused only while a
-    /// fast collect runs. Returns `false` if that lane is already held (and its lease hasn't
-    /// expired) — the caller then skips this org.
-    pub fn acquire(&self, org: Uuid, job_id: Uuid, lease: Duration, now: Instant) -> bool {
-        self.take(org, MerakiLane::Fast, job_id, None, lease, now)
+    /// Try to mark `org`'s `lane` in flight for the inventory sync's `job_id`. Returns `false` if
+    /// that lane is already held (and its lease hasn't expired) — the caller then tries another or
+    /// skips this org. Which lanes a sync may take is `meraki_sync`'s to say (ADR-169 決定 1: the
+    /// periodic one the slow lane only, "Sync now" either).
+    pub fn acquire_sync(
+        &self,
+        org: Uuid,
+        lane: MerakiLane,
+        job_id: Uuid,
+        lease: Duration,
+        now: Instant,
+    ) -> bool {
+        self.take(org, lane, job_id, None, lease, now)
     }
 
     /// [`Self::acquire`] for a collect of `tier` in `lane`, which is what makes an unanswered lease
@@ -1426,6 +1439,11 @@ mod tests {
             },
         );
         assert!(ssids.ssid_statuses && !ssids.port_names);
+        assert!(
+            ssids.ssid_only,
+            "an SSID read went out as a whole wireless round (ADR-169 決定 2)"
+        );
+        assert!(!check.ssid_only && !names.ssid_only);
     }
 
     #[test]
@@ -1524,13 +1542,13 @@ mod tests {
         let now = Instant::now();
         let lease = Duration::from_secs(300);
         // First dispatch acquires; a second in the same lane is refused while outstanding.
-        assert!(f.acquire(org, Uuid::from_u128(10), lease, now));
-        assert!(!f.acquire(org, Uuid::from_u128(11), lease, now));
+        assert!(f.acquire_sync(org, MerakiLane::Fast, Uuid::from_u128(10), lease, now));
+        assert!(!f.acquire_sync(org, MerakiLane::Fast, Uuid::from_u128(11), lease, now));
         assert!(f.is_inflight(org, MerakiLane::Fast, now));
         // The result for the first job clears the lane; then a new collect can acquire.
         f.complete(Uuid::from_u128(10));
         assert!(!f.is_inflight(org, MerakiLane::Fast, now));
-        assert!(f.acquire(org, Uuid::from_u128(12), lease, now));
+        assert!(f.acquire_sync(org, MerakiLane::Fast, Uuid::from_u128(12), lease, now));
     }
 
     /// ADR-169 決定 1: the two lanes are held independently — a slow collect in flight no longer
@@ -1573,11 +1591,11 @@ mod tests {
             "a second slow collect was let in beside the first"
         );
         assert!(
-            !f.acquire(org, Uuid::from_u128(73), lease, now),
+            !f.acquire_sync(org, MerakiLane::Fast, Uuid::from_u128(73), lease, now),
             "the sync ran beside a fast collect"
         );
         assert!(
-            f.acquire(other, Uuid::from_u128(80), lease, now),
+            f.acquire_sync(other, MerakiLane::Fast, Uuid::from_u128(80), lease, now),
             "another organization's lanes are its own"
         );
 
@@ -1595,11 +1613,23 @@ mod tests {
         let f = MerakiInflight::new();
         let org = Uuid::from_u128(2);
         let now = Instant::now();
-        assert!(f.acquire(org, Uuid::from_u128(20), Duration::from_secs(1), now));
+        assert!(f.acquire_sync(
+            org,
+            MerakiLane::Fast,
+            Uuid::from_u128(20),
+            Duration::from_secs(1),
+            now
+        ));
         // A poll far in the future sees the lease expired → re-acquire (backstop for a lost result).
         let later = now + Duration::from_secs(5);
         assert!(!f.is_inflight(org, MerakiLane::Fast, later));
-        assert!(f.acquire(org, Uuid::from_u128(21), Duration::from_secs(1), later));
+        assert!(f.acquire_sync(
+            org,
+            MerakiLane::Fast,
+            Uuid::from_u128(21),
+            Duration::from_secs(1),
+            later
+        ));
     }
 
     /// 🚨 The defect (/verify 17-5): any job the tracker still remembered cleared the org's
@@ -1621,7 +1651,7 @@ mod tests {
         ));
         let later = now + lease + Duration::from_secs(1);
         assert!(
-            f.acquire(org, current, lease, later),
+            f.acquire_sync(org, MerakiLane::Fast, current, lease, later),
             "the sync takes the expired flight"
         );
 
@@ -1662,7 +1692,7 @@ mod tests {
             now
         ));
         assert!(f.acquire_collect(b, fast, Uuid::from_u128(50), MerakiTier::Uplink, lease, now));
-        assert!(f.acquire(c, Uuid::from_u128(60), lease, now));
+        assert!(f.acquire_sync(c, MerakiLane::Fast, Uuid::from_u128(60), lease, now));
         assert_eq!(f.take_unanswered(now), vec![], "nothing has run out yet");
 
         let later = now + lease + Duration::from_secs(1);

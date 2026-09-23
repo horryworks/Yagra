@@ -1655,10 +1655,9 @@ export interface paths {
         put?: never;
         /**
          * Sync one organization's inventory now, rather than waiting for the periodic sync.
-         * @description Read-only upstream (three paged GETs). It takes the organization's fast collect lane, as the
-         *     periodic sync does, so pressing it while a sync or a fast collect (availability, uplink,
-         *     traffic, a wireless round) is running answers 409 rather than spending the organization's rate
-         *     budget twice. A switch-port collect or an SSID read runs in the other lane and does not refuse it.
+         * @description Read-only upstream (three paged GETs). It takes one of the organization's two collect lanes —
+         *     the slow one if it is free, else the fast one — so it answers 409 only while both are busy,
+         *     rather than spending the organization's rate budget three ways at once.
          */
         post: operations["sync_meraki_org"];
         delete?: never;

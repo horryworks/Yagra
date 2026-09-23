@@ -2152,6 +2152,19 @@ pub struct MerakiCollectCheck {
     /// at all ([`crate::CAP_MERAKI_WIRELESS`]).
     #[serde(default)]
     pub ssid_statuses: bool,
+    /// The wireless tier only (ADR-169 決定 2): this collect is **the SSID read and nothing else**
+    /// — no client counts, no utilization samples. Core sends it in the organization's slow lane,
+    /// apart from the wireless rounds, so a read that holds the lane for a minute and a half moves
+    /// neither the rounds' timing nor their samples. The utilization listing is still read,
+    /// because it is what says which radios answered (a stopped access point gets no SSID values).
+    ///
+    /// ⚠️ A poller from before it ignores the flag and runs a whole wireless round with the SSIDs:
+    /// correct values, plus one extra client count and utilization sample every twenty minutes.
+    /// VictoriaMetrics estimates a series' interval from its samples, so at a 600 s wireless
+    /// interval those extra samples can make the ordinary interval read as a gap until that poller
+    /// is upgraded.
+    #[serde(default)]
+    pub ssid_only: bool,
 }
 
 const fn default_meraki_per_page() -> u32 {
@@ -3293,6 +3306,7 @@ mod tests {
                 timeout_ms: 30_000,
                 port_names: false,
                 ssid_statuses: false,
+                ssid_only: false,
             },
             300,
         );
@@ -3377,6 +3391,39 @@ mod tests {
             !c.ssid_statuses,
             "a producer that never heard of it asks for none"
         );
+        assert!(!c.ssid_only, "nor for an SSID read on its own");
+    }
+
+    /// ADR-169 決定 2. The SSID read on its own travels as the wireless tier with both flags; a
+    /// consumer from before `ssid_only` decodes it as a wireless round that reads the SSIDs too,
+    /// which is still a correct collect.
+    #[test]
+    fn an_ssid_read_on_its_own_round_trips_and_an_older_poller_reads_it_as_a_round() {
+        let json = r#"{
+            "org_id":"123456",
+            "meraki_org_uuid":"00000000-0000-0000-0000-000000000000",
+            "tier":"wireless",
+            "base_url":"https://api.meraki.com",
+            "api_key":"x",
+            "ssid_statuses":true,
+            "ssid_only":true
+        }"#;
+        let c: MerakiCollectCheck = serde_json::from_str(json).unwrap();
+        assert!(c.ssid_statuses && c.ssid_only);
+        let back: MerakiCollectCheck =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
+
+        // What a poller from before the flag sees: the same object with the field it cannot name
+        // dropped — a wireless round with the SSID read.
+        #[derive(serde::Deserialize)]
+        struct Older {
+            tier: MerakiTier,
+            ssid_statuses: bool,
+        }
+        let older: Older = serde_json::from_str(json).unwrap();
+        assert_eq!(older.tier, MerakiTier::Wireless);
+        assert!(older.ssid_statuses);
     }
 
     #[test]

@@ -161,6 +161,7 @@ fn spec(tier: MerakiTier, networks: &[&str]) -> MerakiCollectSpec {
         interval_secs: 1_800,
         port_names: false,
         ssid_statuses: false,
+        ssid_only: false,
     }
 }
 
@@ -1094,6 +1095,75 @@ async fn the_wireless_tier_reads_clients_and_utilization_and_leaves_the_ssids_fo
         [
             "GET /api/v1/organizations/1/wireless/clients/overview/byDevice?perPage=1000 HTTP/1.1",
             "GET /api/v1/organizations/1/wireless/devices/channelUtilization/byDevice?interval=300&timespan=300&perPage=1000 HTTP/1.1",
+        ]
+    );
+}
+
+/// ADR-169 決定 2: the SSID read on its own. No clients are asked for and none reported, and the
+/// radios carry the SSID read's channel and power but **no utilization** — the utilization listing
+/// is read only to know which radios answered. The wireless rounds publish those; a second sample
+/// between two rounds is what draws the ordinary interval as a gap.
+#[tokio::test]
+async fn an_ssid_read_on_its_own_asks_no_clients_and_reports_no_utilization() {
+    let util = format!(
+        "[{},{}]",
+        util_row("Q2AP-0001", "N_1", &[("2.4", 37.25, 0.5), ("5", 3.08, 0.0)]),
+        util_row("Q2AP-0002", "N_1", &[]),
+    );
+    let r24 = ("0", "2.4", "6", "17");
+    let r5 = ("1", "5", "44", "null");
+    let ssids = envelope(&format!(
+        "{},{}",
+        ssid_row(
+            "Q2AP-0001",
+            "N_1",
+            &[
+                bss((1, "corp", true), true, r24),
+                bss((1, "corp", true), true, r5)
+            ]
+        ),
+        ssid_row("Q2AP-0002", "N_1", &[bss((1, "corp", true), true, r24)]),
+    ));
+    let (origin, _, seen) = serve(vec![Reply::ok(&util), Reply::ok(&ssids)]).await;
+
+    let only = MerakiCollectSpec {
+        ssid_only: true,
+        ..wireless_spec(false)
+    };
+    let got = collect(&only, TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+    assert_eq!(got.failure(), None);
+
+    let one = &got.observations[0];
+    assert_eq!(one.serial, "Q2AP-0001");
+    assert_eq!(reading(one, "wlan_ap_ssid_count"), Some(1.0));
+    assert_eq!(
+        reading(one, "wlan_ap_client_count"),
+        None,
+        "an SSID read on its own reported a client count between two rounds"
+    );
+    let radios: Vec<_> = one
+        .radios
+        .iter()
+        .map(|r| (r.slot, r.channel, r.channel_util_pct, r.non_wifi_util_pct))
+        .collect();
+    assert_eq!(
+        radios,
+        [(1, Some(6), None, None), (2, Some(44), None, None)],
+        "the utilization went out with the SSID read"
+    );
+    assert!(
+        got.observations
+            .iter()
+            .all(|o| o.serial != "Q2AP-0002" || reading(o, "wlan_ap_ssid_count").is_none()),
+        "a stopped access point got SSID values"
+    );
+    assert_eq!(
+        lines(&seen),
+        [
+            "GET /api/v1/organizations/1/wireless/devices/channelUtilization/byDevice?interval=300&timespan=300&perPage=1000 HTTP/1.1",
+            "GET /api/v1/organizations/1/wireless/ssids/statuses/byDevice?perPage=250 HTTP/1.1",
         ]
     );
 }

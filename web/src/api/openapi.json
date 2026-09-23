@@ -8270,7 +8270,7 @@
           "meraki"
         ],
         "summary": "Sync one organization's inventory now, rather than waiting for the periodic sync.",
-        "description": "Read-only upstream (three paged GETs). It takes the organization's fast collect lane, as the\nperiodic sync does, so pressing it while a sync or a fast collect (availability, uplink,\ntraffic, a wireless round) is running answers 409 rather than spending the organization's rate\nbudget twice. A switch-port collect or an SSID read runs in the other lane and does not refuse it.",
+        "description": "Read-only upstream (three paged GETs). It takes one of the organization's two collect lanes —\nthe slow one if it is free, else the fast one — so it answers 409 only while both are busy,\nrather than spending the organization's rate budget three ways at once.",
         "operationId": "sync_meraki_org",
         "parameters": [
           {

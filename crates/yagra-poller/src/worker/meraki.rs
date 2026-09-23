@@ -201,6 +201,7 @@ fn spec_for(job: &PollJob, check: &yagra_bus::MerakiCollectCheck) -> MerakiColle
         interval_secs: job.interval_secs,
         port_names: check.port_names,
         ssid_statuses: check.ssid_statuses,
+        ssid_only: check.ssid_only,
     }
 }
 
@@ -375,6 +376,7 @@ mod tests {
             timeout_ms: 30_000,
             port_names: false,
             ssid_statuses: false,
+            ssid_only: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
         device_results(execute_meraki(&job, &transport, 42).await)
@@ -411,6 +413,7 @@ mod tests {
             timeout_ms: 30_000,
             port_names: false,
             ssid_statuses: false,
+            ssid_only: false,
         };
         let job = PollJob::meraki_collect(Uuid::from_u128(7), check, 300);
         execute_meraki(&job, transport, 42).await
@@ -456,6 +459,7 @@ mod tests {
             timeout_ms: 30_000,
             port_names: false,
             ssid_statuses: false,
+            ssid_only: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check.clone(), 1_800);
         let spec = spec_for(&job, &check);
@@ -922,6 +926,7 @@ mod tests {
             timeout_ms: 30_000,
             port_names: false,
             ssid_statuses: false,
+            ssid_only: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
 

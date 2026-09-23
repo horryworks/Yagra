@@ -8,16 +8,18 @@
 //! flight for minutes. This module holds every decision that loop makes and nothing it reaches,
 //! so [`MerakiSchedule::plan`] can be run against a clock a test controls.
 //!
-//! **The lanes** ([`MerakiLane`]): the fast one carries availability, uplink, traffic, a wireless
-//! round and the inventory sync; the slow one carries the switch ports and the SSID read. Each runs
-//! one collect at a time.
+//! **The lanes** ([`MerakiLane`]): the fast one carries availability, uplink, traffic and the
+//! wireless rounds; the slow one carries the switch ports, the SSID read and the periodic inventory
+//! sync. Each runs one collect at a time.
 //!
-//! 🚨 **The SSID read is a wireless round, never an extra one** (決定 2). A wireless round that
-//! reads the SSIDs too is sent in the slow lane *instead of* the fast-lane round it replaces, and
-//! it moves the wireless cadence like any other. Sent as an extra job, it would publish the client
-//! count and the utilization once more between two rounds; VictoriaMetrics estimates a series'
-//! interval from its samples, a short interval shrinks the estimate, and the ordinary interval is
-//! then drawn as a gap — the dotted line this whole change exists to remove.
+//! 🚨 **The SSID read is a job of its own, and publishes no client count or utilization**
+//! (決定 2, `MerakiCollectCheck::ssid_only`). Two designs were measured and dropped on the way:
+//! sent as an *extra* wireless round, it adds a sample between two rounds — VictoriaMetrics
+//! estimates a series' interval from its samples, a short interval shrinks the estimate, and the
+//! ordinary interval is then drawn as a gap, the dotted line this whole change exists to remove;
+//! sent *in place of* a round, it drags the rounds' timing wherever the slow lane happens to be
+//! free, and the simulation below read 210, 270, 330 and 45 s intervals where 300 was due. On its
+//! own, the rounds keep their cadence and the read goes wherever the switch ports leave room.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -30,11 +32,19 @@ use crate::meraki::{
     SSID_STATUSES_EVERY,
 };
 
-/// How long past its twenty minutes a due SSID read waits for a wireless round to ride (決定 2).
-/// One round, at the shortest wireless interval: after that it goes alone as soon as the slow lane
-/// is free, so the longest the SSID values go unread is about 1,200 + 300 + one slow collect —
-/// inside the thirty minutes a latest value is looked back for (`store.rs::latest_query`).
-pub const SSID_DEFER: Duration = Duration::from_secs(300);
+/// How long an SSID read holds the slow lane, with room to spare: about 80 s measured on a real
+/// organization of 1,710 access points, 85–90 s on the lab deployment (決定 2). The read starts
+/// only when the switch ports are not due for at least this long, so it ends before they are —
+/// measured on the lab deployment, the read going first made every fourth switch-port interval
+/// 360 s, which a chart draws as a gap.
+pub const SSID_HOLD: Duration = Duration::from_secs(120);
+
+/// How long past its twenty minutes a due SSID read waits for the switch ports to leave it room
+/// ([`SSID_HOLD`]) before it goes as soon as the slow lane is free, room or not — a switch-port
+/// collect slower than its interval minus [`SSID_HOLD`] never leaves any. 1,200 + 450 + one read
+/// (about 90 s) stays inside the thirty minutes a latest value is looked back for
+/// (`store.rs::latest_query`), so the SSID count never goes blank.
+pub const SSID_DEFER: Duration = Duration::from_secs(450);
 
 /// One collect the scheduler has decided to send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +58,11 @@ impl MerakiWork {
     #[must_use]
     pub fn lane(&self) -> MerakiLane {
         MerakiLane::of(self.tier, self.slow)
+    }
+
+    /// The SSID read on its own (決定 2) — a wireless job, but not a wireless round.
+    fn is_ssid_read(&self) -> bool {
+        self.tier == MerakiTier::Wireless && self.slow.ssid_statuses
     }
 }
 
@@ -74,8 +89,7 @@ pub struct MerakiSchedule {
     last: HashMap<(Uuid, MerakiTier), Instant>,
     // When each organization's switch-port collect last asked for the ports' names (ADR-167 決定 1).
     port_names_at: HashMap<Uuid, Instant>,
-    // When each organization's wireless round last read the SSIDs and radio settings (ADR-168
-    // 決定 1).
+    // When each organization's SSIDs and radio settings were last read (ADR-168 決定 1).
     ssid_statuses_at: HashMap<Uuid, Instant>,
     // When a tier was last counted as failed for a reason **core itself** knows about — its key
     // could not be opened, its imported devices could not be read, or which networks it watches
@@ -95,22 +109,22 @@ impl MerakiSchedule {
     /// What `org`'s lanes send at `now`. `free` says whether a lane may take a collect (no
     /// unexpired flight holds it); `caps` which tiers the pool can run at all.
     ///
-    /// - **Slow lane**: a due SSID read riding a due wireless round (or, once it has waited
-    ///   [`SSID_DEFER`], alone), else a due switch-port collect. The SSID read goes first when
-    ///   both are due: it comes once every twenty minutes, and the switch-port collect that waits
-    ///   for it is late by about 85 s and drives nothing live.
+    /// - **Slow lane**: a due switch-port collect; else a due SSID read, where the switch ports are
+    ///   not due for [`SSID_HOLD`] — or anywhere, once it has waited [`SSID_DEFER`]. The switch
+    ///   ports go first because a late one is a gap in every port's traffic chart, while a late
+    ///   SSID read only waits: its values are looked back for thirty minutes. (The periodic
+    ///   inventory sync takes this lane too, from its own loop — `free` says so.)
     /// - **Fast lane**: the **first** due tier in [`MerakiOrg::active_tiers`]' order — availability,
-    ///   uplink, wireless, traffic — minus the wireless round when the slow lane took it this tick.
-    ///   🚨 Not the most overdue one, which is what the single lane picked: measured on the
-    ///   simulation below, a traffic collect (300 s, so 300 s "overdue" when due) then went ahead
-    ///   of availability (60 s) and availability waited two ticks. Everything in this lane takes
-    ///   seconds, so a tier that waits a tick behind one before it loses 15 s, never a cadence.
-    ///   Availability being first is also what makes a restart count core's own failures against
-    ///   it (ADR-164 決定 18).
-    ///   ⚠️ The one thing that still delays it is the inventory sync, which takes this lane from its
-    ///   own loop: one tick, about once in six syncs. At a 60 s cadence that is a 75 s interval,
-    ///   which a chart draws as a gap (VictoriaMetrics: about 1.125× the interval); at 300 s it is
-    ///   not.
+    ///   uplink, wireless, traffic. 🚨 Not the most overdue one, which is what the single lane
+    ///   picked: measured on the simulation below, a traffic collect (300 s, so 300 s "overdue"
+    ///   when due) then went ahead of availability (60 s) and availability waited two ticks.
+    ///   Everything in this lane takes seconds, so a tier that waits a tick behind one before it
+    ///   loses 15 s, never a cadence. Availability being first is also what makes a restart count
+    ///   core's own failures against it (ADR-164 決定 18).
+    ///   ⚠️ Nothing but these four may take this lane. The inventory sync did, from its own loop,
+    ///   and delayed availability by one tick on every run — a 75 s interval at a 60 s cadence,
+    ///   which a chart draws as a gap (VictoriaMetrics: about 1.125× the interval). It is in the
+    ///   slow lane now (`meraki_sync::MerakiSync::sync_org_scheduled`).
     #[must_use]
     pub fn plan(
         &self,
@@ -124,31 +138,17 @@ impl MerakiSchedule {
             .into_iter()
             .filter(|t| pool_can_run(*t, caps))
             .collect();
-        // How overdue a due tier is; `None` when it is not due. Never had its turn ⇒ the most.
-        let overdue = |tier: MerakiTier| -> Option<Duration> {
-            let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
-            match self.last.get(&(org.id, tier)) {
-                Some(&at) => {
-                    let e = now.duration_since(at);
-                    (e >= cadence).then_some(e)
-                }
-                None => Some(Duration::MAX),
-            }
-        };
-
         let mut plan = LanePlan::default();
         if free(MerakiLane::Slow) {
-            plan.slow = self.slow_work(org, &tiers, now, &overdue);
+            plan.slow = self.slow_work(org, &tiers, now);
         }
         if free(MerakiLane::Fast) {
-            let wireless_taken = plan.slow.is_some_and(|w| w.tier == MerakiTier::Wireless);
             plan.fast = tiers
                 .iter()
                 .copied()
                 .find(|&tier| {
                     MerakiLane::of(tier, SlowReads::default()) == MerakiLane::Fast
-                        && !(tier == MerakiTier::Wireless && wireless_taken)
-                        && overdue(tier).is_some()
+                        && self.is_due(org, tier, now)
                 })
                 .map(|tier| MerakiWork {
                     tier,
@@ -158,29 +158,9 @@ impl MerakiSchedule {
         plan
     }
 
-    fn slow_work(
-        &self,
-        org: &MerakiOrg,
-        tiers: &[MerakiTier],
-        now: Instant,
-        overdue: &impl Fn(MerakiTier) -> Option<Duration>,
-    ) -> Option<MerakiWork> {
-        if tiers.contains(&MerakiTier::Wireless) {
-            let read_at = self.ssid_statuses_at.get(&org.id).copied();
-            let since = read_at.map(|at| now.duration_since(at));
-            let due = ssid_statuses_due(read_at, now);
-            let waited_out = since.is_none_or(|e| e >= SSID_STATUSES_EVERY + SSID_DEFER);
-            if due && (overdue(MerakiTier::Wireless).is_some() || waited_out) {
-                return Some(MerakiWork {
-                    tier: MerakiTier::Wireless,
-                    slow: SlowReads {
-                        port_names: false,
-                        ssid_statuses: true,
-                    },
-                });
-            }
-        }
-        if tiers.contains(&MerakiTier::SwitchPorts) && overdue(MerakiTier::SwitchPorts).is_some() {
+    fn slow_work(&self, org: &MerakiOrg, tiers: &[MerakiTier], now: Instant) -> Option<MerakiWork> {
+        let switch_ports = tiers.contains(&MerakiTier::SwitchPorts);
+        if switch_ports && self.is_due(org, MerakiTier::SwitchPorts, now) {
             return Some(MerakiWork {
                 tier: MerakiTier::SwitchPorts,
                 slow: SlowReads {
@@ -189,27 +169,67 @@ impl MerakiSchedule {
                 },
             });
         }
-        None
+        if !tiers.contains(&MerakiTier::Wireless) {
+            return None;
+        }
+        let read_at = self.ssid_statuses_at.get(&org.id).copied();
+        if !ssid_statuses_due(read_at, now) {
+            return None;
+        }
+        let room = !(switch_ports && self.due_within(org, MerakiTier::SwitchPorts, SSID_HOLD, now));
+        let waited_out = read_at
+            .map(|at| now.duration_since(at))
+            .is_none_or(|e| e >= SSID_STATUSES_EVERY + SSID_DEFER);
+        (room || waited_out).then_some(MerakiWork {
+            tier: MerakiTier::Wireless,
+            slow: SlowReads {
+                port_names: false,
+                ssid_statuses: true,
+            },
+        })
+    }
+
+    /// Whether `tier` is due: its cadence has passed since its last turn, or it never had one.
+    fn is_due(&self, org: &MerakiOrg, tier: MerakiTier, now: Instant) -> bool {
+        self.due_within(org, tier, Duration::ZERO, now)
+    }
+
+    /// Whether `tier` falls due within `window` of `now` — or already has, or never had a turn.
+    fn due_within(
+        &self,
+        org: &MerakiOrg,
+        tier: MerakiTier,
+        window: Duration,
+        now: Instant,
+    ) -> bool {
+        let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
+        self.last
+            .get(&(org.id, tier))
+            .is_none_or(|&at| now.duration_since(at) + window >= cadence)
     }
 
     /// `work` had its turn at `now`: it was published — or there was nothing to send it about
     /// (no imported device of its kind), which must count as a turn too, or it stays "never had
-    /// one", the most overdue of all, and is picked on every tick ahead of the work that does have
-    /// something to ask (ADR-167 決定 10; for the SSID read, ADR-169 決定 3). Never call it for a
-    /// publish that failed.
+    /// one", and is picked on every tick ahead of the work that does have something to ask
+    /// (ADR-167 決定 10; for the SSID read, ADR-169 決定 3). Never call it for a publish that
+    /// failed.
+    ///
+    /// The SSID read moves its own clock and not the wireless rounds' — it is not a round (決定 2).
     pub fn dispatched(&mut self, org: Uuid, work: &MerakiWork, now: Instant) {
+        if work.is_ssid_read() {
+            self.ssid_statuses_at.insert(org, now);
+            return;
+        }
         self.last.insert((org, work.tier), now);
         if work.slow.port_names {
             self.port_names_at.insert(org, now);
-        }
-        if work.slow.ssid_statuses {
-            self.ssid_statuses_at.insert(org, now);
         }
     }
 
     /// Whether a failure core found itself for `(org, tier)` should be counted now — at most once
     /// per `cadence` ([`crate::meraki_health::count_once_per_cadence`]). Both lanes can pick the
-    /// same tier on different ticks; they share this record, so it is still counted once.
+    /// same tier on different ticks — a wireless round and an SSID read — and they share this
+    /// record, so it is still counted once.
     pub fn count_core_failure(
         &mut self,
         org: Uuid,
@@ -315,16 +335,16 @@ mod tests {
         let plan = s.plan(&o, Instant::now(), ALL_CAPS, both_free);
         assert_eq!(plan.fast, Some(work(MerakiTier::Availability)));
         assert_eq!(
-            plan.slow,
-            Some(SSID_ROUND),
-            "the first wireless round after a restart reads the SSIDs, in the slow lane"
+            plan.slow.map(|w| w.tier),
+            Some(MerakiTier::SwitchPorts),
+            "the slow lane starts with the switch ports, whose lateness is a gap in a chart"
         );
     }
 
-    /// 決定 2: with the slow lane free, the due SSID read takes the wireless round — the fast lane
-    /// does not send a second one — and the round moves the wireless cadence like any other.
+    /// 決定 2: the SSID read is a slow-lane job of its own, and it moves only its own clock — the
+    /// wireless rounds keep theirs, so no round comes early or late because of it.
     #[test]
-    fn the_ssid_read_rides_the_wireless_round_when_the_slow_lane_is_free() {
+    fn the_ssid_read_is_a_job_of_its_own_and_leaves_the_wireless_rounds_alone() {
         let mut s = MerakiSchedule::new();
         let o = every_tier();
         let t0 = Instant::now();
@@ -333,92 +353,18 @@ mod tests {
             MerakiTier::Uplink,
             MerakiTier::Traffic,
             MerakiTier::SwitchPorts,
+            MerakiTier::Wireless,
         ] {
             s.dispatched(o.id, &work(tier), t0);
         }
-        let plan = s.plan(&o, t0, ALL_CAPS, both_free);
-        assert_eq!(plan.slow, Some(SSID_ROUND));
-        assert_eq!(
-            plan.fast, None,
-            "the fast lane sent the wireless round the slow lane had already taken"
-        );
-
-        s.dispatched(o.id, &SSID_ROUND, t0);
-        let t1 = t0 + Duration::from_secs(300);
-        s.dispatched(o.id, &work(MerakiTier::SwitchPorts), t1);
-        s.dispatched(o.id, &work(MerakiTier::Availability), t1);
-        s.dispatched(o.id, &work(MerakiTier::Uplink), t1);
-        s.dispatched(o.id, &work(MerakiTier::Traffic), t1);
+        let t1 = t0 + Duration::from_secs(15);
         let plan = s.plan(&o, t1, ALL_CAPS, both_free);
-        assert_eq!(
-            plan.fast,
-            Some(work(MerakiTier::Wireless)),
-            "the next round, with the SSIDs read five minutes ago, is an ordinary fast one"
-        );
-        assert_eq!(plan.slow, None);
-    }
+        assert_eq!(plan.slow, Some(SSID_ROUND));
+        assert_eq!(plan.fast, None, "nothing fast is due yet");
+        assert_eq!(SSID_ROUND.lane(), MerakiLane::Slow);
+        s.dispatched(o.id, &SSID_ROUND, t1);
 
-    /// 決定 2: a slow lane that is busy when the round comes does not delay the round — it goes
-    /// in the fast lane without the SSID read — and once the read has waited [`SSID_DEFER`] it goes
-    /// alone the moment the slow lane frees, restarting the wireless cadence.
-    #[test]
-    fn a_deferred_ssid_read_runs_alone_and_restarts_the_wireless_cadence() {
-        let mut s = MerakiSchedule::new();
-        let o = every_tier();
-        let t0 = Instant::now();
-        for w in [
-            work(MerakiTier::Availability),
-            work(MerakiTier::Uplink),
-            work(MerakiTier::Traffic),
-            work(MerakiTier::SwitchPorts),
-            SSID_ROUND,
-        ] {
-            s.dispatched(o.id, &w, t0);
-        }
-        let slow_busy = |lane: MerakiLane| lane == MerakiLane::Fast;
-
-        // Twenty minutes on, the SSIDs are due and so is a wireless round — but the slow lane is
-        // busy: the round goes fast, without them.
-        let t1 = t0 + SSID_STATUSES_EVERY;
-        s.dispatched(o.id, &work(MerakiTier::Availability), t1);
-        s.dispatched(o.id, &work(MerakiTier::Uplink), t1);
-        s.dispatched(o.id, &work(MerakiTier::Traffic), t1);
-        assert_eq!(
-            s.plan(&o, t1, ALL_CAPS, slow_busy).fast,
-            Some(work(MerakiTier::Wireless))
-        );
-        s.dispatched(o.id, &work(MerakiTier::Wireless), t1);
-
-        // The slow lane frees before the next round; the read has not waited long enough to go
-        // alone, so it waits for that round and the lane goes to the switch ports.
-        let early = t1 + Duration::from_secs(120);
-        assert_ne!(
-            s.plan(&o, early, ALL_CAPS, both_free).slow,
-            Some(SSID_ROUND)
-        );
-
-        // The next round finds the slow lane busy again, and goes fast again.
-        let t2 = t1 + Duration::from_secs(300);
-        s.dispatched(o.id, &work(MerakiTier::Availability), t2);
-        s.dispatched(o.id, &work(MerakiTier::Uplink), t2);
-        s.dispatched(o.id, &work(MerakiTier::Traffic), t2);
-        s.dispatched(o.id, &work(MerakiTier::SwitchPorts), t2);
-        assert_eq!(
-            s.plan(&o, t2, ALL_CAPS, slow_busy).fast,
-            Some(work(MerakiTier::Wireless))
-        );
-        s.dispatched(o.id, &work(MerakiTier::Wireless), t2);
-
-        // Waited out, and the slow lane is free: alone, at once, though no round is due.
-        let t3 = t2 + Duration::from_secs(60);
-        let plan = s.plan(&o, t3, ALL_CAPS, both_free);
-        assert_eq!(
-            plan.slow,
-            Some(SSID_ROUND),
-            "the SSID read kept waiting for a round the slow lane is never free for"
-        );
-        s.dispatched(o.id, &SSID_ROUND, t3);
-        // Only the wireless round is left to decide: everything else has just gone.
+        // The round is due 300 s after the last round, not after the SSID read.
         let wireless_at = |s: &mut MerakiSchedule, t: Instant| {
             for tier in [
                 MerakiTier::Availability,
@@ -433,13 +379,44 @@ mod tests {
                 .find(|w| w.tier == MerakiTier::Wireless)
         };
         assert_eq!(
-            wireless_at(&mut s, t3 + Duration::from_secs(299)),
-            None,
-            "the round the read took did not restart the wireless cadence"
+            wireless_at(&mut s, t0 + Duration::from_secs(300)),
+            Some(work(MerakiTier::Wireless)),
+            "the SSID read moved the wireless rounds"
+        );
+    }
+
+    /// 決定 2: where the switch ports never leave room — a switch-port collect slower than its
+    /// interval minus SSID_HOLD — the read waits SSID_DEFER and then goes anyway, before the
+    /// SSID values it keeps on screen have expired.
+    #[test]
+    fn an_ssid_read_that_finds_no_room_goes_before_its_values_expire() {
+        let mut s = MerakiSchedule::new();
+        let o = every_tier();
+        let t0 = Instant::now();
+        s.dispatched(o.id, &SSID_ROUND, t0);
+        // Due, and the switch ports are due in 100 s: no room.
+        let t1 = t0 + SSID_STATUSES_EVERY;
+        s.dispatched(
+            o.id,
+            &work(MerakiTier::SwitchPorts),
+            t1 - Duration::from_secs(200),
+        );
+        assert_eq!(s.plan(&o, t1, ALL_CAPS, both_free).slow, None);
+        // Still no room at the end of the wait — it goes anyway.
+        let t2 = t0 + SSID_STATUSES_EVERY + SSID_DEFER;
+        s.dispatched(
+            o.id,
+            &work(MerakiTier::SwitchPorts),
+            t2 - Duration::from_secs(250),
         );
         assert_eq!(
-            wireless_at(&mut s, t3 + Duration::from_secs(300)),
-            Some(work(MerakiTier::Wireless))
+            s.plan(&o, t2, ALL_CAPS, both_free).slow,
+            Some(SSID_ROUND),
+            "the SSID read waited past the point its values expire"
+        );
+        assert!(
+            SSID_STATUSES_EVERY + SSID_DEFER + Duration::from_secs(90) < Duration::from_secs(1800),
+            "a read that has waited this long, and then takes 90 s, lets the SSID count go blank"
         );
     }
 
@@ -451,15 +428,56 @@ mod tests {
         let mut s = MerakiSchedule::new();
         let o = every_tier();
         let t0 = Instant::now();
-        let first = s.plan(&o, t0, ALL_CAPS, both_free).slow;
-        assert_eq!(first, Some(SSID_ROUND));
+        s.dispatched(o.id, &work(MerakiTier::SwitchPorts), t0);
+        assert_eq!(s.plan(&o, t0, ALL_CAPS, both_free).slow, Some(SSID_ROUND));
         // The scheduler finds no access point to send it about, and records the turn.
         s.dispatched(o.id, &SSID_ROUND, t0);
-        let next = s.plan(&o, t0 + Duration::from_secs(15), ALL_CAPS, both_free);
+        for step in 1..=19u64 {
+            let now = t0 + Duration::from_secs(step * 15);
+            assert_ne!(
+                s.plan(&o, now, ALL_CAPS, both_free).slow,
+                Some(SSID_ROUND),
+                "an SSID read with nothing to read asked for the slow lane again at +{} s",
+                step * 15
+            );
+        }
         assert_eq!(
-            next.slow.map(|w| w.tier),
-            Some(MerakiTier::SwitchPorts),
-            "the switch ports waited behind an SSID read with nothing to read"
+            s.plan(&o, t0 + Duration::from_secs(300), ALL_CAPS, both_free)
+                .slow
+                .map(|w| w.tier),
+            Some(MerakiTier::SwitchPorts)
+        );
+    }
+
+    /// 決定 2: an SSID read never starts where it would make the switch ports late — within
+    /// [`SSID_HOLD`] of their next collect it waits — and they are never kept waiting for it.
+    #[test]
+    fn the_ssid_read_does_not_start_where_the_switch_ports_would_wait_for_it() {
+        let mut s = MerakiSchedule::new();
+        let o = every_tier();
+        let t0 = Instant::now();
+        s.dispatched(o.id, &work(MerakiTier::SwitchPorts), t0);
+        s.dispatched(o.id, &SSID_ROUND, t0);
+        s.dispatched(
+            o.id,
+            &work(MerakiTier::SwitchPorts),
+            t0 + SSID_STATUSES_EVERY,
+        );
+        // Twenty minutes on, the read and a round are due — but the switch ports are due in
+        // less than SSID_HOLD: the round goes fast, and the slow lane waits for the ports.
+        let near = t0 + SSID_STATUSES_EVERY + Duration::from_secs(300) - SSID_HOLD;
+        let plan = s.plan(&o, near, ALL_CAPS, both_free);
+        assert_eq!(plan.slow, None);
+        assert_eq!(plan.fast.map(|w| w.tier), Some(MerakiTier::Availability));
+        assert!(
+            plan.works().all(|w| !w.slow.ssid_statuses),
+            "the SSID read started where the switch ports would wait for it"
+        );
+        // Both due at once: the switch ports first.
+        let both = t0 + SSID_STATUSES_EVERY + Duration::from_secs(300);
+        assert_eq!(
+            s.plan(&o, both, ALL_CAPS, both_free).slow.map(|w| w.tier),
+            Some(MerakiTier::SwitchPorts)
         );
     }
 
@@ -600,11 +618,11 @@ mod tests {
                     true
                 }
             });
-            // The sync loop is its own task; it takes the fast lane when it is free.
+            // The sync loop is its own task; it takes the slow lane when it is free (決定 1).
             if now >= next_sync {
                 job += 1;
                 let id = Uuid::from_u128(job);
-                if f.acquire(o.id, id, LEASE, now) {
+                if f.acquire_sync(o.id, MerakiLane::Slow, id, LEASE, now) {
                     running.push((now + holds(&work(MerakiTier::Inventory)), id));
                     next_sync = now + Duration::from_secs(300);
                 }
@@ -627,8 +645,9 @@ mod tests {
                 if w.slow.port_names {
                     sent.entry("port_names").or_default().push(at(now));
                 }
-                if w.tier == MerakiTier::Wireless {
-                    // Every wireless round publishes the client count, SSID read or not.
+                if w.tier == MerakiTier::Wireless && !w.is_ssid_read() {
+                    // Every wireless round publishes the client count; the SSID read on its own
+                    // publishes none (決定 2).
                     sent.entry("wireless_samples").or_default().push(at(now));
                 }
             }
@@ -641,13 +660,15 @@ mod tests {
         let max = |key: &str| gaps(key).into_iter().max().unwrap_or(0);
         let tick = TICK.as_secs();
 
+        // VictoriaMetrics draws an interval over about 1.125× the usual one as a gap: 67.5 s at
+        // 60 s, so at a 15 s tick availability may not be late at all.
         assert!(
-            max("availability") <= 60 + tick,
+            max("availability") <= 60,
             "availability waited {} s: {:?}",
             max("availability"),
             gaps("availability")
         );
-        assert!(max("uplink") <= 60 + tick, "{:?}", gaps("uplink"));
+        assert!(max("uplink") <= 60, "{:?}", gaps("uplink"));
         assert!(
             sent["availability"].len() >= 3 * 3600 / 75,
             "availability ran {} times in three hours",
@@ -675,11 +696,13 @@ mod tests {
             max("ssid"),
             gaps("ssid")
         );
+        // The first interval is the restart's again (measured: 330 s, the SSID read and the sync
+        // both being due at once). After it, never more than a tick: 315 s is under the 337.5 s a
+        // chart would draw as a gap at a 300 s interval.
+        let ports = gaps("switch_ports");
         assert!(
-            max("switch_ports") <= 300 + 90 + tick,
-            "the switch ports waited {} s: {:?}",
-            max("switch_ports"),
-            gaps("switch_ports")
+            ports.iter().skip(1).all(|&g| g <= 300 + tick),
+            "the switch ports waited: {ports:?}"
         );
         assert!(
             sent["switch_ports"].len() * 300 >= 3 * 3600 * 3 / 4,
