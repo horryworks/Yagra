@@ -2331,4 +2331,54 @@ mod tests {
         assert_ne!(folder_of(&pool, "Q2-A").await, Some(home));
         assert_ne!(folder_of(&pool, "Q2-B").await, Some(home));
     }
+
+    /// An MX waiting for its network to be read keeps its slot under the cap: the access point behind
+    /// it in name order does not take it, so the MX goes in on the sync that reads its network.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_mx_waiting_for_its_network_keeps_its_slot_under_the_cap(pool: sqlx::PgPool) {
+        let device =
+            |serial: &str, name: &str, product_type: &str, network: &str| MerakiInventoryDevice {
+                info: MerakiDeviceInfo {
+                    serial: serial.into(),
+                    name: name.into(),
+                    model: None,
+                    product_type: product_type.into(),
+                    network_id: network.into(),
+                    lan_ip: Some("10.9.0.5".into()),
+                },
+                availability: UP,
+            };
+        let listing = MerakiInventory {
+            networks: ["N_1", "N_2"]
+                .iter()
+                .map(|id| MerakiNetworkInfo {
+                    id: (*id).into(),
+                    name: format!("site {id}"),
+                })
+                .collect(),
+            // Name order puts the MX first.
+            devices: vec![
+                device("Q2-A", "a-mx", "appliance", "N_1"),
+                device("Q2-B", "b-ap", "wireless", "N_2"),
+            ],
+        };
+        let r = rig(&pool, Ok(listing)).await;
+        r.orgs
+            .set_import_settings(r.org, true, true, 1)
+            .await
+            .expect("a cap of one");
+        r.directory
+            .lan_answer_for("N_1", Err(MerakiFetchError::Status(500)));
+
+        let first = r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!((first.imported, first.over_cap), (0, 1), "{first:?}");
+        assert!(nodes_of(&pool, r.org).await.is_empty());
+
+        r.directory
+            .lan_answer_for("N_1", Ok(vec![vlan(10, "10.1.0.1")]));
+        let second = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!((second.imported, second.over_cap), (1, 1), "{second:?}");
+        assert_eq!(nodes_of(&pool, r.org).await, ["Q2-A"]);
+    }
 }

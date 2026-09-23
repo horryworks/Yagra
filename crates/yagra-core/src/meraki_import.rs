@@ -81,10 +81,14 @@ pub struct AutoPick {
 /// caller makes stable (`MerakiInventoryRepo::devices` orders by name, then serial), so which ones
 /// a cap leaves out does not change from sync to sync.
 ///
-/// An MX whose network's LAN side has not been read yet ([`DeviceRecord::lan_pending`]) **waits**,
-/// and is not counted against the cap either: its address — and so its folder — is not known, and
-/// an import files a node once and never moves it (決定 6, 決定 28). The sync that reads its
-/// network imports it.
+/// An MX whose network's LAN side has not been read yet ([`DeviceRecord::lan_pending`]) **waits** —
+/// its address, and so its folder, is not known, and an import files a node once and never moves
+/// it (決定 6, 決定 28) — **and keeps its place**: it holds its slot under the cap, in name order,
+/// until the sync that reads its network imports it. 🚨 It used to step out of the order instead,
+/// which is the rule above broken: on an organization's first sync no MX network has been read, so
+/// the switches and access points behind them in the order filled the whole cap, and when the MX
+/// were ready there was no room left. On a lab organization of 3,170 importable devices under a cap
+/// of 1,000 that works out to no MX at all (from the counts; it was caught before anyone ran it).
 #[must_use]
 pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32) -> AutoPick {
     let held = devices.iter().filter(|d| d.node_id.is_some()).count();
@@ -93,12 +97,13 @@ pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32) -> AutoPick {
         .saturating_sub(held);
     let qualifying: Vec<&DeviceRecord> = devices
         .iter()
-        .filter(|d| d.state == MerakiDeviceState::New && d.network_monitored && !d.lan_pending)
+        .filter(|d| d.state == MerakiDeviceState::New && d.network_monitored)
         .collect();
     AutoPick {
         chosen: qualifying
             .iter()
             .take(room)
+            .filter(|d| !d.lan_pending)
             .map(|d| ImportCandidate::from(*d))
             .collect(),
         over_cap: u32::try_from(qualifying.len().saturating_sub(room)).unwrap_or(u32::MAX),
@@ -299,27 +304,35 @@ mod tests {
     }
 
     /// ADR-164 決定 28: an MX whose network's LAN side has not been read yet has no address, and an
-    /// import would file it by none and never move it. It waits — and a device that waits is not
-    /// one the cap left out, so it is not counted there either.
+    /// import would file it by none and never move it. It waits — **in its place**: the devices
+    /// behind it in the order do not take its slot under the cap, or on an organization's first
+    /// sync they would fill the cap before any MX could go in.
     #[test]
-    fn an_mx_waits_for_its_network_to_be_read_and_is_not_over_the_cap() {
+    fn an_mx_waiting_for_its_network_keeps_its_place_under_the_cap() {
         use MerakiDeviceState as S;
         let mut waiting = record("mx-unread", S::New, true);
         waiting.product_type = "appliance".into();
         waiting.lan_ip = None;
         waiting.lan_pending = true;
-        let devices = [waiting, record("ap", S::New, true)];
-        assert_eq!(serials(&pick_automatic(&devices, 1000)), ["ap"]);
-        let full = pick_automatic(&devices, 0);
-        assert_eq!(
-            full.over_cap, 1,
-            "only the access point was held back by the cap"
-        );
+        let devices = [
+            waiting,
+            record("ap-1", S::New, true),
+            record("ap-2", S::New, true),
+        ];
+        // Room for all: the MX waits, the rest go in.
+        assert_eq!(serials(&pick_automatic(&devices, 1000)), ["ap-1", "ap-2"]);
+        // Room for two: the MX holds the first slot, so only one access point goes in, and the one
+        // behind it is the one the cap leaves out — the same one it will leave out once the MX is in.
+        let two = pick_automatic(&devices, 2);
+        assert_eq!(serials(&two), ["ap-1"]);
+        assert_eq!(two.over_cap, 1);
 
-        // Once the network has been read, the same MX qualifies.
-        let mut read = devices[0].clone();
-        read.lan_pending = false;
-        assert_eq!(serials(&pick_automatic(&[read], 1000)), ["mx-unread"]);
+        // Once the network has been read, the same MX goes into the slot it held.
+        let mut read = devices.clone();
+        read[0].lan_pending = false;
+        let after = pick_automatic(&read, 2);
+        assert_eq!(serials(&after), ["mx-unread", "ap-1"]);
+        assert_eq!(after.over_cap, 1);
     }
 
     /// The cap counts the nodes the organization already holds, stops the import at the limit, and
