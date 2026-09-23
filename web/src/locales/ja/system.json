@@ -532,6 +532,10 @@
     },
     "sync": {
       "never": "まだ同期していません",
+      "firstPending": "最初の読み込みを待っています",
+      "queued": "読み込み待ち（いまの収集が終わりしだい始めます）",
+      "reading": "組織を読み込み中：ネットワーク {{read}} / {{networks}}",
+      "readingStart": "組織を読み込み中…",
       "ok": "最終同期 {{when}}",
       "failed": "同期に失敗しました: {{reason}}",
       "lastGood": "最後に成功した同期 {{when}}",

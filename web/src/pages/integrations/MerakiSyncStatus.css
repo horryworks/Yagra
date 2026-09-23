@@ -21,3 +21,9 @@
 .meraki-org-sync-new {
   color: var(--text-primary);
 }
+
+/* A read in progress is news to whoever pressed "Sync now", not a problem: primary text, like a new
+   device, rather than the failure colour. */
+.meraki-org-sync-reading {
+  color: var(--text-primary);
+}

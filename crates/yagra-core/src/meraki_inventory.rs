@@ -132,36 +132,54 @@ pub fn lan_order(addrs: &[MerakiLanAddress]) -> Vec<IpAddr> {
         .collect()
 }
 
+/// How much of an organization's LAN side one sync reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LanReads {
+    /// The periodic sync: every network never read, then at most `rereads` of the stale ones
+    /// (ADR-164 決定 29).
+    Due { rereads: usize },
+    /// "Sync now": every network, read or not, stale or not (決定 32).
+    Every,
+}
+
 /// Which of the organization's MX networks this sync should read, most needed first: every network
 /// never read (in id order — a network's MX is not imported until it has been, see
-/// [`DeviceRecord::lan_pending`]), then at most `rereads` of those read longer than
-/// [`LAN_REFRESH`] ago, oldest first. The caller reads as many as its budget allows; the rest wait
-/// for the next sync.
+/// [`DeviceRecord::lan_pending`]), then the ones already read, oldest first — with
+/// [`LanReads::Due`], only those read longer than [`LAN_REFRESH`] ago and at most `rereads` of
+/// them; with [`LanReads::Every`], all of them.
 ///
 /// 🚨 **The cap on re-reads is what keeps them spread out** (ADR-164 決定 29). Without it every
 /// stale network was due at once: the first round reads about sixty networks per sync, so a day
 /// later those sixty went stale together and each of about six syncs spent its whole minute
 /// re-reading them — holding the lane the switch-port collects run in, every day at the same time.
 /// Capped, a clump drains a few per sync, and each network's next read lands where it was read.
-/// The networks never read are not capped: their MX waits for that read to be imported.
+/// The networks never read are not capped: they are all read in the one sync that finds them
+/// (決定 30), and their MX waits for that read to be imported.
 #[must_use]
 pub fn lan_reads_due(
     mx_networks: &BTreeSet<String>,
     stored: &HashMap<String, NetworkLan>,
     now: DateTime<Utc>,
-    rereads: usize,
+    reads: LanReads,
 ) -> Vec<String> {
-    let mut stale: Vec<(DateTime<Utc>, &String)> = Vec::new();
+    let mut read: Vec<(DateTime<Utc>, &String)> = Vec::new();
     let mut due: Vec<String> = Vec::new();
     for network in mx_networks {
-        match stored.get(network) {
-            None => due.push(network.clone()),
-            Some(lan) if now - lan.read_at >= LAN_REFRESH => stale.push((lan.read_at, network)),
-            Some(_) => {}
+        match (stored.get(network), reads) {
+            (None, _) => due.push(network.clone()),
+            (Some(lan), LanReads::Every) => read.push((lan.read_at, network)),
+            (Some(lan), LanReads::Due { .. }) if now - lan.read_at >= LAN_REFRESH => {
+                read.push((lan.read_at, network));
+            }
+            (Some(_), LanReads::Due { .. }) => {}
         }
     }
-    stale.sort();
-    due.extend(stale.into_iter().take(rereads).map(|(_, n)| n.clone()));
+    read.sort();
+    let cap = match reads {
+        LanReads::Due { rereads } => rereads,
+        LanReads::Every => usize::MAX,
+    };
+    due.extend(read.into_iter().take(cap).map(|(_, n)| n.clone()));
     due
 }
 
@@ -233,11 +251,13 @@ pub fn shared_lan_addresses(lans: &HashMap<String, NetworkLan>) -> HashSet<IpAdd
 /// [`choose_lan_address`] for every network whose LAN side has been read, with `shared` taken over
 /// all of them.
 ///
-/// ⚠️ While the first round is still reading an organization, "shared" is decided over the networks
-/// read so far: an address reused by two sites is found shared only once both have been read, and
-/// until then the first one may take it (and follows away from it a sync later). An MX imported in
-/// that window is filed by it for good (決定 6) — a narrow case, since it takes a new MX whose
-/// network's reused address is also the one the ranges or the VLAN order would pick.
+/// ⚠️ "Shared" is decided over the networks read so far: an address reused by two sites is found
+/// shared only once both have been read. That window is why a sync reads every never-read network
+/// in one go (ADR-164 決定 30) and imports no MX when its reads were cut short (決定 31) — an MX
+/// imported inside it is filed by the reused address for good (決定 6). It happened on a lab
+/// deployment (2026-09-24) while the first round was still spread over six syncs. What is left of
+/// it: a network whose own read keeps failing is never "read", so an address it shares goes
+/// unnoticed.
 #[must_use]
 pub fn lan_addresses(
     lans: &HashMap<String, NetworkLan>,
@@ -1678,8 +1698,14 @@ mod tests {
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
         assert_eq!(
-            lan_reads_due(&mx, &stored, now, 10),
+            lan_reads_due(&mx, &stored, now, LanReads::Due { rereads: 10 }),
             ["N_new_a", "N_new_b", "N_older", "N_old"]
+        );
+        // "Sync now" (決定 32): every MX network, the fresh one too — still never the one that holds
+        // no MX any more — with the never-read first, then oldest first.
+        assert_eq!(
+            lan_reads_due(&mx, &stored, now, LanReads::Every),
+            ["N_new_a", "N_new_b", "N_older", "N_old", "N_fresh"]
         );
     }
 
@@ -1705,10 +1731,13 @@ mod tests {
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
         assert_eq!(
-            lan_reads_due(&mx, &stored, now, 2),
+            lan_reads_due(&mx, &stored, now, LanReads::Due { rereads: 2 }),
             ["N_new", "N_s2", "N_s3"]
         );
-        assert_eq!(lan_reads_due(&mx, &stored, now, 0), ["N_new"]);
+        assert_eq!(
+            lan_reads_due(&mx, &stored, now, LanReads::Due { rereads: 0 }),
+            ["N_new"]
+        );
     }
 
     /// The share is rounded up plus one, so a whole round fits in a day at any interval — checked

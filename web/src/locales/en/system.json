@@ -544,6 +544,10 @@
     },
     "sync": {
       "never": "Never synced",
+      "firstPending": "Waiting for the first read",
+      "queued": "Read requested — it starts when the current collection finishes",
+      "reading": "Reading the organization: {{read}} / {{networks}} networks",
+      "readingStart": "Reading the organization…",
       "ok": "Last sync {{when}}",
       "failed": "Sync failed: {{reason}}",
       "lastGood": "Last successful sync {{when}}",

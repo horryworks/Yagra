@@ -289,6 +289,8 @@ mod tests {
             max_devices: 1000,
             devices_over_cap: 0,
             collect_failures: Vec::new(),
+            full_sync_requested_at: None,
+            full_sync: None,
         }
     }
 

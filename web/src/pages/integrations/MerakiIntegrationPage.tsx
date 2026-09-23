@@ -52,8 +52,9 @@ import {
   unlistedRegion,
   type KeySourceKind,
 } from './merakiAddOrg';
-import { canSyncNow, merakiOrgPath } from './merakiOrgRow';
+import { canSyncNow, merakiOrgPath, orgFullRead } from './merakiOrgRow';
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
+import { useMerakiReadWatch } from './useMerakiReadWatch';
 import { useMerakiSync } from './useMerakiSync';
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select).
@@ -557,11 +558,13 @@ function OrgRow({
           )}
         </div>
 
-        <MerakiSyncStatus org={org} error={sync.error} />
+        <MerakiSyncStatus org={org} pollingOn={pollingOn} error={sync.error} />
       </div>
 
       <div className="meraki-org-actions">
-        {canConfig && canSyncNow(org, pollingOn) && <MerakiSyncButton sync={sync} />}
+        {canConfig && canSyncNow(org, pollingOn) && (
+          <MerakiSyncButton sync={sync} read={orgFullRead(org, pollingOn)} />
+        )}
         {/* Not behind `canConfig`: it goes to a screen anyone who can read this one can read. The
             writes on that screen are gated there, each by its own control (ADR-056). */}
         <Button variant="outline" onClick={() => navigate(merakiOrgPath(org.id))}>
@@ -622,6 +625,11 @@ export function MerakiIntegrationPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // A read asked for by "Sync now", or an organization's first, runs for minutes: keep the rows
+  // moving while one does (ADR-164 決定 32). The list is small, so one read serves both halves.
+  const reading = orgs.some((o) => orgFullRead(o, pollingOn).kind !== 'none');
+  useMerakiReadWatch(reading, load, load);
 
   // Apart from `load` on purpose. Joined to its `Promise.all`, a credentials read that failed
   // would block the whole page over an annotation — so a failure here only means "no names".

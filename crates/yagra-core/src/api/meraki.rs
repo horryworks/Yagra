@@ -33,7 +33,7 @@
 //! could not see. The same hole `9b1c295d` closed for wireless controllers.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, Leader, RequireManageConfig, RequireView, Scoped};
+use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::ApiState;
 use axum::{
     extract::Path,
@@ -49,7 +49,7 @@ use crate::meraki_import::ImportCandidate;
 use crate::meraki_inventory::{
     usable_address, DeviceRecord, MerakiDeviceCounts, MerakiDeviceState,
 };
-use crate::meraki_sync::{MerakiSyncFailure, MerakiSyncReport, SyncError};
+use crate::meraki_sync::MerakiSyncFailure;
 
 /// Default Dashboard API base URL (the global shard).
 const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
@@ -340,8 +340,10 @@ pub(crate) struct MerakiOrgView {
     enabled_tiers: Vec<String>,
     /// Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
     /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
-    /// wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
-    /// sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
+    /// wireless round, a slow one for the switch ports, the SSID read and the inventory sync
+    /// (periodic, or asked for by "Sync now") — and each paces at half of this. The one exception is
+    /// the LAN reads of an organization with no node yet, which take all of it: nothing is
+    /// collected for it, so the fast lane is idle. Below 0.2
     /// each lane stops at 0.1, the slowest a session paces, so the two together can then send up
     /// to 0.2 whatever this says.
     target_rps: f64,
@@ -376,6 +378,39 @@ pub(crate) struct MerakiOrgView {
     /// organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `wireless`,
     /// `switch_ports` or `traffic` listed alone raises nothing: readings are missing, liveness is not.
     collect_failures: Vec<MerakiCollectFailureView>,
+    /// A whole-organization read asked for or running (ADR-164 決定 30〜32); `null` when there is
+    /// none. "Sync now" asks for one; an organization's first sync is one nobody asked for.
+    full_sync: Option<MerakiFullSyncView>,
+}
+
+/// A whole-organization read: every MX network's LAN side, then the import (ADR-164 決定 30〜32).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct MerakiFullSyncView {
+    /// When "Sync now" asked for it; `null` for a read nobody asked for — an organization's first,
+    /// or the one a sync makes when it finds networks it has never read.
+    requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When it began; `null` while it waits for the organization's slow collect lane.
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How many networks' LAN sides it reads; `null` until it has begun.
+    networks: Option<u32>,
+    /// How many of those it has asked so far — a network whose read failed counts; `null` until
+    /// it has begun.
+    read: Option<u32>,
+}
+
+impl MerakiFullSyncView {
+    /// The organization's read, if one is asked for or running.
+    fn of(o: &crate::meraki::MerakiOrg) -> Option<Self> {
+        if o.full_sync_requested_at.is_none() && o.full_sync.is_none() {
+            return None;
+        }
+        Some(Self {
+            requested_at: o.full_sync_requested_at,
+            started_at: o.full_sync.map(|p| p.started_at),
+            networks: o.full_sync.map(|p| p.networks),
+            read: o.full_sync.map(|p| p.read),
+        })
+    }
 }
 
 /// One collect tier the Dashboard API is not answering (see `MerakiOrgView.collect_failures`).
@@ -453,6 +488,7 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
             .iter()
             .map(MerakiCollectFailureView::of)
             .collect(),
+        full_sync: MerakiFullSyncView::of(o),
     }
 }
 
@@ -747,10 +783,11 @@ pub(super) struct MerakiCadenceReq {
     enabled_tiers: Vec<String>,
     /// Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
     /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
-    /// wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
-    /// sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
-    /// each lane stops at 0.1, the slowest a session paces, so the two together can then send up
-    /// to 0.2 whatever this says.
+    /// wireless round, a slow one for the switch ports, the SSID read and the inventory sync
+    /// (periodic, or asked for by "Sync now") — and each paces at half of this. The one exception is
+    /// the LAN reads of an organization with no node yet, which take all of it: nothing is
+    /// collected for it, so the fast lane is idle. Below 0.2 each lane stops at 0.1, the slowest a
+    /// session paces, so the two together can then send up to 0.2 whatever this says.
     target_rps: f64,
 }
 
@@ -1058,37 +1095,38 @@ fn meraki_devices_are_deployment_wide(scope: &super::scope::NodeScope) -> Result
     )
 }
 
-/// Sync one organization's inventory now, rather than waiting for the periodic sync.
+/// Ask for the whole organization to be read again now, rather than waiting for the periodic sync
+/// (ADR-164 決定 32).
 ///
-/// Read-only upstream: the three paged inventory listings, the MX uplink statuses (for each
-/// warm-spare pair's configured roles), and — only when it runs in the slow lane — the VLANs of the
-/// MX networks whose LAN side is due to be read, one network at a time (`appliance/vlans`, falling
-/// back to `appliance/singleLan`). It takes one of the organization's two collect lanes — the slow
-/// one if it is free, else the fast one — so it answers 409 only while both are busy, rather than
-/// spending the organization's rate budget three ways at once.
+/// **Accepted, not run.** The read re-reads every MX network's VLANs one network at a time, which
+/// takes minutes (about six for 350 networks at the default rate), so this records the request and
+/// answers 202. The leader runs it once the organization's slow collect lane is free — never in the
+/// fast lane, which is availability's — and the organization shows `full_sync` while it waits and
+/// while it runs; how it ended is `last_sync_at` / `last_sync_ok` / `last_sync_error`, as for any
+/// sync. Asking while one is already asked for or running changes nothing: it is the same request.
+///
+/// Read-only upstream: the three paged inventory listings, the VLANs of every MX network
+/// (`appliance/vlans`, falling back to `appliance/singleLan`), and the MX uplink statuses (for each
+/// warm-spare pair's configured roles). Then the devices the organization imports are imported.
+/// While it runs, the organization's switch-port and SSID reads wait for the lane.
 #[utoipa::path(
     post, path = "/api/v1/meraki/orgs/{id}/sync", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
     responses(
-        (status = 200, description = "The sync completed; what it found and how many rows it wrote", body = MerakiSyncReport),
+        (status = 202, description = "The read is asked for — or already was. It runs in the background; watch `full_sync` on the organization", body = MerakiFullSyncView),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
-        (status = 409, description = "Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), both of its collect lanes are held by collects or another sync (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`)", body = super::error::ErrorBody),
-        (status = 500, description = "The sync ran and Yagra could not read or write its own database (`meraki_sync_failed`, reason `internal`)", body = super::error::ErrorBody),
-        (status = 502, description = "The sync ran and the Dashboard API did not give a complete answer (`meraki_sync_failed`). Whatever the status, the reason is recorded on the organization as `last_sync_error`", body = super::error::ErrorBody),
-        (status = 503, description = "Inventory storage is unavailable (skeleton mode), or this core is a standby (`not_leader`)", body = super::error::ErrorBody),
+        (status = 409, description = "Meraki polling is paused globally (`meraki_polling_paused`), or this organization is paused (`meraki_org_paused`)", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn sync_meraki_org(
     _guard: RequireManageConfig,
     Scoped(scope): Scoped,
     admin: Admin,
-    // Leader-gated because the organization's lanes live in the leader's process: a standby
-    // syncing would run beside the leader's collector with neither knowing about the other.
-    _leader: Leader,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<MerakiSyncReport>> {
+) -> ApiResult<(StatusCode, Json<MerakiFullSyncView>)> {
     meraki_is_deployment_wide(&scope)?;
     let org = admin
         .meraki_orgs
@@ -1116,43 +1154,33 @@ async fn sync_meraki_org(
             "this organization is paused; resume it before syncing",
         ));
     }
-    match admin.meraki_sync.sync_org(&org).await {
-        Ok(report) => Ok(Json(report)),
-        Err(SyncError::Busy) => Err(ApiError::conflict(
-            "meraki_sync_busy",
-            "a collect or another sync is running for this organization; try again in a moment",
-        )),
-        Err(SyncError::Failed(reason)) => Err(sync_failure_error(reason)),
+    let internal = |e: anyhow::Error| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "sync: request a full read",
+            "failed to ask for the organization to be read",
+        )
+    };
+    // Written rather than run: the read takes minutes and the leader's loop runs it, so any core may
+    // take the request — which is why this is not leader-gated, unlike the sync it replaced.
+    if !admin
+        .meraki_orgs
+        .request_full_sync(id)
+        .await
+        .map_err(internal)?
+    {
+        return Err(no_org(id));
     }
-}
-
-/// The answer to a sync that ran and failed: one code, and a status that says **where** the fault
-/// is (ADR-164 決定 20). All eleven reasons used to answer 502, so a failure of Yagra's own
-/// database, and a stored key nobody can open, both told a client to go and check Meraki.
-///
-/// The reason is a closed vocabulary (`MerakiSyncFailure`), so naming it is safe — unlike
-/// `meraki_upstream_error`, which has only an upstream string and must stay generic.
-fn sync_failure_error(reason: MerakiSyncFailure) -> ApiError {
-    const CODE: &str = "meraki_sync_failed";
-    let message = format!("the sync failed ({})", reason.as_str());
-    match reason {
-        // What this deployment stores cannot be used: fix the organization, then sync again.
-        MerakiSyncFailure::Credential | MerakiSyncFailure::Config => {
-            ApiError::conflict(CODE, message)
-        }
-        // Yagra's own fault. `NoAnswer` is a collect's reason and no sync produces it; should one
-        // ever arrive here, it is not the Dashboard's doing either.
-        MerakiSyncFailure::Internal | MerakiSyncFailure::NoAnswer => {
-            ApiError::internal_with_code(CODE, message)
-        }
-        MerakiSyncFailure::Auth
-        | MerakiSyncFailure::RateLimited
-        | MerakiSyncFailure::Upstream
-        | MerakiSyncFailure::Unreachable
-        | MerakiSyncFailure::Malformed
-        | MerakiSyncFailure::Truncated
-        | MerakiSyncFailure::Timeout => ApiError::bad_gateway(CODE, message),
-    }
+    let org = admin
+        .meraki_orgs
+        .get(id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| no_org(id))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(MerakiFullSyncView::of(&org).unwrap_or_default()),
+    ))
 }
 
 /// One device of an organization, as the last successful sync recorded it.
@@ -2248,32 +2276,6 @@ mod tests {
         }
     }
 
-    /// 決定 20. Every reason used to answer 502, which tells a client the fault is upstream — also
-    /// for Yagra's own database and for a stored key nobody can open. The code does not move: a
-    /// client that branches on `meraki_sync_failed` keeps working.
-    #[test]
-    fn a_failed_sync_says_where_the_fault_is() {
-        use axum::http::StatusCode;
-        for reason in MerakiSyncFailure::ALL {
-            let error = sync_failure_error(reason);
-            assert_eq!(error.code(), "meraki_sync_failed", "{reason:?}");
-            let expected = match reason {
-                MerakiSyncFailure::Credential | MerakiSyncFailure::Config => StatusCode::CONFLICT,
-                MerakiSyncFailure::Internal | MerakiSyncFailure::NoAnswer => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-                MerakiSyncFailure::Auth
-                | MerakiSyncFailure::RateLimited
-                | MerakiSyncFailure::Upstream
-                | MerakiSyncFailure::Unreachable
-                | MerakiSyncFailure::Malformed
-                | MerakiSyncFailure::Truncated
-                | MerakiSyncFailure::Timeout => StatusCode::BAD_GATEWAY,
-            };
-            assert_eq!(error.status(), expected, "{reason:?}");
-        }
-    }
-
     // ── A folder-scoped caller (ADR-164) ─────────────────────────────────────────────
 
     /// A body each write route deserializes, so the request reaches the handler rather than being
@@ -2415,11 +2417,13 @@ mod tests {
         assert!(!admin.repo.get_meraki_polling_enabled().await);
     }
 
-    /// "Sync now" is accepted, recorded on the organization's row, and refused by each switch that
-    /// means "send nothing to Meraki" (ADR-164). The device list answers from the database.
+    /// "Sync now" is accepted — 202, the request on the organization's row, the same request however
+    /// often it is pressed (ADR-164 決定 32) — and refused by each switch that means "send nothing to
+    /// Meraki". The read the loop then runs answers the request and stamps the row. The device list
+    /// answers from the database.
     ///
     /// ⚠️ The fixture's Dashboard is [`crate::api::tests_support::EmptyDashboard`], so this proves
-    /// the endpoint — the flight, the key, the stamp, the two 409s — and nothing about what a sync
+    /// the endpoint — the request, the view, the two 409s, the stamp — and nothing about what a sync
     /// does with devices. That is `meraki_sync.rs`'s, against its own fake.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2446,18 +2450,42 @@ mod tests {
         let sync = format!("/api/v1/meraki/orgs/{org}/sync");
         let devices = format!("/api/v1/meraki/orgs/{org}/devices");
 
-        // Before any sync: not failed, not synced, and no counts to show.
+        // Before any sync: not failed, not synced, no counts to show, nothing asked for.
         let (status, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
         assert_eq!(status, StatusCode::OK, "{orgs}");
         assert!(orgs[0]["last_sync_ok"].is_null(), "{orgs}");
         assert!(orgs[0]["last_sync_at"].is_null(), "{orgs}");
+        assert!(orgs[0]["full_sync"].is_null(), "{orgs}");
 
-        let (status, report) = send(&st, "POST", &sync, &operator, None).await;
-        assert_eq!(status, StatusCode::OK, "{report}");
-        assert_eq!(report["devices"], 0, "{report}");
-        assert_eq!(report["followed"], 0, "{report}");
-
+        let (status, asked) = send(&st, "POST", &sync, &operator, None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{asked}");
+        assert!(asked["requested_at"].is_string(), "{asked}");
+        assert!(asked["started_at"].is_null(), "{asked}");
+        let (status, again) = send(&st, "POST", &sync, &operator, None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{again}");
+        assert_eq!(
+            again["requested_at"], asked["requested_at"],
+            "a second press made a second request"
+        );
         let (_, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
+        assert_eq!(orgs[0]["full_sync"], asked, "{orgs}");
+        assert!(
+            orgs[0]["last_sync_at"].is_null(),
+            "the endpoint ran the sync itself: {orgs}"
+        );
+
+        // What the leader's loop then does with it.
+        let row = admin.meraki_orgs.get(org).await.expect("get").expect("org");
+        admin
+            .meraki_sync
+            .sync_org_requested(&row)
+            .await
+            .expect("the requested read");
+        let (_, orgs) = send(&st, "GET", "/api/v1/meraki/orgs", &operator, None).await;
+        assert!(
+            orgs[0]["full_sync"].is_null(),
+            "the request outlived its read: {orgs}"
+        );
         assert_eq!(orgs[0]["last_sync_ok"], true, "{orgs}");
         assert!(orgs[0]["last_sync_at"].is_string(), "{orgs}");
         assert!(orgs[0]["last_sync_error"].is_null(), "{orgs}");
@@ -3364,6 +3392,7 @@ mod tests {
             _api_key: &str,
             _network_ids: &[String],
             _budget: std::time::Duration,
+            _rps: f64,
         ) -> Result<
             Vec<(String, yagra_transport::MerakiNetworkLan)>,
             yagra_transport::MerakiFetchError,

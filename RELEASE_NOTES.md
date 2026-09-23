@@ -10,9 +10,21 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`POST /api/v1/meraki/orgs/{id}/sync` ("Sync now") now answers `202` and runs in the background.** It used to run the sync inside the request and answer `200` with a report of what it found. It now re-reads the whole organization, which takes minutes, so it records the request and answers at once with the organization's `full_sync` (when it was asked for, and — once it has begun — how many networks it reads and how many it has read). How it ended is the organization's `last_sync_at`, `last_sync_ok` and `last_sync_error`, as for any sync. It no longer answers `409 meraki_sync_busy` (a request waits for the organization's collect lane instead), nor `meraki_sync_failed` with 409, 500 or 502 (the reason is on the organization). `409 meraki_polling_paused` and `409 meraki_org_paused` are unchanged. Pressing it again while a read is waiting or running is the same request. A standby core now accepts it too.
+
+### Improvements
+
+- **A newly added Meraki organization is read whole before anything is imported.** Its first sync reads the VLANs of every MX network in one go — about three minutes for 350 networks at the default rate, instead of about thirty spread over six syncs — and then files and imports every device at once. While the organization has no nodes yet, the read uses the organization's whole request budget, since nothing else is being collected for it.
+- **"Sync now" re-reads the whole organization**: the inventory, every MX network's VLANs (not only the ones due), and the warm-spare roles, then imports what the organization imports. It runs in the organization's slow collect lane only, so availability keeps being collected; the switch-port and SSID reads wait until it ends (about six minutes for 350 networks at the default rate — raise the organization's request rate to shorten it). A Meraki page now says "Waiting for the first read", "Read requested" or "Reading the organization: 120 / 350 networks", and refreshes itself every five seconds while it does.
+- **Meraki organizations sync side by side.** They used to sync one after another, so one organization's long read would have held every other organization's sync.
+
 ### Bug Fixes
 
 - **A page of the node list no longer reads `unknown` for nodes that are up.** Until the alert engine has observed a node — after every core restart, and for as long as a Meraki organization is paused — its state comes from whether a liveness reading arrived recently, and a page asked about all such nodes in one VictoriaMetrics query. A page of 500 holding more than about 430 of them made that query longer than VictoriaMetrics accepts; the refusal was read as "nothing is fresh", so the whole page read `unknown` while each node's own page said `ok`. The question is now split into queries VictoriaMetrics accepts (at most three for a page of 500), and a refused query is logged as a warning instead of passing silently. The topology graph, which asks the same question, is fixed too.
+
+- **A Meraki MX is no longer filed into another site's folder by a VLAN address two sites share.** An MX takes its address from its own VLANs, skipping any address another network of the organization also holds. That was decided over the networks read so far, and the VLANs used to be read about sixty networks per sync, so an MX whose network was read before the other site sharing its address could take the shared address — and, when a folder's IP range held it, be filed into that folder for good. Every network never read is now read in one sync, and a sync whose reads were cut short (by its time limit, by rate limiting or by a refused key) imports no MX at all; switches and access points are unaffected. A network whose own read fails holds back only its own MX. MX already filed are not moved: use **Move by IP range…** on the Nodes page.
 
 ## v0.3.30 — Meraki MS switch ports and MR access points are monitored like SNMP switch ports and a controller's access points, Meraki MX WAN uplinks, Auto VPN and warm-spare pairs are watched, an MX is filed by its LAN address rather than its WAN, a Meraki organization's slow reads no longer hold up its availability collects, a port alert no longer closes because its readings stopped
 

@@ -71,11 +71,11 @@ import type {
   MatchingThreshold,
   MerakiCreated,
   MerakiDevice,
+  MerakiFullSync,
   MerakiImported,
   MerakiNetwork,
   MerakiOrg,
   MerakiOrgOption,
-  MerakiSyncReport,
   MetricAgg,
   MetricKind,
   MetricRange,
@@ -1081,10 +1081,10 @@ export const api = {
   ): Promise<void> =>
     apiPut('/api/v1/meraki/orgs/{id}/import-settings', { path: { id }, body }),
 
-  /** Sync an org's inventory now instead of waiting for the periodic sync (read-only upstream).
-   *  Rejects with 409 while the org is paused or busy, and with 502 when the sync ran and failed —
-   *  the reason is then on the org as `last_sync_error`, so reload the list either way. */
-  syncMerakiOrg: (id: string): Promise<MerakiSyncReport> =>
+  /** Ask for the whole org to be read again now (ADR-164 決定 32). Answers 202 at once: the read
+   *  runs in the background for minutes and the org shows it as `full_sync`; how it ended is the
+   *  org's `last_sync_*`. Rejects with 409 while the org or Meraki polling is paused. */
+  syncMerakiOrg: (id: string): Promise<MerakiFullSync> =>
     apiPost('/api/v1/meraki/orgs/{id}/sync', { path: { id } }),
 
   /** Every device the last successful sync found in an org, monitored or not, with its state.

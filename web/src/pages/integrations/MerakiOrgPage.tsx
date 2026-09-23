@@ -39,7 +39,7 @@ import { FilterButton, MobileFilterSheet } from '../../components/ui/MobileFilte
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { EntityName } from '../../components/ui/EntityName';
 import { useEntityNames } from '../../components/ui/entityNames';
-import { MERAKI_PAGE_PATH, canSyncNow } from './merakiOrgRow';
+import { MERAKI_PAGE_PATH, canSyncNow, orgFullRead } from './merakiOrgRow';
 import { merakiImportMessage } from './merakiImportResult';
 import {
   MAX_DEVICES_MAX,
@@ -60,6 +60,7 @@ import {
   unwatchedNotice,
 } from './merakiDevices';
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
+import { useMerakiReadWatch } from './useMerakiReadWatch';
 import { useMerakiSync } from './useMerakiSync';
 import './MerakiOrgPage.css';
 
@@ -289,6 +290,24 @@ export function MerakiOrgPage() {
 
   const sync = useMerakiSync(orgId, t('meraki.err.sync'), load);
 
+  // While the organization is being read (ADR-164 決定 32) only the organization is re-read, every
+  // few seconds, so the progress moves; its devices — thousands of rows — are read once, when the
+  // read ends and has imported what it found.
+  const pollOrg = useCallback(() => {
+    api
+      .listMerakiOrgs()
+      .then((list) => setOrg(list.find((o) => o.id === orgId) ?? null))
+      // A read, and the next one is five seconds away: a failure here only leaves the progress
+      // where it was. The page's own load reports what it cannot read.
+      .catch(() => undefined);
+  }, [orgId]);
+  const reloadAll = useCallback(() => void load(), [load]);
+  useMerakiReadWatch(
+    org !== null && orgFullRead(org, pollingOn).kind !== 'none',
+    pollOrg,
+    reloadAll,
+  );
+
   const toggle = useCallback((serial: string, on: boolean) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -501,7 +520,7 @@ export function MerakiOrgPage() {
         note={t('meraki.orgPage.note')}
         actions={
           org && canConfig && canSyncNow(org, pollingOn) ? (
-            <MerakiSyncButton sync={sync} />
+            <MerakiSyncButton sync={sync} read={orgFullRead(org, pollingOn)} />
           ) : undefined
         }
       />
@@ -531,7 +550,7 @@ export function MerakiOrgPage() {
               {org.enabled ? t('meraki.orgs.stateEnabled') : t('meraki.orgs.statePaused')}
             </span>
             {!pollingOn && <span>{t('meraki.polling.paused')}</span>}
-            <MerakiSyncStatus org={org} error={sync.error} />
+            <MerakiSyncStatus org={org} pollingOn={pollingOn} error={sync.error} />
           </div>
 
           <ImportSettingsCard org={org} canConfig={canConfig} onSaved={load} />

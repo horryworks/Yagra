@@ -107,6 +107,22 @@ pub struct MerakiOrg {
     /// The collect tiers that are failing right now, as the health loop last wrote them
     /// (migration 0127, ADR-164 決定 18). Empty means none is *known* to be failing.
     pub collect_failures: Vec<crate::meraki_health::TierFailure>,
+    /// When "Sync now" asked for a whole-organization read that has not ended yet (ADR-164 決定 32,
+    /// migration 0133). The leader's sync loop runs it once the slow lane is free.
+    pub full_sync_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The whole-organization read in flight, if one is (決定 30・32): when it began, how many
+    /// networks' LAN sides it reads, and how many it has tried so far.
+    pub full_sync: Option<FullSyncProgress>,
+}
+
+/// How far a whole-organization read has got (ADR-164 決定 32) — what the page shows while it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FullSyncProgress {
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// The networks whose LAN side the read reads.
+    pub networks: u32,
+    /// How many of them it has tried: a network whose read failed counts, since it was asked.
+    pub read: u32,
 }
 
 impl MerakiOrg {
@@ -149,6 +165,19 @@ impl MerakiOrg {
                 row.try_get::<sqlx::types::Json<serde_json::Value>, _>("collect_failures")?
                     .0,
             ),
+            full_sync_requested_at: row.try_get("full_sync_requested_at")?,
+            full_sync: row
+                .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("full_sync_started_at")?
+                .map(|started_at| -> anyhow::Result<FullSyncProgress> {
+                    let networks: Option<i32> = row.try_get("full_sync_networks")?;
+                    let read: Option<i32> = row.try_get("full_sync_read")?;
+                    Ok(FullSyncProgress {
+                        started_at,
+                        networks: networks.unwrap_or_default().max(0) as u32,
+                        read: read.unwrap_or_default().max(0) as u32,
+                    })
+                })
+                .transpose()?,
         })
     }
 
@@ -183,8 +212,9 @@ impl MerakiOrg {
     /// ⚠️ Below twice [`yagra_transport::MERAKI_MIN_RPS`] the halving stops at that floor, because
     /// no session paces slower; the two lanes together then send twice the floor, whatever the
     /// setting — up to twice the floor more than a setting near zero. The inventory sync paces at
-    /// this too — the periodic one runs in the slow lane,
-    /// "Sync now" in whichever is free (`meraki_sync.rs`).
+    /// this too, in the slow lane — except the LAN reads of an organization that has no node yet,
+    /// which take the whole of `target_rps`: nothing is collected for it, so the fast lane is idle
+    /// (ADR-164 決定 30, `meraki_sync.rs`).
     #[must_use]
     pub fn lane_rps(&self) -> f64 {
         (self.target_rps / 2.0).max(yagra_transport::MERAKI_MIN_RPS)
@@ -555,6 +585,21 @@ impl MerakiInflight {
         true
     }
 
+    /// Move the deadline of the lane `job_id` holds to `now + lease`. A sync takes its lane before it
+    /// knows how much it has to read, and a whole-organization read (ADR-164 決定 30) runs for
+    /// minutes: without this its lease runs out mid-read and a collect starts beside it. Returns
+    /// whether `job_id` still held a lane — `false` once its lease ran out and another took it.
+    pub fn extend(&self, job_id: Uuid, lease: Duration, now: Instant) -> bool {
+        let mut flights = self.flights.lock().expect("meraki inflight poisoned");
+        match flights.values_mut().find(|held| held.job == job_id) {
+            Some(held) => {
+                held.deadline = now + lease;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Release the lane **`job_id` holds, if it still holds one** (called for every poll result; a
     /// no-op for non-Meraki jobs). Returns the organization and the tier that was answered, so a
     /// result from a poller that sends no collect report still counts as an answer.
@@ -634,7 +679,8 @@ impl MerakiOrgRepo {
     const COLUMNS: &'static str = "id, org_id, name, base_url, credential_id, availability_secs, \
         uplink_secs, traffic_secs, inventory_secs, switch_ports_secs, wireless_secs, enabled_tiers, \
         target_rps, group_id, enabled, last_sync_at, last_sync_ok, last_sync_error, import_devices, \
-        file_by_prefix, max_devices, devices_over_cap, collect_failures";
+        file_by_prefix, max_devices, devices_over_cap, collect_failures, full_sync_requested_at, \
+        full_sync_started_at, full_sync_networks, full_sync_read";
 
     /// Every org (for the Integrations UI).
     pub async fn list(&self) -> anyhow::Result<Vec<MerakiOrg>> {
@@ -779,6 +825,86 @@ impl MerakiOrgRepo {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // ── A whole-organization read (ADR-164 決定 30〜32, migration 0133) ─────────────────────────
+
+    /// "Sync now": ask for a whole-organization read, which the leader's sync loop runs once the
+    /// organization's slow lane is free. Returns whether the organization exists.
+    ///
+    /// A request already standing keeps its time: a second press while one waits or runs is the
+    /// same request, not a second read queued behind it.
+    pub async fn request_full_sync(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE meraki_orgs \
+             SET full_sync_requested_at = COALESCE(full_sync_requested_at, now()) WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// A whole-organization read began: `networks` LAN sides to read, none tried yet.
+    pub async fn start_full_sync(&self, id: Uuid, networks: u32) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE meraki_orgs SET full_sync_started_at = now(), full_sync_networks = $2, \
+                    full_sync_read = 0 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(i32::try_from(networks).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// How many networks the read in flight has tried so far.
+    pub async fn record_full_sync_read(&self, id: Uuid, read: u32) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE meraki_orgs SET full_sync_read = $2 \
+             WHERE id = $1 AND full_sync_started_at IS NOT NULL",
+        )
+        .bind(id)
+        .bind(i32::try_from(read).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// A sync ended, however it ended: the progress of the read it made goes and, when it was the
+    /// read "Sync now" asked for (`answered`), the request goes with it — a request is answered by
+    /// a read that ran, whether or not the read succeeded, or one refused key would be asked again
+    /// every tick. Writes nothing when there is nothing to clear.
+    pub async fn finish_full_sync(&self, id: Uuid, answered: bool) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE meraki_orgs SET full_sync_started_at = NULL, full_sync_networks = NULL, \
+                    full_sync_read = NULL, \
+                    full_sync_requested_at = CASE WHEN $2 THEN NULL \
+                                                  ELSE full_sync_requested_at END \
+             WHERE id = $1 \
+               AND (full_sync_started_at IS NOT NULL \
+                    OR ($2 AND full_sync_requested_at IS NOT NULL))",
+        )
+        .bind(id)
+        .bind(answered)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Clear the progress of every read, returning how many rows held one. The leader's sync loop
+    /// calls this as it starts: a read never outlives the process running it (the lanes live in that
+    /// process), so a row still saying "reading" was left by one that stopped mid-way. A request
+    /// stays — the loop runs it.
+    pub async fn clear_full_sync_progress(&self) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "UPDATE meraki_orgs SET full_sync_started_at = NULL, full_sync_networks = NULL, \
+                    full_sync_read = NULL \
+             WHERE full_sync_started_at IS NOT NULL",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Set how the sync imports this organization's devices (ADR-164 Inc.4). Returns whether the
@@ -1405,6 +1531,8 @@ mod tests {
             max_devices: 1000,
             devices_over_cap: 0,
             collect_failures: Vec::new(),
+            full_sync_requested_at: None,
+            full_sync: None,
         }
     }
 
@@ -1703,6 +1831,41 @@ mod tests {
             Duration::from_secs(1),
             later
         ));
+    }
+
+    /// ADR-164 決定 30: a sync that finds it has minutes of reading to do extends the lease it took,
+    /// so a collect cannot take its lane mid-read — and only the job that holds the lane can.
+    #[test]
+    fn a_sync_extends_its_own_lease_and_no_other() {
+        let f = MerakiInflight::new();
+        let org = Uuid::from_u128(4);
+        let now = Instant::now();
+        let (sync, stranger) = (Uuid::from_u128(40), Uuid::from_u128(41));
+        assert!(f.acquire_sync(org, MerakiLane::Slow, sync, Duration::from_secs(150), now));
+        let later = now + Duration::from_secs(200);
+
+        assert!(f.extend(
+            sync,
+            Duration::from_secs(600),
+            now + Duration::from_secs(10)
+        ));
+        assert!(
+            f.is_inflight(org, MerakiLane::Slow, later),
+            "the extended lease ran out at the old deadline"
+        );
+        assert!(!f.acquire_collect(
+            org,
+            MerakiLane::Slow,
+            Uuid::from_u128(42),
+            MerakiTier::SwitchPorts,
+            Duration::from_secs(300),
+            later
+        ));
+        assert!(!f.extend(stranger, Duration::from_secs(600), later));
+
+        // Released, there is nothing left to extend.
+        f.complete(sync);
+        assert!(!f.extend(sync, Duration::from_secs(600), later));
     }
 
     /// 🚨 The defect (/verify 17-5): any job the tracker still remembered cleared the org's

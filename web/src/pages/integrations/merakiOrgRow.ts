@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // What one organization's row on the Meraki page says about its inventory sync (ADR-164).
 //
-// A `.ts` because Vitest never loads a `.tsx` (`testing.md`), and these three functions are
-// judgement, not layout: which of three sync columns wins, when a device count means anything, and
-// when a button that would be refused is not drawn at all.
+// A `.ts` because Vitest never loads a `.tsx` (`testing.md`), and these functions are judgement,
+// not layout: which of three sync columns wins, what a whole-organization read is doing, when a
+// device count means anything, and when a button that would be refused is not drawn at all.
 //
 // Shaped after `netboxStatus.ts::syncSummary` on purpose — the two integrations answer "did the
 // last sync work?" from the same three columns, and two vocabularies for one question is how a
@@ -50,6 +50,43 @@ export function orgSyncSummary(org: SyncColumns): OrgSyncSummary {
   if (!org.last_sync_at) return { kind: 'never' };
   return { kind: 'ok', at: org.last_sync_at };
 }
+
+/** What an organization's whole-organization read is doing (ADR-164 決定 30〜32): every MX
+ *  network's LAN side read, then the import. It takes minutes, so it is shown while it runs. */
+export type OrgFullRead =
+  | { kind: 'none' }
+  /** Never synced, and the first read — which nobody asks for — has not begun yet. */
+  | { kind: 'first' }
+  /** "Sync now" asked for one; it starts when the organization's slow collect lane is free. */
+  | { kind: 'queued' }
+  /** Running: `read` of `networks` networks asked so far (`networks` is 0 for a moment at the
+   *  start, and for an organization with no MX at all). */
+  | { kind: 'reading'; read: number; networks: number };
+
+/** Reduce an organization's `full_sync` to one thing to render.
+ *
+ *  `first` needs both switches on: a paused organization, or a deployment whose Meraki polling is
+ *  off, is not about to be read, and "waiting for the first read" would be a promise nothing keeps.
+ *  A request made before a pause still reads as `queued` — it stands, and runs on resume. */
+export function orgFullRead(
+  org: Pick<MerakiOrg, 'full_sync' | 'last_sync_at' | 'last_sync_ok' | 'enabled'>,
+  pollingOn: boolean,
+): OrgFullRead {
+  const read = org.full_sync;
+  if (read?.started_at) {
+    return { kind: 'reading', read: read.read ?? 0, networks: read.networks ?? 0 };
+  }
+  if (read?.requested_at) return { kind: 'queued' };
+  // `=== false`, not `!`: null means "has not run", which is exactly the case this is about.
+  if (!org.last_sync_at && org.last_sync_ok !== false && org.enabled && pollingOn) {
+    return { kind: 'first' };
+  }
+  return { kind: 'none' };
+}
+
+/** How often a page re-reads the organizations while one of them is being read, so the progress
+ *  moves without a reload. A read of 350 networks takes three to six minutes. */
+export const MERAKI_READ_POLL_MS = 5_000;
 
 /** Whether the row's device counts describe anything yet.
  *

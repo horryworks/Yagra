@@ -7,6 +7,7 @@ import {
   canSyncNow,
   merakiOrgPath,
   orgCollectFailures,
+  orgFullRead,
   orgHasInventory,
   orgSyncSummary,
 } from './merakiOrgRow';
@@ -51,6 +52,73 @@ describe('orgSyncSummary', () => {
       kind: 'failed',
       reason: 'internal',
     });
+  });
+});
+
+describe('orgFullRead (ADR-164 決定 32)', () => {
+  const synced = {
+    last_sync_at: '2026-09-24T09:00:00Z',
+    last_sync_ok: true,
+    enabled: true,
+    full_sync: null,
+  } as const;
+  const asked = '2026-09-24T09:05:00Z';
+
+  it('shows a read that has begun by how far it has got', () => {
+    expect(
+      orgFullRead(
+        {
+          ...synced,
+          full_sync: {
+            requested_at: asked,
+            started_at: '2026-09-24T09:06:00Z',
+            networks: 350,
+            read: 120,
+          },
+        },
+        true,
+      ),
+    ).toEqual({ kind: 'reading', read: 120, networks: 350 });
+    // A first read nobody asked for runs too, with no request behind it.
+    expect(
+      orgFullRead(
+        {
+          ...synced,
+          last_sync_at: null,
+          last_sync_ok: null,
+          full_sync: {
+            requested_at: null,
+            started_at: '2026-09-24T09:06:00Z',
+            networks: null,
+            read: null,
+          },
+        },
+        true,
+      ),
+    ).toEqual({ kind: 'reading', read: 0, networks: 0 });
+  });
+
+  it('shows a request that has not begun as queued — paused or not, since it stands', () => {
+    const queued = {
+      ...synced,
+      full_sync: { requested_at: asked, started_at: null, networks: null, read: null },
+    };
+    expect(orgFullRead(queued, true)).toEqual({ kind: 'queued' });
+    expect(orgFullRead({ ...queued, enabled: false }, false)).toEqual({ kind: 'queued' });
+  });
+
+  it('waits for the first read only while something is going to make it', () => {
+    const fresh = { ...synced, last_sync_at: null, last_sync_ok: null };
+    expect(orgFullRead(fresh, true)).toEqual({ kind: 'first' });
+    expect(orgFullRead({ ...fresh, enabled: false }, true)).toEqual({ kind: 'none' });
+    expect(orgFullRead(fresh, false)).toEqual({ kind: 'none' });
+    // A first sync that failed is a failure on the row, not a read about to happen.
+    expect(orgFullRead({ ...fresh, last_sync_ok: false }, true)).toEqual({ kind: 'none' });
+  });
+
+  it('says nothing for an organization with no read asked for or running', () => {
+    expect(orgFullRead(synced, true)).toEqual({ kind: 'none' });
+    expect(orgFullRead({ ...synced, full_sync: undefined }, true)).toEqual({ kind: 'none' });
   });
 });
 

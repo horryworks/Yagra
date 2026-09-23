@@ -217,6 +217,7 @@ impl crate::meraki_sync::MerakiDirectory for EmptyDashboard {
         _api_key: &str,
         _network_ids: &[String],
         _budget: std::time::Duration,
+        _rps: f64,
     ) -> Result<Vec<(String, yagra_transport::MerakiNetworkLan)>, yagra_transport::MerakiFetchError>
     {
         Ok(Vec::new())

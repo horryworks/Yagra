@@ -953,8 +953,9 @@ export const MERAKI_LISTINGS = [
 /** One read a Meraki collect makes. */
 export type MerakiListing = (typeof MERAKI_LISTINGS)[number];
 
-/** What one successful inventory sync found (`POST /api/v1/meraki/orgs/:id/sync`). */
-export type MerakiSyncReport = components['schemas']['MerakiSyncReport'];
+/** A whole-organization read, asked for by `POST /api/v1/meraki/orgs/:id/sync` or running (ADR-164
+ *  決定 32) — also `MerakiOrg.full_sync`. */
+export type MerakiFullSync = components['schemas']['MerakiFullSyncView'];
 
 /** What an import created and how it was filed (`POST /api/v1/meraki/import`). */
 export type MerakiImported = components['schemas']['MerakiImported'];

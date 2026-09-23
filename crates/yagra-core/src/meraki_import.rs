@@ -25,7 +25,7 @@ use uuid::Uuid;
 use crate::groups::GroupRepo;
 use crate::meraki::MerakiImportDevice;
 use crate::meraki_filing::{addresses_to_match, plan_filing, Filing};
-use crate::meraki_inventory::{DeviceRecord, MerakiDeviceState};
+use crate::meraki_inventory::{takes_lan_from_vlans, DeviceRecord, MerakiDeviceState};
 use crate::repo::NodeRepo;
 
 /// One device somebody — an operator or the sync — picked for import, before anything about it has
@@ -89,8 +89,17 @@ pub struct AutoPick {
 /// the switches and access points behind them in the order filled the whole cap, and when the MX
 /// were ready there was no room left. On a lab organization of 3,170 importable devices under a cap
 /// of 1,000 that works out to no MX at all (from the counts; it was caught before anyone ran it).
+///
+/// `mx_ready` is false when this sync's LAN reads were cut short (ADR-164 決定 31): a time limit,
+/// 429s that outlasted the retries or a refused key stopped them before every network they meant to
+/// read had been asked. Then **no** MX is picked — not only the ones whose network is still unread —
+/// because an address reused by a network the reads never reached is not known to be reused yet,
+/// and an MX filed by that address is filed for good. Every MX keeps its place, as above. A network
+/// whose own read failed does not make this false: it was asked, and only its MX waits
+/// (`lan_pending`). That is what keeps one unreadable network from holding up every MX of the
+/// organization — the reason increment 15 gave for not waiting at all.
 #[must_use]
-pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32) -> AutoPick {
+pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32, mx_ready: bool) -> AutoPick {
     let held = devices.iter().filter(|d| d.node_id.is_some()).count();
     let room = usize::try_from(max_devices)
         .unwrap_or(usize::MAX)
@@ -103,7 +112,7 @@ pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32) -> AutoPick {
         chosen: qualifying
             .iter()
             .take(room)
-            .filter(|d| !d.lan_pending)
+            .filter(|d| !d.lan_pending && (mx_ready || !takes_lan_from_vlans(&d.product_type)))
             .map(|d| ImportCandidate::from(*d))
             .collect(),
         over_cap: u32::try_from(qualifying.len().saturating_sub(room)).unwrap_or(u32::MAX),
@@ -298,7 +307,7 @@ mod tests {
             record("already-a-node", S::Monitored, true),
             record("node-gone-from-meraki", S::Missing, true),
         ];
-        let pick = pick_automatic(&devices, 1000);
+        let pick = pick_automatic(&devices, 1000, true);
         assert_eq!(serials(&pick), ["QUALIFIES"]);
         assert_eq!(pick.over_cap, 0);
     }
@@ -320,19 +329,46 @@ mod tests {
             record("ap-2", S::New, true),
         ];
         // Room for all: the MX waits, the rest go in.
-        assert_eq!(serials(&pick_automatic(&devices, 1000)), ["ap-1", "ap-2"]);
+        assert_eq!(
+            serials(&pick_automatic(&devices, 1000, true)),
+            ["ap-1", "ap-2"]
+        );
         // Room for two: the MX holds the first slot, so only one access point goes in, and the one
         // behind it is the one the cap leaves out — the same one it will leave out once the MX is in.
-        let two = pick_automatic(&devices, 2);
+        let two = pick_automatic(&devices, 2, true);
         assert_eq!(serials(&two), ["ap-1"]);
         assert_eq!(two.over_cap, 1);
 
         // Once the network has been read, the same MX goes into the slot it held.
         let mut read = devices.clone();
         read[0].lan_pending = false;
-        let after = pick_automatic(&read, 2);
+        let after = pick_automatic(&read, 2, true);
         assert_eq!(serials(&after), ["mx-unread", "ap-1"]);
         assert_eq!(after.over_cap, 1);
+    }
+
+    /// ADR-164 決定 31: a sync whose LAN reads were cut short picks no MX at all — even one whose
+    /// own network was read, since a network the reads never reached may reuse its address — while
+    /// switches and access points, whose address is their own `lanIp`, go in as usual. Every MX
+    /// keeps its place under the cap.
+    #[test]
+    fn reads_cut_short_hold_every_mx_in_its_place_and_nothing_else() {
+        use MerakiDeviceState as S;
+        let mut mx = record("mx-read", S::New, true);
+        mx.product_type = "appliance".into();
+        let devices = [
+            mx,
+            record("ap-1", S::New, true),
+            record("ap-2", S::New, true),
+        ];
+
+        let cut = pick_automatic(&devices, 2, false);
+        assert_eq!(serials(&cut), ["ap-1"], "the MX gave up its slot");
+        assert_eq!(cut.over_cap, 1);
+
+        let whole = pick_automatic(&devices, 2, true);
+        assert_eq!(serials(&whole), ["mx-read", "ap-1"]);
+        assert_eq!(whole.over_cap, 1);
     }
 
     /// The cap counts the nodes the organization already holds, stops the import at the limit, and
@@ -347,7 +383,7 @@ mod tests {
             record("b", S::New, true),
             record("c", S::New, true),
         ];
-        let pick = pick_automatic(&devices, 3);
+        let pick = pick_automatic(&devices, 3, true);
         assert_eq!(
             serials(&pick),
             ["a"],
@@ -356,15 +392,15 @@ mod tests {
         assert_eq!(pick.over_cap, 2);
 
         // At or past the cap nothing is picked and everything that qualified is reported.
-        let full = pick_automatic(&devices, 2);
+        let full = pick_automatic(&devices, 2, true);
         assert!(full.chosen.is_empty());
         assert_eq!(full.over_cap, 3);
-        let past = pick_automatic(&devices, 1);
+        let past = pick_automatic(&devices, 1, true);
         assert!(past.chosen.is_empty());
         assert_eq!(past.over_cap, 3);
 
         // Room for everything: nothing is left out.
-        assert_eq!(pick_automatic(&devices, 5).over_cap, 0);
+        assert_eq!(pick_automatic(&devices, 5, true).over_cap, 0);
     }
 
     /// A device that does not qualify is not "over the cap" — the number on the page must be
@@ -377,7 +413,7 @@ mod tests {
             record("never-online", S::NeverOnline, true),
             record("unwatched", S::New, false),
         ];
-        let pick = pick_automatic(&devices, 1);
+        let pick = pick_automatic(&devices, 1, true);
         assert!(pick.chosen.is_empty());
         assert_eq!(pick.over_cap, 0);
     }

@@ -1654,13 +1654,19 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Sync one organization's inventory now, rather than waiting for the periodic sync.
-         * @description Read-only upstream: the three paged inventory listings, the MX uplink statuses (for each
-         *     warm-spare pair's configured roles), and — only when it runs in the slow lane — the VLANs of the
-         *     MX networks whose LAN side is due to be read, one network at a time (`appliance/vlans`, falling
-         *     back to `appliance/singleLan`). It takes one of the organization's two collect lanes — the slow
-         *     one if it is free, else the fast one — so it answers 409 only while both are busy, rather than
-         *     spending the organization's rate budget three ways at once.
+         * Ask for the whole organization to be read again now, rather than waiting for the periodic sync
+         *     (ADR-164 決定 32).
+         * @description **Accepted, not run.** The read re-reads every MX network's VLANs one network at a time, which
+         *     takes minutes (about six for 350 networks at the default rate), so this records the request and
+         *     answers 202. The leader runs it once the organization's slow collect lane is free — never in the
+         *     fast lane, which is availability's — and the organization shows `full_sync` while it waits and
+         *     while it runs; how it ended is `last_sync_at` / `last_sync_ok` / `last_sync_error`, as for any
+         *     sync. Asking while one is already asked for or running changes nothing: it is the same request.
+         *
+         *     Read-only upstream: the three paged inventory listings, the VLANs of every MX network
+         *     (`appliance/vlans`, falling back to `appliance/singleLan`), and the MX uplink statuses (for each
+         *     warm-spare pair's configured roles). Then the devices the organization imports are imported.
+         *     While it runs, the organization's switch-port and SSID reads wait for the lane.
          */
         post: operations["sync_meraki_org"];
         delete?: never;
@@ -8718,10 +8724,11 @@ export interface components {
              * Format: double
              * @description Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
              *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
-             *     wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
-             *     sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
-             *     each lane stops at 0.1, the slowest a session paces, so the two together can then send up
-             *     to 0.2 whatever this says.
+             *     wireless round, a slow one for the switch ports, the SSID read and the inventory sync
+             *     (periodic, or asked for by "Sync now") — and each paces at half of this. The one exception is
+             *     the LAN reads of an organization with no node yet, which take all of it: nothing is
+             *     collected for it, so the fast lane is idle. Below 0.2 each lane stops at 0.1, the slowest a
+             *     session paces, so the two together can then send up to 0.2 whatever this says.
              */
             target_rps: number;
             /** Format: int32 */
@@ -8936,6 +8943,31 @@ export interface components {
             prefix?: string | null;
             reason: components["schemas"]["FilingReason"];
         };
+        /** @description A whole-organization read: every MX network's LAN side, then the import (ADR-164 決定 30〜32). */
+        MerakiFullSyncView: {
+            /**
+             * Format: int32
+             * @description How many networks' LAN sides it reads; `null` until it has begun.
+             */
+            networks?: number | null;
+            /**
+             * Format: int32
+             * @description How many of those it has asked so far — a network whose read failed counts; `null` until
+             *     it has begun.
+             */
+            read?: number | null;
+            /**
+             * Format: date-time
+             * @description When "Sync now" asked for it; `null` for a read nobody asked for — an organization's first,
+             *     or the one a sync makes when it finds networks it has never read.
+             */
+            requested_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When it began; `null` while it waits for the organization's slow collect lane.
+             */
+            started_at?: string | null;
+        };
         /**
          * @description The role an MX is **configured** to hold in its warm-spare pair (ADR-164 決定 26), from
          *     `appliance/uplink/statuses`' `highAvailability.role` while `highAvailability.enabled` is true.
@@ -9056,6 +9088,7 @@ export interface components {
             enabled_tiers: string[];
             /** @description Whether an imported device is filed by its address into the folder whose IP range holds it. */
             file_by_prefix: boolean;
+            full_sync?: null | components["schemas"]["MerakiFullSyncView"];
             /** Format: uuid */
             group_id?: string | null;
             /** Format: uuid */
@@ -9088,8 +9121,10 @@ export interface components {
              * Format: double
              * @description Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
              *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
-             *     wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
-             *     sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
+             *     wireless round, a slow one for the switch ports, the SSID read and the inventory sync
+             *     (periodic, or asked for by "Sync now") — and each paces at half of this. The one exception is
+             *     the LAN reads of an organization with no node yet, which take all of it: nothing is
+             *     collected for it, so the fast lane is idle. Below 0.2
              *     each lane stops at 0.1, the slowest a session paces, so the two together can then send up
              *     to 0.2 whatever this says.
              */
@@ -9149,47 +9184,6 @@ export interface components {
          * @enum {string}
          */
         MerakiSyncFailure: "credential" | "config" | "auth" | "rate_limited" | "upstream" | "unreachable" | "malformed" | "truncated" | "timeout" | "internal" | "no_answer";
-        /** @description What one successful sync found and did. */
-        MerakiSyncReport: {
-            /**
-             * Format: int32
-             * @description Devices the Dashboard lists.
-             */
-            devices: number;
-            /**
-             * Format: int32
-             * @description Nodes that took a new address, a new name or a new network from the Dashboard in this sync
-             *     (ADR-164 決定 14). A node is renamed only while it still carries the name Meraki gave it,
-             *     and is never moved to another folder. Zero is the ordinary answer.
-             */
-            followed: number;
-            /**
-             * Format: int32
-             * @description Devices this sync turned into nodes. Always zero for an organization whose automatic import
-             *     is off.
-             */
-            imported: number;
-            /**
-             * Format: int32
-             * @description Networks the Dashboard lists.
-             */
-            networks: number;
-            /**
-             * Format: int32
-             * @description Devices that were listed last time and are not now.
-             */
-            newly_missing: number;
-            /**
-             * Format: int32
-             * @description Devices that qualified for import and were left out by the organization's `max_devices`.
-             */
-            over_cap: number;
-            /**
-             * Format: int32
-             * @description Inventory and network rows written. Zero is the ordinary answer.
-             */
-            written: number;
-        };
         /**
          * @description The dimension a metric's series carry, which decides how it can be read.
          * @enum {string}
@@ -19483,13 +19477,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The sync completed; what it found and how many rows it wrote */
-            200: {
+            /** @description The read is asked for — or already was. It runs in the background; watch `full_sync` on the organization */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MerakiSyncReport"];
+                    "application/json": components["schemas"]["MerakiFullSyncView"];
                 };
             };
             /** @description No valid bearer token */
@@ -19519,7 +19513,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), both of its collect lanes are held by collects or another sync (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`) */
+            /** @description Meraki polling is paused globally (`meraki_polling_paused`), or this organization is paused (`meraki_org_paused`) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -19528,25 +19522,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The sync ran and Yagra could not read or write its own database (`meraki_sync_failed`, reason `internal`) */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description The sync ran and the Dashboard API did not give a complete answer (`meraki_sync_failed`). Whatever the status, the reason is recorded on the organization as `last_sync_error` */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Inventory storage is unavailable (skeleton mode), or this core is a standby (`not_leader`) */
+            /** @description Inventory storage is unavailable (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;
