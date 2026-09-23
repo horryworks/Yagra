@@ -112,7 +112,7 @@ pub async fn run_stream<S>(
     let row_cadence = Arc::new(std::sync::Mutex::new(identity::IdentityCadence::default()));
     while let Some(mut job) = jobs.next().await {
         // Meraki org collectors share a sentinel target (0.0.0.0) and are single-flighted per org
-        // by core, so they use only the global concurrency cap (not per-device single-flight, which
+        // and lane by core (two lanes, ADR-169), so they use only the global concurrency cap (not per-device single-flight, which
         // would wrongly drop concurrent collects for different orgs) and fan out to many results.
         if matches!(job.check, CheckSpec::MerakiCollect(_)) {
             let queued_at = Instant::now();

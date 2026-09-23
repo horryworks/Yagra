@@ -338,6 +338,11 @@ pub(crate) struct MerakiOrgView {
     /// whatever this says.
     wireless_secs: u32,
     enabled_tiers: Vec<String>,
+    /// Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
+    /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
+    /// wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
+    /// and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
+    /// paces, so the total can then exceed this by up to 0.1.
     target_rps: f64,
     group_id: Option<Uuid>,
     /// Which stored credential holds this organization's API key. An id, not a secret — the key
@@ -739,6 +744,11 @@ pub(super) struct MerakiCadenceReq {
     #[serde(default)]
     wireless_secs: Option<i32>,
     enabled_tiers: Vec<String>,
+    /// Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
+    /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
+    /// wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
+    /// and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
+    /// paces, so the total can then exceed this by up to 0.1.
     target_rps: f64,
 }
 
@@ -1048,9 +1058,10 @@ fn meraki_devices_are_deployment_wide(scope: &super::scope::NodeScope) -> Result
 
 /// Sync one organization's inventory now, rather than waiting for the periodic sync.
 ///
-/// Read-only upstream (three paged GETs). It goes through the same single flight as the periodic
-/// sync and the collector, so pressing it while a collect is running answers 409 rather than
-/// spending the organization's rate budget twice.
+/// Read-only upstream (three paged GETs). It takes the organization's fast collect lane, as the
+/// periodic sync does, so pressing it while a sync or a fast collect (availability, uplink,
+/// traffic, a wireless round) is running answers 409 rather than spending the organization's rate
+/// budget twice. A switch-port collect or an SSID read runs in the other lane and does not refuse it.
 #[utoipa::path(
     post, path = "/api/v1/meraki/orgs/{id}/sync", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
@@ -1069,8 +1080,8 @@ async fn sync_meraki_org(
     _guard: RequireManageConfig,
     Scoped(scope): Scoped,
     admin: Admin,
-    // Leader-gated because the organization's single flight lives in the leader's process: a
-    // standby syncing would run beside the leader's collector with neither knowing about the other.
+    // Leader-gated because the organization's lanes live in the leader's process: a standby
+    // syncing would run beside the leader's collector with neither knowing about the other.
     _leader: Leader,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MerakiSyncReport>> {

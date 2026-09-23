@@ -1655,9 +1655,10 @@ export interface paths {
         put?: never;
         /**
          * Sync one organization's inventory now, rather than waiting for the periodic sync.
-         * @description Read-only upstream (three paged GETs). It goes through the same single flight as the periodic
-         *     sync and the collector, so pressing it while a collect is running answers 409 rather than
-         *     spending the organization's rate budget twice.
+         * @description Read-only upstream (three paged GETs). It takes the organization's fast collect lane, as the
+         *     periodic sync does, so pressing it while a sync or a fast collect (availability, uplink,
+         *     traffic, a wireless round) is running answers 409 rather than spending the organization's rate
+         *     budget twice. A switch-port collect or an SSID read runs in the other lane and does not refuse it.
          */
         post: operations["sync_meraki_org"];
         delete?: never;
@@ -8703,7 +8704,14 @@ export interface components {
              *     stays as it is, so a client written before the tier existed does not reset it.
              */
             switch_ports_secs?: number | null;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
+             *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
+             *     wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
+             *     and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
+             *     paces, so the total can then exceed this by up to 0.1.
+             */
             target_rps: number;
             /** Format: int32 */
             traffic_secs: number;
@@ -9057,7 +9065,14 @@ export interface components {
              * @description The switch-port tier's interval (seconds) — every switch port's status, speed and traffic.
              */
             switch_ports_secs: number;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
+             *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
+             *     wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
+             *     and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
+             *     paces, so the total can then exceed this by up to 0.1.
+             */
             target_rps: number;
             /** Format: int32 */
             traffic_secs: number;

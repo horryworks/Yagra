@@ -8,11 +8,13 @@
 //! bus would mean a new message, both allow-lists, and a second place that decides what "missing"
 //! means — for three GETs every five minutes.
 //!
-//! **What it shares with the collector is the organization's single flight** ([`MerakiInflight`]).
-//! The Dashboard API's rate limit is per organization, so a sync and a collect of the same
-//! organization never run at once: whichever asks second waits a tick. The flight is released by a
-//! drop guard, because a sync that panicked or was cancelled while holding it would otherwise stop
-//! that organization's collection until the lease ran out.
+//! **What it shares with the collector is the organization's fast lane** ([`MerakiInflight`],
+//! ADR-169). The Dashboard API's rate limit is per organization, so a sync and a fast collect of
+//! the same organization never run at once — whichever asks second waits a tick — and it paces at
+//! one lane's share of the budget (`MerakiOrg::lane_rps`), because a slow-lane collect can be
+//! running beside it. The lane is released by a drop guard, because a sync that panicked or was
+//! cancelled while holding it would otherwise stop that organization's availability collects
+//! until the lease ran out.
 //!
 //! **What it must never do is conclude from a short answer.** A device the listing does not contain
 //! is marked missing, so the listing has to be complete: [`MerakiDirectory::inventory`] is backed by
@@ -230,7 +232,7 @@ impl MerakiDirectory for DashboardApi {
             &org.base_url,
             api_key,
             &org.org_id,
-            org.target_rps,
+            org.lane_rps(),
             REQUEST_TIMEOUT,
             self.wire.as_ref(),
         )
@@ -246,7 +248,7 @@ impl MerakiDirectory for DashboardApi {
             &org.base_url,
             api_key,
             &org.org_id,
-            org.target_rps,
+            org.lane_rps(),
             REQUEST_TIMEOUT,
             self.wire.as_ref(),
         )
@@ -279,14 +281,14 @@ pub struct MerakiSyncReport {
 /// Why a sync did not produce a report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncError {
-    /// A collect, or another sync, holds the organization's flight. Nothing was attempted and
-    /// nothing was recorded.
+    /// A fast collect, or another sync, holds the organization's fast lane (ADR-169). Nothing was
+    /// attempted and nothing was recorded.
     Busy,
     /// The sync ran and failed; the reason is on the organization's row.
     Failed(MerakiSyncFailure),
 }
 
-/// Releases an organization's flight when the sync ends — however it ends.
+/// Releases the organization's fast lane when the sync ends — however it ends.
 struct Flight<'a> {
     inflight: &'a MerakiInflight,
     job: Uuid,
@@ -617,8 +619,8 @@ impl SyncSchedule {
 /// The leader-only periodic sync.
 ///
 /// ⚠️ **Spawned from `LeaderTasks`, never from `run_live`** (ADR-090). Leader-gated for a stronger
-/// reason than NetBox's loop: the single flight lives in this process, so two cores syncing would
-/// each believe they held an organization alone.
+/// reason than NetBox's loop: the lanes live in this process, so two cores syncing would each
+/// believe they held an organization's fast lane alone.
 ///
 /// Honours the Meraki kill switch — that switch exists to give the Dashboard API budget back at
 /// once, and a sync spends it like a collect does. Organizations are synced one after another; a
@@ -646,7 +648,7 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
             }
             match sync.sync_org(org).await {
                 Ok(_) => schedule.succeeded(org.id),
-                // A collect holds the organization. Not a failure: ask again next tick.
+                // A fast collect holds the organization. Not a failure: ask again next tick.
                 Err(SyncError::Busy) => {}
                 Err(SyncError::Failed(_)) => schedule.failed(org.id, Instant::now()),
             }
@@ -657,9 +659,11 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meraki::MerakiLane;
     use crate::pgtest;
     use sqlx::Row;
     use std::sync::Mutex;
+    use yagra_common::MerakiTier;
     use yagra_transport::{
         MerakiAvailability, MerakiDeviceInfo, MerakiInventoryDevice, MerakiNetworkInfo,
     };
@@ -1135,16 +1139,22 @@ mod tests {
         assert_eq!((org.last_sync_ok, org.last_sync_error), (Some(true), None));
     }
 
-    /// The single flight, in both directions: a collect in flight refuses the sync without touching
-    /// the Dashboard or the row, and a finished sync leaves the organization free for the collector.
+    /// The fast lane, in both directions (ADR-169): a fast collect in flight refuses the sync
+    /// without touching the Dashboard or the row, and a finished sync leaves the lane free for the
+    /// collector.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn a_sync_and_a_collect_never_hold_one_organization_together(pool: sqlx::PgPool) {
+    async fn a_fast_lane_collect_refuses_the_sync(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
         let collect = Uuid::new_v4();
-        assert!(r
-            .inflight
-            .acquire(r.org, collect, Duration::from_secs(300), Instant::now()));
+        assert!(r.inflight.acquire_collect(
+            r.org,
+            MerakiLane::Fast,
+            collect,
+            MerakiTier::Availability,
+            Duration::from_secs(300),
+            Instant::now()
+        ));
 
         assert_eq!(r.sync.sync_org(&r.org().await).await, Err(SyncError::Busy));
         assert_eq!(
@@ -1162,14 +1172,50 @@ mod tests {
         r.inflight.complete(collect);
         r.sync.sync_org(&r.org().await).await.expect("sync");
         assert!(
-            !r.inflight.is_inflight(r.org, Instant::now()),
-            "a finished sync kept the organization's flight"
+            !r.inflight
+                .is_inflight(r.org, MerakiLane::Fast, Instant::now()),
+            "a finished sync kept the organization's fast lane"
         );
 
         // …and a failed one releases it too.
         r.directory.now_answers(Err(MerakiFetchError::Network));
         let _ = r.sync.sync_org(&r.org().await).await;
-        assert!(!r.inflight.is_inflight(r.org, Instant::now()));
+        assert!(!r
+            .inflight
+            .is_inflight(r.org, MerakiLane::Fast, Instant::now()));
+    }
+
+    /// ADR-169: a switch-port collect or an SSID read holding the slow lane for minutes no longer
+    /// keeps the sync — or a "Sync now" — waiting, and the sync releases its own lane only.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_sync_runs_beside_a_slow_lane_collect_and_releases_only_its_own_lane(
+        pool: sqlx::PgPool,
+    ) {
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+        let ports = Uuid::new_v4();
+        assert!(r.inflight.acquire_collect(
+            r.org,
+            MerakiLane::Slow,
+            ports,
+            MerakiTier::SwitchPorts,
+            Duration::from_secs(300),
+            Instant::now()
+        ));
+
+        r.sync
+            .sync_org(&r.org().await)
+            .await
+            .expect("a slow collect refused the sync");
+        assert_eq!(r.directory.asked(), 1);
+        assert!(
+            r.inflight
+                .is_inflight(r.org, MerakiLane::Slow, Instant::now()),
+            "the sync's drop guard released the switch-port collect's lane"
+        );
+        assert!(!r
+            .inflight
+            .is_inflight(r.org, MerakiLane::Fast, Instant::now()));
     }
 
     /// A key that cannot be opened is a recorded failure, and the Dashboard is never asked.

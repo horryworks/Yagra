@@ -157,12 +157,12 @@ impl MerakiOrg {
     /// collect tier — it is read by the periodic sync (`meraki_sync.rs`), on `inventory_secs` — so
     /// it is filtered out here.
     ///
-    /// 🚨 **The order is load-bearing, and the stored column must not decide it.** Until a tier has
-    /// been dispatched once in this process every tier is equally overdue (`Duration::MAX`), and the
-    /// scheduler's strictly-greater tie-break therefore keeps the **first** tier it is handed. So
-    /// while something stops every collect before a job is sent — a key that cannot be opened, a
-    /// read of this core's own database that failed — the failure is counted against that first
-    /// tier and no other, and availability is the only tier that raises (ADR-164 決定 18).
+    /// 🚨 **The order is load-bearing, and the stored column must not decide it.** The fast collect
+    /// lane sends the **first** due tier in this order (`meraki_schedule::MerakiSchedule::plan`,
+    /// ADR-169). So availability goes whenever it is due, and while something stops every collect
+    /// before a job is sent — a key that cannot be opened, a read of this core's own database that
+    /// failed — the failure is counted against availability on every cadence, and availability is
+    /// the only tier that raises (ADR-164 決定 18).
     /// `PUT …/cadence` stores `enabled_tiers` in the caller's order verbatim and validates only
     /// membership, so an external client sending `["uplink", "availability"]` used to silence the
     /// one alert that says the organization is not being collected at all. Sorting here is what
@@ -174,6 +174,18 @@ impl MerakiOrg {
             .filter(|t| *t != MerakiTier::Inventory)
             .filter(|t| self.enabled_tiers.iter().any(|s| s == t.as_str()))
             .collect()
+    }
+
+    /// The request rate one of this organization's two collect lanes paces at (ADR-169 決定 4):
+    /// half of `target_rps`, which stays **the organization's total** — the Dashboard's limit is
+    /// per organization, and the two lanes can be asking at the same moment.
+    ///
+    /// ⚠️ Below twice [`yagra_transport::MERAKI_MIN_RPS`] the halving stops at that floor, because
+    /// no session paces slower; the two lanes together then send up to the floor more than the
+    /// setting. The inventory sync paces at this too — it runs in the fast lane.
+    #[must_use]
+    pub fn lane_rps(&self) -> f64 {
+        (self.target_rps / 2.0).max(yagra_transport::MERAKI_MIN_RPS)
     }
 
     /// The cadence (seconds) for a tier.
@@ -239,7 +251,7 @@ pub fn build_collect_check(
         devices,
         network_ids,
         per_page: DEFAULT_PER_PAGE,
-        target_rps: org.target_rps,
+        target_rps: org.lane_rps(),
         timeout_ms: DEFAULT_COLLECT_TIMEOUT_MS,
         port_names: slow.port_names,
         ssid_statuses: slow.ssid_statuses,
@@ -259,10 +271,9 @@ pub struct PoolCaps {
 
 /// Whether the pool a collect would go to can run `tier` at all (ADR-167 決定 9, ADR-168 決定 7).
 ///
-/// A poller from before a tier cannot decode its job, drops it, and the organization's single
-/// collect flight then stays taken for the whole lease — availability collects included — so a tier
-/// the pool cannot run is not offered, and not counted as failing either. Exhaustive, so the next
-/// tier has to answer the question.
+/// A poller from before a tier cannot decode its job, drops it, and the lane that job took then
+/// stays taken for the whole lease (ADR-169) — so a tier the pool cannot run is not offered, and not
+/// counted as failing either. Exhaustive, so the next tier has to answer the question.
 #[must_use]
 pub fn pool_can_run(tier: MerakiTier, caps: PoolCaps) -> bool {
     match tier {
@@ -275,38 +286,48 @@ pub fn pool_can_run(tier: MerakiTier, caps: PoolCaps) -> bool {
     }
 }
 
-/// The tier an organization's next collect is for: the most overdue of its due tiers that the pool
-/// can run ([`pool_can_run`]), or `None` when nothing is due. `last` is when each tier was last
-/// dispatched; a tier never dispatched in this process is due and the most overdue of all.
+/// Which of an organization's two collect lanes a piece of Meraki work runs in (ADR-169).
 ///
-/// Ties keep the **first** tier in [`MerakiOrg::active_tiers`]' cadence order, which is what puts
-/// availability first after a restart — the one tier whose failures raise an alert (ADR-164 決定 18).
-/// Pure, so that order and the capability gate are tested without the scheduler's loop.
-#[must_use]
-pub fn pick_due_tier(
-    org: &MerakiOrg,
-    last: &HashMap<(Uuid, MerakiTier), Instant>,
-    now: Instant,
-    caps: PoolCaps,
-) -> Option<MerakiTier> {
-    let mut best: Option<(MerakiTier, Duration)> = None;
-    for tier in org.active_tiers() {
-        if !pool_can_run(tier, caps) {
-            continue;
-        }
-        let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
-        let (due, overdue) = match last.get(&(org.id, tier)) {
-            Some(&t) => {
-                let e = now.duration_since(t);
-                (e >= cadence, e)
-            }
-            None => (true, Duration::MAX),
-        };
-        if due && best.is_none_or(|(_, bo)| overdue > bo) {
-            best = Some((tier, overdue));
+/// Until ADR-169 an organization had **one** lane: a switch-port collect (about 140 s, 220 s with
+/// the ports' names) or an SSID read (about 80 s) held it while availability, which takes two
+/// seconds, waited behind. Measured on a lab deployment with availability every 60 s: 185 of 360
+/// collects in six hours, and a gap of up to 330 s. The slow reads now have a lane of their own,
+/// and each lane still runs one collect at a time, so an organization is asked by two sessions at
+/// most — paced at half its `target_rps` each ([`MerakiOrg::lane_rps`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MerakiLane {
+    /// Availability, uplink, traffic, a wireless round without its SSID read, and the inventory
+    /// sync: seconds each.
+    Fast,
+    /// The switch ports and the SSID read: minutes each, and nothing liveness waits on.
+    Slow,
+}
+
+impl MerakiLane {
+    /// The label value `yagra_meraki_collects_dispatched_total` carries.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MerakiLane::Fast => "fast",
+            MerakiLane::Slow => "slow",
         }
     }
-    best.map(|(tier, _)| tier)
+
+    /// The lane a collect of `tier` that makes the slow reads `slow` runs in. Exhaustive — the next
+    /// tier has to say which one it belongs to. The lane is core's to decide and no poller knows it:
+    /// a wireless round that also reads the SSIDs is still `MerakiTier::Wireless` on the bus.
+    #[must_use]
+    pub fn of(tier: MerakiTier, slow: SlowReads) -> Self {
+        match tier {
+            MerakiTier::SwitchPorts => MerakiLane::Slow,
+            MerakiTier::Wireless if slow.ssid_statuses => MerakiLane::Slow,
+            MerakiTier::Wireless
+            | MerakiTier::Availability
+            | MerakiTier::Uplink
+            | MerakiTier::Traffic
+            | MerakiTier::Inventory => MerakiLane::Fast,
+        }
+    }
 }
 
 /// How often a switch-port collect also reads the ports' configured names (ADR-167 決定 1). The
@@ -418,11 +439,12 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
     }
 }
 
-/// Per-org single-flight tracker: at most one Dashboard API session outstanding per org so the
-/// org's shared API rate budget is never exceeded (the #1 safeguard). Acquired at dispatch and
-/// cleared when the collect's first result returns (all fan-out results share the job's id); a
-/// lease deadline is the backstop if a result never arrives (poller crash), so an org can't wedge
-/// forever. The inventory sync takes the same flight (`meraki_sync.rs`).
+/// Per-lane single-flight tracker: at most one Dashboard API session outstanding per organization
+/// **and lane** ([`MerakiLane`], ADR-169), so an organization is asked by two sessions at most and
+/// its shared API rate budget is never exceeded (the #1 safeguard — each lane paces at half of it).
+/// Acquired at dispatch and cleared when the collect's first result returns (all fan-out results
+/// share the job's id); a lease deadline is the backstop if a result never arrives (poller crash),
+/// so a lane can't wedge forever. The inventory sync takes the fast lane (`meraki_sync.rs`).
 ///
 /// Since ADR-164 決定 18 it also knows **which job, and which tier, holds the flight**, for two
 /// reasons:
@@ -443,7 +465,7 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
 /// exists at all: it is the one Meraki handle the result-ingest path already holds.
 #[derive(Default)]
 pub struct MerakiInflight {
-    flights: Mutex<HashMap<Uuid, Flight>>, // org → who holds it
+    flights: Mutex<HashMap<(Uuid, MerakiLane), Flight>>, // (org, lane) → who holds it
     unanswered: Mutex<Vec<(Uuid, MerakiTier)>>,
     /// How each organization's collects have been ending (決定 18).
     pub health: crate::meraki_health::MerakiCollectHealth,
@@ -463,34 +485,39 @@ impl MerakiInflight {
         Self::default()
     }
 
-    /// Try to mark `org` in flight for the inventory sync's `job_id`. Returns `false` if a session
-    /// is already outstanding (and its lease hasn't expired) — the caller then skips this org.
+    /// Try to mark `org`'s **fast** lane in flight for the inventory sync's `job_id` — the sync is
+    /// a few seconds, so it waits behind nothing slow and a "Sync now" is refused only while a
+    /// fast collect runs. Returns `false` if that lane is already held (and its lease hasn't
+    /// expired) — the caller then skips this org.
     pub fn acquire(&self, org: Uuid, job_id: Uuid, lease: Duration, now: Instant) -> bool {
-        self.take(org, job_id, None, lease, now)
+        self.take(org, MerakiLane::Fast, job_id, None, lease, now)
     }
 
-    /// [`Self::acquire`] for a collect of `tier`, which is what makes an unanswered lease evidence.
+    /// [`Self::acquire`] for a collect of `tier` in `lane`, which is what makes an unanswered lease
+    /// evidence.
     pub fn acquire_collect(
         &self,
         org: Uuid,
+        lane: MerakiLane,
         job_id: Uuid,
         tier: MerakiTier,
         lease: Duration,
         now: Instant,
     ) -> bool {
-        self.take(org, job_id, Some(tier), lease, now)
+        self.take(org, lane, job_id, Some(tier), lease, now)
     }
 
     fn take(
         &self,
         org: Uuid,
+        lane: MerakiLane,
         job: Uuid,
         tier: Option<MerakiTier>,
         lease: Duration,
         now: Instant,
     ) -> bool {
         let mut flights = self.flights.lock().expect("meraki inflight poisoned");
-        if let Some(held) = flights.get(&org) {
+        if let Some(held) = flights.get(&(org, lane)) {
             if held.deadline > now {
                 return false;
             }
@@ -503,7 +530,7 @@ impl MerakiInflight {
             }
         }
         flights.insert(
-            org,
+            (org, lane),
             Flight {
                 job,
                 tier,
@@ -513,16 +540,16 @@ impl MerakiInflight {
         true
     }
 
-    /// Release `org`'s flight **if `job_id` is the job that holds it** (called for every poll
-    /// result; a no-op for non-Meraki jobs). Returns the organization and the tier that was
-    /// answered, so a result from a poller that sends no collect report still counts as an answer.
+    /// Release the lane **`job_id` holds, if it still holds one** (called for every poll result; a
+    /// no-op for non-Meraki jobs). Returns the organization and the tier that was answered, so a
+    /// result from a poller that sends no collect report still counts as an answer.
     pub fn complete(&self, job_id: Uuid) -> Option<(Uuid, Option<MerakiTier>)> {
         let mut flights = self.flights.lock().expect("meraki inflight poisoned");
-        let org = flights
+        let key = flights
             .iter()
-            .find_map(|(org, held)| (held.job == job_id).then_some(*org))?;
-        let held = flights.remove(&org)?;
-        Some((org, held.tier))
+            .find_map(|(key, held)| (held.job == job_id).then_some(*key))?;
+        let held = flights.remove(&key)?;
+        Some((key.0, held.tier))
     }
 
     /// The collect flights whose lease has run out with no result, each handed over once.
@@ -530,7 +557,7 @@ impl MerakiInflight {
         let mut out =
             std::mem::take(&mut *self.unanswered.lock().expect("meraki unanswered poisoned"));
         let mut flights = self.flights.lock().expect("meraki inflight poisoned");
-        flights.retain(|org, held| {
+        flights.retain(|(org, _), held| {
             if held.deadline > now {
                 return true;
             }
@@ -542,13 +569,13 @@ impl MerakiInflight {
         out
     }
 
-    /// Whether `org` currently has an unexpired outstanding session.
+    /// Whether `org`'s `lane` currently has an unexpired outstanding session.
     #[must_use]
-    pub fn is_inflight(&self, org: Uuid, now: Instant) -> bool {
+    pub fn is_inflight(&self, org: Uuid, lane: MerakiLane, now: Instant) -> bool {
         self.flights
             .lock()
             .expect("meraki inflight poisoned")
-            .get(&org)
+            .get(&(org, lane))
             .is_some_and(|held| held.deadline > now)
     }
 }
@@ -1312,8 +1339,8 @@ mod tests {
     /// external client can produce — and it used to mean a key that cannot be opened raised
     /// nothing at all (ADR-164 決定 18).
     ///
-    /// ⚠️ This pins the only place the scheduler's tier order comes from, not the scheduler's own
-    /// tie-break, which lives in a loop in `main.rs` that no test drives.
+    /// This pins the only place the scheduler's tier order comes from; what the fast lane does
+    /// with it is `meraki_schedule`'s `a_restart_puts_availability_first_in_the_fast_lane`.
     #[test]
     fn active_tiers_are_in_cadence_order_whatever_order_they_were_stored_in() {
         let mut o = org();
@@ -1367,7 +1394,10 @@ mod tests {
         assert_eq!(check.org_id, "123456");
         assert_eq!(check.meraki_org_uuid, o.id);
         assert_eq!(check.tier, MerakiTier::Uplink);
-        assert_eq!(check.target_rps, 2.0);
+        assert_eq!(
+            check.target_rps, 1.0,
+            "a collect paced at the whole organization's rate, beside the other lane (ADR-169)"
+        );
         assert_eq!(check.devices.len(), 1);
         assert_eq!(check.network_ids, vec!["N_1".to_string()]);
         assert!(!check.port_names);
@@ -1396,129 +1426,6 @@ mod tests {
             },
         );
         assert!(ssids.ssid_statuses && !ssids.port_names);
-    }
-
-    /// A pool whose every poller claims the wireless tier; whether it can run the switch ports is
-    /// the question.
-    fn ports(switch_ports: bool) -> PoolCaps {
-        PoolCaps {
-            switch_ports,
-            wireless: true,
-        }
-    }
-
-    fn with_switch_ports() -> MerakiOrg {
-        let mut o = org();
-        o.enabled_tiers = ["availability", "uplink", "switch_ports", "traffic"]
-            .map(str::to_owned)
-            .to_vec();
-        o
-    }
-
-    /// ADR-167 決定 9. A pool that cannot run the switch-port tier is never offered it — and the
-    /// other tiers carry on exactly as before, availability first.
-    #[test]
-    fn the_switch_port_tier_is_picked_only_where_every_poller_can_run_it() {
-        let o = with_switch_ports();
-        let now = Instant::now();
-        let mut last = HashMap::new();
-        // Nothing dispatched yet: availability wins the tie either way.
-        assert_eq!(
-            pick_due_tier(&o, &last, now, ports(true)),
-            Some(MerakiTier::Availability)
-        );
-        assert_eq!(
-            pick_due_tier(&o, &last, now, ports(false)),
-            Some(MerakiTier::Availability)
-        );
-
-        // Availability and uplink just went; switch ports and traffic are next.
-        last.insert((o.id, MerakiTier::Availability), now);
-        last.insert((o.id, MerakiTier::Uplink), now);
-        assert_eq!(
-            pick_due_tier(&o, &last, now, ports(true)),
-            Some(MerakiTier::SwitchPorts)
-        );
-        assert_eq!(
-            pick_due_tier(&o, &last, now, ports(false)),
-            Some(MerakiTier::Traffic),
-            "a pool with an old poller was offered the switch-port tier"
-        );
-
-        // Traffic went too: with the tier withheld, nothing is due — not a failure, just nothing.
-        last.insert((o.id, MerakiTier::Traffic), now);
-        assert_eq!(pick_due_tier(&o, &last, now, ports(false)), None);
-        assert_eq!(
-            pick_due_tier(&o, &last, now, ports(true)),
-            Some(MerakiTier::SwitchPorts)
-        );
-
-        // Its own cadence decides when it is due again (600 s in this fixture).
-        last.insert((o.id, MerakiTier::SwitchPorts), now);
-        let later = now + Duration::from_secs(599);
-        assert_ne!(
-            pick_due_tier(&o, &last, later, ports(true)),
-            Some(MerakiTier::SwitchPorts)
-        );
-        let due = now + Duration::from_secs(600);
-        last.insert((o.id, MerakiTier::Availability), due);
-        last.insert((o.id, MerakiTier::Uplink), due);
-        last.insert((o.id, MerakiTier::Traffic), due);
-        assert_eq!(
-            pick_due_tier(&o, &last, due, ports(true)),
-            Some(MerakiTier::SwitchPorts)
-        );
-    }
-
-    /// ADR-168 決定 7, and the starvation it must not bring back: an organization whose pool cannot
-    /// run the wireless tier is never offered it, and one that can but has not had it yet does not
-    /// keep availability waiting — every never-dispatched tier ties, and availability wins the tie.
-    #[test]
-    fn the_wireless_tier_is_picked_only_where_every_poller_can_run_it() {
-        let mut o = org();
-        o.enabled_tiers = ["availability", "wireless", "switch_ports"]
-            .map(str::to_owned)
-            .to_vec();
-        let now = Instant::now();
-        let all = PoolCaps {
-            switch_ports: true,
-            wireless: true,
-        };
-        let old = PoolCaps {
-            switch_ports: true,
-            wireless: false,
-        };
-        let mut last = HashMap::new();
-        assert_eq!(
-            pick_due_tier(&o, &last, now, all),
-            Some(MerakiTier::Availability)
-        );
-        last.insert((o.id, MerakiTier::Availability), now);
-        // The cheap wireless read goes before the long switch-port one when both are due.
-        assert_eq!(
-            pick_due_tier(&o, &last, now, all),
-            Some(MerakiTier::Wireless)
-        );
-        assert_eq!(
-            pick_due_tier(&o, &last, now, old),
-            Some(MerakiTier::SwitchPorts),
-            "a pool with an old poller was offered the wireless tier"
-        );
-        last.insert((o.id, MerakiTier::SwitchPorts), now);
-        assert_eq!(pick_due_tier(&o, &last, now, old), None);
-
-        // Availability is due again before the wireless tier has ever gone: the wireless tier's
-        // "never dispatched" must not outrank it forever — it wins once, then waits its cadence.
-        let later = now + Duration::from_secs(300);
-        assert_eq!(
-            pick_due_tier(&o, &last, later, all),
-            Some(MerakiTier::Wireless)
-        );
-        last.insert((o.id, MerakiTier::Wireless), later);
-        assert_eq!(
-            pick_due_tier(&o, &last, later, all),
-            Some(MerakiTier::Availability)
-        );
     }
 
     #[test]
@@ -1611,19 +1518,76 @@ mod tests {
     }
 
     #[test]
-    fn inflight_single_flights_per_org_and_clears_on_result() {
+    fn inflight_single_flights_per_lane_and_clears_on_result() {
         let f = MerakiInflight::new();
         let org = Uuid::from_u128(1);
         let now = Instant::now();
         let lease = Duration::from_secs(300);
-        // First dispatch acquires; a second (any tier) is refused while outstanding.
+        // First dispatch acquires; a second in the same lane is refused while outstanding.
         assert!(f.acquire(org, Uuid::from_u128(10), lease, now));
         assert!(!f.acquire(org, Uuid::from_u128(11), lease, now));
-        assert!(f.is_inflight(org, now));
-        // The result for the first job clears the org; then a new collect can acquire.
+        assert!(f.is_inflight(org, MerakiLane::Fast, now));
+        // The result for the first job clears the lane; then a new collect can acquire.
         f.complete(Uuid::from_u128(10));
-        assert!(!f.is_inflight(org, now));
+        assert!(!f.is_inflight(org, MerakiLane::Fast, now));
         assert!(f.acquire(org, Uuid::from_u128(12), lease, now));
+    }
+
+    /// ADR-169 決定 1: the two lanes are held independently — a slow collect in flight no longer
+    /// keeps availability, or the sync, waiting — and each is still one collect at a time.
+    #[test]
+    fn an_organization_holds_at_most_one_flight_per_lane() {
+        let f = MerakiInflight::new();
+        let (org, other) = (Uuid::from_u128(7), Uuid::from_u128(8));
+        let now = Instant::now();
+        let lease = Duration::from_secs(300);
+        let ports = Uuid::from_u128(70);
+        assert!(f.acquire_collect(
+            org,
+            MerakiLane::Slow,
+            ports,
+            MerakiTier::SwitchPorts,
+            lease,
+            now
+        ));
+        assert!(
+            f.acquire_collect(
+                org,
+                MerakiLane::Fast,
+                Uuid::from_u128(71),
+                MerakiTier::Availability,
+                lease,
+                now
+            ),
+            "availability waited behind a switch-port collect"
+        );
+        assert!(
+            !f.acquire_collect(
+                org,
+                MerakiLane::Slow,
+                Uuid::from_u128(72),
+                MerakiTier::Wireless,
+                lease,
+                now
+            ),
+            "a second slow collect was let in beside the first"
+        );
+        assert!(
+            !f.acquire(org, Uuid::from_u128(73), lease, now),
+            "the sync ran beside a fast collect"
+        );
+        assert!(
+            f.acquire(other, Uuid::from_u128(80), lease, now),
+            "another organization's lanes are its own"
+        );
+
+        // A result releases the lane its own job took, and only that one.
+        assert_eq!(
+            f.complete(ports),
+            Some((org, Some(MerakiTier::SwitchPorts)))
+        );
+        assert!(!f.is_inflight(org, MerakiLane::Slow, now));
+        assert!(f.is_inflight(org, MerakiLane::Fast, now));
     }
 
     #[test]
@@ -1634,7 +1598,7 @@ mod tests {
         assert!(f.acquire(org, Uuid::from_u128(20), Duration::from_secs(1), now));
         // A poll far in the future sees the lease expired → re-acquire (backstop for a lost result).
         let later = now + Duration::from_secs(5);
-        assert!(!f.is_inflight(org, later));
+        assert!(!f.is_inflight(org, MerakiLane::Fast, later));
         assert!(f.acquire(org, Uuid::from_u128(21), Duration::from_secs(1), later));
     }
 
@@ -1647,7 +1611,14 @@ mod tests {
         let now = Instant::now();
         let lease = Duration::from_secs(300);
         let (old, current) = (Uuid::from_u128(30), Uuid::from_u128(31));
-        assert!(f.acquire_collect(org, old, MerakiTier::Availability, lease, now));
+        assert!(f.acquire_collect(
+            org,
+            MerakiLane::Fast,
+            old,
+            MerakiTier::Availability,
+            lease,
+            now
+        ));
         let later = now + lease + Duration::from_secs(1);
         assert!(
             f.acquire(org, current, lease, later),
@@ -1659,33 +1630,60 @@ mod tests {
             None,
             "a straggler released a flight it does not hold"
         );
-        assert!(f.is_inflight(org, later));
+        assert!(f.is_inflight(org, MerakiLane::Fast, later));
         assert_eq!(f.complete(current), Some((org, None)));
-        assert!(!f.is_inflight(org, later));
+        assert!(!f.is_inflight(org, MerakiLane::Fast, later));
     }
 
     /// A collect nobody answered is evidence (決定 18) — reported once, whether the next dispatch or
     /// the health loop is what notices the lease has run out. The sync's flight never is: its
-    /// failures are recorded on the row.
+    /// failures are recorded on the row. Both lanes' collects are evidence the same way.
     #[test]
     fn a_collect_whose_lease_runs_out_unanswered_is_handed_over_exactly_once() {
         let f = MerakiInflight::new();
         let (a, b, c) = (Uuid::from_u128(4), Uuid::from_u128(5), Uuid::from_u128(6));
         let now = Instant::now();
         let lease = Duration::from_secs(300);
-        assert!(f.acquire_collect(a, Uuid::from_u128(40), MerakiTier::Availability, lease, now));
-        assert!(f.acquire_collect(b, Uuid::from_u128(50), MerakiTier::Uplink, lease, now));
+        let fast = MerakiLane::Fast;
+        assert!(f.acquire_collect(
+            a,
+            fast,
+            Uuid::from_u128(40),
+            MerakiTier::Availability,
+            lease,
+            now
+        ));
+        assert!(f.acquire_collect(
+            a,
+            MerakiLane::Slow,
+            Uuid::from_u128(45),
+            MerakiTier::SwitchPorts,
+            lease,
+            now
+        ));
+        assert!(f.acquire_collect(b, fast, Uuid::from_u128(50), MerakiTier::Uplink, lease, now));
         assert!(f.acquire(c, Uuid::from_u128(60), lease, now));
         assert_eq!(f.take_unanswered(now), vec![], "nothing has run out yet");
 
         let later = now + lease + Duration::from_secs(1);
-        // `a` is noticed by the next dispatch, `b` and `c` by the sweep.
-        assert!(f.acquire_collect(a, Uuid::from_u128(41), MerakiTier::Uplink, lease, later));
+        // `a`'s fast lane is noticed by the next dispatch, the rest by the sweep.
+        assert!(f.acquire_collect(
+            a,
+            fast,
+            Uuid::from_u128(41),
+            MerakiTier::Uplink,
+            lease,
+            later
+        ));
         let mut got = f.take_unanswered(later);
-        got.sort_by_key(|(org, _)| *org);
+        got.sort_by_key(|(org, tier)| (*org, tier.as_str()));
         assert_eq!(
             got,
-            vec![(a, MerakiTier::Availability), (b, MerakiTier::Uplink)]
+            vec![
+                (a, MerakiTier::Availability),
+                (a, MerakiTier::SwitchPorts),
+                (b, MerakiTier::Uplink)
+            ]
         );
         assert_eq!(
             f.take_unanswered(later),
@@ -1693,7 +1691,7 @@ mod tests {
             "handed over a second time"
         );
         assert!(
-            f.is_inflight(a, later),
+            f.is_inflight(a, fast, later),
             "the flight that replaced it is untouched"
         );
 
@@ -1703,6 +1701,49 @@ mod tests {
             Some((a, Some(MerakiTier::Uplink)))
         );
         assert_eq!(f.take_unanswered(later + lease + lease), vec![]);
+    }
+
+    /// ADR-169 決定 1: only the two slow reads leave the fast lane. A wireless round is fast unless
+    /// it carries the SSID read, and nothing else a collect can make changes its lane.
+    #[test]
+    fn only_the_switch_ports_and_the_ssid_read_run_in_the_slow_lane() {
+        for tier in MerakiTier::ALL {
+            for (port_names, ssid_statuses) in [(false, false), (true, false), (false, true)] {
+                let slow = SlowReads {
+                    port_names,
+                    ssid_statuses,
+                };
+                let expected = match tier {
+                    MerakiTier::SwitchPorts => MerakiLane::Slow,
+                    MerakiTier::Wireless if ssid_statuses => MerakiLane::Slow,
+                    MerakiTier::Wireless
+                    | MerakiTier::Availability
+                    | MerakiTier::Uplink
+                    | MerakiTier::Traffic
+                    | MerakiTier::Inventory => MerakiLane::Fast,
+                };
+                assert_eq!(MerakiLane::of(tier, slow), expected, "{tier:?} {slow:?}");
+            }
+        }
+    }
+
+    /// ADR-169 決定 4: `target_rps` stays the organization's total — each lane paces at half — down
+    /// to where no session paces slower.
+    #[test]
+    fn lane_rps_splits_the_org_budget_and_never_exceeds_it() {
+        let mut o = org();
+        for total in [10.0, 2.0, 1.0, 0.5, 0.2] {
+            o.target_rps = total;
+            assert!(
+                (o.lane_rps() * 2.0 - total).abs() < 1e-9,
+                "{total}: two lanes at {} each",
+                o.lane_rps()
+            );
+        }
+        // Below twice the floor the halving stops there; the overshoot is at most the floor.
+        o.target_rps = 0.1;
+        assert!((o.lane_rps() - yagra_transport::MERAKI_MIN_RPS).abs() < 1e-9);
+        assert!(o.lane_rps() * 2.0 - o.target_rps <= yagra_transport::MERAKI_MIN_RPS + 1e-9);
     }
 
     #[test]

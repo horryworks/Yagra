@@ -8270,7 +8270,7 @@
           "meraki"
         ],
         "summary": "Sync one organization's inventory now, rather than waiting for the periodic sync.",
-        "description": "Read-only upstream (three paged GETs). It goes through the same single flight as the periodic\nsync and the collector, so pressing it while a collect is running answers 409 rather than\nspending the organization's rate budget twice.",
+        "description": "Read-only upstream (three paged GETs). It takes the organization's fast collect lane, as the\nperiodic sync does, so pressing it while a sync or a fast collect (availability, uplink,\ntraffic, a wireless round) is running answers 409 rather than spending the organization's rate\nbudget twice. A switch-port collect or an SSID read runs in the other lane and does not refuse it.",
         "operationId": "sync_meraki_org",
         "parameters": [
           {
@@ -31592,7 +31592,8 @@
           },
           "target_rps": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Requests per second this organization may be sent, **in total** (ADR-169). Its collects run\nin two lanes that can be asking at once — a fast one for availability, uplink, traffic, a\nwireless round and the inventory sync, a slow one for the switch ports and the SSID read —\nand each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session\npaces, so the total can then exceed this by up to 0.1."
           },
           "traffic_secs": {
             "type": "integer",
@@ -32294,7 +32295,8 @@
           },
           "target_rps": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Requests per second this organization may be sent, **in total** (ADR-169). Its collects run\nin two lanes that can be asking at once — a fast one for availability, uplink, traffic, a\nwireless round and the inventory sync, a slow one for the switch ports and the SSID read —\nand each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session\npaces, so the total can then exceed this by up to 0.1."
           },
           "traffic_secs": {
             "type": "integer",

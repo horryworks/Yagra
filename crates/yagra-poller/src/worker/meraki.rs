@@ -25,8 +25,8 @@
 //! Beside the per-device results, every collect publishes **one report** — a result of its own
 //! that carries [`PollResult::meraki_collect`] and nothing else. A collect that failed used to
 //! publish nothing, so core could not tell "the Dashboard is not answering" from "nothing is due":
-//! every node of the organization kept its last state, nothing alerted, and the single flight
-//! core holds per organization stayed taken for its whole lease. The report is sent on success as
+//! every node of the organization kept its last state, nothing alerted, and the collect lane
+//! core holds for the job stayed taken for its whole lease. The report is sent on success as
 //! well, because an alert may only be closed on evidence — and "the Dashboard answered" is it.
 
 use super::*;
@@ -293,8 +293,8 @@ fn uplink_row_names(
 /// ([`PollJob::meraki_collect`] set it as a sentinel long before this existed) — no node has that
 /// id, so nothing can mistake the report for a reading of a device. `observational` with no
 /// samples is what makes it inert to a core from before 決定 18: that core persists nothing for
-/// it and returns before the alert engine, having released the organization's single flight on
-/// the way, which is the one effect worth having there.
+/// it and returns before the alert engine, having released the collect lane the job held on the
+/// way, which is the one effect worth having there.
 fn collect_report(
     job: &PollJob,
     check: &yagra_bus::MerakiCollectCheck,

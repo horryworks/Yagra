@@ -34,7 +34,7 @@ pub use icmp::SurgePingTransport;
 pub use meraki::{
     fetch_ha_roles, fetch_inventory, list_organizations, MerakiAvailability, MerakiDeviceInfo,
     MerakiFetchError, MerakiInventory, MerakiInventoryDevice, MerakiNetworkInfo, MerakiOrgInfo,
-    MerakiWireOrigin,
+    MerakiWireOrigin, MERAKI_MIN_RPS,
 };
 /// Why a multi-column walk stopped early, how long one may run, and how each of its columns ended.
 ///

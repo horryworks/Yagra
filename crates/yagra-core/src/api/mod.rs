@@ -221,7 +221,7 @@ pub struct AdminState {
     /// What a Meraki import resolves before it writes — shared with the sync (ADR-164 Inc.4).
     pub meraki_import: Arc<crate::meraki_import::ImportResolver>,
     /// The inventory sync itself — the same value the leader's loop runs, so "Sync now" and the
-    /// loop share one single flight per organization.
+    /// loop share one fast lane per organization (ADR-169).
     pub meraki_sync: Arc<crate::meraki_sync::MerakiSync>,
     /// Configured NetBox deployments and the folder tree pulled from them (ADR-100). Read-only
     /// and outbound from core; the API token lives sealed in `creds`, never on this row.

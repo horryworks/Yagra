@@ -870,7 +870,7 @@ async fn ingest_result(
     if let Some(pid) = &result.poller_id {
         coordinator.record_result(pid);
     }
-    // Clear this org's Meraki single-flight on the collect's first returning result (all fan-out
+    // Clear the collect lane this job holds on the collect's first returning result (all fan-out
     // results share the job id; a no-op for non-Meraki jobs) — and record how the collect ended
     // (ADR-164 決定 18). A report says so outright. A result with no report that released a collect
     // flight is a poller from before the report existed: a device result means the Dashboard

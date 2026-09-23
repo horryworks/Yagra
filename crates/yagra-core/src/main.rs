@@ -73,6 +73,7 @@ mod meraki_filing;
 mod meraki_health;
 mod meraki_import;
 mod meraki_inventory;
+mod meraki_schedule;
 mod meraki_sync;
 mod metric_meaning;
 mod mib;
@@ -511,8 +512,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Self-monitoring counters for the poll loop, shared by the consumer + scheduler and read by
     // the poller-health endpoint.
     let scheduler_stats = Arc::new(scheduler::SchedulerStats::default());
-    // Cisco Meraki: org/device stores (metadata in Postgres) + the per-org single-flight tracker
-    // (shared by the Meraki scheduler and the result consumer, which clears an org's flight on the
+    // Cisco Meraki: org/device stores (metadata in Postgres) + the per-lane single-flight tracker
+    // (ADR-169; shared by the Meraki scheduler and the result consumer, which clears a lane on the
     // collect's first result). Read-only integration.
     let meraki_orgs = Arc::new(meraki::MerakiOrgRepo::new(repo.pool()));
     let netbox = Arc::new(netbox::NetboxRepo::new(repo.pool()));
@@ -646,7 +647,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::new(repo.pool(), kek.clone()));
     // The Meraki inventory sync (ADR-164). Built once and shared: the leader's periodic loop and
-    // the "Sync now" endpoint must go through the same single flight, which lives in this value.
+    // the "Sync now" endpoint must go through the same fast lane, which lives in this value.
     let meraki_inventory = Arc::new(meraki_inventory::MerakiInventoryRepo::new(repo.pool()));
     // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
     // group to its subtree, AdminState serves group CRUD, and a Meraki import reads the folders'
@@ -1149,8 +1150,8 @@ struct LeaderTasks {
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
     /// The Meraki inventory sync (ADR-164). Leader-only, and for a stronger reason than NetBox's:
-    /// an organization's single flight lives in this process, so two cores syncing would each
-    /// believe they held it alone.
+    /// an organization's lanes live in this process, so two cores syncing would each believe they
+    /// held its fast lane alone.
     meraki_sync: Arc<meraki_sync::MerakiSync>,
     /// Configured NetBox deployments (ADR-100). Leader-only: two cores syncing one server would
     /// write the same folders twice — idempotent, but twice the load on someone else's NetBox.
@@ -2118,23 +2119,28 @@ struct MerakiScheduler {
     pool: String,
 }
 
-/// Dispatch Cisco Meraki org-scoped collects, one per due tier, **single-flighted per org** so an
-/// org's shared Dashboard API rate budget is never exceeded (the #1 safeguard). Separate from the
+/// Dispatch Cisco Meraki org-scoped collects in **two lanes per organization** (ADR-169): a fast
+/// one for availability, uplink, traffic and a wireless round, a slow one for the switch ports and
+/// the SSID read. Each lane holds one collect at a time, so an organization is asked by two
+/// sessions at most, each paced at half its rate budget (`MerakiOrg::lane_rps`). Separate from the
 /// per-node scheduler so that loop is untouched. Each short tick: honour the global kill switch,
-/// then for every enabled org with no outstanding collect, pick its most-overdue due tier and
-/// dispatch one collect (serial→node_id map + monitored networks inlined). Tiers have their own
-/// cadences (free of the per-node 1h cap); the collect result clears the org's flight (a lease is
-/// the backstop). An org with no imported devices is skipped to save budget.
+/// then for every enabled org ask [`meraki_schedule::MerakiSchedule::plan`] what each free lane
+/// sends, and dispatch it (serial→node_id map + monitored networks inlined). Tiers have their own
+/// cadences (free of the per-node 1h cap); a collect's result clears its lane (a lease is the
+/// backstop). An org with no imported devices of a kind is skipped to save budget.
 ///
 /// The switch-port tier (ADR-167) is offered only to a pool whose every live poller claims
 /// [`yagra_bus::CAP_MERAKI_SWITCH_PORTS`], carries the organization's switches alone, and asks for
 /// the ports' configured names once an hour per organization — and on its first collect after this
 /// core started. The wireless tier (ADR-168) is the same shape: [`yagra_bus::CAP_MERAKI_WIRELESS`],
-/// the access points alone, and the SSIDs and radio settings every twenty minutes.
+/// the access points alone, and the SSIDs and radio settings every twenty minutes — read by a
+/// wireless round sent in the slow lane in place of the fast one (ADR-169 決定 2).
+///
+/// ⚠️ Every decision below is [`meraki_schedule::MerakiSchedule`]'s, which is what a test drives;
+/// this loop reads the stores and publishes.
 async fn run_meraki_scheduler(s: MerakiScheduler) {
     use std::time::Instant;
     use yagra_bus::{PollJob, SyncBus};
-    use yagra_common::MerakiTier;
 
     let MerakiScheduler {
         orgs: orgs_repo,
@@ -2148,20 +2154,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
     } = s;
     const TICK: Duration = Duration::from_secs(15);
     const LEASE: Duration = Duration::from_secs(300);
-    let mut last: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
-    // When each organization's switch-port collect last asked for the ports' names (ADR-167 決定 1).
-    let mut port_names_at: HashMap<Uuid, Instant> = HashMap::new();
-    // When each organization's wireless collect last asked for the SSIDs and radio settings (ADR-168
-    // 決定 1).
-    let mut ssid_statuses_at: HashMap<Uuid, Instant> = HashMap::new();
-    // When a tier was last counted as failed for a reason **core itself** knows about — its key
-    // could not be opened, its imported devices could not be read, or which networks it watches
-    // could not be read. No job is sent for any of the three, so no poller can report them, and
-    // without this the organization's devices go unasked-about with nothing alerting (ADR-164
-    // 決定 18). The tier stays due and is retried every tick — so a repair is picked up within one
-    // — but it is *counted* once per cadence (`meraki_health::count_once_per_cadence`), or three
-    // ticks of 15 s would read as three failed collects.
-    let mut core_failures: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
+    let mut schedule = meraki_schedule::MerakiSchedule::new();
 
     loop {
         tokio::time::sleep(TICK).await;
@@ -2192,112 +2185,130 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             ),
         };
         for org in orgs {
-            if inflight.is_inflight(org.id, now) {
-                continue; // a collect is still outstanding for this org
-            }
-            // The most-overdue due tier the pool can run (never-dispatched sorts first).
-            let Some(tier) = meraki::pick_due_tier(&org, &last, now, caps) else {
-                continue; // nothing due
-            };
+            let plan = schedule.plan(&org, now, caps, |lane| {
+                !inflight.is_inflight(org.id, lane, now)
+            });
+            // What both lanes' collects share is read once, and only when one of them needs it.
+            let mut watched: Option<Result<Vec<String>, meraki::NoCollect>> = None;
+            let mut key: Option<Option<String>> = None;
+            for work in plan.works() {
+                let tier = work.tier;
+                // Three things below stop this collect before a job is sent, and no poller can
+                // report any of them — so core counts them itself (ADR-164 決定 18), at the
+                // collect's own rate rather than this loop's 15-second one.
+                let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
+                let device_refs = match devices.device_refs(org.id, tier).await {
+                    Ok(d) if !d.is_empty() => d,
+                    // No imported device is not a failure — there is nothing to ask about, and this
+                    // organization is what "save the budget" was always for. For the switch-port
+                    // tier it means no switch (ADR-167 決定 10), for a wireless round no access
+                    // point (ADR-169 決定 3): the work is marked as having had its turn, or, never
+                    // dispatched and so always the most overdue, it would be picked on every tick
+                    // ahead of the work that does have something to ask.
+                    Ok(_) => {
+                        schedule.dispatched(org.id, &work, now);
+                        continue;
+                    }
+                    // A read of this core's own database that failed *is* a collect that did not
+                    // happen, and nothing downstream will ever say so.
+                    Err(e) => {
+                        tracing::warn!(org = %org.org_id, error = %e, "meraki device refs load failed");
+                        if schedule.count_core_failure(org.id, tier, cadence, now) {
+                            inflight.health.record_failed(
+                                org.id,
+                                tier,
+                                meraki_sync::MerakiSyncFailure::Internal,
+                                pool_coverage::now_unix_ms(),
+                            );
+                        }
+                        continue;
+                    }
+                };
+                // Before the key is opened: an organization that watches nothing gets no collect,
+                // and neither does a tick on which that could not be read (ADR-164 決定 16). An
+                // empty list on the bus means "every network", so it must not be what either case
+                // sends.
+                if watched.is_none() {
+                    let read = orgs_repo.monitored_network_ids(org.id).await;
+                    if let Err(e) = &read {
+                        tracing::warn!(org = %org.org_id, error = %e, "meraki watched networks load failed");
+                    }
+                    watched = Some(meraki::networks_to_collect(read));
+                }
+                let network_ids = match watched.clone().expect("read above") {
+                    Ok(ids) => ids,
+                    Err(why) => {
+                        tracing::debug!(org = %org.org_id, ?why, "no meraki collect this tick");
+                        // Watching nothing is a configuration, not a fault — 決定 16 says such an
+                        // organization is sent no collect, so there is nothing failing to report.
+                        // A read that *failed* is the other thing entirely, and is counted.
+                        if why == meraki::NoCollect::Unreadable
+                            && schedule.count_core_failure(org.id, tier, cadence, now)
+                        {
+                            inflight.health.record_failed(
+                                org.id,
+                                tier,
+                                meraki_sync::MerakiSyncFailure::Internal,
+                                pool_coverage::now_unix_ms(),
+                            );
+                        }
+                        continue;
+                    }
+                };
+                if key.is_none() {
+                    key = Some(meraki::resolve_meraki_key(&creds, org.credential_id).await);
+                }
+                let Some(api_key) = key.clone().expect("read above") else {
+                    tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
+                    // No job is sent, so no poller can report this: it is core that knows the
+                    // organization's devices are not being asked about (ADR-164 決定 18).
+                    if schedule.count_core_failure(org.id, tier, cadence, now) {
+                        inflight.health.record_failed(
+                            org.id,
+                            tier,
+                            meraki_sync::MerakiSyncFailure::Credential,
+                            pool_coverage::now_unix_ms(),
+                        );
+                    }
+                    continue;
+                };
+                schedule.clear_core_failure(org.id, tier);
 
-            // Three things below stop this collect before a job is sent, and no poller can report
-            // any of them — so core counts them itself (ADR-164 決定 18), at the collect's own rate
-            // rather than this loop's 15-second one.
-            let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
-            let mut count_core_failure = |reason: meraki_sync::MerakiSyncFailure| {
-                if meraki_health::count_once_per_cadence(
-                    &mut core_failures,
-                    org.id,
+                let lane = work.lane();
+                let job_id = Uuid::new_v4();
+                if !inflight.acquire_collect(org.id, lane, job_id, tier, LEASE, now) {
+                    continue; // lost an acquire race
+                }
+                let check = meraki::build_collect_check(
+                    &org,
                     tier,
-                    cadence,
-                    now,
-                ) {
-                    inflight.health.record_failed(
-                        org.id,
-                        tier,
-                        reason,
-                        pool_coverage::now_unix_ms(),
-                    );
-                }
-            };
-            let device_refs = match devices.device_refs(org.id, tier).await {
-                Ok(d) if !d.is_empty() => d,
-                // No imported device is not a failure — there is nothing to ask about, and this
-                // organization is what "save the budget" was always for. For the switch-port tier
-                // it means no switch (ADR-167 決定 10): the tier is marked as having had its turn,
-                // or, never dispatched and so always the most overdue, it would be picked on every
-                // tick ahead of the tiers that do have something to ask.
-                Ok(_) => {
-                    last.insert((org.id, tier), now);
-                    continue;
-                }
-                // A read of this core's own database that failed *is* a collect that did not
-                // happen, and nothing downstream will ever say so.
-                Err(e) => {
-                    tracing::warn!(org = %org.org_id, error = %e, "meraki device refs load failed");
-                    count_core_failure(meraki_sync::MerakiSyncFailure::Internal);
-                    continue;
-                }
-            };
-            // Before the key is opened: an organization that watches nothing gets no collect, and
-            // neither does a tick on which that could not be read (ADR-164 決定 16). An empty list
-            // on the bus means "every network", so it must not be what either case sends.
-            let watched = orgs_repo.monitored_network_ids(org.id).await;
-            if let Err(e) = &watched {
-                tracing::warn!(org = %org.org_id, error = %e, "meraki watched networks load failed");
-            }
-            let network_ids = match meraki::networks_to_collect(watched) {
-                Ok(ids) => ids,
-                Err(why) => {
-                    tracing::debug!(org = %org.org_id, ?why, "no meraki collect this tick");
-                    // Watching nothing is a configuration, not a fault — 決定 16 says such an
-                    // organization is sent no collect, so there is nothing failing to report. A
-                    // read that *failed* is the other thing entirely, and is counted.
-                    if why == meraki::NoCollect::Unreadable {
-                        count_core_failure(meraki_sync::MerakiSyncFailure::Internal);
+                    api_key,
+                    device_refs,
+                    network_ids,
+                    work.slow,
+                );
+                let job = PollJob::meraki_collect(job_id, check, org.tier_cadence(tier));
+                match bus.publish_job_for_pool(&meraki_pool, job).await {
+                    Ok(()) => {
+                        schedule.dispatched(org.id, &work, now);
+                        metrics::counter!(
+                            "yagra_meraki_collects_dispatched_total",
+                            "lane" => lane.as_str()
+                        )
+                        .increment(1);
+                        tracing::debug!(
+                            org = %org.org_id,
+                            tier = tier.as_str(),
+                            lane = lane.as_str(),
+                            "dispatched meraki collect"
+                        );
                     }
-                    continue;
-                }
-            };
-            let Some(api_key) = meraki::resolve_meraki_key(&creds, org.credential_id).await else {
-                tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
-                // No job is sent, so no poller can report this: it is core that knows the
-                // organization's devices are not being asked about (ADR-164 決定 18).
-                count_core_failure(meraki_sync::MerakiSyncFailure::Credential);
-                continue;
-            };
-            core_failures.remove(&(org.id, tier));
-
-            let job_id = Uuid::new_v4();
-            if !inflight.acquire_collect(org.id, job_id, tier, LEASE, now) {
-                continue; // lost an acquire race
-            }
-            let slow = meraki::SlowReads {
-                port_names: tier == MerakiTier::SwitchPorts
-                    && meraki::port_names_due(port_names_at.get(&org.id).copied(), now),
-                ssid_statuses: tier == MerakiTier::Wireless
-                    && meraki::ssid_statuses_due(ssid_statuses_at.get(&org.id).copied(), now),
-            };
-            let check =
-                meraki::build_collect_check(&org, tier, api_key, device_refs, network_ids, slow);
-            let interval = org.tier_cadence(tier);
-            let job = PollJob::meraki_collect(job_id, check, interval);
-            match bus.publish_job_for_pool(&meraki_pool, job).await {
-                Ok(()) => {
-                    last.insert((org.id, tier), now);
-                    if slow.port_names {
-                        port_names_at.insert(org.id, now);
+                    Err(e) => {
+                        // Release the lane so the next tick retries rather than waiting out the
+                        // lease.
+                        inflight.complete(job_id);
+                        tracing::error!(org = %org.org_id, error = %e, "meraki collect publish failed");
                     }
-                    if slow.ssid_statuses {
-                        ssid_statuses_at.insert(org.id, now);
-                    }
-                    metrics::counter!("yagra_meraki_collects_dispatched_total").increment(1);
-                    tracing::debug!(org = %org.org_id, tier = tier.as_str(), "dispatched meraki collect");
-                }
-                Err(e) => {
-                    // Release the flight so the next tick retries rather than waiting out the lease.
-                    inflight.complete(job_id);
-                    tracing::error!(org = %org.org_id, error = %e, "meraki collect publish failed");
                 }
             }
         }

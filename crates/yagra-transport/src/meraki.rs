@@ -48,6 +48,12 @@ const API_PREFIX: &str = "/api/v1";
 /// Hard cap on pages per endpoint (bounded-pagination safeguard). The switch-port listings have
 /// their own ([`SWITCH_PORT_MAX_PAGES`]) and a clock besides ([`SWITCH_PORTS_BUDGET`]).
 const MAX_PAGES: usize = 50;
+/// The slowest a Meraki session paces, whatever it is asked for: one request every ten seconds.
+///
+/// Public because core halves an organization's `target_rps` between its two collect lanes
+/// (ADR-169 決定 4) and has to know where the halving stops — below twice this, the two lanes
+/// together send more than the organization's setting.
+pub const MERAKI_MIN_RPS: f64 = 0.1;
 /// Hard cap on consecutive 429/Retry-After waits before giving up on an endpoint.
 const MAX_RATE_LIMIT_RETRIES: u32 = 6;
 
@@ -253,7 +259,7 @@ impl Session {
             .build()
             .map_err(|e| io(format!("meraki http client build failed: {e}")))?;
 
-        let rps = target_rps.max(0.1);
+        let rps = target_rps.max(MERAKI_MIN_RPS);
         Ok(Self {
             client,
             base,
@@ -888,9 +894,9 @@ pub(crate) async fn collect(
         // listings joined by serial; the first is the spine.
         MerakiTier::SwitchPorts => {
             // Measured on a real organization (854 switches): statuses 76 s, one usage bucket
-            // 20–30 s, the configured names 84 s. The organization's single collect flight is
-            // leased for 300 s and its availability collects wait behind this one, so it stops
-            // asking at the budget and keeps what it read — the names, read last, go first.
+            // 20–30 s, the configured names 84 s. Core leases the collect lane for 300 s, so it
+            // stops asking at the budget and keeps what it read — the names, read last, go first.
+            // (Since ADR-169 availability no longer waits behind this: it has the other lane.)
             session.max_pages = SWITCH_PORT_MAX_PAGES;
             session.deadline = Some(Instant::now() + SWITCH_PORTS_BUDGET);
 
@@ -962,9 +968,9 @@ pub(crate) async fn collect(
         // (ADR-168). Organization-wide listings joined by serial.
         MerakiTier::Wireless => {
             // Measured on a real organization (1,710 access points): clients about 3 s, utilization
-            // about 2 s, the SSIDs 78 s at 500 a page. The budget is the switch ports' reason: the
-            // organization's single collect flight is leased for 300 s and its availability
-            // collects wait behind this one.
+            // about 2 s, the SSIDs 78 s at 500 a page. The budget is the switch ports' reason: core
+            // leases the collect lane for 300 s. A round that reads the SSIDs runs in the slow lane
+            // (ADR-169), so availability does not wait behind it.
             session.max_pages = WIRELESS_MAX_PAGES;
             session.deadline = Some(Instant::now() + WIRELESS_BUDGET);
 

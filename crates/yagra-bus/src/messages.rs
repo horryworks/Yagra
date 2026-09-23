@@ -209,8 +209,8 @@ pub const CAP_MERAKI_SWITCH_PORTS: &str = "meraki-switch-ports";
 /// **wireless** collect tier (`MerakiTier::Wireless`, ADR-168 決定 7).
 ///
 /// 🚨 Asked of the whole pool for the reason [`CAP_MERAKI_SWITCH_PORTS`] gives: a poller from before
-/// the tier drops the job, and the organization's single collect flight — availability collects
-/// included — then waits out the whole lease behind a job nobody will answer.
+/// the tier drops the job, and the collect lane it took then waits out the whole lease behind a job
+/// nobody will answer.
 pub const CAP_MERAKI_WIRELESS: &str = "meraki-wireless";
 
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
@@ -647,7 +647,7 @@ impl PollJob {
     /// A new Meraki org-scoped collector job. Unlike the per-node checks above, one collect job
     /// pages the org-bulk Dashboard endpoints for a whole organization and fans the result out to
     /// many nodes (the poller emits one [`PollResult`] per device). `node_id`/`target` are
-    /// therefore sentinels: `node_id` carries the internal org handle (correlation / single-flight
+    /// therefore sentinels: `node_id` carries the internal org handle (correlation / collect-lane
     /// clear) and `target` is unspecified (the collector resolves `check.base_url`).
     #[must_use]
     pub fn meraki_collect(job_id: Uuid, check: MerakiCollectCheck, interval_secs: u32) -> Self {
@@ -2378,7 +2378,7 @@ pub struct PollResult {
     ///
     /// Defaulted and omitted when absent: an N-1 poller never sends it, and an N-1 core reads the
     /// result that carries it as an observational result with no samples — inert, except that it
-    /// releases the organization's single-flight as any result of that job does.
+    /// releases the collect lane that job holds, as any result of that job does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meraki_collect: Option<MerakiCollectReport>,
 }

@@ -636,8 +636,7 @@ impl Coordinator {
     /// ➕ **The Meraki scheduler uses it as a send gate** (ADR-167 決定 9), and for the same reason
     /// read the other way round: a Meraki collect is queue-delivered too, so the switch-port tier
     /// goes to a pool only when *every* live member could take it. A member that cannot decodes
-    /// nothing and drops the job, and the organization's single collect flight then waits out its
-    /// lease — availability collects included.
+    /// nothing and drops the job, and the lane that job took then waits out its lease (ADR-169).
     ///
     /// **No live poller ⇒ `false`.** Vacuous truth would be the wrong reading: "every poller
     /// supports this" said of an empty set would tell an operator their stop will land when nothing
