@@ -23,8 +23,8 @@ import {
   type StateCounts,
 } from '../../lib/nodeTree';
 import { stateLabel } from '../../lib/format';
-import { brandBadgeClass } from '../../lib/brandBadge';
 import { nodeBadges } from '../../lib/nodeKind';
+import { NodeBadgeTag } from '../ui/NodeBadgeTag';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
 import { PinButton } from './PinButton';
@@ -256,13 +256,12 @@ export function GroupDetail({
                     <span className="nd-member-name">{n.name}</span>
                     {nodeBadges({ kind: n.kind, merakiProductType: n.meraki_product_type }).map(
                       (badge) => (
-                        <span
+                        <NodeBadgeTag
                           key={badge.text}
-                          className={`nd-kind${brandBadgeClass(badge.brand)}`}
-                          title={t(badge.labelKey)}
-                        >
-                          {badge.text}
-                        </span>
+                          badge={badge}
+                          className="nd-kind"
+                          label={t(badge.labelKey)}
+                        />
                       ),
                     )}
                     <span className="nd-member-addr mono">{n.address}</span>

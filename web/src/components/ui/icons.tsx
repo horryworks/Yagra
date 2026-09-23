@@ -192,3 +192,17 @@ export function MoreIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** The Wi-Fi mark: three arcs over a dot — an access point's badge (`lib/nodeKind.ts`, user
+ *  decision 2026-09-23). Drawn with butt ends and a heavier stroke than the outline set, because it
+ *  is read at badge size, where the others' 1.8 would thin to a hairline. */
+export function WifiIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="2.6" strokeLinecap="butt">
+      <path d="M1.97 9.47A13.5 13.5 0 0 1 22.03 9.47" />
+      <path d="M5.31 12.48A9 9 0 0 1 18.69 12.48" />
+      <path d="M8.66 15.49A4.5 4.5 0 0 1 15.34 15.49" />
+      <circle cx="12" cy="18.5" r="2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

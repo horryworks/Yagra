@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { NODE_KIND_SPEC } from './nodeKind';
+import { BADGE_ICONS, NODE_KIND_SPEC, badgeIconClass, nodeBadges } from './nodeKind';
 import { NODE_KINDS } from '../types/api';
 
 describe('NODE_KIND_SPEC', () => {
@@ -98,5 +98,63 @@ describe('NODE_KIND_SPEC mirrors the Rust NodeKind', () => {
     for (const kind of NODE_KINDS) {
       expect(NODE_KIND_SPEC[kind].livenessMetric, kind).toBe(rust[kind]);
     }
+  });
+});
+
+// An access point's badge is the Wi-Fi mark, black on white (user decision, 2026-09-23) — for the
+// controller-walked AP and for a Meraki MR alike, since both name what the device is.
+describe('node badges drawn as a glyph', () => {
+  it('draws both kinds of access point as the Wi-Fi mark, and nothing else as a glyph', () => {
+    expect(NODE_KIND_SPEC.wireless_ap.badgeIcon).toBe('wifi');
+    for (const kind of NODE_KINDS) {
+      if (kind !== 'wireless_ap') expect(NODE_KIND_SPEC[kind].badgeIcon, kind).toBeNull();
+    }
+    expect(nodeBadges({ kind: 'wireless_ap' })).toEqual([
+      { text: 'AP', brand: null, icon: 'wifi', labelKey: 'kind.wireless_ap' },
+    ]);
+    expect(
+      nodeBadges({ kind: 'meraki', merakiProductType: 'wireless' }).map((b) => [
+        b.text,
+        b.icon,
+        b.brand,
+      ]),
+    ).toEqual([
+      ['Meraki', null, 'meraki'],
+      ['AP', 'wifi', null],
+    ]);
+    expect(
+      nodeBadges({ kind: 'meraki', merakiProductType: 'switch' }).map((b) => b.icon),
+    ).toEqual([null]);
+  });
+
+  it('adds a class only for a glyph', () => {
+    expect(badgeIconClass(null)).toBe('');
+    expect(badgeIconClass('wifi')).toBe(' is-wifi');
+  });
+
+  // A glyph with no rule draws in the default accent on the default pill — the badge looks
+  // deliberate and is simply not what was asked for, which nothing else here can see.
+  it('has a rule in both badge stylesheets for every glyph, reading its two tokens', () => {
+    const src = join(__dirname, '..');
+    const tokens = readFileSync(join(src, 'styles/tokens.css'), 'utf8');
+    const pills: [string, string][] = [
+      ['.nd-kind', 'components/NodeDetail/NodeDetail.css'],
+      ['.ntree-badge', 'components/NodeTree/NodeTree.css'],
+    ];
+    let checked = 0;
+    for (const icon of BADGE_ICONS) {
+      expect(tokens).toMatch(new RegExp(`--badge-${icon}-bg:\\s*#`));
+      expect(tokens).toMatch(new RegExp(`--badge-${icon}-fg:\\s*#`));
+      for (const [pill, file] of pills) {
+        const css = readFileSync(join(src, file), 'utf8');
+        const rule = new RegExp(`\\${pill}\\.is-${icon}\\s*\\{([^}]*)\\}`).exec(css);
+        expect(rule, `${pill}.is-${icon} in ${file}`).not.toBeNull();
+        expect(rule?.[1]).toContain(`var(--badge-${icon}-bg)`);
+        expect(rule?.[1]).toContain(`var(--badge-${icon}-fg)`);
+        expect(css, `${pill} .badge-glyph in ${file}`).toContain(`${pill} .badge-glyph {`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(BADGE_ICONS.length * pills.length);
   });
 });

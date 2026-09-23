@@ -22,6 +22,7 @@ import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
 import { poolChoices, sharedOwnPool } from '../../lib/pool';
 import { targetNodeCount, type ActionTarget } from '../../lib/actionTarget';
 import { nodeBadges } from '../../lib/nodeKind';
+import { NodeBadgeTag } from '../ui/NodeBadgeTag';
 import { brandBadgeClass } from '../../lib/brandBadge';
 import { GROUP_ORIGIN_BADGE_BRANDS, GROUP_ORIGIN_BADGES, groupOriginOf } from '../../lib/groupOrigin';
 import {
@@ -1266,13 +1267,12 @@ export function NodeTree({
             ordinary devices, so a badge on every one of 50k rows would say nothing. */}
         {nodeBadges({ kind: node.kind, merakiProductType: node.meraki_product_type }).map(
           (badge) => (
-            <span
+            <NodeBadgeTag
               key={badge.text}
-              className={`ntree-badge${brandBadgeClass(badge.brand)}`}
-              title={t(badge.labelKey)}
-            >
-              {badge.text}
-            </span>
+              badge={badge}
+              className="ntree-badge"
+              label={t(badge.labelKey)}
+            />
           ),
         )}
         {/* Before the markers — see `.ntree-actions` in the stylesheet. The ↗ acts on whatever the

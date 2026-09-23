@@ -97,6 +97,13 @@
   font-size: var(--font-xs);
 }
 
+/* An access point's Wi-Fi mark, in this list's plain-text colour — the list draws no pills. */
+.mbp-badge .badge-glyph {
+  width: 1.2em;
+  height: 1.2em;
+  vertical-align: -0.2em;
+}
+
 .mbp-done {
   margin: 0;
   color: var(--status-ok);

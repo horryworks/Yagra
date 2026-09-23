@@ -12,6 +12,17 @@
 import type { NodeKind } from '../types/api';
 import type { BadgeBrand } from './brandBadge';
 
+/** The glyphs a badge may be drawn as instead of its text (`components/ui/icons.tsx`). Each has
+ *  a rule in every badge stylesheet and two colour tokens, which `nodeKind.test.ts` holds together.
+ *  `wifi`: an access point, black on white (user decision, 2026-09-23 — it replaced the word "AP"). */
+export const BADGE_ICONS = ['wifi'] as const;
+export type BadgeIcon = (typeof BADGE_ICONS)[number];
+
+/** The class that draws a badge as `icon`, or `''` for a badge that is its text. */
+export function badgeIconClass(icon: BadgeIcon | null): string {
+  return icon ? ` is-${icon}` : '';
+}
+
 export interface NodeKindSpec {
   /** Short badge shown after a node's name. `null` = no badge: the ordinary device is the
    *  *unmarked default*, so a 50k-row inventory tree does not grow a badge on every line, and the
@@ -20,6 +31,10 @@ export interface NodeKindSpec {
   /** Whose colours the badge wears: `null` for Yagra's own accent, or a third party's mark
    *  (`lib/brandBadge.ts`). Required, so a new kind decides rather than inherits. */
   readonly badgeBrand: BadgeBrand | null;
+  /** A glyph the badge is drawn as instead of its text, or `null` to show the text. The text
+   *  stays: it is the badge's key, and the tooltip — not the glyph — says what it means.
+   *  Required, so a new kind decides rather than inherits. */
+  readonly badgeIcon: BadgeIcon | null;
   /** `nodes`-namespace key naming the kind in prose (badge tooltip). Total over `NodeKind`. */
   readonly labelKey: string;
   /** The metric whose newest sample means "we heard from this monitor". Each kind is polled over a
@@ -35,18 +50,38 @@ export const NODE_KIND_SPEC: Record<NodeKind, NodeKindSpec> = {
   wireless_ap: {
     badge: 'AP',
     badgeBrand: null,
+    badgeIcon: 'wifi',
     labelKey: 'kind.wireless_ap',
     livenessMetric: 'wlan_ap_up',
   },
   meraki: {
     badge: 'Meraki',
     badgeBrand: 'meraki',
+    badgeIcon: null,
     labelKey: 'kind.meraki',
     livenessMetric: 'meraki_device_up',
   },
-  url: { badge: 'URL', badgeBrand: null, labelKey: 'kind.url', livenessMetric: 'http_up' },
-  dns: { badge: 'DNS', badgeBrand: null, labelKey: 'kind.dns', livenessMetric: 'dns_up' },
-  device: { badge: null, badgeBrand: null, labelKey: 'kind.device', livenessMetric: 'icmp_rtt_ms' },
+  url: {
+    badge: 'URL',
+    badgeBrand: null,
+    badgeIcon: null,
+    labelKey: 'kind.url',
+    livenessMetric: 'http_up',
+  },
+  dns: {
+    badge: 'DNS',
+    badgeBrand: null,
+    badgeIcon: null,
+    labelKey: 'kind.dns',
+    livenessMetric: 'dns_up',
+  },
+  device: {
+    badge: null,
+    badgeBrand: null,
+    badgeIcon: null,
+    labelKey: 'kind.device',
+    livenessMetric: 'icmp_rtt_ms',
+  },
 };
 
 // The badge strings are literals, not i18n keys, on purpose: `URL`, `DNS` and `Meraki` are the same
@@ -68,6 +103,8 @@ export interface NodeBadge {
   readonly text: string;
   /** Whose colours it wears (`lib/brandBadge.ts`); `null` for Yagra's own accent. */
   readonly brand: BadgeBrand | null;
+  /** The glyph it is drawn as instead of `text`, or `null`. */
+  readonly icon: BadgeIcon | null;
   /** `nodes`-namespace key for the tooltip that says what the badge means. */
   readonly labelKey: string;
 }
@@ -76,11 +113,11 @@ export interface NodeBadge {
  * Every badge a node wears after its name, in order — the one answer the tree, the folder view, the
  * node header and the move dialog all draw from, so none of them can forget one.
  *
- * Its kind's badge first (none for an ordinary device). Then, for a Meraki access point, "AP"
- * beside "Meraki" (ADR-168 決定 11, the user's decision): an MR stays `kind: meraki` — its
- * liveness and its screens are the Meraki ones — so the kind alone cannot say it is an access
- * point. The "AP" wears Yagra's accent, like the controller-walked AP's badge, because it names
- * what the device is rather than whose it is.
+ * Its kind's badge first (none for an ordinary device). Then, for a Meraki access point, the
+ * access point's badge beside "Meraki" (ADR-168 決定 11, the user's decision): an MR stays
+ * `kind: meraki` — its liveness and its screens are the Meraki ones — so the kind alone cannot say
+ * it is an access point. It is the controller-walked AP's badge exactly — the Wi-Fi mark, black on
+ * white — because it names what the device is rather than whose it is.
  */
 export function nodeBadges(node: {
   kind: NodeKind;
@@ -89,10 +126,16 @@ export function nodeBadges(node: {
   const spec = NODE_KIND_SPEC[node.kind];
   const out: NodeBadge[] = [];
   if (spec.badge) {
-    out.push({ text: spec.badge, brand: spec.badgeBrand, labelKey: spec.labelKey });
+    out.push({
+      text: spec.badge,
+      brand: spec.badgeBrand,
+      icon: spec.badgeIcon,
+      labelKey: spec.labelKey,
+    });
   }
   if (node.kind === 'meraki' && isMerakiAccessPoint(node.merakiProductType)) {
-    out.push({ text: 'AP', brand: null, labelKey: 'kindBadge.accessPoint' });
+    const ap = NODE_KIND_SPEC.wireless_ap;
+    out.push({ text: 'AP', brand: null, icon: ap.badgeIcon, labelKey: 'kindBadge.accessPoint' });
   }
   return out;
 }

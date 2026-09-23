@@ -26,6 +26,10 @@
      decision, 2026-09-23), and the word it carries is also the badge's tooltip. */
   --brand-meraki: #67b346;
   --brand-meraki-fg: #ffffff;
+  /* An access point's badge: the Wi-Fi mark, black on white in both themes (user decision,
+     2026-09-23 — it replaced the word "AP"). The badge is an image named by its tooltip. */
+  --badge-wifi-bg: #ffffff;
+  --badge-wifi-fg: #000000;
 
   /* ---- brand accent (§1.1) — orange, active/selected/focus ONLY ---- */
   --brand: #e95d08;

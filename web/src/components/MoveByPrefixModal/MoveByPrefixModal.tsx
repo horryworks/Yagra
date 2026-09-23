@@ -17,6 +17,7 @@ import { api, errMsg } from '../../services/api';
 import type { MovePreview, NodeGroup, NodeSummary } from '../../types/api';
 import { groupOptions } from '../../lib/nodeTree';
 import { nodeBadges } from '../../lib/nodeKind';
+import { NodeBadgeTag } from '../ui/NodeBadgeTag';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import {
@@ -105,9 +106,12 @@ export function MoveByPrefixModal({
         <span className="mbp-name">{n.name}</span>
         <span className="mbp-addr mono">{n.address}</span>
         {nodeBadges({ kind: n.kind, merakiProductType: n.meraki_product_type }).map((badge) => (
-          <span key={badge.text} className="mbp-badge" title={t(badge.labelKey)}>
-            {badge.text}
-          </span>
+          <NodeBadgeTag
+            key={badge.text}
+            badge={badge}
+            className="mbp-badge"
+            label={t(badge.labelKey)}
+          />
         ))}
       </li>
     );

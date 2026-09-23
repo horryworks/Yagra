@@ -446,11 +446,23 @@ test.describe('a Meraki access point', () => {
     const card = cardOf(page);
     await expect(card).toBeVisible({ timeout: 15_000 });
 
-    // ADR-168 決定 11 (the user's decision): Meraki, and AP beside it — the AP in Yagra's accent.
+    // ADR-168 決定 11 (the user's decision): Meraki, and the access point's badge beside it — the
+    // Wi-Fi mark, black on white (2026-09-23), named for a screen reader by its tooltip.
     const badges = page.locator('.nd-namewrap .nd-kind');
-    await expect(badges).toHaveText(['Meraki', 'AP']);
-    await expect(badges.nth(1)).toHaveAttribute('title', 'Access point');
-    await expect(badges.nth(1)).not.toHaveClass(/is-meraki/);
+    await expect(badges).toHaveCount(2);
+    await expect(badges.nth(0)).toHaveText('Meraki');
+    const ap = badges.nth(1);
+    await expect(ap).toHaveAttribute('title', 'Access point');
+    await expect(ap).toHaveAttribute('aria-label', 'Access point');
+    await expect(ap).toHaveClass(/is-wifi/);
+    await expect(ap).not.toHaveClass(/is-meraki/);
+    await expect(ap).toHaveText('');
+    await expect(ap.locator('svg.badge-glyph')).toHaveCount(1);
+    const colours = await ap.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return [cs.color, cs.backgroundColor];
+    });
+    expect(colours).toEqual(['rgb(0, 0, 0)', 'rgb(255, 255, 255)']);
 
     await expect(card.locator('.nd-mk-tiles .nd-mk-tile-label')).toHaveText([
       'Availability',

@@ -46,8 +46,8 @@ import {
 import { SetParentModal } from '../SetParentModal/SetParentModal';
 import { PinButton } from './PinButton';
 import { nodeSubLineParts } from './nodeIdentity';
-import { brandBadgeClass } from '../../lib/brandBadge';
 import { NODE_KIND_SPEC, nodeBadges } from '../../lib/nodeKind';
+import { NodeBadgeTag } from '../ui/NodeBadgeTag';
 import type { MoveTarget } from '../MoveNodeModal/MoveNodeModal';
 import './NodeDetail.css';
 
@@ -376,13 +376,12 @@ export function NodeDetail({
               kind: node.kind,
               merakiProductType: node.meraki_device?.product_type,
             }).map((badge) => (
-              <span
+              <NodeBadgeTag
                 key={badge.text}
-                className={`nd-kind${brandBadgeClass(badge.brand)}`}
-                title={t(badge.labelKey)}
-              >
-                {badge.text}
-              </span>
+                badge={badge}
+                className="nd-kind"
+                label={t(badge.labelKey)}
+              />
             ))}
             {status && <StatePill state={state} />}
           </div>

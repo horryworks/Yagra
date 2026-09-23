@@ -681,3 +681,17 @@ button.ntree-supp-icon:hover {
   background: var(--brand-meraki);
   border-color: var(--brand-meraki);
 }
+
+/* A badge drawn as a glyph (`BADGE_ICONS` in lib/nodeKind.ts): an access point's Wi-Fi mark, black
+   on white. The glyph sits in the line box the text would, so the pill keeps its height. */
+.ntree-badge.is-wifi {
+  padding: 0 5px;
+  color: var(--badge-wifi-fg);
+  background: var(--badge-wifi-bg);
+}
+
+.ntree-badge .badge-glyph {
+  width: 1.3em;
+  height: 1.3em;
+  vertical-align: -0.25em;
+}
