@@ -160,13 +160,17 @@ pub(crate) async fn display_state(st: &ApiState, node: NodeId) -> NodeState {
     state_or_fallback(known, fresh)
 }
 
-/// [`display_state`] for a page of nodes, in one TSDB query instead of N.
+/// [`display_state`] for a page of nodes, in one TSDB query per couple of hundred nodes instead of
+/// one per node.
 ///
 /// The engine already holds a state for most nodes; only the unobserved remainder needs the probe,
 /// and asking `latest()` per node is N sequential HTTP round-trips — worst right after a restart,
-/// when `states` is empty and *every* node takes that path. So the unobserved set is answered with
-/// a single scoped freshness query (S20 — scoped to this page, never the whole fleet), and the
-/// query is skipped entirely when nothing is unobserved, which is the steady state.
+/// when `states` is empty and *every* node takes that path. So the unobserved set is answered by
+/// the scoped freshness probe (S20 — scoped to this page, never the whole fleet), and the probe is
+/// skipped entirely when nothing is unobserved, which is the steady state.
+///
+/// ⚠️ A 500-node page is more ids than one query may name. The store splits it; until 2026-09-23
+/// nothing did, and past about 430 unobserved nodes the whole page read `unknown`.
 pub(crate) async fn display_states(st: &ApiState, nodes: &[NodeId]) -> HashMap<NodeId, NodeState> {
     // ⚠️ `node_states_for`, not `node_states` (ADR-125). The latter clones the whole fleet's state
     // map, and this function is on the hottest read in the product — S20 scoped the TSDB query to

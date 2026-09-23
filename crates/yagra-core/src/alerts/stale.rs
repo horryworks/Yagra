@@ -71,14 +71,6 @@ const STALE_WINDOW_SECS: u64 = 21_600;
 /// Pinned by a test.
 const LIVE_WINDOW_SECS: u64 = 7_200;
 
-/// How many node ids go into one freshness query.
-///
-/// [`MetricStore::fresh_node_ids_scoped`] joins the scope with `|` into a `node=~"…"` selector on a
-/// GET query string — about 37 bytes per id. The existing caller gets away with no chunking because
-/// its scope is one page of the node list; this one's scope is "every node with an open
-/// node-dimension alert", which on a bad day is thousands.
-const SCOPE_CHUNK: usize = 200;
-
 /// Which of these nodes are Meraki devices.
 ///
 /// A seam, for one reason: the concrete [`crate::meraki::MerakiDeviceRepo`] needs a live PostgreSQL,
@@ -113,22 +105,22 @@ impl MerakiNodeSet for crate::meraki::MerakiDeviceRepo {
     }
 }
 
-/// The fresh subset of `scope` for `metrics`, asked in bounded chunks.
+/// The fresh subset of `scope` for `metrics`.
+///
+/// This scope is "every node with an open node-dimension alert", which on a bad day is thousands —
+/// far more ids than one query may name. The store splits it: this file used to, 200 at a time,
+/// while the node list beside it split nothing and went `unknown` a page at a time (2026-09-23).
 async fn fresh_within(
     store: &dyn MetricStore,
     metrics: &[&str],
     window_secs: u64,
     scope: &[Uuid],
 ) -> HashSet<Uuid> {
-    let mut fresh = HashSet::new();
-    for part in scope.chunks(SCOPE_CHUNK) {
-        fresh.extend(
-            store
-                .fresh_node_ids_scoped(metrics, window_secs, part)
-                .await,
-        );
-    }
-    fresh
+    store
+        .fresh_node_ids_scoped(metrics, window_secs, scope)
+        .await
+        .into_iter()
+        .collect()
 }
 
 /// Which candidates nothing is measuring, given what the store answered.
@@ -162,8 +154,9 @@ fn stranded(
 ///
 /// # 🚨 The liveness canary is the safety property, not a convenience — and it is asked twice
 ///
-/// [`MetricStore::fresh_node_ids_scoped`] returns `Vec::new()` on a transport error **and** on a
-/// JSON parse failure, so an empty answer is indistinguishable from "nothing is fresh". Without
+/// [`MetricStore::fresh_node_ids_scoped`] returns `Vec::new()` on a transport error, a refusal
+/// **and** a JSON parse failure — and over a scope it has to split, it leaves out only the nodes of
+/// the query that failed — so an empty answer is indistinguishable from "nothing is fresh". Without
 /// asking whether these nodes are reporting *at all*, one VictoriaMetrics blip would close every
 /// open alert in the fleet and send a recovery for each — the ADR-080 accident, arrived at from a
 /// different direction. **Both answers come from the same store, which is what makes it sound.**
@@ -770,19 +763,6 @@ mod tests {
             assert!(
                 STALE_WINDOW_SECS >= LIVE_WINDOW_SECS,
                 "a quiet node could then have an alert closed"
-            );
-        }
-    }
-
-    /// The scope must be chunked below what a GET query string will carry — roughly 37 bytes per
-    /// id in the `node=~"…"` selector. Compile-time, for the reason above.
-    #[test]
-    fn the_scope_is_chunked_below_the_url_budget() {
-        const {
-            assert!(SCOPE_CHUNK > 0);
-            assert!(
-                SCOPE_CHUNK * 37 < 8_192,
-                "a chunk of ids would exceed a conservative URL budget"
             );
         }
     }

@@ -244,6 +244,10 @@ pub trait MetricStore: Send + Sync {
     /// The default fetches the fleet set and intersects (correct but unscoped); [`VmStore`] overrides
     /// it to push the id set into the query selector so only those series are returned. Empty `scope`
     /// ⇒ empty (no query).
+    ///
+    /// ⚠️ **Any size of `scope` is the implementation's problem, never the caller's.** A store with a
+    /// limit on how many ids one query can name splits the scope itself; a caller that split it too
+    /// would be a second copy of a limit it cannot see.
     async fn fresh_node_ids_scoped(
         &self,
         metrics: &[&str],
@@ -642,6 +646,53 @@ impl VmStore {
             return None;
         }
         Some(parse_top_interfaces(&json))
+    }
+
+    /// One freshness query: the node ids of the series it found, or `None` for no answer.
+    ///
+    /// Every way of not answering is warned about, never silent. The refusal that mattered was a
+    /// query over the server's length ceiling — a 422 whose body parses and carries no `result`, so
+    /// it used to read, with no log line at all, as "no node is fresh".
+    async fn fresh_batch(&self, url: &str, query: String) -> Option<Vec<Uuid>> {
+        let resp = match self.http.get(url).query(&[("query", query)]).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics freshness query failed");
+                return None;
+            }
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            // VictoriaMetrics says why in the body (`too long query; mustn't exceed …`). Only its
+            // head is kept: the rest can repeat the query, which is node ids and nothing secret.
+            let reason: String = resp
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect();
+            tracing::warn!(%status, %reason, "VictoriaMetrics refused a freshness query");
+            return None;
+        }
+        let json = match resp.json::<serde_json::Value>().await {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics freshness response was not JSON");
+                return None;
+            }
+        };
+        if json.get("status").and_then(|v| v.as_str()) != Some("success") {
+            tracing::warn!("VictoriaMetrics freshness query returned a non-success body");
+            return None;
+        }
+        // Reuse the node-label parser; only the ids are wanted, not the values.
+        Some(
+            parse_top_nodes(&json)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect(),
+        )
     }
 
     /// Run a PromQL `query_range` and parse the first series' points (oldest first). Shared
@@ -1216,11 +1267,6 @@ fn interface_candidates_query(
     format!("max by (node,ifindex) ({instant}) >= {floor_bps}")
 }
 
-/// VictoriaMetrics' own query-length ceiling, which it names in its refusal.
-///
-/// **Measured, not remembered** (2026-08-20, v1.148.0, default flags): 200 UUIDs plus separators
-/// is a 7,499-byte query and answers; 400 is 14,899 and answers; 500 is 18,599 and is refused with
-/// `422 too long query; mustn't exceed -search.maxQueryLen=16384`.
 /// Where one bulk import POST spends its time, split into the two halves that scale
 /// differently: **build** is CPU in this process (one exposition line per sample), **post** is
 /// waiting for VictoriaMetrics. A writer task can only use one core, so the `_sum` series over a
@@ -1229,7 +1275,38 @@ fn interface_candidates_query(
 /// neither: a writer starved of CPU and a writer saturated by work pin the queue identically.
 const M_VM_IMPORT_SECONDS: &str = "yagra_vm_import_seconds";
 
+/// VictoriaMetrics' own query-length ceiling, which it names in its refusal.
+///
+/// **Measured, not remembered** (2026-08-20, v1.148.0, default flags): 200 UUIDs plus separators
+/// is a 7,499-byte query and answers; 400 is 14,899 and answers; 500 is 18,599 and is refused with
+/// `422 too long query; mustn't exceed -search.maxQueryLen=16384`.
 const VM_MAX_QUERY_LEN: usize = 16_384;
+
+/// Bytes one node id costs inside a `node=~"…"` alternation: a hyphenated UUID is 36, and the `|`
+/// that joins it to the next is the 37th.
+const NODE_ID_SELECTOR_BYTES: usize = 37;
+
+/// `nodes` in runs short enough that each one, spelled by [`node_alternation`], fits `max_bytes`.
+///
+/// Every query that names nodes one by one goes through here, because each of them met the same
+/// ceiling on its own: the interface candidates, the stale-data sweep, and — the one that shipped
+/// without any split — the node list's freshness probe, which painted a whole page `unknown` once
+/// a page held more than about 430 nodes the alert engine had not observed yet.
+fn node_id_chunks(nodes: &[Uuid], max_bytes: usize) -> std::slice::Chunks<'_, Uuid> {
+    nodes.chunks((max_bytes / NODE_ID_SELECTOR_BYTES).max(1))
+}
+
+/// The value of a `node=~"…"` matcher naming exactly `nodes`, as `a|b|c`.
+///
+/// Node label values are UUIDs (`[0-9a-f-]`, regex-safe) and VictoriaMetrics anchors `=~` fully, so
+/// the alternation matches exactly this set and nothing that merely contains one of them.
+fn node_alternation(nodes: &[Uuid]) -> String {
+    nodes
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join("|")
+}
 
 /// How many times one [`interface_expr_scoped`] expression writes the selector.
 ///
@@ -1277,29 +1354,44 @@ const CANDIDATE_MAX_BATCHES: usize = 25;
 /// `None` = the set needs more than [`CANDIDATE_MAX_BATCHES`] queries, so the caller should fall
 /// back to one fleet-wide query rather than issuing an unbounded number of them.
 fn candidate_selectors(nodes: &[Uuid], metric: InterfaceTopMetric) -> Option<Vec<String>> {
-    // A hyphenated UUID is 36 bytes; the `|` that joins it to the next is the 37th.
-    const PER_ID: usize = 37;
-    let per_batch = (candidate_max_selector_bytes(metric) / PER_ID).max(1);
-    let batches = nodes.len().div_ceil(per_batch);
-    if batches > CANDIDATE_MAX_BATCHES {
+    let chunks = node_id_chunks(nodes, candidate_max_selector_bytes(metric));
+    if chunks.len() > CANDIDATE_MAX_BATCHES {
         return None;
     }
     Some(
-        nodes
-            .chunks(per_batch)
-            .map(|chunk| {
-                let ids = chunk
-                    .iter()
-                    .map(Uuid::to_string)
-                    .collect::<Vec<_>>()
-                    .join("|");
-                // Node label values are UUIDs (`[0-9a-f-]`, regex-safe) and VictoriaMetrics anchors
-                // `=~` fully, so the alternation matches exactly this set — the same reasoning
-                // `fresh_node_ids_scoped` relies on.
-                format!("{{node=~\"{ids}\"}}")
-            })
+        chunks
+            .map(|chunk| format!("{{node=~\"{}\"}}", node_alternation(chunk)))
             .collect(),
     )
+}
+
+/// Bytes of node selector one freshness query may carry: the server's ceiling halved, for the two
+/// reasons [`candidate_max_selector_bytes`] gives. The expression writes the selector once.
+const FRESH_MAX_SELECTOR_BYTES: usize = VM_MAX_QUERY_LEN / 2;
+
+/// The freshness queries that together ask about every node in `scope`, each short enough for
+/// VictoriaMetrics to accept.
+///
+/// 🚨 **One query per call is the defect this replaced.** `display_states` hands over every node of
+/// a page the alert engine has no opinion about, and a page is up to 500. Past about 430 the single
+/// query crossed `-search.maxQueryLen`; VictoriaMetrics answered 422, the probe read that as "no
+/// node is fresh", and the whole page read `unknown` while each node's own page said `ok`. That is
+/// every page after a core restart on a large fleet, and every page of a paused Meraki organization.
+///
+/// No cap on the number of queries, unlike [`candidate_selectors`]: a page costs at most three, and
+/// the stale-data sweep — the one caller that can ask about thousands — already sent one query per
+/// 200 nodes before the split moved in here, so the count is what it always was.
+fn fresh_scoped_queries(metrics: &[&str], within_secs: u64, scope: &[Uuid]) -> Vec<String> {
+    let names = name_selector(metrics);
+    let w = within_secs.max(1);
+    node_id_chunks(scope, FRESH_MAX_SELECTOR_BYTES)
+        .map(|chunk| {
+            format!(
+                "last_over_time({{{names},node=~\"{}\"}}[{w}s])",
+                node_alternation(chunk)
+            )
+        })
+        .collect()
 }
 
 /// Fleet interface rate-delta PromQL: per `(node,ifindex)`, total throughput now minus the rate
@@ -2004,18 +2096,7 @@ impl MetricStore for VmStore {
             name_selector(metrics),
             within_secs.max(1)
         );
-        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics freshness query failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return Vec::new();
-        };
-        // Reuse the node-label parser; we only need the ids, not the values.
-        dedup_ids(parse_top_nodes(&json).into_iter().map(|(id, _)| id))
+        dedup_ids(self.fresh_batch(&url, query).await.into_iter().flatten())
     }
 
     async fn fresh_node_ids_scoped(
@@ -2029,29 +2110,18 @@ impl MetricStore for VmStore {
         }
         let url = format!("{}/api/v1/query", self.base);
         // Push the page's node set into the selector so VM returns only those series, not the whole
-        // fleet (S20). Node label values are UUIDs (regex-safe: `[0-9a-f-]`), and VM anchors `=~`
-        // fully, so the alternation matches exactly this set.
-        let ids = scope
-            .iter()
-            .map(Uuid::to_string)
-            .collect::<Vec<_>>()
-            .join("|");
-        let query = format!(
-            "last_over_time({{{},node=~\"{ids}\"}}[{}s])",
-            name_selector(metrics),
-            within_secs.max(1)
-        );
-        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics scoped freshness query failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return Vec::new();
-        };
-        dedup_ids(parse_top_nodes(&json).into_iter().map(|(id, _)| id))
+        // fleet (S20) — in as many queries as the server's length ceiling needs.
+        //
+        // ⚠️ A batch that fails costs only its own nodes, the opposite of `interface_candidates`.
+        // There an absent node reads as "below its bound" and closes alerts, so a partial answer is
+        // refused whole. Here an absent node reads as not fresh, which is `unknown` on a screen and
+        // closes nothing — so the batches that did answer are kept, and one refused batch cannot
+        // blank the others.
+        let mut ids = Vec::new();
+        for query in fresh_scoped_queries(metrics, within_secs, scope) {
+            ids.extend(self.fresh_batch(&url, query).await.into_iter().flatten());
+        }
+        dedup_ids(ids.into_iter())
     }
 
     async fn interface_delta(
@@ -3333,7 +3403,7 @@ mod tests {
     #[test]
     fn selectors_are_split_at_the_byte_budget_not_at_a_node_count() {
         for metric in InterfaceTopMetric::ALL {
-            let per_batch = candidate_max_selector_bytes(metric) / 37;
+            let per_batch = candidate_max_selector_bytes(metric) / NODE_ID_SELECTOR_BYTES;
             let ids: Vec<Uuid> = (0..per_batch as u128).map(Uuid::from_u128).collect();
 
             // Exactly one batch's worth is one batch.
@@ -3396,7 +3466,7 @@ mod tests {
         // The give-up case: past the batch cap the caller falls back to one fleet-wide query
         // rather than issuing an unbounded number of them.
         let metric = InterfaceTopMetric::InBps;
-        let per_batch = candidate_max_selector_bytes(metric) / 37;
+        let per_batch = candidate_max_selector_bytes(metric) / NODE_ID_SELECTOR_BYTES;
         let too_many: Vec<Uuid> = (0..(per_batch * CANDIDATE_MAX_BATCHES + 1) as u128)
             .map(Uuid::from_u128)
             .collect();
@@ -3413,5 +3483,157 @@ mod tests {
                 .len(),
             CANDIDATE_MAX_BATCHES
         );
+    }
+
+    /// The ids a query's `node=~"…"` matcher names, in order.
+    fn ids_named_in(query: &str) -> Vec<Uuid> {
+        let Some((_, rest)) = query.split_once("node=~\"") else {
+            return Vec::new();
+        };
+        rest.split('"')
+            .next()
+            .unwrap_or_default()
+            .split('|')
+            .filter_map(|s| Uuid::parse_str(s).ok())
+            .collect()
+    }
+
+    #[test]
+    fn every_freshness_query_fits_the_server_and_names_each_node_once() {
+        // The real caller's metric list, because the name selector is part of the length.
+        let metrics = yagra_common::NodeKind::LIVENESS_METRICS;
+        let per_query = FRESH_MAX_SELECTOR_BYTES / NODE_ID_SELECTOR_BYTES;
+        let mut inspected = 0;
+        // 500 is the node list's largest page — the size that was refused as one query.
+        for n in [0, 1, per_query, per_query + 1, 500, 5_000] {
+            let scope: Vec<Uuid> = (0..n as u128)
+                .map(|i| Uuid::from_u128(u128::MAX - i))
+                .collect();
+            let queries = fresh_scoped_queries(&metrics, 600, &scope);
+            assert_eq!(queries.len(), n.div_ceil(per_query), "{n} nodes");
+            for q in &queries {
+                assert!(
+                    q.len() < VM_MAX_QUERY_LEN,
+                    "{n} nodes: a query is {} bytes, over the server's {VM_MAX_QUERY_LEN}",
+                    q.len()
+                );
+                inspected += 1;
+            }
+            // Every node exactly once, in order: a node left out reads `unknown`, and one named
+            // twice would be a batch overlapping another.
+            let named: Vec<Uuid> = queries.iter().flat_map(|q| ids_named_in(q)).collect();
+            assert_eq!(named, scope, "{n} nodes");
+        }
+        assert!(
+            inspected > 25,
+            "the length check looked at {inspected} queries"
+        );
+
+        // A scope that fits is one query, spelled exactly as it was before the split.
+        let one = Uuid::from_u128(7);
+        assert_eq!(
+            fresh_scoped_queries(&["icmp_rtt_ms"], 600, &[one]),
+            [format!(
+                "last_over_time({{__name__=~\"icmp_rtt_ms\",node=~\"{one}\"}}[600s])"
+            )]
+        );
+    }
+
+    /// A VictoriaMetrics stand-in that refuses what the real one refuses — a query longer than
+    /// `-search.maxQueryLen` — and answers every node a query names as fresh. It also refuses any
+    /// query that names `poisoned`, to fail one batch and no other. Returns its base URL and how
+    /// many queries it was asked.
+    async fn length_limited_vm(
+        poisoned: Option<Uuid>,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use axum::extract::Query;
+        use axum::http::StatusCode;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let asked = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = asked.clone();
+        let app = axum::Router::new().route(
+            "/api/v1/query",
+            axum::routing::get(
+                move |Query(params): Query<std::collections::HashMap<String, String>>| {
+                    let counter = counter.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        let query = params.get("query").cloned().unwrap_or_default();
+                        let refuse = |error: &str| {
+                            (
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                axum::Json(serde_json::json!({
+                                    "status": "error", "errorType": "422", "error": error
+                                })),
+                            )
+                        };
+                        if query.len() > VM_MAX_QUERY_LEN {
+                            // The body the real server sends (measured 2026-08-20).
+                            return refuse(
+                                "too long query; mustn't exceed -search.maxQueryLen=16384",
+                            );
+                        }
+                        if poisoned.is_some_and(|p| query.contains(&p.to_string())) {
+                            return refuse("injected");
+                        }
+                        let result: Vec<serde_json::Value> = ids_named_in(&query)
+                            .into_iter()
+                            .map(|id| {
+                                serde_json::json!({
+                                    "metric": { "__name__": "icmp_rtt_ms", "node": id.to_string() },
+                                    "value": [0, "1"]
+                                })
+                            })
+                            .collect();
+                        (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({
+                                "status": "success",
+                                "data": { "resultType": "vector", "result": result }
+                            })),
+                        )
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        (format!("http://{addr}"), asked)
+    }
+
+    #[tokio::test]
+    async fn a_page_too_long_for_one_query_still_reads_fresh() {
+        // The shipped defect (2026-09-23): 500 ids was one 18.6 kB query, the server refused it,
+        // and a whole page of the node list read `unknown` beside detail pages saying `ok`.
+        let (base, asked) = length_limited_vm(None).await;
+        let store = VmStore::new(base);
+        let page: Vec<Uuid> = (1..=500u128).map(Uuid::from_u128).collect();
+        let mut got = store
+            .fresh_node_ids_scoped(&yagra_common::NodeKind::LIVENESS_METRICS, 600, &page)
+            .await;
+        got.sort();
+        assert_eq!(got, page);
+        assert!(
+            asked.load(std::sync::atomic::Ordering::SeqCst) > 1,
+            "a page this size cannot have been asked as one query"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_refused_batch_costs_only_its_own_nodes() {
+        let per_query = FRESH_MAX_SELECTOR_BYTES / NODE_ID_SELECTOR_BYTES;
+        let page: Vec<Uuid> = (1..=500u128).map(Uuid::from_u128).collect();
+        let (base, _) = length_limited_vm(Some(page[0])).await;
+        let store = VmStore::new(base);
+        let mut got = store
+            .fresh_node_ids_scoped(&["icmp_rtt_ms"], 600, &page)
+            .await;
+        got.sort();
+        // Not empty: the batches that answered are kept. Not the whole page either: the refused
+        // batch's nodes are not fresh, which is `unknown` on a screen and closes nothing.
+        assert_eq!(got, page[per_query..]);
     }
 }

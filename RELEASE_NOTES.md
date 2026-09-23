@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A page of the node list no longer reads `unknown` for nodes that are up.** Until the alert engine has observed a node — after every core restart, and for as long as a Meraki organization is paused — its state comes from whether a liveness reading arrived recently, and a page asked about all such nodes in one VictoriaMetrics query. A page of 500 holding more than about 430 of them made that query longer than VictoriaMetrics accepts; the refusal was read as "nothing is fresh", so the whole page read `unknown` while each node's own page said `ok`. The question is now split into queries VictoriaMetrics accepts (at most three for a page of 500), and a refused query is logged as a warning instead of passing silently. The topology graph, which asks the same question, is fixed too.
+
 ## v0.3.30 — Meraki MS switch ports and MR access points are monitored like SNMP switch ports and a controller's access points, Meraki MX WAN uplinks, Auto VPN and warm-spare pairs are watched, an MX is filed by its LAN address rather than its WAN, a Meraki organization's slow reads no longer hold up its availability collects, a port alert no longer closes because its readings stopped
 
 ### Breaking changes
