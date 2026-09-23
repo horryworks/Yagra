@@ -22,6 +22,14 @@
 //! sync whose listing failed writes its reason and nothing else — not one row of
 //! `meraki_inventory`, and not `last_sync_at`.
 //!
+//! **Between the listing and the writes it reads MX networks' LAN sides** (ADR-164 決定 28,
+//! [`MerakiSync::lan_stage`]). An MX reports no `lanIp`, so its address is one of its own VLAN
+//! addresses — the lowest-numbered inside a folder's IP range, else the lowest-numbered. Those
+//! can only be read one network at a time, so each sync reads what it has time for (never-read
+//! networks first, then any a day old) and `meraki_org_networks` remembers the rest. It is a read
+//! that can fail without failing the sync: a network it could not read keeps what it said last
+//! time, and an MX in a network never read is not imported until it has been.
+//!
 //! **Then it imports** (ADR-164 Inc.4), when the organization says so: a device in a watched
 //! network that Meraki has reported online, and that has never been a node here, becomes one. The
 //! pick is [`crate::meraki_import::pick_automatic`] (pure); everything after the pick is the path a
@@ -33,7 +41,8 @@
 //! importer does: the scheduler's cached round holds only the nodes it was built from, and until it
 //! is rebuilt it does not know the new ones are Meraki's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -42,12 +51,16 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use yagra_common::MerakiHaRole;
 use yagra_transport::{
-    MerakiFetchError, MerakiInventory, MerakiOrgInfo, MerakiWireOrigin, TransportError,
+    MerakiFetchError, MerakiInventory, MerakiNetworkLan, MerakiOrgInfo, MerakiWireOrigin,
+    TransportError,
 };
 
 use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiLane, MerakiOrg, MerakiOrgRepo};
 use crate::meraki_import::{pick_automatic, ImportResolver};
-use crate::meraki_inventory::{plan_sync, seen_devices, MerakiInventoryRepo};
+use crate::meraki_inventory::{
+    lan_addresses, lan_order, lan_reads_due, networks_with_an_mx, plan_sync, seen_devices,
+    LanAddresses, MerakiInventoryRepo, NetworkLan,
+};
 use crate::repo::NodeRepo;
 use crate::secrets::CredentialStore;
 
@@ -62,6 +75,13 @@ const SYNC_TIMEOUT: Duration = Duration::from_secs(120);
 /// The flight's lease — the backstop if the drop guard never runs (the process is killed). Longer
 /// than [`SYNC_TIMEOUT`] so a sync that is still running is never treated as abandoned.
 const LEASE: Duration = Duration::from_secs(150);
+/// The most one sync spends reading networks' LAN sides (ADR-164 決定 28). They are read one network
+/// at a time at the lane's pace (about one a second), so an organization of 350 MX networks takes
+/// about six syncs to read the first time, and then a few requests a sync as each goes stale.
+const LAN_READ_BUDGET: Duration = Duration::from_secs(60);
+/// What the rest of the sync keeps once the LAN reads start: one request already in flight when the
+/// budget ran out ([`REQUEST_TIMEOUT`]), then the writes, the role read and the import.
+const LAN_READ_RESERVE: Duration = Duration::from_secs(45);
 /// The shortest interval the loop honours, whatever a row says. Mirrors the column's CHECK.
 const MIN_INTERVAL_SECS: u32 = crate::config::MERAKI_INVENTORY_MIN_SECS.unsigned_abs();
 
@@ -195,6 +215,19 @@ pub trait MerakiDirectory: Send + Sync {
         org: &MerakiOrg,
         api_key: &str,
     ) -> Result<Vec<(String, Option<MerakiHaRole>)>, MerakiFetchError>;
+
+    /// Read the LAN addresses the MX holds in each of `network_ids`, one network at a time, until
+    /// `budget` is spent (ADR-164 決定 28): the networks reached, in order, each with its addresses
+    /// or its own failure. `Err` only when nothing could be sent. No default body, for the reason
+    /// [`ha_roles`](Self::ha_roles) has none — a fake that answered "nothing reached" would leave
+    /// every MX waiting for an address, and so never imported.
+    async fn network_lans(
+        &self,
+        org: &MerakiOrg,
+        api_key: &str,
+        network_ids: &[String],
+        budget: Duration,
+    ) -> Result<Vec<(String, MerakiNetworkLan)>, MerakiFetchError>;
 }
 
 /// The real Dashboard API, through `yagra-transport` (GET only, host allow-listed, paced).
@@ -250,6 +283,25 @@ impl MerakiDirectory for DashboardApi {
             &org.org_id,
             org.lane_rps(),
             REQUEST_TIMEOUT,
+            self.wire.as_ref(),
+        )
+        .await
+    }
+
+    async fn network_lans(
+        &self,
+        org: &MerakiOrg,
+        api_key: &str,
+        network_ids: &[String],
+        budget: Duration,
+    ) -> Result<Vec<(String, MerakiNetworkLan)>, MerakiFetchError> {
+        yagra_transport::fetch_network_lans(
+            &org.base_url,
+            api_key,
+            network_ids,
+            org.lane_rps(),
+            REQUEST_TIMEOUT,
+            budget,
             self.wire.as_ref(),
         )
         .await
@@ -456,7 +508,9 @@ impl MerakiSync {
                 MerakiSyncFailure::Internal
             }
         };
-        let seen = seen_devices(&listing);
+        // Reads only, like everything above the writes: what it read is written below.
+        let lans = self.lan_stage(org, &api_key, &listing, started).await?;
+        let seen = seen_devices(&listing, &lans.chosen);
         let stored = self
             .inventory
             .stored(org.id)
@@ -481,6 +535,13 @@ impl MerakiSync {
             .record_networks(org.id, &networks, org.import_devices)
             .await
             .map_err(internal("recording the networks failed"))?;
+        // After `record_networks`, which created the rows of networks seen for the first time — and
+        // before the import, which reads `lan_read_at` to decide whether an MX may go in yet.
+        // Not counted in `written`: these are the same network rows, updated again.
+        self.orgs
+            .record_network_lans(org.id, &lans.fresh)
+            .await
+            .map_err(internal("recording the networks' LAN addresses failed"))?;
         // The inventory rows and what imported nodes follow, in one transaction (決定 14).
         let applied = self
             .inventory
@@ -505,6 +566,106 @@ impl MerakiSync {
             imported,
             over_cap,
             followed: applied.followed,
+        })
+    }
+
+    /// The LAN side of every network holding an MX (ADR-164 決定 28): read what is due within what
+    /// this sync has left, then choose each read network's address from everything now known.
+    ///
+    /// **A failed read is never a reason to fail the sync, and never forgets anything.** A network
+    /// whose read failed keeps what it said last time, and one never read stays unread (its MX waits
+    /// to be imported); the next sync asks again. What *does* fail the sync is this core's own
+    /// database — the stored addresses, or the folders' ranges — because reading either as empty
+    /// would move hundreds of node addresses and move them back a sync later.
+    async fn lan_stage(
+        &self,
+        org: &MerakiOrg,
+        api_key: &str,
+        listing: &MerakiInventory,
+        started: Instant,
+    ) -> Result<LanStage, MerakiSyncFailure> {
+        let internal = |what: &'static str| {
+            move |e: anyhow::Error| {
+                tracing::warn!(error = %e, "meraki sync: {what}");
+                MerakiSyncFailure::Internal
+            }
+        };
+        let mx = networks_with_an_mx(listing);
+        if mx.is_empty() {
+            return Ok(LanStage::default());
+        }
+        let mut known: HashMap<String, NetworkLan> = self
+            .orgs
+            .network_lans(org.id)
+            .await
+            .map_err(internal("reading the networks' LAN addresses failed"))?;
+        known.retain(|network, _| mx.contains(network));
+
+        let due = lan_reads_due(&mx, &known, Utc::now());
+        let left = SYNC_TIMEOUT.saturating_sub(started.elapsed());
+        let budget = LAN_READ_BUDGET.min(left.saturating_sub(LAN_READ_RESERVE));
+        let mut fresh = Vec::new();
+        if !due.is_empty() && !budget.is_zero() {
+            // The transport stops sending at `budget`; this bounds the one request still in flight.
+            let read = tokio::time::timeout(
+                left,
+                self.directory.network_lans(org, api_key, &due, budget),
+            )
+            .await;
+            match read {
+                Ok(Ok(reached)) => {
+                    let now = Utc::now();
+                    for (network, answer) in reached {
+                        let outcome = match answer {
+                            Ok(addresses) => {
+                                let ips = lan_order(&addresses);
+                                let outcome = if ips.is_empty() { "no_lan" } else { "ok" };
+                                fresh.push((network.clone(), ips.clone()));
+                                known.insert(network, NetworkLan { ips, read_at: now });
+                                outcome
+                            }
+                            Err(why) => {
+                                tracing::debug!(org = %org.org_id, reason = why.token(), "meraki sync: a network's LAN read failed");
+                                "failed"
+                            }
+                        };
+                        metrics::counter!("yagra_meraki_lan_reads_total", "outcome" => outcome)
+                            .increment(1);
+                    }
+                }
+                Ok(Err(why)) => {
+                    tracing::warn!(org = %org.org_id, reason = why.token(), "meraki sync: the LAN reads could not start");
+                }
+                Err(_) => {
+                    tracing::warn!(org = %org.org_id, "meraki sync: the LAN reads ran out of time");
+                }
+            }
+            let unread = mx.iter().filter(|n| !known.contains_key(*n)).count();
+            tracing::info!(
+                org = %org.org_id,
+                read = fresh.len(),
+                due = due.len(),
+                unread,
+                "meraki sync: read networks' LAN addresses"
+            );
+        }
+
+        let candidates: Vec<IpAddr> = known
+            .values()
+            .flat_map(|lan| lan.ips.iter().copied())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let in_a_range = self
+            .resolver
+            .in_a_range(&candidates)
+            .await
+            .map_err(internal(
+                "matching LAN addresses against the folders' ranges failed",
+            ))?;
+        Ok(LanStage {
+            chosen: lan_addresses(&known, &in_a_range),
+            fresh,
         })
     }
 
@@ -594,6 +755,15 @@ impl MerakiSync {
 
 fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// What [`MerakiSync::lan_stage`] hands the rest of the sync.
+#[derive(Debug, Default)]
+struct LanStage {
+    /// The address each read network's MX takes — what [`seen_devices`] reads.
+    chosen: LanAddresses,
+    /// What this sync read, in [`lan_order`], for `record_network_lans`.
+    fresh: Vec<(String, Vec<IpAddr>)>,
 }
 
 /// When each organization is next due. Success is read from the row (`last_sync_at`), so a manual
@@ -805,9 +975,22 @@ mod tests {
         answer: Mutex<Result<MerakiInventory, MerakiFetchError>>,
         asked: Mutex<u32>,
         roles: Mutex<RolesAnswer>,
+        /// What every network's LAN read answers (ADR-164 決定 28). By default one VLAN at
+        /// `10.0.0.1` — the address `listing` has always given its devices — so a test about
+        /// something else sees an MX addressed and imported exactly as before 決定 28.
+        lan: Mutex<MerakiNetworkLan>,
+        /// Every network a LAN read was asked about, in order.
+        lan_asked: Mutex<Vec<String>>,
     }
 
     type RolesAnswer = Result<Vec<(String, Option<MerakiHaRole>)>, MerakiFetchError>;
+
+    fn vlan(id: u32, ip: &str) -> yagra_transport::MerakiLanAddress {
+        yagra_transport::MerakiLanAddress {
+            vlan_id: Some(id),
+            appliance_ip: ip.to_owned(),
+        }
+    }
 
     impl FakeDirectory {
         fn answering(answer: Result<MerakiInventory, MerakiFetchError>) -> Arc<Self> {
@@ -815,11 +998,21 @@ mod tests {
                 answer: Mutex::new(answer),
                 asked: Mutex::new(0),
                 roles: Mutex::new(Ok(Vec::new())),
+                lan: Mutex::new(Ok(vec![vlan(1, "10.0.0.1")])),
+                lan_asked: Mutex::new(Vec::new()),
             })
         }
 
         fn roles_answer(&self, roles: RolesAnswer) {
             *self.roles.lock().expect("roles") = roles;
+        }
+
+        fn lan_answer(&self, lan: MerakiNetworkLan) {
+            *self.lan.lock().expect("lan") = lan;
+        }
+
+        fn lan_asked(&self) -> Vec<String> {
+            self.lan_asked.lock().expect("lan asked").clone()
         }
 
         fn now_answers(&self, answer: Result<MerakiInventory, MerakiFetchError>) {
@@ -853,6 +1046,24 @@ mod tests {
 
         async fn ha_roles(&self, _org: &MerakiOrg, _api_key: &str) -> RolesAnswer {
             self.roles.lock().expect("roles").clone()
+        }
+
+        async fn network_lans(
+            &self,
+            _org: &MerakiOrg,
+            _api_key: &str,
+            network_ids: &[String],
+            _budget: Duration,
+        ) -> Result<Vec<(String, MerakiNetworkLan)>, MerakiFetchError> {
+            self.lan_asked
+                .lock()
+                .expect("lan asked")
+                .extend(network_ids.iter().cloned());
+            let lan = self.lan.lock().expect("lan").clone();
+            Ok(network_ids
+                .iter()
+                .map(|n| (n.clone(), lan.clone()))
+                .collect())
         }
     }
 
@@ -1963,5 +2174,99 @@ mod tests {
             .await
             .expect("watch it again");
         assert_eq!(counted(&r).await, (0, 0));
+    }
+
+    // ── an MX's address from its network's LAN side (ADR-164 決定 28) ─────────────────────────
+
+    /// The case the decision was made on, end to end: VLAN 1 left at a default subnet, the site's own
+    /// VLAN next, a folder holding the site's range. The MX is addressed and filed by the site's VLAN
+    /// — never by the address the listing carries, which for an MX is its WAN — and a network read
+    /// once is not read again the next sync.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_mx_is_addressed_and_filed_by_the_vlan_inside_a_folders_range(pool: sqlx::PgPool) {
+        let site = pgtest::group(&pool, "site-a").await;
+        pgtest::prefix(&pool, site, "10.20.0.0/16").await;
+        // `listing` carries 10.0.0.1 on the device, which is not in the site's range.
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+        r.directory
+            .lan_answer(Ok(vec![vlan(10, "10.20.0.1"), vlan(1, "192.168.128.1")]));
+
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.20.0.1");
+        assert_eq!(folder_of(&pool, "Q2-A").await, Some(site));
+        assert_eq!(r.directory.lan_asked(), ["N_1"]);
+        let row = r.inventory.stored(r.org).await.expect("stored");
+        assert_eq!(row[0].lan_ip, Some("10.20.0.1".parse().expect("ip")));
+
+        let again = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!((again.written, again.followed), (0, 0), "{again:?}");
+        assert_eq!(
+            r.directory.lan_asked(),
+            ["N_1"],
+            "a network read a sync ago is not read again"
+        );
+    }
+
+    /// An MX whose network could not be read has no address yet, and importing it would file it by
+    /// none — for good, since a node is never moved (決定 6). It waits, the sync still succeeds, and
+    /// the sync that reads its network imports it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_mx_is_imported_only_once_its_network_has_been_read(pool: sqlx::PgPool) {
+        let site = pgtest::group(&pool, "site-a").await;
+        pgtest::prefix(&pool, site, "10.20.0.0/16").await;
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+        r.directory.lan_answer(Err(MerakiFetchError::Status(500)));
+
+        let first = r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(first.imported, 0);
+        assert!(nodes_of(&pool, r.org).await.is_empty());
+        let listed = r.inventory.devices(r.org).await.expect("devices");
+        assert!(listed[0].lan_pending);
+        assert_eq!(listed[0].lan_ip, None, "no WAN address stands in for it");
+        assert_eq!(r.org().await.last_sync_ok, Some(true));
+
+        r.directory.lan_answer(Ok(vec![vlan(10, "10.20.0.1")]));
+        let second = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(second.imported, 1);
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.20.0.1");
+        assert_eq!(folder_of(&pool, "Q2-A").await, Some(site));
+    }
+
+    /// A node that carries the address it was given before 決定 28 — its WAN — follows to its LAN
+    /// address; and a later read that fails, once the network is due again, takes nothing away.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_wan_address_follows_to_the_lan_and_a_failed_reread_keeps_it(pool: sqlx::PgPool) {
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+        r.directory.lan_answer(Ok(vec![vlan(10, "10.20.0.1")]));
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        // What an upgrade finds: the node at the address the old core took from `wan1Ip`.
+        sqlx::query("UPDATE nodes SET address = '198.51.100.20'::inet")
+            .execute(&pool)
+            .await
+            .expect("the old address");
+
+        let second = r.sync.sync_org(&r.org().await).await.expect("second sync");
+        assert_eq!(second.followed, 1);
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.20.0.1");
+
+        sqlx::query("UPDATE meraki_org_networks SET lan_read_at = now() - interval '2 days'")
+            .execute(&pool)
+            .await
+            .expect("make the network due");
+        r.directory.lan_answer(Err(MerakiFetchError::Status(500)));
+        let third = r.sync.sync_org(&r.org().await).await.expect("third sync");
+        assert_eq!((third.written, third.followed), (0, 0), "{third:?}");
+        assert_eq!(r.directory.lan_asked(), ["N_1", "N_1"]);
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.20.0.1");
+        let stale: bool = sqlx::query_scalar(
+            "SELECT lan_read_at < now() - interval '1 day' FROM meraki_org_networks",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read stamp");
+        assert!(stale, "a failed read must not stamp the network as read");
     }
 }

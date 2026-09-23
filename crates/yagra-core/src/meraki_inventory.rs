@@ -23,14 +23,14 @@
 //! rather than beside the importer for one reason — a rename is only visible at the moment the
 //! stored name changes, so it has to commit with the row that changes it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::MerakiHaRole;
-use yagra_transport::{MerakiInventory, MerakiInventoryDevice};
+use yagra_transport::{MerakiInventory, MerakiInventoryDevice, MerakiLanAddress};
 
 /// One device as a complete sync saw it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,23 +40,31 @@ pub struct SeenDevice {
     pub model: Option<String>,
     pub product_type: String,
     pub network_id: String,
-    /// The address Meraki reports, if it is a usable one. See [`usable_address`].
+    /// The device's LAN address, if a usable one is known. See [`usable_address`], and for an MX
+    /// [`choose_lan_address`].
     pub lan_ip: Option<IpAddr>,
     /// Whether Meraki reports the device up *in this listing* (online or alerting).
     pub online: bool,
 }
 
 impl SeenDevice {
-    /// Read one device out of a transport inventory.
+    /// Read one device out of a transport inventory. `lans` is what [`lan_addresses`] chose for each
+    /// network whose LAN side has been read; an MX takes its address from there, never from what the
+    /// listing says (決定 28), and one whose network has not been read has none yet.
     #[must_use]
-    pub fn from_transport(d: &MerakiInventoryDevice) -> Self {
+    pub fn from_transport(d: &MerakiInventoryDevice, lans: &LanAddresses) -> Self {
+        let lan_ip = if takes_lan_from_vlans(&d.info.product_type) {
+            lans.get(&d.info.network_id).copied().flatten()
+        } else {
+            d.info.lan_ip.as_deref().and_then(usable_address)
+        };
         Self {
             serial: d.info.serial.clone(),
             name: d.info.name.clone(),
             model: d.info.model.clone(),
             product_type: d.info.product_type.clone(),
             network_id: d.info.network_id.clone(),
-            lan_ip: d.info.lan_ip.as_deref().and_then(usable_address),
+            lan_ip,
             online: d.availability.is_some_and(|a| a.is_up()),
         }
     }
@@ -66,13 +74,124 @@ impl SeenDevice {
 /// its first entry: the table's key is the serial, and two rows for one would make the plan depend
 /// on the order of a listing nobody controls.
 #[must_use]
-pub fn seen_devices(inventory: &MerakiInventory) -> Vec<SeenDevice> {
+pub fn seen_devices(inventory: &MerakiInventory, lans: &LanAddresses) -> Vec<SeenDevice> {
     let mut taken: HashSet<&str> = HashSet::new();
     inventory
         .devices
         .iter()
         .filter(|d| taken.insert(d.info.serial.as_str()))
-        .map(SeenDevice::from_transport)
+        .map(|d| SeenDevice::from_transport(d, lans))
+        .collect()
+}
+
+// ── An MX's address comes from its network's LAN side (ADR-164 決定 28) ──────────────────────────
+//
+// An MX reports no `lanIp` (686 of 686 on a real organization); it reports `wan1Ip`, which is in
+// nobody's IP ranges, is often dynamic, and filed sites into another site's folder. So its address
+// is one of the MX's own VLAN addresses, read per network (the organization-wide listing is beta
+// and answered 404), remembered on `meraki_org_networks`, and chosen again on every sync.
+
+/// The product type whose address comes from its network's VLANs rather than from `lanIp`.
+const LAN_FROM_VLANS: &str = "appliance";
+
+/// Whether a device of this product type takes its address from its network's VLANs (決定 28).
+#[must_use]
+pub fn takes_lan_from_vlans(product_type: &str) -> bool {
+    product_type == LAN_FROM_VLANS
+}
+
+/// How long a network's LAN addresses stand before a sync reads them again. VLANs are configuration
+/// and move a few times a year, and an organization of 350 networks is 350 requests a round.
+pub const LAN_REFRESH: chrono::Duration = chrono::Duration::hours(24);
+
+/// What a network last said about its MX's LAN side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkLan {
+    /// Usable addresses in the order [`choose_lan_address`] reads them ([`lan_order`]). Empty for a
+    /// network with no LAN side at all — which is an answer, not a network still to be read.
+    pub ips: Vec<IpAddr>,
+    pub read_at: DateTime<Utc>,
+}
+
+/// Per network whose LAN side has been read, the address its MX takes (`None` when it has no LAN
+/// address). A network that has never been read is absent.
+pub type LanAddresses = HashMap<String, Option<IpAddr>>;
+
+/// A network's addresses in the order the choice reads them: by VLAN number, a VLAN whose number
+/// could not be read after every numbered one; an unusable address dropped; each address once.
+#[must_use]
+pub fn lan_order(addrs: &[MerakiLanAddress]) -> Vec<IpAddr> {
+    let mut sorted: Vec<&MerakiLanAddress> = addrs.iter().collect();
+    // Stable, so two VLANs with no readable number keep the Dashboard's order.
+    sorted.sort_by_key(|a| (a.vlan_id.is_none(), a.vlan_id));
+    let mut seen = HashSet::new();
+    sorted
+        .into_iter()
+        .filter_map(|a| usable_address(&a.appliance_ip))
+        .filter(|ip| seen.insert(*ip))
+        .collect()
+}
+
+/// Which of the organization's MX networks this sync should read, most needed first: every network
+/// never read (in id order — a network's MX is not imported until it has been, see
+/// [`DeviceRecord::lan_pending`]), then every one read longer than [`LAN_REFRESH`] ago, oldest
+/// first. The caller reads as many as its budget allows; the rest wait for the next sync.
+#[must_use]
+pub fn lan_reads_due(
+    mx_networks: &BTreeSet<String>,
+    stored: &HashMap<String, NetworkLan>,
+    now: DateTime<Utc>,
+) -> Vec<String> {
+    let mut stale: Vec<(DateTime<Utc>, &String)> = Vec::new();
+    let mut due: Vec<String> = Vec::new();
+    for network in mx_networks {
+        match stored.get(network) {
+            None => due.push(network.clone()),
+            Some(lan) if now - lan.read_at >= LAN_REFRESH => stale.push((lan.read_at, network)),
+            Some(_) => {}
+        }
+    }
+    stale.sort();
+    due.extend(stale.into_iter().map(|(_, n)| n.clone()));
+    due
+}
+
+/// The address an MX takes from its network's LAN side: the first of `ips` (they are in VLAN order)
+/// that lies inside some folder's IP range, else the first. `None` when the network has none.
+///
+/// Why not simply the lowest VLAN: on a real organization it was outside the corporate ranges in 29
+/// networks of 342 — a VLAN 1 left at "Default" or a guest VLAN, and **the same subnet reused by up to
+/// eight sites**, so the lowest VLAN alone would give eight sites' MX one address and could file
+/// them into whichever folder claims it. In every one of the 29 the next VLAN or the one after was
+/// inside the ranges. The ranges are the operator's own statement of which addresses belong to a
+/// site, so they decide.
+#[must_use]
+pub fn choose_lan_address(ips: &[IpAddr], in_a_range: &HashSet<IpAddr>) -> Option<IpAddr> {
+    ips.iter()
+        .find(|ip| in_a_range.contains(ip))
+        .or_else(|| ips.first())
+        .copied()
+}
+
+/// [`choose_lan_address`] for every network whose LAN side has been read.
+#[must_use]
+pub fn lan_addresses(
+    lans: &HashMap<String, NetworkLan>,
+    in_a_range: &HashSet<IpAddr>,
+) -> LanAddresses {
+    lans.iter()
+        .map(|(network, lan)| (network.clone(), choose_lan_address(&lan.ips, in_a_range)))
+        .collect()
+}
+
+/// The networks in `inventory` that hold at least one device whose address comes from its VLANs.
+#[must_use]
+pub fn networks_with_an_mx(inventory: &MerakiInventory) -> BTreeSet<String> {
+    inventory
+        .devices
+        .iter()
+        .filter(|d| takes_lan_from_vlans(&d.info.product_type) && !d.info.network_id.is_empty())
+        .map(|d| d.info.network_id.clone())
         .collect()
 }
 
@@ -418,6 +537,9 @@ pub struct DeviceRecord {
     /// has not recorded.
     pub network_monitored: bool,
     pub lan_ip: Option<IpAddr>,
+    /// An MX whose network's LAN side has never been read (決定 28): its address is not known yet,
+    /// so the sync does not import it — an import files the node once and never moves it (決定 6).
+    pub lan_pending: bool,
     pub state: MerakiDeviceState,
     pub node_id: Option<Uuid>,
     /// The folder the device's node is filed in. `None` without a node, and for a node at the top
@@ -651,7 +773,8 @@ impl MerakiInventoryRepo {
             "SELECT i.serial, i.name, i.model, i.product_type, i.network_id, i.lan_ip, \
                     i.first_seen_at, i.first_online_at, i.missing_since, i.imported_at, i.ha_role, \
                     d.node_id, nd.group_id AS node_group_id, n.name AS network_name, \
-                    COALESCE(n.monitored, false) AS monitored \
+                    COALESCE(n.monitored, false) AS monitored, \
+                    n.lan_read_at IS NULL AS lan_unread \
              FROM meraki_inventory i \
              LEFT JOIN meraki_devices d ON d.org_id = i.org_id AND d.serial = i.serial \
              LEFT JOIN nodes nd ON nd.id = d.node_id \
@@ -672,11 +795,15 @@ impl MerakiInventoryRepo {
                 continue;
             };
             let lan_ip: Option<String> = r.try_get("lan_ip")?;
+            let product_type: String = r.try_get("product_type")?;
+            // NULL through the LEFT JOIN too: a network the sync has not recorded is not read.
+            let lan_unread: bool = r.try_get("lan_unread")?;
             out.push(DeviceRecord {
                 serial: r.try_get("serial")?,
                 name: r.try_get("name")?,
                 model: r.try_get("model")?,
-                product_type: r.try_get("product_type")?,
+                lan_pending: takes_lan_from_vlans(&product_type) && lan_unread,
+                product_type,
                 network_id: r.try_get("network_id")?,
                 network_name: r.try_get("network_name")?,
                 network_monitored: r.try_get("monitored")?,
@@ -1353,7 +1480,7 @@ mod tests {
                 device("Q2-C", "c", None),
             ],
         };
-        let got = seen_devices(&inv);
+        let got = seen_devices(&inv, &LanAddresses::new());
         let brief: Vec<(&str, &str, bool)> = got
             .iter()
             .map(|d| (d.serial.as_str(), d.name.as_str(), d.online))
@@ -1367,5 +1494,132 @@ mod tests {
             ]
         );
         assert!(got.iter().all(|d| d.lan_ip.is_none()));
+    }
+
+    // ── An MX's address from its network's LAN side (ADR-164 決定 28) ───────────────────────────
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().expect("ip")
+    }
+
+    fn lan(vlan_id: Option<u32>, ip: &str) -> MerakiLanAddress {
+        MerakiLanAddress {
+            vlan_id,
+            appliance_ip: ip.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_networks_addresses_are_read_in_vlan_order_once_each() {
+        let got = lan_order(&[
+            lan(Some(30), "10.3.0.1"),
+            lan(None, "10.9.0.1"),
+            lan(Some(1), "192.168.128.1"),
+            lan(Some(20), "10.2.0.1"),
+            // The same address twice, and one that identifies nothing.
+            lan(Some(21), "10.2.0.1"),
+            lan(Some(5), "0.0.0.0"),
+            lan(Some(6), "not an address"),
+        ]);
+        assert_eq!(
+            got,
+            [
+                ip("192.168.128.1"),
+                ip("10.2.0.1"),
+                ip("10.3.0.1"),
+                ip("10.9.0.1")
+            ]
+        );
+    }
+
+    /// The case that decided the rule: VLAN 1 left at a default subnet several sites share, and the
+    /// site's own VLAN next. The ranges pick the site's; with no range holding any, the lowest wins.
+    #[test]
+    fn an_mx_takes_the_lowest_vlan_inside_a_range_else_the_lowest() {
+        let ips = [ip("192.168.128.1"), ip("10.2.0.1"), ip("10.3.0.1")];
+        let ranges: HashSet<IpAddr> = [ip("10.2.0.1"), ip("10.3.0.1")].into();
+        assert_eq!(choose_lan_address(&ips, &ranges), Some(ip("10.2.0.1")));
+        assert_eq!(
+            choose_lan_address(&ips, &HashSet::new()),
+            Some(ip("192.168.128.1"))
+        );
+        // A network with no LAN side: nothing to take, and no WAN address to fall back to.
+        assert_eq!(choose_lan_address(&[], &ranges), None);
+    }
+
+    #[test]
+    fn never_read_networks_come_first_then_the_stalest() {
+        let now = at(10 * 86_400);
+        let mx: BTreeSet<String> = ["N_new_b", "N_new_a", "N_old", "N_older", "N_fresh"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let read = |secs_ago: i64| NetworkLan {
+            ips: vec![ip("10.0.0.1")],
+            read_at: at(10 * 86_400 - secs_ago),
+        };
+        let stored: HashMap<String, NetworkLan> = [
+            ("N_old", read(86_400)),
+            ("N_older", read(3 * 86_400)),
+            ("N_fresh", read(86_399)),
+            // Read, and not an MX network any more: never asked again.
+            ("N_gone", read(9 * 86_400)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        assert_eq!(
+            lan_reads_due(&mx, &stored, now),
+            ["N_new_a", "N_new_b", "N_older", "N_old"]
+        );
+    }
+
+    /// An MX takes the chosen address of its network and never the one the listing carries; an MX in
+    /// a network nobody has read has none; everything else still takes `lanIp`.
+    #[test]
+    fn only_an_mx_takes_its_address_from_the_lan_choice() {
+        let device = |serial: &str, product_type: &str, network: &str, lan_ip: Option<&str>| {
+            MerakiInventoryDevice {
+                info: MerakiDeviceInfo {
+                    serial: serial.into(),
+                    name: serial.into(),
+                    model: None,
+                    product_type: product_type.into(),
+                    network_id: network.into(),
+                    lan_ip: lan_ip.map(str::to_owned),
+                },
+                availability: Some(MerakiAvailability::Online),
+            }
+        };
+        let inv = MerakiInventory {
+            networks: Vec::new(),
+            devices: vec![
+                device("mx-read", "appliance", "N_1", Some("198.51.100.20")),
+                device("mx-unread", "appliance", "N_2", None),
+                device("mx-no-lan", "appliance", "N_3", None),
+                device("switch", "switch", "N_1", Some("10.1.0.5")),
+            ],
+        };
+        let lans: LanAddresses = [
+            ("N_1".to_owned(), Some(ip("10.1.0.1"))),
+            ("N_3".to_owned(), None),
+        ]
+        .into();
+        let seen = seen_devices(&inv, &lans);
+        let got: Vec<(&str, Option<IpAddr>)> =
+            seen.iter().map(|d| (d.serial.as_str(), d.lan_ip)).collect();
+        assert_eq!(
+            got,
+            [
+                ("mx-read", Some(ip("10.1.0.1"))),
+                ("mx-unread", None),
+                ("mx-no-lan", None),
+                ("switch", Some(ip("10.1.0.5"))),
+            ]
+        );
+        assert_eq!(
+            networks_with_an_mx(&inv).into_iter().collect::<Vec<_>>(),
+            ["N_1", "N_2", "N_3"]
+        );
     }
 }

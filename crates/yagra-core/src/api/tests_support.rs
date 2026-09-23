@@ -209,6 +209,18 @@ impl crate::meraki_sync::MerakiDirectory for EmptyDashboard {
     {
         Ok(Vec::new())
     }
+
+    /// Never asked: the listing holds no MX, so there is no network to read.
+    async fn network_lans(
+        &self,
+        _org: &crate::meraki::MerakiOrg,
+        _api_key: &str,
+        _network_ids: &[String],
+        _budget: std::time::Duration,
+    ) -> Result<Vec<(String, yagra_transport::MerakiNetworkLan)>, yagra_transport::MerakiFetchError>
+    {
+        Ok(Vec::new())
+    }
 }
 
 /// [`live_state`], with a hand-off directory the upgrade and relocation mechanisms can use.

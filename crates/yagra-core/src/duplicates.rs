@@ -21,7 +21,7 @@
 //!
 //! | Kind | Strength | What it says |
 //! |---|---|---|
-//! | `address` | strong | two device nodes are monitored at the same address |
+//! | `address` | strong | two device nodes are monitored at the same address — unless each is bound to a different Meraki device (a warm-spare MX pair, ADR-164 決定 28) |
 //! | `serial` | strong | a chassis serial (one member of a stack's list) or a Meraki serial is shared |
 //! | `own_ip` | strong | each node's own interface-address list names the other's monitored address |
 //! | `own_ip_one_way` | weak | one list names the other's address, and the other has no list to confirm |
@@ -45,7 +45,7 @@
 //! not used, and is reported in [`Findings::ignored`] rather than dropped silently. `address` is the
 //! one kind exempt — device nodes at one address are the duplicate ADR-139 exists for, however many.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 
 use serde::Serialize;
@@ -352,6 +352,28 @@ pub fn mac_identifies(mac: &str) -> bool {
     !VIRTUAL_MAC_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
+/// Whether every node in `nodes` is bound to a Meraki device, each a different one (ADR-164 決定
+/// 28). Then they are different devices by construction — a Meraki serial is the device — and an
+/// address they share says nothing about them.
+///
+/// It is not rare: an MX takes its address from its network's VLANs, which a warm-spare pair shares,
+/// so both MX of a pair stand at one address — about 336 pairs on one real organization, every one of
+/// which the `address` kind (strong, and exempt from the cap) would otherwise list. A node at that
+/// address that is **not** bound to Meraki keeps the evidence for the whole set: that may well be the
+/// same MX, added a second time by hand.
+fn each_a_different_meraki_device(
+    nodes: &BTreeSet<usize>,
+    candidates: &[DuplicateInput],
+    obs: &Observations,
+) -> bool {
+    let mut seen = HashSet::new();
+    nodes.iter().all(|&i| {
+        obs.meraki_serials
+            .get(&candidates[i].id)
+            .is_some_and(|serial| seen.insert(serial.trim().to_ascii_uppercase()))
+    })
+}
+
 fn name_key(name: &str) -> Option<String> {
     let key = name.trim().to_lowercase();
     (!key.is_empty()).then_some(key)
@@ -461,6 +483,11 @@ pub fn find(candidates: &[DuplicateInput], obs: &Observations) -> Findings {
     let mut items: Vec<(DuplicateEvidenceKind, String, BTreeSet<usize>)> = Vec::new();
     for ((kind, value), nodes) in shared {
         if nodes.len() < 2 {
+            continue;
+        }
+        if kind == DuplicateEvidenceKind::Address
+            && each_a_different_meraki_device(&nodes, candidates, obs)
+        {
             continue;
         }
         if kind.is_capped() && nodes.len() > SHARED_VALUE_MAX {
@@ -789,6 +816,44 @@ mod tests {
             );
         }
         assert!(serial_parts("N/A, , FOX1820GVER").eq(&["FOX1820GVER".to_owned()]));
+    }
+
+    /// ADR-164 決定 28: a warm-spare MX pair stands at one address — its network's VLAN — and is two
+    /// devices, which their Meraki serials say. A third node at that address that Meraki does not
+    /// know still makes a group: that may be the same MX, added again by hand.
+    #[test]
+    fn a_warm_spare_pair_at_one_address_is_not_a_duplicate() {
+        let pair = [
+            node(1, "mx-primary", "10.20.0.1"),
+            node(2, "mx-spare", "10.20.0.1"),
+        ];
+        let obs = Observations {
+            meraki_serials: HashMap::from([
+                (id(1), "Q2XX-AAAA-0001".to_owned()),
+                (id(2), "Q2XX-AAAA-0002".to_owned()),
+            ]),
+            ..Observations::default()
+        };
+        assert_eq!(find(&pair, &obs).total, 0);
+
+        let with_a_stranger = [
+            node(1, "mx-primary", "10.20.0.1"),
+            node(2, "mx-spare", "10.20.0.1"),
+            node(3, "fw-snmp", "10.20.0.1"),
+        ];
+        let f = find(&with_a_stranger, &obs);
+        assert_eq!(f.total, 1);
+        assert_eq!(kinds(&f.groups[0]), [DuplicateEvidenceKind::Address]);
+
+        // One Meraki device bound twice is the duplicate this screen exists for.
+        let twice = Observations {
+            meraki_serials: HashMap::from([
+                (id(1), "Q2XX-AAAA-0001".to_owned()),
+                (id(2), "q2xx-aaaa-0001".to_owned()),
+            ]),
+            ..Observations::default()
+        };
+        assert_eq!(find(&pair, &twice).total, 1);
     }
 
     #[test]

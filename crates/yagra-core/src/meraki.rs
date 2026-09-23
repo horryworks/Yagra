@@ -182,7 +182,8 @@ impl MerakiOrg {
     ///
     /// ⚠️ Below twice [`yagra_transport::MERAKI_MIN_RPS`] the halving stops at that floor, because
     /// no session paces slower; the two lanes together then send up to the floor more than the
-    /// setting. The inventory sync paces at this too — it runs in the fast lane.
+    /// setting. The inventory sync paces at this too — the periodic one runs in the slow lane,
+    /// "Sync now" in whichever is free (`meraki_sync.rs`).
     #[must_use]
     pub fn lane_rps(&self) -> f64 {
         (self.target_rps / 2.0).max(yagra_transport::MERAKI_MIN_RPS)
@@ -891,6 +892,77 @@ impl MerakiOrgRepo {
         .bind(&ids)
         .bind(&names)
         .bind(watch_new)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// What each of the org's networks last said about its MX's LAN side (ADR-164 決定 28), keyed by
+    /// network id. A network never read is absent — which is different from one read and holding no
+    /// LAN, whose list is empty.
+    pub async fn network_lans(
+        &self,
+        org_uuid: Uuid,
+    ) -> anyhow::Result<HashMap<String, crate::meraki_inventory::NetworkLan>> {
+        let rows = sqlx::query(
+            "SELECT network_id, lan_ips, lan_read_at FROM meraki_org_networks \
+             WHERE org_id = $1 AND lan_read_at IS NOT NULL",
+        )
+        .bind(org_uuid)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let ips: Option<Vec<String>> = r.try_get("lan_ips")?;
+                Ok((
+                    r.try_get("network_id")?,
+                    crate::meraki_inventory::NetworkLan {
+                        ips: ips
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|ip| crate::meraki_inventory::usable_address(ip))
+                            .collect(),
+                        read_at: r.try_get("lan_read_at")?,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Record the LAN sides this sync read (ADR-164 決定 28): each network's addresses, in the order
+    /// given, stamped now. Only networks that already have a row are written, so this runs after
+    /// [`Self::record_networks`]. Returns the rows written.
+    ///
+    /// The addresses travel as one comma-joined string per network — an address never holds a comma,
+    /// and PostgreSQL cannot `unnest` an array of arrays of different lengths. `string_to_array('',
+    /// ',')` is the empty array, which is how "no LAN" is stored.
+    pub async fn record_network_lans(
+        &self,
+        org_uuid: Uuid,
+        lans: &[(String, Vec<IpAddr>)],
+    ) -> anyhow::Result<u64> {
+        if lans.is_empty() {
+            return Ok(0);
+        }
+        let ids: Vec<&str> = lans.iter().map(|(id, _)| id.as_str()).collect();
+        let joined: Vec<String> = lans
+            .iter()
+            .map(|(_, ips)| {
+                ips.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect();
+        let res = sqlx::query(
+            "UPDATE meraki_org_networks n \
+             SET lan_ips = string_to_array(r.ips, ','), lan_read_at = now() \
+             FROM unnest($2::text[], $3::text[]) AS r(id, ips) \
+             WHERE n.org_id = $1 AND n.network_id = r.id",
+        )
+        .bind(org_uuid)
+        .bind(&ids)
+        .bind(&joined)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())

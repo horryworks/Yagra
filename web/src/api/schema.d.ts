@@ -8838,7 +8838,13 @@ export interface components {
              */
             folder_id?: string | null;
             ha_role?: null | components["schemas"]["MerakiHaRole"];
-            /** @description The address Meraki reports, when it reports a usable one. */
+            /**
+             * @description The device's LAN address, when a usable one is known: the `lanIp` Meraki reports. An MX
+             *     (`appliance`) reports none, so its address is its own IP on the lowest-numbered VLAN that lies
+             *     inside a folder's IP range, else on the lowest-numbered VLAN — never its WAN address. `null`
+             *     for an MX until its network's VLANs have been read; such an MX is not imported automatically
+             *     until then.
+             */
             lan_ip?: string | null;
             /**
              * Format: date-time

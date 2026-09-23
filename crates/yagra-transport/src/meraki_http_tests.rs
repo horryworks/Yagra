@@ -26,8 +26,8 @@ use tokio::net::TcpListener;
 
 use crate::meraki::collect;
 use crate::{
-    fetch_inventory, list_organizations, MerakiAvailability, MerakiCollectSpec, MerakiFetchError,
-    MerakiTier, MerakiWireOrigin,
+    fetch_inventory, fetch_network_lans, list_organizations, MerakiAvailability, MerakiCollectSpec,
+    MerakiFetchError, MerakiLanAddress, MerakiTier, MerakiWireOrigin,
 };
 use yagra_common::MerakiListing;
 
@@ -1316,4 +1316,138 @@ async fn a_failed_ssid_read_keeps_the_utilization_and_names_itself() {
     assert_eq!(one.radios[0].channel_util_pct, Some(9.5));
     assert_eq!(one.radios[0].channel, None);
     assert_eq!(reading(one, "wlan_ap_ssid_count"), None);
+}
+
+// ── An MX's LAN addresses, one network at a time (ADR-164 決定 28) ─────────────────────────────
+
+fn nets(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|n| (*n).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn each_network_answers_with_its_vlans_its_single_lan_or_nothing() {
+    let (origin, _, seen) = serve(vec![
+        // N_1: VLANs on — listed out of order, as nothing promises an order.
+        Reply::ok(
+            r#"[{"id":20,"networkId":"N_1","applianceIp":"10.1.20.1"},{"id":10,"networkId":"N_1","applianceIp":"10.1.10.1"}]"#,
+        ),
+        // N_2: VLANs off — the VLAN read is refused and the single LAN answers.
+        Reply::json(400, r#"{"errors":["mock"]}"#),
+        Reply::ok(r#"{"subnet":"10.2.0.0/24","applianceIp":"10.2.0.1"}"#),
+        // N_3: neither — a network with no LAN side at all.
+        Reply::json(400, r#"{"errors":["mock"]}"#),
+        Reply::json(400, r#"{"errors":["mock"]}"#),
+        // N_4: the Dashboard failed — this network's own error, and the read goes on.
+        Reply::json(500, r#"{"errors":["mock"]}"#),
+        Reply::ok("[]"),
+    ])
+    .await;
+    let got = fetch_network_lans(
+        BASE,
+        KEY,
+        &nets(&["N_1", "N_2", "N_3", "N_4", "N_5"]),
+        1000.0,
+        TIMEOUT,
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+
+    let lan = |vlan_id: Option<u32>, ip: &str| MerakiLanAddress {
+        vlan_id,
+        appliance_ip: ip.to_owned(),
+    };
+    assert_eq!(
+        got,
+        vec![
+            (
+                "N_1".to_owned(),
+                Ok(vec![lan(Some(20), "10.1.20.1"), lan(Some(10), "10.1.10.1")])
+            ),
+            ("N_2".to_owned(), Ok(vec![lan(None, "10.2.0.1")])),
+            ("N_3".to_owned(), Ok(vec![])),
+            ("N_4".to_owned(), Err(MerakiFetchError::Status(500))),
+            ("N_5".to_owned(), Ok(vec![])),
+        ]
+    );
+    assert_eq!(
+        lines(&seen),
+        vec![
+            "GET /api/v1/networks/N_1/appliance/vlans HTTP/1.1",
+            "GET /api/v1/networks/N_2/appliance/vlans HTTP/1.1",
+            "GET /api/v1/networks/N_2/appliance/singleLan HTTP/1.1",
+            "GET /api/v1/networks/N_3/appliance/vlans HTTP/1.1",
+            "GET /api/v1/networks/N_3/appliance/singleLan HTTP/1.1",
+            "GET /api/v1/networks/N_4/appliance/vlans HTTP/1.1",
+            "GET /api/v1/networks/N_5/appliance/vlans HTTP/1.1",
+        ],
+        "no perPage: the per-network VLAN read is not a paged listing"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_key_stops_the_read_after_one_request() {
+    let (origin, _, seen) = serve(vec![Reply::json(401, r#"{"errors":["mock"]}"#)]).await;
+    let got = fetch_network_lans(
+        BASE,
+        KEY,
+        &nets(&["N_1", "N_2", "N_3"]),
+        1000.0,
+        TIMEOUT,
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    assert_eq!(
+        got,
+        vec![("N_1".to_owned(), Err(MerakiFetchError::Auth(401)))]
+    );
+    assert_eq!(
+        lines(&seen).len(),
+        1,
+        "every other network would say the same"
+    );
+}
+
+#[tokio::test]
+async fn a_spent_budget_sends_nothing_and_claims_nothing() {
+    let (origin, _, seen) = serve(vec![Reply::ok("[]")]).await;
+    let got = fetch_network_lans(
+        BASE,
+        KEY,
+        &nets(&["N_1", "N_2"]),
+        1000.0,
+        TIMEOUT,
+        Duration::ZERO,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    // Absent, not `Ok(empty)`: an empty list would say "this network has no LAN".
+    assert!(got.is_empty(), "{got:?}");
+    assert!(lines(&seen).is_empty());
+}
+
+#[tokio::test]
+async fn a_network_id_that_is_not_one_is_never_put_in_a_path() {
+    let (origin, _, seen) = serve(vec![Reply::ok("[]")]).await;
+    let got = fetch_network_lans(
+        BASE,
+        KEY,
+        &nets(&["../organizations/1", "N_2"]),
+        1000.0,
+        TIMEOUT,
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    assert_eq!(got[0].1, Err(MerakiFetchError::Malformed));
+    assert_eq!(got[1].1, Ok(vec![]));
+    assert_eq!(
+        lines(&seen),
+        vec!["GET /api/v1/networks/N_2/appliance/vlans HTTP/1.1"]
+    );
 }

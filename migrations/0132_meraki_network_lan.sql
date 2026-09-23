@@ -1,0 +1,26 @@
+-- 0132_meraki_network_lan — the addresses an MX holds on its network's LAN side (ADR-164 決定 28).
+--
+-- reversible: two nullable columns are added to `meraki_org_networks`. Nothing is dropped and
+-- nothing is narrowed. A core from before it names its columns explicitly, never reads these, and
+-- its network upsert does not name them, so rolling the binary back leaves every row readable and
+-- these columns untouched. No `schema_compat` floor, for the reason 0108 records: every release
+-- from 0.2.2 on tolerates a database carrying migrations it does not embed.
+--
+-- WHY A NETWORK REMEMBERS THEM
+-- An MX reports no `lanIp`, so its address comes from its VLANs, and those can only be read one
+-- network at a time (the organization-wide listing is beta and answered 404 on a real
+-- organization). An organization of 350 MX networks is 350 requests, more than one sync can send,
+-- so each sync reads some and this is where the rest wait. Which VLAN becomes the address is NOT
+-- stored: it depends on the folders' IP ranges, which change, so the candidates are kept and the
+-- choice is made again on every sync.
+--
+-- WHAT THEY HOLD
+-- `lan_ips`: the MX's usable addresses in VLAN-number order (a single LAN is one address, a network
+-- with no LAN side at all an empty array). `lan_read_at`: when they were last read. NULL in both
+-- means "never read" — which is what keeps a new MX in that network from being imported before its
+-- address is known, since an import files the node once and never moves it (決定 6).
+--
+-- TEXT[] rather than INET[]: the rest of the Meraki tables carry addresses as TEXT
+-- (`meraki_inventory.lan_ip`), and core parses each one through the same `usable_address`.
+ALTER TABLE meraki_org_networks ADD COLUMN IF NOT EXISTS lan_ips TEXT[];
+ALTER TABLE meraki_org_networks ADD COLUMN IF NOT EXISTS lan_read_at TIMESTAMPTZ;

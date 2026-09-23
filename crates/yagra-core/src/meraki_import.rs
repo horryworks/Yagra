@@ -80,6 +80,11 @@ pub struct AutoPick {
 /// device left the Dashboard is still a node. Devices are taken in the order given, which the
 /// caller makes stable (`MerakiInventoryRepo::devices` orders by name, then serial), so which ones
 /// a cap leaves out does not change from sync to sync.
+///
+/// An MX whose network's LAN side has not been read yet ([`DeviceRecord::lan_pending`]) **waits**,
+/// and is not counted against the cap either: its address — and so its folder — is not known, and
+/// an import files a node once and never moves it (決定 6, 決定 28). The sync that reads its
+/// network imports it.
 #[must_use]
 pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32) -> AutoPick {
     let held = devices.iter().filter(|d| d.node_id.is_some()).count();
@@ -88,7 +93,7 @@ pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32) -> AutoPick {
         .saturating_sub(held);
     let qualifying: Vec<&DeviceRecord> = devices
         .iter()
-        .filter(|d| d.state == MerakiDeviceState::New && d.network_monitored)
+        .filter(|d| d.state == MerakiDeviceState::New && d.network_monitored && !d.lan_pending)
         .collect();
     AutoPick {
         chosen: qualifying
@@ -148,6 +153,28 @@ impl ImportResolver {
             plan_filing(addresses, &fold, file_by_prefix),
             ranges_configured,
         ))
+    }
+
+    /// Which of `addresses` lie inside some folder's IP range — what picks an MX's address out of
+    /// its VLANs (決定 28). One statement for all of them, the one [`Self::filings`] asks.
+    ///
+    /// 🚨 **A failed read is an error, never "none of them".** An empty answer makes every MX take
+    /// its lowest VLAN, and the next sync that reads the ranges moves them back: a database hiccup
+    /// would rewrite hundreds of node addresses twice.
+    pub async fn in_a_range(
+        &self,
+        addresses: &[IpAddr],
+    ) -> anyhow::Result<std::collections::HashSet<IpAddr>> {
+        if addresses.is_empty() || !self.groups.any_prefixes(None).await? {
+            return Ok(std::collections::HashSet::new());
+        }
+        Ok(self
+            .groups
+            .match_address_prefixes(addresses, None)
+            .await?
+            .into_iter()
+            .map(|hit| hit.key)
+            .collect())
     }
 
     /// Resolve each candidate's filing, profile and display name.
@@ -239,6 +266,7 @@ mod tests {
             network_name: Some("HQ".into()),
             network_monitored,
             lan_ip: Some("10.0.0.7".parse().expect("ip")),
+            lan_pending: false,
             state,
             node_id: has_node.then(|| Uuid::from_u128(1)),
             node_group_id: None,
@@ -268,6 +296,30 @@ mod tests {
         let pick = pick_automatic(&devices, 1000);
         assert_eq!(serials(&pick), ["QUALIFIES"]);
         assert_eq!(pick.over_cap, 0);
+    }
+
+    /// ADR-164 決定 28: an MX whose network's LAN side has not been read yet has no address, and an
+    /// import would file it by none and never move it. It waits — and a device that waits is not
+    /// one the cap left out, so it is not counted there either.
+    #[test]
+    fn an_mx_waits_for_its_network_to_be_read_and_is_not_over_the_cap() {
+        use MerakiDeviceState as S;
+        let mut waiting = record("mx-unread", S::New, true);
+        waiting.product_type = "appliance".into();
+        waiting.lan_ip = None;
+        waiting.lan_pending = true;
+        let devices = [waiting, record("ap", S::New, true)];
+        assert_eq!(serials(&pick_automatic(&devices, 1000)), ["ap"]);
+        let full = pick_automatic(&devices, 0);
+        assert_eq!(
+            full.over_cap, 1,
+            "only the access point was held back by the cap"
+        );
+
+        // Once the network has been read, the same MX qualifies.
+        let mut read = devices[0].clone();
+        read.lan_pending = false;
+        assert_eq!(serials(&pick_automatic(&[read], 1000)), ["mx-unread"]);
     }
 
     /// The cap counts the nodes the organization already holds, stops the import at the limit, and

@@ -195,8 +195,14 @@ pub struct MerakiDeviceInfo {
     pub product_type: String,
     /// networkId the device belongs to.
     pub network_id: String,
-    /// LAN IP if the device reports one. Never pinged, and not only shown: core matches it against
-    /// the folders' IP ranges, and an imported node takes it as its address (ADR-164 決定 14).
+    /// `lanIp`, when the device reports one. Never pinged, and not only shown: core matches it
+    /// against the folders' IP ranges, and an imported node takes it as its address (ADR-164 決定
+    /// 14).
+    ///
+    /// ⚠️ **An MX reports none** — measured on 686 of 686: it carries `wan1Ip`/`wan2Ip` instead.
+    /// Those are not read: a WAN address is in nobody's IP ranges and is often dynamic, and it filed
+    /// sites into another site's folder. Core takes an MX's address from its VLANs instead
+    /// ([`fetch_network_lans`], ADR-164 決定 28).
     pub lan_ip: Option<String>,
 }
 
@@ -370,7 +376,8 @@ impl Session {
             tracing::debug!(error = %e, path, "invalid meraki path");
             Stop::Malformed
         })?;
-        {
+        // Only when there is something to add: an empty `query_pairs_mut` still leaves a bare `?`.
+        if !query.is_empty() || matches!(paging, Paging::Upto(_)) {
             let mut qp = url.query_pairs_mut();
             for (k, v) in query {
                 qp.append_pair(k, v);
@@ -485,6 +492,9 @@ enum Shape {
     Array,
     /// An object whose `items` is a JSON array; whatever else it carries (`meta`) is not read.
     Items,
+    /// One bare JSON object, which is the one item (ADR-164 決定 28: a network's
+    /// `appliance/singleLan` is a settings document, not a listing).
+    Object,
 }
 
 /// Why a paged read ended before the server said it had no more pages.
@@ -663,7 +673,8 @@ fn page_items(body: &str, shape: Shape) -> Result<Vec<Value>, Stop> {
                 Err(Stop::Malformed)
             }
         },
-        (Shape::Array | Shape::Items, _) => {
+        (Shape::Object, Value::Object(document)) => Ok(vec![Value::Object(document)]),
+        (Shape::Array | Shape::Items | Shape::Object, _) => {
             tracing::debug!(
                 ?shape,
                 "meraki listing answered something other than its shape"
@@ -2186,6 +2197,137 @@ fn parse_ha_roles(rows: &[Value]) -> Vec<(String, Option<MerakiHaRole>)> {
         .collect()
 }
 
+/// One address an MX holds on its network's LAN side (ADR-164 決定 28): its IP on one VLAN, or — in
+/// a network with VLANs turned off — on the single LAN, which has no VLAN number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MerakiLanAddress {
+    /// The VLAN's number (`id`). `None` on a single LAN.
+    pub vlan_id: Option<u32>,
+    /// The MX's own address on it (`applianceIp`), as the Dashboard wrote it.
+    pub appliance_ip: String,
+}
+
+/// One network's LAN addresses, or why this read could not say.
+pub type MerakiNetworkLan = Result<Vec<MerakiLanAddress>, MerakiFetchError>;
+
+/// Read the LAN addresses the MX holds in each of `network_ids`, one network at a time (ADR-164 決定
+/// 28): `GET /networks/{id}/appliance/vlans`, and where that answers 400 — VLANs are off —
+/// `GET /networks/{id}/appliance/singleLan`. Where both answer 400 the network has no LAN side at
+/// all and its list is **empty, which is an answer**: the caller stops waiting for one. Read-only.
+///
+/// Per network, not per organization, because the organization-wide
+/// `organizations/{id}/appliance/vlans` is a beta endpoint: it answered 404 with no body on a real
+/// organization that had not opted in to early access (measured 2026-09-23). The per-network one
+/// answered 342 networks of 342, at a median of 220 ms.
+///
+/// Returns the networks it **reached**, in the order given. It stops at `budget` — the networks
+/// after that are absent from the answer and read by a later sync — and at the first failure that
+/// would be the same for every network (a refused key, a host outside the allow-list, 429s that
+/// outlast the retries), so one bad key costs one request rather than three hundred. A network's
+/// own failure is that network's `Err`: never an empty list, which would read as "no LAN".
+///
+/// `Err` only when no session could be built (`Config`): then nothing was sent.
+pub async fn fetch_network_lans(
+    base_url: &str,
+    api_key: &str,
+    network_ids: &[String],
+    target_rps: f64,
+    timeout: Duration,
+    budget: Duration,
+    wire: Option<&MerakiWireOrigin>,
+) -> Result<Vec<(String, MerakiNetworkLan)>, MerakiFetchError> {
+    let mut s = Session::new(base_url, api_key, target_rps, timeout, wire).map_err(|e| {
+        tracing::debug!(error = %e, "meraki session for the LAN reads refused");
+        MerakiFetchError::Config
+    })?;
+    let deadline = Instant::now() + budget;
+    s.deadline = Some(deadline);
+    let mut out = Vec::new();
+    for network in network_ids {
+        let answer = network_lan(&mut s, network).await;
+        // A request the deadline refused was never sent: nothing was learned about this network.
+        if matches!(answer, Err(MerakiFetchError::Truncated)) && Instant::now() >= deadline {
+            break;
+        }
+        let same_for_every_network = matches!(
+            answer,
+            Err(MerakiFetchError::Auth(_) | MerakiFetchError::Host | MerakiFetchError::RateLimited)
+        );
+        out.push((network.clone(), answer));
+        if same_for_every_network {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// One network's LAN addresses: the VLANs, else the single LAN, else none.
+async fn network_lan(s: &mut Session, network: &str) -> MerakiNetworkLan {
+    // The id goes into the path. One the Dashboard would never issue is refused rather than joined,
+    // so a listing cannot steer a request to another resource.
+    if network.is_empty()
+        || !network
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err(MerakiFetchError::Malformed);
+    }
+    let path = format!("{API_PREFIX}/networks/{network}/appliance");
+    match s
+        .get_paged_strict(&format!("{path}/vlans"), &[], Paging::Unpaged, Shape::Array)
+        .await
+    {
+        Ok(rows) => Ok(parse_vlan_lans(&rows)),
+        // Taken to mean VLANs are off, and the single-LAN read decides. Half of that was measured:
+        // all 342 networks with VLANs on answered 400 to the single-LAN read, and all 8 with them
+        // off answered it 200. What `vlans` itself answers where they are off was not measured — any
+        // 400 goes this way, so a different 400 costs one more request and ends in `Ok(empty)`.
+        Err(MerakiFetchError::Status(400)) => match s
+            .get_paged_strict(
+                &format!("{path}/singleLan"),
+                &[],
+                Paging::Unpaged,
+                Shape::Object,
+            )
+            .await
+        {
+            Ok(documents) => Ok(documents.iter().filter_map(parse_single_lan).collect()),
+            Err(MerakiFetchError::Status(400)) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        },
+        Err(e) => Err(e),
+    }
+}
+
+/// A network's VLANs → one address per VLAN that names one. Pure.
+fn parse_vlan_lans(rows: &[Value]) -> Vec<MerakiLanAddress> {
+    rows.iter()
+        .filter_map(|r| {
+            Some(MerakiLanAddress {
+                vlan_id: vlan_number(r.get("id")),
+                appliance_ip: r.get("applianceIp")?.as_str()?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// A VLAN's `id`: a number on the real Dashboard (1,035 rows of 1,035), read from a string too.
+fn vlan_number(v: Option<&Value>) -> Option<u32> {
+    match v? {
+        Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// A network's single-LAN settings → its one address, if it names one. Pure.
+fn parse_single_lan(document: &Value) -> Option<MerakiLanAddress> {
+    Some(MerakiLanAddress {
+        vlan_id: None,
+        appliance_ip: document.get("applianceIp")?.as_str()?.to_owned(),
+    })
+}
+
 /// Join the three listings. Pure, so the join is tested without a server.
 fn assemble_inventory(
     networks: &[Value],
@@ -2243,11 +2385,7 @@ fn parse_device_info(it: &Value) -> Option<MerakiDeviceInfo> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
-        lan_ip: it
-            .get("lanIp")
-            .and_then(Value::as_str)
-            .or_else(|| it.get("wan1Ip").and_then(Value::as_str))
-            .map(str::to_owned),
+        lan_ip: it.get("lanIp").and_then(Value::as_str).map(str::to_owned),
     })
 }
 
@@ -3238,6 +3376,75 @@ mod tests {
         assert_eq!(d.lan_ip.as_deref(), Some("10.0.0.1"));
         // A row without a serial is not a usable device.
         assert!(parse_device_info(&json!({"name": "x"})).is_none());
+    }
+
+    #[test]
+    fn an_mx_wan_address_is_never_taken_for_its_lan_address() {
+        // The shape every MX has on the real Dashboard: no `lanIp`, both WAN addresses.
+        let d = parse_device_info(&json!({
+            "serial": "Q2-MX", "name": "edge-fw", "model": "MX67",
+            "productType": "appliance", "networkId": "N_1",
+            "wan1Ip": "198.51.100.20", "wan2Ip": "203.0.113.9"
+        }))
+        .unwrap();
+        assert_eq!(
+            d.lan_ip, None,
+            "ADR-164 決定 28: a WAN address files nothing"
+        );
+    }
+
+    #[test]
+    fn a_networks_vlans_become_one_address_each() {
+        let rows = vec![
+            json!({"id": 10, "networkId": "N_1", "subnet": "10.1.0.0/24", "applianceIp": "10.1.0.1"}),
+            json!({"id": "20", "networkId": "N_1", "applianceIp": "10.2.0.1"}),
+            // No address: nothing to take from this VLAN.
+            json!({"id": 30, "networkId": "N_1"}),
+            json!({"networkId": "N_1", "applianceIp": "10.4.0.1"}),
+            json!("not a vlan"),
+        ];
+        assert_eq!(
+            parse_vlan_lans(&rows),
+            vec![
+                MerakiLanAddress {
+                    vlan_id: Some(10),
+                    appliance_ip: "10.1.0.1".into()
+                },
+                MerakiLanAddress {
+                    vlan_id: Some(20),
+                    appliance_ip: "10.2.0.1".into()
+                },
+                // An id that cannot be read keeps the address; core orders it last.
+                MerakiLanAddress {
+                    vlan_id: None,
+                    appliance_ip: "10.4.0.1".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_single_lan_is_one_address_with_no_vlan_number() {
+        assert_eq!(
+            parse_single_lan(&json!({"subnet": "10.9.0.0/24", "applianceIp": "10.9.0.1"})),
+            Some(MerakiLanAddress {
+                vlan_id: None,
+                appliance_ip: "10.9.0.1".into()
+            })
+        );
+        assert_eq!(parse_single_lan(&json!({"subnet": "10.9.0.0/24"})), None);
+    }
+
+    #[test]
+    fn a_settings_document_is_one_item_and_only_where_one_is_expected() {
+        let one = page_items(r#"{"applianceIp":"10.0.0.1"}"#, Shape::Object).unwrap();
+        assert_eq!(one.len(), 1);
+        // The other way round stays as strict as ADR-164 決定 19 made it.
+        assert_eq!(page_items("[]", Shape::Object), Err(Stop::Malformed));
+        assert_eq!(
+            page_items(r#"{"applianceIp":"10.0.0.1"}"#, Shape::Array),
+            Err(Stop::Malformed)
+        );
     }
 
     // ── What a collect reports (ADR-164 決定 18) ─────────────────────────────────────────────

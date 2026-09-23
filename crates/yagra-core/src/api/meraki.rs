@@ -1162,7 +1162,11 @@ pub(crate) struct MerakiDeviceView {
     network_name: Option<String>,
     /// Whether the device's network is one this organization watches.
     network_monitored: bool,
-    /// The address Meraki reports, when it reports a usable one.
+    /// The device's LAN address, when a usable one is known: the `lanIp` Meraki reports. An MX
+    /// (`appliance`) reports none, so its address is its own IP on the lowest-numbered VLAN that lies
+    /// inside a folder's IP range, else on the lowest-numbered VLAN — never its WAN address. `null`
+    /// for an MX until its network's VLANs have been read; such an MX is not imported automatically
+    /// until then.
     #[schema(value_type = Option<String>)]
     lan_ip: Option<std::net::IpAddr>,
     state: MerakiDeviceState,
@@ -3246,6 +3250,20 @@ mod tests {
             _api_key: &str,
         ) -> Result<
             Vec<(String, Option<yagra_common::MerakiHaRole>)>,
+            yagra_transport::MerakiFetchError,
+        > {
+            Ok(Vec::new())
+        }
+
+        /// Never asked: the listing holds no MX.
+        async fn network_lans(
+            &self,
+            _org: &crate::meraki::MerakiOrg,
+            _api_key: &str,
+            _network_ids: &[String],
+            _budget: std::time::Duration,
+        ) -> Result<
+            Vec<(String, yagra_transport::MerakiNetworkLan)>,
             yagra_transport::MerakiFetchError,
         > {
             Ok(Vec::new())
